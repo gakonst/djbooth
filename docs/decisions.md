@@ -24,3 +24,10 @@ server-to-server access to public data, but cannot access personal history or li
 Every operation in Spotify's schema is exposed as an `incur` command. A raw request command covers
 media types that OpenAPI-to-CLI argument generation cannot model conveniently and future endpoints
 that appear before the checked-in schema is refreshed.
+
+## 2026-07-10 — Read-only scopes by default
+
+Interactive login asks for the read scopes needed for profile, library, playlist, listening-history,
+and playback queries. Users explicitly opt into all scopes when they want mutation, playback control,
+image upload, or streaming permissions. This keeps the common path useful without over-requesting
+account access.
