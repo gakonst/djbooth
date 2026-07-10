@@ -11,17 +11,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Compatibility matrix
 
-| Area                         | TypeScript API | CLI     | Parity tests | Status |
-| ---------------------------- | -------------- | ------- | ------------ | ------ |
-| Configuration discovery      | planned        | planned | planned      | queued |
-| Utility functions            | planned        | n/a     | planned      | queued |
-| Rekordbox XML                | planned        | planned | planned      | queued |
-| ANLZ files                   | planned        | planned | planned      | queued |
-| My Settings files            | planned        | planned | planned      | queued |
-| Smart playlists              | planned        | planned | planned      | queued |
-| Master database              | planned        | planned | planned      | queued |
-| Master DB registry/aux files | planned        | planned | planned      | queued |
-| Device Library Plus          | planned        | planned | planned      | queued |
+| Area                         | TypeScript API | CLI           | Parity tests | Status   |
+| ---------------------------- | -------------- | ------------- | ------------ | -------- |
+| Configuration discovery      | implemented    | `config show` | 4 tests      | complete |
+| Utility functions            | implemented    | n/a           | 7 tests      | complete |
+| Rekordbox XML                | planned        | planned       | planned      | queued   |
+| ANLZ files                   | planned        | planned       | planned      | queued   |
+| My Settings files            | planned        | planned       | planned      | queued   |
+| Smart playlists              | planned        | planned       | planned      | queued   |
+| Master database              | planned        | planned       | planned      | queued   |
+| Master DB registry/aux files | planned        | planned       | planned      | queued   |
+| Device Library Plus          | planned        | planned       | planned      | queued   |
 
 ## Decisions
 
@@ -51,11 +51,14 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Inspected the complete pyrekordbox source/test tree (11,345 source lines, 2,617 test lines) and current incur API.
 - Established source pins, project conventions, package exports, runtime dependencies, and the compatibility matrix.
 - Created the initial TypeScript package and test/build scaffolding.
+- Created and pushed the private `gakonst/rekordbox-ts` GitHub repository.
+- Ported utility primitives, including byte-for-byte-compatible zlib/XOR/base85 obfuscation.
+- Ported settings/options parsing and cross-platform Rekordbox 5/6/7 installation discovery.
+- Added the incur `config show` command and 11 total tests.
 
 ## Next
 
-1. Land utility primitives and cross-platform configuration discovery.
-2. Port Rekordbox XML with lossless read/write and playlist operations.
-3. Port My Settings and ANLZ binary formats.
-4. Port smart playlists and both database layers.
-5. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Port Rekordbox XML with lossless read/write and playlist operations.
+2. Port My Settings and ANLZ binary formats.
+3. Port smart playlists and both database layers.
+4. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
