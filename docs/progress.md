@@ -27,3 +27,4 @@
   plus CI and a changelog.
 - Verified the built binary, package contents, all 96 generated commands, and a production dependency
   audit with zero reported vulnerabilities.
+- Pushed the repository and confirmed its GitHub Actions check passes on `main`.
