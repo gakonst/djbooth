@@ -1,0 +1,40 @@
+# ytdlp-ts
+
+A TypeScript port of [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), exposed as an
+[`incur`](https://github.com/wevm/incur) CLI for humans, agents, MCP clients, and HTTP callers.
+
+> [!IMPORTANT]
+> This is an active compatibility port. Native TypeScript support and reference-engine fallback
+> coverage are tracked in [`docs/PARITY.md`](docs/PARITY.md). Every result identifies the engine
+> that handled it; the project does not silently claim native parity.
+
+## Development
+
+Requires Node.js 22+, pnpm, and FFmpeg. Exact long-tail compatibility currently also requires a
+`yt-dlp` executable while native extractors are being ported.
+
+```sh
+pnpm install
+pnpm check
+pnpm dev --help
+```
+
+## CLI shape
+
+```sh
+ytdlp-ts inspect 'https://example.com/video'
+ytdlp-ts formats 'https://example.com/video'
+ytdlp-ts download 'https://example.com/video' --format 'bv*+ba/b'
+ytdlp-ts compat --arg --dump-single-json --arg 'https://example.com/video'
+ytdlp-ts --llms
+ytdlp-ts --mcp
+```
+
+The structured commands are implemented with incur and produce agent-friendly output. `compat`
+passes arbitrary arguments to the reference engine during the parity migration.
+
+## Attribution
+
+The behavioral model, public types, option semantics, and test fixtures are derived from yt-dlp,
+which is released under the Unlicense. Incur is MIT-licensed. Upstream revisions are pinned in
+[`docs/PROGRESS.md`](docs/PROGRESS.md).
