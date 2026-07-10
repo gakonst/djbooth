@@ -1,8 +1,8 @@
 # rekordbox-ts
 
-A TypeScript port of [dylanljones/pyrekordbox](https://github.com/dylanljones/pyrekordbox), with a synchronous typed library API and an agent-friendly CLI built on [wevm/incur](https://github.com/wevm/incur).
+A TypeScript port of [dylanljones/pyrekordbox](https://github.com/dylanljones/pyrekordbox), with a synchronous typed database API and an agent-friendly CLI built on [wevm/incur](https://github.com/wevm/incur).
 
-The port covers Rekordbox configuration discovery, collection XML, ANLZ analysis files, My Settings binaries, smart playlists, encrypted Rekordbox 6/7 master databases, `masterPlaylists6.xml`, and encrypted Device Library Plus exports. The pinned Python revision, compatibility policy, verification evidence, and implementation decisions are recorded in [PORTING.md](./PORTING.md).
+The primary workflow is direct access to encrypted Rekordbox 6/7 `master.db` libraries through `MasterDatabase`. The port also covers Device Library Plus databases, ANLZ analysis files, My Settings binaries, smart playlists, `masterPlaylists6.xml`, and collection XML interchange. The pinned Python revision, compatibility policy, verification evidence, and implementation decisions are recorded in [PORTING.md](./PORTING.md).
 
 > [!CAUTION]
 > Back up your Rekordbox collection before using any write operation. This project is not affiliated with AlphaTheta Corporation, Pioneer Corporation, or their related companies.
@@ -18,29 +18,35 @@ git clone git@github.com:gakonst/rekordbox-ts.git
 cd rekordbox-ts
 pnpm install
 pnpm build
-pnpm cli --help
+pnpm i -g --allow-build=better-sqlite3-multiple-ciphers "$(pwd)"
+rekordbox --help
 ```
 
-Use the local executable through `pnpm cli`, or link/install the package and invoke `rekordbox` directly.
+The global install exposes `rekordbox` as the canonical command and `rekordbox-ts` as an explicit package-name alias. A GitHub install works as well when Git authentication can access the private repository:
+
+```sh
+pnpm i -g --allow-build=better-sqlite3-multiple-ciphers github:gakonst/rekordbox-ts
+rekordbox status
+```
+
+`better-sqlite3-multiple-ciphers` is the one native dependency and provides encrypted SQLCipher access. pnpm 10 requires the explicit `--allow-build` acknowledgement shown above; without it, command discovery works but database commands cannot load the native binding. For development without a global install, use `pnpm cli --help`.
 
 ## CLI
 
 ```sh
-# Inspect discovered Rekordbox installations
-pnpm cli config show
-
-# Inspect collection formats
-pnpm cli xml info collection.xml
-pnpm cli anlz info ANLZ0000.DAT
-pnpm cli settings show MYSETTING.DAT
-
-# Read an encrypted Rekordbox 6/7 master database
-pnpm cli db info --path /path/to/master.db
-pnpm cli db search "track name" --path /path/to/master.db
+# The main flow: discover, query, and manage the Rekordbox master database
+rekordbox config show
+rekordbox db info
+rekordbox db search "track name"
+rekordbox db playlist contents 123456
 
 # Read an encrypted Device Library Plus export
-pnpm cli device info --path /Volumes/USB/PIONEER/rekordbox/exportLibrary.db
-pnpm cli device playlist contents 12 --path /path/to/exportLibrary.db
+rekordbox device info --path /Volumes/USB/PIONEER/rekordbox/exportLibrary.db
+
+# Work with secondary/interchange formats when needed
+rekordbox anlz info ANLZ0000.DAT
+rekordbox settings show MYSETTING.DAT
+rekordbox xml info collection.xml
 ```
 
 Top-level command families:
@@ -72,21 +78,24 @@ pnpm cli db info --token-limit 500
 
 The root entry point exports the common API. Format-specific subpaths avoid name collisions such as the separate master/device `Content`, `PlaylistType`, and `FileType` models.
 
-### Collection XML
+### Primary workflow: master database
 
 ```ts
-import { RekordboxXml } from "@gakonst/rekordbox/xml";
+import { DjmdContent, DjmdPlaylist, MasterDatabase } from "@gakonst/rekordbox/masterdb";
 
-const xml = new RekordboxXml("collection.xml");
-const track = xml.addTrack("/Music/new-track.mp3", {
-  Artist: "Artist",
-  Name: "New Track",
-});
-xml.addPlaylist("Imports").addTrack(track.TrackID);
-xml.save("collection-updated.xml");
+// With no path, the latest Rekordbox 7/6 library is discovered automatically.
+const db = new MasterDatabase();
+try {
+  const tracks = db.searchContent("Orbital");
+  const first = db.query(DjmdContent).orderBy("ID").first();
+  const playlists = db.query(DjmdPlaylist).orderBy("Seq").all();
+  console.log(tracks, first?.Artist?.Name, playlists);
+} finally {
+  db.close();
+}
 ```
 
-Unknown XML attributes and elements are retained when a document is rebuilt.
+Databases open read-only by default. For a write workflow, pass `readonly: false`, stage changes through helpers such as `createPlaylist`, `addToPlaylist`, `renamePlaylist`, or row `set`, then call `commit()`. `rollback()` restores staged rows. Commits are blocked while Rekordbox is running, and `copyUnlocked()` produces a new plain SQLite logical copy without modifying the encrypted source.
 
 ### ANLZ and My Settings
 
@@ -106,22 +115,21 @@ settings.save("MYSETTING-updated.DAT");
 
 Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. Supported mutations recalculate lengths and checksums.
 
-### Master database
+### Collection XML interchange
 
 ```ts
-import { DjmdContent, MasterDatabase } from "@gakonst/rekordbox/masterdb";
+import { RekordboxXml } from "@gakonst/rekordbox/xml";
 
-const db = new MasterDatabase({ path: "/path/to/master.db", readonly: true });
-try {
-  const tracks = db.searchContent("Orbital");
-  const first = db.query(DjmdContent).orderBy("ID").first();
-  console.log(tracks, first?.Artist?.Name);
-} finally {
-  db.close();
-}
+const xml = new RekordboxXml("collection.xml");
+const track = xml.addTrack("/Music/new-track.mp3", {
+  Artist: "Artist",
+  Name: "New Track",
+});
+xml.addPlaylist("Imports").addTrack(track.TrackID);
+xml.save("collection-updated.xml");
 ```
 
-For a write workflow, open with `readonly: false`, stage mutations, then call `commit()`. `rollback()` restores staged rows. `copyUnlocked()` creates a new plain SQLite logical copy without modifying the encrypted source.
+Use this API when importing/exporting collection XML rather than as the default interface to a local Rekordbox library. Unknown XML attributes and elements are retained when a document is rebuilt.
 
 ### Device Library Plus
 

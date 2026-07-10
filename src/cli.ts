@@ -39,13 +39,14 @@ import {
 
 const cli = Cli.create("rekordbox", {
   version,
-  description: "Inspect and modify Rekordbox libraries and export formats.",
+  description: "Query and modify Rekordbox databases, libraries, and export formats.",
   sync: {
     suggestions: [
-      "inspect my Rekordbox configuration",
-      "summarize a Rekordbox XML export",
-      "inspect an ANLZ file",
+      "search my Rekordbox database",
       "list playlists in my Rekordbox library",
+      "inspect my Rekordbox configuration",
+      "inspect an ANLZ file",
+      "summarize a Rekordbox XML export",
     ],
   },
 });

@@ -1,7 +1,7 @@
 {
   "name": "@gakonst/rekordbox",
   "version": "0.1.0",
-  "description": "TypeScript toolkit and CLI for Rekordbox libraries and export formats",
+  "description": "Typed Rekordbox database API and agent-friendly CLI",
   "keywords": [
     "cli",
     "dj",
@@ -19,7 +19,8 @@
     "url": "git+ssh://git@github.com/gakonst/rekordbox-ts.git"
   },
   "bin": {
-    "rekordbox": "./dist/cli.js"
+    "rekordbox": "./dist/cli.js",
+    "rekordbox-ts": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -64,6 +65,8 @@
     "check": "oxlint src test && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",
+    "prepack": "pnpm build",
+    "prepare": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -84,6 +87,7 @@
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
   },
+  "preferGlobal": true,
   "engines": {
     "node": ">=22"
   },
