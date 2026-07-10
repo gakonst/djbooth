@@ -23,3 +23,7 @@
 - Added 10 tests covering PKCE, refresh rotation, secure credential storage, bearer injection,
   retries, errors, paging, endpoint coverage, and incur integration.
 - Passed formatting, lint, typecheck, tests, and the production build.
+- Added complete setup, CLI, agent/MCP, TypeScript, authentication, and schema-refresh documentation,
+  plus CI and a changelog.
+- Verified the built binary, package contents, all 96 generated commands, and a production dependency
+  audit with zero reported vulnerabilities.

@@ -43,7 +43,6 @@ describe('SpotifyOAuth', () => {
           access_token: 'access-2',
           token_type: 'Bearer',
           expires_in: 3600,
-          scope: 'user-read-private',
         }),
       )
     const store = new MemorySessionStore()
@@ -60,6 +59,7 @@ describe('SpotifyOAuth', () => {
     await oauth.invalidateAccessToken()
     expect(await oauth.getAccessToken()).toBe('access-2')
     expect((await store.load())?.token.refreshToken).toBe('refresh-1')
+    expect((await store.load())?.token.scopes).toEqual(['user-read-private'])
     expect(fetch).toHaveBeenCalledTimes(2)
 
     const refreshRequest = fetch.mock.calls[1]?.[1] as RequestInit

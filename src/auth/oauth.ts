@@ -92,7 +92,7 @@ export class SpotifyOAuth implements AccessTokenProvider {
         'Spotify access token expired and no refresh token is available; log in again',
       )
     }
-    const refreshed = await this.#refresh(session.token.refreshToken)
+    const refreshed = await this.#refresh(session.token)
     return refreshed.accessToken
   }
 
@@ -109,10 +109,12 @@ export class SpotifyOAuth implements AccessTokenProvider {
     const session = await this.store.load()
     this.#assertSession(session)
     if (!session.token.refreshToken) throw new Error('No Spotify refresh token is available')
-    return this.#refresh(session.token.refreshToken)
+    return this.#refresh(session.token)
   }
 
-  async #refresh(refreshToken: string): Promise<TokenSet> {
+  async #refresh(previous: TokenSet): Promise<TokenSet> {
+    const refreshToken = previous.refreshToken
+    if (!refreshToken) throw new Error('No Spotify refresh token is available')
     if (!this.#refreshing) {
       this.#refreshing = this.#requestToken({
         grant_type: 'refresh_token',
@@ -120,7 +122,11 @@ export class SpotifyOAuth implements AccessTokenProvider {
         ...(!this.#clientSecret ? { client_id: this.clientId } : {}),
       })
         .then(async (token) => {
-          const merged = { ...token, refreshToken: token.refreshToken ?? refreshToken }
+          const merged = {
+            ...token,
+            refreshToken: token.refreshToken ?? refreshToken,
+            scopes: token.scopes.length ? token.scopes : previous.scopes,
+          }
           await this.#saveToken(merged)
           return merged
         })
@@ -146,7 +152,7 @@ export class SpotifyOAuth implements AccessTokenProvider {
       body: new URLSearchParams(parameters),
     })
     const body = (await response.json().catch(() => undefined)) as TokenResponse | undefined
-    if (!response.ok || !body?.access_token) {
+    if (!response.ok || !body?.access_token || !Number.isFinite(body.expires_in)) {
       const message = body?.error_description ?? body?.error ?? response.statusText
       throw new Error(`Spotify authorization failed (${response.status}): ${message}`)
     }

@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { readFile } from 'node:fs/promises'
 
 import { Cli, z } from 'incur'
@@ -48,10 +50,7 @@ auth.command('login', {
     noBrowser: z.boolean().default(false).describe('Print the URL without opening a browser'),
   }),
   alias: { clientId: 'i' },
-  examples: [
-    { description: 'Log in with the default read scopes' },
-    { options: { allScopes: true }, description: 'Log in with all available scopes' },
-  ],
+  examples: [{ description: 'Log in with the default read scopes' }],
   async run(context) {
     const clientId = context.options.clientId ?? context.env.SPOTIFY_CLIENT_ID
     if (!clientId) {
@@ -304,13 +303,14 @@ function parseJsonRecord(value: string, option: string): Record<string, unknown>
 
 async function parseBody(
   value: string | undefined,
-): Promise<string | Record<string, unknown> | undefined> {
+): Promise<BodyInit | Record<string, unknown> | readonly unknown[] | undefined> {
   if (value === undefined) return undefined
-  const contents = value.startsWith('@') ? await readFile(value.slice(1), 'utf8') : value
+  const contents = value.startsWith('@') ? await readFile(value.slice(1)) : value
+  const text = typeof contents === 'string' ? contents : contents.toString('utf8')
   try {
-    const parsed: unknown = JSON.parse(contents)
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-      return parsed as Record<string, unknown>
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'object' && parsed !== null)
+      return parsed as Record<string, unknown> | readonly unknown[]
   } catch {
     // Plain text is a valid raw request body.
   }

@@ -71,7 +71,7 @@ export async function loginWithBrowser(options: BrowserLoginOptions): Promise<To
   })
 
   options.onAuthorizationUrl?.(authorization.url)
-  if (options.openBrowser !== false) await open(authorization.url)
+  if (options.openBrowser !== false) await open(authorization.url).catch(() => undefined)
   const code = await callback
   return options.oauth.exchangeCode(code, authorization.verifier)
 }
