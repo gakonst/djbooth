@@ -21,7 +21,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete |
 | Master database              | implemented    | `db ...`        | 5 tests      | complete |
 | Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete |
-| Device Library Plus          | planned        | planned         | planned      | queued   |
+| Device Library Plus          | implemented    | `device ...`    | 4 tests      | complete |
 
 ## Decisions
 
@@ -61,6 +61,12 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Open databases read-only by default. CLI mutations additionally require `--write`, and commits refuse to run while Rekordbox is open unless explicitly overridden.
 - Use SQLCipher legacy mode 4 for Rekordbox's encrypted database and a logical schema/data export for plain-SQLite copies because native page backup cannot cross cipher formats.
 
+### 2026-07-10 — Shared database engine
+
+- Reuse the validated schema/query/transaction implementation for Device Library Plus through a composed internal engine. Keep `MasterDatabase` and `DeviceLibraryPlus` as distinct public types because identically named helpers such as `getContent` return different row families.
+- Preserve SQLite autoincrement IDs on newly flushed rows, and recognize Device Library Plus's timezone-bearing date columns even though its declared SQLite storage type is `TEXT`.
+- Apply the same read-only default and explicit CLI `--write` acknowledgement to exported device libraries. Support the separate upstream default SQLCipher key and `REKORDBOX_DEVICE_DB_KEY` override.
+
 ## Progress
 
 ### 2026-07-10
@@ -85,8 +91,10 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Ported the master database across 37 models: schema introspection, typed relationships, queries, search, staged mutations, rollback/commit, USN assignment, playlists, metadata/content creation, ANLZ coordination, and plain-SQLite export.
 - Ported `masterPlaylists6.xml` mutation/synchronization and verified both encrypted and unencrypted upstream databases. The durable suite now has 42 passing tests.
 - Added read, generic row, content, playlist, and explicit-write commands under `db`.
+- Ported all 22 Device Library Plus models, typed columns, relationship and association-proxy traversal, all upstream query/add helpers, content search, transactions, JSON export, and SQLCipher/plain database access.
+- Added `device info`, `table`, `search`, `copy-unlocked`, generic row mutations, content creation, playlist workflows, and My Tag workflows. The durable suite now has 46 passing tests.
 
 ## Next
 
-1. Port Device Library Plus.
-2. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Complete final API/CLI coverage audit against the pinned Python source.
+2. Write package and CLI documentation, then perform end-to-end/package verification.

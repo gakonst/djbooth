@@ -28,6 +28,13 @@ import type {
   TrackAttributes,
   TrackSelector,
 } from "./index.js";
+import {
+  Content as DeviceContent,
+  DeviceLibraryPlus,
+  modelByTable as deviceModelByTable,
+  Playlist as DevicePlaylist,
+  PlaylistContent as DevicePlaylistContent,
+} from "./devicelib-plus/index.js";
 
 const cli = Cli.create("rekordbox", {
   version,
@@ -685,6 +692,366 @@ databaseCli.command(databaseRowCli);
 databaseCli.command(databaseContentCli);
 databaseCli.command(databasePlaylistCli);
 cli.command(databaseCli);
+
+const deviceOpenOptions = z.object({
+  path: z.string().describe("exportLibrary.db path"),
+  plain: z.boolean().default(false).describe("Open an unencrypted SQLite database"),
+});
+const deviceWriteOptions = deviceOpenOptions.extend({
+  allowWhileRunning: z.boolean().default(false).describe("Allow commit while Rekordbox is running"),
+  write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
+});
+
+function openDeviceLibrary(
+  options: { allowWhileRunning?: boolean; path: string; plain: boolean },
+  write = false,
+): DeviceLibraryPlus {
+  return new DeviceLibraryPlus({
+    allowWhileRunning: options.allowWhileRunning,
+    key: process.env.REKORDBOX_DEVICE_DB_KEY,
+    path: options.path,
+    readonly: !write,
+    unlock: !options.plain,
+  });
+}
+
+const deviceCli = Cli.create("device", {
+  description: "Query and mutate Device Library Plus exportLibrary.db databases.",
+});
+
+deviceCli.command("info", {
+  description: "Show Device Library Plus tables and high-level counts.",
+  options: deviceOpenOptions,
+  run(c) {
+    const db = openDeviceLibrary(c.options);
+    try {
+      return {
+        contentCount: db.hasTable("content") ? db.query(DeviceContent).count() : 0,
+        path: db.path,
+        playlistCount: db.hasTable("playlist") ? db.query(DevicePlaylist).count() : 0,
+        readonly: db.readonly,
+        tables: db.tableNames,
+      };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceCli.command("table", {
+  description: "List rows from any Device Library Plus physical table.",
+  args: z.object({ table: z.string().describe("Physical table name") }),
+  options: deviceOpenOptions.extend({
+    descending: z.boolean().default(false).describe("Use descending order"),
+    filters: z.string().default("{}").describe("JSON object of equality filters"),
+    limit: z.number().int().min(1).max(100_000).default(100).describe("Maximum rows"),
+    offset: z.number().int().min(0).default(0).describe("Rows to skip"),
+    orderBy: z.string().optional().describe("Physical column to order by"),
+  }),
+  run(c) {
+    const db = openDeviceLibrary(c.options);
+    try {
+      const model = deviceModelByTable[c.args.table];
+      let query = model ? db.query(model) : db.query(c.args.table);
+      query = query.where(JSON.parse(c.options.filters));
+      if (c.options.orderBy)
+        query = query.orderBy(c.options.orderBy, c.options.descending ? "desc" : "asc");
+      const count = query.count();
+      return {
+        count,
+        limit: c.options.limit,
+        offset: c.options.offset,
+        rows: query.offset(c.options.offset).limit(c.options.limit).all(),
+        table: c.args.table,
+      };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceCli.command("search", {
+  description: "Search exported tracks and joined artist/album/genre/key metadata.",
+  args: z.object({ text: z.string().describe("Case-insensitive search text") }),
+  options: deviceOpenOptions.extend({
+    limit: z.number().int().min(1).max(100_000).default(100),
+    offset: z.number().int().min(0).default(0),
+  }),
+  run(c) {
+    const db = openDeviceLibrary(c.options);
+    try {
+      const rows = db.searchContent(c.args.text);
+      return {
+        count: rows.length,
+        rows: rows.slice(c.options.offset, c.options.offset + c.options.limit),
+      };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceCli.command("copy-unlocked", {
+  description: "Copy a decrypted Device Library Plus database into a plain SQLite file.",
+  args: z.object({ output: z.string().describe("New destination database") }),
+  options: deviceOpenOptions,
+  async run(c) {
+    const db = openDeviceLibrary(c.options);
+    try {
+      await db.copyUnlocked(c.args.output);
+      return { output: c.args.output, source: db.path, tables: db.tableNames.length };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+const deviceRowCli = Cli.create("row", {
+  description: "Generic Device Library Plus row mutations.",
+});
+
+deviceRowCli.command("create", {
+  description: "Insert a mapped row from physical-column JSON.",
+  args: z.object({
+    table: z.string().describe("Physical table name"),
+    values: z.string().describe("JSON object of physical column values"),
+  }),
+  options: deviceWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const model = deviceModelByTable[c.args.table];
+      if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
+      const row = db.create(model, JSON.parse(c.args.values));
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return { row, table: c.args.table };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceRowCli.command("update", {
+  description: "Update exactly one row selected by equality-filter JSON.",
+  args: z.object({
+    table: z.string().describe("Physical table name"),
+    filters: z.string().describe("JSON object selecting exactly one row"),
+    values: z.string().describe("JSON object of physical column updates"),
+  }),
+  options: deviceWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const model = deviceModelByTable[c.args.table];
+      if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
+      const row = db.query(model).where(JSON.parse(c.args.filters)).one();
+      for (const [key, value] of Object.entries(JSON.parse(c.args.values)))
+        row.set(key, value as DatabaseValue);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return { row, table: c.args.table };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceRowCli.command("delete", {
+  description: "Delete exactly one row selected by equality-filter JSON.",
+  args: z.object({
+    table: z.string().describe("Physical table name"),
+    filters: z.string().describe("JSON object selecting exactly one row"),
+  }),
+  options: deviceWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const model = deviceModelByTable[c.args.table];
+      if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
+      const row = db.query(model).where(JSON.parse(c.args.filters)).one();
+      const deleted = row.toJSON();
+      db.delete(row);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return { deleted, table: c.args.table };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+const deviceContentCli = Cli.create("content", {
+  description: "Create Device Library Plus content rows.",
+});
+
+deviceContentCli.command("add", {
+  description: "Add an existing audio file to an export library.",
+  args: z.object({
+    audioPath: z.string().describe("Existing audio file"),
+    fileType: z.number().int().positive().describe("Device Library Plus file-type number"),
+  }),
+  options: deviceWriteOptions.extend({
+    analysisPath: z.string().optional(),
+    bitDepth: z.number().int().min(0).default(0),
+    bitrate: z.number().int().min(0).default(0),
+    samplingRate: z.number().int().min(0).default(0),
+    values: z.string().default("{}").describe("Additional physical-column JSON"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const row = db.addContent(c.args.audioPath, c.args.fileType, {
+        analysisPath: c.options.analysisPath,
+        bitDepth: c.options.bitDepth,
+        bitrate: c.options.bitrate,
+        samplingRate: c.options.samplingRate,
+        values: JSON.parse(c.options.values),
+      });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
+const devicePlaylistCli = Cli.create("playlist", {
+  description: "Query and mutate Device Library Plus playlists.",
+});
+
+devicePlaylistCli.command("contents", {
+  description: "List playlist memberships and their content rows.",
+  args: z.object({ playlistId: z.number().int().nonnegative().describe("Playlist ID") }),
+  options: deviceOpenOptions.extend({
+    limit: z.number().int().min(1).max(100_000).default(100),
+    offset: z.number().int().min(0).default(0),
+  }),
+  run(c) {
+    const db = openDeviceLibrary(c.options);
+    try {
+      const query = db
+        .query(DevicePlaylistContent)
+        .where({ playlist_id: c.args.playlistId })
+        .orderBy("sequenceNo");
+      const rows = query
+        .offset(c.options.offset)
+        .limit(c.options.limit)
+        .all()
+        .map((membership) => ({ content: membership.content, membership }));
+      return { count: query.count(), rows };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+devicePlaylistCli.command("create", {
+  description: "Create a playlist or playlist folder.",
+  args: z.object({ name: z.string().describe("Playlist name") }),
+  options: deviceWriteOptions.extend({
+    imageId: z.number().int().positive().optional(),
+    parentId: z.number().int().nonnegative().default(0),
+    sequenceNo: z.number().int().positive().optional(),
+    type: z.enum(["playlist", "folder"]).default("playlist"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const options = {
+        parentId: c.options.parentId,
+        sequenceNo: c.options.sequenceNo,
+      };
+      const row =
+        c.options.type === "folder"
+          ? db.addPlaylistFolder(c.args.name, options)
+          : db.addPlaylist(c.args.name, { ...options, imageId: c.options.imageId });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
+devicePlaylistCli.command("add-track", {
+  description: "Add a content row to a playlist.",
+  args: z.object({
+    playlistId: z.number().int().positive(),
+    contentId: z.number().int().positive(),
+  }),
+  options: deviceWriteOptions.extend({
+    sequenceNo: z.number().int().positive().optional(),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const row = db.addPlaylistContent(c.args.playlistId, c.args.contentId, c.options.sequenceNo);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
+const deviceTagCli = Cli.create("tag", {
+  description: "Create Device Library Plus My Tags and assignments.",
+});
+
+deviceTagCli.command("create", {
+  description: "Create a My Tag or tag folder.",
+  args: z.object({ name: z.string().describe("Tag name") }),
+  options: deviceWriteOptions.extend({
+    attribute: z.number().int().default(0),
+    parentId: z.number().int().nonnegative().default(0),
+    sequenceNo: z.number().int().positive().optional(),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const row = db.addMyTag(c.args.name, {
+        attribute: c.options.attribute,
+        parentId: c.options.parentId,
+        sequenceNo: c.options.sequenceNo,
+      });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceTagCli.command("add-track", {
+  description: "Assign a My Tag to a content row.",
+  args: z.object({
+    tagId: z.number().int().positive(),
+    contentId: z.number().int().positive(),
+  }),
+  options: deviceWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const row = db.addMyTagContent(c.args.tagId, c.args.contentId);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceCli.command(deviceRowCli);
+deviceCli.command(deviceContentCli);
+deviceCli.command(devicePlaylistCli);
+deviceCli.command(deviceTagCli);
+cli.command(deviceCli);
 
 function playlistPath(xml: RekordboxXml, path: string | undefined) {
   return path ? xml.getPlaylist(...path.split("/").filter(Boolean)) : xml.rootPlaylistFolder;

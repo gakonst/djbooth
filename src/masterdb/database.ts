@@ -376,7 +376,13 @@ export class MasterDatabase {
       this.schemas.set(name, {
         columns,
         dates: new Set(
-          columns.filter((column) => /DATE|TIME/iu.test(column.type)).map((column) => column.name),
+          columns
+            .filter(
+              (column) =>
+                /DATE|TIME/iu.test(column.type) ||
+                ["releaseDate", "dateCreated", "dateAdded", "createdDate"].includes(column.name),
+            )
+            .map((column) => column.name),
         ),
         names: new Set(columns.map((column) => column.name)),
         primaryKeys: columns.filter((column) => column.pk).map((column) => column.name),
@@ -586,7 +592,19 @@ export class MasterDatabase {
         const sql = `INSERT INTO ${quoteIdentifier(row.tableName)} (${entries
           .map(([key]) => quoteIdentifier(key))
           .join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`;
-        connection.prepare(sql).run(...entries.map(([, value]) => this.serializeValue(value)));
+        const result = connection
+          .prepare(sql)
+          .run(...entries.map(([, value]) => this.serializeValue(value)));
+        const schema = this.schema(row.tableName);
+        if (schema.primaryKeys.length === 1) {
+          const primaryKey = schema.primaryKeys[0]!;
+          const column = schema.columns.find((item) => item.name === primaryKey)!;
+          if (row.data[primaryKey] === undefined && /INT/iu.test(column.type)) {
+            row.data[primaryKey] = result.lastInsertRowid;
+            const key = this.identityKey(row.tableName, row.data);
+            if (key) this.identity.set(key, row);
+          }
+        }
         row.flushed = { ...row.data };
         continue;
       }
