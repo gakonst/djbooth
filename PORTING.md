@@ -111,6 +111,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Re-ran built CLI commands against upstream Rekordbox XML, My Settings, ANLZ, and encrypted `master.db` fixtures. Also copied the encrypted database to a temporary plain database and verified real metadata/playlist commits through the CLI.
 - Confirmed `gakonst/rekordbox-ts` is private, uses `main`, and is synchronized with GitHub.
 - Added GitHub Actions CI, source/package build lifecycles, globally installable `rekordbox` and `rekordbox-ts` commands, and database-level global-install smoke coverage. Reworked the README around `MasterDatabase` as the main API flow.
+- The first live CI run exposed Windows CRLF checkout behavior in the formatter gate; added repository-wide LF attributes and upgraded to the current official action majors before rerunning the matrix.
 
 ## Next
 
