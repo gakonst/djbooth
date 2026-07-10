@@ -1,0 +1,301 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import Database from "better-sqlite3-multiple-ciphers";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  DjmdArtist,
+  DjmdContent,
+  DjmdMixerParam,
+  DjmdPlaylist,
+  DjmdSongPlaylist,
+  MasterDatabase,
+  MasterPlaylistXml,
+  PlaylistType,
+} from "../src/masterdb/index.js";
+
+const roots: Array<string> = [];
+const now = "2026-07-10 12:00:00.000 +00:00";
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
+
+function fixture(): { dbPath: string; root: string; xmlPath: string } {
+  const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-masterdb-"));
+  roots.push(root);
+  const dbPath = join(root, "master.db");
+  const database = new Database(dbPath);
+  database.exec(`
+    CREATE TABLE agentRegistry (
+      registry_id TEXT PRIMARY KEY, int_1 INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdArtist (
+      ID TEXT PRIMARY KEY, Name TEXT, SearchStr TEXT, UUID TEXT, rb_local_usn INTEGER,
+      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdAlbum (
+      ID TEXT PRIMARY KEY, Name TEXT, AlbumArtistID TEXT, ImagePath TEXT, Compilation INTEGER,
+      SearchStr TEXT, UUID TEXT, rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdGenre (
+      ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_usn INTEGER,
+      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdLabel (
+      ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_usn INTEGER,
+      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdKey (ID TEXT PRIMARY KEY, ScaleName TEXT);
+    CREATE TABLE djmdDevice (ID TEXT PRIMARY KEY, MasterDBID TEXT, Name TEXT);
+    CREATE TABLE djmdContent (
+      ID TEXT PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, ArtistID TEXT, AlbumID TEXT,
+      GenreID TEXT, KeyID TEXT, LabelID TEXT, OrgArtistID TEXT, ComposerID TEXT, RemixerID TEXT,
+      Commnt TEXT, SearchStr TEXT, AnalysisDataPath TEXT, UUID TEXT, rb_file_id TEXT,
+      rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdPlaylist (
+      ID TEXT PRIMARY KEY, Seq INTEGER, Name TEXT, ImagePath TEXT, Attribute INTEGER, ParentID TEXT,
+      SmartList TEXT, UUID TEXT, rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdSongPlaylist (
+      ID TEXT PRIMARY KEY, PlaylistID TEXT, ContentID TEXT, TrackNo INTEGER, UUID TEXT,
+      rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdCue (ID TEXT PRIMARY KEY, ContentID TEXT, HotCue INTEGER);
+    CREATE TABLE djmdMixerParam (
+      ID TEXT PRIMARY KEY, ContentID TEXT, GainHigh INTEGER, GainLow INTEGER, PeakHigh INTEGER, PeakLow INTEGER
+    );
+  `);
+  const insert = database.transaction(() => {
+    database
+      .prepare("INSERT INTO agentRegistry VALUES (?, ?, ?, ?)")
+      .run("localUpdateCount", 10, now, now);
+    database
+      .prepare("INSERT INTO djmdArtist VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run("100", "Loopmasters", "loopmasters", "artist-uuid", 1, now, now);
+    database
+      .prepare("INSERT INTO djmdGenre VALUES (?, ?, ?, ?, ?, ?)")
+      .run("200", "House", "genre-uuid", 2, now, now);
+    database.prepare("INSERT INTO djmdKey VALUES (?, ?)").run("300", "Fm");
+    database.prepare("INSERT INTO djmdDevice VALUES (?, ?, ?)").run("400", "master", "Device");
+    database
+      .prepare(
+        "INSERT INTO djmdContent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "1",
+        "/Music/Demo 1.mp3",
+        "Demo 1.mp3",
+        "Demo Track 1",
+        "100",
+        null,
+        "200",
+        "300",
+        null,
+        null,
+        null,
+        null,
+        "Great",
+        "Loopmasters Demo",
+        null,
+        "content-1",
+        "file-1",
+        3,
+        now,
+        now,
+      );
+    database
+      .prepare(
+        "INSERT INTO djmdContent VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "2",
+        "/Music/Noise.wav",
+        "Noise.wav",
+        "NOISE",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "",
+        "Noise",
+        null,
+        "content-2",
+        "file-2",
+        4,
+        now,
+        now,
+      );
+    database
+      .prepare("INSERT INTO djmdPlaylist VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("500", 1, "Playlist", null, 0, "root", null, "playlist-uuid", 5, now, now);
+    database
+      .prepare("INSERT INTO djmdSongPlaylist VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("song-1", "500", "1", 1, "song-uuid", 6, now, now);
+    const gain = Buffer.alloc(4);
+    gain.writeFloatBE(1, 0);
+    database
+      .prepare("INSERT INTO djmdMixerParam VALUES (?, ?, ?, ?, ?, ?)")
+      .run("mix-1", "1", gain.readUInt16BE(0), gain.readUInt16BE(2), 0, 0);
+  });
+  insert();
+  database.close();
+
+  const xmlPath = join(root, "masterPlaylists6.xml");
+  writeFileSync(
+    xmlPath,
+    `<?xml version="1.0" encoding="utf-8"?>
+<MASTER_PLAYLIST Version="3.0.0" AutomaticSync="0">
+  <PRODUCT Name="rekordbox" Version="7.0.9" Company="AlphaTheta"/>
+  <PLAYLISTS><NODE Id="1F4" ParentId="0" Attribute="0" Timestamp="${new Date("2026-07-10T12:00:00Z").getTime()}" Lib_Type="0" CheckType="0"/></PLAYLISTS>
+</MASTER_PLAYLIST>`,
+  );
+  return { dbPath, root, xmlPath };
+}
+
+describe("MasterDatabase queries", () => {
+  it("maps rows, dates, relationships, search, and virtual mixer values", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(db.tableNames).toContain("djmdContent");
+    expect(db.query(DjmdContent).count()).toBe(2);
+    expect(
+      db
+        .query(DjmdContent)
+        .orderBy("ID")
+        .offset(1)
+        .limit(1)
+        .all()
+        .map((row) => row.ID),
+    ).toEqual(["2"]);
+
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    expect(content).toBeInstanceOf(DjmdContent);
+    expect(content.Title).toBe("Demo Track 1");
+    expect(content.created_at).toBeInstanceOf(Date);
+    expect(content.Artist).toBeInstanceOf(DjmdArtist);
+    expect(content.Artist?.Name).toBe("Loopmasters");
+    expect(db.searchContent("loopmasters").map((row) => row.ID)).toEqual(["1"]);
+    expect(
+      db
+        .getPlaylistContents("500")
+        .all()
+        .map((row) => row.ID),
+    ).toEqual(["1"]);
+
+    const mixer = db.query(DjmdMixerParam).one();
+    expect(mixer.Gain).toBeCloseTo(0);
+    expect(mixer.Peak).toBe(Number.NEGATIVE_INFINITY);
+    db.close();
+  });
+
+  it("opens the same connection after close", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    db.close();
+    db.open();
+    expect(db.query(DjmdContent).count()).toBe(2);
+    db.close();
+  });
+
+  it("copies logical schema and data into a plain SQLite database", async () => {
+    const { dbPath, root } = fixture();
+    const output = join(root, "copy.db");
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    await db.copyUnlocked(output);
+    db.close();
+    const copy = new Database(output, { readonly: true });
+    expect(copy.prepare("SELECT COUNT(*) AS count FROM djmdContent").get()).toEqual({ count: 2 });
+    copy.close();
+  });
+});
+
+describe("MasterDatabase mutations", () => {
+  it("stages, rolls back, and commits row changes with local USNs", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    content.Title = "Changed";
+    db.rollback();
+    expect(content.Title).toBe("Demo Track 1");
+
+    content.Title = "Committed";
+    const artist = db.addArtist("New Artist");
+    db.commit();
+    expect(db.getLocalUsn()).toBeGreaterThan(10);
+    expect(artist.rb_local_usn).toBeTypeOf("number");
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(reopened.query(DjmdContent).where({ ID: "1" }).one().Title).toBe("Committed");
+    expect(reopened.query(DjmdArtist).where({ Name: "New Artist" }).count()).toBe(1);
+    reopened.close();
+  });
+
+  it("creates playlists and maintains song ordering", () => {
+    const { dbPath, xmlPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const folder = db.createPlaylistFolder("Folder");
+    const playlist = db.createPlaylist("New Playlist", { parent: folder });
+    const sibling = db.createPlaylist("Sibling", { parent: folder });
+    db.movePlaylist(sibling, { seq: 1 });
+    expect(sibling.Seq).toBe(1);
+    expect(playlist.Seq).toBe(2);
+    const first = db.addToPlaylist(playlist, "1");
+    const second = db.addToPlaylist(playlist, "2", 1);
+    expect(first.TrackNo).toBe(2);
+    expect(second.TrackNo).toBe(1);
+    db.moveSongInPlaylist(playlist, first, 1);
+    expect(first.TrackNo).toBe(1);
+    expect(second.TrackNo).toBe(2);
+    db.commit();
+    expect(new MasterPlaylistXml(xmlPath).get(playlist.ID)?.ParentId).toBe(
+      Number(folder.ID).toString(16).toUpperCase(),
+    );
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const songs = reopened
+      .query(DjmdSongPlaylist)
+      .where({ PlaylistID: playlist.ID })
+      .orderBy("TrackNo")
+      .all();
+    expect(songs.map((song) => song.ContentID)).toEqual(["1", "2"]);
+    expect(reopened.query(DjmdPlaylist).where({ ParentID: folder.ID }).count()).toBe(2);
+    reopened.close();
+  });
+});
+
+describe("MasterPlaylistXml", () => {
+  it("adds, updates, removes, and reloads playlist metadata", () => {
+    const { xmlPath } = fixture();
+    const xml = new MasterPlaylistXml(xmlPath);
+    expect(xml.version).toBe("3.0.0");
+    expect(xml.get(500)?.Attribute).toBe(0);
+    xml.add(600, "root", PlaylistType.FOLDER, new Date("2026-07-10T13:00:00Z"));
+    xml.update(600, { attribute: PlaylistType.SMART_PLAYLIST });
+    expect(xml.get(600)?.Attribute).toBe(PlaylistType.SMART_PLAYLIST);
+    xml.remove(500);
+    xml.save();
+    const reloaded = new MasterPlaylistXml(xmlPath);
+    expect(reloaded.get(500)).toBeUndefined();
+    expect(reloaded.get(600)?.ParentId).toBe("0");
+  });
+});

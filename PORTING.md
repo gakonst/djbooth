@@ -19,8 +19,8 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | ANLZ files                   | implemented    | `anlz ...`      | 5 tests      | complete |
 | My Settings files            | implemented    | `settings ...`  | 7 tests      | complete |
 | Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete |
-| Master database              | planned        | planned         | planned      | queued   |
-| Master DB registry/aux files | planned        | planned         | planned      | queued   |
+| Master database              | implemented    | `db ...`        | 5 tests      | complete |
+| Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete |
 | Device Library Plus          | planned        | planned         | planned      | queued   |
 
 ## Decisions
@@ -55,6 +55,12 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Keep original ANLZ tag bytes until a supported mutation occurs. This preserves unknown tags and retains the original garbled PSSI representation while exposing a deobfuscated parsed view.
 - Bound large waveform/beat-grid CLI output by default and expose offset/limit controls through incur.
 
+### 2026-07-10 — Database safety and mapping
+
+- Introspect physical SQLite schemas at runtime and wrap all 37 upstream models with typed, mutation-tracked row classes. This tolerates schema additions across Rekordbox releases without discarding unknown columns.
+- Open databases read-only by default. CLI mutations additionally require `--write`, and commits refuse to run while Rekordbox is open unless explicitly overridden.
+- Use SQLCipher legacy mode 4 for Rekordbox's encrypted database and a logical schema/data export for plain-SQLite copies because native page backup cannot cross cipher formats.
+
 ## Progress
 
 ### 2026-07-10
@@ -76,9 +82,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Added bounded `anlz scan`, `info`, `tag`, `set-path`, and `set-beat-grid` commands.
 - Ported smart-playlist XML, condition/operator validation, signed playlist-ID conversion, and parameterized SQLite compilation for all mapped properties.
 - Added `smartlist parse`, `build`, and `sql` commands; the durable suite now has 36 passing tests.
+- Ported the master database across 37 models: schema introspection, typed relationships, queries, search, staged mutations, rollback/commit, USN assignment, playlists, metadata/content creation, ANLZ coordination, and plain-SQLite export.
+- Ported `masterPlaylists6.xml` mutation/synchronization and verified both encrypted and unencrypted upstream databases. The durable suite now has 42 passing tests.
+- Added read, generic row, content, playlist, and explicit-write commands under `db`.
 
 ## Next
 
-1. Port the master database and registry/auxiliary files.
-2. Port Device Library Plus.
-3. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Port Device Library Plus.
+2. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
