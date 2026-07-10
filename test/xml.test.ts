@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -47,7 +47,9 @@ describe("path encoding", () => {
     const encoded =
       "file://localhost/C:/Music/PioneerDJ/Demo%20Tracks/Rock%20%26%20Roll%20%231.mp3";
     expect(encodePath(path)).toBe(encoded);
-    expect(decodePath(encoded)).toContain("C:/Music/PioneerDJ/Demo Tracks/Rock & Roll #1.mp3");
+    expect(decodePath(encoded)).toContain(
+      normalize("C:/Music/PioneerDJ/Demo Tracks/Rock & Roll #1.mp3"),
+    );
   });
 });
 
@@ -62,7 +64,7 @@ describe("RekordboxXml", () => {
     expect(track.Name).toBe("Track One");
     expect(track.AverageBpm).toBe(128);
     expect(track.Rating).toBe(4);
-    expect(track.Location).toBe("C:/Music/Track One.mp3");
+    expect(track.Location).toBe(normalize("C:/Music/Track One.mp3"));
     expect(track.tempos[0]?.Battito).toBe(1);
     expect(track.marks[0]?.Type).toBe("cue");
 

@@ -112,6 +112,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Confirmed `gakonst/rekordbox-ts` is private, uses `main`, and is synchronized with GitHub.
 - Added GitHub Actions CI, source/package build lifecycles, globally installable `rekordbox` and `rekordbox-ts` commands, and database-level global-install smoke coverage. Reworked the README around `MasterDatabase` as the main API flow.
 - The first live CI run exposed Windows CRLF checkout behavior in the formatter gate; added repository-wide LF attributes and upgraded to the current official action majors before rerunning the matrix.
+- The Windows rerun then exposed POSIX-only XML path assertions. The implementation already matched pyrekordbox's platform-native `normpath`; made the parity tests assert native normalization on Windows as well.
 
 ## Next
 
