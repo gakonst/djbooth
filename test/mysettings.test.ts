@@ -82,6 +82,14 @@ describe("My Settings binary formats", () => {
     expect(djm.build()).toEqual(Buffer.from(variants.djmSteepBottom, "base64"));
   });
 
+  it("keeps checksum state valid and repeated builds stable after mutation", () => {
+    const file = MySettingFile.parse(Buffer.from(fixtures["MYSETTING.DAT"], "base64"));
+    file.set("quantize", "off");
+    const first = file.build();
+    expect(file.checksumValid).toBe(true);
+    expect(file.build()).toEqual(first);
+  });
+
   it("rejects invalid setting keys and values", () => {
     const file = new MySettingFile();
     expect(() => file.set("invalid", "on")).toThrow(RangeError);

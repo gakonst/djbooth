@@ -74,7 +74,9 @@ export function stringToDatetime(value: string): Date {
       value.trim(),
     );
   if (!match) throw new TypeError(`Invalid Rekordbox datetime '${value}'`);
-  return new Date(`${match[1]}T${match[2]}${match[3] ?? "Z"}`);
+  const date = new Date(`${match[1]}T${match[2]}${match[3] ?? "Z"}`);
+  if (Number.isNaN(date.getTime())) throw new TypeError(`Invalid Rekordbox datetime '${value}'`);
+  return date;
 }
 
 function quoteIdentifier(value: string): string {
@@ -147,6 +149,8 @@ export class Query<row extends models.DatabaseRow> implements Iterable<row> {
   orderBy(column: string, direction: "asc" | "desc" = "asc"): Query<row> {
     if (!this.database.hasColumn(this.model.tableName, column))
       throw new RangeError(`Column '${column}' does not exist on '${this.model.tableName}'`);
+    if (direction !== "asc" && direction !== "desc")
+      throw new RangeError("Query order direction must be 'asc' or 'desc'");
     const query = this.clone();
     query.ordering.push({ column, direction: direction.toUpperCase() as "ASC" | "DESC" });
     return query;
@@ -224,6 +228,13 @@ export class Query<row extends models.DatabaseRow> implements Iterable<row> {
 
   /** Count matching rows. */
   count(): number {
+    if (this.rowLimit !== undefined || this.rowOffset !== undefined) {
+      const statement = this.statement();
+      return this.database.countRows(
+        `SELECT COUNT(*) AS count FROM (${statement.sql}) AS "_count"`,
+        statement.parameters,
+      );
+    }
     const statement = this.statement(true);
     return this.database.countRows(statement.sql, statement.parameters);
   }
@@ -632,6 +643,16 @@ export class MasterDatabase {
   /** Stage a row for deletion. */
   delete(row: models.DatabaseRow): void {
     this.requireWritable();
+    if (row.database !== this) throw new TypeError("Cannot delete a row owned by another database");
+    if (row.state === "deleted") return;
+    if (row.newlyCreated && row.flushed === undefined) {
+      const key = this.identityKey(row.tableName, row.data);
+      if (key) this.identity.delete(key);
+      this.tracked.delete(row);
+      this.changes = this.changes.filter((change) => change !== row);
+      row.state = "deleted";
+      return;
+    }
     row.state = "deleted";
     this.tracked.add(row);
     if (!this.trackingDisabled) this.changes.push(row);
@@ -681,7 +702,12 @@ export class MasterDatabase {
     const keys = this.schema(row.tableName).primaryKeys;
     if (!keys.length) throw new Error(`Table '${row.tableName}' has no primary key`);
     return {
-      parameters: keys.map((key) => this.serializeValue(row.original[key]!)),
+      parameters: keys.map((key) => {
+        const value = row.newlyCreated ? (row.flushed?.[key] ?? row.data[key]) : row.original[key];
+        if (value === undefined)
+          throw new Error(`Primary key '${key}' is missing on '${row.tableName}'`);
+        return this.serializeValue(value);
+      }),
       sql: keys.map((key) => `${quoteIdentifier(key)} = ?`).join(" AND "),
     };
   }
@@ -700,9 +726,11 @@ export class MasterDatabase {
     for (const row of this.tracked) {
       if (row.state === "new" && row.flushed === undefined) {
         const entries = Object.entries(row.data);
-        const sql = `INSERT INTO ${quoteIdentifier(row.tableName)} (${entries
-          .map(([key]) => quoteIdentifier(key))
-          .join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`;
+        const sql = entries.length
+          ? `INSERT INTO ${quoteIdentifier(row.tableName)} (${entries
+              .map(([key]) => quoteIdentifier(key))
+              .join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`
+          : `INSERT INTO ${quoteIdentifier(row.tableName)} DEFAULT VALUES`;
         const result = connection
           .prepare(sql)
           .run(...entries.map(([, value]) => this.serializeValue(value)));
@@ -713,7 +741,7 @@ export class MasterDatabase {
           if (row.data[primaryKey] === undefined && /INT/iu.test(column.type)) {
             row.data[primaryKey] = result.lastInsertRowid;
             const key = this.identityKey(row.tableName, row.data);
-            if (key) this.identity.set(key, row);
+            if (key) this.identity.set(key, row.proxy);
           }
         }
         row.flushed = { ...row.data };
@@ -721,12 +749,10 @@ export class MasterDatabase {
       }
 
       if (row.state === "deleted") {
-        if (row.state === "deleted" && row.original !== row.data) {
-          const where = this.primaryPredicate(row);
-          connection
-            .prepare(`DELETE FROM ${quoteIdentifier(row.tableName)} WHERE ${where.sql}`)
-            .run(...where.parameters);
-        }
+        const where = this.primaryPredicate(row);
+        connection
+          .prepare(`DELETE FROM ${quoteIdentifier(row.tableName)} WHERE ${where.sql}`)
+          .run(...where.parameters);
         row.flushed = { ...row.data };
         continue;
       }
@@ -744,6 +770,10 @@ export class MasterDatabase {
         .prepare(sql)
         .run(...changed.map((key) => this.serializeValue(row.data[key]!)), ...where.parameters);
       row.flushed = { ...row.data };
+      const previousKey = this.identityKey(row.tableName, row.original);
+      const currentKey = this.identityKey(row.tableName, row.data);
+      if (previousKey && previousKey !== currentKey) this.identity.delete(previousKey);
+      if (currentKey) this.identity.set(currentKey, row.proxy);
     }
     this.emit("after_flush");
   }
@@ -783,12 +813,20 @@ export class MasterDatabase {
     }
     for (const row of this.tracked) {
       if (row.state === "deleted") {
-        const key = this.identityKey(row.tableName, row.original);
-        if (key) this.identity.delete(key);
+        for (const values of [row.original, row.flushed, row.data]) {
+          if (!values) continue;
+          const key = this.identityKey(row.tableName, values);
+          if (key) this.identity.delete(key);
+        }
       } else {
+        const previousKey = this.identityKey(row.tableName, row.original);
+        const currentKey = this.identityKey(row.tableName, row.data);
+        if (previousKey && previousKey !== currentKey) this.identity.delete(previousKey);
+        if (currentKey) this.identity.set(currentKey, row.proxy);
         row.state = "existing";
         row.original = { ...row.data };
         row.flushed = undefined;
+        row.newlyCreated = false;
       }
     }
     this.tracked.clear();
@@ -808,9 +846,12 @@ export class MasterDatabase {
   rollback(): void {
     if (this.transactionOpen && this.connection?.open) this.connection.exec("ROLLBACK");
     for (const row of this.tracked) {
-      if (row.state === "new") {
+      if (row.newlyCreated) {
         const key = this.identityKey(row.tableName, row.data);
         if (key) this.identity.delete(key);
+        row.data = { ...row.original };
+        row.state = "new";
+        row.flushed = undefined;
       } else {
         row.data = { ...row.original };
         row.state = "existing";
@@ -1099,6 +1140,7 @@ export class MasterDatabase {
     options: { bits?: 28 | 32; field?: string } = {},
   ): number {
     const bits = options.bits ?? 28;
+    if (bits !== 28 && bits !== 32) throw new RangeError("ID width must be 28 or 32 bits");
     const field = options.field ?? "ID";
     for (let attempt = 0; attempt < 1_000_000; attempt++) {
       const value = randomBytes(4).readUInt32BE(0) >>> (32 - bits);
@@ -1139,7 +1181,7 @@ export class MasterDatabase {
       .orderBy("TrackNo")
       .all();
     const target = trackNumber ?? songs.length + 1;
-    if (target < 1 || target > songs.length + 1)
+    if (!Number.isInteger(target) || target < 1 || target > songs.length + 1)
       throw new RangeError("Track number is out of range");
     for (const song of songs) if (song.TrackNo >= target) song.TrackNo += 1;
     return this.create(models.DjmdSongPlaylist, {
@@ -1175,7 +1217,9 @@ export class MasterDatabase {
     const parent = this.resolve(models.DjmdPlaylist, playlist);
     const membership = this.resolve(models.DjmdSongPlaylist, song);
     const songs = this.query(models.DjmdSongPlaylist).where({ PlaylistID: parent.ID }).all();
-    if (newTrackNumber < 1 || newTrackNumber > songs.length)
+    if (membership.PlaylistID !== parent.ID)
+      throw new TypeError("Song is not in the supplied playlist");
+    if (!Number.isInteger(newTrackNumber) || newTrackNumber < 1 || newTrackNumber > songs.length)
       throw new RangeError("Track number is out of range");
     const old = membership.TrackNo;
     if (newTrackNumber === old) return;
@@ -1210,7 +1254,7 @@ export class MasterDatabase {
       .orderBy("Seq")
       .all();
     const seq = options.seq ?? siblings.length + 1;
-    if (seq < 1 || seq > siblings.length + 1)
+    if (!Number.isInteger(seq) || seq < 1 || seq > siblings.length + 1)
       throw new RangeError("Playlist sequence is out of range");
     for (const sibling of siblings) if (sibling.Seq >= seq) sibling.Seq += 1;
     const id = String(this.generateUnusedId(models.DjmdPlaylist));
@@ -1287,6 +1331,22 @@ export class MasterDatabase {
       : undefined;
     if (newParent && newParent.Attribute !== models.PlaylistType.FOLDER)
       throw new TypeError("Parent is not a folder");
+    if (newParent) {
+      const visited = new Set<string>();
+      let ancestor: models.DjmdPlaylist | undefined = newParent;
+      while (ancestor) {
+        const id = String(ancestor.ID);
+        if (id === String(row.ID))
+          throw new TypeError("Cannot move a playlist into itself or one of its descendants");
+        if (visited.has(id)) throw new Error("Existing playlist hierarchy contains a cycle");
+        visited.add(id);
+        const parentId: models.DatabaseValue | undefined = ancestor.get("ParentID");
+        ancestor =
+          parentId == null || parentId === "root"
+            ? undefined
+            : this.query(models.DjmdPlaylist).where({ ID: parentId }).oneOrNone();
+      }
+    }
     const parentId = newParent?.ID ?? oldParent;
     const siblings = this.query(models.DjmdPlaylist)
       .where({ ParentID: parentId })
@@ -1294,7 +1354,7 @@ export class MasterDatabase {
       .all()
       .filter((sibling) => sibling.ID !== row.ID);
     const target = options.seq ?? siblings.length + 1;
-    if (target < 1 || target > siblings.length + 1)
+    if (!Number.isInteger(target) || target < 1 || target > siblings.length + 1)
       throw new RangeError("Playlist sequence is out of range");
 
     if (parentId !== oldParent) {

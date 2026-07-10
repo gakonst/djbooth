@@ -44,6 +44,10 @@ export class DatabaseRow {
   state: RowState;
   /** @internal Last data flushed into the open transaction. */
   flushed: RowData | undefined;
+  /** @internal Whether this row has never been committed to the database. */
+  newlyCreated: boolean;
+  /** @internal Stable public proxy used by the identity map. */
+  proxy!: this;
 
   [key: string]: unknown;
 
@@ -54,7 +58,8 @@ export class DatabaseRow {
     this.original = { ...data };
     this.state = state;
     this.flushed = undefined;
-    return new Proxy(this, {
+    this.newlyCreated = state === "new";
+    const proxy = new Proxy(this, {
       get: (target, property, receiver) => {
         if (typeof property !== "string" || property in target)
           return Reflect.get(target, property, receiver);
@@ -72,6 +77,8 @@ export class DatabaseRow {
         return Reflect.set(target, property, value, receiver);
       },
     });
+    Object.defineProperty(this, "proxy", { enumerable: false, value: proxy });
+    return proxy;
   }
 
   /** Return one physical column value. */

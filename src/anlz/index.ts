@@ -53,6 +53,7 @@ function encodeUtf16Be(value: string): Buffer {
 }
 
 function deobfuscatePssi(data: Buffer): Buffer {
+  assertRange(data, 0, 32, "PSSI header");
   const mood = data.readUInt16BE(18);
   if (mood >= 1 && mood <= 3) return Buffer.from(data);
   const count = data.readUInt16BE(16);
@@ -90,6 +91,8 @@ export class AbstractAnlzTag {
     const header = parseTagHeader(data);
     if (header.lenFile < 12 || header.lenFile > data.length)
       throw new AnlzLengthError(`Invalid ${header.type} tag length ${header.lenFile}`);
+    if (header.lenHeader < 12 || header.lenHeader > header.lenFile)
+      throw new AnlzLengthError(`Invalid ${header.type} header length ${header.lenHeader}`);
     this.type = header.type;
     this.name = name ?? header.type;
     this.lenHeader = header.lenHeader;
@@ -125,6 +128,7 @@ export class BeatGridTag extends AbstractAnlzTag {
     super(data, "beat_grid");
     if (this.lenHeader !== 24)
       throw new AnlzLengthError(`Unexpected PQTZ header ${this.lenHeader}`);
+    assertRange(this.data, 0, 24, "PQTZ header");
     const count = this.data.readUInt32BE(20);
     assertRange(this.data, 24, count * 8, "PQTZ entries");
   }
@@ -222,6 +226,9 @@ export class ExtendedBeatGridTag extends AbstractAnlzTag {
     super(data, "beat_grid2");
     if (this.lenHeader !== 56)
       throw new AnlzLengthError(`Unexpected PQT2 header ${this.lenHeader}`);
+    assertRange(this.data, 0, 56, "PQT2 header");
+    const count = this.data.readUInt32BE(40);
+    assertRange(this.data, 56, count * 2, "PQT2 entries");
   }
 
   /** Two tempo anchors stored in the extended tag. */
@@ -255,6 +262,9 @@ export class ExtendedBeatGridTag extends AbstractAnlzTag {
 export class PathTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "path");
+    assertRange(this.data, 0, 16, "PPTH header");
+    const length = this.data.readUInt32BE(12);
+    if (length >= 2) assertRange(this.data, 16, length, "PPTH path");
   }
 
   /** Decoded path with Rekordbox's forward-slash convention. */
@@ -289,6 +299,7 @@ export class PathTag extends AbstractAnlzTag {
 export class VbrTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "vbr");
+    assertRange(this.data, 16, 400 * 4, "PVBR index");
   }
 
   override get(): Array<number> {
@@ -308,6 +319,10 @@ function parseMonochrome(entries: Buffer): MonochromeWaveform {
 export class MonochromeWaveformTag extends AbstractAnlzTag {
   constructor(data: Buffer, name: string) {
     super(data, name);
+    const offset = this.type === "PWV3" ? 24 : 20;
+    assertRange(this.data, 0, offset, `${this.type} header`);
+    const count = this.data.readUInt32BE(this.type === "PWV3" ? 16 : 12);
+    assertRange(this.data, offset, count, `${this.type} entries`);
   }
 
   override get(): MonochromeWaveform {
@@ -327,6 +342,8 @@ export class MonochromeWaveformTag extends AbstractAnlzTag {
 export class ColorPreviewWaveformTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "wf_color");
+    assertRange(this.data, 0, 24, "PWV4 header");
+    assertRange(this.data, 24, this.data.readUInt32BE(16) * 6, "PWV4 entries");
   }
 
   override get(): {
@@ -365,6 +382,8 @@ export class ColorPreviewWaveformTag extends AbstractAnlzTag {
 export class ColorDetailWaveformTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "wf_color_detail");
+    assertRange(this.data, 0, 24, "PWV5 header");
+    assertRange(this.data, 24, this.data.readUInt32BE(16) * 2, "PWV5 entries");
   }
 
   override get(): { colors: Array<[number, number, number]>; heights: Array<number> } {
@@ -389,6 +408,9 @@ export class ColorDetailWaveformTag extends AbstractAnlzTag {
 export class ThreeByteWaveformTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, parseTagHeader(data).type);
+    const offset = this.type === "PWV7" ? 24 : 20;
+    assertRange(this.data, 0, offset, `${this.type} header`);
+    assertRange(this.data, offset, this.data.readUInt32BE(16) * 3, `${this.type} entries`);
   }
 
   override get(): Array<[number, number, number]> {
@@ -411,6 +433,8 @@ export class ThreeByteWaveformTag extends AbstractAnlzTag {
 export class SongStructureTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "structure");
+    assertRange(this.data, 0, 32, "PSSI header");
+    assertRange(this.data, 32, this.data.readUInt16BE(16) * 24, "PSSI entries");
   }
 
   override get(): Record<string, unknown> {
@@ -510,6 +534,8 @@ function parsePco2(data: Buffer): Record<string, unknown> {
 export class CueListTag extends AbstractAnlzTag {
   constructor(data: Buffer, name: string) {
     super(data, name);
+    assertRange(this.data, 0, this.type === "PCOB" ? 24 : 20, `${this.type} header`);
+    this.get();
   }
 
   override get(): Record<string, unknown> {
@@ -526,6 +552,7 @@ export class CueListTag extends AbstractAnlzTag {
 export class WaveformColorConfigTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
     super(data, "PWVC");
+    assertRange(this.data, 0, 20, "PWVC data");
   }
 
   override get(): { data: Array<number>; unknown: number } {
@@ -657,7 +684,12 @@ export class AnlzFile {
     };
     if (fileHeader.type !== "PMAI")
       throw new TypeError(`Invalid ANLZ file type '${fileHeader.type}'`);
-    if (fileHeader.lenHeader < 28 || fileHeader.lenFile > data.length)
+    if (
+      fileHeader.lenHeader < 28 ||
+      fileHeader.lenHeader > data.length ||
+      fileHeader.lenFile < fileHeader.lenHeader ||
+      fileHeader.lenFile > data.length
+    )
       throw new AnlzLengthError("Invalid ANLZ file header lengths");
 
     const tags: Array<AbstractAnlzTag> = [];

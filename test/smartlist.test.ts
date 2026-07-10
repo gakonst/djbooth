@@ -60,11 +60,28 @@ describe("SmartList XML", () => {
           valueLeft: 2020,
         }),
     ).toThrow(RangeError);
+    expect(
+      () =>
+        new Condition({
+          operator: Operator.GREATER,
+          property: Property.YEAR,
+          valueLeft: "not-a-number",
+        }),
+    ).toThrow(RangeError);
+    expect(() => new SmartList(99 as never)).toThrow(RangeError);
+    expect(() => new SmartList(LogicalOperator.ALL, 2)).toThrow(RangeError);
+    expect(() =>
+      SmartList.fromXml('<NODE Id="wat" LogicalOperator="1" AutomaticUpdate="0"/>'),
+    ).toThrow(RangeError);
+    const invalidId = new SmartList();
+    invalidId.playlistId = Number.NaN;
+    expect(() => invalidId.toXml()).toThrow(RangeError);
   });
 
   it("converts signed and unsigned 32-bit playlist IDs", () => {
     expect(leftBitshift(2602250856)).toBe(-1692716440);
     expect(rightBitshift(-1692716440)).toBe(2602250856);
+    expect(() => leftBitshift(Number.NaN)).toThrow(RangeError);
   });
 });
 

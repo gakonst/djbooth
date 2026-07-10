@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   AnlzFile,
+  AnlzLengthError,
   BeatGridTag,
   getAnlzPaths,
   isAnlzFile,
@@ -134,6 +135,73 @@ describe("ANLZ parsing", () => {
     const waveform = AnlzFile.parse(anlzData()).getTag("wf_preview");
     expect(waveform).toBeInstanceOf(MonochromeWaveformTag);
     expect(waveform.get()).toEqual({ colors: [1, 7, 4], heights: [1, 31, 10] });
+  });
+
+  it("turns every known truncated tag boundary into a format error", () => {
+    const minimums: Record<string, [number, number]> = {
+      PCO2: [20, 20],
+      PCOB: [24, 24],
+      PPTH: [16, 16],
+      PQT2: [56, 56],
+      PQTZ: [24, 24],
+      PSSI: [32, 32],
+      PVBR: [16, 1616],
+      PWAV: [20, 20],
+      PWV2: [20, 20],
+      PWV3: [24, 24],
+      PWV4: [24, 24],
+      PWV5: [24, 24],
+      PWV6: [20, 20],
+      PWV7: [24, 24],
+      PWVC: [20, 20],
+    };
+    for (const [type, [headerLength, minimum]] of Object.entries(minimums)) {
+      for (const length of new Set([12, Math.max(12, minimum - 1)])) {
+        const malformed = Buffer.alloc(length);
+        malformed.write(type, 0, "ascii");
+        malformed.writeUInt32BE(headerLength, 4);
+        malformed.writeUInt32BE(length, 8);
+        const header = Buffer.alloc(28);
+        header.write("PMAI", 0, "ascii");
+        header.writeUInt32BE(28, 4);
+        header.writeUInt32BE(28 + length, 8);
+        expect(
+          () => AnlzFile.parse(Buffer.concat([header, malformed])),
+          `${type}/${length}`,
+        ).toThrow(AnlzLengthError);
+      }
+    }
+  });
+
+  it("survives deterministic mutation fuzzing without native buffer exceptions", () => {
+    const source = anlzData();
+    let state = 0x9e37_79b9;
+    const random = () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return state >>> 0;
+    };
+    for (let iteration = 0; iteration < 1_000; iteration++) {
+      const length = random() % (source.length + 32);
+      const candidate = Buffer.alloc(length);
+      source.copy(candidate, 0, 0, Math.min(source.length, length));
+      for (let mutation = 0; mutation < 1 + (random() % 8); mutation++) {
+        if (!candidate.length) break;
+        candidate[random() % candidate.length] = random() & 0xff;
+      }
+      try {
+        const parsed = AnlzFile.parse(candidate);
+        for (const parsedTag of parsed.tags) {
+          parsedTag.summary();
+          parsedTag.get();
+        }
+        expect(AnlzFile.parse(parsed.build()).build()).toEqual(parsed.build());
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as NodeJS.ErrnoException).code).not.toBe("ERR_OUT_OF_RANGE");
+      }
+    }
   });
 });
 

@@ -475,6 +475,7 @@ export abstract class SettingsFile {
     const checksum = computeChecksum(data, definition.checksumFromStart);
     data.writeUInt16LE(checksum, data.length - 4);
     this.header = { ...this.header, checksum, version: this.version };
+    this.source = Buffer.from(data);
     return data;
   }
 

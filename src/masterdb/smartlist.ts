@@ -169,6 +169,23 @@ export class Condition {
       (input.valueRight === undefined || input.valueRight === "")
     )
       throw new RangeError(`Operator '${input.operator}' requires valueRight`);
+    if (
+      numberProperties.has(input.property) &&
+      input.valueLeft !== "" &&
+      !Number.isFinite(Number(input.valueLeft))
+    )
+      throw new RangeError(`Condition valueLeft must be numeric for '${input.property}'`);
+    if (
+      numberProperties.has(input.property) &&
+      input.operator === Operator.IN_RANGE &&
+      !Number.isFinite(Number(input.valueRight))
+    )
+      throw new RangeError(`Condition valueRight must be numeric for '${input.property}'`);
+    if (
+      (input.operator === Operator.IN_LAST || input.operator === Operator.NOT_IN_LAST) &&
+      (!Number.isFinite(Number(input.valueLeft)) || Number(input.valueLeft) < 0)
+    )
+      throw new RangeError("Relative-date condition value must be a non-negative number");
     this.property = input.property;
     this.operator = input.operator;
     this.unit = input.unit ?? "";
@@ -190,11 +207,19 @@ export class Condition {
 
 /** Convert an unsigned 32-bit playlist ID to Rekordbox's signed XML form. */
 export function leftBitshift(value: number, bits = 32): number {
+  if (!Number.isSafeInteger(value) || !Number.isInteger(bits) || bits < 1 || bits > 52)
+    throw new RangeError(
+      "Bit-shift inputs must be safe integers and bits must be between 1 and 52",
+    );
   return value - 2 ** bits;
 }
 
 /** Convert Rekordbox's signed XML playlist ID to an unsigned form. */
 export function rightBitshift(value: number, bits = 32): number {
+  if (!Number.isSafeInteger(value) || !Number.isInteger(bits) || bits < 1 || bits > 52)
+    throw new RangeError(
+      "Bit-shift inputs must be safe integers and bits must be between 1 and 52",
+    );
   return value + 2 ** bits;
 }
 
@@ -226,8 +251,16 @@ export class SmartList {
   conditions: Array<Condition> = [];
 
   constructor(logicalOperator: LogicalOperator = LogicalOperator.ALL, autoUpdate = 0) {
+    SmartList.validateOptions(logicalOperator, autoUpdate);
     this.logicalOperator = logicalOperator;
     this.autoUpdate = autoUpdate;
+  }
+
+  private static validateOptions(logicalOperator: number, autoUpdate: number): void {
+    if (![LogicalOperator.ALL, LogicalOperator.ANY].includes(logicalOperator as LogicalOperator))
+      throw new RangeError(`Invalid logical operator '${logicalOperator}'`);
+    if (autoUpdate !== 0 && autoUpdate !== 1)
+      throw new RangeError(`AutomaticUpdate must be 0 or 1, got '${autoUpdate}'`);
   }
 
   /** Parse smart-playlist XML into this object. */
@@ -244,9 +277,14 @@ export class SmartList {
       : root.CONDITION
         ? [root.CONDITION]
         : [];
-    this.playlistId = String(rightBitshift(Number(root.Id)));
-    this.logicalOperator = Number(root.LogicalOperator) as LogicalOperator;
-    this.autoUpdate = Number(root.AutomaticUpdate);
+    const id = Number(root.Id);
+    const logicalOperator = Number(root.LogicalOperator);
+    const autoUpdate = Number(root.AutomaticUpdate);
+    if (!Number.isSafeInteger(id)) throw new RangeError(`Invalid smart playlist Id '${root.Id}'`);
+    SmartList.validateOptions(logicalOperator, autoUpdate);
+    this.playlistId = String(rightBitshift(id));
+    this.logicalOperator = logicalOperator as LogicalOperator;
+    this.autoUpdate = autoUpdate;
     this.conditions = rawConditions.map((raw) => {
       const condition = asRecord(raw);
       return new Condition({
@@ -269,6 +307,12 @@ export class SmartList {
   toXml(): string {
     if (this.playlistId === "")
       throw new TypeError("playlistId is required to serialize a smart list");
+    SmartList.validateOptions(this.logicalOperator, this.autoUpdate);
+    const playlistId = Number(this.playlistId);
+    if (!Number.isSafeInteger(playlistId) || playlistId < 0 || playlistId >= 2 ** 32)
+      throw new RangeError(
+        `playlistId must be an unsigned 32-bit integer, got '${this.playlistId}'`,
+      );
     const builder = new XMLBuilder({
       attributeNamePrefix: "",
       format: false,
@@ -277,7 +321,7 @@ export class SmartList {
     });
     return builder.build({
       NODE: {
-        Id: String(leftBitshift(Number(this.playlistId))),
+        Id: String(leftBitshift(playlistId)),
         LogicalOperator: String(this.logicalOperator),
         AutomaticUpdate: String(this.autoUpdate),
         CONDITION: this.conditions.map((condition) => ({
@@ -324,6 +368,7 @@ export class SmartList {
 
   /** Compile conditions to a parameterized SQLite WHERE expression. */
   compileSql(options: { tableAlias?: string } = {}): SmartListSql {
+    SmartList.validateOptions(this.logicalOperator, this.autoUpdate);
     const clauses: Array<string> = [];
     const parameters: Array<unknown> = [];
     const unsupported: Array<Property> = [];

@@ -11,10 +11,16 @@ import {
   DjmdMixerParam,
   DjmdPlaylist,
   DjmdSongPlaylist,
+  DatabaseRow,
   MasterDatabase,
   MasterPlaylistXml,
   PlaylistType,
+  stringToDatetime,
 } from "../src/masterdb/index.js";
+
+class DefaultRow extends DatabaseRow {
+  static override tableName = "defaults";
+}
 
 const roots: Array<string> = [];
 const now = "2026-07-10 12:00:00.000 +00:00";
@@ -68,6 +74,7 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
     CREATE TABLE djmdMixerParam (
       ID TEXT PRIMARY KEY, ContentID TEXT, GainHigh INTEGER, GainLow INTEGER, PeakHigh INTEGER, PeakLow INTEGER
     );
+    CREATE TABLE defaults (ID INTEGER PRIMARY KEY AUTOINCREMENT, Value TEXT DEFAULT 'default');
   `);
   const insert = database.transaction(() => {
     database
@@ -166,6 +173,9 @@ describe("MasterDatabase queries", () => {
     const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
     expect(db.tableNames).toContain("djmdContent");
     expect(db.query(DjmdContent).count()).toBe(2);
+    expect(db.query(DjmdContent).limit(1).count()).toBe(1);
+    expect(db.query(DjmdContent).offset(1).count()).toBe(1);
+    expect(db.query(DjmdContent).limit(0).count()).toBe(0);
     expect(
       db
         .query(DjmdContent)
@@ -193,7 +203,13 @@ describe("MasterDatabase queries", () => {
     const mixer = db.query(DjmdMixerParam).one();
     expect(mixer.Gain).toBeCloseTo(0);
     expect(mixer.Peak).toBe(Number.NEGATIVE_INFINITY);
+    expect(() => db.query(DjmdContent).orderBy("ID", "sideways" as never)).toThrow(RangeError);
     db.close();
+  });
+
+  it("rejects syntactically valid but impossible dates", () => {
+    expect(() => stringToDatetime("2026-99-99 12:00:00 +00:00")).toThrow(TypeError);
+    expect(() => stringToDatetime("not-a-date")).toThrow(TypeError);
   });
 
   it("opens the same connection after close", () => {
@@ -285,6 +301,139 @@ describe("MasterDatabase mutations", () => {
     expect(songs.map((song) => song.ContentID)).toEqual(["1", "2"]);
     expect(reopened.query(DjmdPlaylist).where({ ParentID: folder.ID }).count()).toBe(2);
     reopened.close();
+  });
+
+  it("rejects fractional positions, cross-playlist songs, and hierarchy cycles", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const folder = db.createPlaylistFolder("Folder");
+    const child = db.createPlaylistFolder("Child", { parent: folder });
+    const other = db.createPlaylist("Other");
+    expect(() => db.createPlaylist("Bad", { seq: 1.5 })).toThrow(RangeError);
+    expect(() => db.addToPlaylist(other, "1", 1.5)).toThrow(RangeError);
+    const membership = db.query(DjmdSongPlaylist).where({ ID: "song-1" }).one();
+    expect(() => db.moveSongInPlaylist(other, membership, 1)).toThrow(TypeError);
+    expect(() => db.movePlaylist(folder, { parent: child })).toThrow(TypeError);
+    expect(folder.ParentID).toBe("root");
+    expect(() => db.movePlaylist(other, { seq: Number.NaN })).toThrow(RangeError);
+    expect(() => db.generateUnusedId(DjmdContent, { bits: 16 as never })).toThrow(RangeError);
+    db.rollback();
+    db.close();
+  });
+
+  it("preserves contiguous playlist ordering through a deterministic 300-operation state machine", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const playlist = db.createPlaylist("State machine");
+    let state = 0xa341_316c;
+    const random = () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return state >>> 0;
+    };
+
+    for (let iteration = 0; iteration < 300; iteration++) {
+      const songs = db
+        .query(DjmdSongPlaylist)
+        .where({ PlaylistID: playlist.ID })
+        .orderBy("TrackNo")
+        .all();
+      const operation = random() % 3;
+      if (!songs.length || (operation === 0 && songs.length < 30)) {
+        db.addToPlaylist(playlist, random() % 2 ? "1" : "2", 1 + (random() % (songs.length + 1)));
+      } else if (operation === 1) {
+        db.removeFromPlaylist(playlist, songs[random() % songs.length]!);
+      } else {
+        db.moveSongInPlaylist(
+          playlist,
+          songs[random() % songs.length]!,
+          1 + (random() % songs.length),
+        );
+      }
+      const ordered = db
+        .query(DjmdSongPlaylist)
+        .where({ PlaylistID: playlist.ID })
+        .orderBy("TrackNo")
+        .all();
+      expect(ordered.map((song) => song.TrackNo)).toEqual(
+        Array.from({ length: ordered.length }, (_, index) => index + 1),
+      );
+    }
+    db.commit({ autoincrement: false });
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const trackNumbers = reopened
+      .query(DjmdSongPlaylist)
+      .where({ PlaylistID: playlist.ID })
+      .orderBy("TrackNo")
+      .all()
+      .map((song) => song.TrackNo);
+    expect(trackNumbers).toEqual(
+      Array.from({ length: trackNumbers.length }, (_, index) => index + 1),
+    );
+    reopened.close();
+  });
+
+  it("handles default inserts and every new-row rollback/delete boundary", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+
+    const neverFlushed = db.create(DefaultRow, {});
+    db.delete(neverFlushed);
+    db.commit({ autoincrement: false });
+    expect(db.query(DefaultRow).count()).toBe(0);
+
+    const rolledBack = db.create(DefaultRow, {});
+    expect(db.query(DefaultRow).count()).toBe(1);
+    expect(rolledBack.ID).toBeTypeOf("number");
+    db.rollback();
+    expect(rolledBack.ID).toBeUndefined();
+    expect(db.query(DefaultRow).count()).toBe(0);
+
+    db.add(rolledBack);
+    db.commit({ autoincrement: false });
+    expect(rolledBack.Value).toBeUndefined();
+    expect(db.query(DefaultRow).count()).toBe(1);
+
+    const flushedThenDeleted = db.create(DefaultRow, {});
+    expect(db.query(DefaultRow).count()).toBe(2);
+    db.delete(flushedThenDeleted);
+    db.commit({ autoincrement: false });
+    expect(db.query(DefaultRow).count()).toBe(1);
+    db.close();
+  });
+
+  it("rekeys the identity map when a primary key changes", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    content.ID = "99";
+    db.commit({ autoincrement: false });
+    expect(db.query(DjmdContent).where({ ID: "1" }).oneOrNone()).toBeUndefined();
+    expect(db.query(DjmdContent).where({ ID: "99" }).one()).toBe(content);
+    db.close();
   });
 });
 
