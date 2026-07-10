@@ -29,6 +29,9 @@ export class AnlzLengthError extends Error {
   override name = "AnlzLengthError";
 }
 
+/** Upstream-compatible file-length error name. */
+export { AnlzLengthError as BuildFileLengthError, AnlzLengthError as BuildTagLengthError };
+
 function assertRange(data: Buffer, offset: number, length: number, context: string): void {
   if (offset < 0 || length < 0 || offset + length > data.length)
     throw new AnlzLengthError(`${context} exceeds the ${data.length}-byte buffer`);
@@ -129,6 +132,22 @@ export class BeatGridTag extends AbstractAnlzTag {
   /** Number of beat-grid entries. */
   get count(): number {
     return this.data.readUInt32BE(20);
+  }
+
+  get beats(): Array<number> {
+    return this.getBeats();
+  }
+  get bpms(): Array<number> {
+    return this.getBpms();
+  }
+  get times(): Array<number> {
+    return this.getTimes();
+  }
+  get bpmsAverage(): number {
+    return this.averageBpm;
+  }
+  get bpmsUnique(): Array<number> {
+    return [...new Set(this.getBpms())];
   }
 
   /** Parse all beat-grid entries, with BPM and time in user-facing units. */
@@ -517,38 +536,95 @@ export class WaveformColorConfigTag extends AbstractAnlzTag {
   }
 }
 
+// Upstream tag-class names retained for direct migrations from pyrekordbox.
+export class PQTZAnlzTag extends BeatGridTag {}
+export class PQT2AnlzTag extends ExtendedBeatGridTag {}
+export class PCOBAnlzTag extends CueListTag {
+  constructor(data: Buffer) {
+    super(data, "cue_list");
+  }
+}
+export class PCO2AnlzTag extends CueListTag {
+  constructor(data: Buffer) {
+    super(data, "cue_list2");
+  }
+}
+export class PPTHAnlzTag extends PathTag {}
+export class PVBRAnlzTag extends VbrTag {}
+export class PSSIAnlzTag extends SongStructureTag {}
+export class PWAVAnlzTag extends MonochromeWaveformTag {
+  constructor(data: Buffer) {
+    super(data, "wf_preview");
+  }
+}
+export class PWV2AnlzTag extends MonochromeWaveformTag {
+  constructor(data: Buffer) {
+    super(data, "wf_tiny_preview");
+  }
+}
+export class PWV3AnlzTag extends MonochromeWaveformTag {
+  constructor(data: Buffer) {
+    super(data, "wf_detail");
+  }
+}
+export class PWV4AnlzTag extends ColorPreviewWaveformTag {}
+export class PWV5AnlzTag extends ColorDetailWaveformTag {}
+export class PWV6AnlzTag extends ThreeByteWaveformTag {}
+export class PWV7AnlzTag extends ThreeByteWaveformTag {}
+export class PWVCAnlzTag extends WaveformColorConfigTag {}
+
+/** Tag handlers keyed by the four-character names used by pyrekordbox. */
+export const TAGS = {
+  PCO2: PCO2AnlzTag,
+  PCOB: PCOBAnlzTag,
+  PPTH: PPTHAnlzTag,
+  PQT2: PQT2AnlzTag,
+  PQTZ: PQTZAnlzTag,
+  PSSI: PSSIAnlzTag,
+  PVBR: PVBRAnlzTag,
+  PWAV: PWAVAnlzTag,
+  PWV2: PWV2AnlzTag,
+  PWV3: PWV3AnlzTag,
+  PWV4: PWV4AnlzTag,
+  PWV5: PWV5AnlzTag,
+  PWV6: PWV6AnlzTag,
+  PWV7: PWV7AnlzTag,
+  PWVC: PWVCAnlzTag,
+} as const;
+
 function createTag(data: Buffer): AbstractAnlzTag {
   const type = data.toString("ascii", 0, 4);
   switch (type) {
     case "PQTZ":
-      return new BeatGridTag(data);
+      return new PQTZAnlzTag(data);
     case "PQT2":
-      return new ExtendedBeatGridTag(data);
+      return new PQT2AnlzTag(data);
     case "PCOB":
-      return new CueListTag(data, "cue_list");
+      return new PCOBAnlzTag(data);
     case "PCO2":
-      return new CueListTag(data, "cue_list2");
+      return new PCO2AnlzTag(data);
     case "PPTH":
-      return new PathTag(data);
+      return new PPTHAnlzTag(data);
     case "PVBR":
-      return new VbrTag(data);
+      return new PVBRAnlzTag(data);
     case "PSSI":
-      return new SongStructureTag(data);
+      return new PSSIAnlzTag(data);
     case "PWAV":
-      return new MonochromeWaveformTag(data, "wf_preview");
+      return new PWAVAnlzTag(data);
     case "PWV2":
-      return new MonochromeWaveformTag(data, "wf_tiny_preview");
+      return new PWV2AnlzTag(data);
     case "PWV3":
-      return new MonochromeWaveformTag(data, "wf_detail");
+      return new PWV3AnlzTag(data);
     case "PWV4":
-      return new ColorPreviewWaveformTag(data);
+      return new PWV4AnlzTag(data);
     case "PWV5":
-      return new ColorDetailWaveformTag(data);
+      return new PWV5AnlzTag(data);
     case "PWV6":
+      return new PWV6AnlzTag(data);
     case "PWV7":
-      return new ThreeByteWaveformTag(data);
+      return new PWV7AnlzTag(data);
     case "PWVC":
-      return new WaveformColorConfigTag(data);
+      return new PWVCAnlzTag(data);
     default:
       return new AbstractAnlzTag(data);
   }
@@ -721,6 +797,13 @@ export function walkAnlzDirectories(root: string): Array<string> {
   };
   visit(root);
   return directories;
+}
+
+/** Find ANLZ directories together with their DAT/EXT/2EX files. */
+export function walkAnlzPaths(
+  root: string,
+): Array<[string, Record<"2EX" | "DAT" | "EXT", string | undefined>]> {
+  return walkAnlzDirectories(root).map((directory) => [directory, getAnlzPaths(directory)]);
 }
 
 /** Open every ANLZ file directly inside a directory. */

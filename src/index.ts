@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-export const version = "0.0.0";
+export const version = "0.1.0";
 
 export * from "./anlz/index.js";
 export * from "./config/index.js";

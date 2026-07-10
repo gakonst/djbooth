@@ -62,7 +62,7 @@ cli.command("status", {
       name: "@gakonst/rekordbox",
       version,
       runtime: process.version,
-      phase: "active-port",
+      phase: "complete-port",
     };
   },
 });

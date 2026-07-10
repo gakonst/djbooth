@@ -227,6 +227,10 @@ describe("MasterDatabase mutations", () => {
       unlock: false,
     });
     const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    expect(db.registry.getInt("localUpdateCount")).toBe(10);
+    const events: Array<string> = [];
+    db.registerEvent("before_commit", () => events.push("before"));
+    db.registerEvent("after_commit", () => events.push("after"));
     content.Title = "Changed";
     db.rollback();
     expect(content.Title).toBe("Demo Track 1");
@@ -234,6 +238,7 @@ describe("MasterDatabase mutations", () => {
     content.Title = "Committed";
     const artist = db.addArtist("New Artist");
     db.commit();
+    expect(events).toEqual(["before", "after"]);
     expect(db.getLocalUsn()).toBeGreaterThan(10);
     expect(artist.rb_local_usn).toBeTypeOf("number");
     db.close();

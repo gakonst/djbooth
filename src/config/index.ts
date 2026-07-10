@@ -49,6 +49,9 @@ export class InvalidApplicationDirnameError extends Error {
   override name = "InvalidApplicationDirnameError";
 }
 
+/** Upstream-compatible error name. */
+export { InvalidApplicationDirnameError as InvalidApplicationDirname };
+
 /** Error thrown when automatic discovery is unavailable on the current platform. */
 export class UnsupportedPlatformError extends Error {
   override name = "UnsupportedPlatformError";
@@ -350,4 +353,14 @@ export function formatConfig(value: Configuration = getConfig()): string {
       lines.push(`   ${(key + " =").padEnd(14)} ${setting}`);
   }
   return lines.join("\n");
+}
+
+/** Upstream-compatible alias for {@link formatConfig}. */
+export const pformatConfig = formatConfig;
+
+/** Print the discovered Rekordbox configuration and return its formatted value. */
+export function showConfig(value: Configuration = getConfig()): string {
+  const formatted = formatConfig(value);
+  console.log(formatted);
+  return formatted;
 }

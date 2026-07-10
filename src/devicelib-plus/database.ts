@@ -3,7 +3,12 @@ import { basename } from "node:path";
 
 import type SQLite from "better-sqlite3-multiple-ciphers";
 
-import { MasterDatabase, type CommitOptions, type Query } from "../masterdb/database.js";
+import {
+  MasterDatabase,
+  type CommitOptions,
+  type DatabaseEventHandler,
+  type Query,
+} from "../masterdb/database.js";
 import type { DatabaseRow, DatabaseValue, ModelClass } from "../masterdb/models.js";
 import type { DjmdContent } from "../masterdb/models.js";
 import { deobfuscate } from "../utils.js";
@@ -270,6 +275,18 @@ export class DeviceLibraryPlus {
   }
   hasColumn(table: string, column: string): boolean {
     return this.engine.hasColumn(table, column);
+  }
+  registerEvent(identifier: string, callback: DatabaseEventHandler): void {
+    this.engine.registerEvent(identifier, callback);
+  }
+  unregisterEvent(identifier: string): void {
+    this.engine.unregisterEvent(identifier);
+  }
+  withNoAutoflush<result>(callback: () => result): result {
+    return this.engine.withNoAutoflush(callback);
+  }
+  get noAutoflush(): <result>(callback: () => result) => result {
+    return this.engine.noAutoflush;
   }
 
   query<row extends DatabaseRow>(model: ModelClass<row>): Query<row>;
@@ -659,6 +676,11 @@ export class DeviceLibraryPlus {
         ],
       ),
     );
+  }
+
+  /** Upstream-compatible alias for {@link toObject}. */
+  toDict(): Record<string, Array<Record<string, unknown>>> {
+    return this.toObject();
   }
 
   toJson(path: string, options: { indent?: number } = {}): void {

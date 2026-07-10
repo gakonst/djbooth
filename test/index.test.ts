@@ -4,6 +4,6 @@ import { version } from "../src/index.js";
 
 describe("package", () => {
   it("exports its version", () => {
-    expect(version).toBe("0.0.0");
+    expect(version).toBe("0.1.0");
   });
 });

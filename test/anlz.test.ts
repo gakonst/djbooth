@@ -11,8 +11,11 @@ import {
   isAnlzFile,
   MonochromeWaveformTag,
   PathTag,
+  PQTZAnlzTag,
   readAnlzFiles,
+  TAGS,
   walkAnlzDirectories,
+  walkAnlzPaths,
 } from "../src/anlz/index.js";
 
 function encodeUtf16Be(value: string): Buffer {
@@ -99,6 +102,8 @@ describe("ANLZ parsing", () => {
     const file = AnlzFile.parse(anlzData());
     const grid = file.getTag("beat_grid");
     expect(grid).toBeInstanceOf(BeatGridTag);
+    expect(grid).toBeInstanceOf(PQTZAnlzTag);
+    expect(TAGS.PQTZ).toBe(PQTZAnlzTag);
     if (!(grid instanceof BeatGridTag)) throw new TypeError("Expected beat grid");
     expect(grid.get()).toEqual([
       { beat: 1, bpm: 128, time: 0.025 },
@@ -143,6 +148,7 @@ describe("ANLZ discovery", () => {
 
     expect(isAnlzFile(join(directory, "ANLZ0000.DAT"))).toBe(true);
     expect(walkAnlzDirectories(root)).toEqual([directory]);
+    expect(walkAnlzPaths(root)[0]?.[0]).toBe(directory);
     expect(getAnlzPaths(directory)).toMatchObject({
       DAT: join(directory, "ANLZ0000.DAT"),
       EXT: join(directory, "ANLZ0000.EXT"),

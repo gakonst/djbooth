@@ -1,8 +1,23 @@
 {
   "name": "@gakonst/rekordbox",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "TypeScript toolkit and CLI for Rekordbox libraries and export formats",
+  "keywords": [
+    "cli",
+    "dj",
+    "incur",
+    "rekordbox",
+    "typescript"
+  ],
+  "homepage": "https://github.com/gakonst/rekordbox-ts#readme",
+  "bugs": {
+    "url": "https://github.com/gakonst/rekordbox-ts/issues"
+  },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/gakonst/rekordbox-ts.git"
+  },
   "bin": {
     "rekordbox": "./dist/cli.js"
   },
@@ -51,7 +66,8 @@
     "format": "oxfmt --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "validate": "pnpm check && pnpm test && pnpm typecheck && pnpm build"
   },
   "dependencies": {
     "better-sqlite3-multiple-ciphers": "^12.11.1",

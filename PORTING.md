@@ -67,6 +67,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Preserve SQLite autoincrement IDs on newly flushed rows, and recognize Device Library Plus's timezone-bearing date columns even though its declared SQLite storage type is `TEXT`.
 - Apply the same read-only default and explicit CLI `--write` acknowledgement to exported device libraries. Support the separate upstream default SQLCipher key and `REKORDBOX_DEVICE_DB_KEY` override.
 
+### 2026-07-10 — Compatibility naming
+
+- Keep idiomatic camelCase as the primary TypeScript convention while exporting upstream ANLZ handler names (`PQTZAnlzTag` through `PWVCAnlzTag`), configuration aliases, `toDict`, and the deprecated `Rekordbox6Database` migration class where names carry compatibility value.
+- Model SQLAlchemy session features with synchronous callbacks: lifecycle events, `noAutoflush`, registry value access, and temporary/persistent USN tracking controls.
+
 ## Progress
 
 ### 2026-07-10
@@ -93,8 +98,8 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Added read, generic row, content, playlist, and explicit-write commands under `db`.
 - Ported all 22 Device Library Plus models, typed columns, relationship and association-proxy traversal, all upstream query/add helpers, content search, transactions, JSON export, and SQLCipher/plain database access.
 - Added `device info`, `table`, `search`, `copy-unlocked`, generic row mutations, content creation, playlist workflows, and My Tag workflows. The durable suite now has 46 passing tests.
+- Audited public classes and methods across every pinned Python module, restored compatibility aliases and registry/session hooks, documented the TypeScript and incur interfaces, and prepared version `0.1.0`.
 
 ## Next
 
-1. Complete final API/CLI coverage audit against the pinned Python source.
-2. Write package and CLI documentation, then perform end-to-end/package verification.
+1. Perform final package, CLI-manifest, clean-install, and repository verification.

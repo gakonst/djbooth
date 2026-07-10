@@ -10,7 +10,7 @@ import {
   readAnlzFiles as readAnlzFilesInDirectory,
 } from "../anlz/index.js";
 import { getConfig } from "../config/index.js";
-import { deobfuscate, getRekordboxPid } from "../utils.js";
+import { deobfuscate, getRekordboxPid, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
 import { SmartList } from "./smartlist.js";
@@ -33,6 +33,15 @@ type TableSchema = {
 
 type WhereClause = { parameters: Array<unknown>; sql: string };
 
+/** Raised when an operation requires an open SQLite connection. */
+export class SessionNotInitializedError extends Error {
+  override name = "SessionNotInitializedError";
+
+  constructor() {
+    super("SQLite session is not initialized");
+  }
+}
+
 /** Options for opening a Rekordbox master database. */
 export type MasterDatabaseOptions = {
   allowWhileRunning?: boolean;
@@ -49,6 +58,9 @@ export type CommitOptions = {
   allowWhileRunning?: boolean;
   autoincrement?: boolean;
 };
+
+/** Callback registered for a transaction/session lifecycle event. */
+export type DatabaseEventHandler = (database: MasterDatabase) => void;
 
 /** Convert a JavaScript date to Rekordbox's UTC database representation. */
 export function datetimeToString(value: Date): string {
@@ -230,23 +242,72 @@ export class Query<row extends models.DatabaseRow> implements Iterable<row> {
 export class RekordboxAgentRegistry {
   constructor(private database: MasterDatabase) {}
 
+  /** Query every agent registry row. */
+  getRegistries(): Query<models.AgentRegistry> {
+    return this.database.query(models.AgentRegistry);
+  }
+
+  /** Return one registry row by identifier. */
+  getRegistry(key: string): models.AgentRegistry {
+    return this.database.query(models.AgentRegistry).where({ registry_id: key }).one();
+  }
+
+  getString(key: string): string | null {
+    const value = this.getRegistry(key).get("str_1");
+    return value == null ? null : String(value);
+  }
+  getText(key: string): string | null {
+    const value = this.getRegistry(key).get("text_1");
+    return value == null ? null : String(value);
+  }
+  getInt(key: string): number {
+    return Number(this.getRegistry(key).get("int_1"));
+  }
+  getDate(key: string): Date | null {
+    const value = this.getRegistry(key).get("date_1");
+    if (value == null) return null;
+    return value instanceof Date ? value : stringToDatetime(String(value));
+  }
+
+  setString(key: string, value: string): void {
+    this.getRegistry(key).set("str_1", value);
+  }
+  setText(key: string, value: string): void {
+    this.getRegistry(key).set("text_1", value);
+  }
+  setInt(key: string, value: number): void {
+    this.getRegistry(key).set("int_1", value);
+  }
+  setDate(key: string, value: Date): void {
+    this.getRegistry(key).set("date_1", value);
+  }
+
+  /** Clear pending change events without discarding staged row values. */
+  clearBuffer(): void {
+    this.database.clearChanges();
+  }
+  /** Enable change/USN tracking. */
+  enableTracking(): void {
+    this.database.enableTracking();
+  }
+  /** Disable change/USN tracking until explicitly re-enabled. */
+  disableTracking(): void {
+    this.database.disableTracking();
+  }
+  /** Run a callback with change/USN tracking temporarily disabled. */
+  disabled<result>(callback: () => result): result {
+    return this.database.withTrackingDisabled(callback);
+  }
+
   /** Current local update sequence number. */
   getLocalUpdateCount(): number {
-    const row = this.database
-      .query(models.AgentRegistry)
-      .where({ registry_id: "localUpdateCount" })
-      .one();
-    return Number(row.get("int_1"));
+    return this.getInt("localUpdateCount");
   }
 
   /** Set the global local update sequence number. */
   setLocalUpdateCount(value: number): void {
     if (!Number.isInteger(value)) throw new TypeError("USN must be an integer");
-    const row = this.database
-      .query(models.AgentRegistry)
-      .where({ registry_id: "localUpdateCount" })
-      .one();
-    this.database.withTrackingDisabled(() => row.set("int_1", value));
+    this.database.withTrackingDisabled(() => this.setInt("localUpdateCount", value));
   }
 
   /** Increment the global local update sequence number. */
@@ -298,7 +359,9 @@ export class MasterDatabase {
   private tracked = new Set<models.DatabaseRow>();
   private changes: Array<models.DatabaseRow> = [];
   private trackingDisabled = 0;
+  private autoflushDisabled = 0;
   private transactionOpen = false;
+  private events = new Map<string, DatabaseEventHandler>();
 
   constructor(
     pathOrOptions: string | MasterDatabaseOptions = {},
@@ -351,10 +414,41 @@ export class MasterDatabase {
     this.connection = undefined;
     this.schemas.clear();
     this.identity.clear();
+    this.events.clear();
+  }
+
+  /** Register a SQLAlchemy-style lifecycle callback such as `before_flush`. */
+  registerEvent(identifier: string, callback: DatabaseEventHandler): void {
+    this.events.set(identifier, callback);
+  }
+
+  /** Remove a registered lifecycle callback. */
+  unregisterEvent(identifier: string): void {
+    if (!this.events.delete(identifier))
+      throw new RangeError(`Database event '${identifier}' is not registered`);
+  }
+
+  private emit(identifier: string): void {
+    this.events.get(identifier)?.(this);
+  }
+
+  /** Run a callback without query-triggered autoflush. */
+  withNoAutoflush<result>(callback: () => result): result {
+    this.autoflushDisabled += 1;
+    try {
+      return callback();
+    } finally {
+      this.autoflushDisabled -= 1;
+    }
+  }
+
+  /** Callback wrapper corresponding to pyrekordbox's `no_autoflush` context. */
+  get noAutoflush(): <result>(callback: () => result) => result {
+    return <result>(callback: () => result) => this.withNoAutoflush(callback);
   }
 
   private requireConnection(): Database.Database {
-    if (!this.connection?.open) throw new Error("SQLite connection is not initialized");
+    if (!this.connection?.open) throw new SessionNotInitializedError();
     return this.connection;
   }
 
@@ -460,7 +554,7 @@ export class MasterDatabase {
     sql: string,
     parameters: Array<unknown>,
   ): Array<row> {
-    if (this.tracked.size) this.flush();
+    if (this.tracked.size && !this.autoflushDisabled) this.flush();
     const rows = this.requireConnection()
       .prepare(sql)
       .all(...parameters) as Array<Record<string, unknown>>;
@@ -469,7 +563,7 @@ export class MasterDatabase {
 
   /** @internal Execute a count query. */
   countRows(sql: string, parameters: Array<unknown>): number {
-    if (this.tracked.size) this.flush();
+    if (this.tracked.size && !this.autoflushDisabled) this.flush();
     const row = this.requireConnection()
       .prepare(sql)
       .get(...parameters) as { count: number };
@@ -481,6 +575,7 @@ export class MasterDatabase {
   /** Create an untyped query for a physical table name. */
   query(model: string): Query<models.DatabaseRow>;
   query<row extends models.DatabaseRow>(model: models.ModelClass<row> | string): Query<row> {
+    this.requireConnection();
     let resolved: models.ModelClass<row>;
     if (typeof model === "string") {
       const tableName = model;
@@ -560,6 +655,21 @@ export class MasterDatabase {
     }
   }
 
+  /** Disable change/USN tracking until {@link enableTracking} is called. */
+  disableTracking(): void {
+    this.trackingDisabled += 1;
+  }
+
+  /** Re-enable one level of explicitly disabled change/USN tracking. */
+  enableTracking(): void {
+    if (this.trackingDisabled > 0) this.trackingDisabled -= 1;
+  }
+
+  /** Clear pending USN events without changing staged rows. */
+  clearChanges(): void {
+    this.changes = [];
+  }
+
   /** @internal Consume pending USN events. */
   consumeChanges(): Array<models.DatabaseRow> {
     const changes = [...this.changes];
@@ -580,6 +690,7 @@ export class MasterDatabase {
   flush(): void {
     if (!this.tracked.size) return;
     this.requireWritable();
+    this.emit("before_flush");
     const connection = this.requireConnection();
     if (!this.transactionOpen) {
       connection.exec("BEGIN");
@@ -634,6 +745,7 @@ export class MasterDatabase {
         .run(...changed.map((key) => this.serializeValue(row.data[key]!)), ...where.parameters);
       row.flushed = { ...row.data };
     }
+    this.emit("after_flush");
   }
 
   /** Commit staged changes, assigning local USNs by default. */
@@ -642,6 +754,7 @@ export class MasterDatabase {
     const normalized = typeof options === "boolean" ? { autoincrement: options } : options;
     if (!(normalized.allowWhileRunning ?? this.options.allowWhileRunning) && getRekordboxPid())
       throw new Error("Rekordbox is running; close it before committing database changes");
+    this.emit("before_commit");
     if ((normalized.autoincrement ?? true) && this.changes.length)
       this.registry.autoincrementLocalUpdateCount(true);
     this.flush();
@@ -683,6 +796,7 @@ export class MasterDatabase {
     this.tracked.clear();
     this.changes = [];
     this.transactionOpen = false;
+    this.emit("after_commit");
   }
 
   /** Roll back all staged and flushed-but-uncommitted changes. */
@@ -701,6 +815,7 @@ export class MasterDatabase {
     this.tracked.clear();
     this.changes = [];
     this.transactionOpen = false;
+    this.emit("after_rollback");
   }
 
   /** Current local update sequence number. */
@@ -1397,6 +1512,11 @@ export class MasterDatabase {
     );
   }
 
+  /** Upstream-compatible alias for {@link toObject}. */
+  toDict(): Record<string, Array<Record<string, unknown>>> {
+    return this.toObject();
+  }
+
   /** Write all mapped tables to JSON. */
   toJson(path: string, options: { indent?: number } = {}): void {
     writeFileSync(path, `${JSON.stringify(this.toObject(), null, options.indent ?? 2)}\n`, "utf8");
@@ -1437,5 +1557,19 @@ export class MasterDatabase {
     } finally {
       destination.close();
     }
+  }
+}
+
+/** @deprecated Use {@link MasterDatabase}; retained for pyrekordbox/db6 migrations. */
+export class Rekordbox6Database extends MasterDatabase {
+  constructor(
+    pathOrOptions: string | MasterDatabaseOptions = {},
+    overrides: MasterDatabaseOptions = {},
+  ) {
+    warnDeprecated("Rekordbox6Database", {
+      hint: "The Rekordbox6Database class was renamed.",
+      newName: "MasterDatabase",
+    });
+    super(pathOrOptions, overrides);
   }
 }
