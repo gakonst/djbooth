@@ -244,4 +244,24 @@ describe("DeviceLibraryPlus mutations", () => {
     expect(db.query("color").where({ name: "Pink" }).count()).toBe(0);
     db.close();
   });
+
+  it("persists relationship, association-proxy, and collection mutations", () => {
+    const { dbPath } = fixture();
+    const db = new DeviceLibraryPlus({ path: dbPath, readonly: false, unlock: false });
+    const constructed = Artist.create(db, { name: "Constructed" });
+    db.add(constructed);
+    expect(db.query(Artist).where({ name: "Constructed" }).one()).toBe(constructed);
+    const content = db.query(Content).one();
+    content.artist_name = "Renamed";
+    expect(content.artist?.name).toBe("Renamed");
+
+    const destination = db.addPlaylist("Destination");
+    const membership = db.query(PlaylistContent).one();
+    destination.songs.push(membership);
+    expect(membership.playlist_id).toBe(destination.playlist_id);
+    db.rollback();
+    expect(content.artist?.name).toBe("Orbital");
+    expect(membership.playlist_id).toBe(1);
+    db.close();
+  });
 });

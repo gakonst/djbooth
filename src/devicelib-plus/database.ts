@@ -8,8 +8,9 @@ import {
   type CommitOptions,
   type DatabaseEventHandler,
   type Query,
+  type SqlResult,
 } from "../masterdb/database.js";
-import type { DatabaseRow, DatabaseValue, ModelClass } from "../masterdb/models.js";
+import { DatabaseRow, type DatabaseValue, type ModelClass } from "../masterdb/models.js";
 import type { DjmdContent } from "../masterdb/models.js";
 import { deobfuscate } from "../utils.js";
 import * as models from "./models.js";
@@ -139,16 +140,18 @@ class DeviceDatabaseEngine extends MasterDatabase {
     const tree = treeRelations[row.tableName];
     if (tree) {
       if (property === "children")
-        return this.relatedRows(tree.child, { [tree.childKey]: row.get(tree.id)! }, "sequenceNo");
+        return this.relationshipCollection(row, tree.child, tree.childKey, "sequenceNo", tree.id);
       if (property === "parent") return this.relation(tree.child, tree.id, row.get(tree.parent));
     }
 
     if (row.tableName === "history") {
       if (property === "songs")
-        return this.relatedRows(
+        return this.relationshipCollection(
+          row,
           models.HistoryContent,
-          { history_id: row.get("history_id")! },
+          "history_id",
           "sequenceNo",
+          "history_id",
         );
       if (property === "contents")
         return (this.getComputed(row, "songs") as Array<models.HistoryContent>)
@@ -164,10 +167,12 @@ class DeviceDatabaseEngine extends MasterDatabase {
     if (row.tableName === "hotCueBankList") {
       if (property === "image") return this.relation(models.Image, "image_id", row.get("image_id"));
       if (property === "hotCueBankList_cues")
-        return this.relatedRows(
+        return this.relationshipCollection(
+          row,
           models.HotCueBankListCue,
-          { hotCueBankList_id: row.get("hotCueBankList_id")! },
+          "hotCueBankList_id",
           "sequenceNo",
+          "hotCueBankList_id",
         );
     }
     if (row.tableName === "hotCueBankList_cue") {
@@ -180,7 +185,13 @@ class DeviceDatabaseEngine extends MasterDatabase {
       if (property === "cue") return this.relation(models.Cue, "cue_id", row.get("cue_id"));
     }
     if (row.tableName === "myTag" && property === "myTags")
-      return this.relatedRows(models.MyTagContent, { myTag_id: row.get("myTag_id")! });
+      return this.relationshipCollection(
+        row,
+        models.MyTagContent,
+        "myTag_id",
+        undefined,
+        "myTag_id",
+      );
     if (row.tableName === "myTag_content") {
       if (property === "myTag") return this.relation(models.MyTag, "myTag_id", row.get("myTag_id"));
       if (property === "content")
@@ -189,10 +200,12 @@ class DeviceDatabaseEngine extends MasterDatabase {
     if (row.tableName === "playlist") {
       if (property === "image") return this.relation(models.Image, "image_id", row.get("image_id"));
       if (property === "songs")
-        return this.relatedRows(
+        return this.relationshipCollection(
+          row,
           models.PlaylistContent,
-          { playlist_id: row.get("playlist_id")! },
+          "playlist_id",
           "sequenceNo",
+          "playlist_id",
         );
       if (property === "contents")
         return (this.getComputed(row, "songs") as Array<models.PlaylistContent>)
@@ -214,6 +227,105 @@ class DeviceDatabaseEngine extends MasterDatabase {
     if (row.tableName === "sort" && property === "menuItem")
       return this.relation(models.MenuItem, "menuItem_id", row.get("menuItem_id"));
     return super.getComputed(row, property);
+  }
+
+  /** @internal Set SQLAlchemy-style relationships and association proxies. */
+  override setComputed(row: DatabaseRow, property: string, value: unknown): boolean {
+    const relations: Record<string, Record<string, [string, string]>> = {
+      album: { artist: ["artist_id", "artist_id"], image: ["image_id", "image_id"] },
+      category: { menuItem: ["menuItem_id", "menuItem_id"] },
+      content: {
+        album: ["album_id", "album_id"],
+        artist: ["artist_id_artist", "artist_id"],
+        color: ["color_id", "color_id"],
+        composer: ["artist_id_composer", "artist_id"],
+        genre: ["genre_id", "genre_id"],
+        image: ["image_id", "image_id"],
+        key: ["key_id", "key_id"],
+        label: ["label_id", "label_id"],
+        lyricist: ["artist_id_lyricist", "artist_id"],
+        originalArtist: ["artist_id_originalArtist", "artist_id"],
+        remixer: ["artist_id_remixer", "artist_id"],
+      },
+      cue: { content: ["content_id", "content_id"] },
+      history_content: {
+        content: ["content_id", "content_id"],
+        history: ["history_id", "history_id"],
+      },
+      hotCueBankList: { image: ["image_id", "image_id"] },
+      hotCueBankList_cue: {
+        cue: ["cue_id", "cue_id"],
+        hotCueBankList: ["hotCueBankList_id", "hotCueBankList_id"],
+      },
+      myTag_content: {
+        content: ["content_id", "content_id"],
+        myTag: ["myTag_id", "myTag_id"],
+      },
+      playlist: { image: ["image_id", "image_id"] },
+      playlist_content: {
+        content: ["content_id", "content_id"],
+        playlist: ["playlist_id", "playlist_id"],
+      },
+      recommendedLike: {
+        content_1: ["content_id_1", "content_id"],
+        content_2: ["content_id_2", "content_id"],
+      },
+      sort: { menuItem: ["menuItem_id", "menuItem_id"] },
+    };
+    const relation = relations[row.tableName]?.[property];
+    if (relation) {
+      const id = value instanceof DatabaseRow ? value.get(relation[1]) : value;
+      if (id !== null && id !== undefined && typeof id !== "string" && typeof id !== "number")
+        throw new TypeError("Relationship value must be a row, ID, or null");
+      row.set(relation[0], id == null ? null : id);
+      return true;
+    }
+
+    const trees: Record<string, string> = {
+      history: "history_id_parent",
+      hotCueBankList: "hotCueBankList_id_parent",
+      myTag: "myTag_id_parent",
+      playlist: "playlist_id_parent",
+    };
+    if (property === "parent" && trees[row.tableName]) {
+      const parentKey = trees[row.tableName]!;
+      const primaryKey = parentKey.replace("_parent", "");
+      const id = value instanceof DatabaseRow ? value.get(primaryKey) : value;
+      row.set(parentKey, id == null ? null : (id as DatabaseValue));
+      return true;
+    }
+
+    if (
+      ["children", "hotCueBankList_cues", "myTags", "songs"].includes(property) &&
+      Array.isArray(value)
+    ) {
+      const current = this.getComputed(row, property);
+      if (!Array.isArray(current)) return false;
+      current.splice(0, current.length, ...value);
+      return true;
+    }
+
+    const proxies: Record<string, [string, string]> = {
+      album_name: ["album", "name"],
+      artist_name: ["artist", "name"],
+      composer_name: ["composer", "name"],
+      genre_name: ["genre", "name"],
+      image_path: ["image", "path"],
+      label_name: ["label", "name"],
+      lyricist_name: ["lyricist", "name"],
+      menuItem_name: ["menuItem", "name"],
+      original_artist_name: ["originalArtist", "name"],
+      remixer_name: ["remixer", "name"],
+    };
+    const proxy = proxies[property];
+    if (proxy) {
+      const related = this.getComputed(row, proxy[0]);
+      if (!(related instanceof DatabaseRow))
+        throw new TypeError(`Cannot set '${property}' without an existing '${proxy[0]}' row`);
+      related[proxy[1]] = value;
+      return true;
+    }
+    return super.setComputed(row, property, value);
   }
 
   /** Commit without master.db USN processing. */
@@ -295,6 +407,19 @@ export class DeviceLibraryPlus {
     return (
       typeof model === "string" ? this.engine.query(model) : this.engine.query(model)
     ) as Query<row>;
+  }
+
+  /** Construct a default-populated Device Library row without staging it. */
+  construct<row extends DatabaseRow>(model: ModelClass<row>, values: Filters): row {
+    return this.engine.construct(model, values);
+  }
+
+  /** Execute arbitrary parameterized SQL through the Device Library connection. */
+  executeSql<row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters: Array<unknown> = [],
+  ): SqlResult<row> {
+    return this.engine.executeSql<row>(sql, parameters);
   }
 
   create<row extends DatabaseRow>(model: ModelClass<row>, values: Filters): row {

@@ -6,12 +6,23 @@ import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DjmdArtist,
-  DjmdContent,
-  DjmdMixerParam,
-  DjmdPlaylist,
-  DjmdSongPlaylist,
   DatabaseRow,
+  DjmdAlbum,
+  DjmdArtist,
+  DjmdCategory,
+  DjmdContent,
+  DjmdHistory,
+  DjmdMixerParam,
+  DjmdMyTag,
+  DjmdPlaylist,
+  DjmdRelatedTracks,
+  DjmdSampler,
+  DjmdSongHistory,
+  DjmdSongMyTag,
+  DjmdSongPlaylist,
+  DjmdSongRelatedTracks,
+  DjmdSongSampler,
+  DjmdSort,
   MasterDatabase,
   MasterPlaylistXml,
   PlaylistType,
@@ -74,6 +85,18 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
     CREATE TABLE djmdMixerParam (
       ID TEXT PRIMARY KEY, ContentID TEXT, GainHigh INTEGER, GainLow INTEGER, PeakHigh INTEGER, PeakLow INTEGER
     );
+    CREATE TABLE djmdActiveCensor (ID TEXT PRIMARY KEY, ContentID TEXT);
+    CREATE TABLE djmdMenuItems (ID TEXT PRIMARY KEY, Name TEXT);
+    CREATE TABLE djmdCategory (ID TEXT PRIMARY KEY, MenuItemID TEXT, Seq INTEGER);
+    CREATE TABLE djmdSort (ID TEXT PRIMARY KEY, MenuItemID TEXT, Seq INTEGER);
+    CREATE TABLE djmdMyTag (ID TEXT PRIMARY KEY, Seq INTEGER, Name TEXT, Attribute INTEGER, ParentID TEXT);
+    CREATE TABLE djmdSongMyTag (ID TEXT PRIMARY KEY, MyTagID TEXT, ContentID TEXT, TrackNo INTEGER);
+    CREATE TABLE djmdHistory (ID TEXT PRIMARY KEY, Seq INTEGER, Name TEXT, ParentID TEXT);
+    CREATE TABLE djmdSongHistory (ID TEXT PRIMARY KEY, HistoryID TEXT, ContentID TEXT, TrackNo INTEGER);
+    CREATE TABLE djmdRelatedTracks (ID TEXT PRIMARY KEY, Seq INTEGER, Name TEXT, ParentID TEXT);
+    CREATE TABLE djmdSongRelatedTracks (ID TEXT PRIMARY KEY, RelatedTracksID TEXT, ContentID TEXT, TrackNo INTEGER);
+    CREATE TABLE djmdSampler (ID TEXT PRIMARY KEY, Seq INTEGER, Name TEXT, ParentID TEXT);
+    CREATE TABLE djmdSongSampler (ID TEXT PRIMARY KEY, SamplerID TEXT, ContentID TEXT, TrackNo INTEGER);
     CREATE TABLE defaults (ID INTEGER PRIMARY KEY AUTOINCREMENT, Value TEXT DEFAULT 'default');
   `);
   const insert = database.transaction(() => {
@@ -83,6 +106,9 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
     database
       .prepare("INSERT INTO djmdArtist VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run("100", "Loopmasters", "loopmasters", "artist-uuid", 1, now, now);
+    database
+      .prepare("INSERT INTO djmdAlbum VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run("150", "Album", "100", null, 0, "album", "album-uuid", 1, now, now);
     database
       .prepare("INSERT INTO djmdGenre VALUES (?, ?, ?, ?, ?, ?)")
       .run("200", "House", "genre-uuid", 2, now, now);
@@ -98,7 +124,7 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
         "Demo 1.mp3",
         "Demo Track 1",
         "100",
-        null,
+        "150",
         "200",
         "300",
         null,
@@ -151,6 +177,24 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
     database
       .prepare("INSERT INTO djmdMixerParam VALUES (?, ?, ?, ?, ?, ?)")
       .run("mix-1", "1", gain.readUInt16BE(0), gain.readUInt16BE(2), 0, 0);
+    database.exec(`
+      INSERT INTO djmdActiveCensor VALUES ('censor-1', '1');
+      INSERT INTO djmdMenuItems VALUES ('menu-1', 'Menu');
+      INSERT INTO djmdCategory VALUES ('category-1', 'menu-1', 1);
+      INSERT INTO djmdSort VALUES ('sort-1', 'menu-1', 1);
+      INSERT INTO djmdMyTag VALUES ('tag-root', 1, 'Tags', 1, 'root');
+      INSERT INTO djmdMyTag VALUES ('tag-1', 1, 'Energy', 0, 'tag-root');
+      INSERT INTO djmdSongMyTag VALUES ('tag-song-1', 'tag-1', '1', 1);
+      INSERT INTO djmdHistory VALUES ('history-root', 1, 'History', 'root');
+      INSERT INTO djmdHistory VALUES ('history-1', 1, 'Today', 'history-root');
+      INSERT INTO djmdSongHistory VALUES ('history-song-1', 'history-1', '1', 1);
+      INSERT INTO djmdRelatedTracks VALUES ('related-root', 1, 'Related', 'root');
+      INSERT INTO djmdRelatedTracks VALUES ('related-1', 1, 'List', 'related-root');
+      INSERT INTO djmdSongRelatedTracks VALUES ('related-song-1', 'related-1', '1', 1);
+      INSERT INTO djmdSampler VALUES ('sampler-root', 1, 'Sampler', 'root');
+      INSERT INTO djmdSampler VALUES ('sampler-1', 1, 'Bank', 'sampler-root');
+      INSERT INTO djmdSongSampler VALUES ('sampler-song-1', 'sampler-1', '1', 1);
+    `);
   });
   insert();
   database.close();
@@ -221,6 +265,45 @@ describe("MasterDatabase queries", () => {
     db.close();
   });
 
+  it("matches the complete SQLAlchemy relationship and projection surface", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    expect(content.AlbumArtist?.ID).toBe("100");
+    expect(content.AlbumArtistName).toBe("Loopmasters");
+    expect(content.MyTagNames).toEqual(["Energy"]);
+    expect(content.MyTagIDs).toEqual(["tag-1"]);
+    expect(content.ActiveCensors).toHaveLength(1);
+    expect(db.query(DjmdAlbum).one().AlbumArtistName).toBe("Loopmasters");
+    expect(db.query(DjmdCategory).one().MenuItem?.Name).toBe("Menu");
+    expect(db.query(DjmdSort).one().MenuItem?.Name).toBe("Menu");
+
+    const history = db.query(DjmdHistory).where({ ID: "history-root" }).one();
+    expect(history.Children[0]?.Parent).toBe(history);
+    const historySong = db.query(DjmdSongHistory).one();
+    expect(historySong.History?.Name).toBe("Today");
+    expect(historySong.Content).toBe(content);
+
+    const tag = db.query(DjmdMyTag).where({ ID: "tag-1" }).one();
+    expect(tag.Parent?.Name).toBe("Tags");
+    expect(db.query(DjmdSongMyTag).one().MyTagName).toBe("Energy");
+    expect(db.query(DjmdRelatedTracks).where({ ID: "related-1" }).one().Songs).toHaveLength(1);
+    expect(db.query(DjmdSongRelatedTracks).one().RelatedTracks?.Name).toBe("List");
+    expect(db.query(DjmdSampler).where({ ID: "sampler-1" }).one().Songs).toHaveLength(1);
+    expect(db.query(DjmdSongSampler).one().Sampler?.Name).toBe("Bank");
+
+    expect(db.query(DjmdContent).where({ ID: "1" }).select("ID", "Title")).toEqual([
+      { ID: "1", Title: "Demo Track 1" },
+    ]);
+    expect(
+      db.executeSql<{ Name: string }>(
+        'SELECT ar."Name" FROM "djmdContent" c JOIN "djmdArtist" ar ON ar."ID" = c."ArtistID" WHERE c."ID" = ?',
+        ["1"],
+      ),
+    ).toEqual([{ Name: "Loopmasters" }]);
+    db.close();
+  });
+
   it("copies logical schema and data into a plain SQLite database", async () => {
     const { dbPath, root } = fixture();
     const output = join(root, "copy.db");
@@ -244,12 +327,19 @@ describe("MasterDatabase mutations", () => {
     });
     const content = db.query(DjmdContent).where({ ID: "1" }).one();
     expect(db.registry.getInt("localUpdateCount")).toBe(10);
+    expect(DjmdArtist.columns(db)).toContain("Name");
+    expect(DjmdContent.relationships()).toContain("MyTags");
+    const constructed = DjmdArtist.create(db, { ID: "detached", Name: "Detached" });
+    expect(db.query(DjmdArtist).where({ ID: "detached" }).oneOrNone()).toBeUndefined();
+    expect(constructed.pformat()).toContain("Detached");
+    db.add(constructed);
     const events: Array<string> = [];
     db.registerEvent("before_commit", () => events.push("before"));
     db.registerEvent("after_commit", () => events.push("after"));
     content.Title = "Changed";
     db.rollback();
     expect(content.Title).toBe("Demo Track 1");
+    db.add(constructed);
 
     content.Title = "Committed";
     const artist = db.addArtist("New Artist");
@@ -262,6 +352,9 @@ describe("MasterDatabase mutations", () => {
     const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
     expect(reopened.query(DjmdContent).where({ ID: "1" }).one().Title).toBe("Committed");
     expect(reopened.query(DjmdArtist).where({ Name: "New Artist" }).count()).toBe(1);
+    expect(reopened.query(DjmdArtist).where({ ID: "detached" }).one().toDict().Name).toBe(
+      "Detached",
+    );
     reopened.close();
   });
 
@@ -433,6 +526,28 @@ describe("MasterDatabase mutations", () => {
     db.commit({ autoincrement: false });
     expect(db.query(DjmdContent).where({ ID: "1" }).oneOrNone()).toBeUndefined();
     expect(db.query(DjmdContent).where({ ID: "99" }).one()).toBe(content);
+    db.close();
+  });
+
+  it("persists relationship, proxy, and live collection mutations", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    content.ArtistName = "Renamed";
+    expect(content.Artist?.Name).toBe("Renamed");
+
+    const destination = db.createPlaylist("Destination");
+    const membership = db.query(DjmdSongPlaylist).where({ ID: "song-1" }).one();
+    destination.Songs.push(membership);
+    expect(membership.PlaylistID).toBe(destination.ID);
+    db.rollback();
+    expect(content.Artist?.Name).toBe("Loopmasters");
+    expect(membership.PlaylistID).toBe("500");
     db.close();
   });
 });

@@ -33,6 +33,11 @@ type TableSchema = {
 
 type WhereClause = { parameters: Array<unknown>; sql: string };
 
+/** Result of an arbitrary parameterized SQLite statement. */
+export type SqlResult<row extends Record<string, unknown> = Record<string, unknown>> =
+  | Array<row>
+  | Database.RunResult;
+
 /** Raised when an operation requires an open SQLite connection. */
 export class SessionNotInitializedError extends Error {
   override name = "SessionNotInitializedError";
@@ -145,6 +150,11 @@ export class Query<row extends models.DatabaseRow> implements Iterable<row> {
     return query;
   }
 
+  /** SQLAlchemy-compatible alias for a parameterized predicate. */
+  filter(sql: string, parameters: Array<unknown> = []): Query<row> {
+    return this.whereRaw(sql, parameters);
+  }
+
   /** Add physical-column ordering. */
   orderBy(column: string, direction: "asc" | "desc" = "asc"): Query<row> {
     if (!this.database.hasColumn(this.model.tableName, column))
@@ -239,13 +249,36 @@ export class Query<row extends models.DatabaseRow> implements Iterable<row> {
     return this.database.countRows(statement.sql, statement.parameters);
   }
 
+  /** Select physical columns instead of materializing model rows. */
+  select<column extends string>(...columns: Array<column>): Array<Record<column, unknown>> {
+    if (!columns.length) throw new RangeError("At least one column must be selected");
+    for (const column of columns)
+      if (!this.database.hasColumn(this.model.tableName, column))
+        throw new RangeError(`Column '${column}' does not exist on '${this.model.tableName}'`);
+    const statement = this.statement();
+    statement.sql = statement.sql.replace(
+      /^SELECT \*/u,
+      `SELECT ${columns.map((column) => quoteIdentifier(column)).join(", ")}`,
+    );
+    return this.database.selectRawRows<Record<column, unknown>>(
+      statement.sql,
+      statement.parameters,
+    );
+  }
+
+  /** Stream matching model rows without materializing the complete result set. */
+  iterate(): IterableIterator<row> {
+    const statement = this.statement();
+    return this.database.iterateRows(this.model, statement.sql, statement.parameters);
+  }
+
   /** Return a zero-based row by index. */
   at(index: number): row | undefined {
     return this.offset(index).limit(1).first();
   }
 
   [Symbol.iterator](): Iterator<row> {
-    return this.all()[Symbol.iterator]();
+    return this.iterate();
   }
 }
 
@@ -291,6 +324,28 @@ export class RekordboxAgentRegistry {
   }
   setDate(key: string, value: Date): void {
     this.getRegistry(key).set("date_1", value);
+  }
+
+  /** Record an explicit model update, matching pyrekordbox's registry hook. */
+  onUpdate(instance: models.DatabaseRow, key: string, value: models.DatabaseValue): void {
+    if (instance.get(key) !== value) instance.set(key, value);
+    else this.database.recordChange(instance);
+  }
+
+  /** Record an explicitly constructed model as newly created. */
+  onCreate(instance: models.DatabaseRow): void {
+    this.database.add(instance);
+  }
+
+  /** Record an explicit deletion hook without issuing a second DELETE. */
+  onDelete(instance: models.DatabaseRow): void {
+    this.database.recordChange(instance);
+  }
+
+  /** Record every row participating in an ordering move. */
+  onMove(instances: models.DatabaseRow | Array<models.DatabaseRow>): void {
+    for (const instance of Array.isArray(instances) ? instances : [instances])
+      this.database.recordChange(instance);
   }
 
   /** Clear pending change events without discarding staged row values. */
@@ -500,6 +555,35 @@ export class MasterDatabase {
     return [...this.schemas.keys()].sort();
   }
 
+  /**
+   * Execute arbitrary parameterized SQL, matching the escape hatch provided by
+   * pyrekordbox's public SQLAlchemy engine/session.
+   *
+   * Reader statements return plain rows. Mutating statements require a writable
+   * database and return SQLite's run metadata.
+   */
+  executeSql<row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters: Array<unknown> = [],
+  ): SqlResult<row> {
+    if (this.tracked.size && !this.autoflushDisabled) this.flush();
+    const statement = this.requireConnection().prepare(sql);
+    const serialized = parameters.map((value) => this.serializeUnknown(value));
+    if (statement.reader) return statement.all(...serialized) as Array<row>;
+    this.requireWritable();
+    return statement.run(...serialized);
+  }
+
+  /** Execute an arbitrary reader statement and return all plain rows. */
+  selectRawRows<row extends Record<string, unknown> = Record<string, unknown>>(
+    sql: string,
+    parameters: Array<unknown> = [],
+  ): Array<row> {
+    const result = this.executeSql<row>(sql, parameters);
+    if (!Array.isArray(result)) throw new TypeError("SQL statement does not return rows");
+    return result;
+  }
+
   /** Whether a physical table exists. */
   hasTable(table: string): boolean {
     return this.schemas.has(table);
@@ -508,6 +592,11 @@ export class MasterDatabase {
   /** Whether a physical column exists. */
   hasColumn(table: string, column: string): boolean {
     return this.schemas.get(table)?.names.has(column) ?? false;
+  }
+
+  /** Physical column names for one introspected table. */
+  columnNames(table: string): Array<string> {
+    return this.schema(table).columns.map((column) => column.name);
   }
 
   private schema(table: string): TableSchema {
@@ -572,6 +661,19 @@ export class MasterDatabase {
     return rows.map((raw) => this.materialize(model, raw));
   }
 
+  /** @internal Stream model rows from a parameterized statement. */
+  *iterateRows<row extends models.DatabaseRow>(
+    model: models.ModelClass<row>,
+    sql: string,
+    parameters: Array<unknown>,
+  ): IterableIterator<row> {
+    if (this.tracked.size && !this.autoflushDisabled) this.flush();
+    const rows = this.requireConnection()
+      .prepare(sql)
+      .iterate(...parameters) as IterableIterator<Record<string, unknown>>;
+    for (const raw of rows) yield this.materialize(model, raw);
+  }
+
   /** @internal Execute a count query. */
   countRows(sql: string, parameters: Array<unknown>): number {
     if (this.tracked.size && !this.autoflushDisabled) this.flush();
@@ -613,16 +715,15 @@ export class MasterDatabase {
     if (row.state === "deleted") throw new Error("Cannot mutate a deleted row");
     if (equalValue(row.data[column], value)) return;
     row.data[column] = value;
-    this.tracked.add(row);
-    if (!this.trackingDisabled) this.changes.push(row);
+    this.tracked.add(row.proxy);
+    if (!this.trackingDisabled) this.changes.push(row.proxy);
   }
 
-  /** Create and stage a new mapped row. */
-  create<row extends models.DatabaseRow>(
+  /** Construct a default-populated row without staging it in the session. */
+  construct<row extends models.DatabaseRow>(
     model: models.ModelClass<row>,
     values: Record<string, models.DatabaseValue>,
   ): row {
-    this.requireWritable();
     const schema = this.schema(model.tableName);
     for (const key of Object.keys(values))
       if (!schema.names.has(key))
@@ -632,11 +733,21 @@ export class MasterDatabase {
     if (schema.names.has("created_at") && data.created_at === undefined) data.created_at = now;
     if (schema.names.has("updated_at") && data.updated_at === undefined) data.updated_at = now;
     if (schema.names.has("UUID") && data.UUID === undefined) data.UUID = randomUUID();
-    const row = new model(this, data, "new");
+    return new model(this, data, "new");
+  }
+
+  /** Create and stage a new mapped row. */
+  create<row extends models.DatabaseRow>(
+    model: models.ModelClass<row>,
+    values: Record<string, models.DatabaseValue>,
+  ): row {
+    this.requireWritable();
+    const row = this.construct(model, values);
+    const data = row.data;
     const key = this.identityKey(model.tableName, data);
     if (key) this.identity.set(key, row);
-    this.tracked.add(row);
-    if (!this.trackingDisabled) this.changes.push(row);
+    this.tracked.add(row.proxy);
+    if (!this.trackingDisabled) this.changes.push(row.proxy);
     return row;
   }
 
@@ -645,17 +756,27 @@ export class MasterDatabase {
     this.requireWritable();
     if (row.database !== this) throw new TypeError("Cannot delete a row owned by another database");
     if (row.state === "deleted") return;
+    if (row.tableName === "djmdPlaylist" && !(row.newlyCreated && row.flushed === undefined)) {
+      for (const child of this.query(models.DjmdPlaylist)
+        .where({ ParentID: row.get("ID")! })
+        .all())
+        this.delete(child);
+      for (const song of this.query(models.DjmdSongPlaylist)
+        .where({ PlaylistID: row.get("ID")! })
+        .all())
+        this.delete(song);
+    }
     if (row.newlyCreated && row.flushed === undefined) {
       const key = this.identityKey(row.tableName, row.data);
       if (key) this.identity.delete(key);
-      this.tracked.delete(row);
-      this.changes = this.changes.filter((change) => change !== row);
+      this.tracked.delete(row.proxy);
+      this.changes = this.changes.filter((change) => change !== row.proxy);
       row.state = "deleted";
       return;
     }
     row.state = "deleted";
-    this.tracked.add(row);
-    if (!this.trackingDisabled) this.changes.push(row);
+    this.tracked.add(row.proxy);
+    if (!this.trackingDisabled) this.changes.push(row.proxy);
   }
 
   /** Stage an already-created row owned by this database. */
@@ -663,7 +784,16 @@ export class MasterDatabase {
     this.requireWritable();
     if (row.database !== this) throw new TypeError("Cannot add a row owned by another database");
     if (row.state !== "new") throw new TypeError("Only newly created rows can be added");
-    this.tracked.add(row);
+    if (this.tracked.has(row.proxy)) return;
+    this.tracked.add(row.proxy);
+    if (!this.trackingDisabled) this.changes.push(row.proxy);
+  }
+
+  /** @internal Record a row in the pending USN/update sequence. */
+  recordChange(row: models.DatabaseRow): void {
+    if (row.database !== this) throw new TypeError("Cannot track a row owned by another database");
+    this.tracked.add(row.proxy);
+    if (!this.trackingDisabled) this.changes.push(row.proxy);
   }
 
   /** @internal Temporarily suppress USN event recording. */
@@ -881,18 +1011,82 @@ export class MasterDatabase {
     return this.registry.autoincrementLocalUpdateCount(setRowUsn);
   }
 
+  protected relationshipCollection<row extends models.DatabaseRow>(
+    owner: models.DatabaseRow,
+    model: models.ModelClass<row>,
+    foreignKey: string,
+    order?: string,
+    ownerKey = "ID",
+  ): Array<row> {
+    const query = this.query(model).where({ [foreignKey]: owner.get(ownerKey)! });
+    const rows = (
+      order && this.hasColumn(model.tableName, order) ? query.orderBy(order) : query
+    ).all();
+    const attach = (value: unknown): row => {
+      if (!(value instanceof models.DatabaseRow))
+        throw new TypeError("Relationship collections only accept database rows");
+      if (value.database !== this)
+        throw new TypeError("Relationship row belongs to another database");
+      if (value.state === "new") this.add(value);
+      value.set(foreignKey, owner.get(ownerKey)!);
+      return value as row;
+    };
+    const detach = (value: row | undefined) => {
+      if (value && value.state !== "deleted") value.set(foreignKey, null);
+      return value;
+    };
+    return new Proxy(rows, {
+      get: (target, property, receiver) => {
+        if (property === "push")
+          return (...items: Array<row>) => Array.prototype.push.apply(target, items.map(attach));
+        if (property === "unshift")
+          return (...items: Array<row>) => Array.prototype.unshift.apply(target, items.map(attach));
+        if (property === "pop") return () => detach(Array.prototype.pop.call(target));
+        if (property === "shift") return () => detach(Array.prototype.shift.call(target));
+        if (property === "splice")
+          return (start: number, deleteCount?: number, ...items: Array<row>) => {
+            const removed = Array.prototype.splice.call(
+              target,
+              start,
+              deleteCount ?? target.length - start,
+            ) as Array<row>;
+            removed.forEach(detach);
+            Array.prototype.splice.call(target, start, 0, ...items.map(attach));
+            return removed;
+          };
+        return Reflect.get(target, property, receiver);
+      },
+      set: (target, property, value, receiver) => {
+        if (typeof property === "string" && /^\d+$/u.test(property)) attach(value);
+        return Reflect.set(target, property, value, receiver);
+      },
+    });
+  }
+
   /** @internal Resolve relationships and virtual properties. */
   getComputed(row: models.DatabaseRow, property: string): unknown {
     const one = (model: models.ModelClass, filters: Record<string, models.DatabaseValue>) =>
       this.query(model).where(filters).oneOrNone();
-    const many = (
-      model: models.ModelClass,
-      filters: Record<string, models.DatabaseValue>,
-      order?: string,
-    ) => {
-      const query = this.query(model).where(filters);
-      return (order ? query.orderBy(order) : query).all();
-    };
+    const named = (value: unknown, key: string) =>
+      value instanceof models.DatabaseRow ? value[key] : undefined;
+    const byId = (model: models.ModelClass, value: models.DatabaseValue | undefined) =>
+      value == null ? undefined : one(model, { ID: value });
+
+    if (
+      ["contentActiveCensor", "contentCue", "contentFile", "djmdActiveCensor"].includes(
+        row.tableName,
+      ) &&
+      property === "Content"
+    )
+      return byId(models.DjmdContent, row.get("ContentID"));
+
+    if (row.tableName === "djmdAlbum") {
+      if (property === "AlbumArtist") return byId(models.DjmdArtist, row.get("AlbumArtistID"));
+      if (property === "AlbumArtistName")
+        return named(this.getComputed(row, "AlbumArtist"), "Name");
+    }
+    if (row.tableName === "djmdCategory" && property === "MenuItem")
+      return byId(models.DjmdMenuItems, row.get("MenuItemID"));
 
     if (row.tableName === "djmdContent") {
       const relations: Record<string, [models.ModelClass, string]> = {
@@ -911,9 +1105,77 @@ export class MasterDatabase {
         const id = row.get(relation[1]);
         return id == null ? undefined : one(relation[0], { ID: id });
       }
-      if (property === "Cues") return many(models.DjmdCue, { ContentID: row.get("ID")! });
+      if (property === "Cues") return this.relationshipCollection(row, models.DjmdCue, "ContentID");
+      if (property === "MyTags")
+        return this.relationshipCollection(row, models.DjmdSongMyTag, "ContentID", "TrackNo");
+      if (property === "ActiveCensors")
+        return this.relationshipCollection(row, models.DjmdActiveCensor, "ContentID");
       if (property === "MixerParams")
-        return many(models.DjmdMixerParam, { ContentID: row.get("ID")! });
+        return this.relationshipCollection(row, models.DjmdMixerParam, "ContentID");
+      if (property === "AlbumArtist")
+        return (this.getComputed(row, "Album") as models.DjmdAlbum | undefined)?.AlbumArtist;
+      const proxies: Record<string, [string, string]> = {
+        AlbumArtistName: ["Album", "AlbumArtistName"],
+        AlbumName: ["Album", "Name"],
+        ArtistName: ["Artist", "Name"],
+        ColorName: ["Color", "Commnt"],
+        ComposerName: ["Composer", "Name"],
+        GenreName: ["Genre", "Name"],
+        KeyName: ["Key", "ScaleName"],
+        LabelName: ["Label", "Name"],
+        OrgArtistName: ["OrgArtist", "Name"],
+        RemixerName: ["Remixer", "Name"],
+      };
+      const proxy = proxies[property];
+      if (proxy) return named(this.getComputed(row, proxy[0]), proxy[1]);
+      if (property === "MyTagNames")
+        return (this.getComputed(row, "MyTags") as Array<models.DjmdSongMyTag>).map(
+          (tag) => tag.MyTagName,
+        );
+      if (property === "MyTagIDs")
+        return (this.getComputed(row, "MyTags") as Array<models.DjmdSongMyTag>).map(
+          (tag) => tag.MyTagID,
+        );
+    }
+
+    const trees: Record<
+      string,
+      { child: models.ModelClass; link?: models.ModelClass; linkKey?: string }
+    > = {
+      djmdHistory: {
+        child: models.DjmdHistory,
+        link: models.DjmdSongHistory,
+        linkKey: "HistoryID",
+      },
+      djmdHotCueBanklist: { child: models.DjmdHotCueBanklist },
+      djmdMyTag: {
+        child: models.DjmdMyTag,
+        link: models.DjmdSongMyTag,
+        linkKey: "MyTagID",
+      },
+      djmdRelatedTracks: {
+        child: models.DjmdRelatedTracks,
+        link: models.DjmdSongRelatedTracks,
+        linkKey: "RelatedTracksID",
+      },
+      djmdSampler: {
+        child: models.DjmdSampler,
+        link: models.DjmdSongSampler,
+        linkKey: "SamplerID",
+      },
+    };
+    const tree = trees[row.tableName];
+    if (tree) {
+      if (property === "Children")
+        return this.relationshipCollection(row, tree.child, "ParentID", "Seq");
+      if (property === "Parent") {
+        const parentId = row.get("ParentID");
+        return parentId == null || parentId === "root"
+          ? undefined
+          : one(tree.child, { ID: parentId });
+      }
+      if ((property === "Songs" || property === "MyTags") && tree.link && tree.linkKey)
+        return this.relationshipCollection(row, tree.link, tree.linkKey, "TrackNo");
     }
     if (row.tableName === "djmdPlaylist") {
       if (property === "isPlaylist")
@@ -923,9 +1185,9 @@ export class MasterDatabase {
       if (property === "isSmartPlaylist")
         return Number(row.get("Attribute")) === models.PlaylistType.SMART_PLAYLIST;
       if (property === "Songs")
-        return many(models.DjmdSongPlaylist, { PlaylistID: row.get("ID")! }, "TrackNo");
+        return this.relationshipCollection(row, models.DjmdSongPlaylist, "PlaylistID", "TrackNo");
       if (property === "Children")
-        return many(models.DjmdPlaylist, { ParentID: row.get("ID")! }, "Seq");
+        return this.relationshipCollection(row, models.DjmdPlaylist, "ParentID", "Seq");
       if (property === "Parent") {
         const id = row.get("ParentID");
         return id === "root" || id == null ? undefined : one(models.DjmdPlaylist, { ID: id });
@@ -935,6 +1197,28 @@ export class MasterDatabase {
       if (property === "Content") return one(models.DjmdContent, { ID: row.get("ContentID")! });
       if (property === "Playlist") return one(models.DjmdPlaylist, { ID: row.get("PlaylistID")! });
     }
+    const contentLinks = new Set([
+      "djmdSongHistory",
+      "djmdSongHotCueBanklist",
+      "djmdSongMyTag",
+      "djmdSongRelatedTracks",
+      "djmdSongSampler",
+      "djmdSongTagList",
+    ]);
+    if (contentLinks.has(row.tableName) && property === "Content")
+      return byId(models.DjmdContent, row.get("ContentID"));
+    if (row.tableName === "djmdSongHistory" && property === "History")
+      return byId(models.DjmdHistory, row.get("HistoryID"));
+    if (row.tableName === "djmdSongMyTag") {
+      if (property === "MyTag") return byId(models.DjmdMyTag, row.get("MyTagID"));
+      if (property === "MyTagName") return named(this.getComputed(row, "MyTag"), "Name");
+    }
+    if (row.tableName === "djmdSongRelatedTracks" && property === "RelatedTracks")
+      return byId(models.DjmdRelatedTracks, row.get("RelatedTracksID"));
+    if (row.tableName === "djmdSongSampler" && property === "Sampler")
+      return byId(models.DjmdSampler, row.get("SamplerID"));
+    if (row.tableName === "djmdSort" && property === "MenuItem")
+      return byId(models.DjmdMenuItems, row.get("MenuItemID"));
     if (row.tableName === "djmdCue") {
       if (property === "Content") return one(models.DjmdContent, { ID: row.get("ContentID")! });
       if (property === "isMemoryCue") return Number(row.get("HotCue")) === 0;
@@ -948,13 +1232,106 @@ export class MasterDatabase {
     return undefined;
   }
 
-  /** @internal Set virtual mixer properties. */
+  /** @internal Set virtual values, relationships, and association proxies. */
   setComputed(row: models.DatabaseRow, property: string, value: unknown): boolean {
-    if (row.tableName !== "djmdMixerParam" || !["Gain", "Peak"].includes(property)) return false;
-    const [low, high] = this.encodeDb(Number(value));
-    row.set(`${property}Low`, low);
-    row.set(`${property}High`, high);
-    return true;
+    if (row.tableName === "djmdMixerParam" && ["Gain", "Peak"].includes(property)) {
+      const [low, high] = this.encodeDb(Number(value));
+      row.set(`${property}Low`, low);
+      row.set(`${property}High`, high);
+      return true;
+    }
+
+    const ids: Record<string, Record<string, string>> = {
+      contentActiveCensor: { Content: "ContentID" },
+      contentCue: { Content: "ContentID" },
+      contentFile: { Content: "ContentID" },
+      djmdActiveCensor: { Content: "ContentID" },
+      djmdAlbum: { AlbumArtist: "AlbumArtistID" },
+      djmdCategory: { MenuItem: "MenuItemID" },
+      djmdContent: {
+        Album: "AlbumID",
+        Artist: "ArtistID",
+        Color: "ColorID",
+        Composer: "ComposerID",
+        Genre: "GenreID",
+        Key: "KeyID",
+        Label: "LabelID",
+        OrgArtist: "OrgArtistID",
+        Remixer: "RemixerID",
+      },
+      djmdCue: { Content: "ContentID" },
+      djmdMixerParam: { Content: "ContentID" },
+      djmdSongHistory: { Content: "ContentID", History: "HistoryID" },
+      djmdSongHotCueBanklist: { Content: "ContentID" },
+      djmdSongMyTag: { Content: "ContentID", MyTag: "MyTagID" },
+      djmdSongPlaylist: { Content: "ContentID", Playlist: "PlaylistID" },
+      djmdSongRelatedTracks: { Content: "ContentID", RelatedTracks: "RelatedTracksID" },
+      djmdSongSampler: { Content: "ContentID", Sampler: "SamplerID" },
+      djmdSongTagList: { Content: "ContentID" },
+      djmdSort: { MenuItem: "MenuItemID" },
+    };
+    const foreignKey = ids[row.tableName]?.[property];
+    if (foreignKey) {
+      const id = value instanceof models.DatabaseRow ? value.get("ID") : value;
+      if (id !== null && id !== undefined && typeof id !== "string" && typeof id !== "number")
+        throw new TypeError("Relationship value must be a row, ID, or null");
+      row.set(foreignKey, id == null ? null : String(id));
+      return true;
+    }
+
+    if (
+      [
+        "djmdHistory",
+        "djmdHotCueBanklist",
+        "djmdMyTag",
+        "djmdPlaylist",
+        "djmdRelatedTracks",
+        "djmdSampler",
+      ].includes(row.tableName) &&
+      property === "Parent"
+    ) {
+      const id = value instanceof models.DatabaseRow ? value.get("ID") : value;
+      row.set("ParentID", id == null ? null : String(id));
+      return true;
+    }
+
+    const collectionProperties = new Set([
+      "ActiveCensors",
+      "Children",
+      "Cues",
+      "MixerParams",
+      "MyTags",
+      "Songs",
+    ]);
+    if (collectionProperties.has(property) && Array.isArray(value)) {
+      const current = this.getComputed(row, property);
+      if (!Array.isArray(current)) return false;
+      current.splice(0, current.length, ...value);
+      return true;
+    }
+
+    const proxies: Record<string, [string, string]> = {
+      AlbumArtistName: ["Album", "AlbumArtistName"],
+      AlbumName: ["Album", "Name"],
+      ArtistName: ["Artist", "Name"],
+      ColorName: ["Color", "Commnt"],
+      ComposerName: ["Composer", "Name"],
+      GenreName: ["Genre", "Name"],
+      KeyName: ["Key", "ScaleName"],
+      LabelName: ["Label", "Name"],
+      MyTagName: ["MyTag", "Name"],
+      OrgArtistName: ["OrgArtist", "Name"],
+      RemixerName: ["Remixer", "Name"],
+    };
+    const proxy = proxies[property];
+    if (proxy) {
+      const related = this.getComputed(row, proxy[0]);
+      if (!(related instanceof models.DatabaseRow))
+        throw new TypeError(`Cannot set '${property}' without an existing '${proxy[0]}' row`);
+      related[proxy[1]] = value;
+      return true;
+    }
+    return false;
   }
 
   private decodeDb(
@@ -1376,10 +1753,6 @@ export class MasterDatabase {
   /** Delete a playlist subtree and resequence remaining siblings. */
   deletePlaylist(playlist: models.DjmdPlaylist | string | number): void {
     const row = this.resolve(models.DjmdPlaylist, playlist);
-    for (const child of this.query(models.DjmdPlaylist).where({ ParentID: row.ID }).all())
-      this.deletePlaylist(child);
-    for (const song of this.query(models.DjmdSongPlaylist).where({ PlaylistID: row.ID }).all())
-      this.delete(song);
     this.delete(row);
     for (const sibling of this.query(models.DjmdPlaylist).where({ ParentID: row.ParentID }).all())
       if (sibling.Seq > row.Seq) sibling.Seq -= 1;
@@ -1581,7 +1954,7 @@ export class MasterDatabase {
       models.TABLES.filter((name) => this.hasTable(models.modelClasses[name].tableName)).map(
         (name) => [
           name,
-          this.query(models.modelClasses[name])
+          this.query(models.modelClasses[name] as models.ModelClass<models.DatabaseRow>)
             .all()
             .map((row) => row.toJSON()),
         ],

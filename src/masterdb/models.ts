@@ -1,4 +1,5 @@
 import type { MasterDatabase } from "./database.js";
+import type {} from "./model-fields.js";
 
 /** Rekordbox playlist row types. */
 export const PlaylistType = { FOLDER: 1, PLAYLIST: 0, SMART_PLAYLIST: 4 } as const;
@@ -24,6 +25,11 @@ export type ModelClass<row extends DatabaseRow = DatabaseRow> = {
   tableName: string;
 };
 
+/** Database/session surface required to construct an unattached mapped row. */
+export type DatabaseRowFactory = {
+  construct<row extends DatabaseRow>(model: ModelClass<row>, values: RowData): row;
+};
+
 /**
  * Dynamic, mutation-tracked row returned by the master database.
  *
@@ -31,6 +37,30 @@ export type ModelClass<row extends DatabaseRow = DatabaseRow> = {
  */
 export class DatabaseRow {
   static tableName = "";
+
+  /** Construct an unattached row, equivalent to pyrekordbox model `create`. */
+  static create<row extends DatabaseRow>(
+    this: ModelClass<row>,
+    database: DatabaseRowFactory,
+    values: RowData,
+  ): row {
+    return database.construct(this, values);
+  }
+
+  /** Physical columns for this model in an opened database schema. */
+  static columns(this: typeof DatabaseRow, database: MasterDatabase): Array<string> {
+    return database.columnNames(this.tableName);
+  }
+
+  /** SQLAlchemy-compatible relationship names for this mapped table. */
+  static relationships(this: typeof DatabaseRow): Array<string> {
+    return [...(relationshipNames[this.tableName] ?? [])];
+  }
+
+  /** Physical columns plus relationship names. */
+  static keys(this: typeof DatabaseRow, database: MasterDatabase): Array<string> {
+    return [...this.columns(database), ...this.relationships()];
+  }
 
   /** Owning database. */
   database: MasterDatabase;
@@ -99,6 +129,16 @@ export class DatabaseRow {
     return Object.keys(this.data);
   }
 
+  /** Compatibility alias for physical column names. */
+  columns(): Array<string> {
+    return this.keys();
+  }
+
+  /** Relationship names declared for this row's table. */
+  relationships(): Array<string> {
+    return [...(relationshipNames[this.tableName] ?? [])];
+  }
+
   /** Physical column values. */
   values(): Array<DatabaseValue> {
     return this.keys().map((key) => this.data[key]!);
@@ -118,6 +158,21 @@ export class DatabaseRow {
       ]),
     );
   }
+
+  /** Upstream-compatible plain physical-column dictionary. */
+  toDict(): Record<string, unknown> {
+    return this.toJSON();
+  }
+
+  /** Human-readable table/column representation. */
+  pformat(indent = "   "): string {
+    const columns = this.columns();
+    const width = columns.reduce((maximum, column) => Math.max(maximum, column.length), 0);
+    return [
+      this.tableName,
+      ...columns.map((column) => `${indent}${column.padEnd(width)} ${String(this[column])}`),
+    ].join("\n");
+  }
 }
 
 export class AgentRegistry extends DatabaseRow {
@@ -128,20 +183,26 @@ export class CloudAgentRegistry extends DatabaseRow {
 }
 export class ContentActiveCensor extends DatabaseRow {
   static override tableName = "contentActiveCensor";
+  declare Content: DjmdContent | undefined;
 }
 export class ContentCue extends DatabaseRow {
   static override tableName = "contentCue";
+  declare Content: DjmdContent | undefined;
 }
 export class ContentFile extends DatabaseRow {
   static override tableName = "contentFile";
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdActiveCensor extends DatabaseRow {
   static override tableName = "djmdActiveCensor";
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdAlbum extends DatabaseRow {
   static override tableName = "djmdAlbum";
   declare ID: string;
   declare Name: string | null;
+  declare AlbumArtist: DjmdArtist | undefined;
+  declare AlbumArtistName: string | undefined;
 }
 export class DjmdArtist extends DatabaseRow {
   static override tableName = "djmdArtist";
@@ -150,6 +211,7 @@ export class DjmdArtist extends DatabaseRow {
 }
 export class DjmdCategory extends DatabaseRow {
   static override tableName = "djmdCategory";
+  declare MenuItem: DjmdMenuItems | undefined;
 }
 export class DjmdColor extends DatabaseRow {
   static override tableName = "djmdColor";
@@ -167,9 +229,14 @@ export class DjmdGenre extends DatabaseRow {
 }
 export class DjmdHistory extends DatabaseRow {
   static override tableName = "djmdHistory";
+  declare Songs: Array<DjmdSongHistory>;
+  declare Children: Array<DjmdHistory>;
+  declare Parent: DjmdHistory | undefined;
 }
 export class DjmdHotCueBanklist extends DatabaseRow {
   static override tableName = "djmdHotCueBanklist";
+  declare Children: Array<DjmdHotCueBanklist>;
+  declare Parent: DjmdHotCueBanklist | undefined;
 }
 export class DjmdKey extends DatabaseRow {
   static override tableName = "djmdKey";
@@ -191,36 +258,58 @@ export class DjmdMixerParam extends DatabaseRow {
 }
 export class DjmdMyTag extends DatabaseRow {
   static override tableName = "djmdMyTag";
+  declare MyTags: Array<DjmdSongMyTag>;
+  declare Children: Array<DjmdMyTag>;
+  declare Parent: DjmdMyTag | undefined;
 }
 export class DjmdProperty extends DatabaseRow {
   static override tableName = "djmdProperty";
 }
 export class DjmdRelatedTracks extends DatabaseRow {
   static override tableName = "djmdRelatedTracks";
+  declare Songs: Array<DjmdSongRelatedTracks>;
+  declare Children: Array<DjmdRelatedTracks>;
+  declare Parent: DjmdRelatedTracks | undefined;
 }
 export class DjmdSampler extends DatabaseRow {
   static override tableName = "djmdSampler";
+  declare Songs: Array<DjmdSongSampler>;
+  declare Children: Array<DjmdSampler>;
+  declare Parent: DjmdSampler | undefined;
 }
 export class DjmdSongHistory extends DatabaseRow {
   static override tableName = "djmdSongHistory";
+  declare History: DjmdHistory | undefined;
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSongHotCueBanklist extends DatabaseRow {
   static override tableName = "djmdSongHotCueBanklist";
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSongMyTag extends DatabaseRow {
   static override tableName = "djmdSongMyTag";
+  declare MyTagID: string;
+  declare MyTag: DjmdMyTag | undefined;
+  declare MyTagName: string | undefined;
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSongRelatedTracks extends DatabaseRow {
   static override tableName = "djmdSongRelatedTracks";
+  declare RelatedTracks: DjmdRelatedTracks | undefined;
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSongSampler extends DatabaseRow {
   static override tableName = "djmdSongSampler";
+  declare Sampler: DjmdSampler | undefined;
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSongTagList extends DatabaseRow {
   static override tableName = "djmdSongTagList";
+  declare Content: DjmdContent | undefined;
 }
 export class DjmdSort extends DatabaseRow {
   static override tableName = "djmdSort";
+  declare MenuItem: DjmdMenuItems | undefined;
 }
 export class HotCueBanklistCue extends DatabaseRow {
   static override tableName = "hotCueBanklistCue";
@@ -251,6 +340,27 @@ export class DjmdContent extends DatabaseRow {
   declare Genre: DjmdGenre | undefined;
   declare Key: DjmdKey | undefined;
   declare Label: DjmdLabel | undefined;
+  declare Remixer: DjmdArtist | undefined;
+  declare OrgArtist: DjmdArtist | undefined;
+  declare Color: DjmdColor | undefined;
+  declare Composer: DjmdArtist | undefined;
+  declare AlbumArtist: DjmdArtist | undefined;
+  declare MyTags: Array<DjmdSongMyTag>;
+  declare Cues: Array<DjmdCue>;
+  declare ActiveCensors: Array<DjmdActiveCensor>;
+  declare MixerParams: Array<DjmdMixerParam>;
+  declare ArtistName: string | undefined;
+  declare AlbumName: string | undefined;
+  declare GenreName: string | undefined;
+  declare RemixerName: string | undefined;
+  declare LabelName: string | undefined;
+  declare OrgArtistName: string | undefined;
+  declare KeyName: string | undefined;
+  declare ColorName: string | undefined;
+  declare ComposerName: string | undefined;
+  declare AlbumArtistName: string | undefined;
+  declare MyTagNames: Array<string | undefined>;
+  declare MyTagIDs: Array<string>;
 }
 
 /** Playlist/folder row with common columns declared for TypeScript consumers. */
@@ -279,6 +389,75 @@ export class DjmdSongPlaylist extends DatabaseRow {
   declare Content: DjmdContent;
   declare Playlist: DjmdPlaylist;
 }
+
+/** Relationship names mirrored from pyrekordbox's SQLAlchemy models. */
+export const relationshipNames: Readonly<Record<string, ReadonlyArray<string>>> = {
+  album: ["artist", "image"],
+  category: ["menuItem"],
+  content: [
+    "artist",
+    "remixer",
+    "originalArtist",
+    "composer",
+    "lyricist",
+    "album",
+    "genre",
+    "label",
+    "key",
+    "color",
+    "image",
+    "cues",
+  ],
+  cue: ["content"],
+  history: ["children", "songs"],
+  history_content: ["history", "content"],
+  hotCueBankList: ["image", "children", "hotCueBankList_cues"],
+  hotCueBankList_cue: ["hotCueBankList", "cue"],
+  myTag: ["children", "myTags"],
+  myTag_content: ["myTag", "content"],
+  playlist: ["children", "songs"],
+  playlist_content: ["playlist", "content"],
+  recommendedLike: ["content_1", "content_2"],
+  sort: ["menuItem"],
+  contentActiveCensor: ["Content"],
+  contentCue: ["Content"],
+  contentFile: ["Content"],
+  djmdActiveCensor: ["Content"],
+  djmdAlbum: ["AlbumArtist"],
+  djmdCategory: ["MenuItem"],
+  djmdContent: [
+    "Artist",
+    "Album",
+    "Genre",
+    "Remixer",
+    "Label",
+    "OrgArtist",
+    "Key",
+    "Color",
+    "Composer",
+    "AlbumArtist",
+    "MyTags",
+    "Cues",
+    "ActiveCensors",
+    "MixerParams",
+  ],
+  djmdCue: ["Content"],
+  djmdHistory: ["Songs", "Children", "Parent"],
+  djmdHotCueBanklist: ["Children", "Parent"],
+  djmdMixerParam: ["Content"],
+  djmdMyTag: ["MyTags", "Children", "Parent"],
+  djmdPlaylist: ["Songs", "Children", "Parent"],
+  djmdRelatedTracks: ["Songs", "Children", "Parent"],
+  djmdSampler: ["Songs", "Children", "Parent"],
+  djmdSongHistory: ["History", "Content"],
+  djmdSongHotCueBanklist: ["Content"],
+  djmdSongMyTag: ["MyTag", "Content"],
+  djmdSongPlaylist: ["Playlist", "Content"],
+  djmdSongRelatedTracks: ["RelatedTracks", "Content"],
+  djmdSongSampler: ["Sampler", "Content"],
+  djmdSongTagList: ["Content"],
+  djmdSort: ["MenuItem"],
+};
 
 /** Exported upstream model names in compatibility order. */
 export const TABLES = [
