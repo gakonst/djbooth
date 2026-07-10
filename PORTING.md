@@ -16,7 +16,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Configuration discovery      | implemented    | `config show`  | 4 tests      | complete |
 | Utility functions            | implemented    | n/a            | 6 tests      | complete |
 | Rekordbox XML                | implemented    | `xml ...`      | 6 tests      | complete |
-| ANLZ files                   | planned        | planned        | planned      | queued   |
+| ANLZ files                   | implemented    | `anlz ...`     | 5 tests      | complete |
 | My Settings files            | implemented    | `settings ...` | 7 tests      | complete |
 | Smart playlists              | planned        | planned        | planned      | queued   |
 | Master database              | planned        | planned        | planned      | queued   |
@@ -50,6 +50,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Correct the upstream parsed-document ID bug by seeding auto-increment from the maximum existing track ID, preventing accidental ID reuse.
 - Expose source-preserving writes in the library and optional output destinations in mutation commands; overwriting a source file remains explicit in the command invocation.
 
+### 2026-07-10 — Binary preservation
+
+- Keep original ANLZ tag bytes until a supported mutation occurs. This preserves unknown tags and retains the original garbled PSSI representation while exposing a deobfuscated parsed view.
+- Bound large waveform/beat-grid CLI output by default and expose offset/limit controls through incur.
+
 ## Progress
 
 ### 2026-07-10
@@ -66,9 +71,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Ported all four My Settings binary formats with symbolic enum values, opaque-byte preservation, strict validation, and CRC-16/XMODEM generation.
 - Differentially verified lossless parsing and mutation against all 155 upstream per-setting fixtures; the durable suite now has 24 passing tests.
 - Added `settings list`, `show`, `set`, and `create` incur commands, including allowed-value discovery.
+- Ported all 15 supported ANLZ tag types, including beat-grid/path mutation, cue lists, PSSI deobfuscation, VBR indices, and monochrome/color/three-byte waveforms.
+- Differentially parsed, expanded, and byte-for-byte rebuilt 48 real upstream DAT/EXT/2EX fixtures; the durable suite now has 29 passing tests.
+- Added bounded `anlz scan`, `info`, `tag`, `set-path`, and `set-beat-grid` commands.
 
 ## Next
 
-1. Port ANLZ binary formats.
-2. Port smart playlists and both database layers.
-3. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Port smart playlists and both database layers.
+2. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.

@@ -3,12 +3,16 @@
 import { Cli, z } from "incur";
 
 import {
+  AnlzFile,
+  BeatGridTag,
   createMySettingFile,
+  getAnlzPaths,
   getMySettingPaths,
   readMySettingFile,
   RekordboxXml,
   updateConfig,
   version,
+  walkAnlzDirectories,
 } from "./index.js";
 import type { MySettingFilename, NodeKeyType, TrackAttributes, TrackSelector } from "./index.js";
 
@@ -133,6 +137,109 @@ settingsCli.command("create", {
 });
 
 cli.command(settingsCli);
+
+function paginateTagValue(value: unknown, offset: number, limit: number): unknown {
+  if (Array.isArray(value))
+    return { count: value.length, items: value.slice(offset, offset + limit), limit, offset };
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        Array.isArray(item) ? item.slice(offset, offset + limit) : item,
+      ]),
+    );
+  return value;
+}
+
+function numberList(value: string): Array<number> {
+  const values = value.split(",").map((item) => Number(item.trim()));
+  if (values.some((item) => !Number.isFinite(item)))
+    throw new TypeError(`Invalid comma-separated number list '${value}'`);
+  return values;
+}
+
+const anlzCli = Cli.create("anlz", {
+  description: "Read and write Rekordbox ANLZ analysis files.",
+});
+
+anlzCli.command("scan", {
+  description: "Find directories and DAT/EXT/2EX files recursively.",
+  args: z.object({ root: z.string().describe("USBANLZ root directory") }),
+  run(c) {
+    const directories = walkAnlzDirectories(c.args.root).map((directory) => ({
+      directory,
+      files: getAnlzPaths(directory),
+    }));
+    return { count: directories.length, directories };
+  },
+});
+
+anlzCli.command("info", {
+  description: "Show bounded ANLZ file and tag metadata.",
+  args: z.object({ path: z.string().describe("ANLZ DAT, EXT, or 2EX file") }),
+  run(c) {
+    return AnlzFile.parseFile(c.args.path).summary();
+  },
+});
+
+anlzCli.command("tag", {
+  description: "Parse one tag by four-character type or semantic name.",
+  args: z.object({
+    path: z.string().describe("ANLZ DAT, EXT, or 2EX file"),
+    key: z.string().describe("Tag type such as PQTZ or name such as beat_grid"),
+  }),
+  options: z.object({
+    limit: z.number().int().min(1).max(100_000).default(1_000).describe("Array items to return"),
+    offset: z.number().int().min(0).default(0).describe("Array items to skip"),
+  }),
+  run(c) {
+    const tag = AnlzFile.parseFile(c.args.path).getTag(c.args.key);
+    return {
+      ...tag.summary(),
+      value: paginateTagValue(tag.get(), c.options.offset, c.options.limit),
+    };
+  },
+});
+
+anlzCli.command("set-path", {
+  description: "Replace the PPTH audio path and save the rebuilt ANLZ file.",
+  args: z.object({
+    path: z.string().describe("ANLZ DAT, EXT, or 2EX file"),
+    audioPath: z.string().describe("New audio path"),
+  }),
+  options: z.object({
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+  }),
+  run(c) {
+    const file = AnlzFile.parseFile(c.args.path);
+    file.setPath(c.args.audioPath);
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { output, path: file.get("path") };
+  },
+});
+
+anlzCli.command("set-beat-grid", {
+  description: "Replace every existing PQTZ beat, BPM, and time value.",
+  args: z.object({ path: z.string().describe("ANLZ DAT file") }),
+  options: z.object({
+    beats: z.string().describe("Comma-separated beat numbers"),
+    bpms: z.string().describe("Comma-separated BPM values"),
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+    times: z.string().describe("Comma-separated times in seconds"),
+  }),
+  run(c) {
+    const file = AnlzFile.parseFile(c.args.path);
+    const tag = file.getTag("PQTZ");
+    if (!(tag instanceof BeatGridTag)) throw new TypeError("PQTZ tag has an unexpected handler");
+    tag.set(numberList(c.options.beats), numberList(c.options.bpms), numberList(c.options.times));
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { beatGrid: tag.get(), output };
+  },
+});
+
+cli.command(anlzCli);
 
 function playlistPath(xml: RekordboxXml, path: string | undefined) {
   return path ? xml.getPlaylist(...path.split("/").filter(Boolean)) : xml.rootPlaylistFolder;
