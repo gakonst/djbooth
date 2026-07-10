@@ -11,17 +11,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Compatibility matrix
 
-| Area                         | TypeScript API | CLI            | Parity tests | Status   |
-| ---------------------------- | -------------- | -------------- | ------------ | -------- |
-| Configuration discovery      | implemented    | `config show`  | 4 tests      | complete |
-| Utility functions            | implemented    | n/a            | 6 tests      | complete |
-| Rekordbox XML                | implemented    | `xml ...`      | 6 tests      | complete |
-| ANLZ files                   | implemented    | `anlz ...`     | 5 tests      | complete |
-| My Settings files            | implemented    | `settings ...` | 7 tests      | complete |
-| Smart playlists              | planned        | planned        | planned      | queued   |
-| Master database              | planned        | planned        | planned      | queued   |
-| Master DB registry/aux files | planned        | planned        | planned      | queued   |
-| Device Library Plus          | planned        | planned        | planned      | queued   |
+| Area                         | TypeScript API | CLI             | Parity tests | Status   |
+| ---------------------------- | -------------- | --------------- | ------------ | -------- |
+| Configuration discovery      | implemented    | `config show`   | 4 tests      | complete |
+| Utility functions            | implemented    | n/a             | 6 tests      | complete |
+| Rekordbox XML                | implemented    | `xml ...`       | 6 tests      | complete |
+| ANLZ files                   | implemented    | `anlz ...`      | 5 tests      | complete |
+| My Settings files            | implemented    | `settings ...`  | 7 tests      | complete |
+| Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete |
+| Master database              | planned        | planned         | planned      | queued   |
+| Master DB registry/aux files | planned        | planned         | planned      | queued   |
+| Device Library Plus          | planned        | planned         | planned      | queued   |
 
 ## Decisions
 
@@ -74,8 +74,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Ported all 15 supported ANLZ tag types, including beat-grid/path mutation, cue lists, PSSI deobfuscation, VBR indices, and monochrome/color/three-byte waveforms.
 - Differentially parsed, expanded, and byte-for-byte rebuilt 48 real upstream DAT/EXT/2EX fixtures; the durable suite now has 29 passing tests.
 - Added bounded `anlz scan`, `info`, `tag`, `set-path`, and `set-beat-grid` commands.
+- Ported smart-playlist XML, condition/operator validation, signed playlist-ID conversion, and parameterized SQLite compilation for all mapped properties.
+- Added `smartlist parse`, `build`, and `sql` commands; the durable suite now has 36 passing tests.
 
 ## Next
 
-1. Port smart playlists and both database layers.
-2. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Port the master database and registry/auxiliary files.
+2. Port Device Library Plus.
+3. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.

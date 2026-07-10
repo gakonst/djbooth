@@ -8,13 +8,21 @@ import {
   createMySettingFile,
   getAnlzPaths,
   getMySettingPaths,
+  LogicalOperator,
   readMySettingFile,
   RekordboxXml,
+  SmartList,
   updateConfig,
   version,
   walkAnlzDirectories,
 } from "./index.js";
-import type { MySettingFilename, NodeKeyType, TrackAttributes, TrackSelector } from "./index.js";
+import type {
+  ConditionInput,
+  MySettingFilename,
+  NodeKeyType,
+  TrackAttributes,
+  TrackSelector,
+} from "./index.js";
 
 const cli = Cli.create("rekordbox", {
   version,
@@ -240,6 +248,62 @@ anlzCli.command("set-beat-grid", {
 });
 
 cli.command(anlzCli);
+
+const smartlistCli = Cli.create("smartlist", {
+  description: "Parse, build, and compile Rekordbox smart playlists.",
+});
+
+smartlistCli.command("parse", {
+  description: "Parse smart-playlist XML.",
+  args: z.object({ xml: z.string().describe("Smart-playlist NODE XML") }),
+  run(c) {
+    const smartList = SmartList.fromXml(c.args.xml);
+    return { ...smartList.toJSON(), sql: smartList.compileSql() };
+  },
+});
+
+smartlistCli.command("build", {
+  description: "Build smart-playlist XML from JSON conditions.",
+  args: z.object({ playlistId: z.number().int().describe("Unsigned playlist ID") }),
+  options: z.object({
+    autoUpdate: z.number().int().min(0).max(1).default(0).describe("Automatic update flag"),
+    conditions: z
+      .string()
+      .default("[]")
+      .describe("JSON array of {property,operator,valueLeft,valueRight?,unit?}"),
+    logical: z.enum(["all", "any"]).default("all").describe("Condition combination mode"),
+  }),
+  run(c) {
+    const parsed = JSON.parse(c.options.conditions) as Array<{
+      operator: number;
+      property: string;
+      unit?: string;
+      valueLeft: string | number;
+      valueRight?: string | number;
+    }>;
+    if (!Array.isArray(parsed)) throw new TypeError("--conditions must be a JSON array");
+    const smartList = new SmartList(
+      c.options.logical === "all" ? LogicalOperator.ALL : LogicalOperator.ANY,
+      c.options.autoUpdate,
+    );
+    smartList.playlistId = c.args.playlistId;
+    for (const condition of parsed) smartList.addCondition(condition as ConditionInput);
+    return { smartList: smartList.toJSON(), xml: smartList.toXml() };
+  },
+});
+
+smartlistCli.command("sql", {
+  description: "Compile smart-playlist XML to parameterized SQLite SQL.",
+  args: z.object({ xml: z.string().describe("Smart-playlist NODE XML") }),
+  options: z.object({
+    tableAlias: z.string().optional().describe("Optional content-table alias"),
+  }),
+  run(c) {
+    return SmartList.fromXml(c.args.xml).compileSql({ tableAlias: c.options.tableAlias });
+  },
+});
+
+cli.command(smartlistCli);
 
 function playlistPath(xml: RekordboxXml, path: string | undefined) {
   return path ? xml.getPlaylist(...path.split("/").filter(Boolean)) : xml.rootPlaylistFolder;

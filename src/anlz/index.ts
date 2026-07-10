@@ -38,7 +38,9 @@ function decodeUtf16Be(data: Buffer): string {
   if (data.length % 2 !== 0) throw new TypeError("UTF-16BE data has an odd byte length");
   const swapped = Buffer.from(data);
   swapped.swap16();
-  return swapped.toString("utf16le").replace(/\u0000+$/u, "");
+  let value = swapped.toString("utf16le");
+  while (value.endsWith(String.fromCharCode(0))) value = value.slice(0, -1);
+  return value;
 }
 
 function encodeUtf16Be(value: string): Buffer {
