@@ -118,6 +118,29 @@ cli.command('subtitles', {
   },
 })
 
+cli.command('thumbnails', {
+  description: 'List thumbnail images for a URL.',
+  args: z.object({ url: z.url().describe('Media URL') }),
+  options: inspectOptions,
+  async run(c) {
+    try {
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      return {
+        engine: result.engine,
+        id: result.data.id,
+        title: result.data.title,
+        thumbnails: result.data.thumbnails ?? [],
+      }
+    } catch (error) {
+      return fail(c, error)
+    }
+  },
+})
+
 cli.command('download', {
   description: 'Download media and run requested post-processing.',
   destructive: true,
@@ -189,6 +212,12 @@ cli.command('download', {
             mergeOutputFormat: c.options.mergeOutputFormat,
             extractAudio: c.options.extractAudio,
             audioFormat: c.options.audioFormat,
+            writeSubtitles: c.options.writeSubtitles,
+            writeAutoSubtitles: c.options.writeAutoSubtitles,
+            subtitleLanguages: c.options.subtitleLanguages,
+            subtitleFormat: c.options.subtitleFormat,
+            writeThumbnail: c.options.writeThumbnail,
+            writeInfoJson: c.options.writeInfoJson,
           }),
           onProgress(event) {
             progressEvents += 1

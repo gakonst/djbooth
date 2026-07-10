@@ -56,4 +56,62 @@ describe('native downloader', () => {
     expect(parseRate('4.2M')).toBe(4_200_000)
     expect(parseRate('128kB')).toBe(128_000)
   })
+
+  it('writes metadata, thumbnail, and selected subtitle sidecars', async () => {
+    const server = createServer((request, response) => {
+      if (request.url === '/thumb.jpg') {
+        response.end('jpeg-data')
+      } else if (request.url === '/en.vtt') {
+        response.end('WEBVTT\n\n00:00.000 --> 00:01.000\nHello')
+      } else {
+        response.end('media-data')
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('missing address')
+    const baseUrl = `http://127.0.0.1:${address.port}`
+    const directory = await mkdtemp(join(tmpdir(), 'ytdlp-ts-sidecars-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const info: MediaInfo = {
+      id: 'sidecar',
+      title: 'Sidecar',
+      formats: [
+        {
+          format_id: 'direct',
+          url: `${baseUrl}/video.mp4`,
+          ext: 'mp4',
+          vcodec: 'avc1',
+          acodec: 'aac',
+        },
+      ],
+      thumbnails: [{ url: `${baseUrl}/thumb.jpg`, width: 1280, height: 720 }],
+      subtitles: {
+        en: [{ url: `${baseUrl}/en.vtt`, ext: 'vtt' }],
+        de: [{ url: `${baseUrl}/de.vtt`, ext: 'vtt' }],
+      },
+    }
+
+    const result = await downloadMedia(info, {
+      paths: directory,
+      writeInfoJson: true,
+      writeThumbnail: true,
+      writeSubtitles: true,
+      subtitleLanguages: ['en'],
+    })
+
+    expect(result.files.map((file) => file.slice(directory.length + 1))).toEqual([
+      'Sidecar [sidecar].mp4',
+      'Sidecar [sidecar].info.json',
+      'Sidecar [sidecar].jpg',
+      'Sidecar [sidecar].en.vtt',
+    ])
+    expect(await readFile(join(directory, 'Sidecar [sidecar].jpg'), 'utf8')).toBe('jpeg-data')
+    expect(await readFile(join(directory, 'Sidecar [sidecar].en.vtt'), 'utf8')).toContain('WEBVTT')
+    expect(JSON.parse(await readFile(join(directory, 'Sidecar [sidecar].info.json'), 'utf8'))).toMatchObject({
+      id: 'sidecar',
+      title: 'Sidecar',
+    })
+  })
 })

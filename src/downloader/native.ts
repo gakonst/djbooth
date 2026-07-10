@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process'
-import { mkdir, open, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join, resolve } from 'node:path'
 
 import { YtdlpError } from '../core/errors.js'
 import { selectFormats } from '../core/format-selector.js'
 import { request } from '../core/network.js'
 import { DEFAULT_OUTPUT_TEMPLATE, renderOutputTemplate } from '../core/template.js'
-import type { Format, MediaInfo, ProgressEvent } from '../core/types.js'
+import type { Format, MediaInfo, ProgressEvent, Subtitle, Thumbnail } from '../core/types.js'
+import { extensionFromUrl } from '../core/utils.js'
 
 export interface NativeDownloadOptions {
   format?: string
@@ -19,6 +20,12 @@ export interface NativeDownloadOptions {
   mergeOutputFormat?: string
   extractAudio?: boolean
   audioFormat?: string
+  writeSubtitles?: boolean
+  writeAutoSubtitles?: boolean
+  subtitleLanguages?: string[]
+  subtitleFormat?: string
+  writeThumbnail?: boolean
+  writeInfoJson?: boolean
   onProgress?: (event: ProgressEvent) => void
   signal?: AbortSignal
 }
@@ -70,17 +77,38 @@ export async function downloadMedia(
     finalPath = audioPath
   }
 
-  return { files: [finalPath], selectedFormats: selected.map((format) => format.format_id) }
+  const files = [finalPath]
+  const sidecarBase = withoutExtension(finalPath)
+  if (options.writeInfoJson) {
+    const path = `${sidecarBase}.info.json`
+    await writeFile(path, `${JSON.stringify(info, null, 2)}\n`, 'utf8')
+    files.push(path)
+  }
+  if (options.writeThumbnail && info.thumbnails?.length) {
+    const thumbnail = selectThumbnail(info.thumbnails)
+    const extension = extensionFromUrl(thumbnail.url) ?? 'jpg'
+    const path = `${sidecarBase}.${extension}`
+    await downloadHttp(
+      { format_id: 'thumbnail', url: thumbnail.url, ext: extension },
+      path,
+      options,
+    )
+    files.push(path)
+  }
+  if (options.writeSubtitles) {
+    files.push(...(await writeSubtitleSidecars(info.subtitles ?? {}, sidecarBase, options)))
+  }
+  if (options.writeAutoSubtitles) {
+    files.push(...(await writeSubtitleSidecars(info.automatic_captions ?? {}, sidecarBase, options)))
+  }
+
+  return { files, selectedFormats: selected.map((format) => format.format_id) }
 }
 
 export function supportsNativeDownloadOptions(options: Record<string, unknown>): boolean {
   const unsupported = [
-    'writeSubtitles',
-    'writeAutoSubtitles',
     'embedSubtitles',
-    'writeThumbnail',
     'embedThumbnail',
-    'writeInfoJson',
     'embedMetadata',
     'embedChapters',
     'sponsorblockRemove',
@@ -88,8 +116,6 @@ export function supportsNativeDownloadOptions(options: Record<string, unknown>):
     'audioQuality',
     'concurrentFragments',
     'fragmentRetries',
-    'subtitleLanguages',
-    'subtitleFormat',
     'cookies',
     'cookiesFromBrowser',
     'username',
@@ -103,6 +129,79 @@ export function supportsNativeDownloadOptions(options: Record<string, unknown>):
     'socketTimeout',
   ]
   return unsupported.every((key) => options[key] === undefined || options[key] === false)
+}
+
+async function writeSubtitleSidecars(
+  subtitles: Record<string, Subtitle[]>,
+  basePath: string,
+  options: NativeDownloadOptions,
+): Promise<string[]> {
+  const files: string[] = []
+  for (const [language, entries] of Object.entries(subtitles)) {
+    if (!languageSelected(language, options.subtitleLanguages)) continue
+    const subtitle = selectSubtitle(entries, options.subtitleFormat)
+    if (!subtitle) continue
+    const extension = subtitle.ext ?? extensionFromUrl(subtitle.url) ?? 'vtt'
+    const path = `${basePath}.${language}.${extension}`
+    if (subtitle.data !== undefined) {
+      await writeFile(path, subtitle.data, 'utf8')
+    } else {
+      await downloadHttp(
+        { format_id: `subtitle-${language}`, url: subtitle.url, ext: extension },
+        path,
+        options,
+      )
+    }
+    files.push(path)
+  }
+  return files
+}
+
+function languageSelected(language: string, expressions: string[] | undefined): boolean {
+  if (!expressions?.length) return language === 'en' || language.startsWith('en-')
+  let selected = false
+  for (const expressionList of expressions) {
+    for (const rawExpression of expressionList.split(',')) {
+      const expression = rawExpression.trim()
+      if (!expression) continue
+      const exclude = expression.startsWith('-')
+      const pattern = exclude ? expression.slice(1) : expression
+      const matches = pattern === 'all' || wildcardRegex(pattern).test(language)
+      if (matches) selected = !exclude
+    }
+  }
+  return selected
+}
+
+function selectSubtitle(entries: Subtitle[], preference: string | undefined): Subtitle | undefined {
+  if (!preference) return entries[0]
+  for (const extension of preference.split('/')) {
+    const match = entries.find((entry) => entry.ext === extension || extension === 'best')
+    if (match) return match
+  }
+  return entries[0]
+}
+
+function selectThumbnail(thumbnails: Thumbnail[]): Thumbnail {
+  return [...thumbnails]
+    .sort((left, right) => {
+      const preference = (left.preference ?? -1) - (right.preference ?? -1)
+      if (preference !== 0) return preference
+      return (left.width ?? 0) * (left.height ?? 0) - (right.width ?? 0) * (right.height ?? 0)
+    })
+    .at(-1)!
+}
+
+function wildcardRegex(value: string): RegExp {
+  return new RegExp(
+    `^${value.replace(/[.+?^${}()|[\]\\]/gu, '\\$&').replaceAll('*', '.*')}$`,
+    'u',
+  )
+}
+
+function withoutExtension(path: string): string {
+  const extension = extname(path)
+  return extension ? path.slice(0, -extension.length) : path
 }
 
 async function downloadFormat(

@@ -15,7 +15,7 @@ without delegation.
 | HLS / DASH | partial | yes | Native HLS and BaseURL DASH parsing/download |
 | FFmpeg post-processing | partial | yes | Native format merge and audio extraction |
 | Cookies / browser cookies | planned | yes | Cookie jar and browser stores |
-| Subtitles / thumbnails | planned | yes | Selection and conversion |
+| Subtitles / thumbnails | partial | yes | Native sidecar selection/download; embedding planned |
 | Plugins | planned | yes | TypeScript plugin ABI to be specified |
 
 Parity is measured with differential fixtures against the pinned yt-dlp revision, not by counting

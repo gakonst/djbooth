@@ -68,3 +68,13 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Fixed incur error propagation to return its error sentinel from every command path. This was
   found by a live native YouTube smoke test and is now part of the CLI behavior audit.
 - Added YouTube player-response and DASH fixture tests, bringing the suite to 16 tests.
+
+## 2026-07-10 — Native archival sidecars
+
+- Added native `.info.json` metadata sidecars using the complete compatible information object.
+- Added manual and automatic subtitle selection by language wildcard/exclusion and format
+  preference, supporting both inline data and remote caption downloads.
+- Added best-thumbnail selection and native thumbnail download.
+- Added a typed incur `thumbnails` command alongside the existing subtitle inventory command.
+- Kept embedding and conversion options on the reference path until their FFmpeg container matrix
+  has differential coverage.
