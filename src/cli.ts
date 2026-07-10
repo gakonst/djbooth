@@ -64,7 +64,7 @@ cli.command('inspect', {
       )
       return { engine: result.engine, info: result.data }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -89,7 +89,7 @@ cli.command('formats', {
         formats,
       }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -113,7 +113,7 @@ cli.command('subtitles', {
         automaticCaptions: result.data.automatic_captions ?? {},
       }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -166,7 +166,7 @@ cli.command('download', {
   async run(c) {
     const nativeSupported = supportsNativeDownloadOptions(c.options)
     if (c.options.engine === 'native' && !nativeSupported) {
-      c.error({
+      return c.error({
         code: 'NATIVE_OPTION_UNAVAILABLE',
         message: 'At least one selected option is not native yet. Use --engine auto or reference.',
         exitCode: 2,
@@ -197,7 +197,7 @@ cli.command('download', {
         })
         return { engine: 'native', ...result, progressEvents, lastProgress }
       } catch (error) {
-        if (c.options.engine === 'native') fail(c, error)
+        if (c.options.engine === 'native') return fail(c, error)
       }
     }
     try {
@@ -209,7 +209,7 @@ cli.command('download', {
         warnings: result.stderr,
       }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -234,7 +234,7 @@ cli.command('extractors', {
         reference: { count: reference.length, extractors: reference },
       }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -264,7 +264,7 @@ cli.command('compat', {
         stderr: result.stderr,
       }
     } catch (error) {
-      fail(c, error)
+      return fail(c, error)
     }
   },
 })
@@ -346,9 +346,14 @@ function fail(
   error: unknown,
 ): never {
   if (error instanceof YtdlpError) {
-    context.error({ code: error.code, message: error.message, exitCode: 1, retryable: false })
+    return context.error({ code: error.code, message: error.message, exitCode: 1, retryable: false })
   }
-  context.error({ code: 'YTDLP_TS_ERROR', message: errorMessage(error), exitCode: 1, retryable: false })
+  return context.error({
+    code: 'YTDLP_TS_ERROR',
+    message: errorMessage(error),
+    exitCode: 1,
+    retryable: false,
+  })
 }
 
 await cli.serve()

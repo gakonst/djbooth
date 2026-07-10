@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseM3u8Formats } from '../src/core/manifest.js'
+import { parseM3u8Formats, parseMpdFormats } from '../src/core/manifest.js'
 
 describe('HLS manifest parsing', () => {
   it('extracts variants and resolves relative URLs', () => {
@@ -43,6 +43,31 @@ https://cdn.example/720.m3u8`,
         ext: 'mp4',
         protocol: 'm3u8_native',
       },
+    ])
+  })
+})
+
+describe('DASH manifest parsing', () => {
+  it('extracts representations with inherited adaptation metadata', () => {
+    const formats = parseMpdFormats(
+      `<MPD><Period><AdaptationSet mimeType="video/mp4" codecs="avc1.64001f">
+        <Representation id="137" bandwidth="4500000" width="1920" height="1080" frameRate="30000/1001">
+          <BaseURL>video.mp4?x=1&amp;y=2</BaseURL>
+        </Representation>
+      </AdaptationSet></Period></MPD>`,
+      'https://cdn.example/manifest.mpd',
+    )
+    expect(formats).toEqual([
+      expect.objectContaining({
+        format_id: '137',
+        url: 'https://cdn.example/video.mp4?x=1&y=2',
+        width: 1920,
+        height: 1080,
+        fps: 30000 / 1001,
+        tbr: 4500,
+        vcodec: 'avc1.64001f',
+        acodec: 'none',
+      }),
     ])
   })
 })

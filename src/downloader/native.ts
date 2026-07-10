@@ -110,7 +110,11 @@ async function downloadFormat(
   outputPath: string,
   options: NativeDownloadOptions,
 ): Promise<void> {
-  if (format.protocol?.startsWith('m3u8') || /\.m3u8(?:$|\?)/iu.test(format.url)) {
+  if (
+    format.protocol?.startsWith('m3u8') ||
+    format.protocol === 'dash' ||
+    /\.(?:m3u8|mpd)(?:$|\?)/iu.test(format.url)
+  ) {
     const partPath = `${outputPath}.part${extname(outputPath) || '.mp4'}`
     options.onProgress?.({ status: 'postprocessing', filename: outputPath, operation: 'hls-download' })
     await ffmpeg(['-y', '-i', format.url, '-c', 'copy', partPath], options.signal)

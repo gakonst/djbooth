@@ -1,5 +1,5 @@
 import { downloadText } from '../core/network.js'
-import { deduplicateFormats, parseM3u8Formats } from '../core/manifest.js'
+import { deduplicateFormats, parseM3u8Formats, parseMpdFormats } from '../core/manifest.js'
 import type { Format, MediaInfo, Thumbnail } from '../core/types.js'
 import {
   cleanHtml,
@@ -63,6 +63,18 @@ export class GenericExtractor implements Extractor {
           continue
         } catch {
           // Keep the manifest as a directly consumable format if expansion fails.
+        }
+      }
+      if (ext === 'mpd') {
+        try {
+          const manifest = await downloadText(mediaUrl, {
+            ...(context.signal ? { signal: context.signal } : undefined),
+            maxBytes: 4 * 1024 * 1024,
+          })
+          formats.push(...parseMpdFormats(manifest.text, manifest.response.url))
+          continue
+        } catch {
+          // Keep the manifest URL for FFmpeg fallback.
         }
       }
       formats.push({

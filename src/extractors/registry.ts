@@ -3,11 +3,18 @@ import type { MediaInfo } from '../core/types.js'
 import type { Extractor, ExtractorContext } from './base.js'
 import { DirectExtractor } from './direct.js'
 import { GenericExtractor } from './generic.js'
+import { YoutubeExtractor } from './youtube.js'
 
 export class ExtractorRegistry {
   readonly extractors: readonly Extractor[]
 
-  constructor(extractors: readonly Extractor[] = [new DirectExtractor(), new GenericExtractor()]) {
+  constructor(
+    extractors: readonly Extractor[] = [
+      new DirectExtractor(),
+      new YoutubeExtractor(),
+      new GenericExtractor(),
+    ],
+  ) {
     this.extractors = extractors
   }
 

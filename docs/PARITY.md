@@ -8,11 +8,11 @@ without delegation.
 | Incur CLI / MCP / HTTP metadata | yes | n/a | Typed structured commands |
 | Generic direct HTTP media | yes | yes | HTTP media and HLS manifests |
 | Generic HTML / OpenGraph | partial | yes | Meta tags, media tags, JSON-LD, HLS |
-| YouTube | planned | yes | Player signature tests required |
+| YouTube | partial | yes | Metadata, direct formats, captions; signature transform falls back |
 | Remaining site extractors | planned | yes | Ported by traffic and fixture coverage |
 | Format selection | partial | yes | Common selectors, fallback, merge, filters, nth-best |
 | HTTP file downloader | partial | yes | Resume, range, retries, rate limit, atomic part files |
-| HLS / DASH | partial | yes | Native HLS parsing/download; DASH planned |
+| HLS / DASH | partial | yes | Native HLS and BaseURL DASH parsing/download |
 | FFmpeg post-processing | partial | yes | Native format merge and audio extraction |
 | Cookies / browser cookies | planned | yes | Cookie jar and browser stores |
 | Subtitles / thumbnails | planned | yes | Selection and conversion |

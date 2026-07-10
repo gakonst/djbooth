@@ -55,3 +55,16 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
   and otherwise preserves behavior through the reference engine.
 - Added unit and local-server integration tests for selection, templates, rate parsing, transfer,
   and resume.
+
+## 2026-07-10 — YouTube metadata and DASH
+
+- Added a native YouTube URL matcher and balanced `ytInitialPlayerResponse` decoder.
+- Added native mapping for public player metadata, direct progressive/adaptive formats, thumbnails,
+  manual captions, automatic captions, live status, and HLS/DASH manifest URLs.
+- Kept signature-ciphered formats explicit: native mode returns a typed limitation, while `auto`
+  falls back rather than returning incomplete media.
+- Added a native DASH parser for BaseURL representations, adaptation metadata, bandwidth,
+  dimensions, framerate fractions, and XML entity decoding; FFmpeg handles manifest fallback.
+- Fixed incur error propagation to return its error sentinel from every command path. This was
+  found by a live native YouTube smoke test and is now part of the CLI behavior audit.
+- Added YouTube player-response and DASH fixture tests, bringing the suite to 16 tests.

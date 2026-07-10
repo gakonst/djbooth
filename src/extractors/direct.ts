@@ -1,5 +1,5 @@
 import { downloadText, request } from '../core/network.js'
-import { parseM3u8Formats } from '../core/manifest.js'
+import { parseM3u8Formats, parseMpdFormats } from '../core/manifest.js'
 import type { Format, MediaInfo } from '../core/types.js'
 import {
   extensionFromUrl,
@@ -47,6 +47,12 @@ export class DirectExtractor implements Extractor {
       })
       return this.info(url, 'm3u8', parseM3u8Formats(text, url.href))
     }
+    if (extension === 'mpd') {
+      const { text } = await downloadText(url.href, {
+        ...(context.signal ? { signal: context.signal } : undefined),
+      })
+      return this.info(url, 'mpd', parseMpdFormats(text, url.href))
+    }
     const response = await request(url.href, {
       headers: { Range: 'bytes=0-0', Accept: '*/*' },
       ...(context.signal ? { signal: context.signal } : undefined),
@@ -60,7 +66,7 @@ export class DirectExtractor implements Extractor {
       return this.info(url, 'm3u8', parseM3u8Formats(text, response.url))
     }
     const ext = mimeToExtension(contentType) ?? extension ?? 'unknown_video'
-    const filesize = numberHeader(response.headers, 'content-length')
+    const filesize = contentLength(response.headers)
     return this.info(url, ext, [
       {
         format_id: 'direct',
@@ -90,4 +96,9 @@ export class DirectExtractor implements Extractor {
 function numberHeader(headers: Headers, name: string): number | undefined {
   const value = Number(headers.get(name))
   return Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function contentLength(headers: Headers): number | undefined {
+  const total = /\/(\d+)$/u.exec(headers.get('content-range') ?? '')?.[1]
+  return total ? Number(total) : numberHeader(headers, 'content-length')
 }

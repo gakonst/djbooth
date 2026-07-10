@@ -42,11 +42,79 @@ export function parseM3u8Formats(text: string, manifestUrl: string): Format[] {
   return deduplicateFormats(formats)
 }
 
+export function parseMpdFormats(text: string, manifestUrl: string): Format[] {
+  const formats: Format[] = []
+  for (const adaptationMatch of text.matchAll(/<AdaptationSet\b([^>]*)>([\s\S]*?)<\/AdaptationSet>/giu)) {
+    const adaptation = parseXmlAttributes(adaptationMatch[1] ?? '')
+    const adaptationBody = adaptationMatch[2] ?? ''
+    const adaptationBase = firstXmlText(adaptationBody, 'BaseURL')
+    for (const representationMatch of adaptationBody.matchAll(
+      /<Representation\b([^>]*?)(?:\/>|>([\s\S]*?)<\/Representation>)/giu,
+    )) {
+      const representation = { ...adaptation, ...parseXmlAttributes(representationMatch[1] ?? '') }
+      const body = representationMatch[2] ?? ''
+      const base = firstXmlText(body, 'BaseURL') ?? adaptationBase
+      if (!base) continue
+      const mimeType = representation.mimeType ?? ''
+      const codecs = representation.codecs
+      const bandwidth = numberOrUndefined(representation.bandwidth)
+      const frameRate = parseFrameRate(representation.frameRate)
+      const width = numberOrUndefined(representation.width)
+      const height = numberOrUndefined(representation.height)
+      formats.push({
+        format_id: representation.id ?? `dash-${formats.length}`,
+        url: new URL(decodeXml(base), manifestUrl).href,
+        ext: mimeType.includes('webm') ? 'webm' : mimeType.startsWith('audio/') ? 'm4a' : 'mp4',
+        protocol: 'https',
+        ...(width !== undefined ? { width } : undefined),
+        ...(height !== undefined ? { height } : undefined),
+        ...(frameRate !== undefined ? { fps: frameRate } : undefined),
+        ...(bandwidth !== undefined ? { tbr: bandwidth / 1_000 } : undefined),
+        ...(mimeType.startsWith('video/') ? { vcodec: codecs ?? 'unknown', acodec: 'none' } : undefined),
+        ...(mimeType.startsWith('audio/') ? { vcodec: 'none', acodec: codecs ?? 'unknown' } : undefined),
+      })
+    }
+  }
+  if (formats.length === 0) {
+    formats.push({ format_id: 'dash', url: manifestUrl, ext: 'mp4', protocol: 'dash' })
+  }
+  return deduplicateFormats(formats)
+}
+
 function parseAttributes(value: string): Record<string, string> {
   const attributes: Record<string, string> = {}
   const pattern = /([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))(?:,|$)/giu
   for (const match of value.matchAll(pattern)) attributes[match[1]!] = match[2] ?? match[3] ?? ''
   return attributes
+}
+
+function parseXmlAttributes(value: string): Record<string, string> {
+  const attributes: Record<string, string> = {}
+  for (const match of value.matchAll(/([:\w-]+)\s*=\s*["']([^"']*)["']/gu)) {
+    attributes[match[1]!] = decodeXml(match[2] ?? '')
+  }
+  return attributes
+}
+
+function firstXmlText(value: string, tag: string): string | undefined {
+  return new RegExp(`<${tag}\\b[^>]*>([^<]+)</${tag}>`, 'iu').exec(value)?.[1]?.trim()
+}
+
+function decodeXml(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos);/gu, (entity) => ({
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&apos;': "'",
+  })[entity]!)
+}
+
+function parseFrameRate(value: string | undefined): number | undefined {
+  if (!value) return undefined
+  const [numerator, denominator] = value.split('/').map(Number)
+  const result = denominator ? numerator! / denominator : numerator
+  return result !== undefined && Number.isFinite(result) ? result : undefined
 }
 
 function numberOrUndefined(value: string | undefined): number | undefined {
