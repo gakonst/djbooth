@@ -10,6 +10,7 @@ import { inspect } from './core/engine.js'
 import { errorMessage, YtdlpError } from './core/errors.js'
 import type { EngineKind } from './core/types.js'
 import { ExtractorRegistry } from './extractors/registry.js'
+import { downloadMedia, supportsNativeDownloadOptions } from './downloader/native.js'
 
 const VERSION = '0.1.0'
 const engine = z.enum(['auto', 'native', 'reference']).default('auto').describe('Execution engine')
@@ -163,12 +164,41 @@ cli.command('download', {
   }),
   alias: { mediaFormat: 'f', output: 'o', paths: 'P' },
   async run(c) {
-    if (c.options.engine === 'native') {
+    const nativeSupported = supportsNativeDownloadOptions(c.options)
+    if (c.options.engine === 'native' && !nativeSupported) {
       c.error({
-        code: 'NATIVE_DOWNLOADER_UNAVAILABLE',
-        message: 'The native downloader is not available in this milestone. Use --engine auto or reference.',
+        code: 'NATIVE_OPTION_UNAVAILABLE',
+        message: 'At least one selected option is not native yet. Use --engine auto or reference.',
         exitCode: 2,
       })
+    }
+    if (c.options.engine !== 'reference' && nativeSupported) {
+      try {
+        const extracted = await inspect(c.args.url, 'native', toInspectOptions(c.options))
+        let progressEvents = 0
+        let lastProgress: unknown
+        const result = await downloadMedia(extracted.data, {
+          ...defined({
+            format: c.options.mediaFormat,
+            output: c.options.output,
+            paths: c.options.paths,
+            noOverwrites: c.options.noOverwrites,
+            continueDownload: c.options.continueDownload,
+            retries: c.options.retries,
+            rateLimit: c.options.rateLimit,
+            mergeOutputFormat: c.options.mergeOutputFormat,
+            extractAudio: c.options.extractAudio,
+            audioFormat: c.options.audioFormat,
+          }),
+          onProgress(event) {
+            progressEvents += 1
+            lastProgress = event
+          },
+        })
+        return { engine: 'native', ...result, progressEvents, lastProgress }
+      } catch (error) {
+        if (c.options.engine === 'native') fail(c, error)
+      }
     }
     try {
       const result = await new ReferenceClient().download(c.args.url, toDownloadOptions(c.options))

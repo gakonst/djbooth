@@ -40,3 +40,18 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Changed `auto` to try the native registry before transparently falling back to the reference
   engine; forcing `native` never delegates.
 - Added isolated HTTP-server and manifest tests with no internet dependency.
+
+## 2026-07-10 — Native selection and download pipeline
+
+- Added a format-expression parser covering best/worst video/audio, muxed formats, explicit IDs,
+  nth-best suffixes, `+` merge, `/` fallback, comma selection, and numeric/string filters.
+- Added yt-dlp-style output template fields, fallback keys, padding, precision, percent escapes, and
+  cross-platform filename sanitation.
+- Added native HTTP download with `.part` files, Range resume, server resume detection, retries,
+  byte validation, rate limiting, progress events, and atomic final rename.
+- Added native HLS download and multi-format merge through shell-free FFmpeg invocation, plus audio
+  extraction.
+- Wired `download --engine native`; `auto` uses native only when every requested option is supported
+  and otherwise preserves behavior through the reference engine.
+- Added unit and local-server integration tests for selection, templates, rate parsing, transfer,
+  and resume.
