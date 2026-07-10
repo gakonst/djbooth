@@ -8,6 +8,7 @@ import {
 } from './bridge/reference.js'
 import { inspect } from './core/engine.js'
 import { errorMessage, YtdlpError } from './core/errors.js'
+import { compareMediaInfo } from './core/parity.js'
 import type { EngineKind } from './core/types.js'
 import { ExtractorRegistry } from './extractors/registry.js'
 import { downloadMedia, supportsNativeDownloadOptions } from './downloader/native.js'
@@ -134,6 +135,44 @@ cli.command('thumbnails', {
         id: result.data.id,
         title: result.data.title,
         thumbnails: result.data.thumbnails ?? [],
+      }
+    } catch (error) {
+      return fail(c, error)
+    }
+  },
+})
+
+cli.command('parity', {
+  description: 'Compare native extraction with the pinned yt-dlp behavior model.',
+  args: z.object({ url: z.url().describe('Media URL') }),
+  options: inspectOptions.omit({ engine: true }),
+  async run(c) {
+    const options = toInspectOptions(c.options)
+    let nativeInfo
+    try {
+      nativeInfo = (await inspect(c.args.url, 'native', options)).data
+    } catch (error) {
+      try {
+        const reference = (await inspect(c.args.url, 'reference', options)).data
+        return {
+          native: { supported: false, error: errorMessage(error) },
+          reference: {
+            id: reference.id,
+            title: reference.title,
+            extractor: reference.extractor_key ?? reference.extractor,
+            formatCount: reference.formats?.length ?? 0,
+          },
+        }
+      } catch (referenceError) {
+        return fail(c, referenceError)
+      }
+    }
+    try {
+      const referenceInfo = (await inspect(c.args.url, 'reference', options)).data
+      return {
+        native: { supported: true, extractor: nativeInfo.extractor_key ?? nativeInfo.extractor },
+        reference: { extractor: referenceInfo.extractor_key ?? referenceInfo.extractor },
+        report: compareMediaInfo(nativeInfo, referenceInfo),
       }
     } catch (error) {
       return fail(c, error)

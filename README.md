@@ -24,6 +24,7 @@ pnpm dev --help
 ```sh
 ytdlp-ts inspect 'https://example.com/video'
 ytdlp-ts formats 'https://example.com/video'
+ytdlp-ts parity 'https://example.com/video'
 ytdlp-ts download 'https://example.com/video' --format 'bv*+ba/b'
 ytdlp-ts compat --arg --dump-single-json --arg 'https://example.com/video'
 ytdlp-ts --llms
@@ -32,6 +33,16 @@ ytdlp-ts --mcp
 
 The structured commands are implemented with incur and produce agent-friendly output. `compat`
 passes arbitrary arguments to the reference engine during the parity migration.
+
+## Architecture
+
+- `native` is the TypeScript extractor, selector, downloader, and post-processing path.
+- `reference` invokes an installed yt-dlp executable for exact long-tail compatibility.
+- `auto` attempts native behavior and falls back explicitly when a URL or option is not yet ported.
+- `parity` runs both extractors and reports stable metadata, format, and subtitle differences.
+
+Native support never silently invokes Python. Each structured result reports the engine that handled
+it, and the compatibility matrix distinguishes complete, partial, and delegated subsystems.
 
 ## Attribution
 

@@ -78,3 +78,11 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Added a typed incur `thumbnails` command alongside the existing subtitle inventory command.
 - Kept embedding and conversion options on the reference path until their FFmpeg container matrix
   has differential coverage.
+
+## 2026-07-10 — Differential parity harness
+
+- Added a typed comparison report for stable metadata fields, shared format fields, format counts,
+  and subtitle language inventories.
+- Added an incur `parity` command that reports unsupported native URLs without losing the reference
+  baseline.
+- Added CI for Node.js 22 with frozen dependency installation, type checking, tests, and build.
