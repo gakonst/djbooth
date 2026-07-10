@@ -750,10 +750,8 @@ export class MasterDatabase {
 
   /** Commit staged changes, assigning local USNs by default. */
   commit(options: CommitOptions | boolean = {}): void {
-    this.requireWritable();
     const normalized = typeof options === "boolean" ? { autoincrement: options } : options;
-    if (!(normalized.allowWhileRunning ?? this.options.allowWhileRunning) && getRekordboxPid())
-      throw new Error("Rekordbox is running; close it before committing database changes");
+    this.assertCommitAllowed(normalized.allowWhileRunning);
     this.emit("before_commit");
     if ((normalized.autoincrement ?? true) && this.changes.length)
       this.registry.autoincrementLocalUpdateCount(true);
@@ -797,6 +795,13 @@ export class MasterDatabase {
     this.changes = [];
     this.transactionOpen = false;
     this.emit("after_commit");
+  }
+
+  /** Validate the write/running-process guard without committing. */
+  assertCommitAllowed(allowWhileRunning?: boolean): void {
+    this.requireWritable();
+    if (!(allowWhileRunning ?? this.options.allowWhileRunning) && getRekordboxPid())
+      throw new Error("Rekordbox is running; close it before committing database changes");
   }
 
   /** Roll back all staged and flushed-but-uncommitted changes. */
@@ -1468,9 +1473,16 @@ export class MasterDatabase {
   updateContentPath(
     content: models.DjmdContent | string | number,
     path: string,
-    options: { checkPath?: boolean; commit?: boolean; saveAnlz?: boolean } = {},
+    options: {
+      allowWhileRunning?: boolean;
+      checkPath?: boolean;
+      commit?: boolean;
+      saveAnlz?: boolean;
+    } = {},
   ): void {
     const row = this.resolve(models.DjmdContent, content);
+    if ((options.commit ?? true) || (options.saveAnlz ?? true))
+      this.assertCommitAllowed(options.allowWhileRunning);
     if ((options.checkPath ?? true) && !existsSync(path))
       throw new TypeError(`Path '${path}' does not exist`);
     const normalized = path.replaceAll("\\", "/");
@@ -1489,7 +1501,12 @@ export class MasterDatabase {
   updateContentFilename(
     content: models.DjmdContent | string | number,
     name: string,
-    options: { checkPath?: boolean; commit?: boolean; saveAnlz?: boolean } = {},
+    options: {
+      allowWhileRunning?: boolean;
+      checkPath?: boolean;
+      commit?: boolean;
+      saveAnlz?: boolean;
+    } = {},
   ): void {
     const row = this.resolve(models.DjmdContent, content);
     if (!row.FolderPath) throw new TypeError(`Content '${row.ID}' has no FolderPath`);

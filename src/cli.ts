@@ -13,6 +13,7 @@ import {
   modelByTable,
   DjmdContent,
   DjmdPlaylist,
+  DjmdSongPlaylist,
   readMySettingFile,
   RekordboxXml,
   SmartList,
@@ -519,6 +520,47 @@ const databaseContentCli = Cli.create("content", {
   description: "Create tracks and coordinate database/ANLZ paths.",
 });
 
+const databaseMetadataCli = Cli.create("metadata", {
+  description: "Create common master-library metadata rows.",
+});
+
+databaseMetadataCli.command("add", {
+  description: "Add an artist, genre, label, or album with generated IDs and timestamps.",
+  args: z.object({
+    type: z.enum(["artist", "genre", "label", "album"]),
+    name: z.string().describe("Metadata name"),
+  }),
+  options: dbWriteOptions.extend({
+    artistId: z.string().optional().describe("Album artist ID"),
+    compilation: z.boolean().default(false).describe("Mark an album as a compilation"),
+    imagePath: z.string().optional().describe("Album image path"),
+    searchString: z.string().optional().describe("Optional search string"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      const row =
+        c.args.type === "artist"
+          ? db.addArtist(c.args.name, c.options.searchString)
+          : c.args.type === "genre"
+            ? db.addGenre(c.args.name)
+            : c.args.type === "label"
+              ? db.addLabel(c.args.name)
+              : db.addAlbum(c.args.name, {
+                  artist: c.options.artistId,
+                  compilation: c.options.compilation,
+                  imagePath: c.options.imagePath,
+                  searchString: c.options.searchString,
+                });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
 databaseContentCli.command("add", {
   description: "Add an existing audio file as a content row.",
   args: z.object({ audioPath: z.string().describe("Existing audio file") }),
@@ -561,6 +603,35 @@ databaseContentCli.command("set-path", {
     const db = openDatabase(c.options, true);
     try {
       db.updateContentPath(c.args.contentId, c.args.audioPath, {
+        allowWhileRunning: c.options.allowWhileRunning,
+        checkPath: c.options.checkPath,
+        commit: false,
+        saveAnlz: c.options.saveAnlz,
+      });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return db.query(DjmdContent).where({ ID: c.args.contentId }).one();
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databaseContentCli.command("set-filename", {
+  description: "Rename a content file path and matching ANLZ PPTH tags.",
+  args: z.object({
+    contentId: z.string().describe("Content ID"),
+    filename: z.string().describe("New basename; the original extension is retained"),
+  }),
+  options: dbWriteOptions.extend({
+    checkPath: z.boolean().default(true).describe("Require the renamed audio path to exist"),
+    saveAnlz: z.boolean().default(true).describe("Write updated analysis files"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      db.updateContentFilename(c.args.contentId, c.args.filename, {
+        allowWhileRunning: c.options.allowWhileRunning,
         checkPath: c.options.checkPath,
         commit: false,
         saveAnlz: c.options.saveAnlz,
@@ -688,8 +759,69 @@ databasePlaylistCli.command("move", {
   },
 });
 
+databasePlaylistCli.command("rename", {
+  description: "Rename a playlist or folder.",
+  args: z.object({
+    playlistId: z.string().describe("Playlist ID"),
+    name: z.string().describe("New name"),
+  }),
+  options: dbWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      db.renamePlaylist(c.args.playlistId, c.args.name);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databasePlaylistCli.command("delete", {
+  description: "Delete a playlist subtree and resequence its siblings.",
+  args: z.object({ playlistId: z.string().describe("Playlist or folder ID") }),
+  options: dbWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      const row = db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
+      const deleted = row.toJSON();
+      db.deletePlaylist(row);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return { deleted };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databasePlaylistCli.command("move-track", {
+  description: "Move a playlist-membership row to a new one-based track number.",
+  args: z.object({
+    playlistId: z.string().describe("Playlist ID"),
+    songId: z.string().describe("djmdSongPlaylist ID"),
+    trackNumber: z.number().int().positive().describe("New one-based track number"),
+  }),
+  options: dbWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      db.moveSongInPlaylist(c.args.playlistId, c.args.songId, c.args.trackNumber);
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return db.query(DjmdSongPlaylist).where({ ID: c.args.songId }).one();
+    } finally {
+      db.close();
+    }
+  },
+});
+
 databaseCli.command(databaseRowCli);
 databaseCli.command(databaseContentCli);
+databaseCli.command(databaseMetadataCli);
 databaseCli.command(databasePlaylistCli);
 cli.command(databaseCli);
 
@@ -885,6 +1017,53 @@ const deviceContentCli = Cli.create("content", {
   description: "Create Device Library Plus content rows.",
 });
 
+const deviceMetadataCli = Cli.create("metadata", {
+  description: "Create common Device Library Plus metadata rows.",
+});
+
+deviceMetadataCli.command("add", {
+  description: "Add a named artist, genre, label, color, key, image, or album.",
+  args: z.object({
+    type: z.enum(["artist", "genre", "label", "color", "key", "image", "album"]),
+    value: z.string().describe("Metadata name, or image path"),
+  }),
+  options: deviceWriteOptions.extend({
+    artistId: z.number().int().positive().optional().describe("Album artist ID"),
+    imageId: z.number().int().positive().optional().describe("Album image ID"),
+    compilation: z.boolean().default(false).describe("Mark an album as a compilation"),
+    searchString: z.string().optional().describe("Artist or album search string"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDeviceLibrary(c.options, true);
+    try {
+      const row =
+        c.args.type === "artist"
+          ? db.addArtist(c.args.value, c.options.searchString)
+          : c.args.type === "genre"
+            ? db.addGenre(c.args.value)
+            : c.args.type === "label"
+              ? db.addLabel(c.args.value)
+              : c.args.type === "color"
+                ? db.addColor(c.args.value)
+                : c.args.type === "key"
+                  ? db.addKey(c.args.value)
+                  : c.args.type === "image"
+                    ? db.addImage(c.args.value)
+                    : db.addAlbum(c.args.value, {
+                        artistId: c.options.artistId,
+                        imageId: c.options.imageId,
+                        isCompilation: c.options.compilation,
+                        searchString: c.options.searchString,
+                      });
+      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      return row;
+    } finally {
+      db.close();
+    }
+  },
+});
+
 deviceContentCli.command("add", {
   description: "Add an existing audio file to an export library.",
   args: z.object({
@@ -909,6 +1088,7 @@ deviceContentCli.command("add", {
         samplingRate: c.options.samplingRate,
         values: JSON.parse(c.options.values),
       });
+      if (db.hasTable("property") && db.getProperty().count()) db.updateContentCount();
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return row;
     } finally {
@@ -1049,6 +1229,7 @@ deviceTagCli.command("add-track", {
 
 deviceCli.command(deviceRowCli);
 deviceCli.command(deviceContentCli);
+deviceCli.command(deviceMetadataCli);
 deviceCli.command(devicePlaylistCli);
 deviceCli.command(deviceTagCli);
 cli.command(deviceCli);
