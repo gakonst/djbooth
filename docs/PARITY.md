@@ -9,6 +9,7 @@ without delegation.
 | Generic direct HTTP media | yes | yes | HTTP media and HLS manifests |
 | Generic HTML / OpenGraph | partial | yes | Meta tags, media tags, JSON-LD, HLS |
 | YouTube | partial | yes | Metadata, direct formats, captions; signature transform falls back |
+| SoundCloud | partial | yes | Native public tracks and streams; sets/profiles fall back |
 | Remaining site extractors | planned | yes | Ported by traffic and fixture coverage |
 | Format selection | partial | yes | Common selectors, fallback, merge, filters, nth-best |
 | HTTP file downloader | partial | yes | Resume, range, retries, rate limit, atomic part files |

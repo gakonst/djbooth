@@ -25,11 +25,22 @@ pnpm dev --help
 ytdlp-ts inspect 'https://example.com/video'
 ytdlp-ts formats 'https://example.com/video'
 ytdlp-ts parity 'https://example.com/video'
-ytdlp-ts download 'https://example.com/video' --format 'bv*+ba/b'
+ytdlp-ts download 'https://example.com/video' --media-format 'bv*+ba/b'
 ytdlp-ts compat --arg --dump-single-json --arg 'https://example.com/video'
 ytdlp-ts --llms
 ytdlp-ts --mcp
 ```
+
+### YouTube and SoundCloud
+
+```sh
+ytdlp-ts download 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+ytdlp-ts download 'https://soundcloud.com/savedrecords/unconditional-feat-nasa'
+```
+
+YouTube uses the exact reference engine when its current player requires signature challenges.
+Public SoundCloud tracks use the native TypeScript extractor and downloader; sets, profiles, private
+tracks, and unsupported account flows fall back through `auto`.
 
 The structured commands are implemented with incur and produce agent-friendly output. `compat`
 passes arbitrary arguments to the reference engine during the parity migration.

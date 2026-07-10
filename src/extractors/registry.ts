@@ -4,6 +4,7 @@ import type { Extractor, ExtractorContext } from './base.js'
 import { DirectExtractor } from './direct.js'
 import { GenericExtractor } from './generic.js'
 import { YoutubeExtractor } from './youtube.js'
+import { SoundcloudExtractor } from './soundcloud.js'
 
 export class ExtractorRegistry {
   readonly extractors: readonly Extractor[]
@@ -12,6 +13,7 @@ export class ExtractorRegistry {
     extractors: readonly Extractor[] = [
       new DirectExtractor(),
       new YoutubeExtractor(),
+      new SoundcloudExtractor(),
       new GenericExtractor(),
     ],
   ) {

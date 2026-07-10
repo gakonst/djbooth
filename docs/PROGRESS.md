@@ -88,3 +88,16 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Added CI for Node.js 22 with frozen dependency installation, type checking, tests, and build.
 - Verified the first GitHub Actions run passed, then advanced checkout, setup-node, and pnpm setup
   to their current official major releases to remove the deprecated Node 20 action runtime.
+
+## 2026-07-10 — YouTube and SoundCloud live compatibility
+
+- Verified live YouTube extraction through `auto`, including a playable 360p media format.
+- Added a native SoundCloud public-track extractor using page hydration data and runtime client-ID
+  discovery from SoundCloud's deployed asset bundles.
+- Added native SoundCloud transcoding resolution for progressive MP3 and HLS MP3/AAC/Opus streams,
+  with compatible metadata, uploader, counters, artwork, duration, and upload date fields.
+- Kept SoundCloud sets and profiles on the exact reference path until their pagination semantics are
+  ported.
+- Completed live end-to-end download smoke tests and validated outputs with FFprobe:
+  - SoundCloud native progressive MP3: 180.062 seconds, 2,881,409 bytes.
+  - YouTube automatic reference fallback MP4: 213.043 seconds, 11,829,048 bytes.
