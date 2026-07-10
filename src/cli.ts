@@ -9,6 +9,7 @@ import {
 import { inspect } from './core/engine.js'
 import { errorMessage, YtdlpError } from './core/errors.js'
 import type { EngineKind } from './core/types.js'
+import { ExtractorRegistry } from './extractors/registry.js'
 
 const VERSION = '0.1.0'
 const engine = z.enum(['auto', 'native', 'reference']).default('auto').describe('Execution engine')
@@ -184,16 +185,24 @@ cli.command('download', {
 })
 
 cli.command('extractors', {
-  description: 'List extractor names available through the reference engine.',
-  options: z.object({ descriptions: z.boolean().optional().describe('Include extractor descriptions') }),
+  description: 'List extractor names available through native and reference engines.',
+  options: z.object({
+    engine: z.enum(['native', 'reference', 'all']).default('all').describe('Extractor inventory'),
+  }),
   async run(c) {
     try {
-      const result = await new ReferenceClient().run([
-        '--ignore-config',
-        c.options.descriptions ? '--list-extractors' : '--list-extractors',
-      ])
-      const extractors = result.stdout.split(/\r?\n/u).filter(Boolean)
-      return { engine: 'reference', count: extractors.length, extractors }
+      const native = new ExtractorRegistry().list()
+      if (c.options.engine === 'native') return { engine: 'native', count: native.length, extractors: native }
+      const result = await new ReferenceClient().run(['--ignore-config', '--list-extractors'])
+      const reference = result.stdout.split(/\r?\n/u).filter(Boolean)
+      if (c.options.engine === 'reference') {
+        return { engine: 'reference', count: reference.length, extractors: reference }
+      }
+      return {
+        engine: 'all',
+        native: { count: native.length, extractors: native },
+        reference: { count: reference.length, extractors: reference },
+      }
     } catch (error) {
       fail(c, error)
     }
@@ -237,12 +246,12 @@ cli.command('engines', {
     try {
       const version = await reference.version()
       return {
-        native: { available: false, coverage: 'framework only' },
+        native: { available: true, extractors: new ExtractorRegistry().list() },
         reference: { available: true, binary: reference.binary, version },
       }
     } catch (error) {
       return {
-        native: { available: false, coverage: 'framework only' },
+        native: { available: true, extractors: new ExtractorRegistry().list() },
         reference: { available: false, binary: reference.binary, error: errorMessage(error) },
       }
     }

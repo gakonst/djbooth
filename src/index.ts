@@ -14,3 +14,7 @@ export type {
   ReferenceRunOptions,
 } from './bridge/reference.js'
 export { YtdlpError } from './core/errors.js'
+export { ExtractorRegistry } from './extractors/registry.js'
+export { DirectExtractor } from './extractors/direct.js'
+export { GenericExtractor } from './extractors/generic.js'
+export { parseM3u8Formats } from './core/manifest.js'

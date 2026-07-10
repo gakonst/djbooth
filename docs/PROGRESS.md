@@ -26,3 +26,17 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Mapped common authentication, network, format, subtitle, thumbnail, metadata, SponsorBlock, and
   post-processing options to reference behavior.
 - Added tests that pin the compatibility argument translation, including the `--` URL boundary.
+
+## 2026-07-10 — First native extractors
+
+- Added an ordered native extractor registry with explicit `Direct` and fallback `Generic`
+  extractors.
+- Added retrying, timeout-bounded HTTP requests and bounded in-memory webpage reads.
+- Added direct audio/video discovery by URL extension and content type.
+- Added generic HTML discovery through OpenGraph, Twitter cards, `<video>`, `<audio>`, `<source>`,
+  and JSON-LD VideoObject/AudioObject metadata.
+- Added native HLS master and media-playlist parsing with relative URL resolution, resolution,
+  framerate, bitrate, and codec fields.
+- Changed `auto` to try the native registry before transparently falling back to the reference
+  engine; forcing `native` never delegates.
+- Added isolated HTTP-server and manifest tests with no internet dependency.

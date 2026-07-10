@@ -1,6 +1,7 @@
 import { ReferenceClient, type InspectReferenceOptions } from '../bridge/reference.js'
 import { YtdlpError } from './errors.js'
 import type { EngineKind, MediaInfo } from './types.js'
+import { ExtractorRegistry } from '../extractors/registry.js'
 
 export interface EngineResult<T> {
   engine: Exclude<EngineKind, 'auto'>
@@ -12,12 +13,16 @@ export async function inspect(
   engine: EngineKind,
   options: InspectReferenceOptions,
 ): Promise<EngineResult<MediaInfo>> {
-  if (engine === 'native') {
-    throw new YtdlpError(
-      'NATIVE_EXTRACTOR_UNAVAILABLE',
-      'No native extractor currently supports this URL. Use --engine reference or --engine auto.',
-      { url },
-    )
+  if (engine !== 'reference') {
+    try {
+      const data = await new ExtractorRegistry().extract(url)
+      return { engine: 'native', data }
+    } catch (error) {
+      if (engine === 'native') {
+        if (error instanceof YtdlpError) throw error
+        throw new YtdlpError('NATIVE_EXTRACTION_FAILED', String(error), { url })
+      }
+    }
   }
   const data = await new ReferenceClient().inspect(url, options)
   return { engine: 'reference', data }
