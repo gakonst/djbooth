@@ -413,9 +413,17 @@ export abstract class SettingsFile {
     this.items.set(key, value);
   }
 
+  /** Remove an override so subsequent reads/builds use the format default. */
+  reset(key: string): void {
+    const definition = this.getDefinition();
+    if (!(key in definition.defaults))
+      throw new RangeError(`Key '${key}' is not valid for ${this.constructor.name}`);
+    this.items.delete(key);
+  }
+
   /** Reset one setting to its class default. */
   delete(key: string): void {
-    this.items.delete(key);
+    this.reset(key);
   }
 
   /** Return all supported setting names. */

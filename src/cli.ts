@@ -5,6 +5,7 @@ import { Cli, z } from "incur";
 import {
   AnlzFile,
   BeatGridTag,
+  ExtendedBeatGridTag,
   createMySettingFile,
   getAnlzPaths,
   getMySettingPaths,
@@ -133,6 +134,24 @@ settingsCli.command("set", {
   run(c) {
     const file = readMySettingFile(c.args.path);
     file.set(c.args.key, c.args.value);
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { output, ...file.toJSON() };
+  },
+});
+
+settingsCli.command("reset", {
+  description: "Reset one setting to its format default and write the binary.",
+  args: z.object({
+    path: z.string().describe("Settings file"),
+    key: z.string().describe("Setting name"),
+  }),
+  options: z.object({
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+  }),
+  run(c) {
+    const file = readMySettingFile(c.args.path);
+    file.reset(c.args.key);
     const output = c.options.output ?? c.args.path;
     file.save(output);
     return { output, ...file.toJSON() };
@@ -274,6 +293,60 @@ anlzCli.command("set-beat-grid", {
     const output = c.options.output ?? c.args.path;
     file.save(output);
     return { beatGrid: tag.get(), output };
+  },
+});
+
+anlzCli.command("set-beat-grid2", {
+  description: "Replace the two PQT2 beat, BPM, and time anchors.",
+  args: z.object({ path: z.string().describe("ANLZ EXT/2EX file") }),
+  options: z.object({
+    beats: z.string().describe("Two comma-separated beat numbers"),
+    bpms: z.string().describe("Two comma-separated BPM values"),
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+    times: z.string().describe("Two comma-separated times in seconds"),
+  }),
+  run(c) {
+    const file = AnlzFile.parseFile(c.args.path);
+    const tag = file.getTag("PQT2");
+    if (!(tag instanceof ExtendedBeatGridTag))
+      throw new TypeError("PQT2 tag has an unexpected handler");
+    tag.setBeats(numberList(c.options.beats));
+    tag.setBpms(numberList(c.options.bpms));
+    tag.setTimes(numberList(c.options.times));
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { beatGrid: tag.get(), output };
+  },
+});
+
+anlzCli.command("patch-bytes", {
+  description: "Patch arbitrary on-disk bytes inside one ANLZ tag.",
+  args: z.object({
+    path: z.string().describe("ANLZ DAT, EXT, or 2EX file"),
+    key: z.string().describe("Tag type or semantic name"),
+    offset: z.number().int().min(0).describe("Byte offset from the tag header"),
+    hex: z.string().describe("Replacement bytes as hexadecimal"),
+  }),
+  options: z.object({
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+    parsed: z.boolean().default(false).describe("Patch parsed/deobfuscated tag bytes"),
+  }),
+  run(c) {
+    if (!/^(?:[0-9a-fA-F]{2})+$/u.test(c.args.hex))
+      throw new TypeError("hex must contain a non-empty even number of hexadecimal digits");
+    const file = AnlzFile.parseFile(c.args.path);
+    const tag = file.getTag(c.args.key);
+    const replacement = Buffer.from(c.args.hex, "hex");
+    const edit = (data: Buffer) => {
+      if (c.args.offset + replacement.length > data.length)
+        throw new RangeError("Patch exceeds the tag boundary");
+      replacement.copy(data, c.args.offset);
+    };
+    if (c.options.parsed) tag.editParsed(edit);
+    else tag.editRaw(edit);
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { bytes: replacement.length, offset: c.args.offset, output, tag: tag.summary() };
   },
 });
 
@@ -428,6 +501,32 @@ databaseCli.command("search", {
         count: rows.length,
         rows: rows.slice(c.options.offset, c.options.offset + c.options.limit),
       };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databaseCli.command("sql", {
+  description: "Execute parameterized SQL against the master database.",
+  args: z.object({ sql: z.string().describe("SQLite statement") }),
+  options: dbWriteOptions.extend({
+    parameters: z.string().default("[]").describe("JSON array of bind parameters"),
+    limit: z.number().int().min(1).max(100_000).default(1_000),
+    offset: z.number().int().min(0).default(0),
+  }),
+  run(c) {
+    const db = openDatabase(c.options, c.options.write);
+    try {
+      const result = db.executeSql(c.args.sql, parseJsonArray(c.options.parameters, "parameters"));
+      if (Array.isArray(result))
+        return {
+          count: result.length,
+          limit: c.options.limit,
+          offset: c.options.offset,
+          rows: result.slice(c.options.offset, c.options.offset + c.options.limit),
+        };
+      return { changes: result.changes, lastInsertRowid: String(result.lastInsertRowid) };
     } finally {
       db.close();
     }
@@ -940,6 +1039,32 @@ deviceCli.command("search", {
         count: rows.length,
         rows: rows.slice(c.options.offset, c.options.offset + c.options.limit),
       };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+deviceCli.command("sql", {
+  description: "Execute parameterized SQL against a Device Library Plus database.",
+  args: z.object({ sql: z.string().describe("SQLite statement") }),
+  options: deviceWriteOptions.extend({
+    parameters: z.string().default("[]").describe("JSON array of bind parameters"),
+    limit: z.number().int().min(1).max(100_000).default(1_000),
+    offset: z.number().int().min(0).default(0),
+  }),
+  run(c) {
+    const db = openDeviceLibrary(c.options, c.options.write);
+    try {
+      const result = db.executeSql(c.args.sql, parseJsonArray(c.options.parameters, "parameters"));
+      if (Array.isArray(result))
+        return {
+          count: result.length,
+          limit: c.options.limit,
+          offset: c.options.offset,
+          rows: result.slice(c.options.offset, c.options.offset + c.options.limit),
+        };
+      return { changes: result.changes, lastInsertRowid: String(result.lastInsertRowid) };
     } finally {
       db.close();
     }

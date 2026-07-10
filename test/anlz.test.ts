@@ -8,6 +8,7 @@ import {
   AnlzFile,
   AnlzLengthError,
   BeatGridTag,
+  ExtendedBeatGridTag,
   getAnlzPaths,
   isAnlzFile,
   MonochromeWaveformTag,
@@ -58,6 +59,22 @@ function pathTag(path: string): Buffer {
   content.writeUInt32BE(encoded.length + 2, 0);
   encoded.copy(content, 4);
   return tag("PPTH", 16, content);
+}
+
+function extendedBeatGridTag(): Buffer {
+  const content = Buffer.alloc(44);
+  const anchors = [
+    { beat: 1, bpm: 128, time: 0.1 },
+    { beat: 2, bpm: 129, time: 0.6 },
+  ];
+  anchors.forEach((entry, index) => {
+    const offset = 12 + index * 8;
+    content.writeUInt16BE(entry.beat, offset);
+    content.writeUInt16BE(entry.bpm * 100, offset + 2);
+    content.writeUInt32BE(entry.time * 1_000, offset + 4);
+  });
+  content.writeUInt32BE(0, 28);
+  return tag("PQT2", 56, content);
 }
 
 function waveformTag(): Buffer {
@@ -135,6 +152,61 @@ describe("ANLZ parsing", () => {
     const waveform = AnlzFile.parse(anlzData()).getTag("wf_preview");
     expect(waveform).toBeInstanceOf(MonochromeWaveformTag);
     expect(waveform.get()).toEqual({ colors: [1, 7, 4], heights: [1, 31, 10] });
+  });
+
+  it("mutates extended PQT2 anchors and arbitrary raw tag fields", () => {
+    const tags = [extendedBeatGridTag(), unknownTag()];
+    const header = Buffer.alloc(28);
+    header.write("PMAI", 0, "ascii");
+    header.writeUInt32BE(28, 4);
+    header.writeUInt32BE(28 + tags.reduce((sum, value) => sum + value.length, 0), 8);
+    const file = AnlzFile.parse(Buffer.concat([header, ...tags]));
+    const grid = file.getTag("PQT2");
+    expect(grid).toBeInstanceOf(ExtendedBeatGridTag);
+    if (!(grid instanceof ExtendedBeatGridTag)) throw new TypeError("Expected PQT2");
+    grid.setBeats([3, 4]);
+    grid.setBpms([120, 121.5]);
+    grid.setTimes([1, 1.5]);
+
+    const unknown = file.getTag("TEST");
+    unknown.editRaw((data) => {
+      data[12] = 0x58;
+    });
+    const rebuilt = AnlzFile.parse(file.build());
+    const reparsed = rebuilt.getTag("PQT2") as ExtendedBeatGridTag;
+    expect(reparsed.get()).toEqual([
+      { beat: 3, bpm: 120, time: 1 },
+      { beat: 4, bpm: 121.5, time: 1.5 },
+    ]);
+    expect(rebuilt.getTag("TEST").rawData[12]).toBe(0x58);
+  });
+
+  it("re-obfuscates PSSI after low-level parsed edits", () => {
+    const mask = Buffer.from("cbe1eefae5eeadeee9d2e9ebe1e9f3e8e9f4e1", "hex");
+    const structure = Buffer.alloc(32);
+    structure.write("PSSI", 0, "ascii");
+    structure.writeUInt32BE(32, 4);
+    structure.writeUInt32BE(32, 8);
+    structure.writeUInt16BE(0, 16);
+    structure.writeUInt16BE(2, 18);
+    const obfuscated = Buffer.from(structure);
+    for (let index = 18; index < obfuscated.length; index++)
+      obfuscated[index] = obfuscated[index]! ^ mask[(index - 18) % mask.length]!;
+
+    const header = Buffer.alloc(28);
+    header.write("PMAI", 0, "ascii");
+    header.writeUInt32BE(28, 4);
+    header.writeUInt32BE(60, 8);
+    const file = AnlzFile.parse(Buffer.concat([header, obfuscated]));
+    const pssi = file.getTag("PSSI");
+    pssi.editParsed((data) => {
+      data[30] = 7;
+    });
+    const rebuilt = file.build();
+    expect(rebuilt.readUInt16BE(28 + 18)).not.toBe(2);
+    const reparsed = AnlzFile.parse(rebuilt);
+    expect(reparsed.getTag("PSSI").get()).toMatchObject({ bank: 7, mood: 2 });
+    expect(reparsed.build()).toEqual(rebuilt);
   });
 
   it("turns every known truncated tag boundary into a format error", () => {

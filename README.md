@@ -39,6 +39,7 @@ rekordbox config show
 rekordbox db info
 rekordbox db search "track name"
 rekordbox db playlist contents 123456
+rekordbox db sql "SELECT Title FROM djmdContent WHERE ArtistID = ?" --parameters '["123"]'
 
 # Read an encrypted Device Library Plus export
 rekordbox device info --path /Volumes/USB/PIONEER/rekordbox/exportLibrary.db
@@ -97,6 +98,8 @@ try {
 
 Databases open read-only by default. For a write workflow, pass `readonly: false`, stage changes through helpers such as `createPlaylist`, `addToPlaylist`, `renamePlaylist`, or row `set`, then call `commit()`. `rollback()` restores staged rows. Commits are blocked while Rekordbox is running, and `copyUnlocked()` produces a new plain SQLite logical copy without modifying the encrypted source.
 
+For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.
+
 ### ANLZ and My Settings
 
 ```ts
@@ -106,6 +109,10 @@ import { readMySettingFile } from "@gakonst/rekordbox/mysettings";
 const anlz = AnlzFile.parseFile("ANLZ0000.DAT");
 const grid = anlz.getTag("PQTZ") as PQTZAnlzTag;
 grid.setBpms(grid.getBpms().map(() => 128));
+anlz.getTag("PSSI").editParsed((bytes) => {
+  // Low-level edits are re-obfuscated automatically when necessary.
+  bytes[30] = 2;
+});
 anlz.save("ANLZ0000-updated.DAT");
 
 const settings = readMySettingFile("MYSETTING.DAT");
@@ -113,7 +120,7 @@ settings.set("quantize", "ON");
 settings.save("MYSETTING-updated.DAT");
 ```
 
-Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. Supported mutations recalculate lengths and checksums.
+Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and PQT2 expose typed beat-grid mutation; every tag additionally exposes bounded raw and parsed byte editing. Mutations recalculate file lengths/checksums and preserve PSSI obfuscation.
 
 ### Collection XML interchange
 

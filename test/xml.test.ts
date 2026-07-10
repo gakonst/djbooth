@@ -97,12 +97,13 @@ describe("RekordboxXml", () => {
     const playlist = folder.addPlaylist("Set");
     expect(folder.count).toBe(1);
     expect(playlist).toBeInstanceOf(Node);
+    expect(playlist.parent).toBe(folder.element);
 
-    playlist.addTrack(1);
+    expect(playlist.addTrack(1)).toBeTypeOf("object");
     playlist.addTrack(2);
     expect(playlist.entries).toBe(2);
     expect(playlist.getTrack(1)).toBe(1);
-    playlist.removeTrack(1);
+    expect(playlist.removeTrack(1)).toBeTypeOf("object");
     expect(playlist.getTracks()).toEqual([2]);
     folder.removePlaylist("Set");
     expect(folder.count).toBe(0);

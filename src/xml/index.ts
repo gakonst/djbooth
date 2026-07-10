@@ -475,6 +475,11 @@ export class Node {
     this.parentElement = parent;
   }
 
+  /** Raw parent element, matching pyrekordbox's `Node.parent`. */
+  get parent(): OrderedNode | undefined {
+    return this.parentElement;
+  }
+
   /** @internal Create and append a folder node. */
   static folder(parent: OrderedNode, name: string): Node {
     return new Node(
@@ -603,20 +608,22 @@ export class Node {
   }
 
   /** Add a track key to a playlist. */
-  addTrack(key: number | string): void {
+  addTrack(key: number | string): OrderedNode {
     if (!this.isPlaylist) throw new TypeError("Tracks can only be added to a playlist node!");
-    appendElement(this.element, Track.TAG, { Key: String(key) });
+    const element = appendElement(this.element, Track.TAG, { Key: String(key) });
     this.updateEntries();
+    return element;
   }
 
   /** Remove a track key from a playlist. */
-  removeTrack(key: number | string): void {
+  removeTrack(key: number | string): OrderedNode {
     const element = directChildren(this.element, Track.TAG).find(
       (candidate) => attributesOf(candidate).Key === String(key),
     );
     if (!element) throw new Error(`Track key ${key} not found.`);
     removeElement(this.element, element);
     this.updateEntries();
+    return element;
   }
 
   /** Return all track keys in a playlist. */

@@ -58,6 +58,20 @@ describe("CLI process boundary", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ count: 1, table: "sample" });
 
+    const sql = runCli(
+      "db",
+      "sql",
+      "SELECT Name FROM sample WHERE ID = ?",
+      "--path",
+      path,
+      "--plain",
+      "--parameters",
+      '["1"]',
+      "--json",
+    );
+    expect(sql.status, sql.stderr).toBe(0);
+    expect(JSON.parse(sql.stdout)).toMatchObject({ count: 1, rows: [{ Name: "needle" }] });
+
     const invalid = runCli(
       "db",
       "table",
@@ -71,6 +85,39 @@ describe("CLI process boundary", () => {
     );
     expect(invalid.status).not.toBe(0);
     expect(`${invalid.stdout}\n${invalid.stderr}`).toContain("filters must be a JSON object");
+  });
+
+  it("requires write mode for arbitrary SQL mutations", () => {
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-cli-sql-"));
+    roots.push(root);
+    const path = join(root, "plain.db");
+    const database = new Database(path);
+    database.exec("CREATE TABLE sample (ID TEXT PRIMARY KEY)");
+    database.close();
+
+    const denied = runCli(
+      "db",
+      "sql",
+      "INSERT INTO sample VALUES ('1')",
+      "--path",
+      path,
+      "--plain",
+      "--json",
+    );
+    expect(denied.status).not.toBe(0);
+
+    const allowed = runCli(
+      "db",
+      "sql",
+      "INSERT INTO sample VALUES ('1')",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(allowed.status, allowed.stderr).toBe(0);
+    expect(JSON.parse(allowed.stdout)).toMatchObject({ changes: 1 });
   });
 
   it("refuses database mutations without explicit write acknowledgement", () => {

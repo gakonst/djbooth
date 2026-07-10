@@ -96,6 +96,15 @@ describe("My Settings binary formats", () => {
     expect(() => file.set("quantize", "maybe")).toThrow(RangeError);
   });
 
+  it("resets parsed overrides to format defaults like MutableMapping deletion", () => {
+    const file = MySettingFile.parse(Buffer.from(variants.myQuantizeOff, "base64"));
+    expect(file.get("quantize")).toBe("off");
+    file.reset("quantize");
+    expect(file.get("quantize")).toBe("on");
+    expect(file.build()).toEqual(Buffer.from(fixtures["MYSETTING.DAT"], "base64"));
+    expect(() => file.reset("invalid")).toThrow(RangeError);
+  });
+
   it("computes the stored CRC-16/XMODEM checksum", () => {
     const source = Buffer.from(fixtures["MYSETTING.DAT"], "base64");
     expect(computeChecksum(source)).toBe(source.readUInt16LE(source.length - 4));

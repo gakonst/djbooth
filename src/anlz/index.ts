@@ -63,6 +63,15 @@ function deobfuscatePssi(data: Buffer): Buffer {
   return result;
 }
 
+function transformPssi(data: Buffer): Buffer {
+  assertRange(data, 0, 32, "PSSI header");
+  const count = data.readUInt16BE(16);
+  const result = Buffer.from(data);
+  for (let index = 18; index < result.length; index++)
+    result[index] = result[index]! ^ ((xorMask[(index - 18) % xorMask.length]! + count) & 0xff);
+  return result;
+}
+
 function parseTagHeader(data: Buffer): AnlzHeader {
   assertRange(data, 0, 12, "ANLZ tag header");
   return {
@@ -86,6 +95,7 @@ export class AbstractAnlzTag {
   protected data: Buffer;
   protected original: Buffer;
   protected dirty = false;
+  protected pssiObfuscated = false;
 
   constructor(data: Buffer, name?: string) {
     const header = parseTagHeader(data);
@@ -98,7 +108,81 @@ export class AbstractAnlzTag {
     this.lenHeader = header.lenHeader;
     this.lenTag = header.lenFile;
     this.original = Buffer.from(data.subarray(0, this.lenTag));
+    this.pssiObfuscated =
+      this.type === "PSSI" &&
+      (this.original.readUInt16BE(18) < 1 || this.original.readUInt16BE(18) > 3);
     this.data = this.type === "PSSI" ? deobfuscatePssi(this.original) : Buffer.from(this.original);
+  }
+
+  /** Complete on-disk tag bytes, including the 12-byte tag header. */
+  get rawData(): Buffer {
+    return this.build();
+  }
+
+  /** Parsed semantic tag content, matching pyrekordbox's `content` accessor. */
+  get content(): unknown {
+    return this.get();
+  }
+
+  /** Parsed/deobfuscated tag bytes for low-level field inspection. */
+  get parsedData(): Buffer {
+    return Buffer.from(this.data);
+  }
+
+  /** Replace the complete on-disk tag bytes and reparse its header/obfuscation state. */
+  replaceRawData(data: Buffer): this {
+    const header = parseTagHeader(data);
+    if (header.type !== this.type)
+      throw new TypeError(`Cannot replace ${this.type} with ${header.type}`);
+    if (header.lenFile !== data.length || header.lenHeader < 12 || header.lenHeader > data.length)
+      throw new AnlzLengthError(`Invalid replacement ${header.type} tag lengths`);
+    this.lenHeader = header.lenHeader;
+    this.lenTag = header.lenFile;
+    this.original = Buffer.from(data);
+    this.pssiObfuscated =
+      this.type === "PSSI" &&
+      (this.original.readUInt16BE(18) < 1 || this.original.readUInt16BE(18) > 3);
+    this.data = this.type === "PSSI" ? deobfuscatePssi(this.original) : Buffer.from(this.original);
+    this.dirty = false;
+    return this;
+  }
+
+  /** Reparse complete tag bytes on this handler. */
+  parse(data: Buffer): this {
+    return this.replaceRawData(data);
+  }
+
+  /** Validate that the current handler builds to its declared length. */
+  checkParse(): void {
+    const built = this.build();
+    if (built.length !== this.lenTag)
+      throw new AnlzLengthError(`Built ${this.type} length ${built.length} != ${this.lenTag}`);
+  }
+
+  /** Update the declared tag length after low-level parsed-data edits. */
+  updateLength(): void {
+    this.lenTag = this.data.length;
+    this.data.writeUInt32BE(this.lenTag, 8);
+    this.dirty = true;
+  }
+
+  /** Human-readable low-level tag dump. */
+  pformat(): string {
+    return JSON.stringify(this.toJSON(), null, 2);
+  }
+
+  /** Mutate arbitrary on-disk fields while retaining typed tag handling. */
+  editRaw(editor: (data: Buffer) => void): this {
+    const data = this.build();
+    editor(data);
+    return this.replaceRawData(data);
+  }
+
+  /** Mutate parsed/deobfuscated fields and rebuild the tag on the next save. */
+  editParsed(editor: (data: Buffer) => void): this {
+    editor(this.data);
+    this.dirty = true;
+    return this;
   }
 
   /** Return parsed tag content. Unknown tags return raw payload metadata. */
@@ -108,7 +192,10 @@ export class AbstractAnlzTag {
 
   /** Rebuild this tag, preserving untouched original bytes. */
   build(): Buffer {
-    return Buffer.from(this.dirty ? this.data : this.original);
+    if (!this.dirty) return Buffer.from(this.original);
+    return this.type === "PSSI" && this.pssiObfuscated
+      ? transformPssi(this.data)
+      : Buffer.from(this.data);
   }
 
   /** Return a bounded metadata representation without expanding large waveform arrays. */
@@ -243,6 +330,54 @@ export class ExtendedBeatGridTag extends AbstractAnlzTag {
     });
   }
 
+  get beats(): Array<number> {
+    return this.getBeats();
+  }
+  get bpms(): Array<number> {
+    return this.getBpms();
+  }
+  get times(): Array<number> {
+    return this.getTimes();
+  }
+  get bpmsUnique(): Array<number> {
+    return [...new Set(this.getBpms())];
+  }
+  get beatGridCount(): number {
+    return this.data.readUInt32BE(40);
+  }
+
+  getBeats(): Array<number> {
+    return this.get().map((entry) => entry.beat);
+  }
+
+  getBpms(): Array<number> {
+    return this.get().map((entry) => entry.bpm);
+  }
+
+  getTimes(): Array<number> {
+    return this.get().map((entry) => entry.time);
+  }
+
+  setBeats(beats: Array<number>): void {
+    if (beats.length !== 2) throw new RangeError("Expected two PQT2 beat anchors");
+    beats.forEach((beat, index) => this.data.writeUInt16BE(beat, 24 + index * 8));
+    this.dirty = true;
+  }
+
+  setBpms(bpms: Array<number>): void {
+    if (bpms.length !== 2) throw new RangeError("Expected two PQT2 BPM anchors");
+    bpms.forEach((bpm, index) => this.data.writeUInt16BE(Math.trunc(bpm * 100), 26 + index * 8));
+    this.dirty = true;
+  }
+
+  setTimes(times: Array<number>): void {
+    if (times.length !== 2) throw new RangeError("Expected two PQT2 time anchors");
+    times.forEach((time, index) =>
+      this.data.writeUInt32BE(Math.trunc(time * 1_000), 28 + index * 8),
+    );
+    this.dirty = true;
+  }
+
   /** Fine-grained two-byte beat entries. */
   getBeatGrid(): Array<{ beat: number; unknown: number }> {
     const count = this.data.readUInt32BE(40);
@@ -273,6 +408,10 @@ export class PathTag extends AbstractAnlzTag {
     if (length < 2) return "";
     assertRange(this.data, 16, length, "PPTH path");
     return decodeUtf16Be(this.data.subarray(16, 16 + length - 2));
+  }
+
+  get path(): string {
+    return this.get();
   }
 
   /** Replace the path and update both tag length fields. */
@@ -768,9 +907,17 @@ export class AnlzFile {
   }
 
   /** Rebuild the complete file and update the declared file length. */
+  updateLength(): number {
+    const length =
+      this.fileHeader.lenHeader + this.tags.reduce((sum, tag) => sum + tag.build().length, 0);
+    this.fileHeader.lenFile = length;
+    return length;
+  }
+
+  /** Rebuild the complete file and update the declared file length. */
   build(): Buffer {
     const tags = this.tags.map((tag) => tag.build());
-    const lenFile = this.fileHeader.lenHeader + tags.reduce((total, tag) => total + tag.length, 0);
+    const lenFile = this.updateLength();
     const header = Buffer.from(this.headerData);
     header.writeUInt32BE(lenFile, 8);
     this.fileHeader.lenFile = lenFile;

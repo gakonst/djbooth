@@ -86,6 +86,14 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Convert every truncated known ANLZ tag into a domain `AnlzLengthError`, and run 1,000 deterministic mutation cases to prevent native buffer-range exceptions or unstable successful rebuilds.
 - Enforce repository-wide coverage floors in a dedicated CI job. Process-level CLI tests exercise incur dispatch, both human/agent command discovery and JSON output, real plain-SQLite queries, malformed arguments, and the write-safety gate.
 
+### 2026-07-10 — Full programmability parity
+
+- Treat SQLAlchemy's open-ended engine/session as a capability requirement, not merely its high-level helpers. Expose parameterized arbitrary SQL, selected-column queries, streaming iteration, the native SQLite connection, explicit model construction, schema metadata, and matching registry hooks.
+- Mirror the complete master and Device Library relationship graphs, including writable to-one relationships, association proxies, mutable relationship collections, tree parents/children, and SQLAlchemy's playlist delete cascade.
+- Generate master-model physical-column augmentations from the exact pinned Python model source. The checked-in generated declarations give TypeScript consumers the same complete schema surface while runtime introspection continues to tolerate newer Rekordbox columns.
+- Match ANLZ's mutable Construct-container capability with raw and parsed byte editors for every tag, automatic PSSI re-obfuscation, complete PQT2 mutation, reparsing/length validation helpers, and CLI byte patching.
+- Expose arbitrary SQL for both database families and every new binary/settings operation through incur while retaining read-only defaults, bounded output, parameter binding, and explicit write acknowledgement.
+
 ## Progress
 
 ### 2026-07-10
@@ -122,6 +130,9 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - The Windows rerun then exposed POSIX-only XML path assertions. The implementation already matched pyrekordbox's platform-native `normpath`; made the parity tests assert native normalization on Windows as well.
 - Completed an adversarial API/CLI audit and fixed transaction lifecycle, identity-map, bounded-count, default-insert, checksum-state, hierarchy-cycle, cross-playlist, runtime-validation, and truncated-binary edge cases.
 - Expanded the durable suite from 46 to 56 tests, including 1,000 deterministic ANLZ mutations and subprocess-level CLI coverage. Added enforced V8 coverage floors and made the global package job depend on both cross-platform validation and adversarial coverage.
+- Audited every public class method and top-level function in the pinned Python source with AST-generated inventories. Closed the remaining query/session, schema metadata, relationship read/write/cascade, model-construction, PQT2, arbitrary ANLZ mutation, settings reset, and XML return-value gaps.
+- Added generated typings for every master.db physical column and new incur commands for arbitrary parameterized master/device SQL, PQT2 editing, raw/parsed ANLZ byte patching, and settings reset. The expanded suite passes 64 tests before differential fixture verification.
+- Re-ran the pinned Python project itself under Python 3.12: all 278 upstream tests passed. Then expanded every tag from and byte-for-byte rebuilt all 48 real upstream ANLZ files, rebuilt all 169 My Settings fixtures, round-tripped both Rekordbox 5/6 collection XML fixtures, and sampled every mapped table from the encrypted upstream master database.
 
 ## Next
 
