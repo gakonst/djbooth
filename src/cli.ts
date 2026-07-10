@@ -1,0 +1,315 @@
+#!/usr/bin/env node
+import { Cli, z } from 'incur'
+
+import {
+  ReferenceClient,
+  type DownloadReferenceOptions,
+  type InspectReferenceOptions,
+} from './bridge/reference.js'
+import { inspect } from './core/engine.js'
+import { errorMessage, YtdlpError } from './core/errors.js'
+import type { EngineKind } from './core/types.js'
+
+const VERSION = '0.1.0'
+const engine = z.enum(['auto', 'native', 'reference']).default('auto').describe('Execution engine')
+
+const inspectOptions = z.object({
+  engine,
+  playlist: z.boolean().default(true).describe('Extract playlists instead of a single item'),
+  flatPlaylist: z.boolean().optional().describe('Do not resolve playlist entries'),
+  cookies: z.string().optional().describe('Netscape cookie file'),
+  cookiesFromBrowser: z.string().optional().describe('Browser cookie source specification'),
+  username: z.string().optional().describe('Account username'),
+  password: z.string().optional().describe('Account password'),
+  videoPassword: z.string().optional().describe('Video-specific password'),
+  proxy: z.string().optional().describe('HTTP/HTTPS/SOCKS proxy URL'),
+  geoBypassCountry: z.string().optional().describe('ISO 3166-2 country code for geo bypass'),
+  impersonate: z.string().optional().describe('Browser/client impersonation target'),
+  extractorArgs: z.array(z.string()).optional().describe('Extractor argument key:value'),
+  noCheckCertificates: z.boolean().optional().describe('Disable TLS certificate validation'),
+  socketTimeout: z.number().int().positive().optional().describe('Socket timeout in seconds'),
+})
+
+const cli = Cli.create('ytdlp-ts', {
+  version: VERSION,
+  description: 'Download and inspect media with a TypeScript port of yt-dlp.',
+  mcp: {
+    instructions:
+      'Use inspect before download when format or subtitle selection matters. Results report the native or reference engine used.',
+  },
+  sync: {
+    cwd: import.meta.dirname,
+    suggestions: [
+      'inspect a media URL and summarize its formats',
+      'download the best video and audio for a URL',
+      'list available subtitles for a media URL',
+    ],
+  },
+})
+
+cli.command('inspect', {
+  description: 'Extract the complete yt-dlp-compatible information object for a URL.',
+  args: z.object({ url: z.url().describe('Media or playlist URL') }),
+  options: inspectOptions,
+  alias: { cookies: 'c' },
+  examples: [{ args: { url: 'https://www.youtube.com/watch?v=BaW_jenozKc' } }],
+  async run(c) {
+    try {
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      return { engine: result.engine, info: result.data }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('formats', {
+  description: 'List downloadable formats for a URL.',
+  args: z.object({ url: z.url().describe('Media URL') }),
+  options: inspectOptions,
+  async run(c) {
+    try {
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      const formats = result.data.formats ?? []
+      return {
+        engine: result.engine,
+        id: result.data.id,
+        title: result.data.title,
+        count: formats.length,
+        formats,
+      }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('subtitles', {
+  description: 'List manual and automatically generated subtitles for a URL.',
+  args: z.object({ url: z.url().describe('Media URL') }),
+  options: inspectOptions,
+  async run(c) {
+    try {
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      return {
+        engine: result.engine,
+        id: result.data.id,
+        title: result.data.title,
+        subtitles: result.data.subtitles ?? {},
+        automaticCaptions: result.data.automatic_captions ?? {},
+      }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('download', {
+  description: 'Download media and run requested post-processing.',
+  destructive: true,
+  args: z.object({ url: z.url().describe('Media or playlist URL') }),
+  options: z.object({
+    engine,
+    mediaFormat: z.string().optional().describe('yt-dlp format selection expression'),
+    output: z.string().optional().describe('Output filename template'),
+    paths: z.string().optional().describe('Download directory'),
+    playlist: z.boolean().default(true).describe('Download playlists instead of a single item'),
+    noOverwrites: z.boolean().optional().describe('Do not overwrite existing files'),
+    continueDownload: z.boolean().default(true).describe('Resume partial downloads'),
+    concurrentFragments: z.number().int().positive().optional().describe('Concurrent fragment count'),
+    retries: z.number().int().nonnegative().optional().describe('HTTP retry count'),
+    fragmentRetries: z.number().int().nonnegative().optional().describe('Fragment retry count'),
+    rateLimit: z.string().optional().describe('Maximum download rate, e.g. 4.2M'),
+    extractAudio: z.boolean().optional().describe('Convert video files to audio-only files'),
+    audioFormat: z.string().optional().describe('Audio conversion format'),
+    audioQuality: z.string().optional().describe('FFmpeg audio quality'),
+    mergeOutputFormat: z.string().optional().describe('Container used when merging formats'),
+    remuxVideo: z.string().optional().describe('Remux output to a container'),
+    writeSubtitles: z.boolean().optional().describe('Write manual subtitles'),
+    writeAutoSubtitles: z.boolean().optional().describe('Write automatic subtitles'),
+    subtitleLanguages: z.array(z.string()).optional().describe('Subtitle language expression'),
+    subtitleFormat: z.string().optional().describe('Subtitle format preference'),
+    embedSubtitles: z.boolean().optional().describe('Embed subtitles in the media file'),
+    writeThumbnail: z.boolean().optional().describe('Write thumbnail image'),
+    embedThumbnail: z.boolean().optional().describe('Embed thumbnail in the media file'),
+    writeInfoJson: z.boolean().optional().describe('Write the info object as JSON'),
+    embedMetadata: z.boolean().optional().describe('Embed media metadata'),
+    embedChapters: z.boolean().optional().describe('Embed chapter markers'),
+    sponsorblockRemove: z.array(z.string()).optional().describe('SponsorBlock categories to remove'),
+    cookies: z.string().optional().describe('Netscape cookie file'),
+    cookiesFromBrowser: z.string().optional().describe('Browser cookie source specification'),
+    username: z.string().optional().describe('Account username'),
+    password: z.string().optional().describe('Account password'),
+    videoPassword: z.string().optional().describe('Video-specific password'),
+    proxy: z.string().optional().describe('HTTP/HTTPS/SOCKS proxy URL'),
+    geoBypassCountry: z.string().optional().describe('ISO 3166-2 country code for geo bypass'),
+    impersonate: z.string().optional().describe('Browser/client impersonation target'),
+    extractorArgs: z.array(z.string()).optional().describe('Extractor argument key:value'),
+    noCheckCertificates: z.boolean().optional().describe('Disable TLS certificate validation'),
+    socketTimeout: z.number().int().positive().optional().describe('Socket timeout in seconds'),
+  }),
+  alias: { mediaFormat: 'f', output: 'o', paths: 'P' },
+  async run(c) {
+    if (c.options.engine === 'native') {
+      c.error({
+        code: 'NATIVE_DOWNLOADER_UNAVAILABLE',
+        message: 'The native downloader is not available in this milestone. Use --engine auto or reference.',
+        exitCode: 2,
+      })
+    }
+    try {
+      const result = await new ReferenceClient().download(c.args.url, toDownloadOptions(c.options))
+      return {
+        engine: 'reference',
+        files: result.files,
+        log: result.stdout,
+        warnings: result.stderr,
+      }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('extractors', {
+  description: 'List extractor names available through the reference engine.',
+  options: z.object({ descriptions: z.boolean().optional().describe('Include extractor descriptions') }),
+  async run(c) {
+    try {
+      const result = await new ReferenceClient().run([
+        '--ignore-config',
+        c.options.descriptions ? '--list-extractors' : '--list-extractors',
+      ])
+      const extractors = result.stdout.split(/\r?\n/u).filter(Boolean)
+      return { engine: 'reference', count: extractors.length, extractors }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('compat', {
+  description: 'Run arbitrary yt-dlp arguments through the exact reference engine.',
+  destructive: true,
+  options: z.object({
+    arg: z.array(z.string()).default([]).describe('One argument; repeat for multiple arguments'),
+  }),
+  alias: { arg: 'a' },
+  examples: [
+    {
+      options: { arg: ['--dump-single-json', 'https://www.youtube.com/watch?v=BaW_jenozKc'] },
+      description: 'Pass exact yt-dlp arguments',
+    },
+  ],
+  async run(c) {
+    try {
+      const result = await new ReferenceClient().run(c.options.arg, {
+        maxCaptureBytes: 64 * 1024 * 1024,
+      })
+      return {
+        engine: 'reference',
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      }
+    } catch (error) {
+      fail(c, error)
+    }
+  },
+})
+
+cli.command('engines', {
+  description: 'Report native and reference engine availability.',
+  async run() {
+    const reference = new ReferenceClient()
+    try {
+      const version = await reference.version()
+      return {
+        native: { available: false, coverage: 'framework only' },
+        reference: { available: true, binary: reference.binary, version },
+      }
+    } catch (error) {
+      return {
+        native: { available: false, coverage: 'framework only' },
+        reference: { available: false, binary: reference.binary, error: errorMessage(error) },
+      }
+    }
+  },
+})
+
+function toInspectOptions(options: Record<string, unknown>): InspectReferenceOptions {
+  return defined({
+    playlist: options.playlist as boolean | undefined,
+    flatPlaylist: options.flatPlaylist as boolean | undefined,
+    cookies: options.cookies as string | undefined,
+    cookiesFromBrowser: options.cookiesFromBrowser as string | undefined,
+    username: options.username as string | undefined,
+    password: options.password as string | undefined,
+    videoPassword: options.videoPassword as string | undefined,
+    proxy: options.proxy as string | undefined,
+    geoBypassCountry: options.geoBypassCountry as string | undefined,
+    impersonate: options.impersonate as string | undefined,
+    extractorArgs: options.extractorArgs as string[] | undefined,
+    noCheckCertificates: options.noCheckCertificates as boolean | undefined,
+    socketTimeout: options.socketTimeout as number | undefined,
+  }) as InspectReferenceOptions
+}
+
+function toDownloadOptions(options: Record<string, unknown>): DownloadReferenceOptions {
+  return defined({
+    ...toInspectOptions(options),
+    format: options.mediaFormat as string | undefined,
+    output: options.output as string | undefined,
+    paths: options.paths as string | undefined,
+    noOverwrites: options.noOverwrites as boolean | undefined,
+    continueDownload: options.continueDownload as boolean | undefined,
+    concurrentFragments: options.concurrentFragments as number | undefined,
+    retries: options.retries as number | undefined,
+    fragmentRetries: options.fragmentRetries as number | undefined,
+    rateLimit: options.rateLimit as string | undefined,
+    extractAudio: options.extractAudio as boolean | undefined,
+    audioFormat: options.audioFormat as string | undefined,
+    audioQuality: options.audioQuality as string | undefined,
+    mergeOutputFormat: options.mergeOutputFormat as string | undefined,
+    remuxVideo: options.remuxVideo as string | undefined,
+    writeSubtitles: options.writeSubtitles as boolean | undefined,
+    writeAutoSubtitles: options.writeAutoSubtitles as boolean | undefined,
+    subtitleLanguages: options.subtitleLanguages as string[] | undefined,
+    subtitleFormat: options.subtitleFormat as string | undefined,
+    embedSubtitles: options.embedSubtitles as boolean | undefined,
+    writeThumbnail: options.writeThumbnail as boolean | undefined,
+    embedThumbnail: options.embedThumbnail as boolean | undefined,
+    writeInfoJson: options.writeInfoJson as boolean | undefined,
+    embedMetadata: options.embedMetadata as boolean | undefined,
+    embedChapters: options.embedChapters as boolean | undefined,
+    sponsorblockRemove: options.sponsorblockRemove as string[] | undefined,
+  }) as DownloadReferenceOptions
+}
+
+function defined(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
+}
+
+function fail(
+  context: { error(options: { code: string; exitCode?: number; message: string; retryable?: boolean }): never },
+  error: unknown,
+): never {
+  if (error instanceof YtdlpError) {
+    context.error({ code: error.code, message: error.message, exitCode: 1, retryable: false })
+  }
+  context.error({ code: 'YTDLP_TS_ERROR', message: errorMessage(error), exitCode: 1, retryable: false })
+}
+
+await cli.serve()

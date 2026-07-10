@@ -5,7 +5,7 @@ without delegation.
 
 | Subsystem | Native | Reference | Notes |
 | --- | --- | --- | --- |
-| Incur CLI / MCP / HTTP metadata | bootstrap | n/a | Typed structured commands |
+| Incur CLI / MCP / HTTP metadata | yes | n/a | Typed structured commands |
 | Generic direct HTTP media | planned | yes | First native extractor milestone |
 | Generic HTML / OpenGraph | planned | yes | First native extractor milestone |
 | YouTube | planned | yes | Player signature tests required |

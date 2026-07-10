@@ -16,3 +16,13 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Implement the reference bridge and incur command surface.
 - Implement native direct-media and generic webpage extraction.
 - Implement format selection, filename templates, resumable HTTP downloads, and FFmpeg merging.
+
+## 2026-07-10 — Executable compatibility surface
+
+- Added a shell-free, abortable reference-engine process adapter with bounded output capture and
+  structured errors.
+- Added typed incur commands for inspection, formats, subtitles, downloading, extractor inventory,
+  engine diagnostics, and exact raw compatibility.
+- Mapped common authentication, network, format, subtitle, thumbnail, metadata, SponsorBlock, and
+  post-processing options to reference behavior.
+- Added tests that pin the compatibility argument translation, including the `--` URL boundary.
