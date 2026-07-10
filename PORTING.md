@@ -11,17 +11,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Compatibility matrix
 
-| Area                         | TypeScript API | CLI           | Parity tests | Status   |
-| ---------------------------- | -------------- | ------------- | ------------ | -------- |
-| Configuration discovery      | implemented    | `config show` | 4 tests      | complete |
-| Utility functions            | implemented    | n/a           | 6 tests      | complete |
-| Rekordbox XML                | implemented    | `xml ...`     | 6 tests      | complete |
-| ANLZ files                   | planned        | planned       | planned      | queued   |
-| My Settings files            | planned        | planned       | planned      | queued   |
-| Smart playlists              | planned        | planned       | planned      | queued   |
-| Master database              | planned        | planned       | planned      | queued   |
-| Master DB registry/aux files | planned        | planned       | planned      | queued   |
-| Device Library Plus          | planned        | planned       | planned      | queued   |
+| Area                         | TypeScript API | CLI            | Parity tests | Status   |
+| ---------------------------- | -------------- | -------------- | ------------ | -------- |
+| Configuration discovery      | implemented    | `config show`  | 4 tests      | complete |
+| Utility functions            | implemented    | n/a            | 6 tests      | complete |
+| Rekordbox XML                | implemented    | `xml ...`      | 6 tests      | complete |
+| ANLZ files                   | planned        | planned        | planned      | queued   |
+| My Settings files            | implemented    | `settings ...` | 7 tests      | complete |
+| Smart playlists              | planned        | planned        | planned      | queued   |
+| Master database              | planned        | planned        | planned      | queued   |
+| Master DB registry/aux files | planned        | planned        | planned      | queued   |
+| Device Library Plus          | planned        | planned        | planned      | queued   |
 
 ## Decisions
 
@@ -63,9 +63,12 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Added the incur `config show` command and 11 total tests.
 - Ported the complete Rekordbox XML domain model: tracks, typed attributes, beat grids, position marks, playlist folders, playlists, key modes, mutation, serialization, and unknown-field preservation.
 - Added read and mutation commands under `xml`, verified them against both Rekordbox 5/6 fixtures, and reached 17 passing tests.
+- Ported all four My Settings binary formats with symbolic enum values, opaque-byte preservation, strict validation, and CRC-16/XMODEM generation.
+- Differentially verified lossless parsing and mutation against all 155 upstream per-setting fixtures; the durable suite now has 24 passing tests.
+- Added `settings list`, `show`, `set`, and `create` incur commands, including allowed-value discovery.
 
 ## Next
 
-1. Port My Settings and ANLZ binary formats.
+1. Port ANLZ binary formats.
 2. Port smart playlists and both database layers.
 3. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.

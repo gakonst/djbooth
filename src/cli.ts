@@ -2,8 +2,15 @@
 
 import { Cli, z } from "incur";
 
-import { RekordboxXml, updateConfig, version } from "./index.js";
-import type { NodeKeyType, TrackAttributes, TrackSelector } from "./index.js";
+import {
+  createMySettingFile,
+  getMySettingPaths,
+  readMySettingFile,
+  RekordboxXml,
+  updateConfig,
+  version,
+} from "./index.js";
+import type { MySettingFilename, NodeKeyType, TrackAttributes, TrackSelector } from "./index.js";
 
 const cli = Cli.create("rekordbox", {
   version,
@@ -60,6 +67,72 @@ const configCli = Cli.create("config", {
 });
 
 cli.command(configCli);
+
+const settingsCli = Cli.create("settings", {
+  description: "Read and write Rekordbox My Settings binary files.",
+});
+
+settingsCli.command("list", {
+  description: "Find My Settings files below a directory.",
+  args: z.object({ root: z.string().describe("Directory to scan") }),
+  options: z.object({ deep: z.boolean().default(false).describe("Scan recursively") }),
+  run(c) {
+    const paths = getMySettingPaths(c.args.root, c.options.deep);
+    return { count: paths.length, paths };
+  },
+});
+
+settingsCli.command("show", {
+  description: "Parse and show a My Settings file.",
+  args: z.object({ path: z.string().describe("Settings file") }),
+  run(c) {
+    const file = readMySettingFile(c.args.path);
+    return {
+      ...file.toJSON(),
+      allowedValues: Object.fromEntries(file.keys().map((key) => [key, file.allowedValues(key)])),
+    };
+  },
+});
+
+settingsCli.command("set", {
+  description: "Update one setting and write a checksummed binary.",
+  args: z.object({
+    path: z.string().describe("Settings file"),
+    key: z.string().describe("Setting name"),
+    value: z.string().describe("Symbolic setting value"),
+  }),
+  options: z.object({
+    output: z.string().optional().describe("Destination; defaults to the source file"),
+  }),
+  run(c) {
+    const file = readMySettingFile(c.args.path);
+    file.set(c.args.key, c.args.value);
+    const output = c.options.output ?? c.args.path;
+    file.save(output);
+    return { output, ...file.toJSON() };
+  },
+});
+
+settingsCli.command("create", {
+  description: "Create a default My Settings binary.",
+  args: z.object({
+    filename: z
+      .enum(["MYSETTING.DAT", "MYSETTING2.DAT", "DJMMYSETTING.DAT", "DEVSETTING.DAT"])
+      .describe("Settings format"),
+    output: z.string().describe("Destination file"),
+  }),
+  options: z.object({
+    version: z.string().optional().describe("DEVSETTING Rekordbox version"),
+  }),
+  run(c) {
+    const file = createMySettingFile(c.args.filename as MySettingFilename);
+    if (c.options.version !== undefined) file.version = c.options.version;
+    file.save(c.args.output);
+    return { output: c.args.output, ...file.toJSON() };
+  },
+});
+
+cli.command(settingsCli);
 
 function playlistPath(xml: RekordboxXml, path: string | undefined) {
   return path ? xml.getPlaylist(...path.split("/").filter(Boolean)) : xml.rootPlaylistFolder;
