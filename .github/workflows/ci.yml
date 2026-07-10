@@ -29,9 +29,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm validate
 
+  coverage:
+    name: Coverage and adversarial tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:coverage
+
   global-install:
     name: Package and global CLI
-    needs: validate
+    needs: [validate, coverage]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

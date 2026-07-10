@@ -79,6 +79,13 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Require pnpm 10's explicit `--allow-build=better-sqlite3-multiple-ciphers` acknowledgement for global installs. This preserves pnpm's native-script security model while enabling the SQLCipher binding needed by database commands.
 - Run validation on Node 22 across Linux, macOS, and Windows. Package/global-install CI additionally invokes both command names and queries a real plain SQLite fixture, preventing a command-shim-only false positive.
 
+### 2026-07-10 — Adversarial hardening
+
+- Treat row identity and transaction state as explicit invariants: newly inserted rows retain their lifecycle across autoflush/rollback/delete, default-only inserts use SQLite's `DEFAULT VALUES`, and primary-key changes atomically rekey the identity map.
+- Reject invalid runtime values even when TypeScript callers would normally prevent them. This covers query directions and limits, playlist positions and hierarchy cycles, smart-list flags/IDs/numbers, impossible datetimes, and CLI JSON shapes.
+- Convert every truncated known ANLZ tag into a domain `AnlzLengthError`, and run 1,000 deterministic mutation cases to prevent native buffer-range exceptions or unstable successful rebuilds.
+- Enforce repository-wide coverage floors in a dedicated CI job. Process-level CLI tests exercise incur dispatch, both human/agent command discovery and JSON output, real plain-SQLite queries, malformed arguments, and the write-safety gate.
+
 ## Progress
 
 ### 2026-07-10
@@ -113,6 +120,8 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Added GitHub Actions CI, source/package build lifecycles, globally installable `rekordbox` and `rekordbox-ts` commands, and database-level global-install smoke coverage. Reworked the README around `MasterDatabase` as the main API flow.
 - The first live CI run exposed Windows CRLF checkout behavior in the formatter gate; added repository-wide LF attributes and upgraded to the current official action majors before rerunning the matrix.
 - The Windows rerun then exposed POSIX-only XML path assertions. The implementation already matched pyrekordbox's platform-native `normpath`; made the parity tests assert native normalization on Windows as well.
+- Completed an adversarial API/CLI audit and fixed transaction lifecycle, identity-map, bounded-count, default-insert, checksum-state, hierarchy-cycle, cross-playlist, runtime-validation, and truncated-binary edge cases.
+- Expanded the durable suite from 46 to 56 tests, including 1,000 deterministic ANLZ mutations and subprocess-level CLI coverage. Added enforced V8 coverage floors and made the global package job depend on both cross-platform validation and adversarial coverage.
 
 ## Next
 

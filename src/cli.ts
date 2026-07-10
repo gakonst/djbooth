@@ -180,6 +180,22 @@ function numberList(value: string): Array<number> {
   return values;
 }
 
+function parseJsonObject(value: string, label: string): Record<string, DatabaseValue> {
+  const parsed: unknown = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new TypeError(`${label} must be a JSON object`);
+  for (const [key, item] of Object.entries(parsed))
+    if (item !== null && typeof item !== "string" && typeof item !== "number")
+      throw new TypeError(`${label}.${key} must be a string, number, or null`);
+  return parsed as Record<string, DatabaseValue>;
+}
+
+function parseJsonArray(value: string, label: string): Array<unknown> {
+  const parsed: unknown = JSON.parse(value);
+  if (!Array.isArray(parsed)) throw new TypeError(`${label} must be a JSON array`);
+  return parsed;
+}
+
 const anlzCli = Cli.create("anlz", {
   description: "Read and write Rekordbox ANLZ analysis files.",
 });
@@ -288,7 +304,7 @@ smartlistCli.command("build", {
     logical: z.enum(["all", "any"]).default("all").describe("Condition combination mode"),
   }),
   run(c) {
-    const parsed = JSON.parse(c.options.conditions) as Array<{
+    const parsed = parseJsonArray(c.options.conditions, "conditions") as Array<{
       operator: number;
       property: string;
       unit?: string;
@@ -381,7 +397,10 @@ databaseCli.command("table", {
     try {
       const model = modelByTable[c.args.table];
       let query = model ? db.query(model) : db.query(c.args.table);
-      const filters = JSON.parse(c.options.filters) as Record<string, string | number | null>;
+      const filters = parseJsonObject(c.options.filters, "filters") as Record<
+        string,
+        string | number | null
+      >;
       query = query.where(filters);
       if (c.options.orderBy)
         query = query.orderBy(c.options.orderBy, c.options.descending ? "desc" : "asc");
@@ -445,7 +464,10 @@ databaseRowCli.command("create", {
     try {
       const model = modelByTable[c.args.table];
       if (!model) throw new TypeError(`No mapped model for table '${c.args.table}'`);
-      const row = db.create(model, JSON.parse(c.args.values));
+      const row = db.create(
+        model,
+        parseJsonObject(c.args.values, "values") as Record<string, DatabaseValue>,
+      );
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return { row, table: c.args.table };
     } finally {
@@ -474,7 +496,7 @@ databaseRowCli.command("update", {
         .query(model)
         .where({ [c.options.keyColumn]: c.args.id })
         .one();
-      for (const [key, value] of Object.entries(JSON.parse(c.args.values)))
+      for (const [key, value] of Object.entries(parseJsonObject(c.args.values, "values")))
         row.set(key, value as DatabaseValue);
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return { row, table: c.args.table };
@@ -886,7 +908,7 @@ deviceCli.command("table", {
     try {
       const model = deviceModelByTable[c.args.table];
       let query = model ? db.query(model) : db.query(c.args.table);
-      query = query.where(JSON.parse(c.options.filters));
+      query = query.where(parseJsonObject(c.options.filters, "filters"));
       if (c.options.orderBy)
         query = query.orderBy(c.options.orderBy, c.options.descending ? "desc" : "asc");
       const count = query.count();
@@ -956,7 +978,7 @@ deviceRowCli.command("create", {
     try {
       const model = deviceModelByTable[c.args.table];
       if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
-      const row = db.create(model, JSON.parse(c.args.values));
+      const row = db.create(model, parseJsonObject(c.args.values, "values"));
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return { row, table: c.args.table };
     } finally {
@@ -979,8 +1001,8 @@ deviceRowCli.command("update", {
     try {
       const model = deviceModelByTable[c.args.table];
       if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
-      const row = db.query(model).where(JSON.parse(c.args.filters)).one();
-      for (const [key, value] of Object.entries(JSON.parse(c.args.values)))
+      const row = db.query(model).where(parseJsonObject(c.args.filters, "filters")).one();
+      for (const [key, value] of Object.entries(parseJsonObject(c.args.values, "values")))
         row.set(key, value as DatabaseValue);
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return { row, table: c.args.table };
@@ -1003,7 +1025,7 @@ deviceRowCli.command("delete", {
     try {
       const model = deviceModelByTable[c.args.table];
       if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
-      const row = db.query(model).where(JSON.parse(c.args.filters)).one();
+      const row = db.query(model).where(parseJsonObject(c.args.filters, "filters")).one();
       const deleted = row.toJSON();
       db.delete(row);
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
@@ -1087,7 +1109,7 @@ deviceContentCli.command("add", {
         bitDepth: c.options.bitDepth,
         bitrate: c.options.bitrate,
         samplingRate: c.options.samplingRate,
-        values: JSON.parse(c.options.values),
+        values: parseJsonObject(c.options.values, "values"),
       });
       if (db.hasTable("property") && db.getProperty().count()) db.updateContentCount();
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
