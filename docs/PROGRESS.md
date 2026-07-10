@@ -86,3 +86,5 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Added an incur `parity` command that reports unsupported native URLs without losing the reference
   baseline.
 - Added CI for Node.js 22 with frozen dependency installation, type checking, tests, and build.
+- Verified the first GitHub Actions run passed, then advanced checkout, setup-node, and pnpm setup
+  to their current official major releases to remove the deprecated Node 20 action runtime.
