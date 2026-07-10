@@ -14,8 +14,8 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Area                         | TypeScript API | CLI           | Parity tests | Status   |
 | ---------------------------- | -------------- | ------------- | ------------ | -------- |
 | Configuration discovery      | implemented    | `config show` | 4 tests      | complete |
-| Utility functions            | implemented    | n/a           | 7 tests      | complete |
-| Rekordbox XML                | planned        | planned       | planned      | queued   |
+| Utility functions            | implemented    | n/a           | 6 tests      | complete |
+| Rekordbox XML                | implemented    | `xml ...`     | 6 tests      | complete |
 | ANLZ files                   | planned        | planned       | planned      | queued   |
 | My Settings files            | planned        | planned       | planned      | queued   |
 | Smart playlists              | planned        | planned       | planned      | queued   |
@@ -44,6 +44,12 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Use `fast-xml-parser` for low-level XML tokenization/serialization, wrapped by domain models so the public API is not coupled to the parser.
 - Implement Rekordbox binary structures explicitly with `Buffer`/`DataView` instead of adopting an unmaintained Python-Construct analogue.
 
+### 2026-07-10 — XML representation
+
+- Keep the parser's ordered node representation internally so unknown attributes, elements, and their ordering survive a read/write round trip.
+- Correct the upstream parsed-document ID bug by seeding auto-increment from the maximum existing track ID, preventing accidental ID reuse.
+- Expose source-preserving writes in the library and optional output destinations in mutation commands; overwriting a source file remains explicit in the command invocation.
+
 ## Progress
 
 ### 2026-07-10
@@ -55,10 +61,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Ported utility primitives, including byte-for-byte-compatible zlib/XOR/base85 obfuscation.
 - Ported settings/options parsing and cross-platform Rekordbox 5/6/7 installation discovery.
 - Added the incur `config show` command and 11 total tests.
+- Ported the complete Rekordbox XML domain model: tracks, typed attributes, beat grids, position marks, playlist folders, playlists, key modes, mutation, serialization, and unknown-field preservation.
+- Added read and mutation commands under `xml`, verified them against both Rekordbox 5/6 fixtures, and reached 17 passing tests.
 
 ## Next
 
-1. Port Rekordbox XML with lossless read/write and playlist operations.
-2. Port My Settings and ANLZ binary formats.
-3. Port smart playlists and both database layers.
-4. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
+1. Port My Settings and ANLZ binary formats.
+2. Port smart playlists and both database layers.
+3. Complete incur command coverage, parity fixtures, docs, and end-to-end verification.
