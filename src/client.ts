@@ -22,7 +22,10 @@ export interface SpotifyClientOptions {
 
 export interface RawRequestOptions extends Omit<RequestInit, 'body'> {
   body?: BodyInit | Record<string, unknown> | readonly unknown[] | null
-  query?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>
+  query?: Record<
+    string,
+    string | number | boolean | readonly (string | number | boolean)[] | undefined
+  >
 }
 
 export class SpotifyClient {
@@ -50,6 +53,15 @@ export class SpotifyClient {
     this.DELETE = this.api.DELETE.bind(this.api)
   }
 
+  /** Fetch-compatible handler used by incur and other HTTP adapters. */
+  fetch(request: Request): Promise<Response> {
+    const incoming = new URL(request.url)
+    const target = new URL(this.#baseUrl)
+    target.pathname = `${target.pathname.replace(/\/$/, '')}/${incoming.pathname.replace(/^\//, '')}`
+    target.search = incoming.search
+    return this.#fetch(new Request(target, request))
+  }
+
   async raw<T = unknown>(
     method: string,
     path: string,
@@ -62,7 +74,8 @@ export class SpotifyClient {
       else url.searchParams.set(key, String(value))
     }
 
-    const { body: inputBody, query: _query, ...requestOptions } = options
+    const { body: inputBody, query: requestQuery, ...requestOptions } = options
+    void requestQuery
     const headers = new Headers(requestOptions.headers)
     let body: BodyInit | null | undefined
     if (isBodyInit(inputBody) || inputBody == null) {

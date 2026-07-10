@@ -11,7 +11,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 const response = await fetch(sourceUrl)
 if (!response.ok) {
-  throw new Error(`Could not download Spotify OpenAPI schema: ${response.status} ${response.statusText}`)
+  throw new Error(
+    `Could not download Spotify OpenAPI schema: ${response.status} ${response.statusText}`,
+  )
 }
 
 const yaml = await response.text()

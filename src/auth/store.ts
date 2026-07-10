@@ -57,16 +57,18 @@ export class MemorySessionStore implements SessionStore {
     this.#session = session
   }
 
-  async load(): Promise<StoredSession | undefined> {
-    return this.#session ? structuredClone(this.#session) : undefined
+  load(): Promise<StoredSession | undefined> {
+    return Promise.resolve(this.#session ? structuredClone(this.#session) : undefined)
   }
 
-  async save(session: StoredSession): Promise<void> {
+  save(session: StoredSession): Promise<void> {
     this.#session = structuredClone(session)
+    return Promise.resolve()
   }
 
-  async clear(): Promise<void> {
+  clear(): Promise<void> {
     this.#session = undefined
+    return Promise.resolve()
   }
 }
 

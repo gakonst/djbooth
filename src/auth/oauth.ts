@@ -43,7 +43,7 @@ export class SpotifyOAuth implements AccessTokenProvider {
     this.#refreshLeewayMs = options.refreshLeewayMs ?? 30_000
   }
 
-  async createAuthorizationRequest(scopes: readonly string[]): Promise<AuthorizationRequest> {
+  createAuthorizationRequest(scopes: readonly string[]): AuthorizationRequest {
     const verifier = base64Url(randomBytes(64))
     const state = base64Url(randomBytes(32))
     const challenge = base64Url(createHash('sha256').update(verifier).digest())
@@ -88,7 +88,9 @@ export class SpotifyOAuth implements AccessTokenProvider {
       return session.token.accessToken
     }
     if (!session.token.refreshToken) {
-      throw new Error('Spotify access token expired and no refresh token is available; log in again')
+      throw new Error(
+        'Spotify access token expired and no refresh token is available; log in again',
+      )
     }
     const refreshed = await this.#refresh(session.token.refreshToken)
     return refreshed.accessToken

@@ -22,7 +22,7 @@ export async function loginWithBrowser(options: BrowserLoginOptions): Promise<To
   const port = Number(redirect.port)
   if (!port) throw new Error('Browser login redirect URI must include a port')
 
-  const authorization = await options.oauth.createAuthorizationRequest(options.scopes)
+  const authorization = options.oauth.createAuthorizationRequest(options.scopes)
   const callback = new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
       server.close()

@@ -3,8 +3,8 @@ import type { AccessTokenProvider, FetchLike } from './types.js'
 export class StaticAccessTokenProvider implements AccessTokenProvider {
   constructor(readonly accessToken: string) {}
 
-  async getAccessToken(): Promise<string> {
-    return this.accessToken
+  getAccessToken(): Promise<string> {
+    return Promise.resolve(this.accessToken)
   }
 }
 
@@ -54,8 +54,7 @@ export class ClientCredentialsProvider implements AccessTokenProvider {
       body: new URLSearchParams({ grant_type: 'client_credentials' }),
     })
     const body = (await response.json().catch(() => undefined)) as
-      | { access_token?: string; expires_in?: number; error_description?: string }
-      | undefined
+      { access_token?: string; expires_in?: number; error_description?: string } | undefined
     if (!response.ok || !body?.access_token || !body.expires_in) {
       throw new Error(
         `Spotify client credentials authorization failed (${response.status}): ${body?.error_description ?? response.statusText}`,

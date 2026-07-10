@@ -15,7 +15,7 @@ export class SpotifyApiError extends Error {
   static async fromResponse(response: Response): Promise<SpotifyApiError> {
     const clone = response.clone()
     const contentType = clone.headers.get('content-type') ?? ''
-    const body = contentType.includes('json')
+    const body: unknown = contentType.includes('json')
       ? await clone.json().catch(() => undefined)
       : await clone.text().catch(() => undefined)
     return new SpotifyApiError({
