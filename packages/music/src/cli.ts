@@ -1,7 +1,5 @@
-#!/usr/bin/env node
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 import {
   getRekordboxAgentPid,
@@ -14,7 +12,7 @@ import { ExtractorRegistry, ReferenceClient } from "@gakonst/ytdlp-ts";
 import { Cli, z } from "incur";
 import { SoulseekClient } from "slsk-ts";
 
-const MUSIC_VERSION = (
+export const MUSIC_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
     version: string;
   }
@@ -195,6 +193,7 @@ export function createMusicCli(
   const cli = Cli.create("music", {
     version: MUSIC_VERSION,
     description: "Unified metadata, acquisition, and DJ-library tools.",
+    hint: "Local CodeMode MCP: music --codemode-mcp",
     sync: {
       depth: 0,
       include: [resolve(import.meta.dirname, "../skills/*")],
@@ -326,11 +325,4 @@ function jsonSafe(value: unknown): unknown {
     );
   }
   return value;
-}
-
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href
-) {
-  await runMusicCli();
 }

@@ -14,6 +14,8 @@
     "format:check": "pnpm -r --if-present run format:check",
     "lint": "pnpm -r --if-present run lint",
     "music": "pnpm --filter @gakonst/music cli",
+    "music:mcp": "pnpm --filter @gakonst/music cli -- --mcp",
+    "music:mcp:code": "pnpm --filter @gakonst/music cli -- --codemode-mcp",
     "rekordbox": "pnpm --filter @gakonst/rekordbox cli",
     "slsk": "pnpm --filter slsk-ts cli",
     "spots": "pnpm --filter @gakonst/spots cli",

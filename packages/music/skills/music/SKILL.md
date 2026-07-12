@@ -188,6 +188,9 @@ edits, and completed stages.
 ## Agent transports
 
 Use `music skills add` for the lightest local integration. Use `music mcp add` or `music --mcp` when
-a normal MCP client needs the same typed command map. Keep hosted, CodeMode, and plugin adapters
-thin: call the exported CLI command map and subpath libraries rather than reimplementing pipeline
-logic.
+a normal MCP client needs the same typed command map. For an embedded normal server, import
+`createMusicMcpServer` from `@gakonst/music/mcp`. For CodeMode, import
+`createMusicCodeMcpServer` and inject a sandboxed executor, or run `music --codemode-mcp` for the
+deny-by-default local Secure Exec adapter. Never evaluate generated code directly in the Node.js
+host. Keep hosted and plugin adapters thin: call these factories and subpath libraries rather than
+reimplementing pipeline logic.

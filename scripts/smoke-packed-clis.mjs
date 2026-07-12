@@ -174,7 +174,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
@@ -256,6 +256,42 @@ try {
     throw new Error("Packed music MCP did not initialize with six tools");
   }
   process.stdout.write("✓ music stdio MCP (6 tools)\n");
+
+  const codeMcp = run(music, ["--codemode-mcp"], {
+    cwd: consumer,
+    input: `${[
+      ...mcpInput,
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "code",
+          arguments: {
+            code: "async () => codemode.rekordbox_status({})",
+          },
+        },
+      },
+    ].map((request) => JSON.stringify(request)).join("\n")}\n`,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const codeResponses = codeMcp.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const codeTools = codeResponses.find(
+    (response) => response.id === 2,
+  )?.result?.tools;
+  const codeCall = codeResponses.find((response) => response.id === 3)?.result;
+  const codeResult = JSON.parse(codeCall?.content?.[0]?.text ?? "null");
+  if (
+    codeTools?.length !== 1 ||
+    codeTools[0]?.name !== "code" ||
+    typeof codeResult?.runtime !== "string"
+  ) {
+    throw new Error("Packed music CodeMode MCP did not execute in the local sandbox");
+  }
+  process.stdout.write("✓ music local CodeMode MCP (1 sandboxed tool)\n");
 } finally {
   if (!suppliedPackDirectory)
     rmSync(packDirectory, { recursive: true, force: true });

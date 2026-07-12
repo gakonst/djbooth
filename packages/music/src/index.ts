@@ -3,3 +3,6 @@ export * as spots from "@gakonst/spots";
 export * as tracks from "@gakonst/tracks";
 export * as ytdlp from "@gakonst/ytdlp-ts";
 export * as slsk from "slsk-ts";
+
+export type { MusicCliDependencies } from "./cli.js";
+export * from "./mcp.js";
