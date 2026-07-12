@@ -1,4 +1,0 @@
-interface:
-  display_name: "Build DJ Set Playlist"
-  short_description: "Resolve DJ sets into a Rekordbox playlist"
-  default_prompt: "Use $build-dj-set-playlist to resolve this DJ set, acquire its tracks, and prepare a Rekordbox playlist."

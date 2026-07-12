@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, createReadStream, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import {
   access,
   copyFile,
@@ -31,6 +32,7 @@ import { mapConcurrent } from "./process.js";
 
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
 const DEFAULT_REKORDBOX_MODULE = "@gakonst/rekordbox";
+const REKORDBOX_IO_CONCURRENCY = Math.min(8, Math.max(1, availableParallelism()));
 
 type DatabaseValue = string | number | bigint | Buffer | Date | null;
 
@@ -476,45 +478,52 @@ export async function backupRekordboxDatabase(
   const directory = join(backupRoot, `rekordbox-${backupTimestamp(createdAt)}`);
   await mkdir(directory, { recursive: false, mode: 0o700 });
 
-  const files: RekordboxBackupFile[] = [];
+  let files: RekordboxBackupFile[] = [];
   try {
-    for (const source of rekordboxBackupSources(dbDirectory, options.dbPath)) {
-      let sourceStat;
-      try {
-        sourceStat = await stat(source.sourcePath);
-      } catch (error) {
-        if (isMissingPathError(error) && !source.required) continue;
-        throw error;
-      }
-      if (!sourceStat.isFile())
-        throw new TypeError(`Rekordbox backup source '${source.sourcePath}' is not a file`);
-      const sourceSha256Before = await sha256File(source.sourcePath);
-      const backupPath = join(directory, source.name);
-      await copyFile(source.sourcePath, backupPath, fsConstants.COPYFILE_EXCL);
-      await syncFile(backupPath);
-      const copiedStat = await stat(backupPath);
-      const copiedSha256 = await sha256File(backupPath);
-      const sourceStatAfter = await stat(source.sourcePath);
-      const sourceSha256After = await sha256File(source.sourcePath);
-      if (
-        sourceStat.size !== sourceStatAfter.size ||
-        sourceStat.size !== copiedStat.size ||
-        sourceSha256Before !== sourceSha256After ||
-        sourceSha256Before !== copiedSha256
-      )
-        throw new Error(`Rekordbox backup source changed while copying: ${source.sourcePath}`);
-      files.push({
-        name: source.name,
-        sourcePath: source.sourcePath,
-        backupPath,
-        bytes: copiedStat.size,
-        sha256: copiedSha256,
-        sourceBytesBefore: sourceStat.size,
-        sourceBytesAfter: sourceStatAfter.size,
-        sourceSha256Before,
-        sourceSha256After,
-      });
-    }
+    const copied = await mapConcurrent(
+      rekordboxBackupSources(dbDirectory, options.dbPath),
+      Math.min(4, REKORDBOX_IO_CONCURRENCY),
+      async (source): Promise<RekordboxBackupFile | undefined> => {
+        let sourceStat;
+        try {
+          sourceStat = await stat(source.sourcePath);
+        } catch (error) {
+          if (isMissingPathError(error) && !source.required) return undefined;
+          throw error;
+        }
+        if (!sourceStat.isFile())
+          throw new TypeError(`Rekordbox backup source '${source.sourcePath}' is not a file`);
+        const sourceSha256Before = await sha256File(source.sourcePath);
+        const backupPath = join(directory, source.name);
+        await copyFile(source.sourcePath, backupPath, fsConstants.COPYFILE_EXCL);
+        await syncFile(backupPath);
+        const copiedStat = await stat(backupPath);
+        const sourceStatAfter = await stat(source.sourcePath);
+        const [copiedSha256, sourceSha256After] = await Promise.all([
+          sha256File(backupPath),
+          sha256File(source.sourcePath),
+        ]);
+        if (
+          sourceStat.size !== sourceStatAfter.size ||
+          sourceStat.size !== copiedStat.size ||
+          sourceSha256Before !== sourceSha256After ||
+          sourceSha256Before !== copiedSha256
+        )
+          throw new Error(`Rekordbox backup source changed while copying: ${source.sourcePath}`);
+        return {
+          name: source.name,
+          sourcePath: source.sourcePath,
+          backupPath,
+          bytes: copiedStat.size,
+          sha256: copiedSha256,
+          sourceBytesBefore: sourceStat.size,
+          sourceBytesAfter: sourceStatAfter.size,
+          sourceSha256Before,
+          sourceSha256After,
+        };
+      },
+    );
+    files = copied.filter((file): file is RekordboxBackupFile => file !== undefined);
     const reportPath = join(directory, "backup.json");
     await writeExclusiveJson(reportPath, { createdAt, files });
     await syncDirectory(directory);
@@ -658,23 +667,28 @@ async function importManifestToRekordboxLocked(
     let playlistId: string;
     let folderId: string;
     let imported: RekordboxImportedItem[];
-    const writeStarted = performance.now();
     try {
-      writer = new rekordbox.MasterDatabase({
-        path: location.dbPath,
-        dbDirectory: location.dbDirectory,
-        readonly: false,
-        unlock: true,
-        allowWhileRunning: false,
-        ...(options.key === undefined ? {} : { key: options.key }),
+      await measure("database-write-plan", () => {
+        writer = new rekordbox.MasterDatabase({
+          path: location.dbPath,
+          dbDirectory: location.dbDirectory,
+          readonly: false,
+          unlock: true,
+          allowWhileRunning: false,
+          ...(options.key === undefined ? {} : { key: options.key }),
+        });
+        const writeResult = writeRekordboxPlan(writer, rekordbox, plan);
+        playlistId = writeResult.playlistId;
+        folderId = writeResult.folderId;
+        imported = writeResult.imported;
       });
-      const writeResult = writeRekordboxPlan(writer, rekordbox, plan);
-      playlistId = writeResult.playlistId;
-      folderId = writeResult.folderId;
-      imported = writeResult.imported;
-      await assertMediaFilesExist(plan, mediaReceipts);
-      assertRekordboxStopped(readProcessState(rekordbox));
-      writer.commit({ allowWhileRunning: false });
+      await measure("media-recheck-before-commit", () =>
+        assertMediaFilesExist(plan, mediaReceipts),
+      );
+      await measure("database-commit", () => {
+        assertRekordboxStopped(readProcessState(rekordbox));
+        writer!.commit({ allowWhileRunning: false });
+      });
     } catch (error) {
       throw new TracksError(
         "TOOL_FAILED",
@@ -682,38 +696,35 @@ async function importManifestToRekordboxLocked(
         { cause: error, details: { backup } },
       );
     } finally {
+      const closeStarted = performance.now();
       writer?.close();
       stages.push({
-        stage: "database-write-commit",
-        durationMs: roundMilliseconds(performance.now() - writeStarted),
+        stage: "database-close",
+        durationMs: roundMilliseconds(performance.now() - closeStarted),
       });
     }
 
     let verification: RekordboxVerification;
-    const verificationStarted = performance.now();
     try {
-      assertRekordboxStopped(readProcessState(rekordbox));
-      verification = verifyCommittedImport(
-        rekordbox,
-        location,
-        options.key,
-        folderId!,
-        playlistId!,
-        imported!,
-        plan,
-      );
-      await assertMediaFilesExist(plan, mediaReceipts);
+      verification = await measure("database-verification", () => {
+        assertRekordboxStopped(readProcessState(rekordbox));
+        return verifyCommittedImport(
+          rekordbox,
+          location,
+          options.key,
+          folderId!,
+          playlistId!,
+          imported!,
+          plan,
+        );
+      });
+      await measure("media-recheck-after-commit", () => assertMediaFilesExist(plan, mediaReceipts));
     } catch (error) {
       throw new TracksError(
         "TOOL_FAILED",
         `Rekordbox post-commit verification failed; restore or inspect backup: ${backup.directory}`,
         { cause: error, details: { backup } },
       );
-    } finally {
-      stages.push({
-        stage: "database-verification",
-        durationMs: roundMilliseconds(performance.now() - verificationStarted),
-      });
     }
     const updatedManifest = applyRekordboxImportResults(manifest, imported!, {
       target: "rekordbox-db",
@@ -902,7 +913,7 @@ async function assertMediaFilesExist(
   previous?: ReadonlyMap<string, MediaReceipt>,
 ): Promise<Map<string, MediaReceipt>> {
   const receipts = new Map<string, MediaReceipt>();
-  await mapConcurrent(plan.items, 4, async (item) => {
+  await mapConcurrent(plan.items, REKORDBOX_IO_CONCURRENCY, async (item) => {
     let mediaStat;
     try {
       mediaStat = await stat(item.mediaPath);
@@ -1017,7 +1028,7 @@ export async function readRekordboxBackup(directory: string): Promise<RekordboxB
   if (files.length !== value.files.length || !files.length) {
     throw new Error(`Invalid Rekordbox backup file inventory: ${reportPath}`);
   }
-  await mapConcurrent(files, 4, async (file) => {
+  await mapConcurrent(files, REKORDBOX_IO_CONCURRENCY, async (file) => {
     if (
       basename(file.name) !== file.name ||
       resolve(file.backupPath) !== join(resolvedDirectory, file.name)
@@ -1179,12 +1190,29 @@ export function writeRekordboxPlan(
   const playlist = playlists[0] ?? db.createPlaylist(plan.playlistName, { parent: folder });
   if (playlists[0] && db.hasColumn(playlist.tableName, "updated_at"))
     playlist.set("updated_at", new Date());
-  assertPlaylistIsOwnedByPlan(db, rekordbox, playlist, plan);
-
   const artists = new Map<string, DjmdArtist>();
   const albums = new Map<string, DjmdAlbum>();
   const labels = new Map<string, DjmdLabel>();
+  const existingMemberships = db
+    .query(rekordbox.DjmdSongPlaylist)
+    .where({ PlaylistID: playlist.ID })
+    .all();
+  const membershipByContentId = new Map<string, DjmdSongPlaylist>();
   const contentByPath = new Map<string, DjmdContent>();
+  const expectedPaths = new Set(plan.items.map((item) => item.mediaPath));
+  for (const membership of existingMemberships) {
+    if (membershipByContentId.has(membership.ContentID))
+      throw new Error(`Duplicate playlist memberships exist for content '${membership.ContentID}'`);
+    const content = db.query(rekordbox.DjmdContent).where({ ID: membership.ContentID }).one();
+    if (!content.FolderPath || !expectedPaths.has(content.FolderPath))
+      throw new Error(
+        `Existing playlist '${plan.playlistName}' contains a track outside this manifest`,
+      );
+    if (contentByPath.has(content.FolderPath))
+      throw new Error(`Multiple Rekordbox content rows use '${content.FolderPath}'`);
+    membershipByContentId.set(membership.ContentID, membership);
+    contentByPath.set(content.FolderPath, content);
+  }
   for (const item of plan.items) {
     const artist = findOrCreateNamed(db, rekordbox.DjmdArtist, item.metadata.artist, artists, () =>
       db.addArtist(item.metadata.artist),
@@ -1214,7 +1242,10 @@ export function writeRekordboxPlan(
       Commnt: item.metadata.comment,
       TrackNo: item.entryOrder,
     };
-    const existing = db.query(rekordbox.DjmdContent).where({ FolderPath: item.mediaPath }).all();
+    const cachedContent = contentByPath.get(item.mediaPath);
+    const existing = cachedContent
+      ? [cachedContent]
+      : db.query(rekordbox.DjmdContent).where({ FolderPath: item.mediaPath }).all();
     if (existing.length > 1)
       throw new Error(`Multiple Rekordbox content rows use '${item.mediaPath}'`);
     const content = existing[0] ?? db.addContent(item.mediaPath, values);
@@ -1225,15 +1256,10 @@ export function writeRekordboxPlan(
   const imported: RekordboxImportedItem[] = [];
   for (const [index, item] of plan.items.entries()) {
     const content = contentByPath.get(item.mediaPath)!;
-    const matches = db
-      .query(rekordbox.DjmdSongPlaylist)
-      .where({ PlaylistID: playlist.ID, ContentID: content.ID })
-      .all();
-    if (matches.length > 1)
-      throw new Error(`Duplicate playlist memberships exist for '${item.mediaPath}'`);
     const target = index + 1;
-    const membership = matches[0] ?? db.addToPlaylist(playlist, content, target);
-    if (matches[0] && membership.TrackNo !== target)
+    const existingMembership = membershipByContentId.get(content.ID);
+    const membership = existingMembership ?? db.addToPlaylist(playlist, content, target);
+    if (existingMembership && membership.TrackNo !== target)
       db.moveSongInPlaylist(playlist, membership, target);
     imported.push({
       key: item.key,
@@ -1266,25 +1292,6 @@ function findOrCreateAlbum(
   const album = existing ?? db.addAlbum(name, { artist });
   cache.set(key, album);
   return album;
-}
-
-function assertPlaylistIsOwnedByPlan(
-  db: RekordboxMasterDatabase,
-  rekordbox: RekordboxLibrary,
-  playlist: DjmdPlaylist,
-  plan: RekordboxImportPlan,
-): void {
-  const expected = new Set(plan.items.map((item) => item.mediaPath));
-  for (const membership of db
-    .query(rekordbox.DjmdSongPlaylist)
-    .where({ PlaylistID: playlist.ID })
-    .all()) {
-    const content = db.query(rekordbox.DjmdContent).where({ ID: membership.ContentID }).one();
-    if (!content.FolderPath || !expected.has(content.FolderPath))
-      throw new Error(
-        `Existing playlist '${plan.playlistName}' contains a track outside this manifest`,
-      );
-  }
 }
 
 function findOrCreateNamed<row extends DatabaseRow & { ID: string; Name: string | null }>(
@@ -1371,6 +1378,7 @@ function verifyCommittedImport(
         `Rekordbox playlist has ${memberships.length} memberships; expected ${imported.length}`,
       );
     const verifiedPaths: string[] = [];
+    const relationCache = new Map<string, DatabaseRow>();
     for (const [index, expected] of imported.entries()) {
       const planned = plan.items[index];
       if (!planned || planned.key !== expected.key)
@@ -1384,7 +1392,7 @@ function verifyCommittedImport(
         content.FolderPath !== expected.mediaPath
       )
         throw new Error(`Rekordbox membership verification failed at track ${index + 1}`);
-      verifyContentMetadata(db, rekordbox, content, planned);
+      verifyContentMetadata(db, rekordbox, content, planned, relationCache);
       verifiedPaths.push(content.FolderPath);
     }
     return {
@@ -1406,6 +1414,7 @@ function verifyContentMetadata(
   rekordbox: RekordboxLibrary,
   content: DjmdContent,
   planned: RekordboxImportItem,
+  relationCache: Map<string, DatabaseRow>,
 ): void {
   const metadata = planned.metadata;
   assertMetadataValue(planned, "Title", content.Title, metadata.title);
@@ -1432,10 +1441,7 @@ function verifyContentMetadata(
 
   const artistId = content.get("ArtistID");
   if (artistId == null) throw new Error(`Rekordbox ArtistID is missing for '${planned.mediaPath}'`);
-  const artist = db
-    .query(rekordbox.DjmdArtist)
-    .where({ ID: String(artistId) })
-    .one();
+  const artist = findRelationById(db, rekordbox.DjmdArtist, String(artistId), relationCache);
   assertMetadataValue(planned, "Artist", artist.Name, metadata.artist);
 
   const album = verifyNamedRelation(
@@ -1445,16 +1451,19 @@ function verifyContentMetadata(
     metadata.album,
     "Album",
     planned,
+    relationCache,
   );
   if (album) {
     const albumArtistId = album.get("AlbumArtistID");
     if (albumArtistId == null) {
       throw new Error(`Rekordbox AlbumArtistID is missing for '${planned.mediaPath}'`);
     }
-    const albumArtist = db
-      .query(rekordbox.DjmdArtist)
-      .where({ ID: String(albumArtistId) })
-      .one();
+    const albumArtist = findRelationById(
+      db,
+      rekordbox.DjmdArtist,
+      String(albumArtistId),
+      relationCache,
+    );
     assertMetadataValue(
       planned,
       "AlbumArtist",
@@ -1469,6 +1478,7 @@ function verifyContentMetadata(
     metadata.label,
     "Label",
     planned,
+    relationCache,
   );
 }
 
@@ -1491,18 +1501,30 @@ function verifyNamedRelation<row extends DatabaseRow & { Name: string | null }>(
   expected: string | undefined,
   field: string,
   planned: RekordboxImportItem,
+  relationCache: Map<string, DatabaseRow>,
 ): row | undefined {
   if (expected === undefined) {
     assertMetadataValue(planned, field, id ?? null, null);
     return undefined;
   }
   if (id == null) throw new Error(`Rekordbox ${field}ID is missing for '${planned.mediaPath}'`);
-  const row = db
-    .query(model)
-    .where({ ID: String(id) })
-    .one();
+  const row = findRelationById(db, model, String(id), relationCache);
   assertMetadataValue(planned, field, row.Name, expected);
   return row;
+}
+
+function findRelationById<row extends DatabaseRow>(
+  db: RekordboxMasterDatabase,
+  model: RekordboxModel<row>,
+  id: string,
+  cache: Map<string, DatabaseRow>,
+): row {
+  const key = `${model.tableName}\u0000${id}`;
+  const cached = cache.get(key);
+  if (cached) return cached as row;
+  const value = db.query(model).where({ ID: id }).one();
+  cache.set(key, value);
+  return value;
 }
 
 function assertMetadataValue(

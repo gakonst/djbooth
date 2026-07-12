@@ -262,11 +262,30 @@ describe("Rekordbox analyzer wrapper", () => {
     const options = { analyzerBinary: process.execPath, concurrency: 2, force: true };
 
     const batch = await analyzeTracks(audioPaths, options);
-    expect(batch).toMatchObject({ concurrency: 2, requested: 2 });
+    expect(batch).toMatchObject({
+      analyzed: 2,
+      cacheHits: 0,
+      concurrency: 2,
+      requested: 2,
+      timings: {
+        analyzeMs: expect.any(Number),
+        preflightMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      },
+    });
+    expect(batch.throughputTracksPerSecond).toBeGreaterThan(0);
     expect(batch.results.map((result) => basename(result.audioPath))).toEqual([
       "one.mp3",
       "two.mp3",
     ]);
+    await expect(
+      analyzeTracks(audioPaths, { analyzerBinary: process.execPath, concurrency: 2 }),
+    ).resolves.toMatchObject({
+      analyzed: 0,
+      cacheHits: 2,
+      requested: 2,
+      throughputTracksPerSecond: 0,
+    });
 
     const failed = makeAudio(root, "fail.mp3");
     await expect(analyzeTracks([audioPaths[0]!, failed], options)).rejects.toMatchObject({

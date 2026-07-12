@@ -91,6 +91,7 @@ export interface IdentifyOptions {
   env?: Environment;
   metadataClient?: MediaMetadataClient;
   onProgress?: (progress: IdentifyProgress) => void;
+  onStageTiming?: (timing: IdentifyStageTiming) => void;
 }
 
 export interface IdentifyProgress {
@@ -98,6 +99,12 @@ export interface IdentifyProgress {
   current?: number;
   total?: number;
   message: string;
+}
+
+export interface IdentifyStageTiming {
+  stage: "metadata" | "database-media" | "database-search" | "database-tracklist";
+  outcome: "completed" | "matched" | "missed" | "failed" | "cancelled";
+  durationMs: number;
 }
 
 export interface DatabaseTrack {

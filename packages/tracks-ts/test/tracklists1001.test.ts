@@ -144,6 +144,58 @@ describe("1001Tracklists client", () => {
     });
   });
 
+  test("expires negative media lookups sooner than stable matches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-1001-negative-cache-"));
+    let now = Date.parse("2026-07-12T00:00:00.000Z");
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ data: { found: false } }))
+      .mockResolvedValueOnce(
+        Response.json({
+          data: {
+            found: true,
+            tracklist: {
+              url: "https://www.1001tracklists.com/tracklist/new.html",
+              title: "New Set",
+              entries: [],
+            },
+          },
+        }),
+      ) as typeof globalThis.fetch;
+    const client = new Tracklists1001Client({
+      apiKey: "key",
+      fetch,
+      cache: new JsonDiskCache({
+        namespace: "1001-negative-v1",
+        root,
+        now: () => now,
+        pruneMaxEntries: false,
+      }),
+    });
+
+    await expect(client.findByMediaUrl("https://youtu.be/new")).resolves.toEqual({ found: false });
+    await expect(client.findByMediaUrl("https://youtu.be/new")).resolves.toEqual({ found: false });
+    now += 15 * 60 * 1_000 + 1;
+    await expect(client.findByMediaUrl("https://youtu.be/new")).resolves.toMatchObject({
+      found: true,
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("deduplicates equivalent normalized title searches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-1001-search-cache-"));
+    const fetch = jsonFetch({ data: { items: [] } });
+    const client = new Tracklists1001Client({
+      apiKey: "key",
+      fetch,
+      cache: new JsonDiskCache({ namespace: "1001-search-v1", root }),
+    });
+
+    await client.search("  BRUNELLO   @ LIGHTNING IN A BOTTLE 2026 ", " Brunello ");
+    await client.search("brunello @ lightning in a bottle 2026", "brunello");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   test("quotes exact API errors", async () => {
     const client = new Tracklists1001Client({
       apiKey: "key",

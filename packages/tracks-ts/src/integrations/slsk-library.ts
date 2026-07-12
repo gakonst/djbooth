@@ -126,6 +126,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
   readonly #maxCandidates: number;
   readonly #transferTimeoutMs: number | undefined;
   #connecting: Promise<void> | undefined;
+  readonly #searches = new Map<string, Promise<SoulseekSearchCandidate[]>>();
 
   constructor(
     client: SoulseekLibraryClient | undefined,
@@ -175,7 +176,22 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
     return Promise.resolve({ available: true });
   }
 
-  async search(target: YoutubeTarget): Promise<SoulseekSearchCandidate[]> {
+  search(target: YoutubeTarget): Promise<SoulseekSearchCandidate[]> {
+    const key = JSON.stringify({
+      artists: target.artists,
+      title: target.title,
+      durationSeconds: target.durationSeconds,
+    });
+    const running = this.#searches.get(key);
+    if (running) return running;
+    const search = this.#search(target).finally(() => {
+      if (this.#searches.get(key) === search) this.#searches.delete(key);
+    });
+    this.#searches.set(key, search);
+    return search;
+  }
+
+  async #search(target: YoutubeTarget): Promise<SoulseekSearchCandidate[]> {
     const client = await this.#connectedClient();
     const query = [...target.artists, target.title].join(" ").trim();
     const responses = await client.search(query, {

@@ -46,7 +46,7 @@ export class Tracklists1001Client {
         ? undefined
         : (options.cache ??
           new JsonDiskCache({
-            namespace: "1001tracklists-v2",
+            namespace: "1001tracklists-v3",
             ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }));
     this.#cacheMode = options.cacheMode ?? "default";
@@ -70,10 +70,20 @@ export class Tracklists1001Client {
   }
 
   async search(title: string, uploader?: string): Promise<SearchTracklists> {
+    const normalizedTitle = normalizeSearchText(title);
+    const normalizedUploader = uploader ? normalizeSearchText(uploader) : undefined;
     return this.#request(
       "search_tracklists",
-      { title, ...(uploader ? { uploader } : {}) },
+      { title: normalizedTitle, ...(normalizedUploader ? { uploader: normalizedUploader } : {}) },
       (value) => ({ items: parseSummaries(value) }),
+      {
+        cacheKey: {
+          title: normalizedTitle.toLocaleLowerCase("en-US"),
+          ...(normalizedUploader
+            ? { uploader: normalizedUploader.toLocaleLowerCase("en-US") }
+            : {}),
+        },
+      },
     );
   }
 
@@ -102,15 +112,20 @@ export class Tracklists1001Client {
     endpoint: string,
     params: Record<string, string>,
     parse: (value: unknown) => T,
+    options: { cacheKey?: unknown } = {},
   ): Promise<T> {
     const url = new URL(`${this.#baseUrl}/${endpoint}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
     if (this.#cache) {
       return this.#cache.getOrLoad(
-        { endpoint, url: url.href },
+        {
+          baseUrl: this.#baseUrl,
+          endpoint,
+          params: options.cacheKey ?? params,
+        },
         async () => parse(await this.#requestUncached(url)),
-        { ttlMs: cacheTtl(endpoint), mode: this.#cacheMode },
+        { ttlMs: (value) => cacheTtl(endpoint, value), mode: this.#cacheMode },
       );
     }
     return parse(await this.#requestUncached(url));
@@ -124,6 +139,7 @@ export class Tracklists1001Client {
         ...(this.#signal ? { signal: this.#signal } : {}),
       });
     } catch (error) {
+      if (isAbortError(error)) throw error;
       throw new TracksError("API_ERROR", `1001Tracklists request failed: ${errorMessage(error)}`, {
         cause: error,
         retryable: !isAbortError(error),
@@ -157,12 +173,25 @@ export class Tracklists1001Client {
   }
 }
 
-function cacheTtl(endpoint: string): number {
+function cacheTtl(endpoint: string, value: unknown): number {
   if (endpoint === "get_tracklist") return 7 * 24 * 60 * 60 * 1000;
-  if (endpoint === "find_by_media_url" || endpoint === "search_tracklists") {
+  if (endpoint === "find_by_media_url" && isFindMiss(value)) return 15 * 60 * 1000;
+  if (endpoint === "search_tracklists" && isSearchMiss(value)) return 15 * 60 * 1000;
+  if (endpoint === "find_by_media_url" || endpoint === "search_tracklists")
     return 6 * 60 * 60 * 1000;
-  }
   return 15 * 60 * 1000;
+}
+
+function isFindMiss(value: unknown): boolean {
+  return asRecord(value).found === false;
+}
+
+function isSearchMiss(value: unknown): boolean {
+  return arrayFrom(asRecord(value).items).length === 0;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/gu, " ");
 }
 
 export function databaseTracklistToEntries(tracklist: DatabaseTracklist) {

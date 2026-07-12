@@ -28,7 +28,8 @@ export type JsonDiskCacheOptions = {
 };
 
 export type CacheLoadOptions<T = unknown> = {
-  ttlMs?: number;
+  /** Fixed TTL, or a value-dependent TTL for positive/negative cache entries. */
+  ttlMs?: number | ((value: T) => number);
   mode?: CacheMode;
   /** Return false for values that are valid for the caller but unsafe or useless to persist. */
   shouldStore?: (value: T) => boolean;
@@ -149,7 +150,8 @@ export class JsonDiskCache {
         this.#stats.loadMs += performance.now() - loadStarted;
       }
       if (value !== undefined && (options.shouldStore?.(value) ?? true)) {
-        await this.#write(path, value, positiveTtl(options.ttlMs ?? this.#defaultTtlMs));
+        const ttlMs = typeof options.ttlMs === "function" ? options.ttlMs(value) : options.ttlMs;
+        await this.#write(path, value, positiveTtl(ttlMs ?? this.#defaultTtlMs));
       }
       return value;
     })();

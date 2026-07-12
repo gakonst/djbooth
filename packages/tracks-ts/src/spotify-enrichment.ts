@@ -59,6 +59,8 @@ export type SpotifyEnrichmentResult = {
   attempted: number;
   requests: number;
   networkRequests: number;
+  concurrency: number;
+  maxConcurrency: number;
   matched: number;
   ambiguous: number;
   unmatched: number;
@@ -125,6 +127,8 @@ export async function enrichSpotifyManifest(
   }
 
   let requests = 0;
+  let activeRequests = 0;
+  let maxConcurrency = 0;
   const searches = new Map<string, Promise<SpotifyTrackCandidate[]>>();
   await mapConcurrent(identified, resolved.concurrency, async (entry, index) => {
     const query = spotifySearchQuery(entry.identity);
@@ -141,7 +145,15 @@ export async function enrichSpotifyManifest(
       let search = searches.get(cacheKey);
       if (!search) {
         requests += 1;
-        search = searchSpotify(spotify, query, resolved);
+        search = (async () => {
+          activeRequests += 1;
+          maxConcurrency = Math.max(maxConcurrency, activeRequests);
+          try {
+            return await searchSpotify(spotify, query, resolved);
+          } finally {
+            activeRequests -= 1;
+          }
+        })();
         searches.set(cacheKey, search);
       }
       const expectedDurationMs = resolved.expectedDurationMs?.(entry);
@@ -223,6 +235,8 @@ export async function enrichSpotifyManifest(
     networkRequests: cache
       ? Math.max(0, cache.misses + cache.bypasses - cache.coalesced)
       : requests,
+    concurrency: resolved.concurrency,
+    maxConcurrency,
     matched: countStatus(pending, "matched"),
     ambiguous: countStatus(pending, "ambiguous"),
     unmatched: countStatus(pending, "unmatched"),
@@ -362,7 +376,7 @@ function parseSearchTracks(value: unknown): SpotifyTrackCandidate[] {
 
 function resolveOptions(options: SpotifyEnrichmentOptions): ResolvedOptions {
   const searchLimit = integerOption(options.searchLimit, 10, 1, 10, "searchLimit");
-  const concurrency = integerOption(options.concurrency, 4, 1, 32, "concurrency");
+  const concurrency = integerOption(options.concurrency, 8, 1, 32, "concurrency");
   const maxCandidates = integerOption(options.maxCandidates, 5, 1, searchLimit, "maxCandidates");
   const minimumMatchScore = scoreOption(options.minimumMatchScore, 0.84, "minimumMatchScore");
   const minimumCandidateScore = scoreOption(

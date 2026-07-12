@@ -659,6 +659,159 @@ describe("acquireManifest", () => {
   );
 
   audioToolTest(
+    "fans every set variant through one bounded queue and preserves ambiguity order",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-set-fanout-"));
+      const manifestPath = join(directory, "manifest.json");
+      const manifest = createManifest({
+        source: "https://youtube.test/26-track-set",
+        provider: "1001tracklists",
+        complete: true,
+        tracks: Array.from({ length: 26 }, (_, index) => ({
+          order: index + 1,
+          artist: "Artist",
+          title: "Track",
+          startSeconds: index * 100,
+          endSeconds: (index + 1) * 100,
+        })),
+      });
+      for (const entry of manifest.entries) {
+        const ids =
+          entry.order <= 8
+            ? [`spotify-${entry.order}-a`, `spotify-${entry.order}-b`]
+            : [`spotify-${entry.order}`];
+        entry.spotify =
+          ids.length === 1
+            ? {
+                status: "matched",
+                query: "Artist - Track",
+                score: 1,
+                id: ids[0]!,
+                uri: `spotify:track:${ids[0]}`,
+                name: "Track",
+                artists: ["Artist"],
+                durationMs: 100_000,
+              }
+            : {
+                status: "ambiguous",
+                query: "Artist - Track",
+                candidates: ids.map((id) => ({
+                  score: 1,
+                  id,
+                  uri: `spotify:track:${id}`,
+                  name: "Track",
+                  artists: ["Artist"],
+                  durationMs: 100_000,
+                })),
+              };
+      }
+      await writeManifestAtomic(manifestPath, manifest);
+      const plan: AcquisitionPlan = {
+        clips: [],
+        recordings: manifest.entries.map((entry) => {
+          const spotifyIds =
+            entry.spotify.status === "matched"
+              ? [entry.spotify.id]
+              : entry.spotify.status === "ambiguous"
+                ? entry.spotify.candidates.map((candidate) => candidate.id)
+                : [];
+          return {
+            entryOrder: entry.order,
+            variants: spotifyIds.map((spotifyId, variantIndex) => ({
+              spotifyId,
+              title: "Track",
+              artists: ["Artist"],
+              durationMs: 100_000,
+              outputPath: join(directory, `track-${entry.order}-${variantIndex + 1}.m4a`),
+              metadata: { title: "Track", artists: ["Artist"], comment: "test" },
+            })),
+          };
+        }),
+        stagingDirectory: join(directory, "staging"),
+      };
+      let active = 0;
+      let maximumActive = 0;
+      let downloadCalls = 0;
+      const acquirer: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: () => Promise.resolve({ available: true }),
+        search: (target) =>
+          Promise.resolve([
+            {
+              id: "candidate",
+              source: "https://youtube.test/individual-track",
+              title: target.title,
+              artist: target.artists[0]!,
+              ...(target.durationSeconds === undefined
+                ? {}
+                : { durationSeconds: target.durationSeconds }),
+            },
+          ]),
+        async download(candidate, destination) {
+          downloadCalls += 1;
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "source.m4a");
+          await writeFile(path, `audio ${destination}`);
+          active -= 1;
+          return { path, source: candidate.source, temporary: true };
+        },
+      };
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          concurrency: 8,
+          verificationConcurrency: 8,
+        });
+        if (process.env.TRACKS_PERF_LOG === "1") {
+          process.stderr.write(
+            `${JSON.stringify({
+              artifacts: 34,
+              downloadCalls,
+              maximumActive,
+              performance: result.performance,
+            })}\n`,
+          );
+        }
+
+        expect(downloadCalls).toBe(34);
+        expect(maximumActive).toBe(8);
+        expect(result.downloaded).toHaveLength(34);
+        expect(result.performance.stages).toContainEqual(
+          expect.objectContaining({
+            stage: "recordings",
+            operations: 34,
+            maxConcurrency: 8,
+          }),
+        );
+        expect(result.performance.checkpoints).toMatchObject({ calls: 36 });
+        expect(result.performance.checkpoints.flushes).toBeLessThanOrEqual(36);
+        expect(result.performance.checkpoints.coalesced).toBe(
+          36 - result.performance.checkpoints.flushes,
+        );
+        expect(
+          result.manifest.entries.every((entry) => entry.acquisition.status === "downloaded"),
+        ).toBe(true);
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: { spotifyId: "spotify-1-a" },
+          alternatives: [{ spotifyId: "spotify-1-b" }],
+        });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
     "rejects a resumed artifact changed while another recording downloads",
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-resume-toctou-"));

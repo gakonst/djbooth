@@ -1,5 +1,5 @@
 import { tracklistFromDescription } from "./description.js";
-import { TracksError } from "./errors.js";
+import { isAbortError, TracksError } from "./errors.js";
 import { inspectMediaMetadata } from "./integrations/ytdlp.js";
 import type { MediaMetadata } from "./integrations/ytdlp.js";
 import { is1001Url, isHttpUrl, isSupportedDownloadUrl } from "./media.js";
@@ -16,9 +16,17 @@ import type {
   DatabaseTracklist,
   Environment,
   IdentifyOptions,
+  IdentifyStageTiming,
   RecognitionMoment,
   Tracklist,
+  TracklistSummary,
 } from "./types.js";
+
+type Settled<T> = { status: "fulfilled"; value: T } | { status: "rejected"; error: unknown };
+type DatabaseLookup =
+  | { status: "matched"; tracklist: DatabaseTracklist }
+  | { status: "missed" }
+  | { status: "failed"; error: unknown };
 
 export async function identify(source: string, options: IdentifyOptions = {}): Promise<Tracklist> {
   const env = options.env ?? process.env;
@@ -27,7 +35,6 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
   const preferDescription = options.preferDescription ?? true;
   const warnings: string[] = [];
   const fetch = options.fetch ?? globalThis.fetch;
-  let mediaMetadata: MediaMetadata | undefined;
 
   if (is1001Url(source)) {
     if (!env.PARSE_API_KEY) {
@@ -38,8 +45,12 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
       );
     }
     options.onProgress?.({ phase: "database", message: "Loading 1001Tracklists tracklist" });
-    const tracklist = await create1001Client(env, fetch, options.signal, options.cacheMode).get(
-      source,
+    const tracklist = await timedStage(
+      "database-tracklist",
+      "database",
+      "Loaded 1001Tracklists tracklist",
+      options,
+      () => create1001Client(env, fetch, options.signal, options.cacheMode).get(source),
     );
     return fromDatabase(source, tracklist, options.includeMatches);
   }
@@ -50,37 +61,80 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     });
   }
 
-  if (
-    (provider === "auto" && preferDescription && isSupportedDownloadUrl(source)) ||
-    provider === "description"
-  ) {
-    if (!isSupportedDownloadUrl(source)) {
-      throw new TracksError(
-        "INVALID_SOURCE",
-        "Description resolution requires a public YouTube or SoundCloud URL",
-        { exitCode: 2 },
-      );
-    }
-    options.onProgress?.({ phase: "metadata", message: "Reading set description with ytdlp-ts" });
-    try {
-      const metadata = await (options.metadataClient?.inspect(source, {
-        env,
-        ...(options.cookies ? { cookies: options.cookies } : {}),
-        ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
-      }) ??
-        inspectMediaMetadata(source, {
-          env,
-          ...(options.cookies ? { cookies: options.cookies } : {}),
-          ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
-          ...(options.signal ? { signal: options.signal } : {}),
-          ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
-        }));
-      mediaMetadata = metadata;
-      const described = tracklistFromDescription(source, metadata);
-      if (described) return described;
+  const descriptionEnabled =
+    provider === "description" || (provider === "auto" && preferDescription);
+  const databaseEnabled =
+    provider === "1001tracklists" ||
+    (provider === "auto" && preferDatabase && Boolean(env.PARSE_API_KEY));
+  const supportedMedia = isSupportedDownloadUrl(source);
+  const databaseMedia = isDatabaseMediaUrl(source);
+
+  if (provider === "description" && !supportedMedia) {
+    throw new TracksError(
+      "INVALID_SOURCE",
+      "Description resolution requires a public YouTube or SoundCloud URL",
+      { exitCode: 2 },
+    );
+  }
+  if (databaseEnabled && !env.PARSE_API_KEY) {
+    throw new TracksError(
+      "AUTH_REQUIRED",
+      "PARSE_API_KEY is required for the 1001Tracklists provider",
+      {
+        exitCode: 2,
+      },
+    );
+  }
+  if (provider === "1001tracklists" && !databaseMedia) {
+    throw new TracksError(
+      "INVALID_SOURCE",
+      "1001Tracklists lookup requires a public YouTube or SoundCloud URL",
+      { exitCode: 2 },
+    );
+  }
+
+  // The two independent cold operations start together. Metadata remains authoritative for a
+  // timestamped description; otherwise exact media and ranked title matches race to completion.
+  const localAbort = new AbortController();
+  const lookupSignal = combineSignals(options.signal, localAbort.signal);
+  const client =
+    databaseEnabled && databaseMedia
+      ? create1001Client(env, fetch, lookupSignal, options.cacheMode)
+      : undefined;
+  const metadataPromise =
+    supportedMedia && (descriptionEnabled || Boolean(client))
+      ? settle(loadMediaMetadata(source, options, env, lookupSignal))
+      : undefined;
+  const exactPromise = client
+    ? settleDatabase(
+        timedStage(
+          "database-media",
+          "database",
+          "Completed 1001Tracklists media URL lookup",
+          options,
+          async () => {
+            options.onProgress?.({
+              phase: "database",
+              message: "Searching 1001Tracklists by media URL",
+            });
+            const result = await client.findByMediaUrl(source);
+            return result.found ? result : undefined;
+          },
+          (result) => (result ? "matched" : "missed"),
+        ),
+      )
+    : undefined;
+
+  if (descriptionEnabled && metadataPromise) {
+    const metadata = await metadataPromise;
+    if (metadata.status === "fulfilled") {
+      const described = tracklistFromDescription(source, metadata.value);
+      if (described) {
+        localAbort.abort();
+        return described;
+      }
       if (provider === "description") {
+        localAbort.abort();
         throw new TracksError(
           "NOT_FOUND",
           "No timestamped tracklist found in the media description",
@@ -90,63 +144,32 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
         );
       }
       warnings.push("No timestamped tracklist found in the media description.");
-    } catch (error) {
-      if (provider === "description") throw error;
-      warnings.push(
-        `Description lookup failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    } else {
+      if (provider === "description") throw metadata.error;
+      warnings.push(`Description lookup failed: ${errorMessage(metadata.error)}`);
     }
   }
 
-  if (
-    (provider === "auto" && preferDatabase && env.PARSE_API_KEY) ||
-    provider === "1001tracklists"
-  ) {
-    if (!env.PARSE_API_KEY) {
+  if (client && exactPromise) {
+    const titlePromise = metadataPromise
+      ? settleTitleLookup(metadataPromise, client, options)
+      : Promise.resolve<DatabaseLookup>({ status: "missed" });
+    const result = await firstDatabaseMatch(exactPromise, titlePromise);
+    if (result.status === "matched") {
+      localAbort.abort();
+      return fromDatabase(source, result.tracklist, options.includeMatches);
+    }
+    if (result.status === "failed") throw result.error;
+    if (provider === "1001tracklists") {
       throw new TracksError(
-        "AUTH_REQUIRED",
-        "PARSE_API_KEY is required for the 1001Tracklists provider",
-        { exitCode: 2 },
+        "NOT_FOUND",
+        "No 1001Tracklists entry matched the media URL or inspected set title",
+        { exitCode: 4 },
       );
     }
-    if (!isDatabaseMediaUrl(source)) {
-      if (provider === "1001tracklists") {
-        throw new TracksError(
-          "INVALID_SOURCE",
-          "1001Tracklists lookup requires a public YouTube or SoundCloud URL",
-          {
-            exitCode: 2,
-          },
-        );
-      }
-    } else {
-      options.onProgress?.({ phase: "database", message: "Searching 1001Tracklists by media URL" });
-      const client = create1001Client(env, fetch, options.signal, options.cacheMode);
-      const result = await client.findByMediaUrl(source);
-      if (result.found) return fromDatabase(source, result, options.includeMatches);
-      if (mediaMetadata?.title) {
-        options.onProgress?.({
-          phase: "database",
-          message: "Searching 1001Tracklists by inspected set title and uploader",
-        });
-        const search = await client.search(mediaMetadata.title, mediaMetadata.uploader);
-        const candidate = search.items[0];
-        if (candidate) {
-          const tracklist = await client.get(candidate.url);
-          return fromDatabase(source, tracklist, options.includeMatches);
-        }
-      }
-      if (provider === "1001tracklists") {
-        throw new TracksError(
-          "NOT_FOUND",
-          "No 1001Tracklists entry matched the media URL or inspected set title",
-          { exitCode: 4 },
-        );
-      }
-      warnings.push(
-        "No 1001Tracklists entry matched the media URL or inspected set title; used audio recognition instead.",
-      );
-    }
+    warnings.push(
+      "No 1001Tracklists entry matched the media URL or inspected set title; used audio recognition instead.",
+    );
   }
 
   const selected = selectRecognizer(provider, env);
@@ -221,6 +244,217 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     ...(warnings.length ? { warnings } : {}),
     ...(options.includeMatches ? { matches: moments } : {}),
   };
+}
+
+async function loadMediaMetadata(
+  source: string,
+  options: IdentifyOptions,
+  env: Environment,
+  signal: AbortSignal,
+): Promise<MediaMetadata> {
+  options.onProgress?.({ phase: "metadata", message: "Reading set metadata with ytdlp-ts" });
+  return timedStage(
+    "metadata",
+    "metadata",
+    "Read set metadata",
+    options,
+    () =>
+      options.metadataClient?.inspect(source, {
+        env,
+        ...(options.cookies ? { cookies: options.cookies } : {}),
+        ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
+        signal,
+        ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
+      }) ??
+      inspectMediaMetadata(source, {
+        env,
+        ...(options.cookies ? { cookies: options.cookies } : {}),
+        ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
+        signal,
+        ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
+      }),
+  );
+}
+
+async function settleTitleLookup(
+  metadataPromise: Promise<Settled<MediaMetadata>>,
+  client: Tracklists1001Client,
+  options: IdentifyOptions,
+): Promise<DatabaseLookup> {
+  const metadata = await metadataPromise;
+  if (metadata.status === "rejected") return { status: "missed" };
+  if (!metadata.value.title) return { status: "missed" };
+
+  try {
+    options.onProgress?.({
+      phase: "database",
+      message: "Searching 1001Tracklists by inspected set title and uploader",
+    });
+    const search = await timedStage(
+      "database-search",
+      "database",
+      "Searched 1001Tracklists by title",
+      options,
+      () => client.search(metadata.value.title!, metadata.value.uploader),
+      (result) => (result.items.length ? "completed" : "missed"),
+    );
+    const [ranked] = rankTracklistCandidates(search.items, metadata.value);
+    if (!ranked || ranked.score < 0.35) return { status: "missed" };
+
+    options.onProgress?.({
+      phase: "database",
+      message: `Loading ranked 1001Tracklists candidate (${Math.round(ranked.score * 100)}% match)`,
+    });
+    const tracklist = await timedStage(
+      "database-tracklist",
+      "database",
+      "Loaded ranked 1001Tracklists candidate",
+      options,
+      () => client.get(ranked.candidate.url),
+      () => "matched",
+    );
+    return { status: "matched", tracklist };
+  } catch (error) {
+    return { status: "failed", error };
+  }
+}
+
+/** Rank title-search results so a provider's incidental ordering never selects the wrong set. */
+export function rankTracklistCandidates(
+  candidates: readonly TracklistSummary[],
+  metadata: Pick<MediaMetadata, "title" | "uploader" | "durationSeconds">,
+): { candidate: TracklistSummary; score: number }[] {
+  return candidates
+    .map((candidate) => ({ candidate, score: scoreTracklistCandidate(candidate, metadata) }))
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.candidate.url.localeCompare(right.candidate.url),
+    );
+}
+
+function scoreTracklistCandidate(
+  candidate: TracklistSummary,
+  metadata: Pick<MediaMetadata, "title" | "uploader" | "durationSeconds">,
+): number {
+  const titleScore = tokenSimilarity(metadata.title, candidate.title);
+  let weightedScore = titleScore * 0.75;
+  let weight = 0.75;
+  if (metadata.uploader) {
+    const djText = candidate.djName ?? candidate.title;
+    weightedScore += tokenSimilarity(metadata.uploader, djText) * 0.15;
+    weight += 0.15;
+  }
+  if (metadata.durationSeconds && candidate.durationSeconds) {
+    const difference = Math.abs(metadata.durationSeconds - candidate.durationSeconds);
+    weightedScore += Math.max(0, 1 - difference / Math.max(metadata.durationSeconds, 1)) * 0.1;
+    weight += 0.1;
+  }
+  return Math.round((weightedScore / weight) * 10_000) / 10_000;
+}
+
+function tokenSimilarity(left: string | undefined, right: string | undefined): number {
+  const leftTokens = normalizedTokens(left);
+  const rightTokens = normalizedTokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+  let intersection = 0;
+  for (const token of leftTokens) if (rightTokens.has(token)) intersection += 1;
+  return (2 * intersection) / (leftTokens.size + rightTokens.size);
+}
+
+function normalizedTokens(value: string | undefined): Set<string> {
+  return new Set(
+    (value ?? "")
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
+      .toLocaleLowerCase("en-US")
+      .match(/[\p{L}\p{N}]+/gu) ?? [],
+  );
+}
+
+async function settle<T>(promise: Promise<T>): Promise<Settled<T>> {
+  try {
+    return { status: "fulfilled", value: await promise };
+  } catch (error) {
+    return { status: "rejected", error };
+  }
+}
+
+async function settleDatabase(
+  promise: Promise<DatabaseTracklist | undefined>,
+): Promise<DatabaseLookup> {
+  try {
+    const tracklist = await promise;
+    return tracklist ? { status: "matched", tracklist } : { status: "missed" };
+  } catch (error) {
+    return { status: "failed", error };
+  }
+}
+
+async function firstDatabaseMatch(
+  exact: Promise<DatabaseLookup>,
+  title: Promise<DatabaseLookup>,
+): Promise<DatabaseLookup> {
+  return new Promise((resolve) => {
+    const outcomes: DatabaseLookup[] = [];
+    const complete = (outcome: DatabaseLookup) => {
+      if (outcome.status === "matched") {
+        resolve(outcome);
+        return;
+      }
+      outcomes.push(outcome);
+      if (outcomes.length < 2) return;
+      const failed = outcomes.find(
+        (item): item is Extract<DatabaseLookup, { status: "failed" }> =>
+          item.status === "failed" && !isAbortError(item.error),
+      );
+      resolve(failed ?? outcomes.find((item) => item.status === "failed") ?? { status: "missed" });
+    };
+    void exact.then(complete);
+    void title.then(complete);
+  });
+}
+
+async function timedStage<T>(
+  stage: IdentifyStageTiming["stage"],
+  phase: "metadata" | "database",
+  completedMessage: string,
+  options: IdentifyOptions,
+  run: () => Promise<T>,
+  outcome: (value: T) => IdentifyStageTiming["outcome"] = () => "completed",
+): Promise<T> {
+  const started = performance.now();
+  try {
+    const value = await run();
+    const durationMs = roundMilliseconds(performance.now() - started);
+    const result = outcome(value);
+    options.onStageTiming?.({ stage, outcome: result, durationMs });
+    options.onProgress?.({
+      phase,
+      message: `${completedMessage}${result === "completed" ? "" : ` (${result})`} in ${formatDuration(durationMs)}`,
+    });
+    return value;
+  } catch (error) {
+    const durationMs = roundMilliseconds(performance.now() - started);
+    const result = isAbortError(error) ? "cancelled" : "failed";
+    options.onStageTiming?.({ stage, outcome: result, durationMs });
+    throw error;
+  }
+}
+
+function combineSignals(parent: AbortSignal | undefined, local: AbortSignal): AbortSignal {
+  return parent ? AbortSignal.any([parent, local]) : local;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function roundMilliseconds(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function formatDuration(value: number): string {
+  return value < 1_000 ? `${Math.round(value)}ms` : `${(value / 1_000).toFixed(2)}s`;
 }
 
 function selectRecognizer(

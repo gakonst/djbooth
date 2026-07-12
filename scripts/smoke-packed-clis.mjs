@@ -163,19 +163,21 @@ try {
     "music",
     "SKILL.md",
   );
-  const packagedSkill = join(
-    consumer,
-    "node_modules",
-    "@gakonst",
-    "music",
-    "skills",
-    "music",
-    "SKILL.md",
-  );
+  const installedSkillSource = readFileSync(installedSkill, "utf8");
+  const generatedCommands = [
+    "# music tracks resolve",
+    "# music spots api search",
+    "# music soundcloud resolve",
+    "# music slsk download",
+    "# music ytdlp download",
+    "# music rekordbox db playlist create",
+  ];
   if (
-    readFileSync(installedSkill, "utf8") !== readFileSync(packagedSkill, "utf8")
+    !installedSkillSource.includes("requires_bin: music") ||
+    !installedSkillSource.includes("command: music") ||
+    generatedCommands.some((command) => !installedSkillSource.includes(command))
   ) {
-    throw new Error("Installed music skill differs from its packed source");
+    throw new Error("Installed music skill is missing generated Incur command metadata");
   }
   process.stdout.write("✓ music skills add --no-global\n");
 

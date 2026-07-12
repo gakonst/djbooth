@@ -15,6 +15,8 @@ export {
   type BackendAvailability,
   type IndividualDownload,
   type SpotifyLibraryClient,
+  type SpotifyRefreshOptions,
+  type SpotifyRefreshResult,
   type TrackAcquirer,
 } from "./acquire-manifest.js";
 export {
