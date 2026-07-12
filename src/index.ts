@@ -26,3 +26,10 @@ export { downloadMedia, parseRate, supportsNativeDownloadOptions } from './downl
 export type { NativeDownloadOptions, NativeDownloadResult } from './downloader/native.js'
 export { compareMediaInfo } from './core/parity.js'
 export type { ParityDifference, ParityReport } from './core/parity.js'
+export { downloadMusicBatch, MUSIC_FORMAT_SPEC, MUSIC_OUTPUT_TEMPLATE } from './music.js'
+export type {
+  MusicBatchResult,
+  MusicDependencies,
+  MusicDownloadItem,
+  MusicDownloadOptions,
+} from './music.js'

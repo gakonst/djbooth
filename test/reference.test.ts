@@ -59,4 +59,41 @@ describe('reference argument construction', () => {
       'https://example.com/video',
     ])
   })
+
+  it('maps archive, throttling, and exponential retry policy', () => {
+    const args = buildDownloadArgs('https://youtube.com/watch?v=abcdefghijk', {
+      format: 'bestaudio/best',
+      downloadArchive: '.archive',
+      concurrentFragments: 1,
+      retries: 10,
+      fragmentRetries: 10,
+      sleepRequests: 1,
+      sleepInterval: 2,
+      maxSleepInterval: 5,
+      throttledRate: '100K',
+      retrySleep: ['http:exp=1:20', 'fragment:exp=1:20'],
+      writeInfoJson: true,
+      embedMetadata: true,
+      embedThumbnail: true,
+    })
+
+    for (const pair of [
+      ['-f', 'bestaudio/best'],
+      ['--download-archive', '.archive'],
+      ['--concurrent-fragments', '1'],
+      ['--retries', '10'],
+      ['--fragment-retries', '10'],
+      ['--sleep-requests', '1'],
+      ['--sleep-interval', '2'],
+      ['--max-sleep-interval', '5'],
+      ['--throttled-rate', '100K'],
+      ['--retry-sleep', 'http:exp=1:20'],
+      ['--retry-sleep', 'fragment:exp=1:20'],
+    ]) {
+      expect(args.join('\0')).toContain(pair.join('\0'))
+    }
+    expect(args).toContain('--write-info-json')
+    expect(args).toContain('--embed-metadata')
+    expect(args).toContain('--embed-thumbnail')
+  })
 })

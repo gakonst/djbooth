@@ -10,6 +10,7 @@ without delegation.
 | Generic HTML / OpenGraph | partial | yes | Meta tags, media tags, JSON-LD, HLS |
 | YouTube | partial | yes | Metadata, direct formats, captions; signature transform falls back |
 | SoundCloud | partial | yes | Native public tracks and streams; sets/profiles fall back |
+| Music batch orchestration | yes | yes | Quality-first scheduling, archive, metadata, resume policy |
 | Remaining site extractors | planned | yes | Ported by traffic and fixture coverage |
 | Format selection | partial | yes | Common selectors, fallback, merge, filters, nth-best |
 | HTTP file downloader | partial | yes | Resume, range, retries, rate limit, atomic part files |

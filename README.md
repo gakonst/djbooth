@@ -1,6 +1,6 @@
 # ytdlp-ts
 
-A TypeScript port of [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), exposed as an
+A music-first TypeScript port of [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), exposed as an
 [`incur`](https://github.com/wevm/incur) CLI for humans, agents, MCP clients, and HTTP callers.
 
 > [!IMPORTANT]
@@ -22,6 +22,9 @@ pnpm dev --help
 ## CLI shape
 
 ```sh
+ytdlp-ts music 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+ytdlp-ts music 'https://soundcloud.com/artist/track' --url 'https://youtu.be/another-id'
+ytdlp-ts music --input-file urls.txt --paths ~/Music
 ytdlp-ts inspect 'https://example.com/video'
 ytdlp-ts formats 'https://example.com/video'
 ytdlp-ts parity 'https://example.com/video'
@@ -34,13 +37,27 @@ ytdlp-ts --mcp
 ### YouTube and SoundCloud
 
 ```sh
-ytdlp-ts download 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
-ytdlp-ts download 'https://soundcloud.com/savedrecords/unconditional-feat-nasa'
+ytdlp-ts music 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+ytdlp-ts music 'https://soundcloud.com/savedrecords/unconditional-feat-nasa'
 ```
 
 YouTube uses the exact reference engine when its current player requires signature challenges.
-Public SoundCloud tracks use the native TypeScript extractor and downloader; sets, profiles, private
-tracks, and unsupported account flows fall back through `auto`.
+Public progressive SoundCloud tracks use the native TypeScript extractor and Range-resumable
+downloader. Best-audio HLS tracks use yt-dlp's fragment-resumable path; sets, profiles, private
+tracks, and unsupported account flows also fall back through `auto`.
+
+`music` keeps the highest-quality source audio by default. It writes `.info.json` metadata and cover
+art alongside every track, embeds tags and artwork on the reference path, and only transcodes when
+`--audio-format` explicitly requests a codec.
+
+Batch downloads default to three concurrent tracks while YouTube is capped at one. YouTube requests
+use conservative sleeps, exponential HTTP/fragment/extractor retry delays, throttling detection, and
+one fragment at a time. A durable `.ytdlp-ts-music-archive` in the target directory prevents repeat
+downloads and uses URL fingerprints to skip completed tracks before any network request.
+
+Progressive downloads resume with HTTP Range requests. HLS/DASH music is routed through yt-dlp's
+fragment-aware downloader so interrupted segmented streams also retain resume state. See
+[`docs/STRESS.md`](docs/STRESS.md) for the validation record.
 
 The structured commands are implemented with incur and produce agent-friendly output. `compat`
 passes arbitrary arguments to the reference engine during the parity migration.

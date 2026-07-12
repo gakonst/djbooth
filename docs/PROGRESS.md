@@ -101,3 +101,21 @@ This is the append-only engineering journal for the port. Dates use Pacific Time
 - Completed live end-to-end download smoke tests and validated outputs with FFprobe:
   - SoundCloud native progressive MP3: 180.062 seconds, 2,881,409 bytes.
   - YouTube automatic reference fallback MP4: 213.043 seconds, 11,829,048 bytes.
+
+## 2026-07-10 — Music batch, resume, and rate-limit hardening
+
+- Added the opinionated `music` command with source-quality audio selection, optional conversion,
+  metadata JSON, artwork, embedded reference tags/artwork, URL files, and repeated URL arguments.
+- Added concurrent batch scheduling with a separate one-at-a-time YouTube semaphore.
+- Added conservative YouTube request/track sleeps, one fragment at a time, throttled-rate
+  re-extraction, ten transfer/fragment retries, and exponential HTTP/fragment/extractor backoff.
+- Added a durable yt-dlp-compatible extractor/ID archive plus normalized URL fingerprints. A repeat
+  five-track batch now skips without network requests in 0.168 seconds.
+- Hardened native progressive downloads to retry mid-stream failures automatically from the `.part`
+  byte offset. HLS/DASH best-audio formats use the fragment-resumable reference downloader.
+- Added deterministic four-track scheduler/archive stress coverage and a severed-stream test that
+  proves the retry sends a Range request.
+- Completed a five-track live stress run (three SoundCloud, two YouTube): five downloaded, zero
+  failed, five audio files, five `.info.json` files, and five artwork files.
+- Completed a live SoundCloud interruption test: preserved a 326,450-byte part, resumed from
+  358,347 bytes, and validated the final 2,881,409-byte/180.062-second MP3 with FFprobe.

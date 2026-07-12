@@ -228,13 +228,33 @@ async function downloadHttp(
   outputPath: string,
   options: NativeDownloadOptions,
 ): Promise<void> {
+  const retries = options.retries ?? 3
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      await downloadHttpAttempt(format, outputPath, options)
+      return
+    } catch (error) {
+      lastError = error
+      if (options.signal?.aborted || attempt === retries) break
+      await abortableDelay(Math.min(500 * 2 ** attempt, 10_000), options.signal)
+    }
+  }
+  throw lastError
+}
+
+async function downloadHttpAttempt(
+  format: Format,
+  outputPath: string,
+  options: NativeDownloadOptions,
+): Promise<void> {
   const partPath = `${outputPath}.part`
   const resumeBytes = options.continueDownload === false ? 0 : await fileSize(partPath)
   const headers: Record<string, string> = { Accept: '*/*', 'Accept-Encoding': 'identity' }
   if (resumeBytes > 0) headers.Range = `bytes=${resumeBytes}-`
   const response = await request(format.url, {
     headers: { ...headers, ...format.http_headers },
-    ...(options.retries !== undefined ? { retries: options.retries } : undefined),
+    retries: 0,
     ...(options.signal ? { signal: options.signal } : undefined),
     timeoutMs: 30_000,
   })

@@ -1,7 +1,7 @@
 {
   "name": "@gakonst/ytdlp-ts",
-  "version": "0.1.0",
-  "description": "A TypeScript port of yt-dlp with an agent-native incur CLI",
+  "version": "0.2.0",
+  "description": "A music-first TypeScript yt-dlp port with an agent-native incur CLI",
   "type": "module",
   "private": true,
   "license": "Unlicense",

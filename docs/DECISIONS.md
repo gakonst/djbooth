@@ -32,3 +32,12 @@ reviewable fixtures.
 
 **Why:** Vendoring would obscure which modules are truly ported and would make the repository look
 complete without reducing the runtime dependency.
+
+## ADR-005: Optimize the primary workflow for music libraries
+
+**Decision:** Make `music` the opinionated path: best source audio, metadata JSON, artwork, durable
+archives, conservative YouTube concurrency, and automatic resume. Keep `download` as the lower-level
+compatibility surface.
+
+**Why:** Audio quality is harmed by unnecessary transcoding, while large batches need stronger
+idempotency and rate-limit behavior than one-off video downloads.

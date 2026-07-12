@@ -114,4 +114,53 @@ describe('native downloader', () => {
       title: 'Sidecar',
     })
   })
+
+  it('automatically resumes after a mid-stream disconnect', async () => {
+    const body = Buffer.alloc(512 * 1024, 7)
+    const ranges: string[] = []
+    let requests = 0
+    const server = createServer((request, response) => {
+      requests += 1
+      const rangeHeader = request.headers.range ?? ''
+      ranges.push(rangeHeader)
+      const range = /^bytes=(\d+)-$/u.exec(rangeHeader)
+      const start = range ? Number(range[1]) : 0
+      response.statusCode = start > 0 ? 206 : 200
+      response.setHeader('content-length', body.length - start)
+      if (start > 0) response.setHeader('content-range', `bytes ${start}-${body.length - 1}/${body.length}`)
+      if (requests === 1) {
+        response.write(body.subarray(0, 128 * 1024))
+        setTimeout(() => response.destroy(), 10)
+      } else {
+        response.end(body.subarray(start))
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('missing address')
+    const directory = await mkdtemp(join(tmpdir(), 'ytdlp-ts-retry-'))
+    cleanups.push(() => rm(directory, { recursive: true, force: true }))
+    const info: MediaInfo = {
+      id: 'retry',
+      title: 'Retry',
+      formats: [
+        {
+          format_id: 'audio',
+          url: `http://127.0.0.1:${address.port}/audio.mp3`,
+          ext: 'mp3',
+          vcodec: 'none',
+          acodec: 'mp3',
+          abr: 320,
+        },
+      ],
+    }
+
+    const result = await downloadMedia(info, { paths: directory, format: 'bestaudio', retries: 2 })
+
+    expect(await readFile(result.files[0]!)).toEqual(body)
+    expect(requests).toBe(2)
+    expect(ranges[0]).toBe('')
+    expect(ranges[1]).toMatch(/^bytes=[1-9]\d*-$/u)
+  })
 })

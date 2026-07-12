@@ -62,6 +62,12 @@ export interface DownloadReferenceOptions extends InspectReferenceOptions {
   embedMetadata?: boolean
   embedChapters?: boolean
   sponsorblockRemove?: string[]
+  downloadArchive?: string
+  sleepRequests?: number
+  sleepInterval?: number
+  maxSleepInterval?: number
+  throttledRate?: string
+  retrySleep?: string[]
 }
 
 export class ReferenceClient {
@@ -220,6 +226,12 @@ export function buildDownloadArgs(url: string, options: DownloadReferenceOptions
   for (const category of options.sponsorblockRemove ?? []) {
     appendValue(args, '--sponsorblock-remove', category)
   }
+  appendValue(args, '--download-archive', options.downloadArchive)
+  appendNumber(args, '--sleep-requests', options.sleepRequests)
+  appendNumber(args, '--sleep-interval', options.sleepInterval)
+  appendNumber(args, '--max-sleep-interval', options.maxSleepInterval)
+  appendValue(args, '--throttled-rate', options.throttledRate)
+  for (const value of options.retrySleep ?? []) appendValue(args, '--retry-sleep', value)
   appendNetworkAndAuthArgs(args, options)
   args.push('--', url)
   return args

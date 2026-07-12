@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
 import { Cli, z } from 'incur'
 
 import {
@@ -12,8 +15,9 @@ import { compareMediaInfo } from './core/parity.js'
 import type { EngineKind } from './core/types.js'
 import { ExtractorRegistry } from './extractors/registry.js'
 import { downloadMedia, supportsNativeDownloadOptions } from './downloader/native.js'
+import { downloadMusicBatch } from './music.js'
 
-const VERSION = '0.1.0'
+const VERSION = '0.2.0'
 const engine = z.enum(['auto', 'native', 'reference']).default('auto').describe('Execution engine')
 
 const inspectOptions = z.object({
@@ -35,7 +39,7 @@ const inspectOptions = z.object({
 
 const cli = Cli.create('ytdlp-ts', {
   version: VERSION,
-  description: 'Download and inspect media with a TypeScript port of yt-dlp.',
+  description: 'Download highest-quality music and metadata from YouTube and SoundCloud.',
   mcp: {
     instructions:
       'Use inspect before download when format or subtitle selection matters. Results report the native or reference engine used.',
@@ -44,7 +48,8 @@ const cli = Cli.create('ytdlp-ts', {
     cwd: import.meta.dirname,
     suggestions: [
       'inspect a media URL and summarize its formats',
-      'download the best video and audio for a URL',
+      'download the highest-quality source audio and metadata for a URL',
+      'download several YouTube and SoundCloud tracks at the highest source quality with metadata',
       'list available subtitles for a media URL',
     ],
   },
@@ -174,6 +179,78 @@ cli.command('parity', {
         reference: { extractor: referenceInfo.extractor_key ?? referenceInfo.extractor },
         report: compareMediaInfo(nativeInfo, referenceInfo),
       }
+    } catch (error) {
+      return fail(c, error)
+    }
+  },
+})
+
+cli.command('music', {
+  description: 'Download one or more music tracks at the highest source quality with metadata.',
+  destructive: true,
+  args: z.object({ url: z.url().optional().describe('YouTube or SoundCloud track or playlist URL') }),
+  options: z.object({
+    url: z.array(z.url()).optional().describe('Additional track URL; repeat for multiple tracks'),
+    inputFile: z.string().optional().describe('Text file containing one URL per line'),
+    engine,
+    paths: z.string().default('.').describe('Music library directory'),
+    output: z.string().optional().describe('yt-dlp-compatible output filename template'),
+    audioFormat: z
+      .enum(['best', 'aac', 'alac', 'flac', 'm4a', 'mp3', 'opus', 'vorbis', 'wav'])
+      .default('best')
+      .describe('Keep source audio or convert after download'),
+    audioQuality: z.string().default('0').describe('FFmpeg quality when converting audio'),
+    archive: z.string().optional().describe('Durable completed-track archive path'),
+    concurrency: z.number().int().min(1).max(16).default(3).describe('Maximum parallel tracks'),
+    youtubeConcurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(4)
+      .default(1)
+      .describe('Maximum parallel YouTube tracks'),
+    retries: z.number().int().min(0).max(100).default(10).describe('Transfer and fragment retries'),
+    rateLimit: z.string().optional().describe('Global download rate limit, e.g. 8M'),
+    youtubeRateLimit: z.string().optional().describe('YouTube-specific rate limit, e.g. 4M'),
+    youtubeRequestInterval: z.number().min(0).default(1).describe('Delay between YouTube requests'),
+    youtubeMinSleep: z.number().min(0).default(2).describe('Minimum delay between YouTube tracks'),
+    youtubeMaxSleep: z.number().min(0).default(5).describe('Maximum delay between YouTube tracks'),
+    continueOnError: z.boolean().default(true).describe('Continue the batch after a failed track'),
+    writeInfoJson: z.boolean().default(true).describe('Write full metadata JSON alongside audio'),
+    writeThumbnail: z.boolean().default(true).describe('Write cover artwork alongside audio'),
+    embedMetadata: z.boolean().default(true).describe('Embed tags when using the reference engine'),
+    embedThumbnail: z.boolean().default(true).describe('Embed cover art when using the reference engine'),
+    cookies: z.string().optional().describe('Netscape cookie file'),
+    cookiesFromBrowser: z.string().optional().describe('Browser cookie source specification'),
+    proxy: z.string().optional().describe('HTTP/HTTPS/SOCKS proxy URL'),
+    extractorArgs: z.array(z.string()).optional().describe('Extractor argument key:value'),
+  }),
+  alias: { paths: 'P', output: 'o', url: 'u' },
+  async run(c) {
+    try {
+      const fileUrls = c.options.inputFile
+        ? (await readFile(c.options.inputFile, 'utf8'))
+            .split(/\r?\n/u)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith('#'))
+        : []
+      const urls = [c.args.url, ...(c.options.url ?? []), ...fileUrls].filter(
+        (url): url is string => Boolean(url),
+      )
+      if (urls.length === 0) {
+        return c.error({
+          code: 'NO_MUSIC_URLS',
+          message: 'Pass a URL, repeat --url, or provide --input-file.',
+          exitCode: 2,
+        })
+      }
+      return await downloadMusicBatch(
+        urls,
+        defined({
+          ...c.options,
+          archive: c.options.archive ?? join(c.options.paths, '.ytdlp-ts-music-archive'),
+        }) as Parameters<typeof downloadMusicBatch>[1],
+      )
     } catch (error) {
       return fail(c, error)
     }
