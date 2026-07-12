@@ -20,6 +20,8 @@ const dependencies: MusicCliDependencies = {
   rekordboxStatus: () => ({ rekordboxPid: 42 }),
 };
 
+const localSandboxTest = process.platform === "win32" ? it.skip : it;
+
 async function connect(server: McpServer): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -85,21 +87,25 @@ describe("music MCP adapters", () => {
     }
   });
 
-  it("runs CodeMode locally in the default isolated runtime", async () => {
-    const server = await createLocalMusicCodeMcpServer({ dependencies, timeoutMs: 10_000 });
-    const client = await connect(server);
-    try {
-      const result = await client.callTool({
-        name: "code",
-        arguments: { code: "async () => codemode.rekordbox_status({})" },
-      });
-      const content = result.content as Array<{ type: string; text: string }>;
-      if (result.isError) throw new Error(content[0]!.text);
-      expect(result.isError).not.toBe(true);
-      expect(JSON.parse(content[0]!.text)).toEqual({ rekordboxPid: 42 });
-    } finally {
-      await client.close();
-      await server.close();
-    }
-  }, 20_000);
+  localSandboxTest(
+    "runs CodeMode locally in the default isolated runtime",
+    async () => {
+      const server = await createLocalMusicCodeMcpServer({ dependencies, timeoutMs: 10_000 });
+      const client = await connect(server);
+      try {
+        const result = await client.callTool({
+          name: "code",
+          arguments: { code: "async () => codemode.rekordbox_status({})" },
+        });
+        const content = result.content as Array<{ type: string; text: string }>;
+        if (result.isError) throw new Error(content[0]!.text);
+        expect(result.isError).not.toBe(true);
+        expect(JSON.parse(content[0]!.text)).toEqual({ rekordboxPid: 42 });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    },
+    20_000,
+  );
 });

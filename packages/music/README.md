@@ -70,7 +70,8 @@ music --codemode-mcp
 
 It serves one `code` tool over stdio. Generated JavaScript runs inside Secure Exec with a virtual
 filesystem, denied network access, bounded execution time, and only the music tools bridged back to
-the host.
+the host. The bundled Secure Exec sidecar currently supports macOS and Linux; Windows clients can
+use the normal MCP or inject another isolated `Executor` into `createMusicCodeMcpServer`.
 
 The package also exports explicit server factories. The normal server exposes the same six typed
 commands as the CLI; the CodeMode server collapses them into one sandboxed TypeScript `code` tool:
