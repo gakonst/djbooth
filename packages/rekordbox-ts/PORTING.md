@@ -162,3 +162,27 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   temporary copy of the live schema; the live library was not modified.
 - Release, prerelease, and packed-package verification run on macOS, rebuild the signed universal
   helper, include the vendored runtime, and validate it through `analyze doctor` from a clean install.
+
+## Native analyzer performance checkpoint
+
+- Profiled one 6:25 M4A with Xcode 26 Time Profiler. The original wrapper took 18.14 seconds wall;
+  the optimized wrapper takes 8.65 seconds wall with identical 124.999776 BPM, F key, and parseable
+  DAT/EXT/2EX output. Native completion is 8.31 seconds; backend setup fell from about 0.50 seconds
+  to 0.06 seconds and template preparation from about 0.67 seconds to below timer resolution.
+- Removed cache-hit codesigning, recursive 44,000-file template scans, full 101 MB binary hashing,
+  and full-image offset validation from the per-track hot path. Cold cache creation and `doctor`
+  still hash every source artifact; the hot path trusts the sized provenance manifest and validates
+  the known function signatures with bounded file reads.
+- Replaced one-second polling and a fixed two-second delay with 25 ms polling plus output stability.
+  Treat `.2EX` as a newly created file, use monotonic deadlines, report explicit timeouts, and guard
+  callback state with a mutex instead of racing Rekordbox's callback thread.
+- Time Profiler places the remaining CPU time in Rekordbox AAC decode, beat, waveform, vocal, and
+  song-structure analysis. The wrapper does not have another material CPU hotspot.
+- Added `analyzeTrackAsync`, bounded `analyzeTracks`, and `rekordbox analyze tracks`. Each concurrent
+  track uses an isolated x86_64 process because Rekordbox has singleton/global analyzer state and the
+  rehost redirects process-global stdout/stderr. Four real Brunello-set tracks completed in 9.10
+  seconds wall with four workers; serial execution would take roughly 35 seconds.
+- Packaged sanitized DAT/EXT seed shapes and made them the fallback when a local Rekordbox analysis
+  library is absent. Build and packed-package smoke checks now fail if either seed is missing. An
+  extracted npm tarball analyzed the same track with an empty HOME and no prebuilt runtime cache in
+  14.58 seconds cold, producing the same valid DAT/EXT/2EX, BPM, and key result.

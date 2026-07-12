@@ -1,7 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { availableParallelism } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
@@ -30,6 +40,11 @@ export type RekordboxAnalysisResult = {
   nativeLog: string;
   outputs: Array<[string, number]>;
   startResult: number;
+  source: {
+    mtimeMs: number;
+    path: string;
+    size: number;
+  };
   summary: {
     beat_grid: RekordboxBeatGridSummary | null;
     files: Array<{ path: string; size: number; tags: Array<string> }>;
@@ -38,6 +53,15 @@ export type RekordboxAnalysisResult = {
     tempo_bpm: number | null;
   };
   summaryPath: string;
+  timings: {
+    analyzeStartMs: number;
+    backendMs: number;
+    completionMs: number;
+    loadMs: number;
+    outputPrepareMs: number;
+    summarizeMs: number;
+    totalMs: number;
+  };
 };
 
 /** Options for producing native Rekordbox DAT, EXT, and 2EX files. */
@@ -48,6 +72,29 @@ export type AnalyzeTrackOptions = {
   rekordboxApp?: string;
   rekordboxCache?: string;
   timeoutMs?: number;
+};
+
+/** Options for bounded, process-isolated native Rekordbox analysis. */
+export type AnalyzeTracksOptions = Omit<AnalyzeTrackOptions, "outputDirectory"> & {
+  concurrency?: number;
+};
+
+/** Ordered results and wall-clock timing for a multi-track analyzer run. */
+export type AnalyzeTracksResult = {
+  concurrency: number;
+  elapsedMs: number;
+  requested: number;
+  results: Array<RekordboxAnalysisResult>;
+};
+
+type PreparedAnalysis = {
+  args: Array<string>;
+  cached?: RekordboxAnalysisResult;
+  command: string;
+  env: NodeJS.ProcessEnv;
+  outputDirectory: string;
+  source: RekordboxAnalysisResult["source"];
+  summaryPath: string;
 };
 
 /** Resolve the packaged universal analyzer helper or an explicit override. */
@@ -85,6 +132,86 @@ export function analyzeTrack(
   audioPath: string,
   options: AnalyzeTrackOptions = {},
 ): RekordboxAnalysisResult {
+  const prepared = prepareAnalysis(audioPath, options);
+  if (prepared.cached) return prepared.cached;
+  const child = spawnSync(prepared.command, prepared.args, {
+    encoding: "utf8",
+    env: prepared.env,
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: options.timeoutMs ?? 300_000,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0)
+    throw new Error(
+      `Rekordbox analyzer exited with ${child.status ?? "no status"}: ${child.stderr.trim() || child.stdout.trim()}`,
+    );
+  return persistAnalysisResult(child.stdout, prepared);
+}
+
+/** Analyze one track without blocking the Node.js event loop. */
+export async function analyzeTrackAsync(
+  audioPath: string,
+  options: AnalyzeTrackOptions = {},
+): Promise<RekordboxAnalysisResult> {
+  const prepared = prepareAnalysis(audioPath, options);
+  if (prepared.cached) return prepared.cached;
+  const stdout = await runAnalyzer(prepared, options.timeoutMs ?? 300_000);
+  return persistAnalysisResult(stdout, prepared);
+}
+
+/** Analyze tracks concurrently in isolated native worker processes, preserving input order. */
+export async function analyzeTracks(
+  audioPaths: ReadonlyArray<string>,
+  options: AnalyzeTracksOptions = {},
+): Promise<AnalyzeTracksResult> {
+  const configuredConcurrency = options.concurrency ?? Math.min(4, availableParallelism());
+  if (
+    !Number.isInteger(configuredConcurrency) ||
+    configuredConcurrency < 1 ||
+    configuredConcurrency > 64
+  )
+    throw new TypeError("Analyzer concurrency must be an integer between 1 and 64");
+
+  const absolutePaths = audioPaths.map((audioPath) => resolve(audioPath));
+  const outputDirectories = absolutePaths.map(defaultOutputDirectory);
+  const destinations = new Set<string>();
+  for (const outputDirectory of outputDirectories) {
+    if (destinations.has(outputDirectory))
+      throw new TypeError(`Multiple tracks resolve to analyzer output '${outputDirectory}'`);
+    destinations.add(outputDirectory);
+  }
+
+  const started = performance.now();
+  const concurrency = Math.min(configuredConcurrency, absolutePaths.length);
+  const results = Array.from<RekordboxAnalysisResult>({ length: absolutePaths.length });
+  const failures = Array.from<Error | undefined>({ length: absolutePaths.length });
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      const audioPath = absolutePaths[index];
+      if (audioPath === undefined) return;
+      try {
+        results[index] = await analyzeTrackAsync(audioPath, options);
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        failures[index] = new Error(`Failed to analyze '${audioPath}': ${message}`, { cause });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  const errors = failures.filter((error): error is Error => error !== undefined);
+  if (errors.length)
+    throw new AggregateError(errors, `Rekordbox analysis failed for ${errors.length} track(s)`);
+  return {
+    concurrency,
+    elapsedMs: Math.round(performance.now() - started),
+    requested: absolutePaths.length,
+    results,
+  };
+}
+
+function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): PreparedAnalysis {
   const absoluteAudioPath = resolve(audioPath);
   if (!existsSync(absoluteAudioPath))
     throw new TypeError(`Audio file '${absoluteAudioPath}' does not exist`);
@@ -94,20 +221,44 @@ export function analyzeTrack(
     throw new TypeError(
       `Rekordbox analyzer helper '${analyzerBinary}' does not exist; build it with pnpm --filter @gakonst/rekordbox build:analyzer`,
     );
+  const source = sourceFingerprint(absoluteAudioPath);
   const outputDirectory = resolve(
-    options.outputDirectory ??
-      join(
-        dirname(absoluteAudioPath),
-        `${basename(absoluteAudioPath, extname(absoluteAudioPath))}.rekordbox`,
-      ),
+    options.outputDirectory ?? defaultOutputDirectory(absoluteAudioPath),
   );
   const summaryPath = join(outputDirectory, "analysis.json");
   const nativeLogPath = join(outputDirectory, "rehost-native.log");
   if (options.force) rmSync(outputDirectory, { force: true, recursive: true });
   mkdirSync(outputDirectory, { recursive: true });
   const existing = getAnlzPaths(outputDirectory);
-  if (!options.force && existing.DAT && existing.EXT && existing["2EX"] && existsSync(summaryPath))
-    return readAnalysisResult(summaryPath);
+  if (
+    !options.force &&
+    existing.DAT &&
+    existing.EXT &&
+    existing["2EX"] &&
+    existsSync(summaryPath)
+  ) {
+    try {
+      const cached = readAnalysisResult(summaryPath);
+      if (
+        cached.source?.path === source.path &&
+        cached.source.size === source.size &&
+        cached.source.mtimeMs === source.mtimeMs
+      ) {
+        validateAnalysisFiles(outputDirectory);
+        return {
+          args: [],
+          cached,
+          command: analyzerBinary,
+          env: process.env,
+          outputDirectory,
+          source,
+          summaryPath,
+        };
+      }
+    } catch {
+      // Invalid or stale cached artifacts are replaced by a new native analysis.
+    }
+  }
 
   const env = { ...process.env };
   env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
@@ -118,29 +269,105 @@ export function analyzeTrack(
     process.arch === "arm64"
       ? ["-x86_64", analyzerBinary, "analyze", absoluteAudioPath, outputDirectory, nativeLogPath]
       : ["analyze", absoluteAudioPath, outputDirectory, nativeLogPath];
-  const child = spawnSync(command, args, {
-    encoding: "utf8",
-    env,
-    maxBuffer: 4 * 1024 * 1024,
-    timeout: options.timeoutMs ?? 300_000,
+  return { args, command, env, outputDirectory, source, summaryPath };
+}
+
+function sourceFingerprint(audioPath: string): RekordboxAnalysisResult["source"] {
+  const metadata = statSync(audioPath);
+  if (!metadata.isFile()) throw new TypeError(`Audio path '${audioPath}' is not a file`);
+  return {
+    mtimeMs: metadata.mtimeMs,
+    path: realpathSync(audioPath),
+    size: metadata.size,
+  };
+}
+
+function defaultOutputDirectory(absoluteAudioPath: string): string {
+  return join(
+    dirname(absoluteAudioPath),
+    `${basename(absoluteAudioPath, extname(absoluteAudioPath))}.rekordbox`,
+  );
+}
+
+function runAnalyzer(prepared: PreparedAnalysis, timeoutMs: number): Promise<string> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(prepared.command, prepared.args, {
+      env: prepared.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const maxBuffer = 4 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let captureError: Error | undefined;
+    let spawnError: Error | undefined;
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    const append = (current: string, chunk: Buffer): string => {
+      const next = current + chunk.toString("utf8");
+      if (Buffer.byteLength(next) > maxBuffer) {
+        captureError = new Error(`Rekordbox analyzer output exceeded ${maxBuffer} bytes`);
+        child.kill("SIGKILL");
+      }
+      return next;
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = append(stdout, chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = append(stderr, chunk);
+    });
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+    }, timeoutMs);
+    child.once("close", (status, signal) => {
+      clearTimeout(timeout);
+      if (killTimer) clearTimeout(killTimer);
+      if (spawnError) return rejectPromise(spawnError);
+      if (captureError) return rejectPromise(captureError);
+      if (timedOut)
+        return rejectPromise(new Error(`Rekordbox analyzer timed out after ${timeoutMs}ms`));
+      if (status !== 0)
+        return rejectPromise(
+          new Error(
+            `Rekordbox analyzer exited with ${status ?? `signal ${signal ?? "unknown"}`}: ${stderr.trim() || stdout.trim()}`,
+          ),
+        );
+      resolvePromise(stdout);
+    });
   });
-  if (child.error) throw child.error;
-  if (child.status !== 0)
-    throw new Error(
-      `Rekordbox analyzer exited with ${child.status ?? "no status"}: ${child.stderr.trim() || child.stdout.trim()}`,
-    );
-  const native = JSON.parse(child.stdout) as Omit<RekordboxAnalysisResult, "summaryPath">;
+}
+
+function persistAnalysisResult(
+  stdout: string,
+  prepared: PreparedAnalysis,
+): RekordboxAnalysisResult {
+  const currentSource = sourceFingerprint(prepared.source.path);
+  if (
+    currentSource.size !== prepared.source.size ||
+    currentSource.mtimeMs !== prepared.source.mtimeMs
+  )
+    throw new Error(`Audio file '${prepared.source.path}' changed during Rekordbox analysis`);
+  const native = JSON.parse(stdout) as Omit<RekordboxAnalysisResult, "source" | "summaryPath">;
+  validateAnalysisFiles(prepared.outputDirectory);
+  const result = { ...native, source: prepared.source, summaryPath: prepared.summaryPath };
+  const temporary = `${prepared.summaryPath}.${process.pid}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`);
+  renameSync(temporary, prepared.summaryPath);
+  return result;
+}
+
+function validateAnalysisFiles(outputDirectory: string): void {
   const paths = getAnlzPaths(outputDirectory);
   for (const type of ["DAT", "EXT", "2EX"] as const) {
     const path = paths[type];
     if (!path) throw new Error(`Rekordbox analyzer did not produce ANLZ0000.${type}`);
     AnlzFile.parseFile(path);
   }
-  const result = { ...native, summaryPath };
-  const temporary = `${summaryPath}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`);
-  renameSync(temporary, summaryPath);
-  return result;
 }
 
 /** Read a previously persisted analyzer summary. */

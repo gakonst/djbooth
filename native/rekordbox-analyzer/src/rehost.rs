@@ -4,17 +4,23 @@ use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::DEFAULT_ANLZ_STEM;
-use crate::backend::{RekordboxOffsets, prepare_rekordbox_backend};
+use crate::backend::{ENV_REKORDBOX_ANALYZER_ROOT, RekordboxOffsets, prepare_rekordbox_backend};
 
 const TEMPLATE_SUFFIX: &str = "Library/Pioneer/rekordbox/share/PIONEER/USBANLZ";
+const VENDORED_TEMPLATE_SUFFIX: &str = "vendor/rekordbox-analyzer-templates";
 const WAIT_SECONDS: u64 = 90;
-const SETTLE_DELAY_SECONDS: u64 = 2;
+const COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CALLBACK_STABILITY_WINDOW: Duration = Duration::from_millis(100);
+const OUTPUT_STABILITY_WINDOW: Duration = Duration::from_millis(500);
+static CONTENT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
 pub const REHOST_WORKER_SUBCOMMAND: &str = "__rekordbox-rehost";
 
@@ -70,6 +76,19 @@ pub struct RehostResult {
     pub native_log: String,
     pub outputs: Vec<(String, u64)>,
     pub summary: OutputSummary,
+    pub timings: RehostTimings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RehostTimings {
+    pub backend_ms: u64,
+    pub output_prepare_ms: u64,
+    pub load_ms: u64,
+    pub analyze_start_ms: u64,
+    pub completion_ms: u64,
+    pub summarize_ms: u64,
+    pub total_ms: u64,
 }
 
 impl RehostResult {
@@ -124,6 +143,7 @@ struct AnlzTag {
 }
 
 pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
+    let total_started = Instant::now();
     ensure_x86_64_worker()?;
 
     let audio_path = options
@@ -141,29 +161,53 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
         .map(|path| expand_home(path))
         .unwrap_or_else(|| output_dir.join("rehost-native.log"));
     let content_id = content_id();
+    let backend_started = Instant::now();
     let backend = prepare_rekordbox_backend()?;
+    let backend_ms = elapsed_ms(backend_started);
     let binary = backend.cache.cached_binary.clone();
+    let output_prepare_started = Instant::now();
     let (dat_path, initial_mtimes) = prepare_output(
         &default_template_dir()?,
         &output_dir,
         DEFAULT_ANLZ_STEM,
         &audio_path,
     )?;
+    let output_prepare_ms = elapsed_ms(output_prepare_started);
 
     let mut rehost_output = NativeOutputRedirect::start(&native_log)?;
+    let load_started = Instant::now();
     let mut rehost = unsafe { Rehost::load(&binary, backend.offsets)? };
+    let load_ms = elapsed_ms(load_started);
+    let analyze_started = Instant::now();
     let start_result = unsafe { rehost.analyze(&audio_path, &dat_path, content_id)? };
-    let outputs = wait_for_completion(
+    let analyze_start_ms = elapsed_ms(analyze_started);
+    if start_result != 0 {
+        rehost_output.restore()?;
+        bail!("Rekordbox startAnalyze failed with status {start_result}");
+    }
+    let completion_started = Instant::now();
+    let outputs = match wait_for_completion(
         &dat_path,
         &initial_mtimes,
         Duration::from_secs(WAIT_SECONDS),
-        rehost.callback_state(),
-    );
-    std::thread::sleep(Duration::from_secs(SETTLE_DELAY_SECONDS));
-    let callback_status = rehost.callback_state().status;
-    let callback_error = rehost.callback_state().error.clone();
-    let key = rehost.callback_state().key.clone();
+        &rehost.callback,
+    ) {
+        Ok(outputs) => outputs,
+        Err(error) => {
+            rehost_output.restore()?;
+            std::mem::forget(rehost);
+            return Err(error);
+        }
+    };
+    let completion_ms = elapsed_ms(completion_started);
+    let callback = rehost.callback.snapshot();
+    let callback_status = callback.status;
+    let callback_error = callback.error;
+    let key = callback.key;
     rehost_output.restore()?;
+    let summarize_started = Instant::now();
+    let summary = summarize_outputs(&dat_path, key)?;
+    let summarize_ms = elapsed_ms(summarize_started);
 
     Ok(RehostResult {
         backend: "rekordbox-dlopen-rehost".to_string(),
@@ -176,8 +220,41 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
         callback_error,
         native_log: native_log.display().to_string(),
         outputs,
-        summary: summarize_outputs(&dat_path, key)?,
+        summary,
+        timings: RehostTimings {
+            backend_ms,
+            output_prepare_ms,
+            load_ms,
+            analyze_start_ms,
+            completion_ms,
+            summarize_ms,
+            total_ms: elapsed_ms(total_started),
+        },
     })
+}
+
+pub fn bundle_rekordbox_templates(output_dir: &Path) -> Result<Vec<PathBuf>> {
+    let source_dir = dirs::home_dir()
+        .map(|home| home.join(TEMPLATE_SUFFIX))
+        .context("failed to resolve home directory")?;
+    let output_dir = expand_home(output_dir);
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let mut outputs = Vec::new();
+    for (suffix, template) in find_template_files(&source_dir)? {
+        let output = output_dir.join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"));
+        clean_seed_from_template(
+            &template,
+            &output,
+            Path::new("rekordbox-template-source.wav"),
+        )?;
+        outputs.push(output);
+    }
+    Ok(outputs)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -351,10 +428,6 @@ impl Rehost {
         };
         Ok(result)
     }
-
-    fn callback_state(&self) -> &CallbackState {
-        self.callback.state()
-    }
 }
 
 impl Drop for Rehost {
@@ -482,11 +555,16 @@ impl Drop for JuceString {
 #[repr(C)]
 struct CallbackObject {
     vtable: *mut *const c_void,
-    state: *mut CallbackState,
+    shared: *mut CallbackShared,
 }
 
-struct CallbackState {
+struct CallbackShared {
     string_to_raw_utf8: JuceStringToRawUtf8,
+    snapshot: Mutex<CallbackSnapshot>,
+}
+
+#[derive(Clone, Default)]
+struct CallbackSnapshot {
     status: Option<i32>,
     key: Option<String>,
     error: Option<String>,
@@ -495,28 +573,26 @@ struct CallbackState {
 struct AnalyzerCallback {
     object: Box<CallbackObject>,
     _vtable: Box<[*const c_void; 24]>,
-    state: Box<CallbackState>,
+    shared: Box<CallbackShared>,
 }
 
 impl AnalyzerCallback {
     fn new(string_to_raw_utf8: JuceStringToRawUtf8) -> Self {
-        let mut state = Box::new(CallbackState {
+        let mut shared = Box::new(CallbackShared {
             string_to_raw_utf8,
-            status: None,
-            key: None,
-            error: None,
+            snapshot: Mutex::new(CallbackSnapshot::default()),
         });
         let mut vtable = Box::new([generic_callback as *const c_void; 24]);
         vtable[2] = progress_callback as *const c_void;
         vtable[5] = complete_callback as *const c_void;
         let object = Box::new(CallbackObject {
             vtable: vtable.as_mut_ptr(),
-            state: state.as_mut() as *mut CallbackState,
+            shared: shared.as_mut() as *mut CallbackShared,
         });
         Self {
             object,
             _vtable: vtable,
-            state,
+            shared,
         }
     }
 
@@ -524,8 +600,12 @@ impl AnalyzerCallback {
         self.object.as_mut() as *mut CallbackObject as *mut c_void
     }
 
-    fn state(&self) -> &CallbackState {
-        &self.state
+    fn snapshot(&self) -> CallbackSnapshot {
+        self.shared
+            .snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 }
 
@@ -557,22 +637,34 @@ extern "C" fn complete_callback(
         return;
     }
     let object = unsafe { &mut *(this as *mut CallbackObject) };
-    if object.state.is_null() {
+    if object.shared.is_null() {
         return;
     }
-    let state = unsafe { &mut *object.state };
-    state.status = Some(status);
-    if key_string.is_null() {
-        return;
-    }
-    let raw = unsafe { (state.string_to_raw_utf8)(key_string) };
-    if raw.is_null() {
-        return;
-    }
-    match unsafe { CStr::from_ptr(raw) }.to_str() {
-        Ok(value) if !value.is_empty() => state.key = Some(value.to_string()),
-        Ok(_) => {}
-        Err(error) => state.error = Some(error.to_string()),
+    let shared = unsafe { &*object.shared };
+    let key_result = if key_string.is_null() {
+        None
+    } else {
+        let raw = unsafe { (shared.string_to_raw_utf8)(key_string) };
+        if raw.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(raw) }
+                    .to_str()
+                    .map(str::to_owned)
+                    .map_err(|error| error.to_string()),
+            )
+        }
+    };
+    let mut snapshot = shared
+        .snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    snapshot.status = Some(status);
+    match key_result {
+        Some(Ok(value)) if !value.is_empty() => snapshot.key = Some(value),
+        Some(Err(error)) => snapshot.error = Some(error),
+        _ => {}
     }
 }
 
@@ -712,6 +804,11 @@ fn summarize_outputs(dat_path: &Path, key: Option<String>) -> Result<OutputSumma
 fn find_template_files(template_dir: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
     let mut out = Vec::new();
     for suffix in ["DAT", "EXT"] {
+        let standard_path = template_dir.join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"));
+        if standard_path.is_file() {
+            out.push((suffix, standard_path));
+            continue;
+        }
         let mut matches = walkdir::WalkDir::new(template_dir)
             .into_iter()
             .filter_map(Result::ok)
@@ -834,19 +931,18 @@ fn wait_for_completion(
     dat_path: &Path,
     initial_mtimes: &[(&str, SystemTime)],
     timeout: Duration,
-    callback: &CallbackState,
-) -> Vec<(String, u64)> {
-    let deadline = SystemTime::now() + timeout;
+    callback: &AnalyzerCallback,
+) -> Result<Vec<(String, u64)>> {
+    let started = Instant::now();
     let paths = ["DAT", "EXT", "2EX"]
         .into_iter()
         .map(|suffix| (suffix, dat_path.with_extension(suffix)))
         .collect::<Vec<_>>();
     let mut last = Vec::new();
-    let mut saw_primary_outputs = false;
     let mut previous_primary_sizes = None;
-    let mut stable_primary_ticks = 0usize;
+    let mut stable_since = None;
 
-    while SystemTime::now() < deadline {
+    while started.elapsed() < timeout {
         last = paths
             .iter()
             .filter(|(_, path)| path.exists())
@@ -871,14 +967,15 @@ fn wait_for_completion(
                     .map(|mtime| mtime != *initial_mtime)
                     .unwrap_or(false)
         };
-        saw_primary_outputs = saw_primary_outputs || (changed("DAT") && changed("EXT"));
-        if saw_primary_outputs && callback.status.is_some() {
-            return last;
-        }
-        if saw_primary_outputs {
+        let primary_changed = changed("DAT") && changed("EXT");
+        let all_outputs_exist = paths.iter().all(|(_, path)| {
+            path.metadata()
+                .map(|metadata| metadata.len() > 28)
+                .unwrap_or(false)
+        });
+        if primary_changed && all_outputs_exist {
             let primary_sizes = paths
                 .iter()
-                .filter(|(suffix, _)| matches!(*suffix, "DAT" | "EXT" | "2EX"))
                 .filter_map(|(suffix, path)| {
                     path.metadata()
                         .ok()
@@ -886,32 +983,61 @@ fn wait_for_completion(
                 })
                 .collect::<Vec<_>>();
             if previous_primary_sizes.as_ref() == Some(&primary_sizes) {
-                stable_primary_ticks = stable_primary_ticks.saturating_add(1);
+                stable_since.get_or_insert_with(Instant::now);
             } else {
                 previous_primary_sizes = Some(primary_sizes);
-                stable_primary_ticks = 0;
+                stable_since = Some(Instant::now());
             }
-            if stable_primary_ticks >= 3 {
-                return last;
+            let required_stability = if callback.snapshot().status.is_some() {
+                CALLBACK_STABILITY_WINDOW
+            } else {
+                OUTPUT_STABILITY_WINDOW
+            };
+            if stable_since.is_some_and(|started| started.elapsed() >= required_stability) {
+                return Ok(last);
             }
+        } else {
+            previous_primary_sizes = None;
+            stable_since = None;
         }
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(COMPLETION_POLL_INTERVAL);
     }
-    last
+    bail!(
+        "Rekordbox analysis timed out after {}ms; outputs: {:?}",
+        timeout.as_millis(),
+        last
+    )
 }
 
 fn default_template_dir() -> Result<PathBuf> {
-    dirs::home_dir()
-        .map(|home| home.join(TEMPLATE_SUFFIX))
-        .context("failed to resolve home directory")
+    let mut candidates = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(TEMPLATE_SUFFIX));
+    }
+    if let Ok(root) = std::env::var(ENV_REKORDBOX_ANALYZER_ROOT) {
+        candidates.push(PathBuf::from(root).join(VENDORED_TEMPLATE_SUFFIX));
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        candidates.push(parent.join("rekordbox-analyzer-templates"));
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| {
+            ["DAT", "EXT"].into_iter().all(|suffix| {
+                candidate
+                    .join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"))
+                    .is_file()
+            })
+        })
+        .context("no Rekordbox DAT/EXT templates found locally or in the packaged analyzer")
 }
 
 fn content_id() -> i64 {
-    (SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        & 0x7fff_ffff) as i64
+    let process = (std::process::id() & 0x7fff) << 16;
+    let sequence = CONTENT_SEQUENCE.fetch_add(1, Ordering::Relaxed) & 0xffff;
+    i64::from((process | sequence).max(1))
 }
 
 fn expand_home(path: &Path) -> PathBuf {
@@ -919,10 +1045,10 @@ fn expand_home(path: &Path) -> PathBuf {
         return dirs::home_dir().unwrap_or_else(|| path.to_path_buf());
     }
     let raw = path.to_string_lossy();
-    if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
     path.to_path_buf()
 }
@@ -981,6 +1107,15 @@ mod tests {
         assert_eq!(summary.avg_bpm, 120.0);
         assert_eq!(summary.first_downbeat_ms, 100);
         assert_eq!(summary.last_beat_ms, 600);
+    }
+
+    #[test]
+    fn content_ids_are_positive_and_unique() {
+        let first = content_id();
+        let second = content_id();
+        assert!(first > 0);
+        assert!(second > 0);
+        assert_ne!(first, second);
     }
 
     fn fixture_anlz_with_pqtz() -> Vec<u8> {

@@ -198,7 +198,14 @@ try {
     "6.8.2.0018",
     "rekordbox.app",
   );
-  if (!existsSync(analyzerBinary) || !existsSync(runtimeApp))
+  const analyzerTemplates = ["ANLZ0000.DAT", "ANLZ0000.EXT"].map((name) =>
+    join(installedRekordbox, "vendor", "rekordbox-analyzer-templates", name),
+  );
+  if (
+    !existsSync(analyzerBinary) ||
+    !existsSync(runtimeApp) ||
+    analyzerTemplates.some((path) => !existsSync(path))
+  )
     throw new Error("Packed Rekordbox analyzer runtime is incomplete");
   process.stdout.write("✓ packed Rekordbox analyzer runtime\n");
 
