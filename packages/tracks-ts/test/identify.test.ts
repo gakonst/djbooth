@@ -73,6 +73,57 @@ describe("identify", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  test("searches 1001Tracklists by inspected title after media URL lookup misses", async () => {
+    const requests: string[] = [];
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      requests.push(url.href);
+      if (url.pathname.endsWith("/find_by_media_url")) {
+        return Response.json({ data: { found: false } });
+      }
+      if (url.pathname.endsWith("/search_tracklists")) {
+        expect(url.searchParams.get("title")).toBe("Brunello @ Lightning in a Bottle 2026");
+        expect(url.searchParams.get("uploader")).toBe("Brunello");
+        return Response.json({
+          data: {
+            items: [
+              {
+                title: "Brunello @ Lightning in a Bottle 2026",
+                url: "https://www.1001tracklists.com/tracklist/matched.html",
+              },
+            ],
+          },
+        });
+      }
+      return Response.json({
+        data: {
+          url: "https://www.1001tracklists.com/tracklist/matched.html",
+          title: "Brunello @ Lightning in a Bottle 2026",
+          entries: [{ position: 1, cueSeconds: 0, artist: "Jansons", title: "Panic" }],
+        },
+      });
+    }) as typeof globalThis.fetch;
+
+    const result = await identify("https://youtu.be/baDz12J2uNo", {
+      cacheMode: "off",
+      env: { PARSE_API_KEY: "parse" },
+      fetch,
+      metadataClient: {
+        inspect: vi.fn(async () => ({
+          title: "Brunello @ Lightning in a Bottle 2026",
+          uploader: "Brunello",
+          description: "No timestamps here",
+        })),
+      },
+    });
+
+    expect(result).toMatchObject({
+      provider: "1001tracklists",
+      tracks: [{ artist: "Jansons", title: "Panic" }],
+    });
+    expect(requests).toHaveLength(3);
+  });
+
   test("falls through to AudD Enterprise and reports sampling precision", async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes("parse.bot")) {
@@ -101,7 +152,7 @@ describe("identify", () => {
       complete: false,
       tracks: [{ startSeconds: 50, timestamp: "00:00:50", artist: "A", title: "B" }],
     });
-    expect(result.warnings?.[0]).toMatch(/No existing 1001Tracklists entry/);
+    expect(result.warnings?.[0]).toMatch(/No 1001Tracklists entry matched/);
   });
 
   test("requires a configured recognition provider", async () => {

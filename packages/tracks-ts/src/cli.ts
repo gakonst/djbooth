@@ -408,11 +408,9 @@ const cli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set. It reads timestamped metadata first, then checks configured databases and recognition providers. It never downloads a remote source set. Use --full only when gapless AudD billing is acceptable.",
+      "Use resolve for a DJ set URL. It inspects media metadata once, reads timestamped descriptions, checks an exact 1001Tracklists media association, then searches 1001Tracklists by the inspected title/uploader before recognition. It never downloads a remote source set. Use --full only when gapless AudD billing is acceptable.",
   },
   sync: {
-    cwd: import.meta.dirname,
-    include: ["../skills/*"],
     suggestions: [
       "resolve a YouTube DJ set into a versioned track manifest",
       "find the 1001Tracklists entry for a YouTube URL",
@@ -425,7 +423,7 @@ const cli = Cli.create("tracks", {
 cli.command("resolve", {
   aliases: ["identify"],
   description:
-    "Resolve a set through timestamped metadata, 1001Tracklists, AudD, or ACRCloud without downloading a remote set.",
+    "Resolve a set by inspecting its URL, reading timestamped metadata, matching 1001Tracklists by URL then title/uploader, and only then using recognition—without downloading the remote set.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud URL or local audio file") }),
   options: identifyOptions,
   env: providerEnv,
@@ -438,7 +436,8 @@ cli.command("resolve", {
   examples: [
     {
       args: { source: "https://www.youtube.com/watch?v=vtJ100Znqw0" },
-      description: "Read timestamped metadata, then use configured database/recognition fallbacks",
+      description:
+        "Inspect the YouTube title/uploader, read timestamps, then match 1001Tracklists by URL or title before recognition",
     },
     {
       args: { source: "set.mp3" },
