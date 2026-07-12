@@ -40,6 +40,14 @@ export function tracklistFromDescription(
   if (!metadata.description) return undefined;
   const parsed = parseDescriptionTracklist(metadata.description);
   if (parsed.tracks.length < 2 || parsed.identifiedLines < 1) return undefined;
+  const tracks = parsed.tracks.map((track, index) => {
+    const nextStart = parsed.tracks[index + 1]?.startSeconds ?? metadata.durationSeconds;
+    return nextStart !== undefined &&
+      track.startSeconds !== undefined &&
+      nextStart > track.startSeconds
+      ? { ...track, endSeconds: nextStart }
+      : track;
+  });
   const unresolvedCount = parsed.tracks.filter(
     (track) => track.isId || !track.artist || !track.title,
   ).length;
@@ -54,7 +62,7 @@ export function tracklistFromDescription(
       ? {}
       : { durationSeconds: metadata.durationSeconds }),
     complete: true,
-    tracks: parsed.tracks,
+    tracks,
     ...(unresolvedCount
       ? {
           warnings: [
@@ -66,7 +74,8 @@ export function tracklistFromDescription(
 }
 
 function parseTimestampedLine(line: string): { seconds: number; text: string } | undefined {
-  const leading = line.match(
+  const normalizedLine = line.replace(/^\s*\d{1,3}\s*[.)]\s*/, "");
+  const leading = normalizedLine.match(
     /^\s*[[(]?((?:\d{1,3}:)?\d{1,2}:\d{2}(?:\.\d+)?)[\])]?\s*(?:[-–—|:]\s*)?(.*)$/,
   );
   if (leading) {
@@ -75,7 +84,9 @@ function parseTimestampedLine(line: string): { seconds: number; text: string } |
     if (seconds !== undefined && text) return { seconds, text };
   }
 
-  const trailing = line.match(/^\s*(.*?)\s*[[(]((?:\d{1,3}:)?\d{1,2}:\d{2}(?:\.\d+)?)[\])]\s*$/);
+  const trailing = normalizedLine.match(
+    /^\s*(.*?)\s*[[(]((?:\d{1,3}:)?\d{1,2}:\d{2}(?:\.\d+)?)[\])]\s*$/,
+  );
   if (!trailing) return undefined;
   const seconds = parseTimestamp(trailing[2]);
   const text = cleanTrackText(trailing[1] ?? "");

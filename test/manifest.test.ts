@@ -170,6 +170,53 @@ describe("pipeline manifests", () => {
     });
   });
 
+  test("accepts a provider URL separately from the source-media URL", () => {
+    const manifest = cloneManifest();
+    manifest.tracklist.url = "https://www.1001tracklists.com/tracklist/example.html";
+
+    expect(parseManifest(manifest).tracklist.url).toBe(manifest.tracklist.url);
+  });
+
+  test("maps a 1001Tracklists page separately from its source set", () => {
+    const manifest = createManifest({
+      ...tracklist(),
+      source: "https://soundcloud.com/dj/example-set",
+      provider: "1001tracklists",
+      url: "https://www.1001tracklists.com/tracklist/example.html",
+    });
+
+    expect(manifest.source.url).toBe("https://soundcloud.com/dj/example-set");
+    expect(manifest.tracklist.url).toBe("https://www.1001tracklists.com/tracklist/example.html");
+  });
+
+  test("does not mislabel a directly requested 1001Tracklists page as source media", () => {
+    const page = "https://www.1001tracklists.com/tracklist/example.html";
+    const manifest = createManifest({
+      ...tracklist(),
+      source: page,
+      provider: "1001tracklists",
+      url: page,
+    });
+
+    expect(manifest.source).not.toHaveProperty("url");
+    expect(manifest.tracklist.url).toBe(page);
+  });
+
+  test("rejects a Rekordbox playlist artifact until every entry is imported", () => {
+    const manifest = cloneManifest();
+    manifest.artifacts.rekordbox = {
+      target: "rekordbox-db",
+      dbPath: "/rekordbox/master.db",
+      folderName: "DJ Sets I Like",
+      folderId: "folder-1",
+      playlistName: "Set [tracks-ts]",
+      playlistId: "playlist-1",
+      backupDirectory: "/backups/one",
+    };
+
+    expectInvalid(manifest, "$.entries[0].rekordbox.status");
+  });
+
   test("round-trips JSON and accepts completed pipeline states", () => {
     const manifest = cloneManifest();
     const spotifyCandidate = {
@@ -180,6 +227,7 @@ describe("pipeline manifests", () => {
       name: "Track",
       artists: ["Artist"],
       album: "Album",
+      releaseDate: "2026-01-02",
       durationMs: 200_000,
       explicit: false,
       isrc: "USAAA2600001",
@@ -238,6 +286,48 @@ describe("pipeline manifests", () => {
 
     const json = JSON.parse(JSON.stringify(manifest)) as unknown;
     expect(parseManifest(json)).toEqual(manifest);
+  });
+
+  test("accepts source clips, alternative downloads, and multiple Rekordbox rows", () => {
+    const manifest = cloneManifest();
+    manifest.entries[0]!.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "ytdlp",
+        kind: "source-set-clip",
+        mediaPath: "/music/clip.mp3",
+        files: ["/music/clip.mp3"],
+        source: "https://soundcloud.com/dj/set",
+        sha256: "a".repeat(64),
+        clip: {
+          sourceSetUrl: "https://soundcloud.com/dj/set",
+          sourceSetTitle: "DJ Set",
+          startSeconds: 120,
+          endSeconds: 300,
+          containsTransitions: true,
+          qualityNote: "Lossy set recording; transitions may be present",
+        },
+      },
+      alternatives: [
+        {
+          backend: "ytdlp",
+          kind: "individual",
+          mediaPath: "/music/alternative.m4a",
+          files: ["/music/alternative.m4a"],
+          source: "https://www.youtube.com/watch?v=alternative",
+          spotifyId: "spotify-alternative",
+          isrc: "USAAA2600002",
+        },
+      ],
+    };
+    manifest.entries[0]!.rekordbox = {
+      status: "imported",
+      target: "rekordbox-db",
+      dbContentIds: ["content-1", "content-2"],
+      playlistMembershipIds: ["membership-1", "membership-2"],
+    };
+
+    expect(parseManifest(JSON.parse(JSON.stringify(manifest)))).toEqual(manifest);
   });
 
   test("preserves ambiguous Spotify candidates for manual selection", () => {

@@ -58,6 +58,7 @@ describe("description tracklists", () => {
     ["0:00 Artist — Title", "Artist", "Title"],
     ["[01:02] 3) Artist | Title", "Artist", "Title"],
     ["Artist - Title (01:02:03)", "Artist", "Title"],
+    ["12. 48:33 Artist - Title", "Artist", "Title"],
   ])("accepts common line form %s", (line, artist, title) => {
     expect(parseDescriptionTracklist(line).tracks[0]).toMatchObject({ artist, title });
   });

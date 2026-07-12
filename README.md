@@ -5,9 +5,9 @@ Metadata-first TypeScript resolver for DJ sets.
 Give `tracks` a public YouTube/SoundCloud set URL, a 1001Tracklists URL, or a local audio file. It returns a versioned, nested manifest: set metadata at the root; ordered tracks, cue times, IDs, overlaps, provider metadata, and downstream search queries underneath.
 
 > [!IMPORTANT]
-> `tracks` never downloads a remote source set. Remote YouTube/SoundCloud resolution begins with metadata-only `ytdlp-ts inspect`. 1001Tracklists lookup transfers JSON only. AudD Enterprise receives the URL directly. AudD Standard and ACRCloud clip sampling accept local files only.
+> `tracks resolve` never downloads a remote source set. Remote YouTube/SoundCloud resolution begins with metadata-only `ytdlp-ts inspect`. A later, explicit acquisition run may cache the set once when cue-bounded extraction is the only usable source for an ID, unreleased edit, or otherwise unavailable track. Every extract retains its source URL, range, quality warning, and checksum.
 
-`tracks resolve` also does not acquire the identified songs. Individual acquisition and Rekordbox handoff are separate, coordinated steps described in [Pipeline](#pipeline).
+`tracks resolve` also does not acquire the identified songs. The library pipeline composes `spots`, `slsk-ts`, `ytdlp-ts`, and `rekordbox-ts` directly around the durable manifest; it does not shell between their CLIs. Individual acquisition and Rekordbox handoff remain explicit, resumable stages described in [Pipeline](#pipeline).
 
 ## Quick start
 
@@ -21,11 +21,14 @@ pnpm build
 pnpm link --global
 ```
 
-Build `ytdlp-ts` in the sibling checkout first. `tracks` discovers `../ytdlp-ts/dist/cli.js`; use `YTDLP_TS_PATH` for another location.
+Build `ytdlp-ts` in the sibling checkout first. `tracks` discovers `../ytdlp-ts/dist/cli.js`; use `YTDLP_TS_PATH` for another location. Full library orchestration also uses built sibling checkouts of `spots`, `slsk-ts`, and `rekordbox-ts`, injected as module objects rather than declared as non-portable file dependencies.
 
 ```sh
 pnpm --dir ../ytdlp-ts install
 pnpm --dir ../ytdlp-ts build
+pnpm --dir ../spots build
+pnpm --dir ../slsk-ts build
+pnpm --dir ../rekordbox-ts build
 
 tracks doctor
 tracks providers
@@ -256,28 +259,32 @@ Spotify playlists ── spots ─────────┤
        slsk-ts search/download               ytdlp-ts single-track fallback
        preferred individual file             selected track URL; no playlist
                └────────────────────┬───────────────────┘
+                                    │ unavailable/ID only
+                                    ├── bounded annotated source-set clip
                                     ▼
                          ordered local audio files
                                     │
                                     ▼
-                   rekordbox-ts collection XML + M3U8
+                   rekordbox-ts encrypted master.db
 ```
 
-| Sibling                                                   | Responsibility                                                                             |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`spots`](https://github.com/gakonst/spots)               | Pull the user's Spotify playlists; enrich or verify track metadata                         |
-| `tracks-ts`                                               | Resolve one set into the nested manifest; no acquisition                                   |
-| [`slsk-ts`](https://github.com/gakonst/slsk-ts)           | Preferred search and resumable download of each individual track                           |
-| [`ytdlp-ts`](https://github.com/gakonst/ytdlp-ts)         | Metadata-only set inspection; selected single-track acquisition fallback                   |
-| [`rekordbox-ts`](https://github.com/gakonst/rekordbox-ts) | Collection XML/library handoff after local files exist; the skill also writes ordered M3U8 |
+| Sibling                                                   | Responsibility                                                                      |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [`spots`](https://github.com/gakonst/spots)               | Pull the user's Spotify playlists; enrich or verify track metadata                  |
+| `tracks-ts`                                               | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
+| [`slsk-ts`](https://github.com/gakonst/slsk-ts)           | Preferred search and resumable download of each individual track                    |
+| [`ytdlp-ts`](https://github.com/gakonst/ytdlp-ts)         | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
+| [`rekordbox-ts`](https://github.com/gakonst/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
 
 The boundary is deliberate:
 
 - `tracks resolve` currently implements resolution and manifest creation.
 - It does not call `spots`, `slsk download`, `ytdlp-ts download`, or Rekordbox mutation commands.
-- The bundled skill coordinates those CLIs, records selected sources and local paths under each track's `acquisition`, and leaves unresolved IDs visible.
-- `slsk-ts` is preferred. A `ytdlp-ts` fallback must target a reviewed URL for one track and use `--no-playlist`; it must never fall back to downloading the source set.
-- Rekordbox XML/M3U8 generation begins only after individual files are present and validated.
+- The bundled skill coordinates library calls, records selected sources and local paths under each track's `acquisition`, and leaves unresolved IDs visible.
+- `slsk-ts` is preferred. A `ytdlp-ts` individual fallback targets a scored canonical track URL with playlists disabled. True recording ambiguities remain distinct alternatives and are all acquired.
+- Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
+- If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
+- Direct Rekordbox import begins only after all planned files are present and checksummed. It requires explicit approval, stopped Rekordbox processes, an exclusive backup of the database and companion files, one transaction, and post-commit integrity/membership verification.
 
 Illustrative individual-track calls—not an automatic `tracks` command:
 
@@ -289,7 +296,7 @@ ytdlp-ts inspect "$SELECTED_TRACK_URL" --no-playlist --format json
 ytdlp-ts download "$SELECTED_TRACK_URL" \
   --no-playlist \
   --extract-audio \
-  --audio-format flac \
+  --audio-format m4a \
   --paths ./tracks
 ```
 
@@ -356,7 +363,11 @@ console.log(
 );
 ```
 
-Provider clients and pure parsers are exported for custom orchestration: `Tracklists1001Client`, `AudDClient`, `AcrCloudClient`, `parseDescriptionTracklist`, `parseEnterpriseResult`, `buildTimeline`, `createManifest`, and `parseManifest`.
+Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `rekordbox-ts` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+
+The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject the sibling module objects when running it elsewhere.
+
+Provider clients and pure parsers remain exported for custom orchestration: `Tracklists1001Client`, `AudDClient`, `AcrCloudClient`, `parseDescriptionTracklist`, `parseEnterpriseResult`, `buildTimeline`, `createManifest`, and `parseManifest`.
 
 ## Accuracy and safety
 

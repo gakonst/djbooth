@@ -1,4 +1,5 @@
 import { TracksError } from "./errors.js";
+import { is1001Url, isHttpUrl } from "./media.js";
 import { parseTimestamp } from "./time.js";
 import type {
   RecognitionMoment,
@@ -40,6 +41,7 @@ export type ManifestSource = {
 
 export type ManifestTracklist = {
   provider: RecognitionProvider;
+  url?: string;
   complete: boolean;
   sampledEverySeconds?: number;
   matches?: RecognitionMoment[];
@@ -86,6 +88,8 @@ export type SpotifyCandidate = {
   name: string;
   artists: string[];
   album?: string;
+  albumArtists?: string[];
+  releaseDate?: string;
   durationMs?: number;
   explicit?: boolean;
   isrc?: string;
@@ -103,6 +107,8 @@ export type SpotifyState =
       name?: string;
       artists?: string[];
       album?: string;
+      albumArtists?: string[];
+      releaseDate?: string;
       durationMs?: number;
       explicit?: boolean;
       isrc?: string;
@@ -114,6 +120,7 @@ export type SpotifyState =
   | { status: "failed"; query?: string; error: PipelineError };
 
 export type AcquisitionBackend = "slsk" | "ytdlp";
+export type AcquisitionKind = "individual" | "source-set-clip";
 
 export type AcquisitionCandidate = {
   backend: AcquisitionBackend;
@@ -127,11 +134,22 @@ export type AcquisitionCandidate = {
 
 export type AcquisitionDownload = {
   backend: AcquisitionBackend;
+  kind?: AcquisitionKind;
   mediaPath: string;
   files: string[];
   source?: string;
   engine?: "native" | "reference";
   sha256?: string;
+  spotifyId?: string;
+  isrc?: string;
+  clip?: {
+    sourceSetUrl: string;
+    sourceSetTitle?: string;
+    startSeconds: number;
+    endSeconds: number;
+    containsTransitions: boolean;
+    qualityNote: string;
+  };
 };
 
 export type AcquisitionState =
@@ -150,6 +168,7 @@ export type AcquisitionState =
       candidates?: AcquisitionCandidate[];
       selected?: AcquisitionCandidate;
       download: AcquisitionDownload;
+      alternatives?: AcquisitionDownload[];
     }
   | { status: "skipped"; reason: string }
   | {
@@ -170,6 +189,8 @@ export type RekordboxState =
       xmlTrackId?: number;
       dbContentId?: string;
       playlistMembershipId?: string;
+      dbContentIds?: string[];
+      playlistMembershipIds?: string[];
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; target?: RekordboxTarget; error: PipelineError };
@@ -192,6 +213,23 @@ export type ManifestArtifacts = {
   downloadDirectory?: string;
   m3u8?: string;
   rekordboxXml?: string;
+  sourceSet?: {
+    url: string;
+    path: string;
+    sha256: string;
+    durationSeconds: number;
+    codec: string;
+    bitrate: number;
+  };
+  rekordbox?: {
+    target: "rekordbox-db";
+    dbPath: string;
+    folderName: string;
+    folderId: string;
+    playlistName: string;
+    playlistId: string;
+    backupDirectory: string;
+  };
 };
 
 export type SetManifest = {
@@ -206,6 +244,13 @@ export type SetManifest = {
 };
 
 export function createManifest(tracklist: Tracklist): SetManifest {
+  const providerUrl = tracklist.provider === "1001tracklists" ? tracklist.url : undefined;
+  const sourceUrl =
+    tracklist.provider === "1001tracklists"
+      ? isHttpUrl(tracklist.source) && !is1001Url(tracklist.source)
+        ? tracklist.source
+        : undefined
+      : tracklist.url;
   const entries = tracklist.tracks.map((track) => {
     const status = isUnidentified(track) ? "unidentified" : "identified";
     const searchQuery = status === "identified" ? trackSearchQuery(track)! : undefined;
@@ -246,7 +291,7 @@ export function createManifest(tracklist: Tracklist): SetManifest {
     source: {
       input: tracklist.source,
       ...(tracklist.sourceId === undefined ? {} : { id: tracklist.sourceId }),
-      ...(tracklist.url === undefined ? {} : { url: tracklist.url }),
+      ...(sourceUrl === undefined ? {} : { url: sourceUrl }),
       ...(tracklist.title === undefined ? {} : { title: tracklist.title }),
       ...(tracklist.uploader === undefined ? {} : { uploader: tracklist.uploader }),
       ...(tracklist.date === undefined ? {} : { date: tracklist.date }),
@@ -257,6 +302,7 @@ export function createManifest(tracklist: Tracklist): SetManifest {
     },
     tracklist: {
       provider: tracklist.provider,
+      ...(providerUrl === undefined ? {} : { url: providerUrl }),
       complete: tracklist.complete,
       ...(tracklist.sampledEverySeconds === undefined
         ? {}
@@ -303,6 +349,24 @@ export function parseManifest(value: unknown): SetManifest {
   stringArray(root.warnings, "$.warnings");
   errorArray(root.errors, "$.errors");
   validateArtifacts(root.artifacts, "$.artifacts");
+  const rekordboxArtifact = (root.artifacts as ManifestArtifacts).rekordbox;
+  if (rekordboxArtifact) {
+    (entries as ResolvedTrack[]).forEach((entry, index) => {
+      if (entry.rekordbox.status !== "imported" || entry.rekordbox.target !== "rekordbox-db") {
+        invalid(
+          `$.entries[${index}].rekordbox.status`,
+          "must be imported when artifacts.rekordbox is present",
+        );
+      }
+      if (
+        entry.rekordbox.status === "imported" &&
+        entry.rekordbox.artifact !== undefined &&
+        entry.rekordbox.artifact !== rekordboxArtifact.dbPath
+      ) {
+        invalid(`$.entries[${index}].rekordbox.artifact`, "must match artifacts.rekordbox.dbPath");
+      }
+    });
+  }
   return value as SetManifest;
 }
 
@@ -369,11 +433,13 @@ function validateSource(value: unknown, path: string): void {
 function validateTracklist(value: unknown, path: string): void {
   const record = strictObject(value, path, [
     "provider",
+    "url",
     "complete",
     "sampledEverySeconds",
     "matches",
   ]);
   oneOf(record.provider, ["description", "1001tracklists", "audd", "acrcloud"], `${path}.provider`);
+  optionalString(record, "url", path);
   boolean(record.complete, `${path}.complete`);
   if (record.sampledEverySeconds !== undefined)
     positiveNumber(record.sampledEverySeconds, `${path}.sampledEverySeconds`);
@@ -437,6 +503,17 @@ function validateEntry(value: unknown, path: string): { id: string; order: numbe
   validateSpotify(record.spotify, `${path}.spotify`);
   validateAcquisition(record.acquisition, `${path}.acquisition`);
   validateRekordbox(record.rekordbox, `${path}.rekordbox`);
+  const acquisition = record.acquisition as AcquisitionState;
+  const rekordbox = record.rekordbox as RekordboxState;
+  if (
+    (rekordbox.status === "exported" || rekordbox.status === "imported") &&
+    acquisition.status !== "downloaded"
+  ) {
+    invalid(`${path}.rekordbox.status`, "requires acquisition.status to equal downloaded");
+  }
+  if (rekordbox.status === "imported" && rekordbox.target !== "rekordbox-db") {
+    invalid(`${path}.rekordbox.target`, "must equal rekordbox-db when status is imported");
+  }
   stringArray(record.warnings, `${path}.warnings`);
   errorArray(record.errors, `${path}.errors`);
   return { id, order };
@@ -543,6 +620,8 @@ function validateSpotify(value: unknown, path: string): void {
           "name",
           "artists",
           "album",
+          "albumArtists",
+          "releaseDate",
           "durationMs",
           "explicit",
           "isrc",
@@ -563,8 +642,13 @@ function validateSpotify(value: unknown, path: string): void {
     score1(record.score, `${path}.score`);
     nonemptyString(record.id, `${path}.id`);
     nonemptyString(record.uri, `${path}.uri`);
-    for (const key of ["url", "name", "album", "isrc"]) optionalString(record, key, path);
+    for (const key of ["url", "name", "album", "releaseDate", "isrc"])
+      optionalString(record, key, path);
     if (record.artists !== undefined) stringArray(record.artists, `${path}.artists`);
+    if (record.albumArtists !== undefined) {
+      const albumArtists = stringArray(record.albumArtists, `${path}.albumArtists`);
+      if (!albumArtists.length) invalid(`${path}.albumArtists`, "must contain at least one artist");
+    }
     if (record.durationMs !== undefined) positiveInteger(record.durationMs, `${path}.durationMs`);
     if (record.explicit !== undefined) boolean(record.explicit, `${path}.explicit`);
     if (record.candidates !== undefined)
@@ -597,6 +681,8 @@ function validateSpotifyCandidates(value: unknown, path: string): unknown[] {
       "name",
       "artists",
       "album",
+      "albumArtists",
+      "releaseDate",
       "durationMs",
       "explicit",
       "isrc",
@@ -609,6 +695,12 @@ function validateSpotifyCandidates(value: unknown, path: string): unknown[] {
     const artists = stringArray(record.artists, `${candidatePath}.artists`);
     if (!artists.length) invalid(`${candidatePath}.artists`, "must contain at least one artist");
     optionalString(record, "album", candidatePath);
+    if (record.albumArtists !== undefined) {
+      const albumArtists = stringArray(record.albumArtists, `${candidatePath}.albumArtists`);
+      if (!albumArtists.length)
+        invalid(`${candidatePath}.albumArtists`, "must contain at least one artist");
+    }
+    optionalString(record, "releaseDate", candidatePath);
     if (record.durationMs !== undefined)
       positiveInteger(record.durationMs, `${candidatePath}.durationMs`);
     if (record.explicit !== undefined) boolean(record.explicit, `${candidatePath}.explicit`);
@@ -630,7 +722,7 @@ function validateAcquisition(value: unknown, path: string): void {
       : status === "selected"
         ? ["status", "query", "candidates", "selected"]
         : status === "downloaded"
-          ? ["status", "query", "candidates", "selected", "download"]
+          ? ["status", "query", "candidates", "selected", "download", "alternatives"]
           : status === "skipped"
             ? ["status", "reason"]
             : status === "failed"
@@ -657,6 +749,15 @@ function validateAcquisition(value: unknown, path: string): void {
     if (candidates && selected)
       requireCandidateMembership(candidates, selected, `${path}.selected`);
     const download = validateDownload(record.download, `${path}.download`);
+    const alternatives =
+      record.alternatives === undefined
+        ? []
+        : array(record.alternatives, `${path}.alternatives`).map((item, index) =>
+            validateDownload(item, `${path}.alternatives[${index}]`),
+          );
+    const mediaPaths = [download.mediaPath, ...alternatives.map((item) => item.mediaPath)];
+    if (new Set(mediaPaths).size !== mediaPaths.length)
+      invalid(`${path}.alternatives`, "must use distinct mediaPath values");
     if (selected && download.backend !== selected.backend)
       invalid(`${path}.download.backend`, "must match the selected candidate backend");
     if (selected && download.source && download.source !== selected.source)
@@ -722,19 +823,30 @@ function requireCandidateMembership(
     invalid(path, "must match a candidate by backend, id, and source");
 }
 
-function validateDownload(
-  value: unknown,
-  path: string,
-): { backend: AcquisitionBackend; source?: string } {
+type ValidatedDownload = {
+  backend: AcquisitionBackend;
+  mediaPath: string;
+  source?: string;
+};
+
+function validateDownload(value: unknown, path: string): ValidatedDownload {
   const record = strictObject(value, path, [
     "backend",
+    "kind",
     "mediaPath",
     "files",
     "source",
     "engine",
     "sha256",
+    "spotifyId",
+    "isrc",
+    "clip",
   ]);
   const backend = oneOf(record.backend, ["slsk", "ytdlp"], `${path}.backend`);
+  const kind =
+    record.kind === undefined
+      ? "individual"
+      : oneOf(record.kind, ["individual", "source-set-clip"], `${path}.kind`);
   const mediaPath = nonemptyString(record.mediaPath, `${path}.mediaPath`);
   if (!isAbsolutePath(mediaPath)) invalid(`${path}.mediaPath`, "must be an absolute path");
   const files = stringArray(record.files, `${path}.files`);
@@ -744,16 +856,48 @@ function validateDownload(
   });
   if (!files.includes(mediaPath)) invalid(`${path}.files`, "must include mediaPath");
   optionalString(record, "source", path);
+  optionalString(record, "spotifyId", path);
+  optionalString(record, "isrc", path);
   if (record.engine !== undefined) oneOf(record.engine, ["native", "reference"], `${path}.engine`);
   if (record.sha256 !== undefined) {
     const sha256 = nonemptyString(record.sha256, `${path}.sha256`);
     if (!/^[a-f\d]{64}$/iu.test(sha256))
       invalid(`${path}.sha256`, "must be 64 hexadecimal characters");
   }
+  if (kind === "source-set-clip") {
+    if (record.source === undefined) invalid(`${path}.source`, "is required for a source-set clip");
+    validateSourceClip(record.clip, `${path}.clip`);
+  } else if (record.clip !== undefined) {
+    invalid(`${path}.clip`, "is only allowed for a source-set clip");
+  }
   return {
     backend,
+    mediaPath,
     ...(typeof record.source === "string" ? { source: record.source } : {}),
   };
+}
+
+function validateSourceClip(value: unknown, path: string): void {
+  const record = strictObject(value, path, [
+    "sourceSetUrl",
+    "sourceSetTitle",
+    "startSeconds",
+    "endSeconds",
+    "containsTransitions",
+    "qualityNote",
+  ]);
+  nonemptyString(record.sourceSetUrl, `${path}.sourceSetUrl`);
+  optionalString(record, "sourceSetTitle", path);
+  nonnegativeNumber(record.startSeconds, `${path}.startSeconds`);
+  positiveNumber(record.endSeconds, `${path}.endSeconds`);
+  if (
+    typeof record.startSeconds === "number" &&
+    typeof record.endSeconds === "number" &&
+    record.endSeconds <= record.startSeconds
+  )
+    invalid(`${path}.endSeconds`, "must follow startSeconds");
+  boolean(record.containsTransitions, `${path}.containsTransitions`);
+  nonemptyString(record.qualityNote, `${path}.qualityNote`);
 }
 
 function validateRekordbox(value: unknown, path: string): void {
@@ -765,7 +909,16 @@ function validateRekordbox(value: unknown, path: string): void {
   );
   const keys =
     status === "exported" || status === "imported"
-      ? ["status", "target", "artifact", "xmlTrackId", "dbContentId", "playlistMembershipId"]
+      ? [
+          "status",
+          "target",
+          "artifact",
+          "xmlTrackId",
+          "dbContentId",
+          "playlistMembershipId",
+          "dbContentIds",
+          "playlistMembershipIds",
+        ]
       : status === "skipped"
         ? ["status", "reason"]
         : status === "failed"
@@ -778,13 +931,67 @@ function validateRekordbox(value: unknown, path: string): void {
     if (record.xmlTrackId !== undefined) positiveInteger(record.xmlTrackId, `${path}.xmlTrackId`);
     optionalString(record, "dbContentId", path);
     optionalString(record, "playlistMembershipId", path);
+    const dbContentIds =
+      record.dbContentIds === undefined
+        ? undefined
+        : stringArray(record.dbContentIds, `${path}.dbContentIds`);
+    const playlistMembershipIds =
+      record.playlistMembershipIds === undefined
+        ? undefined
+        : stringArray(record.playlistMembershipIds, `${path}.playlistMembershipIds`);
     if (
       record.artifact === undefined &&
       record.xmlTrackId === undefined &&
       record.dbContentId === undefined &&
-      record.playlistMembershipId === undefined
+      record.playlistMembershipId === undefined &&
+      record.dbContentIds === undefined &&
+      record.playlistMembershipIds === undefined
     )
       invalid(path, "must include an artifact or Rekordbox identifier");
+    if (status === "imported") {
+      const contentId =
+        record.dbContentId === undefined
+          ? undefined
+          : nonemptyString(record.dbContentId, `${path}.dbContentId`);
+      const membershipId =
+        record.playlistMembershipId === undefined
+          ? undefined
+          : nonemptyString(record.playlistMembershipId, `${path}.playlistMembershipId`);
+      if (!contentId && !dbContentIds?.length) {
+        invalid(`${path}.dbContentIds`, "must identify imported content rows");
+      }
+      if (!membershipId && !playlistMembershipIds?.length) {
+        invalid(`${path}.playlistMembershipIds`, "must identify imported membership rows");
+      }
+      if (dbContentIds && !dbContentIds.length) {
+        invalid(`${path}.dbContentIds`, "must not be empty when present");
+      }
+      if (playlistMembershipIds && !playlistMembershipIds.length) {
+        invalid(`${path}.playlistMembershipIds`, "must not be empty when present");
+      }
+      if (dbContentIds && new Set(dbContentIds).size !== dbContentIds.length) {
+        invalid(`${path}.dbContentIds`, "must contain distinct IDs");
+      }
+      if (
+        playlistMembershipIds &&
+        new Set(playlistMembershipIds).size !== playlistMembershipIds.length
+      ) {
+        invalid(`${path}.playlistMembershipIds`, "must contain distinct IDs");
+      }
+      if (
+        dbContentIds &&
+        playlistMembershipIds &&
+        dbContentIds.length !== playlistMembershipIds.length
+      ) {
+        invalid(`${path}.playlistMembershipIds`, "must match dbContentIds length");
+      }
+      if (contentId && dbContentIds && dbContentIds[0] !== contentId) {
+        invalid(`${path}.dbContentId`, "must equal the first dbContentIds value");
+      }
+      if (membershipId && playlistMembershipIds && playlistMembershipIds[0] !== membershipId) {
+        invalid(`${path}.playlistMembershipId`, "must equal the first playlistMembershipIds value");
+      }
+    }
   } else if (status === "skipped") {
     nonemptyString(record.reason, `${path}.reason`);
   } else if (status === "failed") {
@@ -804,9 +1011,55 @@ function validateArtifacts(value: unknown, path: string): void {
     "downloadDirectory",
     "m3u8",
     "rekordboxXml",
+    "sourceSet",
+    "rekordbox",
   ]);
   for (const key of ["root", "manifest", "downloadDirectory", "m3u8", "rekordboxXml"])
     optionalString(record, key, path);
+  if (record.sourceSet !== undefined) {
+    const source = strictObject(record.sourceSet, `${path}.sourceSet`, [
+      "url",
+      "path",
+      "sha256",
+      "durationSeconds",
+      "codec",
+      "bitrate",
+    ]);
+    nonemptyString(source.url, `${path}.sourceSet.url`);
+    const sourcePath = nonemptyString(source.path, `${path}.sourceSet.path`);
+    if (!isAbsolutePath(sourcePath)) invalid(`${path}.sourceSet.path`, "must be an absolute path");
+    const sha256 = nonemptyString(source.sha256, `${path}.sourceSet.sha256`);
+    if (!/^[a-f\d]{64}$/iu.test(sha256))
+      invalid(`${path}.sourceSet.sha256`, "must be 64 hexadecimal characters");
+    positiveNumber(source.durationSeconds, `${path}.sourceSet.durationSeconds`);
+    nonemptyString(source.codec, `${path}.sourceSet.codec`);
+    positiveInteger(source.bitrate, `${path}.sourceSet.bitrate`);
+  }
+  if (record.rekordbox !== undefined) {
+    const rekordbox = strictObject(record.rekordbox, `${path}.rekordbox`, [
+      "target",
+      "dbPath",
+      "folderName",
+      "folderId",
+      "playlistName",
+      "playlistId",
+      "backupDirectory",
+    ]);
+    literal(rekordbox.target, "rekordbox-db", `${path}.rekordbox.target`);
+    const dbPath = nonemptyString(rekordbox.dbPath, `${path}.rekordbox.dbPath`);
+    if (!isAbsolutePath(dbPath)) invalid(`${path}.rekordbox.dbPath`, "must be an absolute path");
+    nonemptyString(rekordbox.folderName, `${path}.rekordbox.folderName`);
+    nonemptyString(rekordbox.folderId, `${path}.rekordbox.folderId`);
+    nonemptyString(rekordbox.playlistName, `${path}.rekordbox.playlistName`);
+    nonemptyString(rekordbox.playlistId, `${path}.rekordbox.playlistId`);
+    const backupDirectory = nonemptyString(
+      rekordbox.backupDirectory,
+      `${path}.rekordbox.backupDirectory`,
+    );
+    if (!isAbsolutePath(backupDirectory)) {
+      invalid(`${path}.rekordbox.backupDirectory`, "must be an absolute path");
+    }
+  }
 }
 
 function errorArray(value: unknown, path: string): PipelineError[] {

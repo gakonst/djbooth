@@ -138,6 +138,8 @@ const spotifyCandidateOutput = z.object({
   name: z.string(),
   artists: z.array(z.string()),
   album: z.string().optional(),
+  albumArtists: z.array(z.string()).optional(),
+  releaseDate: z.string().optional(),
   durationMs: z.number().int().positive().optional(),
   explicit: z.boolean().optional(),
   isrc: z.string().optional(),
@@ -155,6 +157,8 @@ const spotifyOutput = z.union([
     name: z.string().optional(),
     artists: z.array(z.string()).optional(),
     album: z.string().optional(),
+    albumArtists: z.array(z.string()).optional(),
+    releaseDate: z.string().optional(),
     durationMs: z.number().int().positive().optional(),
     explicit: z.boolean().optional(),
     isrc: z.string().optional(),
@@ -184,6 +188,28 @@ const acquisitionCandidateOutput = z.object({
   score: z.number().min(0).max(1).optional(),
 });
 
+const acquisitionDownloadOutput = z.object({
+  backend: z.enum(["slsk", "ytdlp"]),
+  kind: z.enum(["individual", "source-set-clip"]).optional(),
+  mediaPath: z.string(),
+  files: z.array(z.string()),
+  source: z.string().optional(),
+  engine: z.enum(["native", "reference"]).optional(),
+  sha256: z.string().optional(),
+  spotifyId: z.string().optional(),
+  isrc: z.string().optional(),
+  clip: z
+    .object({
+      sourceSetUrl: z.string(),
+      sourceSetTitle: z.string().optional(),
+      startSeconds: z.number().nonnegative(),
+      endSeconds: z.number().positive(),
+      containsTransitions: z.boolean(),
+      qualityNote: z.string(),
+    })
+    .optional(),
+});
+
 const acquisitionOutput = z.union([
   z.object({ status: z.literal("pending"), query: z.string().optional() }),
   z.object({
@@ -207,14 +233,8 @@ const acquisitionOutput = z.union([
     query: z.string().optional(),
     candidates: z.array(acquisitionCandidateOutput).optional(),
     selected: acquisitionCandidateOutput.optional(),
-    download: z.object({
-      backend: z.enum(["slsk", "ytdlp"]),
-      mediaPath: z.string(),
-      files: z.array(z.string()),
-      source: z.string().optional(),
-      engine: z.enum(["native", "reference"]).optional(),
-      sha256: z.string().optional(),
-    }),
+    download: acquisitionDownloadOutput,
+    alternatives: z.array(acquisitionDownloadOutput).optional(),
   }),
   z.object({ status: z.literal("skipped"), reason: z.string() }),
   z.object({
@@ -234,6 +254,8 @@ const rekordboxOutput = z.union([
     xmlTrackId: z.number().int().positive().optional(),
     dbContentId: z.string().optional(),
     playlistMembershipId: z.string().optional(),
+    dbContentIds: z.array(z.string()).optional(),
+    playlistMembershipIds: z.array(z.string()).optional(),
   }),
   z.object({ status: z.literal("skipped"), reason: z.string() }),
   z.object({
@@ -258,6 +280,7 @@ const manifestOutput = z.object({
   }),
   tracklist: z.object({
     provider: z.enum(["description", "1001tracklists", "audd", "acrcloud"]),
+    url: z.string().optional(),
     complete: z.boolean(),
     sampledEverySeconds: z.number().positive().optional(),
     matches: z.array(z.unknown()).optional(),
@@ -287,6 +310,27 @@ const manifestOutput = z.object({
     downloadDirectory: z.string().optional(),
     m3u8: z.string().optional(),
     rekordboxXml: z.string().optional(),
+    sourceSet: z
+      .object({
+        url: z.string(),
+        path: z.string(),
+        sha256: z.string(),
+        durationSeconds: z.number().positive(),
+        codec: z.string(),
+        bitrate: z.number().int().positive(),
+      })
+      .optional(),
+    rekordbox: z
+      .object({
+        target: z.literal("rekordbox-db"),
+        dbPath: z.string(),
+        folderName: z.string(),
+        folderId: z.string(),
+        playlistName: z.string(),
+        playlistId: z.string(),
+        backupDirectory: z.string(),
+      })
+      .optional(),
   }),
 });
 

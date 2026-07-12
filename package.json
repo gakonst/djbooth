@@ -2,7 +2,7 @@
   "name": "@gakonst/tracks",
   "version": "0.1.0",
   "private": true,
-  "description": "Resolve DJ sets into resumable track manifests without downloading the source set",
+  "description": "Resolve DJ sets into enriched tracks and Rekordbox playlists",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -43,6 +43,7 @@
     "validate": "pnpm check && pnpm build"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.10.0",
     "incur": "0.4.13"
   },
   "devDependencies": {

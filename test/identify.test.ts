@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { identify } from "../src/identify.js";
+import { createManifest } from "../src/manifest.js";
 
 describe("identify", () => {
   test("returns an existing 1001Tracklists result before recognition", async () => {
@@ -23,10 +24,22 @@ describe("identify", () => {
       fetch,
     });
     expect(result).toMatchObject({
+      source: "https://youtu.be/known",
       provider: "1001tracklists",
       title: "Known Set",
+      url: "https://www.1001tracklists.com/tracklist/set.html",
       complete: true,
       tracks: [{ order: 1, startSeconds: 12, artist: "A", title: "B" }],
+    });
+    expect(createManifest(result)).toMatchObject({
+      source: {
+        input: "https://youtu.be/known",
+        url: "https://youtu.be/known",
+      },
+      tracklist: {
+        provider: "1001tracklists",
+        url: "https://www.1001tracklists.com/tracklist/set.html",
+      },
     });
     expect(fetch).toHaveBeenCalledTimes(1);
   });

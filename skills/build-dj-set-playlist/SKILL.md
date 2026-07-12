@@ -1,35 +1,36 @@
 ---
 name: build-dj-set-playlist
-description: Resolve a YouTube, SoundCloud, 1001Tracklists, or local DJ set into a resumable track manifest; enrich identities with spots; acquire only identified individual tracks with slsk-ts or ytdlp-ts; and prepare an M3U8 or Rekordbox XML playlist with rekordbox-ts. Use when asked to turn a set, mix, tracklist URL, Spotify playlist, or existing manifest into local DJ-library files or a Rekordbox playlist without downloading the source set.
+description: Resolve a YouTube, SoundCloud, 1001Tracklists, or local DJ set into a resumable track manifest; enrich identities with spots; acquire releases with slsk-ts or ytdlp-ts; cue-extract unavailable tracks from a cached set when explicitly approved; and import an ordered playlist into the normal Rekordbox database with rekordbox-ts. Use when asked to turn a set, mix, tracklist URL, Spotify playlist, or existing manifest into local DJ-library files or a Rekordbox playlist.
 ---
 
 # Build DJ Set Playlist
 
-Build an auditable `set -> identities -> individual files -> playlist` pipeline. Treat the `tracks-ts` manifest as durable state. Never download a remote source set; inspect only its metadata or submit its URL to a configured remote recognition provider.
+Build an auditable `set -> identities -> audio files -> playlist` pipeline. Treat the `tracks-ts` manifest as durable state. Resolution is metadata-only. Acquisition may cache a source set once when the user explicitly permits cue-bounded recovery of IDs, unreleased edits, or otherwise unavailable tracks.
 
 ## Safety invariants
 
-- Never run `ytdlp-ts download` against the set URL.
+- Never download the set during resolution or use it when a suitable individual recording exists.
+- A source-set cache requires explicit approval and complete cues. Extract only bounded ranges, mark them as lossy/transition-bearing, retain source URL/range/checksum, and keep the cache until every clip verifies.
 - Never pass `ytsearch...` directly to `ytdlp-ts download`. Inspect candidates, choose one canonical single-track URL, inspect it, then download that URL.
-- Skip `unidentified`, `ambiguous`, intro, and overlap-only entries unless the user chooses them.
+- Skip intro and overlap-only entries unless the user chooses them. By default, preserve and acquire every distinct candidate for a true recording ambiguity; collapse duplicate releases sharing an ISRC and duration.
 - Use subprocess argument arrays, not shell interpolation, when implementing adapters.
 - Persist the manifest after every match, download, or export. Preserve user edits and completed states on resume.
 - Keep Spotify metadata-only. Prefer Soulseek for acquisition; use YouTube or SoundCloud only as a selected single-track fallback.
-- Default Rekordbox handoff to M3U8 or XML. Direct database writes require explicit user approval, Rekordbox closed, and a backup.
+- Direct database writes require explicit user approval, Rekordbox and its agent closed, shared manifest serialization, a database-scoped import lock, exclusive backups of `master.db`, WAL/SHM files when present, and `masterPlaylists6.xml`, followed by integrity verification.
 
 ## Component ownership
 
-| Component      | Owns                                                             | Must not own                                   |
-| -------------- | ---------------------------------------------------------------- | ---------------------------------------------- |
-| `tracks-ts`    | Set metadata, tracklist resolution, cues, manifest               | Remote set download                            |
-| `spots`        | Spotify playlist/track metadata and identity enrichment          | Audio acquisition                              |
-| `slsk-ts`      | Selected individual Soulseek file acquisition                    | Tracklist resolution                           |
-| `ytdlp-ts`     | Metadata, bounded candidate search, selected individual fallback | Source-set or automatic search-result download |
-| `rekordbox-ts` | M3U8/XML export and approved Rekordbox operations                | Identity guessing                              |
+| Component      | Owns                                                            | Must not own                                |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------- |
+| `tracks-ts`    | Set metadata, resolution, cues, manifest, pipeline coordination | Unannotated or unbounded source extraction  |
+| `spots`        | Spotify playlist/track metadata and identity enrichment         | Audio acquisition                           |
+| `slsk-ts`      | Selected individual Soulseek file acquisition                   | Tracklist resolution                        |
+| `ytdlp-ts`     | Metadata, bounded candidate search, selected fallback/cache     | Automatic unreviewed search-result download |
+| `rekordbox-ts` | Approved, backed-up normal encrypted database import            | Identity guessing                           |
 
 ## 1. Preflight
 
-Work from the sibling repositories' built CLIs or configured paths. Run:
+Import the sibling packages in one Node.js process for pipeline work. Their CLIs remain useful only for manual preflight and debugging. Run:
 
 ```sh
 tracks doctor --format json
@@ -72,7 +73,7 @@ Increment `--offset` until the response has no next page. Build the acquisition 
 
 ## 3. Enrich identities
 
-For each identified primary entry, query Spotify with `spots`:
+Create one `SpotifyOAuth`/`SpotifyClient` backed by `FileSessionStore` and reuse it for every entry. Search remains one request per identity. Spotify removed `GET /tracks` (Get Several Tracks) in February 2026; refresh known IDs with `GET /tracks/{id}` using bounded concurrency and the client's `Retry-After` handling. Equivalent manual diagnostics with `spots` are:
 
 ```sh
 spots api search --q "isrc:$ISRC" --type track --market US --limit 10 --format json
@@ -83,7 +84,7 @@ Use ISRC exact match first. Otherwise score normalized artist/title/mix plus dur
 
 ## 4. Acquire individual tracks
 
-Search Soulseek first:
+Create one `SoulseekClient` and search Soulseek first. Equivalent manual diagnostics are:
 
 ```sh
 slsk search "$ARTIST - $TITLE $MIX" --timeout 8 --max-results 100 --format json
@@ -92,7 +93,9 @@ slsk download "$USERNAME" "$REMOTE_FILE" "$DESTINATION" --resume --timeout 120 -
 
 Prefer lossless files with plausible duration and metadata. Do not infer quality from extension alone. Record the selected peer/file before download and the absolute output path plus SHA-256 after download.
 
-If Soulseek has no acceptable result, discover a bounded YouTube candidate set without media download:
+Preserve compatible Soulseek FLAC, MP3, and M4A containers. Convert WAV/AIFF to FLAC losslessly; transcode unsupported lossy containers to AAC only when Rekordbox compatibility requires it, and record that degradation.
+
+If Soulseek is unavailable or has no acceptable result, use one `ReferenceClient` from `@gakonst/ytdlp-ts` to discover a bounded YouTube candidate set without media download. Equivalent manual diagnostics are:
 
 ```sh
 ytdlp-ts inspect "ytsearch5:$ARTIST - $TITLE $MIX" --engine reference --flat-playlist --format json
@@ -109,29 +112,31 @@ ytdlp-ts download "$TRACK_URL" --engine reference --no-playlist \
 
 Cap concurrent downloads. Resume pending entries; never redownload an existing verified file.
 
-## 5. Prepare Rekordbox handoff
+## 5. Recover unavailable tracks from a set cache
 
-Prefer an M3U8 of absolute paths in manifest order:
+Only with explicit approval and complete cue boundaries, download one canonical set source through the `ytdlp-ts` library. Extract each missing track's `[startSeconds, endSeconds)` range with ffmpeg stream copy when the source codec/container permits. Tag it with `[Set Extract]`, source URL/title, range, checksum, and a warning that the lossy recording may contain transitions. Unknown slots need distinct timestamped titles. Verify every output before optionally removing the cache.
+
+## 6. Import into the normal Rekordbox database
+
+Use the `rekordbox-ts` library, not collection XML. Expand primary and alternative recordings in cue order. Before opening the encrypted database writable:
+
+1. Confirm both Rekordbox and `rekordboxAgent` are stopped.
+2. Hold the shared manifest lock and a database-path lock. Require a readable/writable `masterPlaylists6.xml`, then create an exclusive, checksummed backup directory containing it plus `master.db` and `master.db-wal`/`master.db-shm`/`master.db-journal` when present.
+3. Open `MasterDatabase` with writes enabled and the normal SQLCipher key path.
+4. Find or create the target playlist under the requested folder. Dedupe tracks only by exact permanent `FolderPath`, albums by name plus album artist, and memberships by playlist/content IDs.
+5. Add enriched artist/title/album/label/ISRC/release/comment metadata and commit once.
+6. Reopen read-only; require `PRAGMA quick_check = ok`, zero `foreign_key_check` rows, exact ordered membership paths, and well-formed sidecar XML with exactly one playlist node under the expected folder/type before marking the manifest imported. Persist the DB path, folder ID/name, playlist ID/name, and backup directory under `artifacts.rekordbox`.
+
+An M3U8 may still be emitted as a recovery artifact:
 
 ```sh
 NEXT_M3U8="${M3U8}.next"
-jq -e '([.entries[] | select(.acquisition.status == "downloaded")] | length) > 0 and all(.entries[] | select(.acquisition.status == "downloaded"); .acquisition.download.mediaPath as $p | ($p | startswith("/")) or ($p | test("^[A-Za-z]:[\\\\/]")))' "$MANIFEST" >/dev/null
-{ printf '#EXTM3U\n'; jq -r '.entries[] | select(.acquisition.status == "downloaded") | .acquisition.download.mediaPath' "$MANIFEST"; } > "$NEXT_M3U8"
+jq -e '([.entries[] | select(.acquisition.status == "downloaded")] | length) > 0' "$MANIFEST" >/dev/null
+{ printf '#EXTM3U\n'; jq -r '.entries[] | select(.acquisition.status == "downloaded") | .acquisition as $a | $a.download.mediaPath, ($a.alternatives[]?.mediaPath)' "$MANIFEST"; } > "$NEXT_M3U8"
 mv -f -- "$NEXT_M3U8" "$M3U8"
 ```
 
-For richer metadata, create Rekordbox XML:
-
-```sh
-rekordbox xml create "$XML" --name tracks-ts --version=0.1.0 --format json
-rekordbox xml playlist add "$XML" "$PLAYLIST" --key-type TrackID --format json
-rekordbox xml track add "$XML" "$ABS_PATH" --artist "$ARTIST" --name "$TITLE" --album "$ALBUM" --format json
-rekordbox xml playlist add-track "$XML" "$PLAYLIST" "$TRACK_ID" --format json
-```
-
-Use each `track.TrackID` returned by `track add`. Sanitize `/` in playlist names. Record export state and artifact paths. Tell the user to import the M3U8 via Rekordbox File -> Import -> Import Playlist, or configure and import the generated XML.
-
-## 6. Handoff
+## 7. Handoff
 
 Return: source/title, provider, resolved/unresolved counts, Spotify match counts, acquired/skipped/failed counts by backend, output directory, manifest path, playlist artifact, and any manual decisions. Never claim completion while identified entries remain pending unless the user chose a partial playlist.
 
@@ -146,6 +151,6 @@ Use only schema states accepted by `tracks manifest validate` and the exported `
 
 Do not mark `downloaded` without an absolute `mediaPath` included in `files`. Do not mark `exported` without its target and artifact or Rekordbox identifier. Append structured errors; preserve earlier warnings and user edits.
 
-Persist atomically: write and flush a sibling temporary manifest, run `tracks manifest validate "$NEXT_MANIFEST" --format json`, then rename it over the old file. On resume, preserve completed stages and verified files; retry only pending or explicitly selected failed stages; recompute SHA-256 when a file changes; serialize Rekordbox operations.
+Persist atomically with an expected-content/hash check: write and flush a sibling temporary manifest, verify the durable source did not change, run `tracks manifest validate "$NEXT_MANIFEST" --format json`, then rename it over the old file. On resume, preserve completed stages and verified files; retry only pending or explicitly selected failed stages; recompute SHA-256 when a file changes; serialize Rekordbox operations.
 
-Required environment by stage: `YTDLP_TS_PATH`/provider credentials for resolution; Spotify login or token for `spots`; `SLSK_USERNAME` and `SLSK_PASSWORD` for Soulseek; `REKORDBOX_DB_KEY` only for explicitly approved encrypted database access.
+Required environment by stage: `YTDLP_TS_PATH`/provider credentials for resolution; Spotify login or token for `spots`; `SLSK_USERNAME` and `SLSK_PASSWORD` for Soulseek. Direct database access uses rekordbox-ts's validated bundled key unless `REKORDBOX_DB_KEY` explicitly overrides it.
