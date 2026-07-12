@@ -65,8 +65,11 @@ For a zero-config local CodeMode MCP server, run:
 
 ```sh
 music --codemode-mcp
-# from this repository: pnpm music:mcp:code
+# from this repository: pnpm --silent music:mcp:code
 ```
+
+Use `pnpm --silent music:mcp` for the normal MCP from this repository. `--silent` keeps pnpm's
+script banner off the stdio protocol stream.
 
 It serves one `code` tool over stdio. Generated JavaScript runs inside Secure Exec with a virtual
 filesystem, denied network access, bounded execution time, and only the music tools bridged back to
