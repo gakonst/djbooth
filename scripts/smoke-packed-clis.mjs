@@ -174,7 +174,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
