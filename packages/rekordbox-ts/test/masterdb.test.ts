@@ -5,6 +5,8 @@ import { join } from "node:path";
 import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AnlzFile } from "../src/anlz/index.js";
+
 import {
   DatabaseRow,
   DjmdAlbum,
@@ -35,6 +37,24 @@ class DefaultRow extends DatabaseRow {
 
 const roots: Array<string> = [];
 const now = "2026-07-10 12:00:00.000 +00:00";
+
+function analysisFixture(path: string): Buffer {
+  const encoded = Buffer.from(path, "utf16le");
+  encoded.swap16();
+  const content = Buffer.alloc(4 + encoded.length + 2);
+  content.writeUInt32BE(encoded.length + 2, 0);
+  encoded.copy(content, 4);
+  const tag = Buffer.alloc(12 + content.length);
+  tag.write("PPTH", 0, "ascii");
+  tag.writeUInt32BE(16, 4);
+  tag.writeUInt32BE(tag.length, 8);
+  content.copy(tag, 12);
+  const header = Buffer.alloc(28);
+  header.write("PMAI", 0, "ascii");
+  header.writeUInt32BE(28, 4);
+  header.writeUInt32BE(header.length + tag.length, 8);
+  return Buffer.concat([header, tag]);
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
@@ -317,6 +337,40 @@ describe("MasterDatabase queries", () => {
 });
 
 describe("MasterDatabase mutations", () => {
+  it("installs native analysis files and updates the content row", () => {
+    const { dbPath, root } = fixture();
+    const raw = new Database(dbPath);
+    raw.exec(
+      "ALTER TABLE djmdContent ADD COLUMN Analysed INTEGER; ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
+    );
+    raw.close();
+    const analysisDirectory = join(root, "analysis");
+    mkdirSync(analysisDirectory);
+    for (const type of ["DAT", "EXT", "2EX"])
+      writeFileSync(join(analysisDirectory, `ANLZ0000.${type}`), analysisFixture("/old/path.mp3"));
+
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const result = db.installContentAnalysis("1", analysisDirectory, {
+      allowWhileRunning: true,
+    });
+    expect(result.analysisDataPath).toBe("/PIONEER/USBANLZ/con/tent-1/ANLZ0000.DAT");
+    expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe("/Music/Demo 1.mp3");
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const content = reopened.query(DjmdContent).where({ ID: "1" }).one();
+    expect(content.AnalysisDataPath).toBe(result.analysisDataPath);
+    expect(content.Analysed).toBe(105);
+    expect(content.AnalysisUpdated).toBe("2");
+    expect(content.TrackInfoUpdated).toBe("2");
+    reopened.close();
+  });
+
   it("allows the same album name for different album artists", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({

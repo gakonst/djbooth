@@ -11,6 +11,7 @@ export const { version } = createRequire(import.meta.url)("../package.json") as 
 };
 
 export * from "./anlz/index.js";
+export * from "./analyzer/index.js";
 export * from "./config/index.js";
 export { DeviceLibraryPlus, type DeviceLibraryPlusOptions } from "./devicelib-plus/index.js";
 export * from "./masterdb/index.js";

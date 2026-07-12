@@ -1,4 +1,4 @@
-import { existsSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -62,6 +62,14 @@ export type MasterDatabaseOptions = {
 export type CommitOptions = {
   allowWhileRunning?: boolean;
   autoincrement?: boolean;
+};
+
+/** Result of installing generated ANLZ files for a master-library track. */
+export type InstallContentAnalysisResult = {
+  analysisDataPath: string;
+  contentId: string;
+  directory: string;
+  paths: Record<"2EX" | "DAT" | "EXT", string>;
 };
 
 /** Callback registered for a transaction/session lifecycle event. */
@@ -1906,6 +1914,62 @@ export class MasterDatabase {
   ): AnlzFile | undefined {
     const normalized = type === "EX2" ? "2EX" : type;
     return this.readContentAnlzFile(content, normalized);
+  }
+
+  /** Install native analyzer artifacts and mark a content row analyzed. */
+  installContentAnalysis(
+    content: models.DjmdContent | string | number,
+    analysisDirectory: string,
+    options: { allowWhileRunning?: boolean; commit?: boolean; replace?: boolean } = {},
+  ): InstallContentAnalysisResult {
+    this.assertCommitAllowed(options.allowWhileRunning);
+    const row = this.resolve(models.DjmdContent, content);
+    if (!row.FolderPath) throw new TypeError(`Content '${row.ID}' has no FolderPath`);
+    if (!row.UUID) throw new TypeError(`Content '${row.ID}' has no UUID`);
+    const sourcePaths = findAnlzPaths(analysisDirectory);
+    for (const type of ["DAT", "EXT", "2EX"] as const)
+      if (!sourcePaths[type]) throw new TypeError(`Analysis directory has no ANLZ0000.${type}`);
+
+    const uuid = row.UUID;
+    if (uuid.length < 4) throw new TypeError(`Content '${row.ID}' has invalid UUID '${row.UUID}'`);
+    const relativeDirectory = join("PIONEER", "USBANLZ", uuid.slice(0, 3), uuid.slice(3));
+    const directory = join(this.shareDirectory, relativeDirectory);
+    const paths = {
+      "2EX": join(directory, "ANLZ0000.2EX"),
+      DAT: join(directory, "ANLZ0000.DAT"),
+      EXT: join(directory, "ANLZ0000.EXT"),
+    };
+    if (!options.replace)
+      for (const path of Object.values(paths))
+        if (existsSync(path)) throw new Error(`Analysis file '${path}' already exists`);
+
+    mkdirSync(directory, { recursive: true });
+    const temporaryPaths: Array<string> = [];
+    const temporaryPath = (path: string) =>
+      join(dirname(path), `.${basename(path, extname(path))}.${process.pid}${extname(path)}`);
+    try {
+      for (const type of ["DAT", "EXT", "2EX"] as const) {
+        const file = AnlzFile.parseFile(sourcePaths[type]!);
+        file.setPath(row.FolderPath.replaceAll("\\", "/"));
+        const temporary = temporaryPath(paths[type]);
+        file.save(temporary);
+        AnlzFile.parseFile(temporary);
+        temporaryPaths.push(temporary);
+      }
+      for (const type of ["DAT", "EXT", "2EX"] as const)
+        renameSync(temporaryPath(paths[type]), paths[type]);
+    } catch (error) {
+      for (const path of temporaryPaths) rmSync(path, { force: true });
+      throw error;
+    }
+
+    const analysisDataPath = `/${join(relativeDirectory, "ANLZ0000.DAT").replaceAll("\\", "/")}`;
+    row.AnalysisDataPath = analysisDataPath;
+    if (this.hasColumn(row.tableName, "Analysed")) row.set("Analysed", 105);
+    if (this.hasColumn(row.tableName, "AnalysisUpdated")) row.set("AnalysisUpdated", "2");
+    if (this.hasColumn(row.tableName, "TrackInfoUpdated")) row.set("TrackInfoUpdated", "2");
+    if (options.commit ?? true) this.commit({ allowWhileRunning: options.allowWhileRunning });
+    return { analysisDataPath, contentId: row.ID, directory, paths };
   }
 
   /** Paths referenced by the `settingFile` table. */

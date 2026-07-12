@@ -51,13 +51,18 @@ jobs:
   package:
     name: Pack and install CLIs
     needs: [validate, coverage]
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Clone repository
         uses: actions/checkout@v4
 
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
+
+      - name: Build universal Rekordbox analyzer
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          pnpm --filter @gakonst/rekordbox build:analyzer
 
       - name: Pack, install, and smoke CLIs
         run: pnpm test:pack

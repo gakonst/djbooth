@@ -21,10 +21,12 @@
   },
   "bin": {
     "rekordbox": "./dist/cli.js",
+    "rekordbox-analyzer": "./vendor/rekordbox-analyzer",
     "rekordbox-ts": "./dist/cli.js"
   },
   "files": [
     "dist",
+    "vendor",
     "PORTING.md",
     "README.md",
     "LICENSE"
@@ -40,6 +42,10 @@
     "./anlz": {
       "types": "./dist/anlz/index.d.ts",
       "default": "./dist/anlz/index.js"
+    },
+    "./analyzer": {
+      "types": "./dist/analyzer/index.d.ts",
+      "default": "./dist/analyzer/index.js"
     },
     "./config": {
       "types": "./dist/config/index.d.ts",
@@ -67,6 +73,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:analyzer": "../../scripts/build-rekordbox-analyzer.sh",
     "check": "oxlint src test && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",

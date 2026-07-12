@@ -4,9 +4,11 @@ import { Cli, z } from "incur";
 
 import {
   AnlzFile,
+  analyzeTrack,
   BeatGridTag,
   ExtendedBeatGridTag,
   createMySettingFile,
+  diagnoseAnalyzer,
   getAnlzPaths,
   getMySettingPaths,
   LogicalOperator,
@@ -69,6 +71,45 @@ cli.command("status", {
     };
   },
 });
+
+const analyzeCli = Cli.create("analyze", {
+  description: "Produce native Rekordbox DAT, EXT, and 2EX analysis files.",
+});
+
+analyzeCli.command("track", {
+  description: "Analyze one local audio file with Rekordbox's native analyzer.",
+  args: z.object({ audioPath: z.string().describe("Existing audio file") }),
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Universal native helper override"),
+    force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
+    outputDirectory: z.string().optional().describe("Artifact directory; defaults beside audio"),
+    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(300_000)
+      .describe("Analyzer timeout in milliseconds"),
+  }),
+  run(c) {
+    return analyzeTrack(c.args.audioPath, c.options);
+  },
+});
+
+analyzeCli.command("doctor", {
+  description: "Inspect native analyzer backend discovery and compatibility.",
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Universal native helper override"),
+    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+  }),
+  run(c) {
+    return diagnoseAnalyzer(c.options);
+  },
+});
+
+cli.command(analyzeCli);
 
 const configCli = Cli.create("config", {
   description: "Discover Rekordbox installations and library paths.",
@@ -760,6 +801,30 @@ databaseContentCli.command("set-filename", {
       });
       db.commit({ allowWhileRunning: c.options.allowWhileRunning });
       return db.query(DjmdContent).where({ ID: c.args.contentId }).one();
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databaseContentCli.command("install-analysis", {
+  description: "Install generated DAT/EXT/2EX files and mark a content row analyzed.",
+  args: z.object({
+    contentId: z.string().describe("Content ID"),
+    analysisDirectory: z.string().describe("Directory containing ANLZ0000.DAT/EXT/2EX"),
+  }),
+  options: dbWriteOptions.extend({
+    replace: z.boolean().default(false).describe("Replace existing analysis files"),
+  }),
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      return db.installContentAnalysis(c.args.contentId, c.args.analysisDirectory, {
+        allowWhileRunning: c.options.allowWhileRunning,
+        commit: true,
+        replace: c.options.replace,
+      });
     } finally {
       db.close();
     }

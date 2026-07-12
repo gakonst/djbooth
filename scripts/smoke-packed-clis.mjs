@@ -26,6 +26,11 @@ const packages = [
     bins: ["tracks", "tracks-ts"],
   },
   { name: "@gakonst/spots", prefix: "gakonst-spots-", bins: ["spots"] },
+  {
+    name: "@gakonst/soundcloud",
+    prefix: "gakonst-soundcloud-",
+    bins: ["soundcloud"],
+  },
   { name: "slsk-ts", prefix: "slsk-ts-", bins: ["slsk"] },
   {
     name: "@gakonst/ytdlp-ts",
@@ -50,7 +55,7 @@ function run(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(
-      `${command} ${args.join(" ")} exited with status ${result.status}`,
+      `${command} ${args.join(" ")} exited with status ${result.status}\nstdout: ${result.stdout ?? ""}\nstderr: ${result.stderr ?? ""}`,
     );
   }
   return result;
@@ -173,11 +178,59 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
   process.stdout.write("✓ @gakonst/music exports\n");
+
+  const installedRekordbox = join(
+    consumer,
+    "node_modules",
+    "@gakonst",
+    "rekordbox",
+  );
+  const analyzerBinary = join(
+    installedRekordbox,
+    "vendor",
+    "rekordbox-analyzer",
+  );
+  const runtimeApp = join(
+    installedRekordbox,
+    "vendor",
+    "rekordbox",
+    "6.8.2.0018",
+    "rekordbox.app",
+  );
+  if (!existsSync(analyzerBinary) || !existsSync(runtimeApp))
+    throw new Error("Packed Rekordbox analyzer runtime is incomplete");
+  process.stdout.write("✓ packed Rekordbox analyzer runtime\n");
+
+  if (process.platform === "darwin") {
+    const rekordbox = join(consumer, "node_modules", ".bin", "rekordbox");
+    const doctor = run(
+      rekordbox,
+      [
+        "analyze",
+        "doctor",
+        "--format",
+        "json",
+        "--filter-output",
+        "backend_source,install.version,offset_resolution.supported",
+      ],
+      { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const diagnostics = JSON.parse(doctor.stdout);
+    if (
+      diagnostics.backend_source !== "repo_vendored" ||
+      diagnostics.install?.version !== "6.8.2.0018" ||
+      diagnostics.offset_resolution?.supported !== true
+    )
+      throw new Error(
+        "Packed Rekordbox analyzer doctor rejected the vendored runtime",
+      );
+    process.stdout.write("✓ packed Rekordbox analyzer doctor\n");
+  }
 
   const mcpInput = [
     {

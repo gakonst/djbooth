@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+native/rekordbox-analyzer/target/
+packages/rekordbox-ts/.rekordbox-analyzer/
 downloads/
 .DS_Store
 *.log

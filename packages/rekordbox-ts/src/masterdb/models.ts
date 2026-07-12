@@ -335,6 +335,9 @@ export class DjmdContent extends DatabaseRow {
   declare AlbumID: string | null;
   declare GenreID: string | null;
   declare AnalysisDataPath: string | null;
+  declare Analysed: number | null;
+  declare AnalysisUpdated: string | null;
+  declare TrackInfoUpdated: string | null;
   declare Artist: DjmdArtist | undefined;
   declare Album: DjmdAlbum | undefined;
   declare Genre: DjmdGenre | undefined;

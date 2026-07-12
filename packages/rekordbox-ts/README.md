@@ -56,6 +56,8 @@ rekordbox device info --path /Volumes/USB/PIONEER/rekordbox/exportLibrary.db
 
 # Work with secondary/interchange formats when needed
 rekordbox anlz info ANLZ0000.DAT
+rekordbox analyze doctor
+rekordbox analyze track /Music/track.flac
 rekordbox settings show MYSETTING.DAT
 rekordbox xml info collection.xml
 ```
@@ -67,6 +69,7 @@ Top-level command families:
 | `config`    | Discover Rekordbox 5/6/7 installations and library paths      |
 | `xml`       | Inspect and mutate collection tracks and playlists            |
 | `anlz`      | Scan, inspect, and mutate DAT/EXT/2EX analysis files          |
+| `analyze`   | Produce native Rekordbox DAT/EXT/2EX analysis files on macOS  |
 | `settings`  | Read, update, and create all four My Settings binary formats  |
 | `smartlist` | Parse, construct, and compile smart playlists                 |
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
@@ -131,6 +134,34 @@ settings.save("MYSETTING-updated.DAT");
 ```
 
 Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and PQT2 expose typed beat-grid mutation; every tag additionally exposes bounded raw and parsed byte editing. Mutations recalculate file lengths/checksums and preserve PSSI obfuscation.
+
+### Native analysis and database installation
+
+The package includes a universal macOS helper and the minimal Rekordbox 6.8.2.0018 runtime payload
+needed to rehost its analyzer. It produces real `ANLZ0000.DAT`, `.EXT`, and `.2EX` files without
+mutating the library:
+
+```sh
+rekordbox analyze doctor --format json
+rekordbox analyze track /Music/track.flac --output-directory /Music/track.rekordbox --format json
+```
+
+After closing Rekordbox and backing up the library, install the verified artifacts for an existing
+content row:
+
+```sh
+rekordbox db content install-analysis 123456 /Music/track.rekordbox --write --format json
+```
+
+Programmatically, use `analyzeTrack()` followed by `MasterDatabase.installContentAnalysis()`.
+Analysis requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
+hash, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` can explicitly select another
+compatible `rekordbox.app`.
+
+Release and preview workflows run on macOS, rebuild and ad-hoc sign both analyzer architectures,
+package the minimal runtime, install the packed package in a clean consumer, and require the packed
+`analyze doctor` check to pass. A new machine therefore needs Node.js, pnpm, and Rosetta on Apple
+Silicon; it does not need a separate Rekordbox installation for the pinned analyzer runtime.
 
 ### Collection XML interchange
 

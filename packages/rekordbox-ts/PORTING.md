@@ -146,3 +146,19 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 ## Next
 
 The pinned pyrekordbox port and incur CLI are complete. Future work should track new upstream pyrekordbox or Rekordbox format revisions rather than expand the pinned scope.
+
+## Native analyzer checkpoint
+
+- Added a narrowly scoped Rust rehost helper containing only Rekordbox backend discovery/cache and
+  native analysis code. The private package includes the same provenance-tracked minimal Rekordbox
+  6.8.2.0018 runtime payload used by `djskills`; build caches and full application resources remain
+  excluded.
+- Added `analyzeTrack` plus `rekordbox analyze doctor|track`, producing parseable DAT/EXT/2EX files,
+  an atomic JSON summary, and native log.
+- Added `MasterDatabase.installContentAnalysis` and
+  `rekordbox db content install-analysis` to copy verified artifacts into the UUID-derived share path,
+  rewrite PPTH to the permanent content path, and update Rekordbox analysis fields.
+- Verified native analysis against Rekordbox 6.8.2.0018 and database installation against a decrypted
+  temporary copy of the live schema; the live library was not modified.
+- Release, prerelease, and packed-package verification run on macOS, rebuild the signed universal
+  helper, include the vendored runtime, and validate it through `analyze doctor` from a clean install.

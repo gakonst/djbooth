@@ -1,0 +1,65 @@
+{
+  "source_app": "/Applications/rekordbox 6/rekordbox.app",
+  "output_app": "private/rekordbox/6.8.2.0018/rekordbox.app",
+  "manifest_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/djtools-rekordbox-bundle.json",
+  "created_at": "2026-05-13T17:01:10.219093+00:00",
+  "creation_command": [
+    "target/debug/djtools",
+    "analyze",
+    "rekordbox-bundle",
+    "private/rekordbox/6.8.2.0018/rekordbox.app",
+    "--overwrite",
+    "--format",
+    "json",
+    "--report",
+    "private/rekordbox/6.8.2.0018/bundle-report.json"
+  ],
+  "version": "6.8.2.0018",
+  "build": "6.8.2.0018",
+  "binary_sha256": "19db9964df3751fccd25ec9064b5a3031d7c05aa7c444e5dce3e7d6fc73598bc",
+  "artifacts": [
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/Frameworks/Syphon.framework/Versions/A/Syphon",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/Frameworks/Syphon.framework/Versions/A/Syphon",
+      "relative_path": "Contents/Frameworks/Syphon.framework/Versions/A/Syphon",
+      "bytes": 182560,
+      "sha256": "a02a0e7782bdf645b2a75728c2dfae6dc0d7c653c25d513a50eab47335497707"
+    },
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/Info.plist",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/Info.plist",
+      "relative_path": "Contents/Info.plist",
+      "bytes": 2404,
+      "sha256": "4d26ac5605fe835c8547ff406c015d4a3425330d7af446d11e6d7dca45f9c6b2"
+    },
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/MacOS/libcld.0.dylib",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/MacOS/libcld.0.dylib",
+      "relative_path": "Contents/MacOS/libcld.0.dylib",
+      "bytes": 2731216,
+      "sha256": "bd510ed1cbed7dd5ce3a0115204cbac55faf74d55b9ed50918445a5247917cae"
+    },
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/MacOS/libcrypto.1.1.dylib",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/MacOS/libcrypto.1.1.dylib",
+      "relative_path": "Contents/MacOS/libcrypto.1.1.dylib",
+      "bytes": 2450288,
+      "sha256": "5abbfe78e66fa1230a86c8b48f4ff85a1f1252903442dbbd910228228304aba4"
+    },
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/MacOS/libmpg123.0.dylib",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/MacOS/libmpg123.0.dylib",
+      "relative_path": "Contents/MacOS/libmpg123.0.dylib",
+      "bytes": 540624,
+      "sha256": "429fc05ea6a4486643ab1807ff5b34ff8936fc0d4a9065bf37717e4799ea1c05"
+    },
+    {
+      "source_path": "/Applications/rekordbox 6/rekordbox.app/Contents/MacOS/rekordbox",
+      "destination_path": "private/rekordbox/6.8.2.0018/rekordbox.app/Contents/MacOS/rekordbox",
+      "relative_path": "Contents/MacOS/rekordbox",
+      "bytes": 100939920,
+      "sha256": "19db9964df3751fccd25ec9064b5a3031d7c05aa7c444e5dce3e7d6fc73598bc"
+    }
+  ],
+  "total_bytes": 106847012
+}

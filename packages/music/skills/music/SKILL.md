@@ -62,6 +62,7 @@ music tracks resolve --help
 music spots session --format json
 music ytdlp engines --format json
 music rekordbox status --format json
+rekordbox analyze doctor --format json
 ```
 
 Require provider credentials only for the stage that needs them. Resolution can begin from a
@@ -120,7 +121,23 @@ ffmpeg stream copy where possible. Mark the title/comment with `[Set Extract]`, 
 range, checksum, codec, and a warning about transitions and lossy ancestry. Keep the full cache until
 every requested clip verifies, then ask before deleting it.
 
-## 6. Import into Rekordbox
+## 6. Analyze for Rekordbox
+
+On macOS, use the native Rekordbox rehost analyzer after audio has been acquired. Analysis reads the
+installed Rekordbox application but does not open or mutate `master.db`:
+
+```sh
+rekordbox analyze doctor --format json
+rekordbox analyze track "$AUDIO_PATH" --output-directory "$ANALYSIS_DIR" --format json
+```
+
+Require macOS, Rosetta on Apple Silicon, and successful doctor checks before analysis. The package
+includes the pinned minimal Rekordbox 6.8.2.0018 runtime; use `--rekordbox-app` only to override it
+with another compatible app. The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`,
+`ANLZ0000.2EX`, `analysis.json`, and `rehost-native.log`. Keep these artifacts with the recording or
+manifest. Do not treat Spotify BPM/key or a local DSP approximation as Rekordbox analysis.
+
+## 7. Import into Rekordbox
 
 Use `@gakonst/music/rekordbox` against the normal encrypted database:
 
@@ -132,12 +149,25 @@ Use `@gakonst/music/rekordbox` against the normal encrypted database:
    albums by name plus album artist, and memberships by playlist/content IDs.
 5. Write enriched artist, title, album, label, ISRC, release, source, and quality-note metadata in
    one transaction.
-6. Reopen read-only. Require `PRAGMA quick_check = ok`, no foreign-key failures, exact ordered
+6. For an analyzed track already present in `djmdContent`, resolve its content ID by exact permanent
+   audio path, then install the generated files and update its analysis fields:
+
+   ```sh
+   rekordbox db content install-analysis "$CONTENT_ID" "$ANALYSIS_DIR" --write --format json
+   ```
+
+   This copies DAT/EXT/2EX into `share/PIONEER/USBANLZ/<UUID>/`, rewrites each PPTH tag to the
+   content row's permanent audio path, and sets `AnalysisDataPath`, `Analysed`, `AnalysisUpdated`,
+   and `TrackInfoUpdated`. Do not use `--replace` unless replacing existing analysis was explicitly
+   requested and backed up.
+
+7. Reopen read-only. Require `PRAGMA quick_check = ok`, no foreign-key failures, parseable installed
+   DAT/EXT/2EX files, exact ordered
    membership paths, and a well-formed playlist sidecar before marking the manifest imported.
 
 Retain an M3U8 only as a recovery artifact, not as the primary Rekordbox integration.
 
-## 7. Handoff and resume
+## 8. Handoff and resume
 
 Return source/title, provider, resolution counts, Spotify match counts, acquisition counts by
 backend, output directory, manifest path, Rekordbox identifiers, backup path, cache statistics,
