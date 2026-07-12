@@ -1,0 +1,28 @@
+{
+  "name": "music-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript music metadata, acquisition, and DJ library workspace",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=2 run build",
+    "check": "pnpm validate",
+    "format": "pnpm -r --if-present run format",
+    "format:check": "pnpm -r --if-present run format:check",
+    "lint": "pnpm -r --if-present run lint",
+    "test": "pnpm -r --workspace-concurrency=2 run test",
+    "test:coverage": "pnpm -r --workspace-concurrency=2 --if-present run test:coverage",
+    "typecheck": "pnpm -r --workspace-concurrency=2 run typecheck",
+    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.17.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3-multiple-ciphers"
+    ]
+  }
+}
+
