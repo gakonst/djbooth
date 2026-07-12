@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import {
   getRekordboxAgentPid,
@@ -243,7 +242,6 @@ export function createMusicCli(
     },
     sync: {
       depth: 0,
-      include: [resolve(import.meta.dirname, "../skills/*")],
       suggestions: [
         "resolve a DJ set into tracks",
         "check my Spotify session",

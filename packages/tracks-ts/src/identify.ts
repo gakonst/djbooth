@@ -1,6 +1,7 @@
 import { tracklistFromDescription } from "./description.js";
 import { TracksError } from "./errors.js";
 import { inspectMediaMetadata } from "./integrations/ytdlp.js";
+import type { MediaMetadata } from "./integrations/ytdlp.js";
 import { is1001Url, isHttpUrl, isSupportedDownloadUrl } from "./media.js";
 import { AcrCloudClient } from "./providers/acrcloud.js";
 import { AudDClient } from "./providers/audd.js";
@@ -26,6 +27,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
   const preferDescription = options.preferDescription ?? true;
   const warnings: string[] = [];
   const fetch = options.fetch ?? globalThis.fetch;
+  let mediaMetadata: MediaMetadata | undefined;
 
   if (is1001Url(source)) {
     if (!env.PARSE_API_KEY) {
@@ -75,6 +77,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
           ...(options.signal ? { signal: options.signal } : {}),
           ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
         }));
+      mediaMetadata = metadata;
       const described = tracklistFromDescription(source, metadata);
       if (described) return described;
       if (provider === "description") {
@@ -118,19 +121,31 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
       }
     } else {
       options.onProgress?.({ phase: "database", message: "Searching 1001Tracklists by media URL" });
-      const result = await create1001Client(
-        env,
-        fetch,
-        options.signal,
-        options.cacheMode,
-      ).findByMediaUrl(source);
+      const client = create1001Client(env, fetch, options.signal, options.cacheMode);
+      const result = await client.findByMediaUrl(source);
       if (result.found) return fromDatabase(source, result, options.includeMatches);
-      if (provider === "1001tracklists") {
-        throw new TracksError("NOT_FOUND", "No 1001Tracklists entry references this media URL", {
-          exitCode: 4,
+      if (mediaMetadata?.title) {
+        options.onProgress?.({
+          phase: "database",
+          message: "Searching 1001Tracklists by inspected set title and uploader",
         });
+        const search = await client.search(mediaMetadata.title, mediaMetadata.uploader);
+        const candidate = search.items[0];
+        if (candidate) {
+          const tracklist = await client.get(candidate.url);
+          return fromDatabase(source, tracklist, options.includeMatches);
+        }
       }
-      warnings.push("No existing 1001Tracklists entry found; used audio recognition instead.");
+      if (provider === "1001tracklists") {
+        throw new TracksError(
+          "NOT_FOUND",
+          "No 1001Tracklists entry matched the media URL or inspected set title",
+          { exitCode: 4 },
+        );
+      }
+      warnings.push(
+        "No 1001Tracklists entry matched the media URL or inspected set title; used audio recognition instead.",
+      );
     }
   }
 
