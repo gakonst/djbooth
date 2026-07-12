@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { openAsBlob, realpathSync } from 'node:fs'
+import { existsSync, openAsBlob, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
@@ -27,7 +27,7 @@ import {
 } from './client.js'
 import soundcloudOpenApi from './generated/soundcloud-openapi.json' with { type: 'json' }
 
-loadPackageEnvironment()
+loadWorkspaceEnvironment()
 
 const cli = Cli.create('soundcloud', {
   version: packageJson.version,
@@ -542,13 +542,13 @@ export async function createSoundCloudClient(): Promise<SoundCloudClient> {
   )
 }
 
-function loadPackageEnvironment(): void {
-  try {
-    loadEnvFile(resolve(import.meta.dirname, '../.env'))
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-      throw error
-  }
+function loadWorkspaceEnvironment(): void {
+  const candidates = [
+    resolve(import.meta.dirname, '../../../.env'),
+    resolve(process.cwd(), '.env'),
+  ]
+  const path = candidates.find((candidate) => existsSync(candidate))
+  if (path) loadEnvFile(path)
 }
 
 function normalizeCollection<T>(

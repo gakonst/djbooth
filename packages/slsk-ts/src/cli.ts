@@ -1,12 +1,25 @@
 #!/usr/bin/env node
+import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
 import { SoulseekClient } from './client.js'
 import { BinaryWriter, ServerCode, server } from './protocol/index.js'
+
+loadWorkspaceEnvironment()
+
+function loadWorkspaceEnvironment(): void {
+  const candidates = [
+    path.resolve(import.meta.dirname, '../../../.env'),
+    path.resolve(process.cwd(), '.env'),
+  ]
+  const envPath = candidates.find((candidate) => existsSync(candidate))
+  if (envPath) loadEnvFile(envPath)
+}
 
 const auth = z.object({
   SLSK_USERNAME: z.string().min(1).describe('Soulseek username (new names are registered on first login)'),
@@ -273,4 +286,3 @@ cli.command('raw', {
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) void cli.serve()
 
 export default cli
-import { realpathSync } from 'node:fs'

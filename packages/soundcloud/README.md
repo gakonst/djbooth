@@ -23,9 +23,9 @@ Register this exact redirect URI in the SoundCloud application settings:
 http://127.0.0.1:8788/callback
 ```
 
-Copy `.env.example` to `.env` inside this package and set the client ID and secret. The CLI loads
-that package-local file during monorepo development; it is ignored by Git and excluded from the
-published package.
+Copy the workspace `.env.example` to the root `.env` and set the client ID and secret. The CLI loads
+that workspace-root file during monorepo development; it is ignored by Git and excluded from the
+published package. Standalone installs also check `.env` in the current working directory.
 
 SoundCloud currently treats every client as confidential: the client secret is required even
 though Authorization Code also requires PKCE. Access tokens expire after about an hour and refresh

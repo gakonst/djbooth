@@ -50,6 +50,9 @@ The umbrella CLI composes their library APIs; it does not shell between package 
 
 Requirements: Node.js 22 or 24, pnpm 10.30.2, plus ffmpeg/ffprobe for media integration tests.
 
+Copy `.env.example` to the ignored workspace-root `.env`. The `music`, `tracks`, `spots`,
+`soundcloud`, and `slsk` CLIs load this one file; do not keep credentials inside package folders.
+
 ```sh
 pnpm install
 pnpm validate

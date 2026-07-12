@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { loadEnvFile } from "node:process";
 
 import {
   getRekordboxAgentPid,
@@ -356,6 +358,7 @@ export function createMusicCli(
 }
 
 export async function runMusicCli(argv = process.argv.slice(2)): Promise<void> {
+  loadWorkspaceEnvironment();
   const cli = createMusicCli();
   if (argv.length === 1 && argv[0] === "--codemode-mcp") {
     const { serveLocalMusicCodeMcp } = await import("./mcp.js");
@@ -363,6 +366,15 @@ export async function runMusicCli(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   await cli.serve(argv);
+}
+
+function loadWorkspaceEnvironment(): void {
+  const candidates = [
+    resolve(import.meta.dirname, "../../../.env"),
+    resolve(process.cwd(), ".env"),
+  ];
+  const path = candidates.find((candidate) => existsSync(candidate));
+  if (path) loadEnvFile(path);
 }
 
 function parseServerAddress(value: string): { host: string; port: number } {

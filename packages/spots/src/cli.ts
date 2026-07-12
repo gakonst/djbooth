@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { loadEnvFile } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
@@ -17,6 +20,14 @@ import { ClientCredentialsProvider, StaticAccessTokenProvider } from './auth/pro
 import { SpotifyClient } from './client.js'
 import { SpotifyApiError } from './errors.js'
 import spotifyOpenApi from './generated/spotify-openapi.json' with { type: 'json' }
+
+loadWorkspaceEnvironment()
+
+function loadWorkspaceEnvironment(): void {
+  const candidates = [resolve(import.meta.dirname, '../../../.env'), resolve(process.cwd(), '.env')]
+  const path = candidates.find((candidate) => existsSync(candidate))
+  if (path) loadEnvFile(path)
+}
 
 const cli = Cli.create('spots', {
   version: packageJson.version,
@@ -351,4 +362,3 @@ function queryRecord(
   }
   return result
 }
-import { realpathSync } from 'node:fs'

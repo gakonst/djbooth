@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
+import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { Cli, z } from "incur";
@@ -20,6 +22,17 @@ import type { Environment } from "./types.js";
 const { version: VERSION } = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
+
+loadWorkspaceEnvironment();
+
+function loadWorkspaceEnvironment(): void {
+  const candidates = [
+    resolve(import.meta.dirname, "../../../.env"),
+    resolve(process.cwd(), ".env"),
+  ];
+  const path = candidates.find((candidate) => existsSync(candidate));
+  if (path) loadEnvFile(path);
+}
 
 const provider = z
   .enum(["auto", "description", "1001tracklists", "audd", "acrcloud"])
