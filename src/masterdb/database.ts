@@ -1794,7 +1794,7 @@ export class MasterDatabase {
   addLabel(name: string) {
     return this.addNamed(models.DjmdLabel, name);
   }
-  /** Add a unique album. */
+  /** Add an album unique by name and album artist. */
   addAlbum(
     name: string,
     options: {
@@ -1807,7 +1807,12 @@ export class MasterDatabase {
     const artistId = options.artist
       ? this.resolve(models.DjmdArtist, options.artist).get("ID")!
       : null;
-    return this.addNamed(models.DjmdAlbum, name, {
+    if (this.query(models.DjmdAlbum).where({ Name: name, AlbumArtistID: artistId }).count())
+      throw new Error(`DjmdAlbum '${name}' already exists for album artist '${String(artistId)}'`);
+    return this.create(models.DjmdAlbum, {
+      ID: String(this.generateUnusedId(models.DjmdAlbum)),
+      Name: name,
+      UUID: randomUUID(),
       AlbumArtistID: artistId,
       Compilation: options.compilation == null ? null : Number(options.compilation),
       ImagePath: options.imagePath ?? null,

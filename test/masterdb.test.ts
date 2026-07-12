@@ -317,6 +317,33 @@ describe("MasterDatabase queries", () => {
 });
 
 describe("MasterDatabase mutations", () => {
+  it("allows the same album name for different album artists", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const secondArtist = db.addArtist("Second Artist");
+
+    expect(() => db.addAlbum("Album", { artist: "100" })).toThrow(
+      "already exists for album artist '100'",
+    );
+    const secondAlbum = db.addAlbum("Album", { artist: secondArtist });
+    expect(secondAlbum.AlbumArtist?.ID).toBe(secondArtist.ID);
+    db.commit();
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(reopened.query(DjmdAlbum).where({ Name: "Album" }).count()).toBe(2);
+    expect(
+      reopened.query(DjmdAlbum).where({ Name: "Album", AlbumArtistID: secondArtist.ID }).one()
+        .AlbumArtistName,
+    ).toBe("Second Artist");
+    reopened.close();
+  });
+
   it("stages, rolls back, and commits row changes with local USNs", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
