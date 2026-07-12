@@ -767,7 +767,8 @@ describe('direct, indirect, and server-requested connections', () => {
 
   it('handles fragmented, ended, reset, and timed-out raw file handshakes', async () => {
     const { fake, address } = await fakeServer()
-    const client = await clientFor(address, { transferTimeout: 10 })
+    // Keep the fragmented invalid-token path deterministic under loaded CI runners.
+    const client = await clientFor(address, { transferTimeout: 1_000 })
     await fake.waitFor(ServerCode.HaveNoParent)
     const makeFileSocket = async () => {
       const accepted = once(client.listener, 'connection')
