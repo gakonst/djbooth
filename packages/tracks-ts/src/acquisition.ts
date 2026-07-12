@@ -90,7 +90,7 @@ export async function writeManifestAtomic(
       mode: 0o600,
       flag: "wx",
     });
-    const file = await open(temporary, "r");
+    const file = await open(temporary, "r+");
     try {
       await file.sync();
     } finally {
@@ -538,7 +538,7 @@ function temporaryMediaPath(path: string): string {
 }
 
 async function syncAndRename(temporary: string, destination: string): Promise<void> {
-  const handle = await open(temporary, "r");
+  const handle = await open(temporary, "r+");
   try {
     await handle.sync();
   } finally {
@@ -587,6 +587,9 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 function isUnsupportedDirectorySyncError(error: unknown): boolean {
   return (
     isNodeError(error) &&
-    (error.code === "EINVAL" || error.code === "ENOTSUP" || error.code === "EISDIR")
+    (error.code === "EINVAL" ||
+      error.code === "ENOTSUP" ||
+      error.code === "EISDIR" ||
+      error.code === "EPERM")
   );
 }

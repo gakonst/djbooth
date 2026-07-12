@@ -1,6 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -273,9 +273,9 @@ describe("Rekordbox direct database planning", () => {
       playlistName: "Festival Set [tracks-ts]",
     });
     expect(plan.items.map((item) => [item.key, item.mediaPath])).toEqual([
-      ["track-001:0", "/music/festival-set/tracks/01-full.m4a"],
-      ["track-001:1", "/music/festival-set/tracks/01-mixed.m4a"],
-      ["track-002:0", "/music/festival-set/tracks/02-id.mp3"],
+      ["track-001:0", resolve("/music/festival-set/tracks/01-full.m4a")],
+      ["track-001:1", resolve("/music/festival-set/tracks/01-mixed.m4a")],
+      ["track-002:0", resolve("/music/festival-set/tracks/02-id.mp3")],
     ]);
     expect(plan.items[0]!.metadata).toMatchObject({
       title: "Nen Lambo (Rampa Edit)",
@@ -450,18 +450,19 @@ describe("Rekordbox direct database planning", () => {
 
   test("derives deterministic naming and backup companion paths", () => {
     expect(defaultRekordboxPlaylistName(completedManifest())).toBe("Festival Set [tracks-ts]");
-    expect(rekordboxBackupSources("/rekordbox")).toEqual([
-      { name: "master.db", sourcePath: "/rekordbox/master.db", required: true },
-      { name: "master.db-wal", sourcePath: "/rekordbox/master.db-wal", required: false },
-      { name: "master.db-shm", sourcePath: "/rekordbox/master.db-shm", required: false },
+    const directory = resolve("/rekordbox");
+    expect(rekordboxBackupSources(directory)).toEqual([
+      { name: "master.db", sourcePath: join(directory, "master.db"), required: true },
+      { name: "master.db-wal", sourcePath: join(directory, "master.db-wal"), required: false },
+      { name: "master.db-shm", sourcePath: join(directory, "master.db-shm"), required: false },
       {
         name: "master.db-journal",
-        sourcePath: "/rekordbox/master.db-journal",
+        sourcePath: join(directory, "master.db-journal"),
         required: false,
       },
       {
         name: "masterPlaylists6.xml",
-        sourcePath: "/rekordbox/masterPlaylists6.xml",
+        sourcePath: join(directory, "masterPlaylists6.xml"),
         required: true,
       },
     ]);

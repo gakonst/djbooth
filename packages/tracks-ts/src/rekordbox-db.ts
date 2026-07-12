@@ -425,7 +425,7 @@ export function applyRekordboxImportResults(
     entry.rekordbox = {
       status: "imported",
       target: "rekordbox-db",
-      artifact: resolve(rekordboxArtifact.dbPath),
+      artifact: rekordboxArtifact.dbPath,
       dbContentId: dbContentIds[0]!,
       playlistMembershipId: playlistMembershipIds[0]!,
       dbContentIds,
@@ -1657,7 +1657,7 @@ async function writeExclusiveJson(path: string, value: unknown): Promise<void> {
 }
 
 async function syncFile(path: string): Promise<void> {
-  const handle = await open(path, "r");
+  const handle = await open(path, "r+");
   try {
     await handle.sync();
   } finally {
@@ -1703,6 +1703,9 @@ function isUnsupportedSyncError(error: unknown): error is NodeJS.ErrnoException 
   return (
     error instanceof Error &&
     "code" in error &&
-    (error.code === "EINVAL" || error.code === "ENOTSUP" || error.code === "EISDIR")
+    (error.code === "EINVAL" ||
+      error.code === "ENOTSUP" ||
+      error.code === "EISDIR" ||
+      error.code === "EPERM")
   );
 }
