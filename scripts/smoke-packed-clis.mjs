@@ -112,7 +112,9 @@ try {
     )}\n`,
   );
 
-  run("pnpm", ["install"], { cwd: consumer });
+  run("pnpm", ["install", "--store-dir", join(packDirectory, ".pnpm-store")], {
+    cwd: consumer,
+  });
 
   for (const package_ of packages) {
     for (const bin of package_.bins) {

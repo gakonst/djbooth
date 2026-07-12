@@ -1015,7 +1015,7 @@ describe('downloads and uploads', () => {
       client.download('downloader-peer', 'Music\\track.flac', path.join(root, 'bad-path.flac'), {
         temporaryPath: path.join(root, 'x'.repeat(5_000)),
       }),
-    ).rejects.toMatchObject({ code: 'ENAMETOOLONG' })
+    ).rejects.toMatchObject({ code: process.platform === 'win32' ? 'ENOENT' : 'ENAMETOOLONG' })
     client.peers.get('downloader-peer')?.destroy()
     await new Promise((resolve) => setImmediate(resolve))
     await badPathPeer.listener.close()

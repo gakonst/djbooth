@@ -435,7 +435,10 @@ describe('PeerListener and PeerConnection', () => {
 
   it('reports unix addresses, listen failures, and close callback errors', async () => {
     const unix = new PeerListener()
-    const socketPath = `/tmp/slsk-listener-${process.pid}-${Date.now()}.sock`
+    const socketPath =
+      process.platform === 'win32'
+        ? `\\\\.\\pipe\\slsk-listener-${process.pid}-${Date.now()}`
+        : `/tmp/slsk-listener-${process.pid}-${Date.now()}.sock`
     unix.server.listen(socketPath)
     await once(unix.server, 'listening')
     expect(unix.address).toBeNull()
