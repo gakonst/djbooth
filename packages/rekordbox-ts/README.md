@@ -7,29 +7,39 @@ The primary workflow is direct access to encrypted Rekordbox 6/7 `master.db` lib
 > [!CAUTION]
 > Back up your Rekordbox collection before using any write operation. This project is not affiliated with AlphaTheta Corporation, Pioneer Corporation, or their related companies.
 
-## Requirements and setup
+## Installation
 
 - Node.js 22 or newer
 - pnpm 10
 - macOS, Windows, or Linux; automatic Rekordbox installation discovery is implemented for macOS and Windows
 
 ```sh
-git clone git@github.com:gakonst/rekordbox-ts.git
-cd rekordbox-ts
-pnpm install
-pnpm build
-pnpm i -g --allow-build=better-sqlite3-multiple-ciphers "$(pwd)"
+pnpm add --global --allow-build=better-sqlite3-multiple-ciphers @gakonst/rekordbox
 rekordbox --help
 ```
 
-The global install exposes `rekordbox` as the canonical command and `rekordbox-ts` as an explicit package-name alias. A GitHub install works as well when Git authentication can access the private repository:
+The package exposes `rekordbox` as the canonical command and `rekordbox-ts` as an explicit alias.
+For library use, install it in a project with the native dependency explicitly approved:
 
 ```sh
-pnpm i -g --allow-build=better-sqlite3-multiple-ciphers github:gakonst/rekordbox-ts
-rekordbox status
+pnpm add --allow-build=better-sqlite3-multiple-ciphers @gakonst/rekordbox
 ```
 
-`better-sqlite3-multiple-ciphers` is the one native dependency and provides encrypted SQLCipher access. pnpm 10 requires the explicit `--allow-build` acknowledgement shown above; without it, command discovery works but database commands cannot load the native binding. For development without a global install, use `pnpm cli --help`.
+`better-sqlite3-multiple-ciphers` is the one native dependency and provides encrypted SQLCipher
+access. pnpm 10 requires the explicit `--allow-build` acknowledgement shown above; without it,
+command discovery works but database commands cannot load the native binding.
+
+## Development
+
+The source package lives in the `gakonst/music-ts` pnpm workspace:
+
+```sh
+gh repo clone gakonst/music-ts ~/github/gakonst/music-ts
+cd ~/github/gakonst/music-ts
+pnpm install
+pnpm --filter @gakonst/rekordbox validate
+pnpm --filter @gakonst/rekordbox cli --help
+```
 
 ## CLI
 
@@ -69,10 +79,10 @@ Use `--plain` for an unencrypted SQLite fixture or unlocked copy. The built-in u
 incur provides structured output and discovery on every command:
 
 ```sh
-pnpm cli --llms                 # LLM-readable command manifest
-pnpm cli db info --schema       # input/output JSON Schema
-pnpm cli db info --format json  # JSON, TOON, YAML, Markdown, or JSONL
-pnpm cli db info --token-limit 500
+rekordbox --llms                 # LLM-readable command manifest
+rekordbox db info --schema       # input/output JSON Schema
+rekordbox db info --format json  # JSON, TOON, YAML, Markdown, or JSONL
+rekordbox db info --token-limit 500
 ```
 
 ## TypeScript API
@@ -160,10 +170,10 @@ try {
 - SQLite schemas are introspected at runtime. Known tables receive named row classes, while newly introduced physical columns remain accessible through row properties and `get`/`set`.
 - Library and CLI operations are synchronous except `copyUnlocked`, which returns a promise for API stability.
 
-## Development and verification
+## Verification
 
 ```sh
-pnpm validate
+pnpm --filter @gakonst/rekordbox validate
 ```
 
 The suite includes fixed Python-compatible vectors, generated database fixtures, encrypted SQLCipher opening, mutation/rollback behavior, and exact differential verification against the pinned upstream fixtures. See [PORTING.md](./PORTING.md) for the full evidence log.

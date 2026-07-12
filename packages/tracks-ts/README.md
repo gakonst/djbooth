@@ -7,32 +7,22 @@ Give `tracks` a public YouTube/SoundCloud set URL, a 1001Tracklists URL, or a lo
 > [!IMPORTANT]
 > `tracks resolve` never downloads a remote source set. Remote YouTube/SoundCloud resolution begins with metadata-only `ytdlp-ts inspect`. A later, explicit acquisition run may cache the set once when cue-bounded extraction is the only usable source for an ID, unreleased edit, or otherwise unavailable track. Every extract retains its source URL, range, quality warning, and checksum.
 
-`tracks resolve` also does not acquire the identified songs. The library pipeline composes `spots`, `slsk-ts`, `ytdlp-ts`, and `rekordbox-ts` directly around the durable manifest; it does not shell between their CLIs. Individual acquisition and Rekordbox handoff remain explicit, resumable stages described in [Pipeline](#pipeline).
+`tracks resolve` also does not acquire the identified songs. The library pipeline composes `@gakonst/spots`, `slsk-ts`, `@gakonst/ytdlp-ts`, and `@gakonst/rekordbox` directly around the durable manifest; it does not shell between their CLIs. Individual acquisition and Rekordbox handoff remain explicit, resumable stages described in [Pipeline](#pipeline).
 
 ## Quick start
 
-Node.js 22+ and pnpm 10 required.
+Node.js 22+ and the pnpm version pinned by the music-ts workspace are required.
 
 ```sh
-gh repo clone gakonst/tracks-ts
-cd tracks-ts
+gh repo clone gakonst/music-ts
+cd music-ts
 pnpm install
 pnpm build
-pnpm link --global
+pnpm --filter @gakonst/tracks cli -- doctor
+pnpm --filter @gakonst/tracks cli -- providers
 ```
 
-Build `ytdlp-ts` in the sibling checkout first. `tracks` discovers `../ytdlp-ts/dist/cli.js`; use `YTDLP_TS_PATH` for another location. Full library orchestration also uses built sibling checkouts of `spots`, `slsk-ts`, and `rekordbox-ts`, injected as module objects rather than declared as non-portable file dependencies.
-
-```sh
-pnpm --dir ../ytdlp-ts install
-pnpm --dir ../ytdlp-ts build
-pnpm --dir ../spots build
-pnpm --dir ../slsk-ts build
-pnpm --dir ../rekordbox-ts build
-
-tracks doctor
-tracks providers
-```
+The provider libraries are declared with `workspace:*` dependencies, so one root install links the exact local packages and a root build orders them before `@gakonst/tracks`. `YTDLP_TS_PATH` remains available only when an explicit alternative executable is needed. Tests and custom runtimes can still inject module objects directly.
 
 The CLI deliberately does not load `.env`. Copy `.env.example` only as a reference, then export or source values through your shell or secret manager.
 
@@ -247,7 +237,7 @@ tracks completions zsh
 
 ## Pipeline
 
-The intended system is a set of narrow sibling tools, joined by the manifest and the `build-dj-set-playlist` skill:
+The intended system is a set of narrow workspace packages, joined by the manifest and the `build-dj-set-playlist` skill:
 
 ```text
 set URL ── tracks-ts ───────────────┐
@@ -271,13 +261,13 @@ Spotify playlists ── spots ─────────┤
                    rekordbox-ts encrypted master.db
 ```
 
-| Sibling                                                   | Responsibility                                                                      |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [`spots`](https://github.com/gakonst/spots)               | Pull the user's Spotify playlists; enrich or verify track metadata                  |
-| `tracks-ts`                                               | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
-| [`slsk-ts`](https://github.com/gakonst/slsk-ts)           | Preferred search and resumable download of each individual track                    |
-| [`ytdlp-ts`](https://github.com/gakonst/ytdlp-ts)         | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
-| [`rekordbox-ts`](https://github.com/gakonst/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
+| Workspace package                                                                           | Responsibility                                                                      |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [`@gakonst/spots`](https://github.com/gakonst/music-ts/tree/main/packages/spots)            | Pull the user's Spotify playlists; enrich or verify track metadata                  |
+| `@gakonst/tracks`                                                                           | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
+| [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts)                 | Preferred search and resumable download of each individual track                    |
+| [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
+| [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
 
 The boundary is deliberate:
 
@@ -414,9 +404,9 @@ console.log(
 );
 ```
 
-Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `rekordbox-ts` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
 
-The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject the sibling module objects when running it elsewhere.
+The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject module objects when running it elsewhere.
 
 Provider clients and pure parsers remain exported for custom orchestration: `Tracklists1001Client`, `AudDClient`, `AcrCloudClient`, `parseDescriptionTracklist`, `parseEnterpriseResult`, `buildTimeline`, `createManifest`, and `parseManifest`.
 
@@ -433,15 +423,15 @@ Provider clients and pure parsers remain exported for custom orchestration: `Tra
 ## Development
 
 ```sh
-pnpm validate
-pnpm test:coverage
+pnpm --filter @gakonst/tracks validate
+pnpm --filter @gakonst/tracks test:coverage
 ```
 
 Tests use fixtures and injected HTTP transports; they consume no provider credits. The Adam Ten fixture mirrors the real SoundCloud description.
 
 Primary documentation:
 
-- [ytdlp-ts](https://github.com/gakonst/ytdlp-ts)
+- [@gakonst/ytdlp-ts](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts)
 - [incur](https://github.com/wevm/incur)
 - [Parse 1001Tracklists wrapper](https://parse.bot/marketplace/ec03e43b-6798-40ce-86c9-02832adedc4c/1001tracklists-com-api)
 - [AudD recognition](https://docs.audd.io/)

@@ -8,15 +8,32 @@ A music-first TypeScript port of [`yt-dlp`](https://github.com/yt-dlp/yt-dlp), e
 > coverage are tracked in [`docs/PARITY.md`](docs/PARITY.md). Every result identifies the engine
 > that handled it; the project does not silently claim native parity.
 
-## Development
+## Installation
 
-Requires Node.js 22+, pnpm, and FFmpeg. Exact long-tail compatibility currently also requires a
-`yt-dlp` executable while native extractors are being ported.
+Requires Node.js 22+ and FFmpeg. Exact long-tail compatibility currently also requires a `yt-dlp`
+executable while native extractors are being ported.
 
 ```sh
+pnpm add --global @gakonst/ytdlp-ts
+ytdlp-ts --help
+```
+
+For library use:
+
+```sh
+pnpm add @gakonst/ytdlp-ts
+```
+
+## Development
+
+The source package lives in the `gakonst/music-ts` pnpm workspace:
+
+```sh
+gh repo clone gakonst/music-ts ~/github/gakonst/music-ts
+cd ~/github/gakonst/music-ts
 pnpm install
-pnpm check
-pnpm dev --help
+pnpm --filter @gakonst/ytdlp-ts check
+pnpm --filter @gakonst/ytdlp-ts dev --help
 ```
 
 ## CLI shape

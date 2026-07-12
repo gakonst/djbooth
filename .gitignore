@@ -15,4 +15,10 @@ downloads/
 *.webm
 *.db-shm
 *.db-wal
-
+*.db
+*.sqlite
+*.info.json
+.ytdlp-ts-music-archive*
+cookies.txt
+cookies-*.txt
+test/fixtures/private/

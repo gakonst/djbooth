@@ -34,18 +34,21 @@ http://127.0.0.1:8787/callback
 
 Spotify permits HTTP only for explicit loopback IP addresses; `localhost` is not accepted.
 
-## Install for development
+## Install
 
 ```sh
-git clone git@github.com:gakonst/spots.git
-cd spots
-npm install
-npm run build
-npm link
+pnpm add @gakonst/spots
 ```
 
-`npm link` makes the `spots` command available on your path. You can also use
-`npm run cli -- <arguments>` from the repository.
+For development in the monorepo:
+
+```sh
+gh repo clone gakonst/music-ts
+cd music-ts
+pnpm install
+pnpm --filter @gakonst/spots build
+pnpm --filter @gakonst/spots cli -- --help
+```
 
 ## Log in as your Spotify user
 
@@ -146,7 +149,7 @@ spots recent --filter-output 'items[0].track.name'
 ### Saved user session
 
 ```ts
-import { FileSessionStore, SpotifyClient, SpotifyOAuth } from 'spots'
+import { FileSessionStore, SpotifyClient, SpotifyOAuth } from '@gakonst/spots'
 
 const store = new FileSessionStore()
 const session = await store.load()
@@ -173,7 +176,7 @@ schema. Invalid paths or parameter names fail TypeScript compilation.
 ### Client Credentials
 
 ```ts
-import { ClientCredentialsProvider, SpotifyClient } from 'spots'
+import { ClientCredentialsProvider, SpotifyClient } from '@gakonst/spots'
 
 const spotify = new SpotifyClient({
   auth: new ClientCredentialsProvider({
@@ -203,8 +206,8 @@ for await (const item of spotify.paginate('/me/tracks', { limit: 50 })) {
 ## Keeping the API current
 
 ```sh
-npm run openapi:sync
-npm run check
+pnpm openapi:sync
+pnpm check
 ```
 
 The sync command downloads Spotify's official schema, removes documentation-only policy extensions,
@@ -218,9 +221,9 @@ the CLI labels deprecated operations where Spotify's schema does.
 ## Development
 
 ```sh
-npm run check       # formatting, lint, typecheck, and tests
-npm run build       # ESM library, declarations, and CLI
-npm run cli -- --help
+pnpm check       # formatting, lint, typecheck, and tests
+pnpm build       # ESM library, declarations, and CLI
+pnpm cli -- --help
 ```
 
 See the [progress log](docs/progress.md) and [architecture decisions](docs/decisions.md) for the

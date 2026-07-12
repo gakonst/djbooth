@@ -2,4 +2,3 @@ dist
 node_modules
 src/generated
 openapi/spotify.yaml
-package-lock.json

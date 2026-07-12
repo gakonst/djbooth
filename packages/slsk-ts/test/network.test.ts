@@ -17,6 +17,7 @@ import {
 import {
   ConnectionType,
   encodeFrame,
+  FrameDecoder,
   PeerCode,
   peer,
   peerInit,
@@ -306,6 +307,23 @@ describe('FramedConnection', () => {
 })
 
 describe('PeerListener and PeerConnection', () => {
+  it('reports a missing decoded initialization frame', async () => {
+    const decode = vi.spyOn(FrameDecoder.prototype, 'push').mockReturnValueOnce([])
+    const listener = new PeerListener({ handshakeTimeout: 100 })
+    const address = await listener.listen(0, '127.0.0.1')
+    const failed = once(listener, 'connectionError')
+    const socket = await connectSocket({ host: '127.0.0.1', port: address.port })
+    sockets.push(socket)
+    const init = peerInit.initialize('remote', ConnectionType.Peer)
+    socket.write(encodeFrame('peer-init', init.code, init.payload))
+
+    await expect(failed).resolves.toMatchObject([
+      { message: 'Missing peer initialization frame' },
+    ])
+    expect(decode).toHaveBeenCalledOnce()
+    await listener.close()
+  })
+
   it('accepts a handshake without consuming a coalesced peer frame', async () => {
     const listener = new PeerListener({ handshakeTimeout: 100, maxFrameSize: 1024 })
     const address = await listener.listen(0, '127.0.0.1')

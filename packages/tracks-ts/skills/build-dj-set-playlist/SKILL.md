@@ -30,7 +30,7 @@ Build an auditable `set -> identities -> audio files -> playlist` pipeline. Trea
 
 ## 1. Preflight
 
-Import the sibling packages in one Node.js process for pipeline work. Their CLIs remain useful only for manual preflight and debugging. Run:
+Import the music-ts workspace packages in one Node.js process for pipeline work. Their CLIs remain useful only for manual preflight and debugging. Run:
 
 ```sh
 tracks doctor --format json
@@ -40,7 +40,7 @@ slsk --version
 rekordbox --version
 ```
 
-Build a missing sibling with `pnpm install && pnpm build`. Require Soulseek credentials only when acquisition begins. Require Spotify auth only when enrichment begins.
+From the monorepo root, run `pnpm install && pnpm build` to build every workspace dependency in topological order. Require Soulseek credentials only when acquisition begins. Require Spotify auth only when enrichment begins.
 
 ## 2. Resolve the input
 
@@ -158,4 +158,4 @@ Do not mark `downloaded` without an absolute `mediaPath` included in `files`. Do
 
 Persist atomically with an expected-content/hash check: write and flush a sibling temporary manifest, verify the durable source did not change, run `tracks manifest validate "$NEXT_MANIFEST" --format json`, then rename it over the old file. On resume, preserve completed stages and verified files; retry only pending or explicitly selected failed stages; recompute SHA-256 when a file changes; serialize Rekordbox operations.
 
-Required environment by stage: `YTDLP_TS_PATH`/provider credentials for resolution; Spotify login or token for `spots`; `SLSK_USERNAME` and `SLSK_PASSWORD` for Soulseek. Direct database access uses rekordbox-ts's validated bundled key unless `REKORDBOX_DB_KEY` explicitly overrides it.
+Required environment by stage: provider credentials for resolution; Spotify login or token for `@gakonst/spots`; `SLSK_USERNAME` and `SLSK_PASSWORD` for Soulseek. `YTDLP_TS_PATH` is only an executable override. Direct database access uses rekordbox-ts's validated bundled key unless `REKORDBOX_DB_KEY` explicitly overrides it.

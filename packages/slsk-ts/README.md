@@ -156,16 +156,18 @@ slsk mcp add
 ## Development
 
 ```sh
+gh repo clone gakonst/music-ts
+cd music-ts
 pnpm install
-pnpm check             # types + lint + 100% coverage
-pnpm build
-pnpm bench
+pnpm --filter slsk-ts check             # types + lint + 100% coverage
+pnpm --filter slsk-ts build
+pnpm --filter slsk-ts bench
 ```
 
 The live test is opt-in and never stores credentials:
 
 ```sh
-SLSK_E2E_USERNAME=... SLSK_E2E_PASSWORD=... pnpm test:e2e
+SLSK_E2E_USERNAME=... SLSK_E2E_PASSWORD=... pnpm --filter slsk-ts test:e2e
 ```
 
 ## Performance and safety
@@ -178,7 +180,7 @@ SLSK_E2E_USERNAME=... SLSK_E2E_PASSWORD=... pnpm test:e2e
 - Downloads cannot write beyond the peer-declared size and resume offsets are validated.
 - Connection, handshake, request, search, and transfer waits are bounded and abort-aware.
 
-Run `BENCH_ITERATIONS=1000000 pnpm bench` for local protocol throughput numbers.
+Run `BENCH_ITERATIONS=1000000 pnpm --filter slsk-ts bench` for local protocol throughput numbers.
 
 ## License
 

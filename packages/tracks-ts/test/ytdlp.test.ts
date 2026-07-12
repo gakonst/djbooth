@@ -6,9 +6,16 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 import { JsonDiskCache } from "../src/cache.js";
-import { inspectMediaMetadata } from "../src/integrations/ytdlp.js";
+import { getYtdlpTsCommand, inspectMediaMetadata } from "../src/integrations/ytdlp.js";
 
 describe("ytdlp-ts metadata integration", () => {
+  test("uses the workspace-installed CLI by default", async () => {
+    await expect(getYtdlpTsCommand({})).resolves.toEqual({
+      executable: "ytdlp-ts",
+      prefix: [],
+    });
+  });
+
   test("inspects metadata with no-playlist and never invokes download", async () => {
     const metadata = await inspectMediaMetadata("https://soundcloud.com/dj/set", {
       env: {

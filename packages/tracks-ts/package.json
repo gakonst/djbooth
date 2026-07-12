@@ -1,13 +1,13 @@
 {
   "name": "@gakonst/tracks",
   "version": "0.1.0",
-  "private": true,
   "description": "Resolve DJ sets into enriched tracks and Rekordbox playlists",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/gakonst/tracks-ts.git"
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/tracks-ts"
   },
   "bin": {
     "tracks": "./dist/cli.js",
@@ -28,6 +28,9 @@
       "import": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
@@ -43,8 +46,12 @@
     "validate": "pnpm check && pnpm build"
   },
   "dependencies": {
+    "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/spots": "workspace:*",
+    "@gakonst/ytdlp-ts": "workspace:*",
     "fast-xml-parser": "^5.10.0",
-    "incur": "0.4.13"
+    "incur": "0.4.13",
+    "slsk-ts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.19.7",
@@ -57,6 +64,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "packageManager": "pnpm@10.12.1"
+  }
 }

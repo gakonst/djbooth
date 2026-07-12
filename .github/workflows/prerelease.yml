@@ -1,0 +1,24 @@
+name: Prerelease
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Package preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        uses: ./.github/actions/install-dependencies
+
+      - name: Publish preview packages
+        run: |
+          pnpm run build
+          pnpx pkg-pr-new publish --pnpm

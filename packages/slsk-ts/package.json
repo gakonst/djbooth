@@ -5,10 +5,17 @@
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/slsk-ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.17.1",
   "bin": {
     "slsk": "./dist/cli.js"
   },
@@ -37,10 +44,12 @@
     "check:types": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
     "lint": "oxlint src test",
+    "prepack": "pnpm build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "bench": "tsx bench/protocol.ts"
+    "bench": "tsx bench/protocol.ts",
+    "typecheck": "pnpm check:types"
   },
   "dependencies": {
     "incur": "^0.4.13"

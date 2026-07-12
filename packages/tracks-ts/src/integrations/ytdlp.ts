@@ -1,6 +1,3 @@
-import { access } from "node:fs/promises";
-import { resolve } from "node:path";
-
 import { JsonDiskCache, type CacheMode } from "../cache.js";
 import { TracksError } from "../errors.js";
 import { runProcess } from "../process.js";
@@ -150,14 +147,7 @@ async function inspectMediaMetadataUncached(
 
 export async function getYtdlpTsCommand(env: Environment = process.env): Promise<CliCommand> {
   if (env.YTDLP_TS_PATH) return commandForPath(env.YTDLP_TS_PATH);
-
-  const sibling = resolve(import.meta.dirname, "../../../ytdlp-ts/dist/cli.js");
-  try {
-    await access(sibling);
-    return { executable: process.execPath, prefix: [sibling] };
-  } catch {
-    return { executable: "ytdlp-ts", prefix: [] };
-  }
+  return { executable: "ytdlp-ts", prefix: [] };
 }
 
 function commandForPath(path: string): { executable: string; prefix: string[] } {

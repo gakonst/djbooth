@@ -6,4 +6,3 @@
 - Run a filtered package check while iterating and `pnpm validate` before merging.
 - Follow package-local `AGENTS.md` files when present.
 - Use conventional commits.
-

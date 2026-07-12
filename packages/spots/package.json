@@ -1,14 +1,17 @@
 {
-  "name": "spots",
+  "name": "@gakonst/spots",
   "version": "0.1.0",
   "description": "A complete typed Spotify Web API client and agent-friendly CLI built with incur.",
   "type": "module",
-  "private": true,
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com/gakonst/spots.git"
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/spots"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=22"
@@ -34,13 +37,13 @@
   ],
   "scripts": {
     "build": "tsup",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "cli": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "openapi:sync": "tsx scripts/sync-openapi.ts",
-    "prepack": "npm run build",
+    "prepack": "pnpm build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

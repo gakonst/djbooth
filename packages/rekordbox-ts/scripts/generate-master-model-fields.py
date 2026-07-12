@@ -97,12 +97,24 @@ def generate(source: Path) -> str:
     return "\n".join(lines)
 
 
+def find_default_source(root: Path) -> Path:
+    relative = Path("dylanljones/pyrekordbox/pyrekordbox/masterdb/models.py")
+    for ancestor in root.parents:
+        candidate = ancestor / relative
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        "Could not find dylanljones/pyrekordbox. Pass the path to pyrekordbox/masterdb/models.py "
+        "as the first argument."
+    )
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (
         Path(sys.argv[1])
         if len(sys.argv) > 1
-        else root.parents[1] / "dylanljones" / "pyrekordbox" / "pyrekordbox/masterdb/models.py"
+        else find_default_source(root)
     )
     output = root / "src/masterdb/model-fields.ts"
     output.write_text(generate(source))

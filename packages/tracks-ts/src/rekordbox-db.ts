@@ -252,7 +252,7 @@ export type ImportManifestToRekordboxOptions = {
   playlistName?: string;
   backupRoot?: string;
   now?: Date;
-  /** Inject the sibling library directly; useful when it is not an installed package. */
+  /** Inject the library directly for tests or a custom runtime. */
   rekordboxModule?: RekordboxLibrary;
   /** Optional package name or file URL used when no module object is injected. */
   rekordboxModuleSpecifier?: string;

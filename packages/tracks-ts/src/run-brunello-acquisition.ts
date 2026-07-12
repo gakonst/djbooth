@@ -159,37 +159,13 @@ function lazyYtdlpAcquirer(
 }
 
 async function loadSpots(): Promise<SpotsModule> {
-  try {
-    const packageName = "spots";
-    return (await import(packageName)) as SpotsModule;
-  } catch (packageError) {
-    const path = resolve(import.meta.dirname, "../../spots/dist/index.js");
-    try {
-      return (await import(pathToFileURL(path).href)) as SpotsModule;
-    } catch (siblingError) {
-      throw new AggregateError(
-        [packageError, siblingError],
-        "Could not load spots as an installed package or built sibling checkout",
-      );
-    }
-  }
+  const packageName = "@gakonst/spots";
+  return (await import(packageName)) as SpotsModule;
 }
 
 async function loadYtdlp(): Promise<YtdlpModule> {
-  try {
-    const packageName = "@gakonst/ytdlp-ts";
-    return (await import(packageName)) as YtdlpModule;
-  } catch (packageError) {
-    const path = resolve(import.meta.dirname, "../../ytdlp-ts/dist/index.js");
-    try {
-      return (await import(pathToFileURL(path).href)) as YtdlpModule;
-    } catch (siblingError) {
-      throw new AggregateError(
-        [packageError, siblingError],
-        "Could not load ytdlp-ts as an installed package or built sibling checkout",
-      );
-    }
-  }
+  const packageName = "@gakonst/ytdlp-ts";
+  return (await import(packageName)) as YtdlpModule;
 }
 
 function parseArguments(arguments_: readonly string[]): RunBrunelloAcquisitionOptions {
