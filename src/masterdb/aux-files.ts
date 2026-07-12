@@ -46,6 +46,7 @@ export class MasterPlaylistXml {
     const parser = new XMLParser({
       attributeNamePrefix: "",
       ignoreAttributes: false,
+      ignoreDeclaration: true,
       parseAttributeValue: false,
       processEntities: false,
     });
@@ -171,7 +172,11 @@ export class MasterPlaylistXml {
       processEntities: false,
       suppressEmptyNode: true,
     });
-    return `<?xml version="1.0" encoding="utf-8"?>\n${builder.build(this.document).trim()}\n`;
+    const document = builder
+      .build(this.document)
+      .trim()
+      .replace(/^(?:<\?xml[^?]*\?>\s*)+/u, "");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n${document}\n`;
   }
 
   /** Save the companion file. */

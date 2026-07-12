@@ -202,7 +202,7 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
   const xmlPath = join(root, "masterPlaylists6.xml");
   writeFileSync(
     xmlPath,
-    `<?xml version="1.0" encoding="utf-8"?>
+    `<?xml version="1.0" encoding="UTF-8"?>
 <MASTER_PLAYLIST Version="3.0.0" AutomaticSync="0">
   <PRODUCT Name="rekordbox" Version="7.0.9" Company="AlphaTheta"/>
   <PLAYLISTS><NODE Id="1F4" ParentId="0" Attribute="0" Timestamp="${new Date("2026-07-10T12:00:00Z").getTime()}" Lib_Type="0" CheckType="0"/></PLAYLISTS>
@@ -592,6 +592,7 @@ describe("MasterPlaylistXml", () => {
     expect(xml.get(600)?.Attribute).toBe(PlaylistType.SMART_PLAYLIST);
     xml.remove(500);
     xml.save();
+    expect(readFileSync(xmlPath, "utf8").match(/<\?xml/gu)).toHaveLength(1);
     const reloaded = new MasterPlaylistXml(xmlPath);
     expect(reloaded.get(500)).toBeUndefined();
     expect(reloaded.get(600)?.ParentId).toBe("0");
