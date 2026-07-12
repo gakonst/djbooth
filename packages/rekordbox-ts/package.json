@@ -1,0 +1,102 @@
+{
+  "name": "@gakonst/rekordbox",
+  "version": "0.1.0",
+  "description": "Typed Rekordbox database API and agent-friendly CLI",
+  "keywords": [
+    "cli",
+    "dj",
+    "incur",
+    "rekordbox",
+    "typescript"
+  ],
+  "homepage": "https://github.com/gakonst/rekordbox-ts#readme",
+  "bugs": {
+    "url": "https://github.com/gakonst/rekordbox-ts/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/gakonst/rekordbox-ts.git"
+  },
+  "bin": {
+    "rekordbox": "./dist/cli.js",
+    "rekordbox-ts": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./anlz": {
+      "types": "./dist/anlz/index.d.ts",
+      "default": "./dist/anlz/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./devicelib-plus": {
+      "types": "./dist/devicelib-plus/index.d.ts",
+      "default": "./dist/devicelib-plus/index.js"
+    },
+    "./masterdb": {
+      "types": "./dist/masterdb/index.d.ts",
+      "default": "./dist/masterdb/index.js"
+    },
+    "./mysettings": {
+      "types": "./dist/mysettings/index.d.ts",
+      "default": "./dist/mysettings/index.js"
+    },
+    "./xml": {
+      "types": "./dist/xml/index.d.ts",
+      "default": "./dist/xml/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "oxlint src test && oxfmt --check .",
+    "cli": "tsx src/cli.ts",
+    "format": "oxfmt --write .",
+    "prepack": "pnpm build",
+    "prepare": "pnpm build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "validate": "pnpm check && pnpm test && pnpm typecheck && pnpm build"
+  },
+  "dependencies": {
+    "better-sqlite3-multiple-ciphers": "^12.11.1",
+    "fast-xml-parser": "^5.9.3",
+    "incur": "^0.4.13",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "4.1.10",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  },
+  "preferGlobal": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.17.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3-multiple-ciphers"
+    ]
+  }
+}
