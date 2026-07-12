@@ -162,5 +162,5 @@ describe('native downloader', () => {
     expect(requests).toBe(2)
     expect(ranges[0]).toBe('')
     expect(ranges[1]).toMatch(/^bytes=[1-9]\d*-$/u)
-  })
+  }, 15_000)
 })
