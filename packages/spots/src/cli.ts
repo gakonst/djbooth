@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -230,7 +231,8 @@ cli.command('api', {
   fetch: async (request: Request) => (await createSpotifyClient()).fetch(request),
 })
 
-void cli.serve()
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+  void cli.serve()
 
 export default cli
 
@@ -349,3 +351,4 @@ function queryRecord(
   }
   return result
 }
+import { realpathSync } from 'node:fs'

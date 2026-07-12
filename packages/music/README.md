@@ -53,7 +53,10 @@ music ytdlp inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
 ```
 
-The umbrella intentionally exposes the cross-package happy path. The package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp-ts`, and `rekordbox` CLIs retain their complete specialist command surfaces.
+The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
+and `rekordbox` Incur CLIs. Its MCP surface filters those commands to the composable calls used for
+set resolution, metadata lookup, individual acquisition, analysis, and normal Rekordbox database
+maintenance; it does not impose a pipeline command.
 
 Install the single aggregate agent skill, or register the same command map as MCP:
 
@@ -77,8 +80,8 @@ filesystem, denied network access, bounded execution time, and only the music to
 the host. The bundled Secure Exec sidecar currently supports macOS and Linux; Windows clients can
 use the normal MCP or inject another isolated `Executor` into `createMusicCodeMcpServer`.
 
-The package also exports explicit server factories. The normal server exposes the same six typed
-commands as the CLI; the CodeMode server collapses them into one sandboxed TypeScript `code` tool:
+The package also exports explicit server factories. The normal server exposes the filtered typed
+Incur commands; the CodeMode server collapses them into one sandboxed TypeScript `code` tool:
 
 ```ts
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";

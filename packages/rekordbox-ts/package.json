@@ -39,6 +39,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    },
     "./anlz": {
       "types": "./dist/anlz/index.d.ts",
       "default": "./dist/anlz/index.js"

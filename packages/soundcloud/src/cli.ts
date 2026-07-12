@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { openAsBlob } from 'node:fs'
+import { openAsBlob, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
 import { loadEnvFile } from 'node:process'
+import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -490,7 +491,11 @@ cli.command('api', {
     (await createSoundCloudClient()).fetch(request),
 })
 
-void cli.serve()
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  void cli.serve()
 
 export default cli
 

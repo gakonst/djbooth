@@ -31,6 +31,11 @@ const packages = [
     bins: ["soundcloud"],
   },
   { name: "@gakonst/spots", prefix: "gakonst-spots-", bins: ["spots"] },
+  {
+    name: "@gakonst/soundcloud",
+    prefix: "gakonst-soundcloud-",
+    bins: ["soundcloud"],
+  },
   { name: "slsk-ts", prefix: "slsk-ts-", bins: ["slsk"] },
   {
     name: "@gakonst/ytdlp-ts",
@@ -264,10 +269,15 @@ try {
     .map((line) => JSON.parse(line));
   const initialize = responses.find((response) => response.id === 1);
   const tools = responses.find((response) => response.id === 2)?.result?.tools;
-  if (initialize?.result?.serverInfo?.name !== "music" || tools?.length !== 6) {
-    throw new Error("Packed music MCP did not initialize with six tools");
+  if (
+    initialize?.result?.serverInfo?.name !== "music" ||
+    tools?.length < 50 ||
+    !tools.some((tool) => tool.name === "slsk_download") ||
+    !tools.some((tool) => tool.name === "rekordbox_db_playlist_create")
+  ) {
+    throw new Error("Packed music MCP did not initialize with the composable tool surface");
   }
-  process.stdout.write("✓ music stdio MCP (6 tools)\n");
+  process.stdout.write(`✓ music stdio MCP (${tools.length} composable tools)\n`);
 
   const codeMcp = run(music, ["--codemode-mcp"], {
     cwd: consumer,

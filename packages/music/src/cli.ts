@@ -6,17 +6,59 @@ import {
   getRekordboxPid,
   version as rekordboxVersion,
 } from "@gakonst/rekordbox";
+import rekordboxCli from "@gakonst/rekordbox/cli";
+import soundcloudCli from "@gakonst/soundcloud/cli";
 import { FileSessionStore } from "@gakonst/spots";
+import spotsCli from "@gakonst/spots/cli";
 import { createManifest, identify, type MediaMetadataClient } from "@gakonst/tracks";
+import tracksCli from "@gakonst/tracks/cli";
 import { ExtractorRegistry, ReferenceClient } from "@gakonst/ytdlp-ts";
+import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli, z } from "incur";
 import { SoulseekClient } from "slsk-ts";
+import slskCli from "slsk-ts/cli";
 
 export const MUSIC_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
     version: string;
   }
 ).version;
+
+export const MUSIC_MCP_TOOL_FILTER = {
+  include: [
+    "tracks_*",
+    "spots_auth_status",
+    "spots_me",
+    "spots_recent",
+    "spots_request",
+    "spots_session",
+    "spots_api_search",
+    "spots_api_get-track",
+    "spots_api_get-several-tracks",
+    "spots_api_get-playlist",
+    "spots_api_get-playlists-items",
+    "soundcloud_auth_status",
+    "soundcloud_resolve",
+    "soundcloud_search_*",
+    "soundcloud_request",
+    "soundcloud_api_get-tracks*",
+    "slsk_info",
+    "slsk_search",
+    "slsk_download",
+    "ytdlp_engines",
+    "ytdlp_inspect",
+    "ytdlp_formats",
+    "ytdlp_music",
+    "ytdlp_download",
+    "rekordbox_status",
+    "rekordbox_analyze_*",
+    "rekordbox_db_info",
+    "rekordbox_db_search",
+    "rekordbox_db_content_*",
+    "rekordbox_db_metadata_add",
+    "rekordbox_db_playlist_*",
+  ],
+};
 
 export type ResolveTracksOptions = {
   provider: "auto" | "description" | "1001tracklists" | "audd" | "acrcloud";
@@ -194,6 +236,11 @@ export function createMusicCli(
     version: MUSIC_VERSION,
     description: "Unified metadata, acquisition, and DJ-library tools.",
     hint: "Local CodeMode MCP: music --codemode-mcp",
+    mcp: {
+      instructions:
+        "Compose metadata resolution, provider lookup, individual-track acquisition, analysis, and normal Rekordbox database operations. Inspect before downloading; require explicit write acknowledgement for database mutations.",
+      tools: MUSIC_MCP_TOOL_FILTER,
+    },
     sync: {
       depth: 0,
       include: [resolve(import.meta.dirname, "../skills/*")],
@@ -206,6 +253,16 @@ export function createMusicCli(
       ],
     },
   });
+
+  if (Object.keys(overrides).length === 0) {
+    cli.command(tracksCli);
+    cli.command(spotsCli);
+    cli.command(soundcloudCli);
+    cli.command(slskCli);
+    cli.command(ytdlpCli);
+    cli.command(rekordboxCli);
+    return cli;
+  }
 
   const tracks = Cli.create("tracks", {
     description: "Resolve DJ sets into durable track manifests.",

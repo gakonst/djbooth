@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
+import { realpathSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import { Cli, z } from "incur";
 
@@ -838,6 +840,7 @@ function fail(
   });
 }
 
-await cli.serve();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+  await cli.serve();
 
 export default cli;
