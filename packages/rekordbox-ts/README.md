@@ -144,6 +144,11 @@ mutating the library:
 ```sh
 rekordbox analyze doctor --format json
 rekordbox analyze track /Music/track.flac --output-directory /Music/track.rekordbox --format json
+rekordbox analyze tracks \
+  --audio-path /Music/one.flac \
+  --audio-path /Music/two.flac \
+  --concurrency 4 \
+  --format json
 ```
 
 After closing Rekordbox and backing up the library, install the verified artifacts for an existing
@@ -153,15 +158,19 @@ content row:
 rekordbox db content install-analysis 123456 /Music/track.rekordbox --write --format json
 ```
 
-Programmatically, use `analyzeTrack()` followed by `MasterDatabase.installContentAnalysis()`.
+Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
+runs a bounded pool of isolated native worker processes, preserves input order, and defaults to at
+most four workers. Keep database installation separate and serialized: call
+`MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
 Analysis requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
 hash, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` can explicitly select another
 compatible `rekordbox.app`.
 
 Release and preview workflows run on macOS, rebuild and ad-hoc sign both analyzer architectures,
 package the minimal runtime, install the packed package in a clean consumer, and require the packed
-`analyze doctor` check to pass. A new machine therefore needs Node.js, pnpm, and Rosetta on Apple
-Silicon; it does not need a separate Rekordbox installation for the pinned analyzer runtime.
+`analyze doctor` check to pass. Sanitized DAT/EXT seed shapes are packaged with the runtime, so a new
+machine needs Node.js, pnpm, and Rosetta on Apple Silicon; it does not need a separate Rekordbox
+installation or an existing analyzed Rekordbox library for the pinned analyzer runtime.
 
 ### Collection XML interchange
 

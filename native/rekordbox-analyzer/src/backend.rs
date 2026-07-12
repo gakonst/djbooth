@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use anyhow::{Context, Result, bail};
@@ -231,6 +231,7 @@ pub fn prepare_rekordbox_backend() -> Result<PreparedRekordboxBackend> {
 
 pub fn diagnose_rekordbox_backend() -> Result<RekordboxBackendDiagnostics> {
     let prepared = prepare_rekordbox_backend()?;
+    verify_install_artifact_hashes(&prepared.install)?;
     let display = DiagnosticPathDisplay::new(prepared.install.repo_root.clone());
     let mut paths = Vec::new();
     paths.push(prepared.cache.cached_binary.clone());
@@ -530,10 +531,10 @@ fn resolve_repo_root() -> Result<PathBuf> {
 
     let mut starts = Vec::new();
     starts.push(std::env::current_dir().context("failed to read current directory")?);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            starts.push(parent.to_path_buf());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+    {
+        starts.push(parent.to_path_buf());
     }
 
     for start in starts {
@@ -590,10 +591,33 @@ fn inspect_rekordbox_app(
         bail!("missing Rekordbox executable {}", binary_path.display());
     }
     let info = read_info_plist(&contents_dir.join("Info.plist"))?;
-    let binary_sha256 = sha256_file(&binary_path)?;
+    let bundle_manifest = read_sized_bundle_manifest(&app_path)?;
+    if let Some(manifest) = &bundle_manifest
+        && (manifest.version != info.version || manifest.build != info.build)
+    {
+        bail!(
+            "Rekordbox bundle manifest version/build does not match {}",
+            contents_dir.join("Info.plist").display()
+        );
+    }
+    let binary_sha256 = match bundle_manifest
+        .as_ref()
+        .and_then(|manifest| bundle_artifact_for_path(manifest, &app_path, &binary_path))
+    {
+        Some(artifact) if artifact.sha256 == manifest_binary_sha(bundle_manifest.as_ref())? => {
+            artifact.sha256.clone()
+        }
+        Some(_) => bail!("Rekordbox bundle manifest binary hash is inconsistent"),
+        None => sha256_file(&binary_path)?,
+    };
     let architectures = macho_architectures(&binary_path)?;
     let load_dylibs = macho_load_dylibs(&binary_path)?;
-    let local_dependencies = local_dependencies(&macos_dir, &app_path, &load_dylibs)?;
+    let local_dependencies = local_dependencies(
+        &macos_dir,
+        &app_path,
+        &load_dylibs,
+        bundle_manifest.as_ref(),
+    )?;
     Ok(RekordboxInstall {
         source: source.to_string(),
         repo_root: repo_root.to_path_buf(),
@@ -609,6 +633,84 @@ fn inspect_rekordbox_app(
         load_dylibs,
         local_dependencies,
     })
+}
+
+fn manifest_binary_sha(manifest: Option<&RekordboxBundleReport>) -> Result<&str> {
+    manifest
+        .map(|manifest| manifest.binary_sha256.as_str())
+        .context("missing Rekordbox bundle manifest")
+}
+
+fn read_sized_bundle_manifest(app_path: &Path) -> Result<Option<RekordboxBundleReport>> {
+    let path = app_path
+        .join("Contents")
+        .join(REKORDBOX_BUNDLE_MANIFEST_NAME);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let manifest: RekordboxBundleReport = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let mut total_bytes = 0u64;
+    for artifact in &manifest.artifacts {
+        if artifact.relative_path.is_absolute()
+            || artifact
+                .relative_path
+                .components()
+                .any(|component| matches!(component, Component::ParentDir | Component::RootDir))
+        {
+            bail!(
+                "invalid Rekordbox bundle artifact path {}",
+                artifact.relative_path.display()
+            );
+        }
+        let artifact_path = app_path.join(&artifact.relative_path);
+        let metadata = artifact_path.metadata().with_context(|| {
+            format!(
+                "missing Rekordbox bundle artifact {}",
+                artifact_path.display()
+            )
+        })?;
+        if !metadata.is_file() || metadata.len() != artifact.bytes {
+            bail!(
+                "Rekordbox bundle artifact size mismatch for {}: expected {}, got {}",
+                artifact_path.display(),
+                artifact.bytes,
+                metadata.len()
+            );
+        }
+        if artifact.sha256.len() != 64
+            || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            bail!(
+                "invalid Rekordbox bundle artifact hash for {}",
+                artifact.relative_path.display()
+            );
+        }
+        total_bytes = total_bytes
+            .checked_add(artifact.bytes)
+            .context("Rekordbox bundle artifact size overflow")?;
+    }
+    if total_bytes != manifest.total_bytes {
+        bail!(
+            "Rekordbox bundle manifest size mismatch: expected {}, got {total_bytes}",
+            manifest.total_bytes
+        );
+    }
+    Ok(Some(manifest))
+}
+
+fn bundle_artifact_for_path<'a>(
+    manifest: &'a RekordboxBundleReport,
+    app_path: &Path,
+    path: &Path,
+) -> Option<&'a RekordboxBundleArtifact> {
+    let relative = path.strip_prefix(app_path).ok()?;
+    manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative)
 }
 
 #[derive(Debug)]
@@ -641,6 +743,7 @@ fn local_dependencies(
     macos_dir: &Path,
     app_path: &Path,
     load_dylibs: &[String],
+    bundle_manifest: Option<&RekordboxBundleReport>,
 ) -> Result<Vec<RekordboxDependency>> {
     let mut out = Vec::new();
     let mut cached_names = BTreeSet::new();
@@ -658,7 +761,12 @@ fn local_dependencies(
         }
         out.push(RekordboxDependency {
             original_load_path: load_path.clone(),
-            sha256: sha256_file(&source_path)?,
+            sha256: match bundle_manifest
+                .and_then(|manifest| bundle_artifact_for_path(manifest, app_path, &source_path))
+            {
+                Some(artifact) => artifact.sha256.clone(),
+                None => sha256_file(&source_path)?,
+            },
             source_path,
             cached_name,
         });
@@ -713,7 +821,6 @@ fn ensure_rekordbox_cache(install: &RekordboxInstall) -> Result<RekordboxCache> 
         .collect::<Vec<_>>();
 
     if cache_is_current(&cached_binary, &dependencies, install)? {
-        sign_cached_artifacts(&cached_binary, &dependencies)?;
         return Ok(RekordboxCache {
             cache_dir,
             cached_binary,
@@ -721,6 +828,7 @@ fn ensure_rekordbox_cache(install: &RekordboxInstall) -> Result<RekordboxCache> 
         });
     }
 
+    verify_install_artifact_hashes(install)?;
     reset_cache_dir(&cache_dir)?;
     std::fs::copy(&install.binary_path, &cached_binary).with_context(|| {
         format!(
@@ -746,6 +854,28 @@ fn ensure_rekordbox_cache(install: &RekordboxInstall) -> Result<RekordboxCache> 
         cached_binary,
         dependencies,
     })
+}
+
+fn verify_install_artifact_hashes(install: &RekordboxInstall) -> Result<()> {
+    let binary_sha256 = sha256_file(&install.binary_path)?;
+    if binary_sha256 != install.binary_sha256 {
+        bail!(
+            "Rekordbox executable hash mismatch for {}: expected {}, got {binary_sha256}",
+            install.binary_path.display(),
+            install.binary_sha256
+        );
+    }
+    for dependency in &install.local_dependencies {
+        let sha256 = sha256_file(&dependency.source_path)?;
+        if sha256 != dependency.sha256 {
+            bail!(
+                "Rekordbox dependency hash mismatch for {}: expected {}, got {sha256}",
+                dependency.source_path.display(),
+                dependency.sha256
+            );
+        }
+    }
+    Ok(())
 }
 
 fn cache_is_current(
@@ -939,11 +1069,9 @@ fn sanitize_slug(value: &str) -> String {
 }
 
 fn resolve_offsets(install: &RekordboxInstall) -> Result<(RekordboxOffsets, OffsetResolution)> {
-    let binary = std::fs::read(&install.binary_path)
-        .with_context(|| format!("failed to read {}", install.binary_path.display()))?;
     if install.binary_sha256 == KNOWN_REKORDBOX_6820018_SHA256 {
         let offsets = RekordboxOffsets::current_6820018();
-        validate_offset_signatures(&binary, offsets)?;
+        validate_offset_signatures_file(&install.binary_path, offsets)?;
         return Ok((
             offsets,
             OffsetResolution {
@@ -958,6 +1086,8 @@ fn resolve_offsets(install: &RekordboxInstall) -> Result<(RekordboxOffsets, Offs
         ));
     }
 
+    let binary = std::fs::read(&install.binary_path)
+        .with_context(|| format!("failed to read {}", install.binary_path.display()))?;
     let offsets = scan_offset_signatures(&binary).with_context(|| {
         format!(
             "unsupported Rekordbox binary {} {}",
@@ -982,11 +1112,15 @@ fn resolve_offsets(install: &RekordboxInstall) -> Result<(RekordboxOffsets, Offs
     ))
 }
 
-fn validate_offset_signatures(binary: &[u8], offsets: RekordboxOffsets) -> Result<()> {
+fn validate_offset_signatures_file(path: &Path, offsets: RekordboxOffsets) -> Result<()> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     for signature in offset_signatures() {
         let offset = (signature.offset_from)(offsets);
-        let end = offset + signature.bytes.len();
-        if binary.get(offset..end) != Some(signature.bytes) {
+        file.seek(SeekFrom::Start(offset as u64))?;
+        let mut actual = vec![0u8; signature.bytes.len()];
+        file.read_exact(&mut actual)?;
+        if actual != signature.bytes {
             bail!("offset signature mismatch for {}", signature.name);
         }
     }

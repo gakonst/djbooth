@@ -5,6 +5,7 @@ import { Cli, z } from "incur";
 import {
   AnlzFile,
   analyzeTrack,
+  analyzeTracks,
   BeatGridTag,
   ExtendedBeatGridTag,
   createMySettingFile,
@@ -94,6 +95,34 @@ analyzeCli.command("track", {
   }),
   run(c) {
     return analyzeTrack(c.args.audioPath, c.options);
+  },
+});
+
+analyzeCli.command("tracks", {
+  description: "Analyze local audio files with bounded isolated native workers.",
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Universal native helper override"),
+    audioPath: z.array(z.string()).describe("Existing audio file; repeat for multiple tracks"),
+    concurrency: z.number().int().min(1).max(64).optional().describe("Parallel analyzer workers"),
+    force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
+    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(300_000)
+      .describe("Per-track analyzer timeout in milliseconds"),
+  }),
+  async run(c) {
+    return analyzeTracks(c.options.audioPath, {
+      analyzerBinary: c.options.analyzerBinary,
+      concurrency: c.options.concurrency,
+      force: c.options.force,
+      rekordboxApp: c.options.rekordboxApp,
+      rekordboxCache: c.options.rekordboxCache,
+      timeoutMs: c.options.timeoutMs,
+    });
   },
 });
 

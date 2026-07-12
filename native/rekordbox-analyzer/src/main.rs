@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer::backend::diagnose_rekordbox_backend;
-use rekordbox_analyzer::rehost::{RehostOptions, run_rehost};
+use rekordbox_analyzer::rehost::{RehostOptions, bundle_rekordbox_templates, run_rehost};
 
 fn main() {
     if let Err(error) = run() {
@@ -42,8 +42,22 @@ fn run() -> Result<()> {
             );
             Ok(())
         }
+        Some("bundle-templates") => {
+            let output_dir = required_path(args.next(), "output directory")?;
+            if args.next().is_some() {
+                bail!("bundle-templates accepts one output directory");
+            }
+            let outputs = bundle_rekordbox_templates(&output_dir)?
+                .into_iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            println!("{}", serde_json::to_string_pretty(&outputs)?);
+            Ok(())
+        }
         Some(command) => bail!("unknown command '{command}'"),
-        None => bail!("usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|doctor>"),
+        None => bail!(
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR>"
+        ),
     }
 }
 

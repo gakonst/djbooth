@@ -129,6 +129,11 @@ installed Rekordbox application but does not open or mutate `master.db`:
 ```sh
 rekordbox analyze doctor --format json
 rekordbox analyze track "$AUDIO_PATH" --output-directory "$ANALYSIS_DIR" --format json
+rekordbox analyze tracks \
+  --audio-path "$AUDIO_PATH_1" \
+  --audio-path "$AUDIO_PATH_2" \
+  --concurrency 4 \
+  --format json
 ```
 
 Require macOS, Rosetta on Apple Silicon, and successful doctor checks before analysis. The package
@@ -136,6 +141,10 @@ includes the pinned minimal Rekordbox 6.8.2.0018 runtime; use `--rekordbox-app` 
 with another compatible app. The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`,
 `ANLZ0000.2EX`, `analysis.json`, and `rehost-native.log`. Keep these artifacts with the recording or
 manifest. Do not treat Spotify BPM/key or a local DSP approximation as Rekordbox analysis.
+For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated x86_64 worker
+processes and preserves input order. Default to at most four workers unless measurement on the target
+machine supports another limit. Parallelize analysis only. Keep Rekordbox database installation
+stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
 
 ## 7. Import into Rekordbox
 

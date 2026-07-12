@@ -4,7 +4,13 @@ import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { analyzeTrack, getAnalyzerBinary, readAnalysisResult } from "../src/analyzer/index.js";
+import {
+  analyzeTrack,
+  analyzeTrackAsync,
+  analyzeTracks,
+  getAnalyzerBinary,
+  readAnalysisResult,
+} from "../src/analyzer/index.js";
 
 const roots: Array<string> = [];
 
@@ -28,5 +34,25 @@ describe("Rekordbox analyzer wrapper", () => {
     roots.push(root);
     mkdirSync(join(root, "output"));
     expect(() => analyzeTrack(join(root, "missing.mp3"))).toThrow("does not exist");
+  });
+
+  it("supports empty bounded batches and rejects unsafe scheduler inputs", async () => {
+    await expect(analyzeTracks([], { concurrency: 2 })).resolves.toMatchObject({
+      concurrency: 0,
+      requested: 0,
+      results: [],
+    });
+    await expect(analyzeTracks([], { concurrency: 0 })).rejects.toThrow(
+      "concurrency must be an integer",
+    );
+    await expect(analyzeTracks(["same.mp3", "same.mp3"])).rejects.toThrow(
+      "Multiple tracks resolve",
+    );
+  });
+
+  it("rejects missing audio asynchronously before launching a worker", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    await expect(analyzeTrackAsync(join(root, "missing.mp3"))).rejects.toThrow("does not exist");
   });
 });
