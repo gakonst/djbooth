@@ -2,7 +2,7 @@ import type { Executor, ResolvedProvider } from "@cloudflare/codemode";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createLocalMusicCodeMcpServer,
@@ -21,6 +21,17 @@ const dependencies: MusicCliDependencies = {
 };
 
 const localSandboxTest = process.platform === "win32" ? it.skip : it;
+
+afterEach(() => vi.unstubAllEnvs());
+
+const toolCalls = [
+  { name: "rekordbox_status", arguments: {} },
+  { name: "slsk_search", arguments: { query: "artist track" } },
+  { name: "spots_session", arguments: {} },
+  { name: "tracks_resolve", arguments: { source: "https://youtu.be/example" } },
+  { name: "ytdlp_engines", arguments: {} },
+  { name: "ytdlp_inspect", arguments: { url: "https://youtu.be/example" } },
+] as const;
 
 async function connect(server: McpServer): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -107,5 +118,57 @@ describe("music MCP adapters", () => {
       }
     },
     20_000,
+  );
+
+  localSandboxTest(
+    "runs every Incur tool concurrently through normal and local CodeMode MCP",
+    async () => {
+      vi.stubEnv("SLSK_USERNAME", "stress-user");
+      vi.stubEnv("SLSK_PASSWORD", "stress-password");
+      const rounds = 20;
+      const normalServer = createMusicMcpServer({ dependencies });
+      const normalClient = await connect(normalServer);
+      try {
+        const results = await Promise.all(
+          Array.from({ length: rounds }, () =>
+            toolCalls.map(({ name, arguments: args }) =>
+              normalClient.callTool({ name, arguments: args }),
+            ),
+          ).flat(),
+        );
+        expect(results).toHaveLength(rounds * toolCalls.length);
+        expect(results.every(({ isError }) => isError !== true)).toBe(true);
+      } finally {
+        await normalClient.close();
+        await normalServer.close();
+      }
+
+      const codeServer = await createLocalMusicCodeMcpServer({
+        dependencies,
+        timeoutMs: 20_000,
+      });
+      const codeClient = await connect(codeServer);
+      try {
+        const calls = Array.from({ length: rounds }, () => [
+          "codemode.rekordbox_status({})",
+          'codemode.slsk_search({ query: "artist track" })',
+          "codemode.spots_session({})",
+          'codemode.tracks_resolve({ source: "https://youtu.be/example" })',
+          "codemode.ytdlp_engines({})",
+          'codemode.ytdlp_inspect({ url: "https://youtu.be/example" })',
+        ]).flat();
+        const result = await codeClient.callTool({
+          name: "code",
+          arguments: { code: `async () => Promise.all([${calls.join(",")}])` },
+        });
+        const content = result.content as Array<{ type: string; text: string }>;
+        if (result.isError) throw new Error(content[0]!.text);
+        expect(JSON.parse(content[0]!.text)).toHaveLength(rounds * toolCalls.length);
+      } finally {
+        await codeClient.close();
+        await codeServer.close();
+      }
+    },
+    30_000,
   );
 });

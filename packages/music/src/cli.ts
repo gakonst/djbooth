@@ -300,8 +300,14 @@ export function createMusicCli(
   return cli;
 }
 
-export async function runMusicCli(argv?: string[]): Promise<void> {
-  await createMusicCli().serve(argv);
+export async function runMusicCli(argv = process.argv.slice(2)): Promise<void> {
+  const cli = createMusicCli();
+  if (argv.length === 1 && argv[0] === "--codemode-mcp") {
+    const { serveLocalMusicCodeMcp } = await import("./mcp.js");
+    await serveLocalMusicCodeMcp({ cli });
+    return;
+  }
+  await cli.serve(argv);
 }
 
 function parseServerAddress(value: string): { host: string; port: number } {
