@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -67,15 +67,20 @@ function recordingPlan(directory: string): AcquisitionPlan {
 async function installFakeAudioTools(directory: string): Promise<string> {
   const bin = join(directory, "bin");
   await mkdir(bin);
-  const ffprobe = join(bin, "ffprobe");
-  const ffmpeg = join(bin, "ffmpeg");
+  const windows = process.platform === "win32";
+  const ffprobe = join(bin, windows ? "ffprobe.cmd" : "ffprobe");
+  const ffmpeg = join(bin, windows ? "ffmpeg.cmd" : "ffmpeg");
   await writeFile(
     ffprobe,
-    `#!/bin/sh\nprintf '%s\\n' '{"format":{"duration":"100","bit_rate":"128000","tags":{"title":"Track","artist":"Artist","comment":"test"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}'\n`,
+    windows
+      ? `@echo off\necho {"format":{"duration":"100","bit_rate":"128000","tags":{"title":"Track","artist":"Artist","comment":"test"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}\n`
+      : `#!/bin/sh\nprintf '%s\\n' '{"format":{"duration":"100","bit_rate":"128000","tags":{"title":"Track","artist":"Artist","comment":"test"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}'\n`,
   );
   await writeFile(
     ffmpeg,
-    '#!/bin/sh\ninput=\'\'\nprevious=\'\'\nfor argument in "$@"; do\n  if [ "$previous" = \'-i\' ]; then input="$argument"; fi\n  previous="$argument"\n  output="$argument"\ndone\ncp "$input" "$output"\n',
+    windows
+      ? '@echo off\nsetlocal EnableDelayedExpansion\nset "previous="\nfor %%A in (%*) do (\n  if "!previous!"=="-i" set "input=%%~A"\n  set "previous=%%~A"\n  set "output=%%~A"\n)\ncopy /Y "!input!" "!output!" >nul\n'
+      : '#!/bin/sh\ninput=\'\'\nprevious=\'\'\nfor argument in "$@"; do\n  if [ "$previous" = \'-i\' ]; then input="$argument"; fi\n  previous="$argument"\n  output="$argument"\ndone\ncp "$input" "$output"\n',
   );
   await Promise.all([chmod(ffprobe, 0o700), chmod(ffmpeg, 0o700)]);
   return bin;
@@ -335,7 +340,7 @@ describe("acquireManifest", () => {
       },
     };
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
     try {
       const result = await acquireManifest({
         manifestPath,
@@ -415,7 +420,7 @@ describe("acquireManifest", () => {
       outputPath: join(directory, "track-2.m4a"),
     });
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
     try {
       const result = await acquireManifest({
         manifestPath,
@@ -495,7 +500,7 @@ describe("acquireManifest", () => {
       },
     };
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
     try {
       const first = await acquireManifest({
         manifestPath,
@@ -622,7 +627,7 @@ describe("acquireManifest", () => {
     };
     const bin = await installFakeAudioTools(directory);
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
     try {
       const result = await acquireManifest({
         manifestPath,
@@ -732,7 +737,7 @@ describe("acquireManifest", () => {
     };
     const bin = await installFakeAudioTools(directory);
     const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
     try {
       await expect(
         acquireManifest({

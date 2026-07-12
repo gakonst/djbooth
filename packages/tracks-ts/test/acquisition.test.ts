@@ -97,7 +97,7 @@ describe("acquisition primitives", () => {
     await writeManifestAtomic(path, manifest);
 
     await expect(readManifest(path)).resolves.toEqual(manifest);
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual(manifest);
   });
 });
