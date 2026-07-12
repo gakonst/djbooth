@@ -60,6 +60,7 @@ export {
   inspectMediaMetadata,
   type CliCommand,
   type InspectMetadataOptions,
+  type MediaMetadataClient,
   type MediaMetadata,
 } from "./integrations/ytdlp.js";
 export {

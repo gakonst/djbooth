@@ -10,10 +10,12 @@ import { getYtdlpTsCommand, inspectMediaMetadata } from "../src/integrations/ytd
 
 describe("ytdlp-ts metadata integration", () => {
   test("uses the workspace-installed CLI by default", async () => {
-    await expect(getYtdlpTsCommand({})).resolves.toEqual({
-      executable: "ytdlp-ts",
-      prefix: [],
-    });
+    const command = await getYtdlpTsCommand({});
+    expect(command.executable).toBe(process.execPath);
+    expect(command.prefix).toHaveLength(1);
+    expect(command.prefix[0]).toMatch(
+      /[/\\]@?gakonst[/\\]ytdlp-ts[/\\]dist[/\\]cli\.js$|[/\\]packages[/\\]ytdlp-ts[/\\]dist[/\\]cli\.js$/u,
+    );
   });
 
   test("inspects metadata with no-playlist and never invokes download", async () => {

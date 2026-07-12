@@ -61,13 +61,20 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     }
     options.onProgress?.({ phase: "metadata", message: "Reading set description with ytdlp-ts" });
     try {
-      const metadata = await inspectMediaMetadata(source, {
+      const metadata = await (options.metadataClient?.inspect(source, {
         env,
         ...(options.cookies ? { cookies: options.cookies } : {}),
         ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
-      });
+      }) ??
+        inspectMediaMetadata(source, {
+          env,
+          ...(options.cookies ? { cookies: options.cookies } : {}),
+          ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
+        }));
       const described = tracklistFromDescription(source, metadata);
       if (described) return described;
       if (provider === "description") {

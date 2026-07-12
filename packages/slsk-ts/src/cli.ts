@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from 'node:module'
 import path from 'node:path'
 
 import { Cli, z } from 'incur'
@@ -45,7 +46,7 @@ async function connected<T>(env: Auth, run: (client: SoulseekClient) => Promise<
 }
 
 const cli = Cli.create('slsk', {
-  version: '0.1.0',
+  version: (createRequire(import.meta.url)('../package.json') as { version: string }).version,
   description: 'A complete command-line client for the Soulseek network.',
   sync: {
     suggestions: [

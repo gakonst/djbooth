@@ -30,8 +30,8 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Use current npm for trusted publishing
-        run: npm install --global npm@latest
+      - name: Use npm 11 for trusted publishing
+        run: npm install --global npm@11
 
       - name: PR or publish
         id: changesets

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 import { Cli, z } from 'incur'
@@ -17,7 +18,9 @@ import { ExtractorRegistry } from './extractors/registry.js'
 import { downloadMedia, supportsNativeDownloadOptions } from './downloader/native.js'
 import { downloadMusicBatch } from './music.js'
 
-const VERSION = '0.2.0'
+const { version: VERSION } = createRequire(import.meta.url)('../package.json') as {
+  version: string
+}
 const engine = z.enum(['auto', 'native', 'reference']).default('auto').describe('Execution engine')
 
 const inspectOptions = z.object({

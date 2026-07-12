@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createRequire } from "node:module";
 import { readFile, stat } from "node:fs/promises";
 
 import { Cli, z } from "incur";
@@ -14,7 +15,9 @@ import { parseTracklistJson, renderTracklist } from "./render.js";
 import { requireTimestamp } from "./time.js";
 import type { Environment } from "./types.js";
 
-const VERSION = "0.1.0";
+const { version: VERSION } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 const provider = z
   .enum(["auto", "description", "1001tracklists", "audd", "acrcloud"])

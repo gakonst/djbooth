@@ -13,6 +13,7 @@
     "format": "pnpm -r --if-present run format",
     "format:check": "pnpm -r --if-present run format:check",
     "lint": "pnpm -r --if-present run lint",
+    "music": "pnpm --filter @gakonst/music cli",
     "rekordbox": "pnpm --filter @gakonst/rekordbox cli",
     "slsk": "pnpm --filter slsk-ts cli",
     "spots": "pnpm --filter @gakonst/spots cli",
@@ -20,8 +21,8 @@
     "test:coverage": "pnpm -r --workspace-concurrency=2 --if-present run test:coverage",
     "test:pack": "node scripts/smoke-packed-clis.mjs",
     "tracks": "pnpm --filter @gakonst/tracks cli",
-    "typecheck": "pnpm -r --workspace-concurrency=2 run typecheck",
-    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "typecheck": "pnpm build && pnpm -r --workspace-concurrency=2 run typecheck",
+    "validate": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "ytdlp": "pnpm --filter @gakonst/ytdlp-ts dev"
   },
   "devDependencies": {

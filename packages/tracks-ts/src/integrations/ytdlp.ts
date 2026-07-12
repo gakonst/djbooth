@@ -1,3 +1,6 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { JsonDiskCache, type CacheMode } from "../cache.js";
 import { TracksError } from "../errors.js";
 import { runProcess } from "../process.js";
@@ -20,6 +23,10 @@ export interface InspectMetadataOptions {
   signal?: AbortSignal;
   cache?: JsonDiskCache | false;
   cacheMode?: CacheMode;
+}
+
+export interface MediaMetadataClient {
+  inspect(source: string, options?: Omit<InspectMetadataOptions, "cache">): Promise<MediaMetadata>;
 }
 
 export interface CliCommand {
@@ -147,7 +154,8 @@ async function inspectMediaMetadataUncached(
 
 export async function getYtdlpTsCommand(env: Environment = process.env): Promise<CliCommand> {
   if (env.YTDLP_TS_PATH) return commandForPath(env.YTDLP_TS_PATH);
-  return { executable: "ytdlp-ts", prefix: [] };
+  const entrypoint = fileURLToPath(import.meta.resolve("@gakonst/ytdlp-ts"));
+  return commandForPath(join(dirname(entrypoint), "cli.js"));
 }
 
 function commandForPath(path: string): { executable: string; prefix: string[] } {

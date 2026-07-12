@@ -4,7 +4,11 @@
  * @packageDocumentation
  */
 
-export const version = "0.1.0";
+import { createRequire } from "node:module";
+
+export const { version } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 export * from "./anlz/index.js";
 export * from "./config/index.js";

@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 import Database from "better-sqlite3-multiple-ciphers";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,10 +23,16 @@ function runCli(...args: Array<string>) {
 
 describe("CLI process boundary", () => {
   it("serves the named CLI and machine-readable status", () => {
+    const packageJson = createRequire(import.meta.url)("../package.json") as { version: string };
+    const version = runCli("--version");
+    expect(version.status, version.stderr).toBe(0);
+    expect(version.stdout.trim()).toBe(packageJson.version);
+
     const status = runCli("status", "--json");
     expect(status.status, status.stderr).toBe(0);
     expect(JSON.parse(status.stdout)).toMatchObject({
       name: "@gakonst/rekordbox",
+      version: packageJson.version,
       phase: "complete-port",
     });
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Music"
+  short_description: "Build and maintain a DJ music library"
+  default_prompt: "Use $music to resolve a DJ set, enrich and acquire its tracks, and add the result to Rekordbox."

@@ -89,6 +89,7 @@ export interface IdentifyOptions {
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
   env?: Environment;
+  metadataClient?: MediaMetadataClient;
   onProgress?: (progress: IdentifyProgress) => void;
 }
 
@@ -149,3 +150,4 @@ export interface ChartTracks {
 }
 
 export type FindTracklistResult = { found: false } | ({ found: true } & DatabaseTracklist);
+import type { MediaMetadataClient } from "./integrations/ytdlp.js";

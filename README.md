@@ -8,14 +8,28 @@ Git histories under `packages/`.
 
 | Package                                       | CLI         | Responsibility                                                         |
 | --------------------------------------------- | ----------- | ---------------------------------------------------------------------- |
+| [`@gakonst/music`](packages/music)            | `music`     | Unified namespace/subpath API, CLI, agent Skill, and MCP entrypoint    |
 | [`@gakonst/tracks`](packages/tracks-ts)       | `tracks`    | Set/tracklist resolution, orchestration, caches, acquisition manifests |
 | [`@gakonst/spots`](packages/spots)            | `spots`     | Typed Spotify Web API, OAuth, playlists, metadata                      |
 | [`slsk-ts`](packages/slsk-ts)                 | `slsk`      | Soulseek protocol, search, shares, individual-file downloads           |
 | [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)      | `ytdlp-ts`  | YouTube/SoundCloud inspection and resilient media acquisition          |
 | [`@gakonst/rekordbox`](packages/rekordbox-ts) | `rekordbox` | Normal encrypted Rekordbox database and format APIs                    |
 
-Package licenses remain package-local; `ytdlp-ts` uses the Unlicense and the other packages use
-MIT.
+Package licenses remain package-local; `ytdlp-ts` uses the Unlicense and the other packages use MIT.
+
+Install one package and use only the subpaths needed by a process:
+
+```sh
+pnpm add --allow-build=better-sqlite3-multiple-ciphers @gakonst/music
+```
+
+```ts
+import { identify } from "@gakonst/music/tracks";
+import { SpotifyClient } from "@gakonst/music/spots";
+import { SoulseekClient } from "@gakonst/music/slsk";
+import { ReferenceClient } from "@gakonst/music/ytdlp";
+import { MasterDatabase } from "@gakonst/music/rekordbox";
+```
 
 ## Pipeline
 
@@ -30,6 +44,7 @@ YouTube / SoundCloud set
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording
 jobs run concurrently; manifest checkpoints and Rekordbox mutations stay serialized and fail closed.
+The umbrella CLI composes their library APIs; it does not shell between package CLIs.
 
 ## Development
 
@@ -39,11 +54,19 @@ Requirements: Node.js 22 or 24, pnpm 10.30.2, plus ffmpeg/ffprobe for media inte
 pnpm install
 pnpm validate
 
+pnpm music --help
 pnpm tracks --help
 pnpm spots --help
 pnpm slsk --help
 pnpm ytdlp --help
 pnpm rekordbox --help
+```
+
+Install the single aggregate agent skill or register the same typed command map as MCP:
+
+```sh
+pnpm music skills add
+pnpm music mcp add
 ```
 
 Package-scoped iteration remains available:

@@ -4,6 +4,34 @@ import { identify } from "../src/identify.js";
 import { createManifest } from "../src/manifest.js";
 
 describe("identify", () => {
+  test("accepts a library metadata client without spawning the ytdlp-ts CLI", async () => {
+    const inspect = vi.fn(async () => ({
+      id: "set-id",
+      title: "Library Set",
+      description: "00:00 Artist - Track\n03:00 Artist - Next",
+      durationSeconds: 360,
+      webpageUrl: "https://youtu.be/library",
+      uploader: "DJ",
+    }));
+
+    const result = await identify("https://youtu.be/library", {
+      provider: "description",
+      cacheMode: "off",
+      env: {},
+      metadataClient: { inspect },
+    });
+
+    expect(result).toMatchObject({
+      provider: "description",
+      title: "Library Set",
+      tracks: [
+        { order: 1, startSeconds: 0, artist: "Artist", title: "Track" },
+        { order: 2, startSeconds: 180, artist: "Artist", title: "Next" },
+      ],
+    });
+    expect(inspect).toHaveBeenCalledOnce();
+  });
+
   test("returns an existing 1001Tracklists result before recognition", async () => {
     const fetch = vi.fn(async () =>
       Response.json({

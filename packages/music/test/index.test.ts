@@ -1,0 +1,26 @@
+import { describe, expect, test } from "vitest";
+
+import { rekordbox, slsk, spots, tracks, ytdlp } from "../src/index.js";
+import * as rekordboxSubpath from "../src/rekordbox.js";
+import * as slskSubpath from "../src/slsk.js";
+import * as spotsSubpath from "../src/spots.js";
+import * as tracksSubpath from "../src/tracks.js";
+import * as ytdlpSubpath from "../src/ytdlp.js";
+
+describe("umbrella exports", () => {
+  test("exposes collision-free package namespaces", () => {
+    expect(tracks.identify).toBeTypeOf("function");
+    expect(spots.SpotifyClient).toBeTypeOf("function");
+    expect(slsk.SoulseekClient).toBeTypeOf("function");
+    expect(ytdlp.ReferenceClient).toBeTypeOf("function");
+    expect(rekordbox.MasterDatabase).toBeTypeOf("function");
+  });
+
+  test("re-exports each package through its dedicated subpath module", () => {
+    expect(tracksSubpath.identify).toBe(tracks.identify);
+    expect(spotsSubpath.SpotifyClient).toBe(spots.SpotifyClient);
+    expect(slskSubpath.SoulseekClient).toBe(slsk.SoulseekClient);
+    expect(ytdlpSubpath.ReferenceClient).toBe(ytdlp.ReferenceClient);
+    expect(rekordboxSubpath.MasterDatabase).toBe(rekordbox.MasterDatabase);
+  });
+});

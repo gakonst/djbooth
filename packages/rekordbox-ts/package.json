@@ -25,6 +25,7 @@
   },
   "files": [
     "dist",
+    "PORTING.md",
     "README.md",
     "LICENSE"
   ],
@@ -69,6 +70,8 @@
     "check": "oxlint src test && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint src test",
     "prepack": "pnpm build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

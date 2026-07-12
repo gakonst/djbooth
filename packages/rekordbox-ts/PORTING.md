@@ -80,7 +80,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 ### 2026-07-10 — Global CLI installation and CI
 
 - Treat the database API as the primary product path; collection XML remains a supported interchange format rather than the default local-library interface.
-- Install `rekordbox` as the canonical global command and `rekordbox-ts` as an explicit alias. Build `dist` during Git dependency preparation and package creation so the repository itself is installable without committed build artifacts.
+- Install `rekordbox` as the canonical global command and `rekordbox-ts` as an explicit alias. Build `dist` during package creation so published archives do not require committed build artifacts.
 - Require pnpm 10's explicit `--allow-build=better-sqlite3-multiple-ciphers` acknowledgement for global installs. This preserves pnpm's native-script security model while enabling the SQLCipher binding needed by database commands.
 - Run validation on Node 22 across Linux, macOS, and Windows. Package/global-install CI additionally invokes both command names and queries a real plain SQLite fixture, preventing a command-shim-only false positive.
 
