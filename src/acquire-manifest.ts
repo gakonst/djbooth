@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, resolve } from "node:path";
 
 import {
@@ -24,6 +24,7 @@ import type {
   SpotifyCandidate,
 } from "./manifest.js";
 import { parseManifest } from "./manifest.js";
+import { JsonDiskCache, type CacheStats } from "./cache.js";
 
 export type SpotifyLibraryClient = {
   raw<T = unknown>(
@@ -133,6 +134,25 @@ export type AcquireManifestResult = {
   failures: AcquireFailure[];
   unavailableBackends: Array<{ backend: AcquisitionBackend; reason: string }>;
   verification?: AcquisitionVerification;
+  performance: AcquisitionPerformance;
+};
+
+export type AcquisitionPerformance = {
+  startedAt: string;
+  finishedAt: string;
+  totalMs: number;
+  concurrency: number;
+  stages: Array<{ stage: string; durationMs: number; operations?: number }>;
+  checkpoints: { writes: number; skipped: number; durationMs: number };
+  caches?: Record<string, CacheStats>;
+};
+
+type AcquisitionVerificationReceipt = {
+  sha256: string;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  ino: number | bigint;
 };
 
 export type AcquisitionVerification = {
@@ -154,6 +174,10 @@ export type AcquireManifestOptions = {
   requireCompletePlan?: boolean;
   dryRun?: boolean;
   continueOnError?: boolean;
+  /** Independent recording jobs. Variants of one ambiguous cue remain ordered. */
+  concurrency?: number;
+  /** Optional stat-keyed cache for successful SHA/tag/duration verification receipts. */
+  verificationCache?: JsonDiskCache | false;
   onProgress?: (progress: AcquireProgress) => void;
 };
 
@@ -164,21 +188,78 @@ export type AcquireManifestOptions = {
 export async function acquireManifest(
   options: AcquireManifestOptions,
 ): Promise<AcquireManifestResult> {
+  const runStartedAt = new Date();
+  const runStarted = performance.now();
+  const stages: AcquisitionPerformance["stages"] = [];
+  let checkpointMs = 0;
+  let checkpointCalls = 0;
+  let checkpointWrites = 0;
+  const measure = async <T>(stage: string, task: () => T | Promise<T>): Promise<T> => {
+    const started = performance.now();
+    try {
+      return await task();
+    } finally {
+      stages.push({ stage, durationMs: roundMilliseconds(performance.now() - started) });
+    }
+  };
+  const concurrency = integerConcurrency(options.concurrency ?? 3);
+  const verificationCache =
+    options.verificationCache === false ? undefined : options.verificationCache;
+  const verificationCacheBefore = verificationCache?.snapshot();
+  const performanceResult = (): AcquisitionPerformance => ({
+    startedAt: runStartedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    totalMs: roundMilliseconds(performance.now() - runStarted),
+    concurrency,
+    stages,
+    checkpoints: {
+      writes: checkpointWrites,
+      skipped: checkpointCalls - checkpointWrites,
+      durationMs: roundMilliseconds(checkpointMs),
+    },
+    ...(verificationCache
+      ? {
+          caches: { audio: cacheStatsDelta(verificationCache.snapshot(), verificationCacheBefore) },
+        }
+      : {}),
+  });
   const manifestPath = resolve(options.manifestPath);
-  const release = await acquirePipelineManifestLock(manifestPath);
+  const release = await measure("manifest-lock", () => acquirePipelineManifestLock(manifestPath));
   try {
     let expectedManifestContents = await readFile(manifestPath, "utf8");
     let manifest = parseManifest(JSON.parse(expectedManifestContents) as unknown);
     let checkpointedManifest = structuredClone(manifest);
-    const checkpoint = async (): Promise<void> => {
-      invalidateChangedRekordboxState(checkpointedManifest, manifest);
-      await writeManifestAtomic(manifestPath, manifest, {
-        expectedContents: expectedManifestContents,
+    let checkpointTail = Promise.resolve();
+    const checkpoint = (mutate?: () => void): Promise<void> => {
+      const next = checkpointTail.then(async () => {
+        const checkpointStarted = performance.now();
+        checkpointCalls += 1;
+        mutate?.();
+        invalidateChangedRekordboxState(checkpointedManifest, manifest);
+        const snapshot = structuredClone(manifest);
+        const serialized = serializeManifest(snapshot);
+        if (serialized === expectedManifestContents) {
+          checkpointedManifest = snapshot;
+          checkpointMs += performance.now() - checkpointStarted;
+          return;
+        }
+        try {
+          checkpointWrites += 1;
+          await writeManifestAtomic(manifestPath, snapshot, {
+            expectedContents: expectedManifestContents,
+          });
+          expectedManifestContents = serialized;
+          checkpointedManifest = snapshot;
+        } finally {
+          checkpointMs += performance.now() - checkpointStarted;
+        }
       });
-      expectedManifestContents = serializeManifest(manifest);
-      checkpointedManifest = structuredClone(manifest);
+      checkpointTail = next.catch(() => undefined);
+      return next;
     };
-    if (options.prepare) manifest = await options.prepare(manifest);
+    if (options.prepare) {
+      manifest = await measure("manifest-prepare", () => options.prepare!(manifest));
+    }
     const downloaded: string[] = [];
     const resumed: string[] = [];
     const failures: AcquireFailure[] = [];
@@ -195,304 +276,367 @@ export async function acquireManifest(
         message: "Refreshing known tracks with one long-lived Spotify client",
       });
       try {
-        await refreshKnownSpotifyTracks(manifest, options.spotify);
+        await measure("spotify-refresh", () =>
+          refreshKnownSpotifyTracks(manifest, options.spotify!),
+        );
       } catch (error) {
         const warning = `Spotify refresh failed; retained checkpointed metadata: ${errorMessage(error)}`;
         if (!manifest.warnings.includes(warning)) manifest.warnings.push(warning);
       }
     }
 
-    const plan = typeof options.plan === "function" ? await options.plan(manifest) : options.plan;
+    const plan = await measure("acquisition-plan", async () =>
+      typeof options.plan === "function" ? options.plan(manifest) : options.plan,
+    );
     validatePlan(manifest, plan, options.requireCompletePlan ?? false);
     if (options.dryRun) {
       invalidateChangedRekordboxState(checkpointedManifest, manifest);
-      return { manifest, downloaded, resumed, failures, unavailableBackends };
+      return {
+        manifest,
+        downloaded,
+        resumed,
+        failures,
+        unavailableBackends,
+        performance: performanceResult(),
+      };
     }
 
-    for (const source of plan.sourceSets ?? []) {
-      const verified = await verifyAudioFile(source.path, {
-        expectedSha256: source.sha256,
-        expectedDurationSeconds: source.durationSeconds,
-        durationToleranceSeconds: 0.1,
+    const verificationReceipts = await measure("artifact-preflight", () =>
+      preflightExistingArtifacts(manifest, plan, Math.max(concurrency, 4), verificationCache),
+    );
+    const plannedPaths = [
+      ...plan.clips.map((clip) => clip.outputPath),
+      ...plan.recordings.flatMap((recording) =>
+        recording.variants.map((variant) => variant.outputPath),
+      ),
+    ];
+    if (plannedPaths.every((path) => verificationReceipts.has(path))) {
+      let verification: AcquisitionVerification | undefined;
+      try {
+        verification = await measure("resume-fast-path", () =>
+          verifyAcquisitionPlan(manifest, plan, verificationReceipts),
+        );
+      } catch {
+        // Valid media without a complete manifest checkpoint falls through for reconciliation.
+      }
+      if (verification) {
+        resumed.push(...plannedPaths);
+        await checkpoint();
+        return {
+          manifest,
+          downloaded,
+          resumed: resumed.toSorted(),
+          failures,
+          unavailableBackends,
+          verification,
+          performance: performanceResult(),
+        };
+      }
+    }
+    const missingSetClip = [
+      ...plan.clips.map((clip) => clip.outputPath),
+      ...plan.recordings.flatMap((recording) =>
+        recording.variants.flatMap((variant) => (variant.sourceClip ? [variant.outputPath] : [])),
+      ),
+    ].some((path) => !verificationReceipts.has(path));
+    if (missingSetClip) {
+      await measure("source-set-verification", async () => {
+        for (const source of plan.sourceSets ?? []) {
+          const verified = await verifyAudioFile(source.path, {
+            expectedSha256: source.sha256,
+            expectedDurationSeconds: source.durationSeconds,
+            durationToleranceSeconds: 0.1,
+          });
+          if (verified.probe.codec !== source.codec) {
+            throw new Error(
+              `Source-set codec mismatch for ${source.path}: expected ${source.codec}, got ${verified.probe.codec}`,
+            );
+          }
+          if (verified.probe.bitrate !== source.bitrate) {
+            throw new Error(
+              `Source-set bitrate mismatch for ${source.path}: expected ${source.bitrate}, got ${String(verified.probe.bitrate)}`,
+            );
+          }
+        }
       });
-      if (verified.probe.codec !== source.codec) {
-        throw new Error(
-          `Source-set codec mismatch for ${source.path}: expected ${source.codec}, got ${verified.probe.codec}`,
-        );
-      }
-      if (verified.probe.bitrate !== source.bitrate) {
-        throw new Error(
-          `Source-set bitrate mismatch for ${source.path}: expected ${source.bitrate}, got ${String(verified.probe.bitrate)}`,
-        );
-      }
     }
     await checkpoint();
 
     const availableAcquirers: TrackAcquirer[] = [];
-    for (const acquirer of options.acquirers) {
-      const availability = await acquirer.availability();
-      if (availability.available) {
-        availableAcquirers.push(acquirer);
-      } else {
-        unavailableBackends.push({ backend: acquirer.backend, reason: availability.reason });
-        const warning = `${acquirer.backend} unavailable: ${availability.reason}`;
-        if (!manifest.warnings.includes(warning)) manifest.warnings.push(warning);
-        options.onProgress?.({
-          phase: "backend",
-          message: `${acquirer.backend} unavailable: ${availability.reason}`,
-        });
-      }
+    const needsBackend = plan.recordings.some((recording) =>
+      recording.variants.some(
+        (variant) => !variant.sourceClip && !verificationReceipts.has(variant.outputPath),
+      ),
+    );
+    if (needsBackend) {
+      await measure("backend-availability", async () => {
+        const availability = await Promise.all(
+          options.acquirers.map(async (acquirer) => ({
+            acquirer,
+            availability: await acquirer.availability(),
+          })),
+        );
+        for (const result of availability) {
+          if (result.availability.available) {
+            availableAcquirers.push(result.acquirer);
+          } else {
+            unavailableBackends.push({
+              backend: result.acquirer.backend,
+              reason: result.availability.reason,
+            });
+            const warning = `${result.acquirer.backend} unavailable: ${result.availability.reason}`;
+            if (!manifest.warnings.includes(warning)) manifest.warnings.push(warning);
+            options.onProgress?.({ phase: "backend", message: warning });
+          }
+        }
+      });
     }
     await checkpoint();
 
-    for (const clip of plan.clips) {
-      const entry = requireEntry(manifest, clip.entryOrder);
-      options.onProgress?.({
-        phase: "clip",
-        entryOrder: clip.entryOrder,
-        message: `Extracting set cue ${clip.entryOrder}`,
-      });
-      try {
-        const prior = downloadForPath(entry, clip.outputPath);
-        if (await validExisting(clip.outputPath, clip.metadata, prior?.sha256)) {
-          await verifyAudioFile(clip.outputPath, {
-            expectedDurationSeconds: clip.endSeconds - clip.startSeconds,
-            durationToleranceSeconds: 2,
-            expectedMetadata: clip.metadata,
-            ...(prior?.sha256 ? { expectedSha256: prior.sha256 } : {}),
-          });
-          resumed.push(clip.outputPath);
-          entry.acquisition = clipState(
-            clip,
-            prior?.sha256 ?? (await verifyAudioFile(clip.outputPath)).sha256,
-          );
-        } else {
-          const verified = await createSourceSetClip({
-            sourcePath: clip.sourcePath,
-            outputPath: clip.outputPath,
-            startSeconds: clip.startSeconds,
-            endSeconds: clip.endSeconds,
-            metadata: clip.metadata,
-          });
-          downloaded.push(clip.outputPath);
-          entry.acquisition = clipState(clip, verified.sha256);
-        }
-        clearAcquisitionErrors(entry);
-        await checkpoint();
-      } catch (error) {
-        const failure = toFailure(clip.entryOrder, undefined, error);
-        failures.push(failure);
-        markFailure(entry, failure.message);
-        await checkpoint();
-        if (options.continueOnError === false) throw error;
-      }
-    }
-
-    await mkdir(plan.stagingDirectory, { recursive: true });
-    for (const recording of plan.recordings) {
-      const entry = requireEntry(manifest, recording.entryOrder);
-      const priorAcquisition =
-        entry.acquisition.status === "downloaded" ? structuredClone(entry.acquisition) : undefined;
-      const priorDownloads = new Map(
-        priorAcquisition
-          ? [priorAcquisition.download, ...(priorAcquisition.alternatives ?? [])].flatMap(
-              (download) => (download.spotifyId ? [[download.spotifyId, download] as const] : []),
-            )
-          : [],
-      );
-      const completed: Array<{
-        download: AcquisitionDownload;
-        candidate?: AcquisitionCandidate;
-      }> = [];
-      let recordingFailed = false;
-      for (const [variantIndex, variant] of recording.variants.entries()) {
+    await measure("clips", () =>
+      mapConcurrent(plan.clips, Math.min(concurrency, 2), async (clip) => {
         options.onProgress?.({
-          phase: "recording",
-          entryOrder: recording.entryOrder,
-          variant: variantIndex + 1,
-          totalVariants: recording.variants.length,
-          message: `Acquiring ${variant.artists.join(", ")} — ${variant.title}`,
+          phase: "clip",
+          entryOrder: clip.entryOrder,
+          message: `Extracting set cue ${clip.entryOrder}`,
         });
         try {
-          const prior = priorDownloads.get(variant.spotifyId);
-          if (prior && prior.mediaPath !== variant.outputPath) {
-            variant.outputPath = prior.mediaPath;
-          }
-          if (
-            (prior !== undefined || variant.sourceClip !== undefined) &&
-            (await validExisting(variant.outputPath, variant.metadata, prior?.sha256))
-          ) {
-            const expectedDurationSeconds = variant.sourceClip
-              ? variant.sourceClip.endSeconds - variant.sourceClip.startSeconds
-              : variant.durationMs === undefined
-                ? undefined
-                : variant.durationMs / 1000;
-            const verified = await verifyAudioFile(variant.outputPath, {
-              ...(expectedDurationSeconds === undefined ? {} : { expectedDurationSeconds }),
-              durationToleranceSeconds: variant.sourceClip
-                ? 2
-                : Math.max(10, ((variant.durationMs ?? 0) / 1000) * 0.035),
-              expectedMetadata: variant.metadata,
-            });
-            const priorCandidate = candidateFromDownload(prior, priorAcquisition, variant);
-            completed.push({
-              download:
-                prior ??
-                (variant.sourceClip
-                  ? recordingClipDownload(variant, verified.sha256)
-                  : individualDownload(variant, variant.outputPath, verified.sha256)),
-              ...(priorCandidate ? { candidate: priorCandidate } : {}),
-            });
-            resumed.push(variant.outputPath);
-            continue;
-          }
-
-          if (variant.sourceClip) {
-            const clip = variant.sourceClip;
+          let sha256 = verificationReceipts.get(clip.outputPath)?.sha256;
+          if (sha256) {
+            resumed.push(clip.outputPath);
+          } else {
             const verified = await createSourceSetClip({
               sourcePath: clip.sourcePath,
-              outputPath: variant.outputPath,
+              outputPath: clip.outputPath,
               startSeconds: clip.startSeconds,
               endSeconds: clip.endSeconds,
-              metadata: variant.metadata,
+              metadata: clip.metadata,
             });
-            completed.push({
-              download: {
-                backend: "ytdlp",
-                kind: "source-set-clip",
-                mediaPath: variant.outputPath,
-                files: [variant.outputPath],
-                source: clip.sourceUrl,
-                engine: "reference",
-                sha256: verified.sha256,
-                spotifyId: variant.spotifyId,
-                clip: {
-                  sourceSetUrl: clip.sourceUrl,
-                  ...(clip.sourceTitle ? { sourceSetTitle: clip.sourceTitle } : {}),
-                  startSeconds: clip.startSeconds,
-                  endSeconds: clip.endSeconds,
-                  containsTransitions: clip.containsTransitions,
-                  qualityNote: clip.qualityNote,
-                },
-              },
-            });
-            addUniqueWarning(
-              entry,
-              `${variant.spotifyId} is a cue-based source-set extract, not a verified release master; ISRC deliberately omitted`,
-            );
-            downloaded.push(variant.outputPath);
-            persistPartial(entry, recording, completed);
-            await checkpoint();
-            continue;
+            sha256 = verified.sha256;
+            downloaded.push(clip.outputPath);
           }
-
-          const target: YoutubeTarget = {
-            title: variant.title,
-            artists: variant.artists,
-            ...(variant.durationMs === undefined
-              ? {}
-              : { durationSeconds: variant.durationMs / 1000 }),
-          };
-          const acquired = await acquireVariant(
-            target,
-            variant,
-            availableAcquirers,
-            plan.stagingDirectory,
-            minimumScore,
-            variant.preferredCandidate,
-          );
-          const adaptedOutputPath = outputPathForSource(
-            variant.outputPath,
-            acquired.source.path,
-            acquired.acquirer.backend,
-          );
-          assertAdaptedOutputUnique(plan, variant, adaptedOutputPath);
-          variant.outputPath = adaptedOutputPath;
-          const retagCodec = retagCodecForSource(
-            acquired.source.path,
-            variant.outputPath,
-            acquired.acquirer.backend,
-          );
-          const tagged = await retagAudio({
-            sourcePath: acquired.source.path,
-            outputPath: variant.outputPath,
-            metadata: variant.metadata,
-            audioCodec: retagCodec,
-            ...(variant.durationMs === undefined
-              ? {}
-              : { expectedDurationSeconds: variant.durationMs / 1000 }),
+          await checkpoint(() => {
+            const entry = requireEntry(manifest, clip.entryOrder);
+            entry.acquisition = clipState(clip, sha256);
+            clearAcquisitionErrors(entry);
           });
-          if (acquired.source.temporary !== false) await rm(acquired.source.path, { force: true });
-          const download: AcquisitionDownload = {
-            backend: acquired.acquirer.backend,
-            kind: "individual",
-            mediaPath: variant.outputPath,
-            files: [variant.outputPath],
-            source: acquired.candidate.source,
-            ...(acquired.source.engine ? { engine: acquired.source.engine } : {}),
-            sha256: tagged.sha256,
-            spotifyId: variant.spotifyId,
-            ...(variant.isrc ? { isrc: variant.isrc } : {}),
-          };
-          if (acquired.source.qualityNote) {
-            addUniqueWarning(
-              entry,
-              `${variant.spotifyId} acquisition quality: ${acquired.source.qualityNote}`,
-            );
-          }
-          if (acquired.source.transcoded) {
-            addUniqueWarning(
-              entry,
-              `${variant.spotifyId} required a lossy compatibility transcode`,
-            );
-          }
-          if (retagCodec === "aac") {
-            addUniqueWarning(
-              entry,
-              `${variant.spotifyId} Soulseek source required a lossy AAC compatibility transcode`,
-            );
-          } else if (retagCodec === "flac") {
-            addUniqueWarning(
-              entry,
-              `${variant.spotifyId} Soulseek PCM source was losslessly converted to FLAC`,
-            );
-          }
-          completed.push({
-            download,
-            candidate: manifestCandidate(acquired.acquirer, acquired.candidate),
-          });
-          downloaded.push(variant.outputPath);
-          persistPartial(entry, recording, completed);
-          await checkpoint();
         } catch (error) {
-          recordingFailed = true;
-          const failure = toFailure(recording.entryOrder, variant.spotifyId, error);
+          const failure = toFailure(clip.entryOrder, undefined, error);
           failures.push(failure);
-          if (completed.length) {
-            persistPartial(entry, recording, completed);
-            addAcquisitionError(entry, failure.message);
-          } else {
-            markFailure(entry, failure.message, variant.searchQuery);
-          }
-          await checkpoint();
+          await checkpoint(() =>
+            markFailure(requireEntry(manifest, clip.entryOrder), failure.message),
+          );
           if (options.continueOnError === false) throw error;
         }
-      }
-      if (!recordingFailed && completed.length === recording.variants.length) {
-        persistPartial(entry, recording, completed);
-        clearAcquisitionErrors(entry);
-        await checkpoint();
-      }
-    }
+      }),
+    );
 
-    const verification = failures.length ? undefined : await verifyAcquisitionPlan(manifest, plan);
+    await mkdir(plan.stagingDirectory, { recursive: true });
+    await measure("recordings", () =>
+      mapConcurrent(plan.recordings, concurrency, async (recording) => {
+        const entry = structuredClone(requireEntry(manifest, recording.entryOrder));
+        const persistEntry = () => checkpoint(() => replaceEntry(manifest, structuredClone(entry)));
+        const priorAcquisition =
+          entry.acquisition.status === "downloaded"
+            ? structuredClone(entry.acquisition)
+            : undefined;
+        const priorDownloads = new Map(
+          priorAcquisition
+            ? [priorAcquisition.download, ...(priorAcquisition.alternatives ?? [])].flatMap(
+                (download) => (download.spotifyId ? [[download.spotifyId, download] as const] : []),
+              )
+            : [],
+        );
+        const completed: Array<{
+          download: AcquisitionDownload;
+          candidate?: AcquisitionCandidate;
+        }> = [];
+        let recordingFailed = false;
+        for (const [variantIndex, variant] of recording.variants.entries()) {
+          options.onProgress?.({
+            phase: "recording",
+            entryOrder: recording.entryOrder,
+            variant: variantIndex + 1,
+            totalVariants: recording.variants.length,
+            message: `Acquiring ${variant.artists.join(", ")} — ${variant.title}`,
+          });
+          try {
+            const prior = priorDownloads.get(variant.spotifyId);
+            if (prior && prior.mediaPath !== variant.outputPath) {
+              variant.outputPath = prior.mediaPath;
+            }
+            const receipt = verificationReceipts.get(variant.outputPath);
+            if (receipt) {
+              const priorCandidate = candidateFromDownload(prior, priorAcquisition, variant);
+              completed.push({
+                download:
+                  prior ??
+                  (variant.sourceClip
+                    ? recordingClipDownload(variant, receipt.sha256)
+                    : individualDownload(variant, variant.outputPath, receipt.sha256)),
+                ...(priorCandidate ? { candidate: priorCandidate } : {}),
+              });
+              resumed.push(variant.outputPath);
+              continue;
+            }
+
+            if (variant.sourceClip) {
+              const clip = variant.sourceClip;
+              const verified = await createSourceSetClip({
+                sourcePath: clip.sourcePath,
+                outputPath: variant.outputPath,
+                startSeconds: clip.startSeconds,
+                endSeconds: clip.endSeconds,
+                metadata: variant.metadata,
+              });
+              completed.push({
+                download: {
+                  backend: "ytdlp",
+                  kind: "source-set-clip",
+                  mediaPath: variant.outputPath,
+                  files: [variant.outputPath],
+                  source: clip.sourceUrl,
+                  engine: "reference",
+                  sha256: verified.sha256,
+                  spotifyId: variant.spotifyId,
+                  clip: {
+                    sourceSetUrl: clip.sourceUrl,
+                    ...(clip.sourceTitle ? { sourceSetTitle: clip.sourceTitle } : {}),
+                    startSeconds: clip.startSeconds,
+                    endSeconds: clip.endSeconds,
+                    containsTransitions: clip.containsTransitions,
+                    qualityNote: clip.qualityNote,
+                  },
+                },
+              });
+              addUniqueWarning(
+                entry,
+                `${variant.spotifyId} is a cue-based source-set extract, not a verified release master; ISRC deliberately omitted`,
+              );
+              downloaded.push(variant.outputPath);
+              persistPartial(entry, recording, completed);
+              await persistEntry();
+              continue;
+            }
+
+            const target: YoutubeTarget = {
+              title: variant.title,
+              artists: variant.artists,
+              ...(variant.durationMs === undefined
+                ? {}
+                : { durationSeconds: variant.durationMs / 1000 }),
+            };
+            const acquired = await acquireVariant(
+              target,
+              variant,
+              availableAcquirers,
+              plan.stagingDirectory,
+              minimumScore,
+              variant.preferredCandidate,
+            );
+            const adaptedOutputPath = outputPathForSource(
+              variant.outputPath,
+              acquired.source.path,
+              acquired.acquirer.backend,
+            );
+            assertAdaptedOutputUnique(plan, variant, adaptedOutputPath);
+            variant.outputPath = adaptedOutputPath;
+            const retagCodec = retagCodecForSource(
+              acquired.source.path,
+              variant.outputPath,
+              acquired.acquirer.backend,
+            );
+            const tagged = await retagAudio({
+              sourcePath: acquired.source.path,
+              outputPath: variant.outputPath,
+              metadata: variant.metadata,
+              audioCodec: retagCodec,
+              ...(variant.durationMs === undefined
+                ? {}
+                : { expectedDurationSeconds: variant.durationMs / 1000 }),
+            });
+            if (acquired.source.temporary !== false)
+              await rm(acquired.source.path, { force: true });
+            const download: AcquisitionDownload = {
+              backend: acquired.acquirer.backend,
+              kind: "individual",
+              mediaPath: variant.outputPath,
+              files: [variant.outputPath],
+              source: acquired.candidate.source,
+              ...(acquired.source.engine ? { engine: acquired.source.engine } : {}),
+              sha256: tagged.sha256,
+              spotifyId: variant.spotifyId,
+              ...(variant.isrc ? { isrc: variant.isrc } : {}),
+            };
+            if (acquired.source.qualityNote) {
+              addUniqueWarning(
+                entry,
+                `${variant.spotifyId} acquisition quality: ${acquired.source.qualityNote}`,
+              );
+            }
+            if (acquired.source.transcoded) {
+              addUniqueWarning(
+                entry,
+                `${variant.spotifyId} required a lossy compatibility transcode`,
+              );
+            }
+            if (retagCodec === "aac") {
+              addUniqueWarning(
+                entry,
+                `${variant.spotifyId} Soulseek source required a lossy AAC compatibility transcode`,
+              );
+            } else if (retagCodec === "flac") {
+              addUniqueWarning(
+                entry,
+                `${variant.spotifyId} Soulseek PCM source was losslessly converted to FLAC`,
+              );
+            }
+            completed.push({
+              download,
+              candidate: manifestCandidate(acquired.acquirer, acquired.candidate),
+            });
+            downloaded.push(variant.outputPath);
+            persistPartial(entry, recording, completed);
+            await persistEntry();
+          } catch (error) {
+            recordingFailed = true;
+            const failure = toFailure(recording.entryOrder, variant.spotifyId, error);
+            failures.push(failure);
+            if (completed.length) {
+              persistPartial(entry, recording, completed);
+              addAcquisitionError(entry, failure.message);
+            } else {
+              markFailure(entry, failure.message, variant.searchQuery);
+            }
+            await persistEntry();
+            if (options.continueOnError === false) throw error;
+          }
+        }
+        if (!recordingFailed && completed.length === recording.variants.length) {
+          persistPartial(entry, recording, completed);
+          clearAcquisitionErrors(entry);
+          await persistEntry();
+        }
+      }),
+    );
+
+    const verification = failures.length
+      ? undefined
+      : await measure("final-verification", () =>
+          verifyAcquisitionPlan(manifest, plan, verificationReceipts),
+        );
     return {
       manifest,
-      downloaded,
-      resumed,
-      failures,
+      downloaded: downloaded.toSorted(),
+      resumed: resumed.toSorted(),
+      failures: failures.toSorted(
+        (left, right) =>
+          left.entryOrder - right.entryOrder ||
+          (left.spotifyId ?? "").localeCompare(right.spotifyId ?? ""),
+      ),
       unavailableBackends,
       ...(verification ? { verification } : {}),
+      performance: performanceResult(),
     };
   } finally {
     await release();
@@ -503,6 +647,7 @@ export async function acquireManifest(
 export async function verifyAcquisitionPlan(
   manifest: SetManifest,
   plan: AcquisitionPlan,
+  verified?: ReadonlyMap<string, AcquisitionVerificationReceipt>,
 ): Promise<AcquisitionVerification> {
   validatePlan(manifest, plan, false, true);
   const expected = [
@@ -534,6 +679,10 @@ export async function verifyAcquisitionPlan(
   const paths = new Set<string>();
   let individualFiles = 0;
   let sourceSetClips = 0;
+  const filesToVerify: Array<{
+    item: (typeof expected)[number];
+    expectedSha256: string;
+  }> = [];
   for (const item of expected) {
     if (paths.has(item.path)) throw new Error(`Acquisition plan repeats output ${item.path}`);
     paths.add(item.path);
@@ -553,15 +702,25 @@ export async function verifyAcquisitionPlan(
     } else {
       individualFiles += 1;
     }
-    await verifyAudioFile(item.path, {
-      expectedSha256: download.sha256,
-      ...(item.durationSeconds === undefined
-        ? {}
-        : { expectedDurationSeconds: item.durationSeconds }),
-      durationToleranceSeconds: item.durationToleranceSeconds,
-      expectedMetadata: item.metadata,
-    });
+    filesToVerify.push({ item, expectedSha256: download.sha256 });
   }
+  await mapConcurrent(filesToVerify, 4, async ({ item, expectedSha256 }) => {
+    const receipt = verified?.get(item.path);
+    if (
+      !receipt ||
+      receipt.sha256 !== expectedSha256 ||
+      !(await fileMatchesVerificationReceipt(item.path, receipt))
+    ) {
+      await verifyAudioFile(item.path, {
+        expectedSha256,
+        ...(item.durationSeconds === undefined
+          ? {}
+          : { expectedDurationSeconds: item.durationSeconds }),
+        durationToleranceSeconds: item.durationToleranceSeconds,
+        expectedMetadata: item.metadata,
+      });
+    }
+  });
   return {
     files: expected.length,
     individualFiles,
@@ -649,12 +808,7 @@ async function acquireVariant(
       try {
         source = await preferredAcquirer.download(
           selected,
-          candidateStagingDirectory(
-            stagingDirectory,
-            variant.spotifyId,
-            preferredAcquirer.backend,
-            selected,
-          ),
+          candidateStagingDirectory(stagingDirectory, variant, preferredAcquirer.backend, selected),
           variant.spotifyId,
         );
         await validateAcquiredSource(source, target);
@@ -690,12 +844,7 @@ async function acquireVariant(
       try {
         source = await acquirer.download(
           selected,
-          candidateStagingDirectory(
-            stagingDirectory,
-            variant.spotifyId,
-            acquirer.backend,
-            selected,
-          ),
+          candidateStagingDirectory(stagingDirectory, variant, acquirer.backend, selected),
           variant.spotifyId,
         );
         await validateAcquiredSource(source, target);
@@ -713,12 +862,14 @@ async function acquireVariant(
 
 function candidateStagingDirectory(
   stagingDirectory: string,
-  spotifyId: string,
+  variant: AcquisitionRecordingVariant,
   backend: AcquisitionBackend,
   candidate: YoutubeSearchCandidate,
 ): string {
   const identity = createHash("sha256")
-    .update(`${spotifyId}\u0000${backend}\u0000${candidate.id}\u0000${candidate.source}`)
+    .update(
+      `${variant.spotifyId}\u0000${variant.outputPath}\u0000${backend}\u0000${candidate.id}\u0000${candidate.source}`,
+    )
     .digest("hex")
     .slice(0, 20);
   return join(stagingDirectory, identity);
@@ -930,20 +1081,133 @@ function downloadForPath(entry: ResolvedTrack, path: string): AcquisitionDownloa
   );
 }
 
-async function validExisting(
+async function preflightExistingArtifacts(
+  manifest: SetManifest,
+  plan: AcquisitionPlan,
+  concurrency: number,
+  cache?: JsonDiskCache,
+): Promise<Map<string, AcquisitionVerificationReceipt>> {
+  const expected = [
+    ...plan.clips.map((clip) => {
+      const prior = downloadForPath(requireEntry(manifest, clip.entryOrder), clip.outputPath);
+      return {
+        path: clip.outputPath,
+        metadata: clip.metadata,
+        expectedSha256: prior?.sha256,
+        expectedDurationSeconds: clip.endSeconds - clip.startSeconds,
+        durationToleranceSeconds: 2,
+        eligible: true,
+      };
+    }),
+    ...plan.recordings.flatMap((recording) => {
+      const entry = requireEntry(manifest, recording.entryOrder);
+      const downloads =
+        entry.acquisition.status === "downloaded"
+          ? [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])]
+          : [];
+      return recording.variants.map((variant) => {
+        const prior = downloads.find((download) => download.spotifyId === variant.spotifyId);
+        if (prior && prior.mediaPath !== variant.outputPath) variant.outputPath = prior.mediaPath;
+        return {
+          path: variant.outputPath,
+          metadata: variant.metadata,
+          expectedSha256: prior?.sha256,
+          expectedDurationSeconds: variant.sourceClip
+            ? variant.sourceClip.endSeconds - variant.sourceClip.startSeconds
+            : variant.durationMs === undefined
+              ? undefined
+              : variant.durationMs / 1000,
+          durationToleranceSeconds: variant.sourceClip
+            ? 2
+            : Math.max(10, ((variant.durationMs ?? 0) / 1000) * 0.035),
+          eligible: prior !== undefined || variant.sourceClip !== undefined,
+        };
+      });
+    }),
+  ];
+  const receipts = new Map<string, AcquisitionVerificationReceipt>();
+  await mapConcurrent(expected, concurrency, async (item) => {
+    if (!item.eligible) return;
+    try {
+      const before = await stat(item.path);
+      const verified = await verifyAudioCached(
+        item.path,
+        {
+          ...(item.expectedSha256 ? { expectedSha256: item.expectedSha256 } : {}),
+          ...(item.expectedDurationSeconds === undefined
+            ? {}
+            : { expectedDurationSeconds: item.expectedDurationSeconds }),
+          durationToleranceSeconds: item.durationToleranceSeconds,
+          expectedMetadata: item.metadata,
+        },
+        cache,
+      );
+      const after = await stat(item.path);
+      if (!sameFileStat(before, after)) {
+        throw new Error(`Audio file changed during verification: ${item.path}`);
+      }
+      receipts.set(item.path, {
+        sha256: verified.sha256,
+        size: after.size,
+        mtimeMs: after.mtimeMs,
+        ctimeMs: after.ctimeMs,
+        ino: after.ino,
+      });
+    } catch {
+      // A missing or invalid artifact is reacquired by the normal stage below.
+    }
+  });
+  return receipts;
+}
+
+async function fileMatchesVerificationReceipt(
   path: string,
-  metadata: AudioMetadata,
-  sha256?: string,
+  receipt: AcquisitionVerificationReceipt,
 ): Promise<boolean> {
   try {
-    await verifyAudioFile(path, {
-      ...(sha256 ? { expectedSha256: sha256 } : {}),
-      expectedMetadata: metadata,
-    });
-    return true;
+    return sameFileStat(await stat(path), receipt);
   } catch {
     return false;
   }
+}
+
+function sameFileStat(
+  left: Pick<AcquisitionVerificationReceipt, "size" | "mtimeMs" | "ctimeMs" | "ino">,
+  right: Pick<AcquisitionVerificationReceipt, "size" | "mtimeMs" | "ctimeMs" | "ino">,
+): boolean {
+  return (
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs &&
+    left.ino === right.ino
+  );
+}
+
+async function verifyAudioCached(
+  path: string,
+  options: Parameters<typeof verifyAudioFile>[1],
+  cache?: JsonDiskCache,
+): ReturnType<typeof verifyAudioFile> {
+  if (!cache) return verifyAudioFile(path, options);
+  const info = await stat(path);
+  return cache.getOrLoad(
+    {
+      path: resolve(path),
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      ctimeMs: info.ctimeMs,
+      ino: String(info.ino),
+      options,
+    },
+    () => verifyAudioFile(path, options),
+    { ttlMs: 30 * 24 * 60 * 60 * 1000 },
+  );
+}
+
+function replaceEntry(manifest: SetManifest, replacement: ResolvedTrack): void {
+  const index = manifest.entries.findIndex((entry) => entry.id === replacement.id);
+  if (index < 0) throw new Error(`Manifest has no track ${replacement.id}`);
+  manifest.entries[index] = replacement;
 }
 
 function requireEntry(manifest: SetManifest, order: number): ResolvedTrack {
@@ -1190,6 +1454,37 @@ function serializeManifest(manifest: SetManifest): string {
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
+function integerConcurrency(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 8) {
+    throw new RangeError("concurrency must be an integer between 1 and 8");
+  }
+  return value;
+}
+
+function roundMilliseconds(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function cacheStatsDelta(after: CacheStats, before?: CacheStats): CacheStats {
+  const baseline: CacheStats = before ?? {
+    hits: 0,
+    misses: 0,
+    writes: 0,
+    bypasses: 0,
+    coalesced: 0,
+    errors: 0,
+    readMs: 0,
+    loadMs: 0,
+    writeMs: 0,
+  };
+  return Object.fromEntries(
+    Object.entries(after).map(([key, value]) => [
+      key,
+      roundMilliseconds(value - baseline[key as keyof CacheStats]),
+    ]),
+  ) as CacheStats;
+}
+
 function invalidateChangedRekordboxState(previous: SetManifest, current: SetManifest): void {
   let invalidated = false;
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
@@ -1393,11 +1688,19 @@ async function mapConcurrent<T>(
   task: (value: T) => Promise<void>,
 ): Promise<void> {
   let cursor = 0;
+  let firstError: unknown;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     while (cursor < values.length) {
+      if (firstError !== undefined) return;
       const index = cursor++;
-      await task(values[index]!);
+      try {
+        await task(values[index]!);
+      } catch (error) {
+        firstError ??= error;
+        return;
+      }
     }
   });
   await Promise.all(workers);
+  if (firstError !== undefined) throw firstError;
 }

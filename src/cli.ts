@@ -40,6 +40,11 @@ const parseEnv = z.object({
   PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
 });
 
+const cacheModeOption = z
+  .enum(["default", "refresh", "off"])
+  .default("default")
+  .describe("Use, refresh, or bypass the persistent provider metadata cache");
+
 const identifyOptions = z.object({
   provider,
   strategy: z
@@ -80,6 +85,10 @@ const identifyOptions = z.object({
   includeMatches: z.boolean().default(false).describe("Include raw recognition moments"),
   cookies: z.string().optional().describe("Netscape cookie file passed to yt-dlp"),
   cookiesFromBrowser: z.string().optional().describe("Browser cookie source passed to yt-dlp"),
+  cacheMode: z
+    .enum(["default", "refresh", "off"])
+    .default("default")
+    .describe("Use, refresh, or bypass the persistent provider metadata cache"),
   progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
 });
 
@@ -457,6 +466,7 @@ cli.command("resolve", {
           ...(context.options.cookiesFromBrowser
             ? { cookiesFromBrowser: context.options.cookiesFromBrowser }
             : {}),
+          cacheMode: context.options.cacheMode,
           env: { ...process.env, ...context.env },
           onProgress(progress) {
             if (
@@ -486,10 +496,11 @@ one001.command("get", {
   description: "Get a complete tracklist by 1001Tracklists URL.",
   args: z.object({ url: z.url().describe("1001Tracklists tracklist URL") }),
   env: parseEnv,
+  options: z.object({ cacheMode: cacheModeOption }),
   output: databaseTracklistOutput,
   async run(context) {
     try {
-      return await parseClient(context.env).get(context.args.url);
+      return await parseClient(context.env, context.options.cacheMode).get(context.args.url);
     } catch (error) {
       return fail(context, error);
     }
@@ -500,13 +511,16 @@ one001.command("find", {
   description: "Find the tracklist referencing a YouTube or SoundCloud URL.",
   args: z.object({ url: z.url().describe("YouTube or SoundCloud media URL") }),
   env: parseEnv,
+  options: z.object({ cacheMode: cacheModeOption }),
   output: z.union([
     z.object({ found: z.literal(false) }),
     databaseTracklistOutput.extend({ found: z.literal(true) }),
   ]),
   async run(context) {
     try {
-      return await parseClient(context.env).findByMediaUrl(context.args.url);
+      return await parseClient(context.env, context.options.cacheMode).findByMediaUrl(
+        context.args.url,
+      );
     } catch (error) {
       return fail(context, error);
     }
@@ -518,12 +532,16 @@ one001.command("search", {
   args: z.object({ title: z.string().min(1).describe("Set title or search text") }),
   options: z.object({
     uploader: z.string().optional().describe("DJ or uploader used to narrow results"),
+    cacheMode: cacheModeOption,
   }),
   env: parseEnv,
   output: z.object({ items: z.array(summaryOutput) }),
   async run(context) {
     try {
-      return await parseClient(context.env).search(context.args.title, context.options.uploader);
+      return await parseClient(context.env, context.options.cacheMode).search(
+        context.args.title,
+        context.options.uploader,
+      );
     } catch (error) {
       return fail(context, error);
     }
@@ -533,10 +551,11 @@ one001.command("search", {
 one001.command("latest", {
   description: "List tracklists most recently added to 1001Tracklists.",
   env: parseEnv,
+  options: z.object({ cacheMode: cacheModeOption }),
   output: z.object({ items: z.array(summaryOutput) }),
   async run(context) {
     try {
-      return await parseClient(context.env).latest();
+      return await parseClient(context.env, context.options.cacheMode).latest();
     } catch (error) {
       return fail(context, error);
     }
@@ -547,6 +566,7 @@ one001.command("charts", {
   description: "List a current 1001Tracklists chart.",
   options: z.object({
     type: z.enum(["weekly", "trending", "mostheard"]).default("weekly").describe("Chart type"),
+    cacheMode: cacheModeOption,
   }),
   env: parseEnv,
   output: z.object({
@@ -557,7 +577,7 @@ one001.command("charts", {
   }),
   async run(context) {
     try {
-      return await parseClient(context.env).charts(context.options.type);
+      return await parseClient(context.env, context.options.cacheMode).charts(context.options.type);
     } catch (error) {
       return fail(context, error);
     }
@@ -695,11 +715,14 @@ cli.command("doctor", {
   },
 });
 
-function parseClient(env: {
-  PARSE_API_KEY?: string | undefined;
-  PARSE_API_BASE?: string | undefined;
-  PARSE_SCRAPER_ID?: string | undefined;
-}): Tracklists1001Client {
+function parseClient(
+  env: {
+    PARSE_API_KEY?: string | undefined;
+    PARSE_API_BASE?: string | undefined;
+    PARSE_SCRAPER_ID?: string | undefined;
+  },
+  cacheMode: "default" | "refresh" | "off" = "default",
+): Tracklists1001Client {
   if (!env.PARSE_API_KEY) {
     throw new TracksError("AUTH_REQUIRED", "PARSE_API_KEY is required for 1001Tracklists access", {
       exitCode: 2,
@@ -712,6 +735,7 @@ function parseClient(env: {
       (env.PARSE_SCRAPER_ID
         ? `https://api.parse.bot/scraper/${env.PARSE_SCRAPER_ID}`
         : DEFAULT_PARSE_API_BASE),
+    cacheMode,
   });
 }
 

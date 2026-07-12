@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { JsonDiskCache, type CacheMode } from "../cache.js";
 import { TracksError } from "../errors.js";
 import { runProcess } from "../process.js";
 import type { Environment } from "../types.js";
@@ -20,6 +21,8 @@ export interface InspectMetadataOptions {
   cookies?: string;
   cookiesFromBrowser?: string;
   signal?: AbortSignal;
+  cache?: JsonDiskCache | false;
+  cacheMode?: CacheMode;
 }
 
 export interface CliCommand {
@@ -31,6 +34,68 @@ export interface CliCommand {
 export async function inspectMediaMetadata(
   source: string,
   options: InspectMetadataOptions = {},
+): Promise<MediaMetadata> {
+  const authenticated = Boolean(
+    options.cookies || options.cookiesFromBrowser || hasSensitiveMediaSource(source),
+  );
+  const cache =
+    options.cache === false || authenticated
+      ? undefined
+      : (options.cache ??
+        new JsonDiskCache({
+          namespace: "set-metadata-v1",
+          ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+        }));
+  if (cache) {
+    return cache.getOrLoad(
+      {
+        source,
+      },
+      () => inspectMediaMetadataUncached(source, options),
+      {
+        ttlMs: 6 * 60 * 60 * 1000,
+        ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+        shouldStore: (metadata) =>
+          !metadata.webpageUrl || !hasSensitiveMediaSource(metadata.webpageUrl),
+      },
+    );
+  }
+  return inspectMediaMetadataUncached(source, options);
+}
+
+function hasSensitiveMediaSource(source: string): boolean {
+  try {
+    const url = new URL(source);
+    const pathname = decodePathname(url.pathname);
+    if (
+      /(^|\.)soundcloud\.com$/iu.test(url.hostname) &&
+      pathname
+        .split("/")
+        .filter(Boolean)
+        .slice(2)
+        .some((segment) => /^s-/iu.test(segment))
+    ) {
+      return true;
+    }
+    return [...url.searchParams.keys()].some((key) =>
+      /(?:^|[_-])(?:auth|expires?|key|secret|signature|token)(?:$|[_-])/iu.test(key),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function decodePathname(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+async function inspectMediaMetadataUncached(
+  source: string,
+  options: InspectMetadataOptions,
 ): Promise<MediaMetadata> {
   const env = options.env ?? process.env;
   const command = await getYtdlpTsCommand(env);

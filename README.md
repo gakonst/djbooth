@@ -154,6 +154,9 @@ tracks 1001 latest
 tracks 1001 charts --type trending
 ```
 
+Exact tracklists are cached for seven days by default, avoiding repeated Parse credits. Use
+`--cache-mode refresh` after a tracklist edit or `--cache-mode off` for a diagnostic network call.
+
 Optional endpoint pinning:
 
 ```sh
@@ -302,6 +305,54 @@ ytdlp-ts download "$SELECTED_TRACK_URL" \
 
 Use acquisition backends only for media you are authorized to download.
 
+## Performance and persistent caches
+
+Provider metadata is public but not immutable. `tracks` uses TTL-bounded, versioned JSON cache
+entries under `TRACKS_CACHE_DIR` or `~/.cache/tracks-ts`; directories are mode `0700`, entries are
+mode `0600`, writes are atomic, and credentials/cookies are never included. Volatile signed media
+URLs are stripped before YouTube metadata is stored. A bounded, persisted sweep periodically removes
+expired or malformed entries.
+
+| Namespace                       | Default freshness |
+| ------------------------------- | ----------------- |
+| Exact 1001 tracklist            | 7 days            |
+| 1001 media lookup/search        | 6 hours           |
+| 1001 latest/charts              | 15 minutes        |
+| Spotify search                  | 6 hours           |
+| Spotify track metadata          | 24 hours          |
+| YouTube/SoundCloud set metadata | 6 hours           |
+| YouTube search/exact metadata   | 6/24 hours        |
+| Stat-keyed audio verification   | 30 days           |
+
+Spotify metadata remains temporary, consistent with [Spotify's caching requirements](https://developer.spotify.com/terms). Spotify's
+[February 2026 Development Mode migration](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide)
+removed the multi-track metadata endpoint, so `CachedSpotifyClient` combines bounded individual
+requests with persistent reuse. The underlying client still owns documented
+[`429 Retry-After` handling](https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
+Spotify responses may depend on the authenticated account and market, so persistent caching requires
+an opaque, non-secret `cacheScope` that identifies both. Caching is disabled when callers omit it;
+the bundled runner derives a one-way session fingerprint without storing the credential.
+
+`acquireManifest` defaults to three independent recording workers. Variants of one ambiguous cue,
+candidate fallback, manifest writes, and all Rekordbox operations remain serialized. Completed
+media gets one concurrent verification pass; the bundled runner injects a stat-keyed cache that
+eliminates unchanged repeat hash/probe work. Library callers can inject the same `JsonDiskCache`
+through `verificationCache`. A fully verified resume takes the fast path without loading an acquisition backend.
+The normal Rekordbox importer similarly verifies an already-imported playlist and returns
+`performance.changed: false` without another backup or write.
+
+```sh
+pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 3
+pnpm exec tsx src/run-brunello-acquisition.ts --refresh-cache
+pnpm exec tsx src/run-brunello-acquisition.ts --no-cache
+```
+
+Acquisition and Rekordbox results both include monotonic stage durations and wall timestamps.
+Acquisition additionally reports cache hit/miss/network-load counters, checkpoint writes, and the
+effective concurrency. Cache load time is aggregate work; with parallel calls it can exceed wall
+time. See the reproducible Brunello baseline and optimized measurements in
+[docs/performance.md](docs/performance.md).
+
 ## Render/export
 
 The resolver manifest can still be rendered as plain text, YouTube chapters, or a CUE sheet for the original set:
@@ -363,7 +414,7 @@ console.log(
 );
 ```
 
-Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `rekordbox-ts` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `rekordbox-ts` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
 
 The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject the sibling module objects when running it elsewhere.
 

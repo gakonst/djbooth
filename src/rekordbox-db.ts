@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, createReadStream, readFileSync } from "node:fs";
-import { access, copyFile, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import {
+  access,
+  copyFile,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -17,6 +27,7 @@ import {
   type SpotifyCandidate,
 } from "./manifest.js";
 import { formatTimestamp } from "./time.js";
+import { mapConcurrent } from "./process.js";
 
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
 const DEFAULT_REKORDBOX_MODULE = "@gakonst/rekordbox";
@@ -256,6 +267,24 @@ export type ImportManifestToRekordboxResult = {
   imported: RekordboxImportedItem[];
   backup: RekordboxBackup;
   verification: RekordboxVerification;
+  performance: RekordboxPerformance;
+};
+
+export type RekordboxPerformance = {
+  startedAt: string;
+  finishedAt: string;
+  totalMs: number;
+  changed: boolean;
+  stages: Array<{ stage: string; durationMs: number }>;
+};
+
+type MediaReceipt = {
+  path: string;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+  ino: number | bigint;
+  sha256: string;
 };
 
 type ProcessState = { rekordboxPid: number; rekordboxAgentPid: number };
@@ -507,11 +536,20 @@ export async function backupRekordboxDatabase(
 export async function importManifestToRekordbox(
   options: ImportManifestToRekordboxOptions,
 ): Promise<ImportManifestToRekordboxResult> {
+  const startedAt = new Date();
+  const started = performance.now();
   assertRekordboxImportApproved(options.approved);
   const manifestPath = resolve(options.manifestPath);
+  const lockStarted = performance.now();
   const release = await acquirePipelineManifestLock(manifestPath);
+  const lockMs = roundMilliseconds(performance.now() - lockStarted);
   try {
-    return await importManifestToRekordboxLocked(options, manifestPath);
+    const result = await importManifestToRekordboxLocked(options, manifestPath);
+    result.performance.totalMs = roundMilliseconds(performance.now() - started);
+    result.performance.startedAt = startedAt.toISOString();
+    result.performance.finishedAt = new Date().toISOString();
+    result.performance.stages.unshift({ stage: "manifest-lock", durationMs: lockMs });
+    return result;
   } finally {
     await release();
   }
@@ -521,6 +559,16 @@ async function importManifestToRekordboxLocked(
   options: ImportManifestToRekordboxOptions,
   manifestPath: string,
 ): Promise<ImportManifestToRekordboxResult> {
+  const started = performance.now();
+  const stages: RekordboxPerformance["stages"] = [];
+  const measure = async <T>(stage: string, task: () => T | Promise<T>): Promise<T> => {
+    const stageStarted = performance.now();
+    try {
+      return await task();
+    } finally {
+      stages.push({ stage, durationMs: roundMilliseconds(performance.now() - stageStarted) });
+    }
+  };
   const manifest = parseManifest(structuredClone(options.manifest));
   const manifestBytes = await readFile(manifestPath);
   const diskManifest = parseManifest(JSON.parse(manifestBytes.toString("utf8")) as unknown);
@@ -536,25 +584,81 @@ async function importManifestToRekordboxLocked(
     ...(options.folderName === undefined ? {} : { folderName: options.folderName }),
     ...(options.playlistName === undefined ? {} : { playlistName: options.playlistName }),
   });
-  await assertMediaFilesExist(plan);
+  const mediaReceipts = await measure("media-preflight", () => assertMediaFilesExist(plan));
 
-  const rekordbox = await loadRekordboxLibrary(options);
+  const rekordbox = await measure("library-load", () => loadRekordboxLibrary(options));
   const location = resolveDatabaseLocation(rekordbox, options);
   const releaseDatabaseLock = await acquireRekordboxDatabaseLock(location.dbPath);
   try {
     assertRekordboxStopped(readProcessState(rekordbox));
     await assertRekordboxWriteTargets(location);
-    const backup = await backupRekordboxDatabase(location.dbDirectory, {
-      dbPath: location.dbPath,
-      ...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),
-      ...(options.now === undefined ? {} : { now: options.now }),
-    });
+    const checkpointed = checkpointedRekordboxImport(manifest, plan, location.dbPath);
+    if (checkpointed) {
+      const existingStarted = performance.now();
+      try {
+        const verification = verifyCommittedImport(
+          rekordbox,
+          location,
+          options.key,
+          checkpointed.folderId,
+          checkpointed.playlistId,
+          checkpointed.imported,
+          plan,
+        );
+        await assertMediaFilesExist(plan, mediaReceipts);
+        const backup = await readRekordboxBackup(checkpointed.backupDirectory);
+        return {
+          manifest,
+          dbPath: location.dbPath,
+          playlistId: checkpointed.playlistId,
+          folderId: checkpointed.folderId,
+          plan,
+          imported: checkpointed.imported,
+          backup,
+          verification,
+          performance: {
+            startedAt: new Date(Date.now() - (performance.now() - started)).toISOString(),
+            finishedAt: new Date().toISOString(),
+            totalMs: roundMilliseconds(performance.now() - started),
+            changed: false,
+            stages,
+          },
+        };
+      } catch (error) {
+        if (!isRepairableRekordboxCheckpointDrift(error)) {
+          throw new TracksError(
+            "TOOL_FAILED",
+            "Existing Rekordbox checkpoint could not be safely verified; refusing database mutation",
+            {
+              cause: error,
+              details: {
+                dbPath: location.dbPath,
+                backupDirectory: checkpointed.backupDirectory,
+              },
+            },
+          );
+        }
+      } finally {
+        stages.push({
+          stage: "existing-import-verification",
+          durationMs: roundMilliseconds(performance.now() - existingStarted),
+        });
+      }
+    }
+    const backup = await measure("database-backup", () =>
+      backupRekordboxDatabase(location.dbDirectory, {
+        dbPath: location.dbPath,
+        ...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),
+        ...(options.now === undefined ? {} : { now: options.now }),
+      }),
+    );
     assertRekordboxStopped(readProcessState(rekordbox));
 
     let writer: RekordboxMasterDatabase | undefined;
     let playlistId: string;
     let folderId: string;
     let imported: RekordboxImportedItem[];
+    const writeStarted = performance.now();
     try {
       writer = new rekordbox.MasterDatabase({
         path: location.dbPath,
@@ -568,7 +672,7 @@ async function importManifestToRekordboxLocked(
       playlistId = writeResult.playlistId;
       folderId = writeResult.folderId;
       imported = writeResult.imported;
-      await assertMediaFilesExist(plan);
+      await assertMediaFilesExist(plan, mediaReceipts);
       assertRekordboxStopped(readProcessState(rekordbox));
       writer.commit({ allowWhileRunning: false });
     } catch (error) {
@@ -579,9 +683,14 @@ async function importManifestToRekordboxLocked(
       );
     } finally {
       writer?.close();
+      stages.push({
+        stage: "database-write-commit",
+        durationMs: roundMilliseconds(performance.now() - writeStarted),
+      });
     }
 
     let verification: RekordboxVerification;
+    const verificationStarted = performance.now();
     try {
       assertRekordboxStopped(readProcessState(rekordbox));
       verification = verifyCommittedImport(
@@ -593,13 +702,18 @@ async function importManifestToRekordboxLocked(
         imported!,
         plan,
       );
-      await assertMediaFilesExist(plan);
+      await assertMediaFilesExist(plan, mediaReceipts);
     } catch (error) {
       throw new TracksError(
         "TOOL_FAILED",
         `Rekordbox post-commit verification failed; restore or inspect backup: ${backup.directory}`,
         { cause: error, details: { backup } },
       );
+    } finally {
+      stages.push({
+        stage: "database-verification",
+        durationMs: roundMilliseconds(performance.now() - verificationStarted),
+      });
     }
     const updatedManifest = applyRekordboxImportResults(manifest, imported!, {
       target: "rekordbox-db",
@@ -610,7 +724,9 @@ async function importManifestToRekordboxLocked(
       playlistId: playlistId!,
       backupDirectory: backup.directory,
     });
-    await writeManifestAtomically(manifestPath, updatedManifest, manifestSha256);
+    await measure("manifest-checkpoint", () =>
+      writeManifestAtomically(manifestPath, updatedManifest, manifestSha256),
+    );
     return {
       manifest: updatedManifest,
       dbPath: location.dbPath,
@@ -620,6 +736,13 @@ async function importManifestToRekordboxLocked(
       imported: imported!,
       backup,
       verification,
+      performance: {
+        startedAt: new Date(Date.now() - (performance.now() - started)).toISOString(),
+        finishedAt: new Date().toISOString(),
+        totalMs: roundMilliseconds(performance.now() - started),
+        changed: true,
+        stages,
+      },
     };
   } finally {
     await releaseDatabaseLock();
@@ -729,6 +852,10 @@ function releaseDateYear(releaseDate: string | undefined): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+function roundMilliseconds(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function downloadComment(
   manifest: SetManifest,
   entry: ResolvedTrack,
@@ -770,8 +897,12 @@ function downloadComment(
   ].join("\n");
 }
 
-async function assertMediaFilesExist(plan: RekordboxImportPlan): Promise<void> {
-  for (const item of plan.items) {
+async function assertMediaFilesExist(
+  plan: RekordboxImportPlan,
+  previous?: ReadonlyMap<string, MediaReceipt>,
+): Promise<Map<string, MediaReceipt>> {
+  const receipts = new Map<string, MediaReceipt>();
+  await mapConcurrent(plan.items, 4, async (item) => {
     let mediaStat;
     try {
       mediaStat = await stat(item.mediaPath);
@@ -791,14 +922,153 @@ async function assertMediaFilesExist(plan: RekordboxImportPlan): Promise<void> {
         `Downloaded media has no recorded SHA-256: ${item.mediaPath}`,
         { exitCode: 2 },
       );
-    const actualSha256 = await sha256File(item.mediaPath);
+    const prior = previous?.get(item.mediaPath);
+    const unchanged =
+      prior !== undefined &&
+      prior.size === mediaStat.size &&
+      prior.mtimeMs === mediaStat.mtimeMs &&
+      prior.ctimeMs === mediaStat.ctimeMs &&
+      prior.ino === mediaStat.ino;
+    const actualSha256 = unchanged ? prior.sha256 : await sha256File(item.mediaPath);
     if (actualSha256 !== item.download.sha256)
       throw new TracksError(
         "INVALID_SOURCE",
         `Downloaded media SHA-256 changed: ${item.mediaPath}`,
         { exitCode: 2 },
       );
+    receipts.set(item.mediaPath, {
+      path: item.mediaPath,
+      size: mediaStat.size,
+      mtimeMs: mediaStat.mtimeMs,
+      ctimeMs: mediaStat.ctimeMs,
+      ino: mediaStat.ino,
+      sha256: actualSha256,
+    });
+  });
+  return receipts;
+}
+
+function checkpointedRekordboxImport(
+  manifest: SetManifest,
+  plan: RekordboxImportPlan,
+  dbPath: string,
+):
+  | {
+      folderId: string;
+      playlistId: string;
+      backupDirectory: string;
+      imported: RekordboxImportedItem[];
+    }
+  | undefined {
+  const artifact = manifest.artifacts.rekordbox;
+  if (
+    !artifact ||
+    resolve(artifact.dbPath) !== resolve(dbPath) ||
+    artifact.folderName !== plan.folderName ||
+    artifact.playlistName !== plan.playlistName
+  ) {
+    return undefined;
   }
+  const imported: RekordboxImportedItem[] = [];
+  for (const [index, item] of plan.items.entries()) {
+    const entry = manifest.entries.find((candidate) => candidate.id === item.entryId);
+    if (!entry || entry.rekordbox.status !== "imported") return undefined;
+    const contentId =
+      entry.rekordbox.dbContentIds?.[item.variantIndex] ??
+      (item.variantIndex === 0 ? entry.rekordbox.dbContentId : undefined);
+    const membershipId =
+      entry.rekordbox.playlistMembershipIds?.[item.variantIndex] ??
+      (item.variantIndex === 0 ? entry.rekordbox.playlistMembershipId : undefined);
+    if (!contentId || !membershipId) return undefined;
+    imported.push({
+      key: item.key,
+      entryId: item.entryId,
+      variantIndex: item.variantIndex,
+      mediaPath: item.mediaPath,
+      contentId,
+      membershipId,
+      trackNumber: index + 1,
+    });
+  }
+  return {
+    folderId: artifact.folderId,
+    playlistId: artifact.playlistId,
+    backupDirectory: artifact.backupDirectory,
+    imported,
+  };
+}
+
+/** Read and fully reverify a checkpointed backup before relying on it for recovery. */
+export async function readRekordboxBackup(directory: string): Promise<RekordboxBackup> {
+  const resolvedDirectory = resolve(directory);
+  const reportPath = join(resolvedDirectory, "backup.json");
+  const value = JSON.parse(await readFile(reportPath, "utf8")) as {
+    createdAt?: unknown;
+    files?: unknown;
+  };
+  if (
+    typeof value.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(value.createdAt)) ||
+    !Array.isArray(value.files)
+  ) {
+    throw new Error(`Invalid Rekordbox backup report: ${reportPath}`);
+  }
+  const files = value.files.filter(isRekordboxBackupFile);
+  if (files.length !== value.files.length || !files.length) {
+    throw new Error(`Invalid Rekordbox backup file inventory: ${reportPath}`);
+  }
+  await mapConcurrent(files, 4, async (file) => {
+    if (
+      basename(file.name) !== file.name ||
+      resolve(file.backupPath) !== join(resolvedDirectory, file.name)
+    ) {
+      throw new Error(`Invalid Rekordbox backup path: ${file.backupPath}`);
+    }
+    const backupStat = await lstat(file.backupPath);
+    if (!backupStat.isFile() || backupStat.isSymbolicLink() || backupStat.size !== file.bytes) {
+      throw new Error(`Rekordbox backup file changed: ${file.backupPath}`);
+    }
+    if ((await sha256File(file.backupPath)) !== file.sha256) {
+      throw new Error(`Rekordbox backup checksum changed: ${file.backupPath}`);
+    }
+  });
+  return { directory: resolvedDirectory, createdAt: value.createdAt, files, reportPath };
+}
+
+function isRekordboxBackupFile(value: unknown): value is RekordboxBackupFile {
+  if (!value || typeof value !== "object") return false;
+  const file = value as Record<string, unknown>;
+  return (
+    typeof file.name === "string" &&
+    typeof file.sourcePath === "string" &&
+    typeof file.backupPath === "string" &&
+    Number.isSafeInteger(file.bytes) &&
+    (file.bytes as number) >= 0 &&
+    typeof file.sha256 === "string" &&
+    /^[\da-f]{64}$/u.test(file.sha256) &&
+    Number.isSafeInteger(file.sourceBytesBefore) &&
+    (file.sourceBytesBefore as number) >= 0 &&
+    Number.isSafeInteger(file.sourceBytesAfter) &&
+    (file.sourceBytesAfter as number) >= 0 &&
+    typeof file.sourceSha256Before === "string" &&
+    /^[\da-f]{64}$/u.test(file.sourceSha256Before) &&
+    typeof file.sourceSha256After === "string" &&
+    /^[\da-f]{64}$/u.test(file.sourceSha256After)
+  );
+}
+
+function isRepairableRekordboxCheckpointDrift(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return [
+    /^Rekordbox playlist folder verification failed/u,
+    /^Rekordbox playlist row verification failed/u,
+    /^Rekordbox playlist sidecar /u,
+    /^Rekordbox playlist has \d+ memberships/u,
+    /^Rekordbox import plan\/result mismatch/u,
+    /^Rekordbox membership verification failed/u,
+    /^Rekordbox (?:Artist|AlbumArtist|Album|Label)ID is missing/u,
+    /^Rekordbox \w+ mismatch/u,
+  ].some((pattern) => pattern.test(message));
 }
 
 async function assertRekordboxWriteTargets(location: ResolvedDatabaseLocation): Promise<void> {

@@ -1,5 +1,10 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, test, vi } from "vitest";
 
+import { JsonDiskCache } from "../src/cache.js";
 import {
   isDatabaseMediaUrl,
   normalizeMediaUrl,
@@ -42,7 +47,7 @@ describe("1001Tracklists client", () => {
         tracks: [{ order: 1, artist: "A", title: "B", label: "Label", links: {} }],
       },
     });
-    const client = new Tracklists1001Client({ apiKey: "key", fetch });
+    const client = new Tracklists1001Client({ apiKey: "key", fetch, cache: false });
     await expect(client.get("https://www.1001tracklists.com/tracklist/test.html")).resolves.toEqual(
       {
         url: "https://www.1001tracklists.com/tracklist/test.html",
@@ -50,6 +55,52 @@ describe("1001Tracklists client", () => {
         tracks: [{ order: 1, artist: "A", title: "B", label: "Label", links: {} }],
       },
     );
+  });
+
+  test("caches exact tracklists on disk", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-1001-cache-"));
+    const fetch = jsonFetch({
+      data: {
+        url: "https://www.1001tracklists.com/tracklist/cached.html",
+        event: { name: "Cached Set", lineup: ["DJ"] },
+        tracks: [{ order: 1, artist: "A", title: "B" }],
+      },
+    });
+    const cache = new JsonDiskCache({ namespace: "1001-test-v1", root });
+    const client = new Tracklists1001Client({ apiKey: "key", fetch, cache });
+    const url = "https://www.1001tracklists.com/tracklist/cached.html";
+
+    await client.get(url);
+    await client.get(url);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 1, writes: 1 });
+  });
+
+  test("does not cache a malformed successful response", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-1001-invalid-cache-"));
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ data: {} }))
+      .mockResolvedValueOnce(
+        Response.json({
+          data: {
+            url: "https://www.1001tracklists.com/tracklist/recovered.html",
+            event: { name: "Recovered", lineup: [] },
+            tracks: [],
+          },
+        }),
+      ) as typeof globalThis.fetch;
+    const client = new Tracklists1001Client({
+      apiKey: "key",
+      fetch,
+      cache: new JsonDiskCache({ namespace: "1001-invalid-v1", root }),
+    });
+    const url = "https://www.1001tracklists.com/tracklist/recovered.html";
+
+    await expect(client.get(url)).rejects.toThrow("missing tracklist URL");
+    await expect(client.get(url)).resolves.toMatchObject({ url });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   test("parses media lookup entries with cue seconds", async () => {
@@ -69,9 +120,11 @@ describe("1001Tracklists client", () => {
         },
       });
     }) as typeof globalThis.fetch;
-    const result = await new Tracklists1001Client({ apiKey: "key", fetch }).findByMediaUrl(
-      "https://youtu.be/abc?t=42",
-    );
+    const result = await new Tracklists1001Client({
+      apiKey: "key",
+      fetch,
+      cache: false,
+    }).findByMediaUrl("https://youtu.be/abc?t=42");
     expect(result).toMatchObject({
       found: true,
       durationSeconds: 3600,
@@ -84,6 +137,7 @@ describe("1001Tracklists client", () => {
     const client = new Tracklists1001Client({
       apiKey: "key",
       fetch: jsonFetch({ status: "success", data: { found: false } }),
+      cache: false,
     });
     await expect(client.findByMediaUrl("https://youtube.com/watch?v=missing")).resolves.toEqual({
       found: false,
@@ -96,6 +150,7 @@ describe("1001Tracklists client", () => {
       fetch: vi.fn(async () =>
         Response.json({ error: "Missing X-API-Key header", status_code: 401 }, { status: 401 }),
       ) as typeof globalThis.fetch,
+      cache: false,
     });
     await expect(client.latest()).rejects.toThrow(
       "1001Tracklists wrapper error: Missing X-API-Key header",
@@ -117,6 +172,7 @@ describe("1001Tracklists client", () => {
           ],
         },
       }),
+      cache: false,
     });
     await expect(client.search("Set")).resolves.toEqual({
       items: [
@@ -154,7 +210,7 @@ describe("1001Tracklists client", () => {
         },
       });
     }) as typeof globalThis.fetch;
-    const client = new Tracklists1001Client({ apiKey: "key", fetch });
+    const client = new Tracklists1001Client({ apiKey: "key", fetch, cache: false });
 
     await expect(client.latest()).resolves.toEqual({
       items: [
@@ -171,7 +227,11 @@ describe("1001Tracklists client", () => {
   });
 
   test("rejects a missing Parse data envelope", async () => {
-    const client = new Tracklists1001Client({ apiKey: "key", fetch: jsonFetch({}) });
+    const client = new Tracklists1001Client({
+      apiKey: "key",
+      fetch: jsonFetch({}),
+      cache: false,
+    });
     await expect(client.latest()).rejects.toThrow(
       "1001Tracklists wrapper response is missing data",
     );

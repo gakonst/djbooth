@@ -1,3 +1,4 @@
+import { JsonDiskCache, type CacheMode, type CacheStats } from "../cache.js";
 import { isAbortError, TracksError } from "../errors.js";
 import { parseTimestamp } from "../time.js";
 import type {
@@ -19,6 +20,8 @@ export interface Tracklists1001ClientOptions {
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
+  cache?: JsonDiskCache | false;
+  cacheMode?: CacheMode;
 }
 
 /** Typed client for Parse's managed, unofficial 1001Tracklists wrapper. */
@@ -27,6 +30,8 @@ export class Tracklists1001Client {
   readonly #baseUrl: string;
   readonly #fetch: typeof globalThis.fetch;
   readonly #signal?: AbortSignal;
+  readonly #cache: JsonDiskCache | undefined;
+  readonly #cacheMode: CacheMode;
 
   constructor(options: Tracklists1001ClientOptions) {
     if (!options.apiKey) {
@@ -36,52 +41,82 @@ export class Tracklists1001Client {
     this.#baseUrl = (options.baseUrl ?? DEFAULT_PARSE_API_BASE).replace(/\/$/, "");
     this.#fetch = options.fetch ?? globalThis.fetch;
     if (options.signal) this.#signal = options.signal;
+    this.#cache =
+      options.cache === false
+        ? undefined
+        : (options.cache ??
+          new JsonDiskCache({
+            namespace: "1001tracklists-v2",
+            ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+          }));
+    this.#cacheMode = options.cacheMode ?? "default";
+  }
+
+  cacheStats(): CacheStats | undefined {
+    return this.#cache?.snapshot();
   }
 
   async get(url: string): Promise<DatabaseTracklist> {
-    return parseTracklist(await this.#request("get_tracklist", { url }));
+    return this.#request("get_tracklist", { url }, parseTracklist);
   }
 
   async findByMediaUrl(mediaUrl: string): Promise<FindTracklistResult> {
-    const value = await this.#request("find_by_media_url", { url: normalizeMediaUrl(mediaUrl) });
-    const record = asRecord(value);
-    if (record.found === false) return { found: false };
-    const nested = record.tracklist ?? record.result ?? value;
-    return { found: true, ...parseTracklist(nested) };
+    return this.#request("find_by_media_url", { url: normalizeMediaUrl(mediaUrl) }, (value) => {
+      const record = asRecord(value);
+      if (record.found === false) return { found: false };
+      const nested = record.tracklist ?? record.result ?? value;
+      return { found: true, ...parseTracklist(nested) };
+    });
   }
 
   async search(title: string, uploader?: string): Promise<SearchTracklists> {
-    const value = await this.#request("search_tracklists", {
-      title,
-      ...(uploader ? { uploader } : {}),
-    });
-    return { items: parseSummaries(value) };
+    return this.#request(
+      "search_tracklists",
+      { title, ...(uploader ? { uploader } : {}) },
+      (value) => ({ items: parseSummaries(value) }),
+    );
   }
 
   async latest(): Promise<LatestTracklists> {
-    return { items: parseSummaries(await this.#request("list_latest")) };
+    return this.#request("list_latest", {}, (value) => ({ items: parseSummaries(value) }));
   }
 
   async charts(type: "weekly" | "trending" | "mostheard" = "weekly"): Promise<ChartTracks> {
-    const value = await this.#request("list_charts", { type });
-    const record = asRecord(value);
-    const rawItems = arrayFrom(record.items ?? record.tracks ?? record.chart ?? value);
-    const items: ChartTrack[] = rawItems.map((item, index) => {
-      const row = asRecord(item);
-      const rank = numberValue(row.rank) ?? index + 1;
-      return {
-        name: stringValue(row.name ?? row.title, `chart item ${index + 1} name`),
-        url: stringValue(row.url ?? row.href, `chart item ${index + 1} URL`),
-        rank,
-      };
+    return this.#request("list_charts", { type }, (value) => {
+      const record = asRecord(value);
+      const rawItems = arrayFrom(record.items ?? record.tracks ?? record.chart ?? value);
+      const items: ChartTrack[] = rawItems.map((item, index) => {
+        const row = asRecord(item);
+        const rank = numberValue(row.rank) ?? index + 1;
+        return {
+          name: stringValue(row.name ?? row.title, `chart item ${index + 1} name`),
+          url: stringValue(row.url ?? row.href, `chart item ${index + 1} URL`),
+          rank,
+        };
+      });
+      return { chart: typeof record.chart === "string" ? record.chart : type, items };
     });
-    return { chart: typeof record.chart === "string" ? record.chart : type, items };
   }
 
-  async #request(endpoint: string, params: Record<string, string> = {}): Promise<unknown> {
+  async #request<T>(
+    endpoint: string,
+    params: Record<string, string>,
+    parse: (value: unknown) => T,
+  ): Promise<T> {
     const url = new URL(`${this.#baseUrl}/${endpoint}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
+    if (this.#cache) {
+      return this.#cache.getOrLoad(
+        { endpoint, url: url.href },
+        async () => parse(await this.#requestUncached(url)),
+        { ttlMs: cacheTtl(endpoint), mode: this.#cacheMode },
+      );
+    }
+    return parse(await this.#requestUncached(url));
+  }
+
+  async #requestUncached(url: URL): Promise<unknown> {
     let response: Response;
     try {
       response = await this.#fetch(url, {
@@ -120,6 +155,14 @@ export class Tracklists1001Client {
     }
     return record.data;
   }
+}
+
+function cacheTtl(endpoint: string): number {
+  if (endpoint === "get_tracklist") return 7 * 24 * 60 * 60 * 1000;
+  if (endpoint === "find_by_media_url" || endpoint === "search_tracklists") {
+    return 6 * 60 * 60 * 1000;
+  }
+  return 15 * 60 * 1000;
 }
 
 export function databaseTracklistToEntries(tracklist: DatabaseTracklist) {

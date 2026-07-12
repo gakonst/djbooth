@@ -8,6 +8,7 @@ export {
   type AcquireProgress,
   type AcquisitionClipPlan,
   type AcquisitionPlan,
+  type AcquisitionPerformance,
   type AcquisitionRecordingPlan,
   type AcquisitionRecordingVariant,
   type AcquisitionVerification,
@@ -39,6 +40,15 @@ export {
   type YoutubeTarget,
 } from "./acquisition.js";
 export {
+  JsonDiskCache,
+  cacheDigest,
+  defaultCacheRoot,
+  type CacheLoadOptions,
+  type CacheMode,
+  type CacheStats,
+  type JsonDiskCacheOptions,
+} from "./cache.js";
+export {
   parseDescriptionTracklist,
   tracklistFromDescription,
   type DescriptionParseResult,
@@ -65,6 +75,11 @@ export {
   type SoulseekSearchResult,
   type SoulseekSharedFile,
 } from "./integrations/slsk-library.js";
+export {
+  CachedSpotifyClient,
+  type CachedSpotifyClientOptions,
+  type SpotifyRawClient,
+} from "./integrations/spotify-cache.js";
 export {
   YtdlpReferenceAcquirer,
   unavailableTrackAcquirer,
@@ -159,6 +174,7 @@ export {
   defaultRekordboxPlaylistName,
   importManifestToRekordbox,
   planRekordboxImport,
+  readRekordboxBackup,
   rekordboxBackupSources,
   validateMasterPlaylistSidecar,
   writeRekordboxPlan,
@@ -173,6 +189,7 @@ export {
   type RekordboxLibrary,
   type RekordboxMasterDatabase,
   type RekordboxPlaylistArtifact,
+  type RekordboxPerformance,
   type RekordboxTrackMetadata,
   type RekordboxVerification,
 } from "./rekordbox-db.js";

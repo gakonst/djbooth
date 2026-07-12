@@ -1,4 +1,5 @@
 import { normalizeMatchText } from "./acquisition.js";
+import type { CacheStats } from "./cache.js";
 import type { ResolvedTrack, SetManifest, SpotifyCandidate, TrackIdentity } from "./manifest.js";
 import { mapConcurrent } from "./process.js";
 
@@ -14,6 +15,7 @@ export type SpotifySearchClient = {
       signal?: AbortSignal;
     },
   ): Promise<T | undefined>;
+  cacheStats?(): CacheStats | undefined;
 };
 
 export type SpotifyScoringTarget = {
@@ -56,12 +58,15 @@ export type SpotifyEnrichmentResult = {
   manifest: SetManifest;
   attempted: number;
   requests: number;
+  networkRequests: number;
   matched: number;
   ambiguous: number;
   unmatched: number;
   skipped: number;
   failed: number;
   untouched: number;
+  durationMs: number;
+  cache?: CacheStats;
 };
 
 type ResolvedOptions = {
@@ -104,6 +109,8 @@ export async function enrichSpotifyManifest(
   spotify: SpotifySearchClient,
   options: SpotifyEnrichmentOptions = {},
 ): Promise<SpotifyEnrichmentResult> {
+  const started = performance.now();
+  const cacheBefore = spotify.cacheStats?.();
   const resolved = resolveOptions(options);
   const pending = manifest.entries.filter((entry) => entry.spotify.status === "pending");
   const identified = pending.filter(
@@ -207,17 +214,44 @@ export async function enrichSpotifyManifest(
   });
 
   const processed = new Set(pending.map((entry) => entry.id));
+  const cacheAfter = spotify.cacheStats?.();
+  const cache = cacheAfter ? subtractCacheStats(cacheAfter, cacheBefore) : undefined;
   return {
     manifest,
     attempted: identified.length,
     requests,
+    networkRequests: cache
+      ? Math.max(0, cache.misses + cache.bypasses - cache.coalesced)
+      : requests,
     matched: countStatus(pending, "matched"),
     ambiguous: countStatus(pending, "ambiguous"),
     unmatched: countStatus(pending, "unmatched"),
     skipped: countStatus(pending, "skipped"),
     failed: countStatus(pending, "failed"),
     untouched: manifest.entries.filter((entry) => !processed.has(entry.id)).length,
+    durationMs: Math.round((performance.now() - started) * 100) / 100,
+    ...(cache ? { cache } : {}),
   };
+}
+
+function subtractCacheStats(after: CacheStats, before?: CacheStats): CacheStats {
+  const baseline = before ?? {
+    hits: 0,
+    misses: 0,
+    writes: 0,
+    bypasses: 0,
+    coalesced: 0,
+    errors: 0,
+    readMs: 0,
+    loadMs: 0,
+    writeMs: 0,
+  };
+  return Object.fromEntries(
+    Object.entries(after).map(([key, value]) => [
+      key,
+      Math.round((value - baseline[key as keyof CacheStats]) * 100) / 100,
+    ]),
+  ) as CacheStats;
 }
 
 export function spotifySearchQuery(

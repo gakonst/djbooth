@@ -12,6 +12,7 @@ import {
   backupRekordboxDatabase,
   defaultRekordboxPlaylistName,
   planRekordboxImport,
+  readRekordboxBackup,
   rekordboxBackupSources,
   validateMasterPlaylistSidecar,
   writeRekordboxPlan,
@@ -495,6 +496,12 @@ describe("Rekordbox direct database planning", () => {
         "selected database",
       );
       expect(backup.files.some((file) => file.sourcePath.endsWith("/master.db"))).toBe(false);
+      await expect(readRekordboxBackup(backup.directory)).resolves.toEqual(backup);
+
+      await writeFile(backup.files[0]!.backupPath, "corrupted recovery file");
+      await expect(readRekordboxBackup(backup.directory)).rejects.toThrow(
+        "Rekordbox backup file changed",
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }

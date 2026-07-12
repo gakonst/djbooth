@@ -85,6 +85,7 @@ export interface IdentifyOptions {
   includeMatches?: boolean;
   cookies?: string;
   cookiesFromBrowser?: string;
+  cacheMode?: "default" | "refresh" | "off";
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
   env?: Environment;

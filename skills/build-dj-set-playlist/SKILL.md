@@ -73,7 +73,7 @@ Increment `--offset` until the response has no next page. Build the acquisition 
 
 ## 3. Enrich identities
 
-Create one `SpotifyOAuth`/`SpotifyClient` backed by `FileSessionStore` and reuse it for every entry. Search remains one request per identity. Spotify removed `GET /tracks` (Get Several Tracks) in February 2026; refresh known IDs with `GET /tracks/{id}` using bounded concurrency and the client's `Retry-After` handling. Equivalent manual diagnostics with `spots` are:
+Create one `SpotifyOAuth`/`SpotifyClient` backed by `FileSessionStore`, wrap it in `CachedSpotifyClient`, and reuse it for every entry. Supply an opaque, non-secret `cacheScope` for the authenticated account plus market (for example, `cacheDigest({ account: spotifyUserId, market })`); persistence is deliberately disabled without one. Search remains one logical request per identity; an unexpired cache hit performs no network request. Spotify removed `GET /tracks` (Get Several Tracks) in February 2026; refresh known IDs with `GET /tracks/{id}` using bounded concurrency and the client's `Retry-After` handling. Equivalent manual diagnostics with `spots` are:
 
 ```sh
 spots api search --q "isrc:$ISRC" --type track --market US --limit 10 --format json
@@ -110,7 +110,7 @@ ytdlp-ts download "$TRACK_URL" --engine reference --no-playlist \
   --audio-format m4a --embed-metadata --format json
 ```
 
-Cap concurrent downloads. Resume pending entries; never redownload an existing verified file.
+Cap independent recording downloads at three by default. Keep variants and candidate fallback for one cue serial. Resume pending entries; never redownload an existing verified file. Manifest checkpoints must pass through one serialized commit coordinator.
 
 ## 5. Recover unavailable tracks from a set cache
 
@@ -138,7 +138,12 @@ mv -f -- "$NEXT_M3U8" "$M3U8"
 
 ## 7. Handoff
 
-Return: source/title, provider, resolved/unresolved counts, Spotify match counts, acquired/skipped/failed counts by backend, output directory, manifest path, playlist artifact, and any manual decisions. Never claim completion while identified entries remain pending unless the user chose a partial playlist.
+Return: source/title, provider, resolved/unresolved counts, Spotify match counts, acquired/skipped/failed counts by backend, output directory, manifest path, playlist artifact, cache hit/miss counters, stage timing, and any manual decisions. Never claim completion while identified entries remain pending unless the user chose a partial playlist.
+
+Use the default persistent metadata cache for exact 1001 pages, Spotify search/track responses,
+sanitized YouTube metadata, and stat-keyed audio verification. Use `--refresh-cache` after a known
+provider edit and `--no-cache` only for diagnostics. Never cache credentials, cookies, signed format
+URLs, Soulseek peer results, authentication failures, or quota failures.
 
 ## Manifest and resume contract
 

@@ -20,6 +20,7 @@ describe("identify", () => {
 
     const result = await identify("https://youtu.be/known", {
       preferDescription: false,
+      cacheMode: "off",
       env: { PARSE_API_KEY: "parse" },
       fetch,
     });
@@ -62,6 +63,7 @@ describe("identify", () => {
 
     const result = await identify("https://youtube.com/watch?v=unknown", {
       preferDescription: false,
+      cacheMode: "off",
       env: { PARSE_API_KEY: "parse", AUDD_API_TOKEN: "audd" },
       fetch,
     });
@@ -80,6 +82,7 @@ describe("identify", () => {
         env: {},
         preferDatabase: false,
         preferDescription: false,
+        cacheMode: "off",
       }),
     ).rejects.toThrow(/No recognition provider configured/);
   });
@@ -91,6 +94,7 @@ describe("identify", () => {
     await expect(
       identify("https://youtube.com/watch?v=set", {
         preferDescription: false,
+        cacheMode: "off",
         env: { PARSE_API_KEY: "parse", AUDD_API_TOKEN: "audd" },
         fetch,
       }),

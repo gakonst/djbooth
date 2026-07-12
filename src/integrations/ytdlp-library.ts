@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { JsonDiskCache, type CacheMode, type CacheStats } from "../cache.js";
 import type {
   BackendAvailability,
   IndividualDownload,
@@ -61,10 +62,38 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
   readonly backend = "ytdlp" as const;
   readonly #client: YtdlpReferenceClient;
   readonly #searchLimit: number;
+  readonly #cache: JsonDiskCache | undefined;
+  readonly #cacheMode: CacheMode;
+  readonly #searchTtlMs: number;
+  readonly #metadataTtlMs: number;
 
-  constructor(client: YtdlpReferenceClient, options: { searchLimit?: number } = {}) {
+  constructor(
+    client: YtdlpReferenceClient,
+    options: {
+      searchLimit?: number;
+      cache?: JsonDiskCache | false;
+      cacheMode?: CacheMode;
+      searchTtlMs?: number;
+      metadataTtlMs?: number;
+    } = {},
+  ) {
     this.#client = client;
     this.#searchLimit = options.searchLimit ?? 10;
+    this.#cacheMode = options.cacheMode ?? "default";
+    this.#cache =
+      options.cache === false
+        ? undefined
+        : (options.cache ??
+          new JsonDiskCache({
+            namespace: "youtube-metadata-v1",
+            ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+          }));
+    this.#searchTtlMs = options.searchTtlMs ?? 6 * 60 * 60 * 1000;
+    this.#metadataTtlMs = options.metadataTtlMs ?? 24 * 60 * 60 * 1000;
+  }
+
+  cacheStats(): CacheStats | undefined {
+    return this.#cache?.snapshot();
   }
 
   availability(): Promise<BackendAvailability> {
@@ -73,10 +102,12 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
 
   async search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]> {
     const query = [...target.artists, target.title].join(" ");
-    const result = await this.#client.inspect(`ytsearch${this.#searchLimit}:${query}`, {
+    const source = `ytsearch${this.#searchLimit}:${query}`;
+    const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       flatPlaylist: true,
       extractorArgs: ["youtube:player_client=android_vr"],
-    });
+    };
+    const result = await this.#inspect("search", source, inspectOptions, this.#searchTtlMs);
     return (result.entries ?? []).flatMap((entry) => {
       const source = mediaUrl(entry);
       if (!source || !entry.id || !entry.title) return [];
@@ -114,10 +145,16 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
         await rm(existing, { force: true });
       }
     }
-    const info = await this.#client.inspect(candidate.source, {
+    const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       playlist: false,
       extractorArgs: ["youtube:player_client=android_vr"],
-    });
+    };
+    const info = await this.#inspect(
+      "media",
+      candidate.source,
+      inspectOptions,
+      this.#metadataTtlMs,
+    );
     const directM4a = hasDirectM4a(info);
     const result = await this.#client.download(candidate.source, {
       playlist: false,
@@ -145,6 +182,124 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
         ? "Downloaded the source AAC/M4A audio and stream-copied tags without re-encoding."
         : "No AAC/M4A source was advertised; yt-dlp converted the best available audio to M4A for Rekordbox compatibility.",
     };
+  }
+
+  async #inspect(
+    kind: "search" | "media",
+    source: string,
+    options: Parameters<YtdlpReferenceClient["inspect"]>[1],
+    ttlMs: number,
+  ): Promise<YtdlpMediaInfo> {
+    if (!this.#cache || isSensitiveMediaSource(source)) {
+      return this.#client.inspect(source, options);
+    }
+    const cached = await this.#cache.getOrLoad(
+      { schemaVersion: 2, kind, source, options },
+      async () => {
+        const inspected = await this.#client.inspect(source, options);
+        return {
+          cacheable: kind === "search" || !containsSensitivePageUrl(inspected),
+          value: sanitizeMediaInfo(inspected),
+        };
+      },
+      {
+        ttlMs,
+        mode: this.#cacheMode,
+        shouldStore: (result) => result.cacheable,
+      },
+    );
+    return cached.value;
+  }
+}
+
+function sanitizeMediaInfo(info: YtdlpMediaInfo): YtdlpMediaInfo {
+  const webpageUrl = stablePageUrl(info.webpage_url);
+  const originalUrl = stablePageUrl(info.original_url);
+  return {
+    id: info.id,
+    title: info.title,
+    ...(webpageUrl ? { webpage_url: webpageUrl } : {}),
+    ...(originalUrl ? { original_url: originalUrl } : {}),
+    ...(info.extractor ? { extractor: info.extractor } : {}),
+    ...(info.uploader ? { uploader: info.uploader } : {}),
+    ...(info.artist ? { artist: info.artist } : {}),
+    ...(info.creator ? { creator: info.creator } : {}),
+    ...(info.duration === undefined ? {} : { duration: info.duration }),
+    ...(info.entries
+      ? {
+          entries: info.entries
+            .filter((entry) => !containsSensitivePageUrl(entry))
+            .map(sanitizeMediaInfo),
+        }
+      : {}),
+    ...(info.formats
+      ? {
+          formats: info.formats.map((format) => ({
+            ...(format.ext ? { ext: format.ext } : {}),
+            ...(format.acodec ? { acodec: format.acodec } : {}),
+            ...(format.vcodec ? { vcodec: format.vcodec } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+function stablePageUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (!/(^|\.)(?:youtube\.com|youtu\.be|soundcloud\.com)$/iu.test(url.hostname)) return undefined;
+    if (/(^|\.)soundcloud\.com$/iu.test(url.hostname) && isPrivateSoundCloudUrl(url)) {
+      return undefined;
+    }
+    const videoId =
+      /(^|\.)youtube\.com$/iu.test(url.hostname) && url.pathname === "/watch"
+        ? url.searchParams.get("v")
+        : undefined;
+    url.search = "";
+    if (videoId) url.searchParams.set("v", videoId);
+    url.hash = "";
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+function containsSensitivePageUrl(info: YtdlpMediaInfo): boolean {
+  return (
+    isSensitiveMediaSource(info.webpage_url) ||
+    isSensitiveMediaSource(info.original_url) ||
+    (info.entries?.some(containsSensitivePageUrl) ?? false)
+  );
+}
+
+function isSensitiveMediaSource(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    if (/(^|\.)soundcloud\.com$/iu.test(url.hostname) && isPrivateSoundCloudUrl(url)) return true;
+    return [...url.searchParams.keys()].some((key) =>
+      /(?:^|[_-])(?:auth|expires?|key|secret|signature|token)(?:$|[_-])/iu.test(key),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isPrivateSoundCloudUrl(url: URL): boolean {
+  const pathname = safelyDecodePathname(url.pathname);
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.slice(2).some((segment) => /^s-/iu.test(segment))) return true;
+  return [...url.searchParams.keys()].some((key) =>
+    /(?:^|[_-])(?:auth|expires?|key|secret|signature|token)(?:$|[_-])/iu.test(key),
+  );
+}
+
+function safelyDecodePathname(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
   }
 }
 

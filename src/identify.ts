@@ -36,7 +36,9 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
       );
     }
     options.onProgress?.({ phase: "database", message: "Loading 1001Tracklists tracklist" });
-    const tracklist = await create1001Client(env, fetch, options.signal).get(source);
+    const tracklist = await create1001Client(env, fetch, options.signal, options.cacheMode).get(
+      source,
+    );
     return fromDatabase(source, tracklist, options.includeMatches);
   }
 
@@ -64,6 +66,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
         ...(options.cookies ? { cookies: options.cookies } : {}),
         ...(options.cookiesFromBrowser ? { cookiesFromBrowser: options.cookiesFromBrowser } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.cacheMode ? { cacheMode: options.cacheMode } : {}),
       });
       const described = tracklistFromDescription(source, metadata);
       if (described) return described;
@@ -108,7 +111,12 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
       }
     } else {
       options.onProgress?.({ phase: "database", message: "Searching 1001Tracklists by media URL" });
-      const result = await create1001Client(env, fetch, options.signal).findByMediaUrl(source);
+      const result = await create1001Client(
+        env,
+        fetch,
+        options.signal,
+        options.cacheMode,
+      ).findByMediaUrl(source);
       if (result.found) return fromDatabase(source, result, options.includeMatches);
       if (provider === "1001tracklists") {
         throw new TracksError("NOT_FOUND", "No 1001Tracklists entry references this media URL", {
@@ -225,6 +233,7 @@ function create1001Client(
   env: Environment,
   fetch: typeof globalThis.fetch,
   signal?: AbortSignal,
+  cacheMode?: "default" | "refresh" | "off",
 ): Tracklists1001Client {
   const baseUrl =
     env.PARSE_API_BASE ??
@@ -234,6 +243,7 @@ function create1001Client(
     fetch,
     ...(baseUrl ? { baseUrl } : {}),
     ...(signal ? { signal } : {}),
+    ...(cacheMode ? { cacheMode } : {}),
   });
 }
 

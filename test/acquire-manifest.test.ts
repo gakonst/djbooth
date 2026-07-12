@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -540,6 +541,208 @@ describe("acquireManifest", () => {
       });
       expect(resumed.manifest.entries[0]!.rekordbox.status).toBe("imported");
       expect(resumed.manifest.artifacts.rekordbox?.playlistId).toBe("playlist-1");
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test("runs independent recording jobs concurrently with serialized checkpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-parallel-recordings-"));
+    const manifestPath = join(directory, "manifest.json");
+    const manifest = createManifest({
+      source: "https://youtube.test/parallel-set",
+      provider: "description",
+      complete: true,
+      tracks: [1, 2, 3].map((order) => ({
+        order,
+        startSeconds: order * 100,
+        endSeconds: (order + 1) * 100,
+        artist: "Artist",
+        title: "Track",
+      })),
+    });
+    for (const entry of manifest.entries) {
+      entry.spotify = {
+        status: "matched",
+        query: "Artist - Track",
+        score: 1,
+        id: "spotify-shared",
+        uri: "spotify:track:spotify-shared",
+        name: "Track",
+        artists: ["Artist"],
+        durationMs: 100_000,
+      };
+    }
+    await writeManifestAtomic(manifestPath, manifest);
+    const plan: AcquisitionPlan = {
+      clips: [],
+      recordings: manifest.entries.map((entry) => ({
+        entryOrder: entry.order,
+        variants: [
+          {
+            spotifyId: "spotify-shared",
+            title: "Track",
+            artists: ["Artist"],
+            durationMs: 100_000,
+            outputPath: join(directory, `track-${entry.order}.m4a`),
+            metadata: { title: "Track", artists: ["Artist"], comment: "test" },
+          },
+        ],
+      })),
+      stagingDirectory: join(directory, "staging"),
+    };
+    let active = 0;
+    let maximumActive = 0;
+    const stagingDirectories = new Set<string>();
+    const acquirer: TrackAcquirer = {
+      backend: "ytdlp",
+      availability: () => Promise.resolve({ available: true }),
+      search: async (target) => [
+        {
+          id: target.title,
+          source: `https://youtube.test/${encodeURIComponent(target.title)}`,
+          title: target.title,
+          artist: target.artists[0]!,
+          ...(target.durationSeconds === undefined
+            ? {}
+            : { durationSeconds: target.durationSeconds }),
+        },
+      ],
+      async download(candidate, destination) {
+        stagingDirectories.add(destination);
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        await mkdir(destination, { recursive: true });
+        const path = join(destination, `${candidate.id}.m4a`);
+        await writeFile(path, `audio ${candidate.id}`);
+        active -= 1;
+        return { path, source: candidate.source, temporary: true };
+      },
+    };
+    const bin = await installFakeAudioTools(directory);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    try {
+      const result = await acquireManifest({
+        manifestPath,
+        plan,
+        acquirers: [acquirer],
+        requireCompletePlan: true,
+        concurrency: 3,
+      });
+
+      expect(maximumActive).toBe(3);
+      expect(stagingDirectories.size).toBe(3);
+      expect(result.failures).toEqual([]);
+      expect(result.downloaded).toHaveLength(3);
+      expect(result.performance).toMatchObject({ concurrency: 3 });
+      expect(result.performance.stages).toContainEqual(
+        expect.objectContaining({ stage: "recordings" }),
+      );
+      expect(
+        (await readManifest(manifestPath)).entries.map((entry) => entry.acquisition.status),
+      ).toEqual(["downloaded", "downloaded", "downloaded"]);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  test("rejects a resumed artifact changed while another recording downloads", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-resume-toctou-"));
+    const manifestPath = join(directory, "manifest.json");
+    const firstPath = join(directory, "track-1.m4a");
+    const firstBytes = "verified first recording";
+    await writeFile(firstPath, firstBytes);
+    const manifest = createManifest({
+      source: "https://youtube.test/toctou-set",
+      provider: "description",
+      complete: true,
+      tracks: [1, 2].map((order) => ({
+        order,
+        startSeconds: order * 100,
+        endSeconds: (order + 1) * 100,
+        artist: "Artist",
+        title: "Track",
+      })),
+    });
+    for (const [index, entry] of manifest.entries.entries()) {
+      entry.spotify = {
+        status: "matched",
+        query: "Artist - Track",
+        score: 1,
+        id: `spotify-${index + 1}`,
+        uri: `spotify:track:spotify-${index + 1}`,
+        name: "Track",
+        artists: ["Artist"],
+        durationMs: 100_000,
+      };
+    }
+    manifest.entries[0]!.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "ytdlp",
+        kind: "individual",
+        mediaPath: firstPath,
+        files: [firstPath],
+        spotifyId: "spotify-1",
+        sha256: createHash("sha256").update(firstBytes).digest("hex"),
+      },
+    };
+    await writeManifestAtomic(manifestPath, manifest);
+    const plan: AcquisitionPlan = {
+      clips: [],
+      recordings: manifest.entries.map((entry) => ({
+        entryOrder: entry.order,
+        variants: [
+          {
+            spotifyId: `spotify-${entry.order}`,
+            title: "Track",
+            artists: ["Artist"],
+            durationMs: 100_000,
+            outputPath: join(directory, `track-${entry.order}.m4a`),
+            metadata: { title: "Track", artists: ["Artist"], comment: "test" },
+          },
+        ],
+      })),
+      stagingDirectory: join(directory, "staging"),
+    };
+    const acquirer: TrackAcquirer = {
+      backend: "ytdlp",
+      availability: () => Promise.resolve({ available: true }),
+      search: (target) =>
+        Promise.resolve([
+          {
+            id: "second",
+            source: "https://youtube.test/second",
+            title: target.title,
+            artist: target.artists[0]!,
+            ...(target.durationSeconds === undefined
+              ? {}
+              : { durationSeconds: target.durationSeconds }),
+          },
+        ]),
+      async download(candidate, destination) {
+        await mkdir(destination, { recursive: true });
+        const path = join(destination, "second.m4a");
+        await writeFile(path, "second recording");
+        await writeFile(firstPath, "changed after preflight");
+        return { path, source: candidate.source, temporary: true };
+      },
+    };
+    const bin = await installFakeAudioTools(directory);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}:${previousPath ?? ""}`;
+    try {
+      await expect(
+        acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          concurrency: 2,
+        }),
+      ).rejects.toThrow(/SHA-256|checksum/iu);
     } finally {
       process.env.PATH = previousPath;
     }
