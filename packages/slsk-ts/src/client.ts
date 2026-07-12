@@ -1,5 +1,5 @@
 import { randomInt } from 'node:crypto'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { createWriteStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import type { Socket } from 'node:net'
@@ -775,6 +775,13 @@ export class SoulseekClient extends EventEmitter {
     }
     await writeSocket(socket, new BinaryWriter().uint64(resumedFrom).build())
     const output = createWriteStream(temporaryPath, { flags: resumedFrom > 0n ? 'a' : 'w' })
+    try {
+      await once(output, 'open')
+    } catch (error) {
+      output.destroy()
+      socket.destroy()
+      throw error
+    }
     let received = resumedFrom
     const onData = (chunk: Buffer) => {
       received += BigInt(chunk.length)

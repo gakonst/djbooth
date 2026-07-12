@@ -937,6 +937,7 @@ describe('downloads and uploads', () => {
           }
         } else if (message.code === PeerCode.TransferResponse && behavior !== 'no-file') {
           const fileSocket = net.createConnection({ host: '127.0.0.1', port: fake.listenPort })
+          fileSocket.on('error', () => {})
           cleanup.push(() => {
             fileSocket.destroy()
           })
@@ -1010,12 +1011,22 @@ describe('downloads and uploads', () => {
     await new Promise((resolve) => setImmediate(resolve))
     await long.listener.close()
 
+    const invalidStatPeer = await downloadPeer(fake, Buffer.from('abcd'))
+    await expect(
+      client.download('downloader-peer', 'Music\\track.flac', path.join(root, 'invalid-stat.flac'), {
+        temporaryPath: `${root}\0invalid`,
+      }),
+    ).rejects.toMatchObject({ code: 'ERR_INVALID_ARG_VALUE' })
+    client.peers.get('downloader-peer')?.destroy()
+    await new Promise((resolve) => setImmediate(resolve))
+    await invalidStatPeer.listener.close()
+
     const badPathPeer = await downloadPeer(fake, Buffer.from('abcd'))
     await expect(
       client.download('downloader-peer', 'Music\\track.flac', path.join(root, 'bad-path.flac'), {
-        temporaryPath: path.join(root, 'x'.repeat(5_000)),
+        temporaryPath: path.join(root, 'missing', 'bad-path.part'),
       }),
-    ).rejects.toMatchObject({ code: process.platform === 'win32' ? 'ENOENT' : 'ENAMETOOLONG' })
+    ).rejects.toMatchObject({ code: 'ENOENT' })
     client.peers.get('downloader-peer')?.destroy()
     await new Promise((resolve) => setImmediate(resolve))
     await badPathPeer.listener.close()
