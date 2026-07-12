@@ -1,0 +1,772 @@
+#!/usr/bin/env node
+
+import { readFile, stat } from "node:fs/promises";
+
+import { Cli, z } from "incur";
+
+import { TracksError, errorMessage } from "./errors.js";
+import { identify } from "./identify.js";
+import { getYtdlpTsCommand } from "./integrations/ytdlp.js";
+import { createManifest, parseManifest } from "./manifest.js";
+import { runProcess } from "./process.js";
+import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
+import { parseTracklistJson, renderTracklist } from "./render.js";
+import { requireTimestamp } from "./time.js";
+import type { Environment } from "./types.js";
+
+const VERSION = "0.1.0";
+
+const provider = z
+  .enum(["auto", "description", "1001tracklists", "audd", "acrcloud"])
+  .default("auto")
+  .describe("Resolution provider");
+
+const providerEnv = z.object({
+  PARSE_API_KEY: z.string().optional().describe("Parse API key for 1001Tracklists access"),
+  PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
+  PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
+  AUDD_API_TOKEN: z.string().optional().describe("AudD API token"),
+  ACR_HOST: z.string().optional().describe("ACRCloud identification project host"),
+  ACR_ACCESS_KEY: z.string().optional().describe("ACRCloud identification access key"),
+  ACR_ACCESS_SECRET: z.string().optional().describe("ACRCloud identification access secret"),
+  YTDLP_TS_PATH: z.string().optional().describe("ytdlp-ts executable or dist/cli.js path"),
+  FFMPEG_PATH: z.string().optional().describe("ffmpeg executable path"),
+  FFPROBE_PATH: z.string().optional().describe("ffprobe executable path"),
+});
+
+const parseEnv = z.object({
+  PARSE_API_KEY: z.string().optional().describe("Parse API key from https://parse.bot"),
+  PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
+  PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
+});
+
+const identifyOptions = z.object({
+  provider,
+  strategy: z
+    .enum(["enterprise", "samples"])
+    .default("enterprise")
+    .describe("AudD long-file scan or local clip sampling"),
+  preferDatabase: z
+    .boolean()
+    .default(true)
+    .describe("Check 1001Tracklists before paid audio recognition"),
+  preferDescription: z
+    .boolean()
+    .default(true)
+    .describe("Resolve timestamped tracks from the media description first"),
+  full: z
+    .boolean()
+    .default(false)
+    .describe("AudD: scan every 12-second fragment instead of the cost-aware sample"),
+  every: z.number().int().min(1).max(20).default(1).describe("AudD chunks scanned per cycle"),
+  skip: z.number().int().min(0).max(100).default(4).describe("AudD chunks skipped per cycle"),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Maximum billable chunks or local samples"),
+  start: z.string().optional().describe("Start at seconds, MM:SS, or HH:MM:SS"),
+  interval: z
+    .number()
+    .int()
+    .min(12)
+    .default(60)
+    .describe("Seconds between local samples for AudD Standard or ACRCloud"),
+  clip: z.number().int().min(5).max(25).default(12).describe("Sample clip length in seconds"),
+  concurrency: z.number().int().min(1).max(8).default(3).describe("Concurrent recognition calls"),
+  minScore: z.number().min(0).max(100).default(40).describe("Minimum primary match score"),
+  blendScore: z.number().min(0).max(100).default(50).describe("Minimum overlap match score"),
+  includeMatches: z.boolean().default(false).describe("Include raw recognition moments"),
+  cookies: z.string().optional().describe("Netscape cookie file passed to yt-dlp"),
+  cookiesFromBrowser: z.string().optional().describe("Browser cookie source passed to yt-dlp"),
+  progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
+});
+
+const pipelineErrorOutput = z.object({
+  stage: z.enum([
+    "manifest",
+    "source",
+    "tracklist",
+    "identity",
+    "spotify",
+    "acquisition",
+    "rekordbox",
+  ]),
+  message: z.string(),
+  code: z.string().optional(),
+  retryable: z.boolean().optional(),
+});
+
+const overlapOutput = z.object({
+  artist: z.string(),
+  title: z.string(),
+  confidence: z.number().min(0).max(100).optional(),
+});
+
+const identityMetadataOutput = {
+  isId: z.boolean().optional(),
+  artist: z.string().optional(),
+  title: z.string().optional(),
+  mix: z.string().optional(),
+  album: z.string().optional(),
+  label: z.string().optional(),
+  releaseDate: z.string().optional(),
+  isrc: z.string().optional(),
+  upc: z.string().optional(),
+  songLink: z.string().optional(),
+  confidence: z.number().min(0).max(100).optional(),
+  overlaps: z.array(overlapOutput).optional(),
+};
+
+const identityOutput = z.union([
+  z.object({
+    status: z.literal("identified"),
+    ...identityMetadataOutput,
+    artist: z.string(),
+    title: z.string(),
+    searchQuery: z.string(),
+  }),
+  z.object({ status: z.literal("unidentified"), ...identityMetadataOutput }),
+]);
+
+const spotifyCandidateOutput = z.object({
+  score: z.number().min(0).max(1),
+  id: z.string(),
+  uri: z.string(),
+  url: z.string().optional(),
+  name: z.string(),
+  artists: z.array(z.string()),
+  album: z.string().optional(),
+  durationMs: z.number().int().positive().optional(),
+  explicit: z.boolean().optional(),
+  isrc: z.string().optional(),
+});
+
+const spotifyOutput = z.union([
+  z.object({ status: z.literal("pending"), query: z.string().optional() }),
+  z.object({
+    status: z.literal("matched"),
+    query: z.string(),
+    score: z.number().min(0).max(1),
+    id: z.string(),
+    uri: z.string(),
+    url: z.string().optional(),
+    name: z.string().optional(),
+    artists: z.array(z.string()).optional(),
+    album: z.string().optional(),
+    durationMs: z.number().int().positive().optional(),
+    explicit: z.boolean().optional(),
+    isrc: z.string().optional(),
+    candidates: z.array(spotifyCandidateOutput).optional(),
+  }),
+  z.object({
+    status: z.literal("ambiguous"),
+    query: z.string(),
+    candidates: z.array(spotifyCandidateOutput),
+  }),
+  z.object({ status: z.literal("unmatched"), query: z.string() }),
+  z.object({ status: z.literal("skipped"), reason: z.string() }),
+  z.object({
+    status: z.literal("failed"),
+    query: z.string().optional(),
+    error: pipelineErrorOutput,
+  }),
+]);
+
+const acquisitionCandidateOutput = z.object({
+  backend: z.enum(["slsk", "ytdlp"]),
+  id: z.string(),
+  source: z.string(),
+  title: z.string(),
+  artist: z.string().optional(),
+  durationSeconds: z.number().positive().optional(),
+  score: z.number().min(0).max(1).optional(),
+});
+
+const acquisitionOutput = z.union([
+  z.object({ status: z.literal("pending"), query: z.string().optional() }),
+  z.object({
+    status: z.literal("searching"),
+    query: z.string(),
+    candidates: z.array(acquisitionCandidateOutput),
+  }),
+  z.object({
+    status: z.literal("selected"),
+    query: z.string(),
+    candidates: z.array(acquisitionCandidateOutput),
+    selected: acquisitionCandidateOutput,
+  }),
+  z.object({
+    status: z.literal("unmatched"),
+    query: z.string(),
+    candidates: z.array(acquisitionCandidateOutput),
+  }),
+  z.object({
+    status: z.literal("downloaded"),
+    query: z.string().optional(),
+    candidates: z.array(acquisitionCandidateOutput).optional(),
+    selected: acquisitionCandidateOutput.optional(),
+    download: z.object({
+      backend: z.enum(["slsk", "ytdlp"]),
+      mediaPath: z.string(),
+      files: z.array(z.string()),
+      source: z.string().optional(),
+      engine: z.enum(["native", "reference"]).optional(),
+      sha256: z.string().optional(),
+    }),
+  }),
+  z.object({ status: z.literal("skipped"), reason: z.string() }),
+  z.object({
+    status: z.literal("failed"),
+    query: z.string().optional(),
+    candidates: z.array(acquisitionCandidateOutput).optional(),
+    error: pipelineErrorOutput,
+  }),
+]);
+
+const rekordboxOutput = z.union([
+  z.object({ status: z.literal("pending") }),
+  z.object({
+    status: z.enum(["exported", "imported"]),
+    target: z.enum(["m3u8", "rekordbox-xml", "rekordbox-db"]),
+    artifact: z.string().optional(),
+    xmlTrackId: z.number().int().positive().optional(),
+    dbContentId: z.string().optional(),
+    playlistMembershipId: z.string().optional(),
+  }),
+  z.object({ status: z.literal("skipped"), reason: z.string() }),
+  z.object({
+    status: z.literal("failed"),
+    target: z.enum(["m3u8", "rekordbox-xml", "rekordbox-db"]).optional(),
+    error: pipelineErrorOutput,
+  }),
+]);
+
+const manifestOutput = z.object({
+  schemaVersion: z.literal(1),
+  kind: z.literal("dj-set-pipeline"),
+  source: z.object({
+    input: z.string(),
+    id: z.string().optional(),
+    url: z.string().optional(),
+    title: z.string().optional(),
+    uploader: z.string().optional(),
+    date: z.string().optional(),
+    lineup: z.array(z.string()).optional(),
+    durationSeconds: z.number().positive().optional(),
+  }),
+  tracklist: z.object({
+    provider: z.enum(["description", "1001tracklists", "audd", "acrcloud"]),
+    complete: z.boolean(),
+    sampledEverySeconds: z.number().positive().optional(),
+    matches: z.array(z.unknown()).optional(),
+  }),
+  entries: z.array(
+    z.object({
+      id: z.string(),
+      order: z.number().int().positive(),
+      cue: z.object({
+        timestamp: z.string().optional(),
+        startSeconds: z.number().nonnegative().optional(),
+        endSeconds: z.number().nonnegative().optional(),
+      }),
+      identity: identityOutput,
+      spotify: spotifyOutput,
+      acquisition: acquisitionOutput,
+      rekordbox: rekordboxOutput,
+      warnings: z.array(z.string()),
+      errors: z.array(pipelineErrorOutput),
+    }),
+  ),
+  warnings: z.array(z.string()),
+  errors: z.array(pipelineErrorOutput),
+  artifacts: z.object({
+    root: z.string().optional(),
+    manifest: z.string().optional(),
+    downloadDirectory: z.string().optional(),
+    m3u8: z.string().optional(),
+    rekordboxXml: z.string().optional(),
+  }),
+});
+
+const databaseTrackOutput = z.object({
+  order: z.number().int().positive(),
+  isId: z.boolean().optional(),
+  artist: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  label: z.string().nullable().optional(),
+  mix: z.string().nullable().optional(),
+  timestamp: z.string().nullable().optional(),
+  links: z.union([z.record(z.string(), z.string()), z.array(z.string()), z.null()]).optional(),
+});
+
+const databaseTracklistOutput = z.object({
+  url: z.string(),
+  durationSeconds: z.number().positive().optional(),
+  event: z.object({
+    name: z.string(),
+    date: z.string().optional(),
+    djName: z.string().optional(),
+    lineup: z.array(z.string()),
+  }),
+  tracks: z.array(databaseTrackOutput),
+});
+
+const summaryOutput = z.object({
+  title: z.string(),
+  url: z.string(),
+  djName: z.string().optional(),
+  durationSeconds: z.number().positive().optional(),
+});
+
+const providerStatusOutput = z.object({
+  configured: z.boolean(),
+  env: z.array(z.string()),
+  capability: z.string(),
+});
+
+const providersOutput = z.object({
+  description: providerStatusOutput,
+  tracklists1001: providerStatusOutput,
+  audd: providerStatusOutput,
+  acrcloud: providerStatusOutput,
+});
+
+const toolStatusOutput = z.object({
+  available: z.boolean(),
+  command: z.string(),
+  version: z.string().optional(),
+  error: z.string().optional(),
+});
+
+const cli = Cli.create("tracks", {
+  version: VERSION,
+  description: "Resolve DJ sets into resumable track manifests without downloading remote sets.",
+  config: {
+    flag: "config",
+    files: ["tracks.json", "~/.config/tracks/config.json"],
+  },
+  mcp: {
+    command: "tracks --mcp",
+    instructions:
+      "Use resolve for a DJ set. It reads timestamped metadata first, then checks configured databases and recognition providers. It never downloads a remote source set. Use --full only when gapless AudD billing is acceptable.",
+  },
+  sync: {
+    cwd: import.meta.dirname,
+    include: ["../skills/*"],
+    suggestions: [
+      "resolve a YouTube DJ set into a versioned track manifest",
+      "find the 1001Tracklists entry for a YouTube URL",
+      "search 1001Tracklists for a DJ set",
+      "render a tracklist as YouTube chapters",
+    ],
+  },
+});
+
+cli.command("resolve", {
+  aliases: ["identify"],
+  description:
+    "Resolve a set through timestamped metadata, 1001Tracklists, AudD, or ACRCloud without downloading a remote set.",
+  args: z.object({ source: z.string().describe("YouTube/SoundCloud URL or local audio file") }),
+  options: identifyOptions,
+  env: providerEnv,
+  output: manifestOutput,
+  alias: {
+    provider: "p",
+    interval: "i",
+    concurrency: "c",
+  },
+  examples: [
+    {
+      args: { source: "https://www.youtube.com/watch?v=vtJ100Znqw0" },
+      description: "Read timestamped metadata, then use configured database/recognition fallbacks",
+    },
+    {
+      args: { source: "set.mp3" },
+      options: { provider: "audd", strategy: "samples", interval: 45 },
+      description: "Sample a local set every 45 seconds with AudD Standard",
+    },
+  ],
+  async run(context) {
+    try {
+      return createManifest(
+        await identify(context.args.source, {
+          provider: context.options.provider,
+          strategy: context.options.strategy,
+          preferDatabase: context.options.preferDatabase,
+          preferDescription: context.options.preferDescription,
+          full: context.options.full,
+          every: context.options.every,
+          skip: context.options.skip,
+          ...(context.options.limit === undefined ? {} : { limit: context.options.limit }),
+          ...(context.options.start === undefined
+            ? {}
+            : { startSeconds: requireTimestamp(context.options.start) }),
+          intervalSeconds: context.options.interval,
+          clipSeconds: context.options.clip,
+          concurrency: context.options.concurrency,
+          minScore: context.options.minScore,
+          blendScore: context.options.blendScore,
+          includeMatches: context.options.includeMatches,
+          ...(context.options.cookies ? { cookies: context.options.cookies } : {}),
+          ...(context.options.cookiesFromBrowser
+            ? { cookiesFromBrowser: context.options.cookiesFromBrowser }
+            : {}),
+          env: { ...process.env, ...context.env },
+          onProgress(progress) {
+            if (
+              context.options.progress === "always" ||
+              (context.options.progress === "auto" && !context.agent && !context.formatExplicit)
+            ) {
+              const count =
+                progress.current === undefined
+                  ? ""
+                  : ` ${progress.current}/${progress.total ?? "?"}`;
+              process.stderr.write(`[${progress.phase}]${count} ${progress.message}\n`);
+            }
+          },
+        }),
+      );
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+const one001 = Cli.create("1001", {
+  description: "Read 1001Tracklists through the managed Parse wrapper.",
+});
+
+one001.command("get", {
+  description: "Get a complete tracklist by 1001Tracklists URL.",
+  args: z.object({ url: z.url().describe("1001Tracklists tracklist URL") }),
+  env: parseEnv,
+  output: databaseTracklistOutput,
+  async run(context) {
+    try {
+      return await parseClient(context.env).get(context.args.url);
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+one001.command("find", {
+  description: "Find the tracklist referencing a YouTube or SoundCloud URL.",
+  args: z.object({ url: z.url().describe("YouTube or SoundCloud media URL") }),
+  env: parseEnv,
+  output: z.union([
+    z.object({ found: z.literal(false) }),
+    databaseTracklistOutput.extend({ found: z.literal(true) }),
+  ]),
+  async run(context) {
+    try {
+      return await parseClient(context.env).findByMediaUrl(context.args.url);
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+one001.command("search", {
+  description: "Search DJ-set tracklist pages by title.",
+  args: z.object({ title: z.string().min(1).describe("Set title or search text") }),
+  options: z.object({
+    uploader: z.string().optional().describe("DJ or uploader used to narrow results"),
+  }),
+  env: parseEnv,
+  output: z.object({ items: z.array(summaryOutput) }),
+  async run(context) {
+    try {
+      return await parseClient(context.env).search(context.args.title, context.options.uploader);
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+one001.command("latest", {
+  description: "List tracklists most recently added to 1001Tracklists.",
+  env: parseEnv,
+  output: z.object({ items: z.array(summaryOutput) }),
+  async run(context) {
+    try {
+      return await parseClient(context.env).latest();
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+one001.command("charts", {
+  description: "List a current 1001Tracklists chart.",
+  options: z.object({
+    type: z.enum(["weekly", "trending", "mostheard"]).default("weekly").describe("Chart type"),
+  }),
+  env: parseEnv,
+  output: z.object({
+    chart: z.string(),
+    items: z.array(
+      z.object({ name: z.string(), url: z.string(), rank: z.number().int().positive().optional() }),
+    ),
+  }),
+  async run(context) {
+    try {
+      return await parseClient(context.env).charts(context.options.type);
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+cli.command(one001);
+
+const manifest = Cli.create("manifest", {
+  description: "Validate and summarize resumable DJ-set pipeline manifests.",
+});
+
+const stageCountOutput = z.object({ status: z.string(), count: z.number().int().nonnegative() });
+
+manifest.command("validate", {
+  description: "Strictly validate a pipeline manifest and summarize its stage states.",
+  args: z.object({ file: z.string().describe("Path to a dj-set-pipeline JSON manifest") }),
+  output: z.object({
+    valid: z.literal(true),
+    schemaVersion: z.literal(1),
+    kind: z.literal("dj-set-pipeline"),
+    source: z.object({ input: z.string(), title: z.string().optional() }),
+    entries: z.number().int().nonnegative(),
+    identified: z.number().int().nonnegative(),
+    unidentified: z.number().int().nonnegative(),
+    spotify: z.array(stageCountOutput),
+    acquisition: z.array(stageCountOutput),
+    rekordbox: z.array(stageCountOutput),
+  }),
+  async run(context) {
+    try {
+      const value = await readJsonFile(context.args.file);
+      const parsed = parseManifest(asData(value));
+      const identified = parsed.entries.filter(
+        (entry) => entry.identity.status === "identified",
+      ).length;
+      return {
+        valid: true as const,
+        schemaVersion: parsed.schemaVersion,
+        kind: parsed.kind,
+        source: {
+          input: parsed.source.input,
+          ...(parsed.source.title ? { title: parsed.source.title } : {}),
+        },
+        entries: parsed.entries.length,
+        identified,
+        unidentified: parsed.entries.length - identified,
+        spotify: stageCounts(parsed.entries.map((entry) => entry.spotify.status)),
+        acquisition: stageCounts(parsed.entries.map((entry) => entry.acquisition.status)),
+        rekordbox: stageCounts(parsed.entries.map((entry) => entry.rekordbox.status)),
+      };
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+cli.command(manifest);
+
+cli.command("render", {
+  description: "Render a JSON tracklist as text, YouTube chapters, or a CUE sheet.",
+  args: z.object({
+    file: z.string().describe("JSON file produced by `tracks identify --format json`"),
+  }),
+  options: z.object({
+    style: z.enum(["text", "youtube", "cue"]).default("text").describe("Output style"),
+    audioFile: z.string().optional().describe("Audio filename embedded in CUE output"),
+  }),
+  alias: { style: "s" },
+  output: z.string(),
+  async run(context) {
+    try {
+      const json = await readJsonFile(context.args.file);
+      return renderTracklist(parseTracklistJson(json), {
+        style: context.options.style,
+        ...(context.options.audioFile ? { audioFile: context.options.audioFile } : {}),
+      });
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+cli.command("providers", {
+  description: "Show configured providers without revealing secrets.",
+  env: providerEnv,
+  output: providersOutput,
+  run(context) {
+    return providerStatus({ ...process.env, ...context.env });
+  },
+});
+
+cli.command("doctor", {
+  description: "Check resolution providers and local-file sampling dependencies.",
+  env: providerEnv,
+  output: z.object({
+    providers: providersOutput,
+    tools: z.object({
+      ytdlpTs: toolStatusOutput,
+      ffmpeg: toolStatusOutput,
+      ffprobe: toolStatusOutput,
+    }),
+    readyForLookup: z.boolean(),
+    readyForResolution: z.boolean(),
+    readyForRecognition: z.boolean(),
+    ready: z.boolean(),
+  }),
+  async run(context) {
+    const env = { ...process.env, ...context.env };
+    const ytdlpTs = await getYtdlpTsCommand(env);
+    const tools = await Promise.all([
+      toolStatus(ytdlpTs.executable, [...ytdlpTs.prefix, "--version"]),
+      toolStatus(env.FFMPEG_PATH ?? "ffmpeg", ["-version"]),
+      toolStatus(env.FFPROBE_PATH ?? "ffprobe", ["-version"]),
+    ]);
+    const acrConfigured = Boolean(env.ACR_HOST && env.ACR_ACCESS_KEY && env.ACR_ACCESS_SECRET);
+    const readyForRecognition = Boolean(
+      env.AUDD_API_TOKEN || (acrConfigured && tools[1]?.available && tools[2]?.available),
+    );
+    const readyForResolution = Boolean(
+      tools[0]?.available || env.PARSE_API_KEY || readyForRecognition,
+    );
+    return {
+      providers: providerStatus(env),
+      tools: {
+        ytdlpTs: tools[0],
+        ffmpeg: tools[1],
+        ffprobe: tools[2],
+      },
+      readyForLookup: Boolean(env.PARSE_API_KEY),
+      readyForResolution,
+      readyForRecognition,
+      ready: readyForResolution,
+    };
+  },
+});
+
+function parseClient(env: {
+  PARSE_API_KEY?: string | undefined;
+  PARSE_API_BASE?: string | undefined;
+  PARSE_SCRAPER_ID?: string | undefined;
+}): Tracklists1001Client {
+  if (!env.PARSE_API_KEY) {
+    throw new TracksError("AUTH_REQUIRED", "PARSE_API_KEY is required for 1001Tracklists access", {
+      exitCode: 2,
+    });
+  }
+  return new Tracklists1001Client({
+    apiKey: env.PARSE_API_KEY,
+    baseUrl:
+      env.PARSE_API_BASE ??
+      (env.PARSE_SCRAPER_ID
+        ? `https://api.parse.bot/scraper/${env.PARSE_SCRAPER_ID}`
+        : DEFAULT_PARSE_API_BASE),
+  });
+}
+
+function providerStatus(env: Environment) {
+  return {
+    description: {
+      configured: true,
+      env: ["YTDLP_TS_PATH"],
+      capability: "Metadata-only YouTube/SoundCloud description resolution via ytdlp-ts",
+    },
+    tracklists1001: {
+      configured: Boolean(env.PARSE_API_KEY),
+      env: ["PARSE_API_KEY"],
+      capability: "Existing 1001Tracklists lookup, search, latest, and charts",
+    },
+    audd: {
+      configured: Boolean(env.AUDD_API_TOKEN),
+      env: ["AUDD_API_TOKEN"],
+      capability: "Direct long-file and YouTube audio recognition",
+    },
+    acrcloud: {
+      configured: Boolean(env.ACR_HOST && env.ACR_ACCESS_KEY && env.ACR_ACCESS_SECRET),
+      env: ["ACR_HOST", "ACR_ACCESS_KEY", "ACR_ACCESS_SECRET"],
+      capability: "Local short-clip fingerprint sampling",
+    },
+  };
+}
+
+async function toolStatus(command: string, args: string[]) {
+  try {
+    const result = await runProcess(command, args, { maxOutputBytes: 1024 * 1024 });
+    const version = `${result.stdout}\n${result.stderr}`
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean);
+    return { available: true, command, ...(version ? { version } : {}) };
+  } catch (error) {
+    return { available: false, command, error: errorMessage(error) };
+  }
+}
+
+function asData(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  return "data" in value ? (value as { data: unknown }).data : value;
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  const bytes = (await stat(path)).size;
+  const maxBytes = 20 * 1024 * 1024;
+  if (bytes > maxBytes) {
+    throw new TracksError(
+      "INVALID_SOURCE",
+      `JSON file is ${bytes} bytes; maximum supported size is ${maxBytes}`,
+      { exitCode: 2 },
+    );
+  }
+  return JSON.parse(await readFile(path, "utf8")) as unknown;
+}
+
+function stageCounts(statuses: readonly string[]): { status: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const status of statuses) counts.set(status, (counts.get(status) ?? 0) + 1);
+  return [...counts]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([status, count]) => ({
+      status,
+      count,
+    }));
+}
+
+function fail(
+  context: {
+    error(options: {
+      code: string;
+      exitCode?: number;
+      message: string;
+      retryable?: boolean;
+      cta?: { commands: string[] };
+    }): never;
+  },
+  error: unknown,
+): never {
+  if (error instanceof TracksError) {
+    return context.error({
+      code: error.code,
+      message: error.message,
+      retryable: error.retryable,
+      exitCode: error.exitCode,
+      ...(error.code === "AUTH_REQUIRED" ? { cta: { commands: ["doctor"] } } : {}),
+    });
+  }
+  return context.error({
+    code: "TRACKS_ERROR",
+    message: errorMessage(error),
+    retryable: false,
+    exitCode: 1,
+  });
+}
+
+await cli.serve();
+
+export default cli;
