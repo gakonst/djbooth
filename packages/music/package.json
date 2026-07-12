@@ -35,6 +35,10 @@
       "types": "./dist/spots.d.ts",
       "import": "./dist/spots.js"
     },
+    "./soundcloud": {
+      "types": "./dist/soundcloud.d.ts",
+      "import": "./dist/soundcloud.js"
+    },
     "./slsk": {
       "types": "./dist/slsk.d.ts",
       "import": "./dist/slsk.js"
@@ -67,6 +71,7 @@
   },
   "dependencies": {
     "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/soundcloud": "workspace:*",
     "@gakonst/spots": "workspace:*",
     "@gakonst/tracks": "workspace:*",
     "@gakonst/ytdlp-ts": "workspace:*",
