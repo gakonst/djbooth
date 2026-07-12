@@ -6,7 +6,12 @@ import { Cli, Mcp } from "incur";
 import { NodeRuntime, type BindingDefinition } from "secure-exec";
 import { z } from "zod";
 
-import { createMusicCli, type MusicCliDependencies, MUSIC_VERSION } from "./cli.js";
+import {
+  createMusicCli,
+  type MusicCliDependencies,
+  MUSIC_MCP_TOOL_FILTER,
+  MUSIC_VERSION,
+} from "./cli.js";
 
 export type MusicMcpOptions = {
   cli?: ReturnType<typeof createMusicCli>;
@@ -44,17 +49,31 @@ export class SecureExecMusicExecutor implements Executor {
     const namespaces: Record<string, Record<string, string>> = {};
 
     for (const [providerIndex, provider] of providers.entries()) {
+      const binding = `codemode-${providerIndex}`;
       const methods: Record<string, string> = {};
-      for (const [methodIndex, [method, handler]] of Object.entries(provider.fns).entries()) {
-        const binding = `codemode-${providerIndex}-${methodIndex}`;
+      for (const method of Object.keys(provider.fns)) {
         methods[method] = binding;
-        bindings[binding] = {
-          description: `${provider.name}.${method}`,
-          inputSchema: { type: "object", additionalProperties: true },
-          timeoutMs: this.timeoutMs,
-          handler,
-        };
       }
+      bindings[binding] = {
+        description: `${provider.name} method dispatcher`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            method: { type: "string" },
+            input: { type: "object", additionalProperties: true },
+          },
+          required: ["method", "input"],
+          additionalProperties: false,
+        },
+        timeoutMs: this.timeoutMs,
+        async handler(value: unknown) {
+          const request = value as { method?: string; input?: unknown };
+          const handler = request.method ? provider.fns[request.method] : undefined;
+          if (!handler)
+            throw new Error(`Unknown ${provider.name} method '${request.method ?? ""}'`);
+          return handler(request.input ?? {});
+        },
+      };
       namespaces[provider.name] = methods;
     }
 
@@ -94,7 +113,7 @@ export function createMusicMcpServer(options: MusicMcpOptions = {}): McpServer {
     { instructions: options.instructions ?? DEFAULT_INSTRUCTIONS },
   );
 
-  for (const tool of Mcp.collectTools(commands, [])) {
+  for (const tool of Mcp.collectTools(commands, [], [], MUSIC_MCP_TOOL_FILTER)) {
     const shape = {
       ...tool.command.args?.shape,
       ...tool.command.options?.shape,
@@ -159,10 +178,10 @@ function localSandboxSource(
 ): string {
   return `
 import { execFileSync } from "node:child_process";
-const invoke = async (command, input) => {
+const invoke = async (command, method, input) => {
   const response = JSON.parse(execFileSync(
     command,
-    [command, "--json", JSON.stringify(input ?? {})],
+    [command, "--json", JSON.stringify({ method, input: input ?? {} })],
     { encoding: "utf8" },
   ));
   if (!response.ok) throw new Error(response.error ?? command + " failed");
@@ -173,7 +192,7 @@ for (const [namespace, methods] of Object.entries(namespaces)) {
   globalThis[namespace] = Object.fromEntries(
     Object.entries(methods).map(([method, command]) => [
       method,
-      async (input = {}) => invoke(command, input),
+      async (input = {}) => invoke(command, method, input),
     ]),
   );
 }

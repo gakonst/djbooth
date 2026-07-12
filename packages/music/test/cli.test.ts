@@ -52,17 +52,22 @@ describe("music CLI", () => {
     inspect.mockRestore();
   });
 
-  test("publishes the five package command groups in its agent manifest", async () => {
+  test("publishes the complete specialist command groups in its agent manifest", async () => {
     const { output } = await serve({}, ["--llms-full", "--format", "json"]);
     const manifest = JSON.parse(output) as { commands: { name: string }[] };
-    expect(manifest.commands.map((command) => command.name)).toEqual([
-      "rekordbox status",
-      "slsk search",
-      "spots session",
-      "tracks resolve",
-      "ytdlp engines",
-      "ytdlp inspect",
-    ]);
+    const commands = manifest.commands.map((command) => command.name);
+    expect(commands.length).toBeGreaterThan(250);
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        "rekordbox analyze track",
+        "rekordbox db playlist create",
+        "slsk download",
+        "soundcloud resolve",
+        "spots api search",
+        "tracks resolve",
+        "ytdlp download",
+      ]),
+    );
   });
 
   test("lists one aggregate music skill", async () => {

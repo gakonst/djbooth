@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { Cli, z } from "incur";
 
 import {
@@ -1721,6 +1724,7 @@ xmlCli.command(xmlTrackCli);
 xmlCli.command(xmlPlaylistCli);
 cli.command(xmlCli);
 
-cli.serve();
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+  void cli.serve();
 
 export default cli;

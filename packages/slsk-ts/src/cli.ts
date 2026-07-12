@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -269,6 +270,7 @@ cli.command('raw', {
     }),
 })
 
-cli.serve()
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) void cli.serve()
 
 export default cli
+import { realpathSync } from 'node:fs'

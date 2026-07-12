@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -40,7 +41,7 @@ const inspectOptions = z.object({
   socketTimeout: z.number().int().positive().optional().describe('Socket timeout in seconds'),
 })
 
-const cli = Cli.create('ytdlp-ts', {
+const cli = Cli.create('ytdlp', {
   version: VERSION,
   description: 'Download highest-quality music and metadata from YouTube and SoundCloud.',
   mcp: {
@@ -504,4 +505,7 @@ function fail(
   })
 }
 
-await cli.serve()
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await cli.serve()
+
+export default cli
+import { realpathSync } from 'node:fs'
