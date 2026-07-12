@@ -1,0 +1,62 @@
+{
+  "name": "@gakonst/tracks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Resolve DJ sets into enriched tracks and Rekordbox playlists",
+  "license": "MIT",
+  "author": "Georgios Konstantopoulos",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/gakonst/tracks-ts.git"
+  },
+  "bin": {
+    "tracks": "./dist/cli.js",
+    "tracks-ts": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "cli": "tsx src/cli.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint src test",
+    "prepack": "pnpm build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "validate": "pnpm check && pnpm build"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.10.0",
+    "incur": "0.4.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "@vitest/coverage-v8": "^4.1.10",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.12.1"
+}

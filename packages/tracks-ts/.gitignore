@@ -1,0 +1,13 @@
+dist/
+node_modules/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+*.mp3
+*.m4a
+*.wav
+*.webm
+*.part
