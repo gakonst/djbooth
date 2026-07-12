@@ -25,6 +25,11 @@ const packages = [
     prefix: "gakonst-tracks-",
     bins: ["tracks", "tracks-ts"],
   },
+  {
+    name: "@gakonst/soundcloud",
+    prefix: "gakonst-soundcloud-",
+    bins: ["soundcloud"],
+  },
   { name: "@gakonst/spots", prefix: "gakonst-spots-", bins: ["spots"] },
   { name: "slsk-ts", prefix: "slsk-ts-", bins: ["slsk"] },
   {
