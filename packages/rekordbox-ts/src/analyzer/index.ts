@@ -85,10 +85,10 @@ export function analyzeTrack(
   audioPath: string,
   options: AnalyzeTrackOptions = {},
 ): RekordboxAnalysisResult {
-  if (process.platform !== "darwin") throw new TypeError("Rekordbox analysis requires macOS");
   const absoluteAudioPath = resolve(audioPath);
   if (!existsSync(absoluteAudioPath))
     throw new TypeError(`Audio file '${absoluteAudioPath}' does not exist`);
+  if (process.platform !== "darwin") throw new TypeError("Rekordbox analysis requires macOS");
   const analyzerBinary = getAnalyzerBinary(options.analyzerBinary);
   if (!existsSync(analyzerBinary))
     throw new TypeError(
