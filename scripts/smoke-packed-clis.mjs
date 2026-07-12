@@ -26,11 +26,6 @@ const packages = [
     bins: ["tracks", "tracks-ts"],
   },
   { name: "@gakonst/spots", prefix: "gakonst-spots-", bins: ["spots"] },
-  {
-    name: "@gakonst/soundcloud",
-    prefix: "gakonst-soundcloud-",
-    bins: ["soundcloud"],
-  },
   { name: "slsk-ts", prefix: "slsk-ts-", bins: ["slsk"] },
   {
     name: "@gakonst/ytdlp-ts",
@@ -65,6 +60,7 @@ try {
   mkdirSync(packDirectory, { recursive: true });
 
   if (!suppliedPackDirectory) {
+    run("pnpm", ["build"]);
     for (const package_ of packages) {
       run("pnpm", [
         "--filter",
