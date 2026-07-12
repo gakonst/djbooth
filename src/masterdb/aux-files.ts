@@ -1,4 +1,16 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { XMLBuilder, XMLParser } from "fast-xml-parser";
 
@@ -164,7 +176,31 @@ export class MasterPlaylistXml {
 
   /** Save the companion file. */
   save(path = this.path, indent = "    "): void {
-    writeFileSync(path, this.toString(indent), "utf8");
+    const directory = dirname(path);
+    const temporaryPath = join(directory, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+    const mode = existsSync(path) ? statSync(path).mode & 0o777 : 0o666;
+    let descriptor: number | undefined;
+    try {
+      descriptor = openSync(temporaryPath, "wx", mode);
+      writeFileSync(descriptor, this.toString(indent), "utf8");
+      fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = undefined;
+      renameSync(temporaryPath, path);
+    } catch (error) {
+      if (descriptor !== undefined)
+        try {
+          closeSync(descriptor);
+        } catch {
+          // Preserve the original write error.
+        }
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // The temporary file may not have been created or may already have been renamed.
+      }
+      throw error;
+    }
     this.path = path;
     this.modified = false;
   }

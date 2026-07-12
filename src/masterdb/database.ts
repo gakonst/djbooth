@@ -917,30 +917,41 @@ export class MasterDatabase {
       this.registry.autoincrementLocalUpdateCount(true);
     this.flush();
     const playlistChanges = [...this.tracked].filter((row) => row.tableName === "djmdPlaylist");
-    if (this.transactionOpen) this.requireConnection().exec("COMMIT");
-    if (this.playlistXml) {
-      for (const row of playlistChanges) {
-        const id = row.get("ID");
-        if (id == null) continue;
-        const entry = this.playlistXml.get(String(id));
-        if (row.state === "deleted") {
-          if (entry) this.playlistXml.remove(String(id));
-          continue;
-        }
-        const parentId = row.get("ParentID") ?? "root";
-        const attribute = Number(row.get("Attribute"));
-        const updatedAt = row.get("updated_at");
-        const date = updatedAt instanceof Date ? updatedAt : new Date();
-        if (entry)
-          this.playlistXml.update(String(id), {
-            attribute,
-            parentId: String(parentId),
-            updatedAt: date,
-          });
-        else this.playlistXml.add(String(id), String(parentId), attribute, date);
-      }
-      if (this.playlistXml.modified) this.playlistXml.save();
+    if (this.transactionOpen) {
+      this.requireConnection().exec("COMMIT");
+      this.transactionOpen = false;
     }
+    try {
+      if (this.playlistXml) {
+        for (const row of playlistChanges) {
+          const id = row.get("ID");
+          if (id == null) continue;
+          const entry = this.playlistXml.get(String(id));
+          if (row.state === "deleted") {
+            if (entry) this.playlistXml.remove(String(id));
+            continue;
+          }
+          const parentId = row.get("ParentID") ?? "root";
+          const attribute = Number(row.get("Attribute"));
+          const updatedAt = row.get("updated_at");
+          const date = updatedAt instanceof Date ? updatedAt : new Date();
+          if (entry)
+            this.playlistXml.update(String(id), {
+              attribute,
+              parentId: String(parentId),
+              updatedAt: date,
+            });
+          else this.playlistXml.add(String(id), String(parentId), attribute, date);
+        }
+        if (this.playlistXml.modified) this.playlistXml.save();
+      }
+    } finally {
+      this.acceptCommittedChanges();
+    }
+    this.emit("after_commit");
+  }
+
+  private acceptCommittedChanges(): void {
     for (const row of this.tracked) {
       if (row.state === "deleted") {
         for (const values of [row.original, row.flushed, row.data]) {
@@ -961,8 +972,6 @@ export class MasterDatabase {
     }
     this.tracked.clear();
     this.changes = [];
-    this.transactionOpen = false;
-    this.emit("after_commit");
   }
 
   /** Validate the write/running-process guard without committing. */

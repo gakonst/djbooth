@@ -61,6 +61,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Open databases read-only by default. CLI mutations additionally require `--write`, and commits refuse to run while Rekordbox is open unless explicitly overridden.
 - Use SQLCipher legacy mode 4 for Rekordbox's encrypted database and a logical schema/data export for plain-SQLite copies because native page backup cannot cross cipher formats.
 
+### 2026-07-12 — Master playlist commit boundary
+
+- Replace `masterPlaylists6.xml` atomically through a same-directory exclusive temporary file, file sync, and rename. Failed writes retain the original source path and modified state while cleaning temporary output.
+- Mark the SQLite transaction closed immediately after `COMMIT`. Accept committed row state even when the subsequent companion-file save fails, so the original sidecar error propagates and `close()` cannot mask it with a second rollback error.
+
 ### 2026-07-10 — Shared database engine
 
 - Reuse the validated schema/query/transaction implementation for Device Library Plus through a composed internal engine. Keep `MasterDatabase` and `DeviceLibraryPlus` as distinct public types because identically named helpers such as `getContent` return different row families.
@@ -133,6 +138,10 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Audited every public class method and top-level function in the pinned Python source with AST-generated inventories. Closed the remaining query/session, schema metadata, relationship read/write/cascade, model-construction, PQT2, arbitrary ANLZ mutation, settings reset, and XML return-value gaps.
 - Added generated typings for every master.db physical column and new incur commands for arbitrary parameterized master/device SQL, PQT2 editing, raw/parsed ANLZ byte patching, and settings reset. The expanded suite passes 64 tests before differential fixture verification.
 - Re-ran the pinned Python project itself under Python 3.12: all 278 upstream tests passed. Then expanded every tag from and byte-for-byte rebuilt all 48 real upstream ANLZ files, rebuilt all 169 My Settings fixtures, round-tripped both Rekordbox 5/6 collection XML fixtures, and sampled every mapped table from the encrypted upstream master database.
+
+### 2026-07-12
+
+- Hardened the direct master-database playlist commit boundary with atomic companion-file replacement and regression coverage for post-commit save failures, original-error propagation, cleanup, and close behavior.
 
 ## Next
 

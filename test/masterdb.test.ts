@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3-multiple-ciphers";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DatabaseRow,
@@ -396,6 +396,35 @@ describe("MasterDatabase mutations", () => {
     reopened.close();
   });
 
+  it("preserves a committed database and the original sidecar error when saving XML fails", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const playlist = db.createPlaylist("Committed before sidecar failure");
+    const failure = new Error("sidecar save failed");
+    vi.spyOn(db.playlistXml!, "save").mockImplementation(() => {
+      throw failure;
+    });
+
+    let thrown: unknown;
+    try {
+      db.commit();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(failure);
+    expect(db.query(DjmdPlaylist).where({ ID: playlist.ID }).count()).toBe(1);
+    expect(() => db.close()).not.toThrow();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(reopened.query(DjmdPlaylist).where({ ID: playlist.ID }).count()).toBe(1);
+    reopened.close();
+  });
+
   it("rejects fractional positions, cross-playlist songs, and hierarchy cycles", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
@@ -566,5 +595,22 @@ describe("MasterPlaylistXml", () => {
     const reloaded = new MasterPlaylistXml(xmlPath);
     expect(reloaded.get(500)).toBeUndefined();
     expect(reloaded.get(600)?.ParentId).toBe("0");
+  });
+
+  it("keeps its source and cleans the temporary file when atomic replacement fails", () => {
+    const { root, xmlPath } = fixture();
+    const original = readFileSync(xmlPath, "utf8");
+    const xml = new MasterPlaylistXml(xmlPath);
+    xml.add(600, "root", PlaylistType.PLAYLIST, new Date("2026-07-10T13:00:00Z"));
+    const destination = join(root, "cannot-replace-directory");
+    mkdirSync(destination);
+
+    expect(() => xml.save(destination)).toThrow();
+    expect(xml.path).toBe(xmlPath);
+    expect(xml.modified).toBe(true);
+    expect(readFileSync(xmlPath, "utf8")).toBe(original);
+    expect(
+      readdirSync(root).filter((name) => name.startsWith(".cannot-replace-directory.")),
+    ).toEqual([]);
   });
 });
