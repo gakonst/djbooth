@@ -10,7 +10,7 @@
     "directory": "packages/music"
   },
   "bin": {
-    "music": "./dist/cli.js"
+    "music": "./dist/bin.js"
   },
   "files": [
     "dist",
@@ -50,6 +50,10 @@
     "./rekordbox": {
       "types": "./dist/rekordbox.d.ts",
       "import": "./dist/rekordbox.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
     }
   },
   "publishConfig": {
@@ -70,13 +74,17 @@
     "validate": "pnpm check && pnpm build"
   },
   "dependencies": {
+    "@cloudflare/codemode": "0.4.2",
     "@gakonst/rekordbox": "workspace:*",
     "@gakonst/soundcloud": "workspace:*",
     "@gakonst/spots": "workspace:*",
     "@gakonst/tracks": "workspace:*",
     "@gakonst/ytdlp-ts": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "incur": "^0.4.13",
-    "slsk-ts": "workspace:*"
+    "secure-exec": "0.3.3",
+    "slsk-ts": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.19.7",

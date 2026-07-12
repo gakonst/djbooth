@@ -62,6 +62,38 @@ music skills add
 music mcp add
 ```
 
+For a zero-config local CodeMode MCP server, run:
+
+```sh
+music --codemode-mcp
+# from this repository: pnpm --silent music:mcp:code
+```
+
+Use `pnpm --silent music:mcp` for the normal MCP from this repository. `--silent` keeps pnpm's
+script banner off the stdio protocol stream.
+
+It serves one `code` tool over stdio. Generated JavaScript runs inside Secure Exec with a virtual
+filesystem, denied network access, bounded execution time, and only the music tools bridged back to
+the host. The bundled Secure Exec sidecar currently supports macOS and Linux; Windows clients can
+use the normal MCP or inject another isolated `Executor` into `createMusicCodeMcpServer`.
+
+The package also exports explicit server factories. The normal server exposes the same six typed
+commands as the CLI; the CodeMode server collapses them into one sandboxed TypeScript `code` tool:
+
+```ts
+import { DynamicWorkerExecutor } from "@cloudflare/codemode";
+import { createMusicCodeMcpServer, createMusicMcpServer } from "@gakonst/music/mcp";
+
+const normal = createMusicMcpServer();
+const codeMode = await createMusicCodeMcpServer({
+  executor: new DynamicWorkerExecutor({ loader: env.LOADER }),
+});
+```
+
+`createLocalMusicCodeMcpServer` uses the same local Secure Exec default as the CLI.
+`createMusicCodeMcpServer` accepts an injected `Executor`; Cloudflare Workers should provide a
+`worker_loaders` binding and `DynamicWorkerExecutor`.
+
 ## Packages
 
 - [`@gakonst/tracks`](https://github.com/gakonst/music-ts/tree/main/packages/tracks-ts): DJ-set resolution, manifests, enrichment, and pipeline coordination.
