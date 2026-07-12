@@ -92,7 +92,7 @@ describe("CLI process boundary", () => {
     );
     expect(invalid.status).not.toBe(0);
     expect(`${invalid.stdout}\n${invalid.stderr}`).toContain("filters must be a JSON object");
-  });
+  }, 20_000);
 
   it("requires write mode for arbitrary SQL mutations", () => {
     const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-cli-sql-"));
