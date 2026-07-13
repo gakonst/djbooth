@@ -19,7 +19,7 @@ import {
 } from "../anlz/index.js";
 import { readAnalysisResult } from "../analyzer/index.js";
 import { getConfig } from "../config/index.js";
-import { deobfuscate, getRekordboxPid, warnDeprecated } from "../utils.js";
+import { deobfuscate, getRekordboxAgentPid, getRekordboxPid, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
 import {
@@ -536,7 +536,11 @@ export class RekordboxAgentRegistry {
     this.database.withTrackingDisabled(() => {
       for (const row of changes) {
         usn += 1;
-        if (setRowUsn && this.database.hasColumn(row.tableName, "rb_local_usn"))
+        if (
+          setRowUsn &&
+          row.state !== "deleted" &&
+          this.database.hasColumn(row.tableName, "rb_local_usn")
+        )
           row.set("rb_local_usn", usn);
       }
       this.setLocalUpdateCount(usn);
@@ -1121,8 +1125,17 @@ export class MasterDatabase {
   /** Validate the write/running-process guard without committing. */
   assertCommitAllowed(allowWhileRunning?: boolean): void {
     this.requireWritable();
-    if (!(allowWhileRunning ?? this.options.allowWhileRunning) && getRekordboxPid())
-      throw new Error("Rekordbox is running; close it before committing database changes");
+    if (allowWhileRunning ?? this.options.allowWhileRunning) return;
+    const rekordboxPid = getRekordboxPid();
+    const rekordboxAgentPid = getRekordboxAgentPid();
+    const running = [
+      rekordboxPid ? `rekordbox (PID ${rekordboxPid})` : undefined,
+      rekordboxAgentPid ? `rekordboxAgent (PID ${rekordboxAgentPid})` : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (running.length)
+      throw new Error(
+        `Close Rekordbox before committing database changes; running: ${running.join(", ")}`,
+      );
   }
 
   /** Roll back all staged and flushed-but-uncommitted changes. */

@@ -31,6 +31,7 @@ describe("music CLI", () => {
         "rekordbox analyze track",
         "rekordbox db playlist create",
         "rekordbox status",
+        "library status",
         "slsk download",
         "slsk search",
         "soundcloud api get-me",
@@ -68,17 +69,28 @@ describe("music CLI", () => {
     expect(soundcloud.output).toContain("--sharing");
   });
 
-  test("mounts all six specialist CLIs as top-level groups", async () => {
+  test("mounts every specialist CLI as a top-level group", async () => {
     const { output } = await serve(["--help"]);
 
-    for (const command of ["rekordbox", "slsk", "soundcloud", "spots", "tracks", "ytdlp-ts"]) {
+    for (const command of [
+      "library",
+      "rekordbox",
+      "slsk",
+      "soundcloud",
+      "spots",
+      "tracks",
+      "ytdlp-ts",
+    ]) {
       expect(output).toMatch(new RegExp(`^  ${command}\\s{2,}`, "m"));
     }
   });
 
-  test("lists one aggregate music skill", async () => {
+  test("lists the workflow skill alongside typed command-group skills", async () => {
     const { output } = await serve(["skills", "list"]);
-    expect(output).toContain("music");
-    expect(output).toContain("1 skill (0 installed)");
+    expect(output).toContain("music ");
+    expect(output).toContain("music-library");
+    expect(output).toContain("music-rekordbox");
+    expect(output).toContain("music-ytdlp-ts");
+    expect(output).toContain("8 skills");
   });
 });

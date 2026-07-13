@@ -1,0 +1,77 @@
+{
+  "name": "@gakonst/rekordbox-library",
+  "version": "0.1.0",
+  "description": "Local-first Rekordbox library management workbench",
+  "license": "MIT",
+  "author": "Georgios Konstantopoulos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/rekordbox-library"
+  },
+  "bin": {
+    "rekordbox-library": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "pnpm build:server && pnpm build:client",
+    "build:client": "vite build",
+    "build:server": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "cli": "tsx src/cli.ts",
+    "dev": "vite --host 127.0.0.1",
+    "format": "oxfmt --write src test index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",
+    "format:check": "oxfmt --check src test index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",
+    "lint": "oxlint src test vite.config.ts",
+    "prepack": "pnpm build",
+    "serve": "tsx src/cli.ts serve",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/tracks": "workspace:*",
+    "@tanstack/react-query": "^5.101.2",
+    "incur": "0.4.13",
+    "lucide-react": "^1.24.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,20 +1,21 @@
 # music-ts
 
 One TypeScript workspace for resolving DJ sets, enriching their metadata, publishing playlists to
-Spotify or SoundCloud, acquiring individual recordings, and maintaining Rekordbox playlists. The five original repositories retain their full
-Git histories under `packages/`.
+Spotify or SoundCloud, acquiring individual recordings, and maintaining Rekordbox playlists. The
+five original repositories retain their full Git histories under `packages/`.
 
 ## Packages
 
-| Package                                       | CLI          | Responsibility                                                         |
-| --------------------------------------------- | ------------ | ---------------------------------------------------------------------- |
-| [`@gakonst/music`](packages/music)            | `music`      | Unified namespace/subpath API, CLI, agent Skill, and MCP entrypoint    |
-| [`@gakonst/tracks`](packages/tracks-ts)       | `tracks`     | Set/tracklist resolution, orchestration, caches, acquisition manifests |
-| [`@gakonst/spots`](packages/spots)            | `spots`      | Typed Spotify Web API, OAuth, playlists, metadata                      |
-| [`@gakonst/soundcloud`](packages/soundcloud)  | `soundcloud` | Typed SoundCloud API, OAuth, account playlists, uploads                |
-| [`slsk-ts`](packages/slsk-ts)                 | `slsk`       | Soulseek protocol, search, shares, individual-file downloads           |
-| [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)      | `ytdlp-ts`   | YouTube/SoundCloud inspection and resilient media acquisition          |
-| [`@gakonst/rekordbox`](packages/rekordbox-ts) | `rekordbox`  | Normal encrypted Rekordbox database and format APIs                    |
+| Package                                                    | CLI                 | Responsibility                                                         |
+| ---------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------- |
+| [`@gakonst/music`](packages/music)                         | `music`             | Unified namespace/subpath API, CLI, agent Skill, and MCP entrypoint    |
+| [`@gakonst/tracks`](packages/tracks-ts)                    | `tracks`            | Set/tracklist resolution, orchestration, caches, acquisition manifests |
+| [`@gakonst/spots`](packages/spots)                         | `spots`             | Typed Spotify Web API, OAuth, playlists, metadata                      |
+| [`@gakonst/soundcloud`](packages/soundcloud)               | `soundcloud`        | Typed SoundCloud API, OAuth, account playlists, uploads                |
+| [`slsk-ts`](packages/slsk-ts)                              | `slsk`              | Soulseek protocol, search, shares, individual-file downloads           |
+| [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)                   | `ytdlp-ts`          | YouTube/SoundCloud inspection and resilient media acquisition          |
+| [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
+| [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
 
 Package licenses remain package-local; `ytdlp-ts` uses the Unlicense and the other packages use MIT.
 
@@ -30,6 +31,7 @@ import { SpotifyClient } from "@gakonst/music/spots";
 import { SoulseekClient } from "@gakonst/music/slsk";
 import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
+import { RekordboxLibraryService } from "@gakonst/music/library";
 ```
 
 ## Pipeline
@@ -66,14 +68,52 @@ pnpm spots --help
 pnpm slsk --help
 pnpm ytdlp --help
 pnpm rekordbox --help
+pnpm library --help
 ```
 
-Install the single aggregate agent skill or register the same typed command map as MCP:
+Install the curated workflow skill plus Incur's typed command-group skills, or register the same
+command map as MCP:
 
 ```sh
 pnpm music skills add
 pnpm music mcp add
 ```
+
+## Rekordbox library workbench
+
+Browse the normal encrypted library through the native TypeScript APIs, without uploading the
+database or shelling through another CLI:
+
+```sh
+pnpm music library status --format json
+pnpm music library serve --open
+```
+
+The server binds only to loopback and opens `master.db` read-only by default. Launch with `--write`
+only for an intentional playlist edit. Every mutation refuses to run while Rekordbox or
+`rekordboxAgent` is active, holds the shared database lock, takes a checksummed backup, and verifies
+the exact database and `masterPlaylists6.xml` outcome after commit. A durable stage journal beside
+the backup records partial commits and the recovery path instead of hiding them behind a generic
+error.
+
+## Claude Code and Codex plugins
+
+The repository is a marketplace for one shared `music` skill, packaged with native manifests for
+both agents. Install the `music` CLI first, then add the marketplace:
+
+```sh
+# Codex
+codex plugin marketplace add gakonst/music-ts
+codex plugin add music@music-ts
+
+# Claude Code
+claude plugin marketplace add gakonst/music-ts
+claude plugin install music@music-ts
+```
+
+The plugin does not install executables or start a background MCP server. Agents call the same Incur
+CLI; `music mcp add` remains an explicit opt-in. During development, rebuild and verify the generated
+plugin payload with `pnpm plugin:build` and `pnpm plugin:check`.
 
 Package-scoped iteration remains available:
 

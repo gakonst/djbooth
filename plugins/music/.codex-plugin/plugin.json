@@ -1,0 +1,39 @@
+{
+  "name": "music",
+  "version": "0.2.0",
+  "description": "Resolve sets and playlists, acquire tracks, analyze audio, and maintain Rekordbox libraries.",
+  "author": {
+    "name": "gakonst",
+    "url": "https://github.com/gakonst"
+  },
+  "homepage": "https://github.com/gakonst/music-ts",
+  "repository": "https://github.com/gakonst/music-ts",
+  "license": "MIT",
+  "keywords": [
+    "music",
+    "dj",
+    "rekordbox",
+    "soundcloud",
+    "spotify",
+    "soulseek"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Music",
+    "shortDescription": "Build and maintain a DJ music library",
+    "longDescription": "Music provides auditable workflows for resolving DJ sets and playlists, enriching track identities, acquiring individual recordings, analyzing audio, and importing verified playlists into Rekordbox.",
+    "developerName": "gakonst",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/gakonst/music-ts",
+    "defaultPrompt": [
+      "Resolve this DJ set and build a reviewed track manifest.",
+      "Show my SoundCloud likes and playlists.",
+      "Analyze these tracks and add them to Rekordbox."
+    ],
+    "brandColor": "#FF5500"
+  }
+}

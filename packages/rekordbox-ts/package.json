@@ -21,12 +21,10 @@
   },
   "bin": {
     "rekordbox": "./dist/cli.js",
-    "rekordbox-analyzer": "./vendor/rekordbox-analyzer",
     "rekordbox-ts": "./dist/cli.js"
   },
   "files": [
     "dist",
-    "vendor",
     "PORTING.md",
     "README.md",
     "LICENSE"

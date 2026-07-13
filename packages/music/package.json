@@ -14,6 +14,7 @@
   },
   "files": [
     "dist",
+    "skills",
     "README.md",
     "LICENSE"
   ],
@@ -50,6 +51,10 @@
       "types": "./dist/rekordbox.d.ts",
       "import": "./dist/rekordbox.js"
     },
+    "./library": {
+      "types": "./dist/library.d.ts",
+      "import": "./dist/library.js"
+    },
     "./mcp": {
       "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js"
@@ -75,6 +80,7 @@
   "dependencies": {
     "@cloudflare/codemode": "0.4.2",
     "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/rekordbox-library": "workspace:*",
     "@gakonst/soundcloud": "workspace:*",
     "@gakonst/spots": "workspace:*",
     "@gakonst/tracks": "workspace:*",

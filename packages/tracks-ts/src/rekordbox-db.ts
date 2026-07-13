@@ -1831,7 +1831,8 @@ async function writeManifestAtomically(
   }
 }
 
-async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
+/** Acquire the cross-process lock shared by direct Rekordbox database writers. */
+export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
   const path = `${dbPath}.tracks-ts.lock`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {

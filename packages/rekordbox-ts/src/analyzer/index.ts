@@ -8,7 +8,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 
@@ -169,11 +170,22 @@ type PreparedAnalysis = {
   summaryPath: string;
 };
 
-/** Resolve the packaged universal analyzer helper or an explicit override. */
+/** Resolve an explicit, PATH-installed, user-local, or repository-built analyzer helper. */
 export function getAnalyzerBinary(explicit?: string): string {
   const path = explicit ?? process.env.REKORDBOX_ANALYZER_BINARY;
   if (path) return resolve(path);
-  return fileURLToPath(new URL(`../../vendor/${helperName}`, import.meta.url));
+  const pathCandidates = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .map((directory) => join(directory, helperName));
+  const candidates = [
+    ...pathCandidates,
+    join(homedir(), ".local/bin", helperName),
+    "/opt/homebrew/bin/rekordbox-analyzer",
+    "/usr/local/bin/rekordbox-analyzer",
+    fileURLToPath(new URL(`../../vendor/${helperName}`, import.meta.url)),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
 /** Inspect Rekordbox application discovery, binary offsets, cache, and signatures. */
@@ -309,7 +321,7 @@ function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): Prepa
   const analyzerBinary = getAnalyzerBinary(options.analyzerBinary);
   if (!existsSync(analyzerBinary))
     throw new TypeError(
-      `Rekordbox analyzer helper '${analyzerBinary}' does not exist; build it with pnpm --filter @gakonst/rekordbox build:analyzer`,
+      `Rekordbox analyzer helper '${analyzerBinary}' does not exist; set REKORDBOX_ANALYZER_BINARY or build the repository-local helper with pnpm --filter @gakonst/rekordbox build:analyzer`,
     );
   const source = sourceFingerprint(absoluteAudioPath);
   const outputDirectory = resolve(

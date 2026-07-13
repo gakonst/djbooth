@@ -186,6 +186,7 @@ export {
 } from "./spotify-enrichment.js";
 export {
   applyRekordboxImportResults,
+  acquireRekordboxDatabaseLock,
   assertRekordboxImportApproved,
   assertRekordboxStopped,
   backupRekordboxDatabase,

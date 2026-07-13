@@ -1,0 +1,33 @@
+{
+  "name": "music-ts",
+  "owner": {
+    "name": "gakonst"
+  },
+  "metadata": {
+    "description": "Music discovery, acquisition, analysis, and DJ-library workflows."
+  },
+  "description": "Music discovery, acquisition, analysis, and DJ-library workflows.",
+  "version": "0.2.0",
+  "plugins": [
+    {
+      "name": "music",
+      "source": "./plugins/music",
+      "description": "Resolve sets and playlists, acquire tracks, analyze audio, and maintain Rekordbox libraries.",
+      "version": "0.2.0",
+      "author": {
+        "name": "gakonst"
+      },
+      "homepage": "https://github.com/gakonst/music-ts",
+      "repository": "https://github.com/gakonst/music-ts",
+      "license": "MIT",
+      "category": "productivity",
+      "tags": [
+        "music",
+        "dj",
+        "rekordbox",
+        "soundcloud",
+        "spotify"
+      ]
+    }
+  ]
+}

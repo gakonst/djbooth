@@ -59,10 +59,5 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
-      - name: Build universal Rekordbox analyzer
-        run: |
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          pnpm --filter @gakonst/rekordbox build:analyzer
-
       - name: Pack, install, and smoke CLIs
         run: pnpm test:pack

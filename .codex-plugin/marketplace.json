@@ -1,0 +1,20 @@
+{
+  "name": "music-ts",
+  "interface": {
+    "displayName": "Music TS"
+  },
+  "plugins": [
+    {
+      "name": "music",
+      "source": {
+        "source": "local",
+        "path": "./plugins/music"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

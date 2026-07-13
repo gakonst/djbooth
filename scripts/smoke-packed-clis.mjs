@@ -23,6 +23,11 @@ const packDirectory = suppliedPackDirectory
 const packages = [
   { name: "@gakonst/music", prefix: "gakonst-music-", bins: ["music"] },
   {
+    name: "@gakonst/rekordbox-library",
+    prefix: "gakonst-rekordbox-library-",
+    bins: ["rekordbox-library"],
+  },
+  {
     name: "@gakonst/tracks",
     prefix: "gakonst-tracks-",
     bins: ["tracks", "tracks-ts"],
@@ -101,24 +106,17 @@ try {
   if (!suppliedPackDirectory) {
     run("pnpm", ["build"]);
     for (const package_ of packages) {
-      run("pnpm", [
-        "--filter",
-        package_.name,
-        "pack",
-        "--pack-destination",
-        packDirectory,
-      ]);
+      run("pnpm", ["--filter", package_.name, "pack", "--pack-destination", packDirectory]);
     }
   }
 
-  const archives = readdirSync(packDirectory).filter((file) =>
-    file.endsWith(".tgz"),
-  );
+  const archives = readdirSync(packDirectory).filter((file) => file.endsWith(".tgz"));
   const dependencies = {};
 
   for (const package_ of packages) {
-    const matches = archives.filter((archive) =>
-      archive.startsWith(package_.prefix),
+    const matches = archives.filter(
+      (archive) =>
+        archive.startsWith(package_.prefix) && /^\d/u.test(archive.slice(package_.prefix.length)),
     );
     if (matches.length !== 1) {
       throw new Error(
@@ -141,9 +139,7 @@ try {
         pnpm: {
           onlyBuiltDependencies: ["better-sqlite3-multiple-ciphers"],
           overrides: Object.fromEntries(
-            Object.entries(dependencies).filter(
-              ([name]) => name !== "@gakonst/music",
-            ),
+            Object.entries(dependencies).filter(([name]) => name !== "@gakonst/music"),
           ),
         },
       },
@@ -159,25 +155,40 @@ try {
   for (const package_ of packages) {
     for (const bin of package_.bins) {
       const executable = join(consumer, "node_modules", ".bin", bin);
-      if (!existsSync(executable))
-        throw new Error(`Missing packed CLI binary: ${bin}`);
+      if (!existsSync(executable)) throw new Error(`Missing packed CLI binary: ${bin}`);
       const result = run(executable, ["--help"], {
         cwd: consumer,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      if (!result.stdout.trim())
-        throw new Error(`Packed CLI returned empty help: ${bin}`);
+      if (!result.stdout.trim()) throw new Error(`Packed CLI returned empty help: ${bin}`);
       process.stdout.write(`✓ ${bin} --help\n`);
     }
   }
 
   const music = join(consumer, "node_modules", ".bin", "music");
+  const libraryHelp = run(music, ["library", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    !libraryHelp.stdout.includes("music library") ||
+    !libraryHelp.stdout.includes("status") ||
+    !libraryHelp.stdout.includes("serve")
+  ) {
+    throw new Error("Packed music CLI did not compose the Rekordbox library workbench");
+  }
+  process.stdout.write("✓ music library composed CLI\n");
+
   const skills = run(music, ["skills", "list"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (!skills.stdout.includes("1 skill")) {
-    throw new Error("Packed music CLI did not expose exactly one skill");
+  if (
+    !skills.stdout.includes("8 skills") ||
+    !skills.stdout.includes("music-library") ||
+    !skills.stdout.includes("music-rekordbox")
+  ) {
+    throw new Error("Packed music CLI did not expose its workflow and typed command-group skills");
   }
   process.stdout.write("✓ music skills list\n");
 
@@ -185,29 +196,37 @@ try {
     cwd: consumer,
     stdio: "ignore",
   });
-  const installedSkill = join(
-    consumer,
-    ".agents",
-    "skills",
-    "music",
-    "SKILL.md",
-  );
+  const installedSkill = join(consumer, ".agents", "skills", "music", "SKILL.md");
   const installedSkillSource = readFileSync(installedSkill, "utf8");
-  const generatedCommands = [
-    "# music tracks resolve",
-    "# music spots api search",
-    "# music soundcloud resolve",
-    "# music slsk download",
-    "# music ytdlp-ts download",
-    "# music rekordbox db playlist create",
-    "# music rekordbox db playlist show",
+  const workflowContracts = [
+    "## ytdlp engine contract",
+    "## Local library workbench",
+    "--engine native",
+    "durable stage journal",
+    "packages do not redistribute the proprietary helper",
   ];
-  if (
-    !installedSkillSource.includes("requires_bin: music") ||
-    !installedSkillSource.includes("command: music") ||
-    generatedCommands.some((command) => !installedSkillSource.includes(command))
-  ) {
-    throw new Error("Installed music skill is missing generated Incur command metadata");
+  if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {
+    throw new Error("Installed Music workflow skill is missing a safety contract");
+  }
+  const generatedSkills = [
+    ["music-library", ["# music library serve"]],
+    ["music-tracks", ["# music tracks resolve"]],
+    ["music-spots", ["# music spots api search"]],
+    ["music-soundcloud", ["# music soundcloud resolve"]],
+    ["music-slsk", ["# music slsk download"]],
+    ["music-ytdlp-ts", ["# music ytdlp-ts download"]],
+    [
+      "music-rekordbox",
+      ["# music rekordbox db playlist create", "# music rekordbox db playlist show"],
+    ],
+  ];
+  for (const [skill, commands] of generatedSkills) {
+    const source = readFileSync(join(consumer, ".agents", "skills", skill, "SKILL.md"), "utf8");
+    if (
+      !source.includes("requires_bin: music") ||
+      commands.some((command) => !source.includes(command))
+    )
+      throw new Error(`Installed ${skill} skill is missing generated Incur command metadata`);
   }
   process.stdout.write("✓ music skills add --no-global\n");
 
@@ -216,41 +235,28 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
   process.stdout.write("✓ @gakonst/music exports\n");
 
-  const installedRekordbox = join(
-    consumer,
-    "node_modules",
-    "@gakonst",
-    "rekordbox",
-  );
+  const installedRekordbox = join(consumer, "node_modules", "@gakonst", "rekordbox");
   const rekordbox = join(consumer, "node_modules", ".bin", "rekordbox");
-  const analyzerBinary = join(
-    installedRekordbox,
-    "vendor",
-    "rekordbox-analyzer",
+  const installedRekordboxManifest = JSON.parse(
+    readFileSync(join(installedRekordbox, "package.json"), "utf8"),
   );
-  const runtimeApp = join(
-    installedRekordbox,
-    "vendor",
-    "rekordbox",
-    "6.8.2.0018",
-    "rekordbox.app",
-  );
-  const analyzerTemplates = ["ANLZ0000.DAT", "ANLZ0000.EXT"].map((name) =>
-    join(installedRekordbox, "vendor", "rekordbox-analyzer-templates", name),
-  );
+  const forbiddenRekordboxPayloads = [
+    join(installedRekordbox, "vendor"),
+    join(consumer, "node_modules", ".bin", "rekordbox-analyzer"),
+  ];
   if (
-    !existsSync(analyzerBinary) ||
-    !existsSync(runtimeApp) ||
-    analyzerTemplates.some((path) => !existsSync(path))
-  )
-    throw new Error("Packed Rekordbox analyzer runtime is incomplete");
-  process.stdout.write("✓ packed Rekordbox analyzer runtime\n");
+    installedRekordboxManifest.bin?.["rekordbox-analyzer"] ||
+    forbiddenRekordboxPayloads.some((path) => existsSync(path))
+  ) {
+    throw new Error("Packed Rekordbox package exposed a private analyzer helper or vendor runtime");
+  }
+  process.stdout.write("✓ packed Rekordbox excludes private analyzer payloads\n");
 
   const playlistFixture = join(consumer, "playlist.db");
   createPlaylistFixture(playlistFixture, installedRekordbox);
@@ -298,31 +304,6 @@ try {
   }
   process.stdout.write("✓ packed Rekordbox playlist JSON and table\n");
 
-  if (process.platform === "darwin") {
-    const doctor = run(
-      rekordbox,
-      [
-        "analyze",
-        "doctor",
-        "--format",
-        "json",
-        "--filter-output",
-        "backend_source,install.version,offset_resolution.supported",
-      ],
-      { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    const diagnostics = JSON.parse(doctor.stdout);
-    if (
-      diagnostics.backend_source !== "repo_vendored" ||
-      diagnostics.install?.version !== "6.8.2.0018" ||
-      diagnostics.offset_resolution?.supported !== true
-    )
-      throw new Error(
-        "Packed Rekordbox analyzer doctor rejected the vendored runtime",
-      );
-    process.stdout.write("✓ packed Rekordbox analyzer doctor\n");
-  }
-
   const mcpDiscoveryInput = [
     {
       jsonrpc: "2.0",
@@ -364,6 +345,7 @@ try {
   const initialize = responses.find((response) => response.id === 1);
   const tools = responses.find((response) => response.id === 2)?.result?.tools;
   const requiredTools = [
+    "library_status",
     "soundcloud_playlist_create",
     "soundcloud_playlist_delete",
     "soundcloud_playlist_get",
@@ -411,16 +393,16 @@ try {
           },
         },
       },
-    ].map((request) => JSON.stringify(request)).join("\n")}\n`,
+    ]
+      .map((request) => JSON.stringify(request))
+      .join("\n")}\n`,
     stdio: ["pipe", "pipe", "pipe"],
   });
   const codeResponses = codeMcp.stdout
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line));
-  const codeTools = codeResponses.find(
-    (response) => response.id === 2,
-  )?.result?.tools;
+  const codeTools = codeResponses.find((response) => response.id === 2)?.result?.tools;
   const codeCall = codeResponses.find((response) => response.id === 3)?.result;
   const codeResult = JSON.parse(codeCall?.content?.[0]?.text ?? "null");
   if (
@@ -432,6 +414,5 @@ try {
   }
   process.stdout.write("✓ music local CodeMode MCP (1 sandboxed tool)\n");
 } finally {
-  if (!suppliedPackDirectory)
-    rmSync(packDirectory, { recursive: true, force: true });
+  if (!suppliedPackDirectory) rmSync(packDirectory, { recursive: true, force: true });
 }

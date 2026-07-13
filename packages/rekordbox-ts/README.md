@@ -157,9 +157,10 @@ Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and
 
 ### Native analysis and database installation
 
-The package includes a universal macOS helper and the minimal Rekordbox 6.8.2.0018 runtime payload
-needed to rehost its analyzer. It produces real `ANLZ0000.DAT`, `.EXT`, and `.2EX` files without
-mutating the library:
+The repository can build a universal macOS rehost helper that produces real `ANLZ0000.DAT`, `.EXT`,
+and `.2EX` files without mutating the library. The public package does not include that helper or a
+Rekordbox runtime; analysis discovers an explicit, PATH-installed, user-local, or repository-built
+helper:
 
 ```sh
 rekordbox analyze doctor --format json
@@ -214,15 +215,11 @@ Two additional source files returned the same native `startAnalyze` incompatibil
 concurrency one and were excluded from that timing. Higher concurrency consumes more CPU and memory;
 pass `concurrency` explicitly to constrain resource use. Warm validation of all 26 cached analyses
 took 11.65 ms. Analysis
-requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
-hash, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` can explicitly select another
-compatible `rekordbox.app`.
-
-Release and preview workflows run on macOS, rebuild and ad-hoc sign both analyzer architectures,
-package the minimal runtime, install the packed package in a clean consumer, and require the packed
-`analyze doctor` check to pass. Sanitized DAT/EXT seed shapes are packaged with the runtime, so a new
-machine needs Node.js, pnpm, and Rosetta on Apple Silicon; it does not need a separate Rekordbox
-installation or an existing analyzed Rekordbox library for the pinned analyzer runtime.
+requires macOS and Rosetta on Apple Silicon. The public package does not redistribute an analyzer
+helper or AlphaTheta/Rekordbox runtime. Set `REKORDBOX_ANALYZER_BINARY`, place a locally built
+`rekordbox-analyzer` on `PATH`, or pass `analyzerBinary`; `analyze doctor` validates that local
+helper, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` selects the user's compatible
+`rekordbox.app`.
 
 ### Collection XML interchange
 

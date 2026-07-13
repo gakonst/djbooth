@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
 import rekordboxCli from "@gakonst/rekordbox/cli";
+import libraryCli from "@gakonst/rekordbox-library/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
 import tracksCli from "@gakonst/tracks/cli";
@@ -33,6 +35,9 @@ export const MUSIC_MCP_TOOL_FILTER = {
     "spots_api_get-playlists-items",
     "spots_playlist_*",
     "soundcloud_auth_status",
+    "soundcloud_likes_*",
+    "soundcloud_me",
+    "soundcloud_recent",
     "soundcloud_resolve",
     "soundcloud_search_*",
     "soundcloud_request",
@@ -53,6 +58,7 @@ export const MUSIC_MCP_TOOL_FILTER = {
     "rekordbox_db_content_*",
     "rekordbox_db_metadata_add",
     "rekordbox_db_playlist_*",
+    "library_status",
   ],
 };
 
@@ -68,8 +74,10 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
       tools: MUSIC_MCP_TOOL_FILTER,
     },
     sync: {
-      depth: 0,
+      depth: 1,
+      include: [resolve(import.meta.dirname, "../skills/music")],
       suggestions: [
+        "open my Rekordbox library workbench",
         "resolve a DJ set into tracks",
         "create a playlist on Spotify",
         "create a playlist on SoundCloud",
@@ -82,6 +90,7 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
   });
 
   cli.command(rekordboxCli);
+  cli.command(libraryCli);
   cli.command(slskCli);
   cli.command(soundcloudCli);
   cli.command(spotsCli);
@@ -103,9 +112,13 @@ export async function runMusicCli(argv = process.argv.slice(2)): Promise<void> {
 
 function loadWorkspaceEnvironment(): void {
   const candidates = [
+    process.env.MUSIC_ENV_FILE,
+    resolve(homedir(), ".config/music-ts/.env"),
     resolve(import.meta.dirname, "../../../.env"),
     resolve(process.cwd(), ".env"),
-  ];
+  ].filter(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
   const path = candidates.find((candidate) => existsSync(candidate));
   if (path) loadEnvFile(path);
 }

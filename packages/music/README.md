@@ -80,7 +80,8 @@ Both provider groups expose `playlist create|get|update|delete`. SoundCloud dele
 Spotify's delete command reflects Spotify's platform model and removes the playlist from the user's
 library because Spotify provides no permanent delete endpoint.
 
-Install the single aggregate agent skill, or register the same command map as MCP:
+Install the curated workflow skill plus Incur's typed command-group skills, or register the same
+command map as MCP:
 
 ```sh
 music skills add

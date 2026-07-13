@@ -711,6 +711,23 @@ describe("MasterDatabase mutations", () => {
     reopened.close();
   });
 
+  it("commits row deletions without assigning a local USN to the deleted model", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    db.removeFromPlaylist("500", "song-1");
+    expect(() => db.commit()).not.toThrow();
+    db.close();
+
+    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(reopened.query(DjmdSongPlaylist).where({ ID: "song-1" }).count()).toBe(0);
+    reopened.close();
+  });
+
   it("preserves a committed database and the original sidecar error when saving XML fails", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({

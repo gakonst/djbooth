@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
-import { rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "../src/index.js";
+import { library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "../src/index.js";
+import * as librarySubpath from "../src/library.js";
 import * as rekordboxSubpath from "../src/rekordbox.js";
 import * as slskSubpath from "../src/slsk.js";
 import * as soundcloudSubpath from "../src/soundcloud.js";
@@ -17,6 +18,7 @@ describe("umbrella exports", () => {
     expect(slsk.SoulseekClient).toBeTypeOf("function");
     expect(ytdlp.ReferenceClient).toBeTypeOf("function");
     expect(rekordbox.MasterDatabase).toBeTypeOf("function");
+    expect(library.RekordboxLibraryService).toBeTypeOf("function");
   });
 
   test("re-exports each package through its dedicated subpath module", () => {
@@ -27,5 +29,6 @@ describe("umbrella exports", () => {
     expect(slskSubpath.SoulseekClient).toBe(slsk.SoulseekClient);
     expect(ytdlpSubpath.ReferenceClient).toBe(ytdlp.ReferenceClient);
     expect(rekordboxSubpath.MasterDatabase).toBe(rekordbox.MasterDatabase);
+    expect(librarySubpath.RekordboxLibraryService).toBe(library.RekordboxLibraryService);
   });
 });

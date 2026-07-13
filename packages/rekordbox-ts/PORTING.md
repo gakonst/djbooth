@@ -25,6 +25,13 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-12 — Analyzer distribution boundary
+
+- Do not publish the repository's analyzer helper or any AlphaTheta/Rekordbox binary in the public
+  npm package. Analysis discovers an explicit `analyzerBinary`, `REKORDBOX_ANALYZER_BINARY`, a
+  `rekordbox-analyzer` on `PATH`, a user-local helper, or the repository-built development helper.
+- Database, ANLZ parsing, locking, metadata, and web-library orchestration remain TypeScript-owned.
+
 ### 2026-07-10 — Runtime and packaging
 
 - Require Node.js 22, matching incur's supported runtime.
@@ -65,6 +72,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 - Replace `masterPlaylists6.xml` atomically through a same-directory exclusive temporary file, file sync, and rename. Failed writes retain the original source path and modified state while cleaning temporary output.
 - Mark the SQLite transaction closed immediately after `COMMIT`. Accept committed row state even when the subsequent companion-file save fails, so the original sidecar error propagates and `close()` cannot mask it with a second rollback error.
+- Advance the global local-USN counter for delete events without assigning a field on models already marked deleted; physical playlist and membership deletions can now commit without violating row lifecycle guards.
 
 ### 2026-07-10 — Shared database engine
 
@@ -169,8 +177,8 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   being accepted from `AnalysisDataPath` and `Analysed` alone.
 - Verified native analysis against Rekordbox 6.8.2.0018 and database installation against a decrypted
   temporary copy of the live schema; the live library was not modified.
-- Release, prerelease, and packed-package verification run on macOS, rebuild the signed universal
-  helper, include the vendored runtime, and validate it through `analyze doctor` from a clean install.
+- Historical private builds included a vendored runtime. Public package verification now rejects
+  AlphaTheta/Rekordbox binaries and requires an explicit or locally discovered analyzer helper.
 
 ## Playlist inspection checkpoint
 
