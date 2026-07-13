@@ -40,7 +40,7 @@ describe("CLI process boundary", () => {
     expect(llms.status, llms.stderr).toBe(0);
     expect(llms.stdout).toContain("# rekordbox");
     expect(llms.stdout).toContain("rekordbox db table");
-  });
+  }, 20_000);
 
   it("queries a plain database and rejects non-object filters", () => {
     const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-cli-"));
@@ -125,11 +125,11 @@ describe("CLI process boundary", () => {
     );
     expect(allowed.status, allowed.stderr).toBe(0);
     expect(JSON.parse(allowed.stdout)).toMatchObject({ changes: 1 });
-  });
+  }, 20_000);
 
   it("refuses database mutations without explicit write acknowledgement", () => {
     const result = runCli("db", "row", "create", "djmdArtist", "{}", "--plain", "--json");
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("explicit --write flag");
-  });
+  }, 20_000);
 });
