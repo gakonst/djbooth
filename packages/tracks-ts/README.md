@@ -89,6 +89,16 @@ Verified result: 29 ordered cue entries, six explicit IDs preserved, and 22 iden
 
 `identify` remains an alias for `resolve`.
 
+The complete CLI definition can be imported without loading `.env` or serving a process:
+
+```ts
+import tracksCli from "@gakonst/tracks/cli";
+
+root.command(tracksCli);
+```
+
+`runTracksCli()` remains available from the same subpath for standalone launchers.
+
 ## Resolution flow
 
 Automatic resolution is ordered and short-circuits at the first usable tracklist:

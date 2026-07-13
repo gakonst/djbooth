@@ -81,6 +81,16 @@ fragment-aware downloader so interrupted segmented streams also retain resume st
 The structured commands are implemented with incur and produce agent-friendly output. `compat`
 passes arbitrary arguments to the reference engine during the parity migration.
 
+The complete CLI definition is importable without serving a process and can be mounted directly in
+another Incur CLI. Its command-group name is `ytdlp-ts`:
+
+```ts
+import { Cli } from 'incur'
+import ytdlpCli from '@gakonst/ytdlp-ts/cli'
+
+Cli.create('music').command(ytdlpCli)
+```
+
 ## Architecture
 
 - `native` is the TypeScript extractor, selector, downloader, and post-processing path.

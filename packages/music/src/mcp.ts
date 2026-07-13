@@ -6,16 +6,10 @@ import { Cli, Mcp } from "incur";
 import { NodeRuntime, type BindingDefinition } from "secure-exec";
 import { z } from "zod";
 
-import {
-  createMusicCli,
-  type MusicCliDependencies,
-  MUSIC_MCP_TOOL_FILTER,
-  MUSIC_VERSION,
-} from "./cli.js";
+import { createMusicCli, MUSIC_MCP_TOOL_FILTER, MUSIC_VERSION } from "./cli.js";
 
 export type MusicMcpOptions = {
   cli?: ReturnType<typeof createMusicCli>;
-  dependencies?: Partial<MusicCliDependencies>;
   instructions?: string;
 };
 
@@ -104,7 +98,7 @@ export class SecureExecMusicExecutor implements Executor {
 
 /** Build the normal typed MCP server from the same command map as the music CLI. */
 export function createMusicMcpServer(options: MusicMcpOptions = {}): McpServer {
-  const cli = options.cli ?? createMusicCli(options.dependencies);
+  const cli = options.cli ?? createMusicCli();
   const commands = Cli.toCommands.get(cli as never);
   if (!commands) throw new Error("Could not read the music command map");
 

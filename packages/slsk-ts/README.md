@@ -153,6 +153,16 @@ slsk skills add
 slsk mcp add
 ```
 
+The CLI definition is importable without reading `.env` or serving a process, so another Incur CLI
+can mount the complete `slsk` command group directly:
+
+```ts
+import { Cli } from 'incur'
+import slskCli from 'slsk-ts/cli'
+
+Cli.create('music').command(slskCli)
+```
+
 ## Development
 
 ```sh

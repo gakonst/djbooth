@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { createRequire } from "node:module";
 import { existsSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { loadEnvFile } from "node:process";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
 
@@ -26,8 +26,6 @@ import type { Environment } from "./types.js";
 const { version: VERSION } = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
-
-loadWorkspaceEnvironment();
 
 function loadWorkspaceEnvironment(): void {
   const candidates = [
@@ -421,7 +419,7 @@ const toolStatusOutput = z.object({
   error: z.string().optional(),
 });
 
-const cli = Cli.create("tracks", {
+export const tracksCli = Cli.create("tracks", {
   version: VERSION,
   description: "Resolve DJ sets into resumable track manifests without downloading remote sets.",
   config: {
@@ -434,6 +432,8 @@ const cli = Cli.create("tracks", {
       "Use resolve for a DJ set URL. It inspects media metadata once, reads timestamped descriptions, checks an exact 1001Tracklists media association, then searches 1001Tracklists by the inspected title/uploader before recognition. It never downloads a remote source set. Use --full only when gapless AudD billing is acceptable.",
   },
   sync: {
+    cwd: import.meta.dirname,
+    include: ["../skills/*"],
     suggestions: [
       "resolve a YouTube DJ set into a versioned track manifest",
       "find the 1001Tracklists entry for a YouTube URL",
@@ -443,7 +443,7 @@ const cli = Cli.create("tracks", {
   },
 });
 
-cli.command("resolve", {
+tracksCli.command("resolve", {
   aliases: ["identify"],
   description:
     "Resolve a set by inspecting its URL, reading timestamped metadata, matching 1001Tracklists by URL then title/uploader, and only then using recognition—without downloading the remote set.",
@@ -611,7 +611,7 @@ one001.command("charts", {
   },
 });
 
-cli.command(one001);
+tracksCli.command(one001);
 
 const manifest = Cli.create("manifest", {
   description: "Validate and summarize resumable DJ-set pipeline manifests.",
@@ -662,9 +662,9 @@ manifest.command("validate", {
   },
 });
 
-cli.command(manifest);
+tracksCli.command(manifest);
 
-cli.command("render", {
+tracksCli.command("render", {
   description: "Render a JSON tracklist as text, YouTube chapters, or a CUE sheet.",
   args: z.object({
     file: z.string().describe("JSON file produced by `tracks identify --format json`"),
@@ -688,7 +688,7 @@ cli.command("render", {
   },
 });
 
-cli.command("providers", {
+tracksCli.command("providers", {
   description: "Show configured providers without revealing secrets.",
   env: providerEnv,
   output: providersOutput,
@@ -697,7 +697,7 @@ cli.command("providers", {
   },
 });
 
-cli.command("doctor", {
+tracksCli.command("doctor", {
   description: "Check resolution providers and local-file sampling dependencies.",
   env: providerEnv,
   output: z.object({
@@ -862,7 +862,20 @@ function fail(
   });
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  await cli.serve();
+export async function runTracksCli(argv = process.argv.slice(2)): Promise<void> {
+  loadWorkspaceEnvironment();
+  await tracksCli.serve(argv);
+}
 
-export default cli;
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) await runTracksCli();
+
+export default tracksCli;

@@ -195,6 +195,188 @@ describe('SoundCloudClient', () => {
     expect(postFetch).toHaveBeenCalledOnce()
   })
 
+  it('creates a private playlist from ordered IDs, URNs, and resolved URLs', async () => {
+    const requestedUrls: string[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const request = input as Request
+      const url = new URL(request.url)
+      if (url.pathname === '/resolve') {
+        const permalink = url.searchParams.get('url')
+        requestedUrls.push(permalink ?? '')
+        const slug = new URL(permalink ?? '').pathname.split('/').at(-1)
+        return Response.json({
+          kind: 'track',
+          urn: `soundcloud:tracks:${slug === 'first' ? '30' : '40'}`,
+        })
+      }
+      expect(request.method).toBe('POST')
+      expect(url.pathname).toBe('/playlists')
+      await expect(request.json()).resolves.toEqual({
+        playlist: {
+          title: 'Ordered playlist',
+          description: 'In this exact order',
+          sharing: 'private',
+          tracks: [
+            { urn: 'soundcloud:tracks:10' },
+            { urn: 'soundcloud:tracks:20' },
+            { urn: 'soundcloud:tracks:30' },
+            { urn: 'soundcloud:tracks:40' },
+            { urn: 'soundcloud:tracks:30' },
+          ],
+        },
+      })
+      return Response.json(
+        {
+          kind: 'playlist',
+          urn: 'soundcloud:playlists:99',
+          title: 'Ordered playlist',
+        },
+        { status: 201 },
+      )
+    })
+    const client = new SoundCloudClient({ auth: 'user-token', fetch })
+
+    await expect(
+      client.createPlaylist({
+        title: ' Ordered playlist ',
+        description: 'In this exact order',
+        tracks: [
+          10,
+          'soundcloud:tracks:20',
+          'https://soundcloud.com/example/first',
+          'https://soundcloud.com/example/second',
+          'https://soundcloud.com/example/first',
+        ],
+      }),
+    ).resolves.toMatchObject({ urn: 'soundcloud:playlists:99' })
+    expect(requestedUrls).toEqual([
+      'https://soundcloud.com/example/first',
+      'https://soundcloud.com/example/second',
+      'https://soundcloud.com/example/first',
+    ])
+    expect(fetch).toHaveBeenCalledTimes(4)
+  })
+
+  it('rejects non-track SoundCloud URLs before playlist creation', async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        kind: 'playlist',
+        urn: 'soundcloud:playlists:12',
+      }),
+    )
+    const client = new SoundCloudClient({ auth: 'user-token', fetch })
+
+    await expect(
+      client.createPlaylist({
+        title: 'No sets',
+        tracks: ['https://soundcloud.com/example/sets/not-a-track'],
+      }),
+    ).rejects.toThrow(
+      'SoundCloud URL does not resolve to a track: https://soundcloud.com/example/sets/not-a-track',
+    )
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('validates playlist inputs before sending credentials', async () => {
+    const fetch = vi.fn()
+    const client = new SoundCloudClient({ auth: 'user-token', fetch })
+
+    await expect(
+      client.createPlaylist({
+        title: 'Too large',
+        tracks: Array.from({ length: 501 }, (_, index) => index + 1),
+      }),
+    ).rejects.toThrow('SoundCloud playlists support at most 500 tracks')
+    await expect(
+      client.createPlaylist({
+        title: 'Bad URL',
+        tracks: ['https://attacker.invalid/not-soundcloud'],
+      }),
+    ).rejects.toThrow(
+      'Unsupported SoundCloud track URL: https://attacker.invalid/not-soundcloud',
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reads, updates, replaces tracks, and permanently deletes playlists', async () => {
+    const requests: Request[] = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const request = input as Request
+      requests.push(request)
+      if (request.method === 'GET') {
+        return Response.json({
+          urn: 'soundcloud:playlists:77',
+          kind: 'playlist',
+          title: 'Before',
+        })
+      }
+      if (request.method === 'PUT') {
+        await expect(request.clone().json()).resolves.toEqual({
+          playlist: {
+            title: 'After',
+            description: 'Updated',
+            sharing: 'private',
+            tracks: [
+              { urn: 'soundcloud:tracks:1' },
+              { urn: 'soundcloud:tracks:2' },
+            ],
+          },
+        })
+        return Response.json({
+          urn: 'soundcloud:playlists:77',
+          kind: 'playlist',
+          title: 'After',
+        })
+      }
+      return new Response(null, { status: 204 })
+    })
+    const client = new SoundCloudClient({ auth: 'user-token', fetch })
+
+    await expect(
+      client.getPlaylist('soundcloud:playlists:77'),
+    ).resolves.toMatchObject({
+      urn: 'soundcloud:playlists:77',
+      title: 'Before',
+    })
+    await expect(
+      client.updatePlaylist('77', {
+        title: 'After',
+        description: 'Updated',
+        sharing: 'private',
+        tracks: [1, 'soundcloud:tracks:2'],
+      }),
+    ).resolves.toMatchObject({ urn: 'soundcloud:playlists:77', title: 'After' })
+    await expect(client.deletePlaylist(77)).resolves.toEqual({
+      playlistUrn: 'soundcloud:playlists:77',
+      deleted: true,
+    })
+
+    expect(
+      requests.map(
+        (request) => `${request.method} ${new URL(request.url).pathname}`,
+      ),
+    ).toEqual([
+      'GET /playlists/soundcloud:playlists:77',
+      'PUT /playlists/soundcloud:playlists:77',
+      'DELETE /playlists/soundcloud:playlists:77',
+    ])
+  })
+
+  it('validates playlist updates before making requests', async () => {
+    const fetch = vi.fn()
+    const client = new SoundCloudClient({ auth: 'user-token', fetch })
+
+    await expect(
+      client.updatePlaylist('soundcloud:playlists:1', {}),
+    ).rejects.toThrow('At least one SoundCloud playlist update is required')
+    await expect(
+      client.updatePlaylist('soundcloud:playlists:1', {
+        tracks: Array.from({ length: 501 }, (_, index) => index + 1),
+      }),
+    ).rejects.toThrow('SoundCloud playlists support at most 500 tracks')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('throws a structured rate-limit error', async () => {
     const body = {
       code: 429,

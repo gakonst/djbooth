@@ -2,35 +2,61 @@ import type { Executor, ResolvedProvider } from "@cloudflare/codemode";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Cli, z } from "incur";
+import { describe, expect, it } from "vitest";
 
 import {
   createLocalMusicCodeMcpServer,
   createMusicCodeMcpServer,
   createMusicMcpServer,
-  type MusicCliDependencies,
 } from "../src/index.js";
 
-const dependencies: MusicCliDependencies = {
-  resolveTracks: async (source) => ({ source }),
-  spotifySession: async () => ({ loggedIn: false }),
-  searchSoulseek: async (query) => ({ query }),
-  ytdlpEngines: async () => ({ native: { available: true } }),
-  inspectYtdlp: async (url) => ({ url }),
-  rekordboxStatus: () => ({ rekordboxPid: 42 }),
-};
+function createTestMusicCli(): ReturnType<typeof Cli.create> {
+  const cli = Cli.create("music");
+  cli.command(
+    Cli.create("rekordbox").command("status", {
+      run: () => ({ rekordboxPid: 42 }),
+    }),
+  );
+  cli.command(
+    Cli.create("slsk").command("info", {
+      run: () => ({ connected: false }),
+    }),
+  );
+
+  const soundcloudAuth = Cli.create("auth").command("status", {
+    run: () => ({ loggedIn: false }),
+  });
+  cli.command(Cli.create("soundcloud").command(soundcloudAuth));
+
+  const spotsAuth = Cli.create("auth").command("status", {
+    run: () => ({ loggedIn: false }),
+  });
+  cli.command(Cli.create("spots").command(spotsAuth));
+
+  cli.command(
+    Cli.create("tracks").command("resolve", {
+      args: z.object({ source: z.string() }),
+      run: ({ args }) => ({ source: args.source }),
+    }),
+  );
+  cli.command(
+    Cli.create("ytdlp").command("engines", {
+      run: () => ({ native: { available: true } }),
+    }),
+  );
+  return cli;
+}
 
 const localSandboxTest = process.platform === "win32" ? it.skip : it;
 
-afterEach(() => vi.unstubAllEnvs());
-
 const toolCalls = [
   { name: "rekordbox_status", arguments: {} },
-  { name: "slsk_search", arguments: { query: "artist track" } },
-  { name: "spots_session", arguments: {} },
+  { name: "slsk_info", arguments: {} },
+  { name: "soundcloud_auth_status", arguments: {} },
+  { name: "spots_auth_status", arguments: {} },
   { name: "tracks_resolve", arguments: { source: "https://youtu.be/example" } },
   { name: "ytdlp_engines", arguments: {} },
-  { name: "ytdlp_inspect", arguments: { url: "https://youtu.be/example" } },
 ] as const;
 
 async function connect(server: McpServer): Promise<Client> {
@@ -42,18 +68,18 @@ async function connect(server: McpServer): Promise<Client> {
 }
 
 describe("music MCP adapters", () => {
-  it("exposes the CLI command map as six normal MCP tools", async () => {
-    const server = createMusicMcpServer({ dependencies });
+  it("exposes the composed CLI command map as normal MCP tools", async () => {
+    const server = createMusicMcpServer({ cli: createTestMusicCli() });
     const client = await connect(server);
     try {
       const { tools } = await client.listTools();
       expect(tools.map(({ name }) => name).sort()).toEqual([
         "rekordbox_status",
-        "slsk_search",
-        "spots_session",
+        "slsk_info",
+        "soundcloud_auth_status",
+        "spots_auth_status",
         "tracks_resolve",
         "ytdlp_engines",
-        "ytdlp_inspect",
       ]);
 
       const result = await client.callTool({ name: "rekordbox_status", arguments: {} });
@@ -77,7 +103,7 @@ describe("music MCP adapters", () => {
         return { result: await status({}) };
       },
     };
-    const server = await createMusicCodeMcpServer({ dependencies, executor });
+    const server = await createMusicCodeMcpServer({ cli: createTestMusicCli(), executor });
     const client = await connect(server);
     try {
       const { tools } = await client.listTools();
@@ -101,7 +127,10 @@ describe("music MCP adapters", () => {
   localSandboxTest(
     "runs CodeMode locally in the default isolated runtime",
     async () => {
-      const server = await createLocalMusicCodeMcpServer({ dependencies, timeoutMs: 10_000 });
+      const server = await createLocalMusicCodeMcpServer({
+        cli: createTestMusicCli(),
+        timeoutMs: 10_000,
+      });
       const client = await connect(server);
       try {
         const result = await client.callTool({
@@ -123,10 +152,8 @@ describe("music MCP adapters", () => {
   localSandboxTest(
     "runs every Incur tool concurrently through normal and local CodeMode MCP",
     async () => {
-      vi.stubEnv("SLSK_USERNAME", "stress-user");
-      vi.stubEnv("SLSK_PASSWORD", "stress-password");
       const rounds = 20;
-      const normalServer = createMusicMcpServer({ dependencies });
+      const normalServer = createMusicMcpServer({ cli: createTestMusicCli() });
       const normalClient = await connect(normalServer);
       try {
         const results = await Promise.all(
@@ -144,18 +171,18 @@ describe("music MCP adapters", () => {
       }
 
       const codeServer = await createLocalMusicCodeMcpServer({
-        dependencies,
+        cli: createTestMusicCli(),
         timeoutMs: 20_000,
       });
       const codeClient = await connect(codeServer);
       try {
         const calls = Array.from({ length: rounds }, () => [
           "codemode.rekordbox_status({})",
-          'codemode.slsk_search({ query: "artist track" })',
-          "codemode.spots_session({})",
+          "codemode.slsk_info({})",
+          "codemode.soundcloud_auth_status({})",
+          "codemode.spots_auth_status({})",
           'codemode.tracks_resolve({ source: "https://youtu.be/example" })',
           "codemode.ytdlp_engines({})",
-          'codemode.ytdlp_inspect({ url: "https://youtu.be/example" })',
         ]).flat();
         const result = await codeClient.callTool({
           name: "code",

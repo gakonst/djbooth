@@ -5,6 +5,10 @@ import { promisify } from 'node:util'
 
 import { describe, expect, it } from 'vitest'
 
+import soundcloudCliDefault, {
+  runSoundCloudCli,
+  soundcloudCli,
+} from '../src/cli.js'
 import metadata from '../src/generated/metadata.json' with { type: 'json' }
 
 const exec = promisify(execFile)
@@ -17,6 +21,12 @@ const cleanEnvironment = {
 }
 
 describe('soundcloud CLI', () => {
+  it('exports an import-safe Incur definition for direct composition', () => {
+    expect(soundcloudCliDefault).toBe(soundcloudCli)
+    expect(typeof soundcloudCli.serve).toBe('function')
+    expect(typeof runSoundCloudCli).toBe('function')
+  })
+
   it('loads all 63 official operations as Incur commands', async () => {
     const { stdout } = await runCli('api', '--help')
 
@@ -63,6 +73,23 @@ describe('soundcloud CLI', () => {
     expect(upload.stdout).toContain('multipart track creation')
     expect(upload.stdout).toContain('--title')
     expect(upload.stdout).toContain('--sharing')
+  })
+
+  it('documents playlist CRUD', async () => {
+    const { stdout } = await runCli('playlist', 'create', '--help')
+
+    expect(stdout).toContain('ordered SoundCloud track references')
+    expect(stdout).toContain('--track')
+    expect(stdout).toContain('--input-file')
+    expect(stdout).toContain('--description')
+    expect(stdout).toContain('--sharing')
+    expect(stdout).toContain('soundcloud:tracks:* URN')
+
+    const playlist = await runCli('playlist', '--help')
+    expect(playlist.stdout).toContain('create')
+    expect(playlist.stdout).toContain('get')
+    expect(playlist.stdout).toContain('update')
+    expect(playlist.stdout).toContain('delete')
   })
 })
 

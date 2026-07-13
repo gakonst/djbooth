@@ -3,14 +3,12 @@ import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { loadEnvFile } from 'node:process'
-import { fileURLToPath } from 'node:url'
+import { pathToFileURL } from 'node:url'
 
 import { Cli, z } from 'incur'
 
 import { SoulseekClient } from './client.js'
 import { BinaryWriter, ServerCode, server } from './protocol/index.js'
-
-loadWorkspaceEnvironment()
 
 function loadWorkspaceEnvironment(): void {
   const candidates = [
@@ -59,7 +57,7 @@ async function connected<T>(env: Auth, run: (client: SoulseekClient) => Promise<
   }
 }
 
-const cli = Cli.create('slsk', {
+export const cli = Cli.create('slsk', {
   version: (createRequire(import.meta.url)('../package.json') as { version: string }).version,
   description: 'A complete command-line client for the Soulseek network.',
   sync: {
@@ -283,6 +281,16 @@ cli.command('raw', {
     }),
 })
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) void cli.serve()
+export async function runSlskCli(argv?: string[]): Promise<void> {
+  loadWorkspaceEnvironment()
+  await cli.serve(argv)
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(realpathSync(path.resolve(process.argv[1]))).href
+) {
+  await runSlskCli()
+}
 
 export default cli

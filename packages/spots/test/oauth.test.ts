@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { MemorySessionStore, SpotifyOAuth } from '../src/auth/index.js'
+import { DEFAULT_SCOPES, MemorySessionStore, SpotifyOAuth } from '../src/auth/index.js'
 
 describe('SpotifyOAuth', () => {
+  it('requests public and private playlist modification by default', () => {
+    expect(DEFAULT_SCOPES).toEqual(
+      expect.arrayContaining([
+        'playlist-modify-public',
+        'playlist-modify-private',
+        'user-library-modify',
+      ]),
+    )
+  })
+
   it('builds a PKCE authorization URL without exposing a client secret', () => {
     const oauth = new SpotifyOAuth({
       clientId: 'client-id',

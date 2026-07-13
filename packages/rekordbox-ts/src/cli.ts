@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
 
@@ -44,7 +44,7 @@ import {
   PlaylistContent as DevicePlaylistContent,
 } from "./devicelib-plus/index.js";
 
-const cli = Cli.create("rekordbox", {
+export const rekordboxCli = Cli.create("rekordbox", {
   version,
   description: "Query and modify Rekordbox databases, libraries, and export formats.",
   sync: {
@@ -58,7 +58,7 @@ const cli = Cli.create("rekordbox", {
   },
 });
 
-cli.command("status", {
+rekordboxCli.command("status", {
   description: "Show implementation and runtime status.",
   output: z.object({
     name: z.string(),
@@ -147,7 +147,7 @@ analyzeCli.command("doctor", {
   },
 });
 
-cli.command(analyzeCli);
+rekordboxCli.command(analyzeCli);
 
 const configCli = Cli.create("config", {
   description: "Discover Rekordbox installations and library paths.",
@@ -172,7 +172,7 @@ const configCli = Cli.create("config", {
   },
 });
 
-cli.command(configCli);
+rekordboxCli.command(configCli);
 
 const settingsCli = Cli.create("settings", {
   description: "Read and write Rekordbox My Settings binary files.",
@@ -256,7 +256,7 @@ settingsCli.command("create", {
   },
 });
 
-cli.command(settingsCli);
+rekordboxCli.command(settingsCli);
 
 function paginateTagValue(value: unknown, offset: number, limit: number): unknown {
   if (Array.isArray(value))
@@ -429,7 +429,7 @@ anlzCli.command("patch-bytes", {
   },
 });
 
-cli.command(anlzCli);
+rekordboxCli.command(anlzCli);
 
 const smartlistCli = Cli.create("smartlist", {
   description: "Parse, build, and compile Rekordbox smart playlists.",
@@ -485,7 +485,7 @@ smartlistCli.command("sql", {
   },
 });
 
-cli.command(smartlistCli);
+rekordboxCli.command(smartlistCli);
 
 const dbOpenOptions = z.object({
   path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
@@ -1048,7 +1048,7 @@ databaseCli.command(databaseRowCli);
 databaseCli.command(databaseContentCli);
 databaseCli.command(databaseMetadataCli);
 databaseCli.command(databasePlaylistCli);
-cli.command(databaseCli);
+rekordboxCli.command(databaseCli);
 
 const deviceOpenOptions = z.object({
   path: z.string().describe("exportLibrary.db path"),
@@ -1483,7 +1483,7 @@ deviceCli.command(deviceContentCli);
 deviceCli.command(deviceMetadataCli);
 deviceCli.command(devicePlaylistCli);
 deviceCli.command(deviceTagCli);
-cli.command(deviceCli);
+rekordboxCli.command(deviceCli);
 
 function playlistPath(xml: RekordboxXml, path: string | undefined) {
   return path ? xml.getPlaylist(...path.split("/").filter(Boolean)) : xml.rootPlaylistFolder;
@@ -1728,9 +1728,21 @@ xmlPlaylistCli.command("remove-track", {
 
 xmlCli.command(xmlTrackCli);
 xmlCli.command(xmlPlaylistCli);
-cli.command(xmlCli);
+rekordboxCli.command(xmlCli);
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  void cli.serve();
+export async function runRekordboxCli(argv = process.argv.slice(2)): Promise<void> {
+  await rekordboxCli.serve(argv);
+}
 
-export default cli;
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) await runRekordboxCli();
+
+export default rekordboxCli;

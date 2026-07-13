@@ -26,10 +26,9 @@ import {
   type SoundCloudTrackAccess,
 } from './client.js'
 import soundcloudOpenApi from './generated/soundcloud-openapi.json' with { type: 'json' }
+import { createSoundCloudUserClient } from './user-client.js'
 
-loadWorkspaceEnvironment()
-
-const cli = Cli.create('soundcloud', {
+export const soundcloudCli = Cli.create('soundcloud', {
   version: packageJson.version,
   description: 'Typed SoundCloud API client for humans and agents.',
   sync: {
@@ -194,16 +193,16 @@ auth.command('logout', {
   },
 })
 
-cli.command(auth)
+soundcloudCli.command(auth)
 
-cli.command('me', {
+soundcloudCli.command('me', {
   description: "Get the logged-in user's SoundCloud profile.",
   async run() {
     return (await createSoundCloudClient()).getMe()
   },
 })
 
-cli.command('recent', {
+soundcloudCli.command('recent', {
   description: "Get the logged-in user's last 25 unique played tracks.",
   async run() {
     const tracks =
@@ -343,7 +342,7 @@ likes.command('playlists', {
   },
 })
 
-cli.command(likes)
+soundcloudCli.command(likes)
 
 const search = Cli.create('search', {
   description: 'Search public SoundCloud resources.',
@@ -376,9 +375,163 @@ for (const resource of ['tracks', 'playlists', 'users'] as const) {
     },
   })
 }
-cli.command(search)
+soundcloudCli.command(search)
 
-cli.command('resolve', {
+const playlist = Cli.create('playlist', {
+  description: 'Create and manage playlists in the logged-in user account.',
+})
+
+playlist.command('create', {
+  description: 'Create a playlist from ordered SoundCloud track references.',
+  destructive: true,
+  args: z.object({ title: z.string().min(1).describe('Playlist title') }),
+  options: z.object({
+    track: z
+      .array(z.string().min(1))
+      .default([])
+      .describe(
+        'Track ID, soundcloud:tracks:* URN, or SoundCloud URL; repeat in playlist order',
+      ),
+    inputFile: z
+      .string()
+      .optional()
+      .describe(
+        'Text file with one track reference per line, appended in order',
+      ),
+    description: z.string().optional().describe('Playlist description'),
+    sharing: z
+      .enum(['public', 'private'])
+      .default('private')
+      .describe('Sharing mode'),
+  }),
+  alias: { track: 't' },
+  examples: [
+    {
+      args: { title: 'Late night' },
+      options: {
+        track: [
+          'soundcloud:tracks:308946187',
+          'https://soundcloud.com/artist/track',
+        ],
+      },
+      description: 'Create a private playlist while preserving track order',
+    },
+  ],
+  async run(context) {
+    const fileTracks = context.options.inputFile
+      ? parseTrackReferenceFile(
+          await readFile(context.options.inputFile, 'utf8'),
+        )
+      : []
+    return (await createSoundCloudUserClient()).createPlaylist({
+      title: context.args.title,
+      tracks: [...context.options.track, ...fileTracks],
+      ...(context.options.description === undefined
+        ? {}
+        : { description: context.options.description }),
+      sharing: context.options.sharing,
+    })
+  },
+})
+
+playlist.command('get', {
+  description: 'Read a SoundCloud playlist by ID, URN, or URL.',
+  args: z.object({
+    playlist: z.string().min(1).describe('SoundCloud playlist ID, URN, or URL'),
+  }),
+  async run(context) {
+    return (await createSoundCloudUserClient()).getPlaylist(
+      context.args.playlist,
+    )
+  },
+})
+
+playlist.command('update', {
+  description:
+    'Update SoundCloud playlist details and optionally replace all tracks.',
+  destructive: true,
+  args: z.object({
+    playlist: z.string().min(1).describe('SoundCloud playlist ID, URN, or URL'),
+  }),
+  options: z.object({
+    title: z.string().min(1).optional().describe('New playlist title'),
+    description: z.string().optional().describe('New playlist description'),
+    sharing: z
+      .enum(['private', 'public'])
+      .optional()
+      .describe('New sharing mode'),
+    track: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Replacement track ID, URN, or URL; repeat in playlist order'),
+    inputFile: z
+      .string()
+      .optional()
+      .describe('Replacement tracks, one reference per line'),
+    clearTracks: z
+      .boolean()
+      .default(false)
+      .describe('Remove every track from the playlist'),
+  }),
+  async run(context) {
+    if (
+      context.options.clearTracks &&
+      (context.options.track !== undefined ||
+        context.options.inputFile !== undefined)
+    ) {
+      throw new Error(
+        '--clear-tracks cannot be combined with --track or --input-file',
+      )
+    }
+    const fileTracks = context.options.inputFile
+      ? parseTrackReferenceFile(
+          await readFile(context.options.inputFile, 'utf8'),
+        )
+      : []
+    const hasTrackUpdate =
+      context.options.clearTracks ||
+      context.options.track !== undefined ||
+      context.options.inputFile !== undefined
+    return (await createSoundCloudUserClient()).updatePlaylist(
+      context.args.playlist,
+      {
+        ...(context.options.title === undefined
+          ? {}
+          : { title: context.options.title }),
+        ...(context.options.description === undefined
+          ? {}
+          : { description: context.options.description }),
+        ...(context.options.sharing === undefined
+          ? {}
+          : { sharing: context.options.sharing }),
+        ...(hasTrackUpdate
+          ? {
+              tracks: context.options.clearTracks
+                ? []
+                : [...(context.options.track ?? []), ...fileTracks],
+            }
+          : {}),
+      },
+    )
+  },
+})
+
+playlist.command('delete', {
+  description: 'Permanently delete a playlist owned by the logged-in user.',
+  destructive: true,
+  args: z.object({
+    playlist: z.string().min(1).describe('SoundCloud playlist ID, URN, or URL'),
+  }),
+  async run(context) {
+    return (await createSoundCloudUserClient()).deletePlaylist(
+      context.args.playlist,
+    )
+  },
+})
+
+soundcloudCli.command(playlist)
+
+soundcloudCli.command('resolve', {
   description: 'Resolve a soundcloud.com permalink to its API resource.',
   args: z.object({ url: z.url().describe('SoundCloud permalink') }),
   async run(context) {
@@ -388,7 +541,7 @@ cli.command('resolve', {
   },
 })
 
-cli.command('upload', {
+soundcloudCli.command('upload', {
   description:
     'Upload an audio file through SoundCloud multipart track creation.',
   args: z.object({ file: z.string().min(1).describe('Local audio file') }),
@@ -436,7 +589,7 @@ cli.command('upload', {
   },
 })
 
-cli.command('request', {
+soundcloudCli.command('request', {
   description:
     'Make a raw authenticated SoundCloud request (forward-compatibility escape hatch).',
   args: z.object({
@@ -484,20 +637,22 @@ cli.command('request', {
   },
 })
 
-cli.command('api', {
+soundcloudCli.command('api', {
   description: 'All operations from the official SoundCloud OpenAPI schema.',
   openapi: soundcloudOpenApi as never,
   fetch: async (request: Request) =>
     (await createSoundCloudClient()).fetch(request),
 })
 
-if (
-  process.argv[1] &&
-  realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
-)
-  void cli.serve()
+export default soundcloudCli
 
-export default cli
+/** Load standalone configuration and serve the exported Incur definition. */
+export async function runSoundCloudCli(
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
+  loadWorkspaceEnvironment()
+  await soundcloudCli.serve(argv)
+}
 
 export async function createSoundCloudClient(): Promise<SoundCloudClient> {
   if (process.env.SOUNDCLOUD_ACCESS_TOKEN) {
@@ -556,6 +711,13 @@ function normalizeCollection<T>(
 ): T[] {
   if (!value) return []
   return Array.isArray(value) ? value : value.collection
+}
+
+function parseTrackReferenceFile(contents: string): string[] {
+  return contents
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
 }
 
 function parseAccess(value: string): SoundCloudTrackAccess[] {
@@ -690,4 +852,19 @@ function audioContentType(path: string): string {
     default:
       return 'application/octet-stream'
   }
+}
+
+function isDirectExecution(moduleUrl: string, argvPath: string | undefined) {
+  if (!argvPath) return false
+  try {
+    return (
+      realpathSync(fileURLToPath(moduleUrl)) === realpathSync(resolve(argvPath))
+    )
+  } catch {
+    return false
+  }
+}
+
+if (isDirectExecution(import.meta.url, process.argv[1])) {
+  await runSoundCloudCli()
 }
