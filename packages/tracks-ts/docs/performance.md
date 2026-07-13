@@ -77,6 +77,13 @@ with valid installed DAT/EXT/2EX files but absent or incorrect BPM/key is repair
 approved run reuses the cached analysis, synchronizes only its metadata inside the normal backed-up
 transaction, and then returns to the no-mutation warm fast path.
 
+The real playlist repair completed in 3.07 s total: 34 recording resumes, 34 analyzer cache hits,
+zero downloads, zero analyzer executions, and a 2.92 s backed-up Rekordbox stage. Independent
+read-only verification found 34/34 BPM values, 34/34 valid canonical key references, 102 parseable
+ANLZ files, no metadata mismatches, `PRAGMA quick_check = ok`, and zero foreign-key violations. The
+next run completed in 1.64 s and retained identical database and manifest checksums plus the same
+backup directory, proving the repaired checkpoint returns to the no-mutation fast path.
+
 ## Implemented changes
 
 - Atomic TTL cache: exact 1001 results, account-scoped Spotify search/track metadata, sanitized
