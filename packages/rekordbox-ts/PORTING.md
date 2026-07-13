@@ -183,9 +183,12 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   rehost redirects process-global stdout/stderr. Four real Brunello-set tracks completed in 9.10
   seconds wall with four workers; serial execution would take roughly 35 seconds. A later full-set
   profile measured 26 real tracks at 60.02 seconds with four workers, 32.23 seconds with eight, and
-  28.83 seconds with twelve. Eight is the default concurrency knee; twelve remains an explicit
-  override. The batch result reports preflight time, analyzer time, cache hits, and throughput; a
-  warm 26-track cache validation took 11.65 ms.
+  28.83 seconds with twelve. A 64-default stress run completed 27 compatible real artifacts in 23.85
+  seconds at effective concurrency 27 and 1.13 tracks/second; two other files reproduced a native
+  `startAnalyze` incompatibility at concurrency one and were excluded. The default remains 64
+  (bounded by the uncached track count) to prioritize set-level wall time; callers can lower it to
+  constrain CPU and memory. The batch result reports preflight time, analyzer time, cache hits, and
+  throughput; a warm 26-track cache validation took 11.65 ms.
 - Packaged sanitized DAT/EXT seed shapes and made them the fallback when a local Rekordbox analysis
   library is absent. Build and packed-package smoke checks now fail if either seed is missing. An
   extracted npm tarball analyzed the same track with an empty HOME and no prebuilt runtime cache in

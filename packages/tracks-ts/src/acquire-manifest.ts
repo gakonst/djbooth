@@ -179,6 +179,14 @@ export type AcquisitionVerification = {
   metadataVerified: number;
 };
 
+/** Playlist-scale defaults: fan a typical 30-60 track set out immediately. */
+export const DEFAULT_ACQUISITION_CONCURRENCY = 64;
+export const MAX_ACQUISITION_CONCURRENCY = 256;
+export const DEFAULT_VERIFICATION_CONCURRENCY = 64;
+export const MAX_VERIFICATION_CONCURRENCY = 256;
+export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 64;
+export const MAX_SPOTIFY_REFRESH_CONCURRENCY = 256;
+
 export type AcquireManifestOptions = {
   manifestPath: string;
   plan: AcquisitionPlan | ((manifest: SetManifest) => AcquisitionPlan | Promise<AcquisitionPlan>);
@@ -190,11 +198,11 @@ export type AcquireManifestOptions = {
   requireCompletePlan?: boolean;
   dryRun?: boolean;
   continueOnError?: boolean;
-  /** Global limit for independent recording variants, including ambiguity alternatives. */
+  /** Global limit for independent recording variants, including ambiguity alternatives. Defaults to 64. */
   concurrency?: number;
-  /** Parallel stat/hash/tag checks. Defaults to 8 and is independent of transfer concurrency. */
+  /** Parallel stat/hash/tag checks. Defaults to 64 and is independent of transfer concurrency. */
   verificationConcurrency?: number;
-  /** Parallel Spotify single-track metadata requests. Spotify removed its batch endpoint. */
+  /** Parallel Spotify single-track metadata requests. Defaults to 64; Spotify removed its batch endpoint. */
   spotifyConcurrency?: number;
   /** Optional stat-keyed cache for successful SHA/tag/duration verification receipts. */
   verificationCache?: JsonDiskCache | false;
@@ -231,16 +239,16 @@ export async function acquireManifest(
       });
     }
   };
-  const concurrency = integerConcurrency(options.concurrency ?? 3);
+  const concurrency = integerConcurrency(options.concurrency ?? DEFAULT_ACQUISITION_CONCURRENCY);
   const verificationConcurrency = boundedConcurrency(
-    options.verificationConcurrency ?? 8,
+    options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
     "verificationConcurrency",
-    16,
+    MAX_VERIFICATION_CONCURRENCY,
   );
   const spotifyConcurrency = boundedConcurrency(
-    options.spotifyConcurrency ?? 8,
+    options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
     "spotifyConcurrency",
-    32,
+    MAX_SPOTIFY_REFRESH_CONCURRENCY,
   );
   const verificationCache =
     options.verificationCache === false ? undefined : options.verificationCache;
@@ -524,7 +532,7 @@ export async function acquireManifest(
     const clipsTask = measure(
       "clips",
       () =>
-        mapConcurrent(plan.clips, Math.min(concurrency, 2), async (clip) => {
+        mapConcurrent(plan.clips, concurrency, async (clip) => {
           activeClips += 1;
           clipMetrics.maxConcurrency = Math.max(clipMetrics.maxConcurrency ?? 0, activeClips);
           options.onProgress?.({
@@ -784,9 +792,13 @@ export async function verifyAcquisitionPlan(
   manifest: SetManifest,
   plan: AcquisitionPlan,
   verified?: ReadonlyMap<string, AcquisitionVerificationReceipt>,
-  concurrency = 4,
+  concurrency = DEFAULT_VERIFICATION_CONCURRENCY,
 ): Promise<AcquisitionVerification> {
-  const verificationConcurrency = boundedConcurrency(concurrency, "concurrency", 16);
+  const verificationConcurrency = boundedConcurrency(
+    concurrency,
+    "concurrency",
+    MAX_VERIFICATION_CONCURRENCY,
+  );
   validatePlan(manifest, plan, false, true);
   const expected = [
     ...plan.clips.map((clip) => ({
@@ -869,6 +881,7 @@ export async function verifyAcquisitionPlan(
 }
 
 export type SpotifyRefreshOptions = {
+  /** Parallel individual-track requests. Defaults to 64; callers may set 1 through 256. */
   concurrency?: number;
 };
 
@@ -889,7 +902,11 @@ export async function refreshKnownSpotifyTracks(
   options: SpotifyRefreshOptions = {},
 ): Promise<SpotifyRefreshResult> {
   const started = performance.now();
-  const concurrency = boundedConcurrency(options.concurrency ?? 8, "concurrency", 32);
+  const concurrency = boundedConcurrency(
+    options.concurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
+    "concurrency",
+    MAX_SPOTIFY_REFRESH_CONCURRENCY,
+  );
   const cacheBefore = spotify.cacheStats?.();
   const ids = [
     ...new Set(
@@ -1648,8 +1665,10 @@ function serializeManifest(manifest: SetManifest): string {
 }
 
 function integerConcurrency(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > 8) {
-    throw new RangeError("concurrency must be an integer between 1 and 8");
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_ACQUISITION_CONCURRENCY) {
+    throw new RangeError(
+      `concurrency must be an integer between 1 and ${String(MAX_ACQUISITION_CONCURRENCY)}`,
+    );
   }
   return value;
 }

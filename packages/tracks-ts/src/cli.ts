@@ -15,6 +15,10 @@ import { getYtdlpTsCommand } from "./integrations/ytdlp.js";
 import { createManifest, parseManifest } from "./manifest.js";
 import { runProcess } from "./process.js";
 import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
+import {
+  DEFAULT_RECOGNITION_CONCURRENCY,
+  MAX_RECOGNITION_CONCURRENCY,
+} from "./recognize-samples.js";
 import { parseTracklistJson, renderTracklist } from "./render.js";
 import { requireTimestamp } from "./time.js";
 import type { Environment } from "./types.js";
@@ -97,7 +101,13 @@ const identifyOptions = z.object({
     .default(60)
     .describe("Seconds between local samples for AudD Standard or ACRCloud"),
   clip: z.number().int().min(5).max(25).default(12).describe("Sample clip length in seconds"),
-  concurrency: z.number().int().min(1).max(8).default(3).describe("Concurrent recognition calls"),
+  concurrency: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_RECOGNITION_CONCURRENCY)
+    .default(DEFAULT_RECOGNITION_CONCURRENCY)
+    .describe("Concurrent local sample recognition calls"),
   minScore: z.number().min(0).max(100).default(40).describe("Minimum primary match score"),
   blendScore: z.number().min(0).max(100).default(50).describe("Minimum overlap match score"),
   includeMatches: z.boolean().default(false).describe("Include raw recognition moments"),

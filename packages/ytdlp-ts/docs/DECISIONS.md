@@ -36,8 +36,10 @@ complete without reducing the runtime dependency.
 ## ADR-005: Optimize the primary workflow for music libraries
 
 **Decision:** Make `music` the opinionated path: best source audio, metadata JSON, artwork, durable
-archives, conservative YouTube concurrency, and automatic resume. Keep `download` as the lower-level
-compatibility surface.
+archives, playlist-wide concurrency, provider-specific overrides, and automatic resume. Keep
+`download` as the lower-level compatibility surface.
 
 **Why:** Audio quality is harmed by unnecessary transcoding, while large batches need stronger
-idempotency and rate-limit behavior than one-off video downloads.
+idempotency and much higher throughput than one-off video downloads. A 64-operation default fills a
+typical 30–60-track playlist immediately; callers can lower either the global or YouTube limit for
+provider-specific rate limits.

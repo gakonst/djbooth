@@ -112,7 +112,7 @@ analyzeCli.command("tracks", {
       .min(1)
       .max(64)
       .optional()
-      .describe("Parallel analyzer workers; defaults to at most 8 based on available cores"),
+      .describe("Parallel analyzer workers; defaults to 64 (bounded by uncached track count)"),
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
     rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
     rekordboxCache: z.string().optional().describe("Native backend cache directory"),

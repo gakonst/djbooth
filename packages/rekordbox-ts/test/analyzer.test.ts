@@ -158,6 +158,9 @@ describe("Rekordbox analyzer wrapper", () => {
     await expect(analyzeTracks([], { concurrency: 0 })).rejects.toThrow(
       "concurrency must be an integer",
     );
+    await expect(analyzeTracks([], { concurrency: 65 })).rejects.toThrow(
+      "concurrency must be an integer",
+    );
     await expect(analyzeTracks(["same.mp3", "same.mp3"])).rejects.toThrow(
       "Multiple tracks resolve",
     );
@@ -278,6 +281,13 @@ describe("Rekordbox analyzer wrapper", () => {
       "one.mp3",
       "two.mp3",
     ]);
+    await expect(
+      analyzeTracks(audioPaths, { analyzerBinary: process.execPath, force: true }),
+    ).resolves.toMatchObject({
+      analyzed: 2,
+      concurrency: 2,
+      requested: 2,
+    });
     await expect(
       analyzeTracks(audioPaths, { analyzerBinary: process.execPath, concurrency: 2 }),
     ).resolves.toMatchObject({

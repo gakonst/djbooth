@@ -42,6 +42,7 @@ export type SpotifyEnrichmentOptions = {
   market?: string;
   /** Spotify reduced Search's maximum to 10 in February 2026. */
   searchLimit?: number;
+  /** Parallel Spotify searches. Defaults to 64; callers may set 1 through 256. */
   concurrency?: number;
   minimumMatchScore?: number;
   minimumCandidateScore?: number;
@@ -70,6 +71,10 @@ export type SpotifyEnrichmentResult = {
   durationMs: number;
   cache?: CacheStats;
 };
+
+/** Fan a typical 30-60 track set out in one wave; callers can still choose a lower bound. */
+export const DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY = 64;
+export const MAX_SPOTIFY_ENRICHMENT_CONCURRENCY = 256;
 
 type ResolvedOptions = {
   market?: string;
@@ -376,7 +381,13 @@ function parseSearchTracks(value: unknown): SpotifyTrackCandidate[] {
 
 function resolveOptions(options: SpotifyEnrichmentOptions): ResolvedOptions {
   const searchLimit = integerOption(options.searchLimit, 10, 1, 10, "searchLimit");
-  const concurrency = integerOption(options.concurrency, 8, 1, 32, "concurrency");
+  const concurrency = integerOption(
+    options.concurrency,
+    DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY,
+    1,
+    MAX_SPOTIFY_ENRICHMENT_CONCURRENCY,
+    "concurrency",
+  );
   const maxCandidates = integerOption(options.maxCandidates, 5, 1, searchLimit, "maxCandidates");
   const minimumMatchScore = scoreOption(options.minimumMatchScore, 0.84, "minimumMatchScore");
   const minimumCandidateScore = scoreOption(

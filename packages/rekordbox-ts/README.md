@@ -159,13 +159,18 @@ rekordbox db content install-analysis 123456 /Music/track.rekordbox --write --fo
 ```
 
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
-runs a bounded pool of isolated native worker processes, preserves input order, and defaults to at
-most four workers. Keep database installation separate and serialized: call
+runs a bounded pool of isolated native worker processes, preserves input order, and defaults to 64
+workers or the number of uncached tracks, whichever is lower. Keep database installation separate
+and serialized: call
 `MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
-The default worker pool is capped at eight: on a 12-core machine, 26 real set tracks took 60.02
-seconds with four workers, 32.23 seconds with eight, and 28.83 seconds with twelve. Twelve workers
-used 50% more processes for only 10.5% less wall time than eight; pass `concurrency` explicitly when
-that tradeoff is desirable. Warm validation of all 26 cached analyses took 11.65 ms. Analysis
+The default favors minimum playlist wall time: a 30–60 track playlist can analyze every uncached
+track concurrently. On a 12-core machine, 26 real set tracks took 60.02 seconds with four workers,
+32.23 seconds with eight, and 28.83 seconds with twelve. A 64-default stress run completed 27
+compatible real artifacts in 23.85 seconds at an effective concurrency of 27 (1.13 tracks/second).
+Two additional source files returned the same native `startAnalyze` incompatibility alone at
+concurrency one and were excluded from that timing. Higher concurrency consumes more CPU and memory;
+pass `concurrency` explicitly to constrain resource use. Warm validation of all 26 cached analyses
+took 11.65 ms. Analysis
 requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
 hash, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` can explicitly select another
 compatible `rekordbox.app`.

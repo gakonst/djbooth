@@ -6,6 +6,9 @@ import { extractClip, hasCompleteSampleCoverage, prepareMedia, sampleOffsets } f
 import { mapConcurrent } from "./process.js";
 import type { IdentifyOptions, RecognitionMoment } from "./types.js";
 
+export const DEFAULT_RECOGNITION_CONCURRENCY = 64;
+export const MAX_RECOGNITION_CONCURRENCY = 64;
+
 export interface ClipRecognizer {
   recognizeClip(clip: Blob, scanSeconds: number, filename?: string): Promise<RecognitionMoment>;
 }
@@ -25,7 +28,15 @@ export async function recognizeSamples(
 ): Promise<SampleRecognitionResult> {
   const intervalSeconds = options.intervalSeconds ?? 60;
   const clipSeconds = options.clipSeconds ?? 12;
-  const concurrency = options.concurrency ?? 3;
+  const concurrency = options.concurrency ?? DEFAULT_RECOGNITION_CONCURRENCY;
+  if (
+    !Number.isInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > MAX_RECOGNITION_CONCURRENCY
+  )
+    throw new TypeError(
+      `Recognition concurrency must be an integer between 1 and ${String(MAX_RECOGNITION_CONCURRENCY)}`,
+    );
   const env = options.env ?? process.env;
   const media = await prepareMedia(source, {
     ...(options.signal ? { signal: options.signal } : {}),

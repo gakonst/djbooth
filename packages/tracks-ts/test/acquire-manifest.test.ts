@@ -768,8 +768,6 @@ describe("acquireManifest", () => {
           plan,
           acquirers: [acquirer],
           requireCompletePlan: true,
-          concurrency: 8,
-          verificationConcurrency: 8,
         });
         if (process.env.TRACKS_PERF_LOG === "1") {
           process.stderr.write(
@@ -783,13 +781,18 @@ describe("acquireManifest", () => {
         }
 
         expect(downloadCalls).toBe(34);
-        expect(maximumActive).toBe(8);
+        expect(maximumActive).toBe(34);
         expect(result.downloaded).toHaveLength(34);
+        expect(result.performance).toMatchObject({
+          concurrency: 64,
+          verificationConcurrency: 64,
+          spotifyConcurrency: 64,
+        });
         expect(result.performance.stages).toContainEqual(
           expect.objectContaining({
             stage: "recordings",
             operations: 34,
-            maxConcurrency: 8,
+            maxConcurrency: 34,
           }),
         );
         expect(result.performance.checkpoints).toMatchObject({ calls: 36 });
