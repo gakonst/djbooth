@@ -1,5 +1,11 @@
 export {
   acquireManifest,
+  DEFAULT_ACQUISITION_CONCURRENCY,
+  DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
+  DEFAULT_VERIFICATION_CONCURRENCY,
+  MAX_ACQUISITION_CONCURRENCY,
+  MAX_SPOTIFY_REFRESH_CONCURRENCY,
+  MAX_VERIFICATION_CONCURRENCY,
   refreshKnownSpotifyTracks,
   verifyAcquisitionPlan,
   type AcquireFailure,
@@ -153,12 +159,16 @@ export {
   type Tracklists1001ClientOptions,
 } from "./providers/tracklists1001.js";
 export {
+  DEFAULT_RECOGNITION_CONCURRENCY,
+  MAX_RECOGNITION_CONCURRENCY,
   recognizeSamples,
   type ClipRecognizer,
   type SampleRecognitionResult,
 } from "./recognize-samples.js";
 export {
+  DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY,
   enrichSpotifyManifest,
+  MAX_SPOTIFY_ENRICHMENT_CONCURRENCY,
   scoreSpotifyCandidate,
   scoreSpotifyCandidates,
   spotifySearchQuery,
@@ -174,6 +184,7 @@ export {
   assertRekordboxImportApproved,
   assertRekordboxStopped,
   backupRekordboxDatabase,
+  DEFAULT_REKORDBOX_IO_CONCURRENCY,
   defaultRekordboxPlaylistName,
   importManifestToRekordbox,
   planRekordboxImport,

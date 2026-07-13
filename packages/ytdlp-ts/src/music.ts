@@ -2,23 +2,17 @@ import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import {
-  ReferenceClient,
-  type DownloadReferenceOptions,
-  type InspectReferenceOptions,
-} from './bridge/reference.js'
+import { ReferenceClient, type DownloadReferenceOptions, type InspectReferenceOptions } from './bridge/reference.js'
 import { inspect, type EngineResult } from './core/engine.js'
 import { errorMessage, YtdlpError } from './core/errors.js'
 import { selectFormats } from './core/format-selector.js'
 import type { EngineKind, MediaInfo } from './core/types.js'
-import {
-  downloadMedia,
-  type NativeDownloadOptions,
-  type NativeDownloadResult,
-} from './downloader/native.js'
+import { downloadMedia, type NativeDownloadOptions, type NativeDownloadResult } from './downloader/native.js'
 
 export const MUSIC_FORMAT_SPEC = 'bestaudio/best'
 export const MUSIC_OUTPUT_TEMPLATE = '%(uploader,channel)s/%(title)s [%(id)s].%(ext)s'
+export const DEFAULT_MUSIC_CONCURRENCY = 64
+export const MAX_MUSIC_CONCURRENCY = 64
 
 export interface MusicDownloadOptions extends InspectReferenceOptions {
   engine?: EngineKind
@@ -63,11 +57,7 @@ export interface MusicBatchResult {
 }
 
 export interface MusicDependencies {
-  inspect(
-    url: string,
-    engine: EngineKind,
-    options: InspectReferenceOptions,
-  ): Promise<EngineResult<MediaInfo>>
+  inspect(url: string, engine: EngineKind, options: InspectReferenceOptions): Promise<EngineResult<MediaInfo>>
   downloadNative(info: MediaInfo, options: NativeDownloadOptions): Promise<NativeDownloadResult>
   downloadReference(
     url: string,
@@ -87,6 +77,8 @@ interface PreparedTrack {
   extractionEngine: 'native' | 'reference'
 }
 
+type PlannedItem = { kind: 'track'; track: PreparedTrack } | { kind: 'result'; item: MusicDownloadItem }
+
 export async function downloadMusicBatch(
   sources: string[],
   options: MusicDownloadOptions = {},
@@ -95,58 +87,88 @@ export async function downloadMusicBatch(
   const uniqueSources = [...new Set(sources.map((source) => source.trim()).filter(Boolean))]
   if (uniqueSources.length === 0) throw new YtdlpError('NO_MUSIC_URLS', 'At least one music URL is required')
   const archive = await DownloadArchive.open(options.archive)
-  const items: MusicDownloadItem[] = []
-  const prepared: PreparedTrack[] = []
-
-  for (const source of uniqueSources) {
+  const concurrency = musicConcurrency(options.concurrency)
+  const plannedBySource = await mapConcurrent(uniqueSources, concurrency, async (source) => {
     if (archive.has(makeUrlArchiveKey(source))) {
-      items.push({ url: source, status: 'skipped', files: [] })
-      continue
+      return [
+        {
+          kind: 'result',
+          item: { url: source, status: 'skipped', files: [] },
+        },
+      ] satisfies PlannedItem[]
     }
     try {
       const result = await dependencies.inspect(source, options.engine ?? 'auto', inspectOptions(options))
       if (result.data.entries?.length) {
-        for (const entry of result.data.entries) {
+        return result.data.entries.flatMap((entry): PlannedItem[] => {
           const entryUrl = mediaWebpageUrl(entry)
-          if (!entryUrl) continue
-          prepared.push({ url: entryUrl, info: entry, extractionEngine: result.engine })
-        }
-      } else {
-        prepared.push({ url: source, info: result.data, extractionEngine: result.engine })
+          return entryUrl
+            ? [
+                {
+                  kind: 'track',
+                  track: {
+                    url: entryUrl,
+                    info: entry,
+                    extractionEngine: result.engine,
+                  },
+                },
+              ]
+            : []
+        })
       }
+      return [
+        {
+          kind: 'track',
+          track: {
+            url: source,
+            info: result.data,
+            extractionEngine: result.engine,
+          },
+        },
+      ] satisfies PlannedItem[]
     } catch (error) {
-      items.push({ url: source, status: 'failed', error: errorMessage(error) })
       if (options.continueOnError === false) throw error
+      return [
+        {
+          kind: 'result',
+          item: { url: source, status: 'failed', error: errorMessage(error) },
+        },
+      ] satisfies PlannedItem[]
     }
-  }
+  })
 
-  const queue = deduplicatePrepared(prepared)
+  const plan = deduplicatePlan(plannedBySource.flat())
+  const queue = plan.flatMap((item) => (item.kind === 'track' ? [item.track] : []))
+  const completed = new Map<PreparedTrack, MusicDownloadItem>()
   let cursor = 0
-  const youtubeSemaphore = new Semaphore(Math.max(1, options.youtubeConcurrency ?? 1))
-  const workers = Array.from(
-    { length: Math.min(Math.max(1, options.concurrency ?? 3), Math.max(queue.length, 1)) },
-    async () => {
-      while (cursor < queue.length) {
-        const track = queue[cursor++]!
-        const release = isYouTube(track) ? await youtubeSemaphore.acquire() : () => undefined
-        try {
-          items.push(await downloadPreparedTrack(track, archive, options, dependencies))
-        } catch (error) {
-          items.push({
-            url: track.url,
-            id: track.info.id,
-            title: track.info.title,
-            status: 'failed',
-            error: errorMessage(error),
-          })
-          if (options.continueOnError === false) throw error
-        } finally {
-          release()
-        }
+  const youtubeSemaphore = new Semaphore(musicConcurrency(options.youtubeConcurrency))
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(queue.length, 1)) }, async () => {
+    while (cursor < queue.length) {
+      const track = queue[cursor++]!
+      const release = isYouTube(track) ? await youtubeSemaphore.acquire() : () => undefined
+      try {
+        completed.set(track, await downloadPreparedTrack(track, archive, options, dependencies))
+      } catch (error) {
+        completed.set(track, {
+          url: track.url,
+          id: track.info.id,
+          title: track.info.title,
+          status: 'failed',
+          error: errorMessage(error),
+        })
+        if (options.continueOnError === false) throw error
+      } finally {
+        release()
       }
-    },
-  )
+    }
+  })
   await Promise.all(workers)
+  const items = plan.map((item) => {
+    if (item.kind === 'result') return item.item
+    const completedItem = completed.get(item.track)
+    if (!completedItem) throw new YtdlpError('MUSIC_BATCH_INCOMPLETE', `No result for ${item.track.url}`)
+    return completedItem
+  })
 
   return {
     requested: uniqueSources.length,
@@ -185,17 +207,20 @@ async function downloadPreparedTrack(
   let files: string[]
   let selectedEngine: 'native' | 'reference'
   if (useNative) {
-    const result = await dependencies.downloadNative(track.info, omitUndefined({
-      format: MUSIC_FORMAT_SPEC,
-      output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
-      paths: options.paths,
-      continueDownload: true,
-      retries: options.retries ?? 5,
-      rateLimit: options.rateLimit,
-      writeInfoJson: options.writeInfoJson ?? true,
-      writeThumbnail: options.writeThumbnail ?? true,
-      signal: options.signal,
-    }) as NativeDownloadOptions)
+    const result = await dependencies.downloadNative(
+      track.info,
+      omitUndefined({
+        format: MUSIC_FORMAT_SPEC,
+        output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
+        paths: options.paths,
+        continueDownload: true,
+        retries: options.retries ?? 5,
+        rateLimit: options.rateLimit,
+        writeInfoJson: options.writeInfoJson ?? true,
+        writeThumbnail: options.writeThumbnail ?? true,
+        signal: options.signal,
+      }) as NativeDownloadOptions,
+    )
     files = result.files
     selectedEngine = 'native'
   } else {
@@ -207,31 +232,34 @@ async function downloadPreparedTrack(
     }
     const youtube = isYouTube(track)
     const audioFormat = options.audioFormat ?? 'best'
-    const result = await dependencies.downloadReference(track.url, omitUndefined({
-      ...inspectOptions(options),
-      playlist: false,
-      format: MUSIC_FORMAT_SPEC,
-      output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
-      paths: options.paths,
-      continueDownload: true,
-      concurrentFragments: youtube ? 1 : undefined,
-      retries: options.retries ?? 10,
-      fragmentRetries: options.retries ?? 10,
-      rateLimit: youtube ? options.youtubeRateLimit ?? options.rateLimit : options.rateLimit,
-      extractAudio: true,
-      audioFormat,
-      audioQuality: options.audioQuality ?? '0',
-      writeInfoJson: options.writeInfoJson ?? true,
-      writeThumbnail: options.writeThumbnail ?? true,
-      embedMetadata: options.embedMetadata ?? true,
-      embedThumbnail: options.embedThumbnail ?? true,
-      embedChapters: true,
-      sleepRequests: youtube ? (options.youtubeRequestInterval ?? 1) : undefined,
-      sleepInterval: youtube ? (options.youtubeMinSleep ?? 2) : undefined,
-      maxSleepInterval: youtube ? (options.youtubeMaxSleep ?? 5) : undefined,
-      throttledRate: youtube ? '100K' : undefined,
-      retrySleep: ['http:exp=1:20', 'fragment:exp=1:20', 'extractor:exp=1:20'],
-    }) as DownloadReferenceOptions)
+    const result = await dependencies.downloadReference(
+      track.url,
+      omitUndefined({
+        ...inspectOptions(options),
+        playlist: false,
+        format: MUSIC_FORMAT_SPEC,
+        output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
+        paths: options.paths,
+        continueDownload: true,
+        concurrentFragments: youtube ? 1 : undefined,
+        retries: options.retries ?? 10,
+        fragmentRetries: options.retries ?? 10,
+        rateLimit: youtube ? (options.youtubeRateLimit ?? options.rateLimit) : options.rateLimit,
+        extractAudio: true,
+        audioFormat,
+        audioQuality: options.audioQuality ?? '0',
+        writeInfoJson: options.writeInfoJson ?? true,
+        writeThumbnail: options.writeThumbnail ?? true,
+        embedMetadata: options.embedMetadata ?? true,
+        embedThumbnail: options.embedThumbnail ?? true,
+        embedChapters: true,
+        sleepRequests: youtube ? (options.youtubeRequestInterval ?? 1) : undefined,
+        sleepInterval: youtube ? (options.youtubeMinSleep ?? 2) : undefined,
+        maxSleepInterval: youtube ? (options.youtubeMaxSleep ?? 5) : undefined,
+        throttledRate: youtube ? '100K' : undefined,
+        retrySleep: ['http:exp=1:20', 'fragment:exp=1:20', 'extractor:exp=1:20'],
+      }) as DownloadReferenceOptions,
+    )
     files = result.files
     selectedEngine = 'reference'
   }
@@ -279,14 +307,37 @@ function mediaWebpageUrl(info: MediaInfo): string | undefined {
   return undefined
 }
 
-function deduplicatePrepared(tracks: PreparedTrack[]): PreparedTrack[] {
+function deduplicatePlan(items: PlannedItem[]): PlannedItem[] {
   const seen = new Set<string>()
-  return tracks.filter((track) => {
-    const key = makeArchiveKey(track.info) ?? track.url
+  return items.filter((item) => {
+    if (item.kind === 'result') return true
+    const key = makeArchiveKey(item.track.info) ?? item.track.url
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
+}
+
+function musicConcurrency(value?: number): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_MUSIC_CONCURRENCY
+  return Math.min(MAX_MUSIC_CONCURRENCY, Math.max(1, Math.trunc(value)))
+}
+
+async function mapConcurrent<Input, Output>(
+  values: Input[],
+  concurrency: number,
+  operation: (value: Input, index: number) => Promise<Output>,
+): Promise<Output[]> {
+  const output = new Array<Output>(values.length)
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(values.length, 1)) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor++
+      output[index] = await operation(values[index]!, index)
+    }
+  })
+  await Promise.all(workers)
+  return output
 }
 
 function makeArchiveKey(info: MediaInfo): string | undefined {
@@ -313,13 +364,17 @@ function makeUrlArchiveKey(value: string): string {
 }
 
 function isYouTube(track: PreparedTrack): boolean {
-  return /youtube/iu.test(String(track.info.extractor_key ?? track.info.extractor ?? '')) ||
+  return (
+    /youtube/iu.test(String(track.info.extractor_key ?? track.info.extractor ?? '')) ||
     /(?:youtube\.com|youtu\.be)/iu.test(track.url)
+  )
 }
 
 function isSoundCloud(track: PreparedTrack): boolean {
-  return /soundcloud/iu.test(String(track.info.extractor_key ?? track.info.extractor ?? '')) ||
+  return (
+    /soundcloud/iu.test(String(track.info.extractor_key ?? track.info.extractor ?? '')) ||
     /soundcloud\.com/iu.test(track.url)
+  )
 }
 
 function hasNativelyResumableBestAudio(info: MediaInfo): boolean {

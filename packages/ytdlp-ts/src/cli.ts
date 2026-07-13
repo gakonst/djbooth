@@ -6,11 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import { Cli, z } from 'incur'
 
-import {
-  ReferenceClient,
-  type DownloadReferenceOptions,
-  type InspectReferenceOptions,
-} from './bridge/reference.js'
+import { ReferenceClient, type DownloadReferenceOptions, type InspectReferenceOptions } from './bridge/reference.js'
 import { inspect } from './core/engine.js'
 import { errorMessage, YtdlpError } from './core/errors.js'
 import { compareMediaInfo } from './core/parity.js'
@@ -67,11 +63,7 @@ cli.command('inspect', {
   examples: [{ args: { url: 'https://www.youtube.com/watch?v=BaW_jenozKc' } }],
   async run(c) {
     try {
-      const result = await inspect(
-        c.args.url,
-        c.options.engine as EngineKind,
-        toInspectOptions(c.options),
-      )
+      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
       return { engine: result.engine, info: result.data }
     } catch (error) {
       return fail(c, error)
@@ -85,11 +77,7 @@ cli.command('formats', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(
-        c.args.url,
-        c.options.engine as EngineKind,
-        toInspectOptions(c.options),
-      )
+      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
       const formats = result.data.formats ?? []
       return {
         engine: result.engine,
@@ -110,11 +98,7 @@ cli.command('subtitles', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(
-        c.args.url,
-        c.options.engine as EngineKind,
-        toInspectOptions(c.options),
-      )
+      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
       return {
         engine: result.engine,
         id: result.data.id,
@@ -134,11 +118,7 @@ cli.command('thumbnails', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(
-        c.args.url,
-        c.options.engine as EngineKind,
-        toInspectOptions(c.options),
-      )
+      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
       return {
         engine: result.engine,
         id: result.data.id,
@@ -179,8 +159,13 @@ cli.command('parity', {
     try {
       const referenceInfo = (await inspect(c.args.url, 'reference', options)).data
       return {
-        native: { supported: true, extractor: nativeInfo.extractor_key ?? nativeInfo.extractor },
-        reference: { extractor: referenceInfo.extractor_key ?? referenceInfo.extractor },
+        native: {
+          supported: true,
+          extractor: nativeInfo.extractor_key ?? nativeInfo.extractor,
+        },
+        reference: {
+          extractor: referenceInfo.extractor_key ?? referenceInfo.extractor,
+        },
         report: compareMediaInfo(nativeInfo, referenceInfo),
       }
     } catch (error) {
@@ -192,7 +177,9 @@ cli.command('parity', {
 cli.command('music', {
   description: 'Download one or more music tracks at the highest source quality with metadata.',
   destructive: true,
-  args: z.object({ url: z.url().optional().describe('YouTube or SoundCloud track or playlist URL') }),
+  args: z.object({
+    url: z.url().optional().describe('YouTube or SoundCloud track or playlist URL'),
+  }),
   options: z.object({
     url: z.array(z.url()).optional().describe('Additional track URL; repeat for multiple tracks'),
     inputFile: z.string().optional().describe('Text file containing one URL per line'),
@@ -205,14 +192,8 @@ cli.command('music', {
       .describe('Keep source audio or convert after download'),
     audioQuality: z.string().default('0').describe('FFmpeg quality when converting audio'),
     archive: z.string().optional().describe('Durable completed-track archive path'),
-    concurrency: z.number().int().min(1).max(16).default(3).describe('Maximum parallel tracks'),
-    youtubeConcurrency: z
-      .number()
-      .int()
-      .min(1)
-      .max(4)
-      .default(1)
-      .describe('Maximum parallel YouTube tracks'),
+    concurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel source inspections and tracks'),
+    youtubeConcurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel YouTube tracks'),
     retries: z.number().int().min(0).max(100).default(10).describe('Transfer and fragment retries'),
     rateLimit: z.string().optional().describe('Global download rate limit, e.g. 8M'),
     youtubeRateLimit: z.string().optional().describe('YouTube-specific rate limit, e.g. 4M'),
@@ -238,9 +219,7 @@ cli.command('music', {
             .map((line) => line.trim())
             .filter((line) => line && !line.startsWith('#'))
         : []
-      const urls = [c.args.url, ...(c.options.url ?? []), ...fileUrls].filter(
-        (url): url is string => Boolean(url),
-      )
+      const urls = [c.args.url, ...(c.options.url ?? []), ...fileUrls].filter((url): url is string => Boolean(url))
       if (urls.length === 0) {
         return c.error({
           code: 'NO_MUSIC_URLS',
@@ -375,7 +354,11 @@ cli.command('extractors', {
       const result = await new ReferenceClient().run(['--ignore-config', '--list-extractors'])
       const reference = result.stdout.split(/\r?\n/u).filter(Boolean)
       if (c.options.engine === 'reference') {
-        return { engine: 'reference', count: reference.length, extractors: reference }
+        return {
+          engine: 'reference',
+          count: reference.length,
+          extractors: reference,
+        }
       }
       return {
         engine: 'all',
@@ -397,7 +380,9 @@ cli.command('compat', {
   alias: { arg: 'a' },
   examples: [
     {
-      options: { arg: ['--dump-single-json', 'https://www.youtube.com/watch?v=BaW_jenozKc'] },
+      options: {
+        arg: ['--dump-single-json', 'https://www.youtube.com/watch?v=BaW_jenozKc'],
+      },
       description: 'Pass exact yt-dlp arguments',
     },
   ],
@@ -431,7 +416,11 @@ cli.command('engines', {
     } catch (error) {
       return {
         native: { available: true, extractors: new ExtractorRegistry().list() },
-        reference: { available: false, binary: reference.binary, error: errorMessage(error) },
+        reference: {
+          available: false,
+          binary: reference.binary,
+          error: errorMessage(error),
+        },
       }
     }
   },
@@ -491,11 +480,18 @@ function defined(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function fail(
-  context: { error(options: { code: string; exitCode?: number; message: string; retryable?: boolean }): never },
+  context: {
+    error(options: { code: string; exitCode?: number; message: string; retryable?: boolean }): never
+  },
   error: unknown,
 ): never {
   if (error instanceof YtdlpError) {
-    return context.error({ code: error.code, message: error.message, exitCode: 1, retryable: false })
+    return context.error({
+      code: error.code,
+      message: error.message,
+      exitCode: 1,
+      retryable: false,
+    })
   }
   return context.error({
     code: 'YTDLP_TS_ERROR',

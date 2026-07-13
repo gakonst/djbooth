@@ -321,13 +321,13 @@ describe("Spotify manifest enrichment", () => {
     const result = await enrichSpotifyManifest(value, spotify);
 
     expect(calls).toBe(24);
-    expect(maximumActive).toBe(8);
+    expect(maximumActive).toBe(24);
     expect(result).toMatchObject({
       attempted: 24,
       requests: 24,
       networkRequests: 24,
-      concurrency: 8,
-      maxConcurrency: 8,
+      concurrency: 64,
+      maxConcurrency: 24,
       unmatched: 24,
     });
   });

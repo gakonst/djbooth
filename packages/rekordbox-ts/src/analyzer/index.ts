@@ -8,7 +8,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { availableParallelism } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -172,7 +171,7 @@ export async function analyzeTracks(
   audioPaths: ReadonlyArray<string>,
   options: AnalyzeTracksOptions = {},
 ): Promise<AnalyzeTracksResult> {
-  const configuredConcurrency = options.concurrency ?? Math.min(8, availableParallelism());
+  const configuredConcurrency = options.concurrency ?? 64;
   if (
     !Number.isInteger(configuredConcurrency) ||
     configuredConcurrency < 1 ||

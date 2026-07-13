@@ -6,7 +6,7 @@ tests guard the behavior in CI without depending on third-party availability.
 ## Five-track mixed-service batch
 
 - Inputs: three public SoundCloud tracks and two public YouTube tracks.
-- Scheduler: global concurrency 4, YouTube concurrency 1.
+- Scheduler for this historical validation: explicit global concurrency 4, YouTube concurrency 1.
 - Result: 5 downloaded, 0 failed.
 - Artifacts: 5 audio files, 5 `.info.json` files, and 5 artwork files.
 - SoundCloud selected the best exposed AAC streams (160 kbps on the tested Monstercat tracks).
@@ -22,15 +22,16 @@ FFprobe validated it as a 180.062-second MP3.
 The deterministic test server also severs its first 512 KiB transfer. The downloader retries inside
 the same invocation, sends `Range: bytes=<part-size>-`, and verifies the final bytes exactly.
 
-## YouTube rate-limit policy
+## YouTube transfer policy
 
-- One YouTube track at a time by default.
+- Up to 64 YouTube tracks at a time by default, bounded by the global 64-track limit.
 - One fragment at a time.
-- One-second request spacing and randomized two-to-five-second track spacing.
+- One-second request spacing and randomized two-to-five-second spacing inside each transfer.
 - Ten HTTP and fragment retries.
 - Exponential retry sleeps from one to twenty seconds for HTTP, fragment, and extractor errors.
 - Re-extraction when throughput falls below 100 KiB/s.
 - Optional `--youtube-rate-limit` and cookies/browser cookies for account-specific access.
+- Explicit `--concurrency` and `--youtube-concurrency` overrides for provider-specific throttling.
 
 The default `best` mode never intentionally performs a lossy transcode. Conversion is enabled only
 when `--audio-format` names a target codec.

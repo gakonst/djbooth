@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import type { EngineKind, MediaInfo } from '../src/core/types.js'
 import {
+  DEFAULT_MUSIC_CONCURRENCY,
   downloadMusicBatch,
+  MAX_MUSIC_CONCURRENCY,
   MUSIC_FORMAT_SPEC,
   MUSIC_OUTPUT_TEMPLATE,
   type MusicDependencies,
@@ -24,10 +26,16 @@ describe('music batch downloads', () => {
     const archive = join(directory, 'archive.txt')
     let activeYoutube = 0
     let maxActiveYoutube = 0
+    let activeInspections = 0
+    let maxActiveInspections = 0
     const referenceOptions: unknown[] = []
 
     const dependencies: MusicDependencies = {
       async inspect(url: string, _engine: EngineKind) {
+        activeInspections += 1
+        maxActiveInspections = Math.max(maxActiveInspections, activeInspections)
+        await delay(5)
+        activeInspections -= 1
         const youtube = url.includes('youtube')
         const id = url.split('/').at(-1)!
         const info: MediaInfo = {
@@ -53,7 +61,10 @@ describe('music batch downloads', () => {
         expect(options.writeInfoJson).toBe(true)
         expect(options.writeThumbnail).toBe(true)
         await delay(15)
-        return { files: ['track.mp3', 'track.info.json'], selectedFormats: ['http_mp3_0_0'] }
+        return {
+          files: ['track.mp3', 'track.info.json'],
+          selectedFormats: ['http_mp3_0_0'],
+        }
       },
       async downloadReference(_url, options) {
         activeYoutube += 1
@@ -61,7 +72,11 @@ describe('music batch downloads', () => {
         referenceOptions.push(options)
         await delay(20)
         activeYoutube -= 1
-        return { files: ['track.webm', 'track.info.json'], stdout: '', stderr: '' }
+        return {
+          files: ['track.webm', 'track.info.json'],
+          stdout: '',
+          stderr: '',
+        }
       },
     }
 
@@ -71,13 +86,16 @@ describe('music batch downloads', () => {
       'https://soundcloud.test/s1',
       'https://soundcloud.test/s2',
     ]
-    const result = await downloadMusicBatch(
-      urls,
-      { archive, concurrency: 4, youtubeConcurrency: 1 },
-      dependencies,
-    )
+    const result = await downloadMusicBatch(urls, { archive, concurrency: 4, youtubeConcurrency: 1 }, dependencies)
 
-    expect(result).toMatchObject({ requested: 4, tracks: 4, downloaded: 4, skipped: 0, failed: 0 })
+    expect(result).toMatchObject({
+      requested: 4,
+      tracks: 4,
+      downloaded: 4,
+      skipped: 0,
+      failed: 0,
+    })
+    expect(maxActiveInspections).toBe(4)
     expect(maxActiveYoutube).toBe(1)
     expect(referenceOptions).toEqual([
       expect.objectContaining({
@@ -104,23 +122,137 @@ describe('music batch downloads', () => {
         .split('\n')
         .filter((line) => !line.startsWith('url '))
         .sort(),
-    ).toEqual([
-      'soundcloud s1',
-      'soundcloud s2',
-      'youtube y1',
-      'youtube y2',
-    ])
+    ).toEqual(['soundcloud s1', 'soundcloud s2', 'youtube y1', 'youtube y2'])
 
-    const skipped = await downloadMusicBatch(urls, { archive, concurrency: 4 }, {
-      ...dependencies,
+    const skipped = await downloadMusicBatch(
+      urls,
+      { archive, concurrency: 4 },
+      {
+        ...dependencies,
+        async downloadNative() {
+          throw new Error('archive should skip native download')
+        },
+        async downloadReference() {
+          throw new Error('archive should skip reference download')
+        },
+      },
+    )
+    expect(skipped).toMatchObject({ downloaded: 0, skipped: 4, failed: 0 })
+  })
+
+  it('prepares and downloads a full playlist with a bounded 64-track default while preserving order', async () => {
+    expect(DEFAULT_MUSIC_CONCURRENCY).toBe(64)
+    expect(MAX_MUSIC_CONCURRENCY).toBe(64)
+    let activeInspections = 0
+    let maxActiveInspections = 0
+    let activeDownloads = 0
+    let maxActiveDownloads = 0
+    const urls = Array.from({ length: 70 }, (_, index) => `https://youtube.test/track-${index}`)
+    const dependencies: MusicDependencies = {
+      async inspect(url) {
+        activeInspections += 1
+        maxActiveInspections = Math.max(maxActiveInspections, activeInspections)
+        const index = Number(url.split('-').at(-1))
+        await delay(index % 3)
+        activeInspections -= 1
+        return {
+          engine: 'reference',
+          data: {
+            id: `track-${index}`,
+            title: `Track ${index}`,
+            extractor_key: 'Youtube',
+            webpage_url: url,
+          },
+        }
+      },
       async downloadNative() {
-        throw new Error('archive should skip native download')
+        throw new Error('YouTube should use the reference downloader')
+      },
+      async downloadReference(url) {
+        activeDownloads += 1
+        maxActiveDownloads = Math.max(maxActiveDownloads, activeDownloads)
+        const index = Number(url.split('-').at(-1))
+        await delay((70 - index) % 4)
+        activeDownloads -= 1
+        return { files: [`track-${index}.m4a`], stdout: '', stderr: '' }
+      },
+    }
+
+    const result = await downloadMusicBatch(urls, {}, dependencies)
+
+    expect(maxActiveInspections).toBe(64)
+    expect(maxActiveDownloads).toBe(64)
+    expect(result).toMatchObject({
+      requested: 70,
+      tracks: 70,
+      downloaded: 70,
+      failed: 0,
+    })
+    expect(result.items.map((item) => item.id)).toEqual(Array.from({ length: 70 }, (_, index) => `track-${index}`))
+  })
+
+  it('keeps preparation errors in source order and honors an explicit lower limit', async () => {
+    let activeInspections = 0
+    let maxActiveInspections = 0
+    let activeDownloads = 0
+    let maxActiveDownloads = 0
+    const urls = Array.from({ length: 6 }, (_, index) => `https://soundcloud.test/track-${index}`)
+    const dependencies: MusicDependencies = {
+      async inspect(url) {
+        activeInspections += 1
+        maxActiveInspections = Math.max(maxActiveInspections, activeInspections)
+        const index = Number(url.split('-').at(-1))
+        await delay((6 - index) % 3)
+        activeInspections -= 1
+        if (index === 2) throw new Error('inspection failed')
+        return {
+          engine: 'native',
+          data: {
+            id: `track-${index}`,
+            title: `Track ${index}`,
+            extractor_key: 'Soundcloud',
+            formats: [
+              {
+                format_id: 'http_mp3_0_0',
+                url: `${url}/media.mp3`,
+                ext: 'mp3',
+                protocol: 'https',
+                vcodec: 'none',
+                acodec: 'mp3',
+              },
+            ],
+          },
+        }
+      },
+      async downloadNative(info) {
+        activeDownloads += 1
+        maxActiveDownloads = Math.max(maxActiveDownloads, activeDownloads)
+        await delay(3)
+        activeDownloads -= 1
+        return { files: [`${info.id}.mp3`], selectedFormats: ['http_mp3_0_0'] }
       },
       async downloadReference() {
-        throw new Error('archive should skip reference download')
+        throw new Error('progressive SoundCloud should use the native downloader')
       },
+    }
+
+    const result = await downloadMusicBatch(urls, { concurrency: 2 }, dependencies)
+
+    expect(maxActiveInspections).toBe(2)
+    expect(maxActiveDownloads).toBe(2)
+    expect(result.items.map((item) => item.id ?? item.url)).toEqual([
+      'track-0',
+      'track-1',
+      urls[2],
+      'track-3',
+      'track-4',
+      'track-5',
+    ])
+    expect(result.items[2]).toMatchObject({
+      url: urls[2],
+      status: 'failed',
+      error: 'inspection failed',
     })
-    expect(skipped).toMatchObject({ downloaded: 0, skipped: 4, failed: 0 })
   })
 
   it('routes best-audio HLS through the fragment-resumable reference downloader', async () => {
@@ -159,7 +291,10 @@ describe('music batch downloads', () => {
     const result = await downloadMusicBatch(['https://soundcloud.test/hls'], {}, dependencies)
 
     expect(result).toMatchObject({ downloaded: 1, failed: 0 })
-    expect(result.items[0]).toMatchObject({ engine: 'reference', status: 'downloaded' })
+    expect(result.items[0]).toMatchObject({
+      engine: 'reference',
+      status: 'downloaded',
+    })
     expect(referenceOptions).toMatchObject({
       format: 'bestaudio/best',
       retries: 10,

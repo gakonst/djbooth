@@ -10,6 +10,7 @@ import {
   assertRekordboxImportApproved,
   assertRekordboxStopped,
   backupRekordboxDatabase,
+  DEFAULT_REKORDBOX_IO_CONCURRENCY,
   defaultRekordboxPlaylistName,
   planRekordboxImport,
   readRekordboxBackup,
@@ -138,6 +139,10 @@ function completedManifest(): SetManifest {
 }
 
 describe("Rekordbox direct database planning", () => {
+  test("defaults parallel read/hash/copy work to a full playlist wave", () => {
+    expect(DEFAULT_REKORDBOX_IO_CONCURRENCY).toBe(64);
+  });
+
   test("deduplicates albums by name and artist instead of name alone", () => {
     const albumFilters: Array<Record<string, unknown>> = [];
     const queryCounts = new Map<string, number>();
