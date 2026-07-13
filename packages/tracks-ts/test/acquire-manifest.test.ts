@@ -509,6 +509,12 @@ describe("acquireManifest", () => {
         plan: makePlan(),
         acquirers: [acquirer],
         requireCompletePlan: true,
+        async onArtifactVerified(artifact) {
+          expect((await readManifest(manifestPath)).entries[0]!.acquisition.status).toBe(
+            "downloaded",
+          );
+          expect(artifact.status).toBe("downloaded");
+        },
       });
       expect(first.failures).toEqual([]);
       expect(downloads).toBe(2);
@@ -532,22 +538,91 @@ describe("acquireManifest", () => {
       };
       await writeManifestAtomic(manifestPath, first.manifest);
       downloads = 0;
+      const resumedArtifacts: string[] = [];
 
       const resumed = await acquireManifest({
         manifestPath,
         plan: makePlan(),
         acquirers: [acquirer],
         requireCompletePlan: true,
+        onArtifactVerified(artifact) {
+          expect(artifact.status).toBe("resumed");
+          resumedArtifacts.push(artifact.path);
+        },
       });
 
       expect(downloads).toBe(0);
       expect(resumed.resumed).toHaveLength(2);
+      expect(resumedArtifacts.toSorted()).toEqual(resumed.resumed);
       expect(resumed.manifest.entries[0]!.acquisition).toMatchObject({
         status: "downloaded",
         alternatives: [expect.objectContaining({ spotifyId: "spotify-2" })],
       });
       expect(resumed.manifest.entries[0]!.rekordbox.status).toBe("imported");
       expect(resumed.manifest.artifacts.rekordbox?.playlistId).toBe("playlist-1");
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  audioToolTest("overlaps fallback searches while preserving backend priority", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-parallel-search-"));
+    const manifestPath = join(directory, "manifest.json");
+    const bin = await installFakeAudioTools(directory);
+    await writeManifestAtomic(manifestPath, oneTrackManifest());
+    let startFallbackSearch!: () => void;
+    const fallbackSearchStarted = new Promise<void>((resolve) => {
+      startFallbackSearch = resolve;
+    });
+    const downloadedBy: string[] = [];
+    const primary: TrackAcquirer = {
+      backend: "slsk",
+      availability: () => Promise.resolve({ available: true }),
+      async search() {
+        await fallbackSearchStarted;
+        return [
+          {
+            id: "primary",
+            source: "slsk://peer/track.wav",
+            title: "Artist - Track",
+            artist: "Artist",
+            durationSeconds: 100,
+          },
+        ];
+      },
+      async download(candidate, destination) {
+        downloadedBy.push("slsk");
+        await mkdir(destination, { recursive: true });
+        const path = join(destination, "track.wav");
+        await writeFile(path, "primary audio");
+        return { path, source: candidate.source, temporary: true };
+      },
+    };
+    const fallback: TrackAcquirer = {
+      backend: "ytdlp",
+      availability: () => Promise.resolve({ available: true }),
+      async search() {
+        startFallbackSearch();
+        return [];
+      },
+      async download() {
+        downloadedBy.push("ytdlp");
+        throw new Error("fallback download must not run");
+      },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+    try {
+      await expect(
+        acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [primary, fallback],
+          requireCompletePlan: true,
+          continueOnError: false,
+        }),
+      ).resolves.toMatchObject({ failures: [] });
+      expect(downloadedBy).toEqual(["slsk"]);
     } finally {
       process.env.PATH = previousPath;
     }

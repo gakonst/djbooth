@@ -101,13 +101,16 @@ root.command(tracksCli);
 
 ## Resolution flow
 
-Automatic resolution is ordered and short-circuits at the first usable tracklist:
+Automatic resolution is ordered. A complete timestamped description remains authoritative for cue
+boundaries; unresolved rows can be aligned with 1001Tracklists identities before resolution returns:
 
 ```text
 YouTube / SoundCloud URL
 └─ 1. ytdlp-ts metadata inspection
-   └─ timestamped description found → manifest
-└─ 2. 1001Tracklists media lookup, when configured
+   └─ timestamped description found
+      ├─ all rows identified → manifest
+      └─ unresolved rows + 1001 configured → retain cues; align/fill database identities
+└─ 2. 1001Tracklists media lookup, when configured and no description tracklist exists
    └─ submitted tracklist found → manifest
 └─ 3. configured recognizer
    ├─ AudD Enterprise → provider processes URL or local file
@@ -252,7 +255,24 @@ tracks completions zsh
 
 ## Pipeline
 
-The intended system is a set of narrow workspace packages, joined by the manifest and the `build-dj-set-playlist` skill:
+The narrow workspace libraries can be composed directly, or driven by one Incur-native local
+command. `import-set` resumes the same manifest at every boundary, starts native analysis as each
+verified recording lands, and performs one final normal-database transaction:
+
+```sh
+tracks import-set "$SET_URL" \
+  --manifest ./adam-ten/manifest.json \
+  --output-directory ./adam-ten/tracks \
+  --local-directory "$HOME/Music/2026/Adam Ten - MAXA x BiPolar Express Link up - Burning Man 2025" \
+  --folder-name 'DJ Sets I Like' \
+  --playlist-name 'Adam Ten — Burning Man 2025 [music-ts]' \
+  --write \
+  --format json
+```
+
+`--write` is required. The command never downloads a remote source set. Cue recovery additionally
+requires `--allow-set-clips` and an existing `--source-set-path`; external reference yt-dlp requires
+`--reference-ytdlp`.
 
 ```text
 set URL ── tracks-ts ───────────────┐
@@ -286,15 +306,30 @@ Spotify playlists ── spots ─────────┤
 
 The boundary is deliberate:
 
-- `tracks resolve` currently implements resolution and manifest creation.
-- It does not call `spots`, `slsk download`, `ytdlp-ts download`, or Rekordbox mutation commands.
-- The bundled skill coordinates library calls, records selected sources and local paths under each track's `acquisition`, and leaves unresolved IDs visible.
+- `tracks resolve` only resolves metadata and creates a manifest.
+- `tracks import-set` composes exported TypeScript clients in-process; it never shells between the
+  package CLIs.
+- `buildAcquisitionPlan` preserves Spotify ambiguities and tracklist overlaps as distinct recordings,
+  adopts deterministic local-directory matches, and leaves unresolved IDs visible unless explicit
+  cue clipping was enabled. Artist/title-only local matches do not claim an exact Spotify ISRC or
+  duration.
 - `slsk-ts` is preferred. A `ytdlp-ts` individual fallback targets a scored canonical track URL with playlists disabled. True recording ambiguities remain distinct alternatives and are all acquired.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
 - If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
-- Direct Rekordbox import begins only after all planned files are present and checksummed. Its file preflight, hashing, and backup copies use up to 64 workers; encrypted database access stays serialized in one transaction. It requires explicit approval, stopped Rekordbox processes, an exclusive backup of the database and companion files, and post-commit integrity/membership verification.
+- Identified tracks still try individual acquisition first. With explicit set-clip approval, a
+  checkpointed reviewed failure becomes a cue-bounded source extract on the next resume and stays on
+  that recovery path on later warm runs.
+- Acquisition, verification, Spotify enrichment, native analysis, and Rekordbox file I/O default to
+  64-way playlist-scale concurrency. Soulseek and ytdlp candidate searches overlap while download
+  priority remains deterministic. Native analysis begins per artifact while remaining downloads
+  continue.
+- Direct Rekordbox import begins only after all planned files are present, checksummed, and analyzed.
+  Its file preflight, hashing, analysis installation, and backup copies use up to 64 workers;
+  encrypted database access stays serialized in one transaction. It requires explicit approval,
+  stopped Rekordbox processes, an exclusive backup of the database and companion files, and
+  post-commit integrity, metadata, analysis, and membership verification.
 
-Illustrative individual-track calls—not an automatic `tracks` command:
+The same backends remain independently callable for inspection or repair:
 
 ```sh
 slsk search 'Adam Ten & Rhye - 3 Days Later' --format json

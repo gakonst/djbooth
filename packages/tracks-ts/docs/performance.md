@@ -44,6 +44,30 @@ A real isolated three-track acquisition downloaded and retagged all three indivi
 were removed after verification. This validates real yt-dlp concurrency without deleting or
 redownloading the complete 29-file library.
 
+### Adam Ten Burning Man 2025 end-to-end proof
+
+Measured on the real 29-cue Adam Ten set after description/1001 sequence alignment: 27 identified
+cue rows, two unresolved IDs, one overlap, 34 retained recording variants, 31 individual artifacts,
+and three explicitly approved source-set clips.
+
+| Run                                         | Library wall | Result                                                                  |
+| ------------------------------------------- | -----------: | ----------------------------------------------------------------------- |
+| One-time native SoundCloud source cache     |      85.18 s | 7,196.03 s AAC source, used only for cue recovery                       |
+| Adoption-heavy v2 acquisition/analyzer pass |      29.09 s | 33 variants analyzed; one reviewed individual miss checkpointed         |
+| Strict resume through clip + DB import      |      13.33 s | 34/34 analyzed, imported, and post-verified                             |
+| Fully warm steady-state resume              |       1.56 s | 34 audio hits, 34 analysis hits, zero downloads, zero database mutation |
+
+On the successful strict resume, acquisition occupied 9.97 s and native analysis occupied 9.41 s,
+but they overlapped; the complete critical path including the 3.35 s Rekordbox boundary was 13.33 s
+rather than their 22.73 s serial sum. The warm library path spent 49.84 ms in acquisition, 12.38 ms
+in analysis, and 1.50 s fully reverifying the existing normal-database checkpoint and recovery
+backup. The surrounding pnpm/tsx CLI process measured 2.14 s.
+
+Independent post-checks returned `PRAGMA quick_check = ok`, zero foreign-key violations, 34 ordered
+distinct playlist memberships, 34 analysis paths with `Analysed = 105`, and 102 installed
+DAT/EXT/2EX files. Repeated warm runs retained playlist ID `86375504` and the same backup instead of
+creating duplicate rows or backups.
+
 ## Implemented changes
 
 - Atomic TTL cache: exact 1001 results, account-scoped Spotify search/track metadata, sanitized
@@ -51,7 +75,8 @@ redownloading the complete 29-file library.
   expired or malformed entries.
 - Cache controls: default, refresh, and off; `TRACKS_CACHE_DIR` override.
 - Sixty-four independent recording workers by default; ambiguity variants share the same global
-  queue and candidate fallback remains serial within each recording.
+  queue. Backend searches start together while candidate downloads retain deterministic backend
+  priority.
 - Sixty-four clip, verification, Spotify enrichment, and Spotify refresh workers by default. The
   scheduler caps actual workers to queued work; callers may override each limit from 1 through 256.
 - Sixty-four local recognition workers by default and a 64-call cap. Rekordbox media preflight,
