@@ -62,6 +62,8 @@ music slsk search "artist track" --timeout 8 --format json
 music ytdlp-ts engines --format json
 music ytdlp-ts inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
+music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
+music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 ```
 
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,

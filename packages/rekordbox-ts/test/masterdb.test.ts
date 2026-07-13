@@ -36,7 +36,11 @@ import {
   DjmdSort,
   MasterDatabase,
   MasterPlaylistXml,
+  LogicalOperator,
+  Operator,
   PlaylistType,
+  Property,
+  SmartList,
   normalizeRekordboxKeyName,
   stringToDatetime,
 } from "../src/masterdb/index.js";
@@ -272,6 +276,14 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
     `);
   });
   insert();
+  database.exec(`
+    ALTER TABLE djmdContent ADD COLUMN BPM INTEGER;
+    ALTER TABLE djmdContent ADD COLUMN Length INTEGER;
+    ALTER TABLE djmdContent ADD COLUMN FileType INTEGER;
+    ALTER TABLE djmdContent ADD COLUMN Analysed INTEGER;
+    UPDATE djmdContent SET BPM = 12801, Length = 345, FileType = 1, Analysed = 105 WHERE ID = '1';
+    UPDATE djmdContent SET FileType = 11, Analysed = 0 WHERE ID = '2';
+  `);
   database.close();
 
   const xmlPath = join(root, "masterPlaylists6.xml");
@@ -329,6 +341,117 @@ describe("MasterDatabase queries", () => {
   it("rejects syntactically valid but impossible dates", () => {
     expect(() => stringToDatetime("2026-99-99 12:00:00 +00:00")).toThrow(TypeError);
     expect(() => stringToDatetime("not-a-date")).toThrow(TypeError);
+  });
+
+  it("returns ordered joined playlist memberships without collapsing duplicates", () => {
+    const { dbPath } = fixture();
+    const fixtureDatabase = new Database(dbPath);
+    fixtureDatabase.exec(`
+      UPDATE djmdSongPlaylist SET TrackNo = 3 WHERE ID = 'song-1';
+      INSERT INTO djmdSongPlaylist VALUES ('song-2', '500', '2', 1, 'song-uuid-2', 7, '${now}', '${now}');
+      INSERT INTO djmdSongPlaylist VALUES ('song-3', '500', '1', 2, 'song-uuid-3', 8, '${now}', '${now}');
+      INSERT INTO djmdSongPlaylist VALUES ('song-orphan', '500', 'missing', 4, 'song-uuid-4', 9, '${now}', '${now}');
+    `);
+    fixtureDatabase.close();
+
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const tracks = db.getPlaylistTracks("500");
+    expect(tracks.map(({ contentId, position }) => [contentId, position])).toEqual([
+      ["2", 1],
+      ["1", 2],
+      ["1", 3],
+    ]);
+    expect(tracks[1]).toMatchObject({
+      analyzed: 105,
+      artist: "Loopmasters",
+      bpm: 128.01,
+      durationSeconds: 345,
+      fileType: 1,
+      key: "Fm",
+      membershipId: "song-3",
+      path: "/Music/Demo 1.mp3",
+      title: "Demo Track 1",
+    });
+    expect(db.getPlaylistTracks("500", { limit: 1, offset: 1 })).toEqual([tracks[1]]);
+    expect(db.countPlaylistTracks("500")).toBe(3);
+    db.close();
+  });
+
+  it("selects smart playlists with joined artist and key criteria in one metadata query", () => {
+    const { dbPath } = fixture();
+    const smartList = new SmartList(LogicalOperator.ALL);
+    smartList.playlistId = "501";
+    smartList
+      .addCondition(Property.ARTIST, Operator.EQUAL, "Loopmasters")
+      .addCondition(Property.KEY, Operator.EQUAL, "Fm");
+    const fixtureDatabase = new Database(dbPath);
+    fixtureDatabase
+      .prepare("INSERT INTO djmdPlaylist VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(
+        "501",
+        2,
+        "Joined smart playlist",
+        null,
+        PlaylistType.SMART_PLAYLIST,
+        "root",
+        smartList.toXml(),
+        "smart-playlist-uuid",
+        9,
+        now,
+        now,
+      );
+    fixtureDatabase.close();
+
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(db.getPlaylistTracks("501")).toEqual([
+      expect.objectContaining({
+        artist: "Loopmasters",
+        contentId: "1",
+        key: "Fm",
+        membershipId: null,
+        position: 1,
+      }),
+    ]);
+    expect(db.countPlaylistTracks("501")).toBe(1);
+    expect(
+      db
+        .getPlaylistContents("501")
+        .all()
+        .map((content) => content.ID),
+    ).toEqual(["1"]);
+    db.close();
+  });
+
+  it("fails closed when a smart playlist uses unsupported criteria", () => {
+    const { dbPath } = fixture();
+    const smartList = new SmartList();
+    smartList.playlistId = "502";
+    smartList.addCondition(Property.MIX_NAME, Operator.EQUAL, "Club Mix");
+    const fixtureDatabase = new Database(dbPath);
+    fixtureDatabase
+      .prepare("INSERT INTO djmdPlaylist VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(
+        "502",
+        2,
+        "Unsupported smart playlist",
+        null,
+        PlaylistType.SMART_PLAYLIST,
+        "root",
+        smartList.toXml(),
+        "unsupported-smart-playlist-uuid",
+        9,
+        now,
+        now,
+      );
+    fixtureDatabase.close();
+
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    expect(() => db.getPlaylistTracks("502")).toThrow(
+      "Smart playlist 'Unsupported smart playlist' (502) uses unsupported criteria: mixName",
+    );
+    expect(() => db.countPlaylistTracks("502")).toThrow("unsupported criteria: mixName");
+    expect(() => db.getPlaylistContents("502")).toThrow("unsupported criteria: mixName");
+    db.close();
   });
 
   it("opens the same connection after close", () => {
@@ -392,6 +515,23 @@ describe("MasterDatabase queries", () => {
 });
 
 describe("MasterDatabase mutations", () => {
+  it("respects no-autoflush scopes when querying playlist tracks", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    content.Title = "Staged title";
+
+    expect(db.withNoAutoflush(() => db.getPlaylistTracks("500")[0]?.title)).toBe("Demo Track 1");
+    expect(db.getPlaylistTracks("500")[0]?.title).toBe("Staged title");
+    db.rollback();
+    db.close();
+  });
+
   it("normalizes analyzer key names to canonical Camelot names", () => {
     expect(normalizeRekordboxKeyName("Bm")).toBe("10A");
     expect(normalizeRekordboxKeyName("Bmin")).toBe("10A");
@@ -407,7 +547,7 @@ describe("MasterDatabase mutations", () => {
     writeFileSync(audioPath, "audio");
     const raw = new Database(dbPath);
     raw.exec(
-      "ALTER TABLE djmdContent ADD COLUMN BPM INTEGER; ALTER TABLE djmdContent ADD COLUMN Analysed INTEGER; ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
+      "ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
     );
     raw
       .prepare("UPDATE djmdContent SET FolderPath = ?, FileNameL = ? WHERE ID = ?")

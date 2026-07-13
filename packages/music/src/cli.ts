@@ -76,6 +76,7 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
         "search Soulseek for a track",
         "inspect a YouTube or SoundCloud URL",
         "check whether Rekordbox is running",
+        "show tracks in a Rekordbox playlist by name",
       ],
     },
   });

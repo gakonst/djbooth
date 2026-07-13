@@ -22,7 +22,12 @@ import { getConfig } from "../config/index.js";
 import { deobfuscate, getRekordboxPid, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
-import { SmartList } from "./smartlist.js";
+import {
+  Property,
+  propertyColumnMap,
+  SmartList,
+  type Property as SmartPlaylistProperty,
+} from "./smartlist.js";
 
 const defaultKeyBlob = "PN_Pq^*N>(JYe*u^8;Yg76HuZ<mR13S?=>)b9;DpoTXV(6ItkU`}8*m6tx_I{Solh_N#dfe{v=";
 
@@ -92,6 +97,35 @@ export type SyncContentAnalysisMetadataResult = {
   keyId: string | null;
   keyName: string | null;
   tempoBpm: number | null;
+};
+
+/** Ordered, joined metadata for one track membership in a Rekordbox playlist. */
+export type PlaylistTrack = {
+  analyzed: number | null;
+  artist: string | null;
+  bpm: number | null;
+  contentId: string;
+  durationSeconds: number | null;
+  fileType: number | null;
+  key: string | null;
+  membershipId: string | null;
+  path: string | null;
+  position: number;
+  title: string | null;
+};
+
+/** Pagination controls for an ordered playlist-track query. */
+export type PlaylistTrackOptions = {
+  limit?: number;
+  offset?: number;
+};
+
+type SmartPlaylistSelection = {
+  artistExpression: string;
+  fromSql: string;
+  keyExpression: string;
+  parameters: Array<unknown>;
+  whereSql: string;
 };
 
 type NormalizedMusicalKey = {
@@ -1609,6 +1643,115 @@ export class MasterDatabase {
     return rows.map((row) => this.materialize(models.DjmdContent, row));
   }
 
+  private compileSmartPlaylistSelection(playlist: models.DjmdPlaylist): SmartPlaylistSelection {
+    if (!playlist.SmartList) throw new TypeError("Smart playlist has no SmartList XML");
+    const smartList = SmartList.fromXml(playlist.SmartList);
+    const joins = new Map<string, string>();
+    const expressions = new Map<SmartPlaylistProperty, string | null>();
+    const contentTable = models.DjmdContent.tableName;
+
+    const joinedName = (
+      table: string,
+      alias: string,
+      foreignKey: string,
+      nameColumn = "Name",
+    ): string | null => {
+      if (
+        !this.hasColumn(contentTable, foreignKey) ||
+        !this.hasTable(table) ||
+        !this.hasColumn(table, "ID") ||
+        !this.hasColumn(table, nameColumn)
+      )
+        return null;
+      joins.set(
+        alias,
+        `LEFT JOIN ${quoteIdentifier(table)} ${quoteIdentifier(alias)} ON ${quoteIdentifier(alias)}."ID" = "c".${quoteIdentifier(foreignKey)}`,
+      );
+      return `${quoteIdentifier(alias)}.${quoteIdentifier(nameColumn)}`;
+    };
+
+    const expressionFor = (property: SmartPlaylistProperty): string | null => {
+      if (expressions.has(property)) return expressions.get(property)!;
+      let expression: string | null;
+      switch (property) {
+        case Property.ALBUM:
+          expression = joinedName(models.DjmdAlbum.tableName, "al", "AlbumID");
+          break;
+        case Property.ALBUM_ARTIST: {
+          const albumName = expressionFor(Property.ALBUM);
+          if (
+            !albumName ||
+            !this.hasColumn(models.DjmdAlbum.tableName, "AlbumArtistID") ||
+            !this.hasTable(models.DjmdArtist.tableName) ||
+            !this.hasColumn(models.DjmdArtist.tableName, "ID") ||
+            !this.hasColumn(models.DjmdArtist.tableName, "Name")
+          ) {
+            expression = null;
+            break;
+          }
+          joins.set("aa", `LEFT JOIN "djmdArtist" "aa" ON "aa"."ID" = "al"."AlbumArtistID"`);
+          expression = '"aa"."Name"';
+          break;
+        }
+        case Property.ARTIST:
+          expression = joinedName(models.DjmdArtist.tableName, "ar", "ArtistID");
+          break;
+        case Property.GENRE:
+          expression = joinedName(models.DjmdGenre.tableName, "ge", "GenreID");
+          break;
+        case Property.KEY:
+          expression = joinedName(models.DjmdKey.tableName, "ke", "KeyID", "ScaleName");
+          break;
+        case Property.LABEL:
+          expression = joinedName(models.DjmdLabel.tableName, "la", "LabelID");
+          break;
+        case Property.ORIGINAL_ARTIST:
+          expression = joinedName(models.DjmdArtist.tableName, "oa", "OrgArtistID");
+          break;
+        case Property.PRODUCER:
+          expression = joinedName(models.DjmdArtist.tableName, "co", "ComposerID");
+          break;
+        case Property.REMIXED_BY:
+          expression = joinedName(models.DjmdArtist.tableName, "re", "RemixerID");
+          break;
+        case Property.MIX_NAME:
+        case Property.MYTAG:
+          expression = null;
+          break;
+        default: {
+          const column = propertyColumnMap[property];
+          expression =
+            column && this.hasColumn(contentTable, column)
+              ? `"c".${quoteIdentifier(column)}`
+              : null;
+        }
+      }
+      expressions.set(property, expression);
+      return expression;
+    };
+
+    const propertyExpressions: Partial<Record<SmartPlaylistProperty, string | null>> = {};
+    for (const condition of smartList.conditions)
+      propertyExpressions[condition.property] = expressionFor(condition.property);
+    const compiled = smartList.compileSql({ propertyExpressions });
+    if (compiled.unsupported.length) {
+      const unsupported = [...new Set(compiled.unsupported)].join(", ");
+      throw new TypeError(
+        `Smart playlist '${playlist.Name}' (${playlist.ID}) uses unsupported criteria: ${unsupported}`,
+      );
+    }
+
+    const artistExpression = expressionFor(Property.ARTIST) ?? "NULL";
+    const keyExpression = expressionFor(Property.KEY) ?? "NULL";
+    return {
+      artistExpression,
+      fromSql: `"djmdContent" "c"${joins.size ? ` ${[...joins.values()].join(" ")}` : ""}`,
+      keyExpression,
+      parameters: compiled.parameters,
+      whereSql: compiled.sql,
+    };
+  }
+
   /** Return content rows selected by a regular or smart playlist. */
   getPlaylistContents(playlist: models.DjmdPlaylist | string | number): Query<models.DjmdContent> {
     const row =
@@ -1620,14 +1763,148 @@ export class MasterDatabase {
     if (Number(row.Attribute) === models.PlaylistType.FOLDER)
       throw new TypeError("Playlist is a folder");
     if (Number(row.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
-      if (!row.SmartList) throw new TypeError("Smart playlist has no SmartList XML");
-      const compiled = SmartList.fromXml(row.SmartList).compileSql();
-      return this.query(models.DjmdContent).whereRaw(compiled.sql, compiled.parameters);
+      const selection = this.compileSmartPlaylistSelection(row);
+      return this.query(models.DjmdContent).whereRaw(
+        `"ID" IN (SELECT "c"."ID" FROM ${selection.fromSql} WHERE ${selection.whereSql})`,
+        selection.parameters,
+      );
     }
     return this.query(models.DjmdContent).whereRaw(
       '"ID" IN (SELECT "ContentID" FROM "djmdSongPlaylist" WHERE "PlaylistID" = ?)',
       [row.ID],
     );
+  }
+
+  /** Count track rows selected by a regular or smart playlist. */
+  countPlaylistTracks(playlist: models.DjmdPlaylist | string | number): number {
+    const row =
+      playlist instanceof models.DatabaseRow
+        ? (playlist as models.DjmdPlaylist)
+        : this.query(models.DjmdPlaylist)
+            .where({ ID: String(playlist) })
+            .one();
+    if (Number(row.Attribute) === models.PlaylistType.FOLDER)
+      throw new TypeError("Playlist is a folder");
+    if (Number(row.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
+      const selection = this.compileSmartPlaylistSelection(row);
+      return this.countRows(
+        `SELECT COUNT(*) AS count FROM ${selection.fromSql} WHERE ${selection.whereSql}`,
+        selection.parameters,
+      );
+    }
+    return this.countRows(
+      `SELECT COUNT(*) AS count
+        FROM "djmdSongPlaylist" sp
+        JOIN "djmdContent" c ON c."ID" = sp."ContentID"
+        WHERE sp."PlaylistID" = ?`,
+      [row.ID],
+    );
+  }
+
+  /** Return ordered playlist memberships with joined artist, key, and track metadata. */
+  getPlaylistTracks(
+    playlist: models.DjmdPlaylist | string | number,
+    options: PlaylistTrackOptions = {},
+  ): Array<PlaylistTrack> {
+    const limit = options.limit;
+    const offset = options.offset ?? 0;
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
+      throw new RangeError("Playlist track limit must be a positive integer");
+    if (!Number.isSafeInteger(offset) || offset < 0)
+      throw new RangeError("Playlist track offset must be a non-negative integer");
+
+    const playlistRow =
+      playlist instanceof models.DatabaseRow
+        ? (playlist as models.DjmdPlaylist)
+        : this.query(models.DjmdPlaylist)
+            .where({ ID: String(playlist) })
+            .one();
+    if (Number(playlistRow.Attribute) === models.PlaylistType.FOLDER)
+      throw new TypeError("Playlist is a folder");
+    if (this.tracked.size && !this.autoflushDisabled) this.flush();
+
+    type RawPlaylistTrack = {
+      analyzed: number | null;
+      artist: string | null;
+      bpmHundredths: number | null;
+      contentId: string | number;
+      durationSeconds: number | null;
+      fileType: number | null;
+      key: string | null;
+      membershipId?: string | number | null;
+      path: string | null;
+      position?: number | null;
+      title: string | null;
+    };
+
+    const mapRows = (rows: Array<RawPlaylistTrack>): Array<PlaylistTrack> =>
+      rows.map((row, index) => ({
+        analyzed: row.analyzed === null ? null : Number(row.analyzed),
+        artist: row.artist,
+        bpm: row.bpmHundredths === null ? null : Number(row.bpmHundredths) / 100,
+        contentId: String(row.contentId),
+        durationSeconds: row.durationSeconds === null ? null : Number(row.durationSeconds),
+        fileType: row.fileType === null ? null : Number(row.fileType),
+        key: row.key,
+        membershipId: row.membershipId == null ? null : String(row.membershipId),
+        path: row.path,
+        position: row.position == null ? offset + index + 1 : Number(row.position),
+        title: row.title,
+      }));
+
+    if (Number(playlistRow.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
+      const selection = this.compileSmartPlaylistSelection(playlistRow);
+      const pagination =
+        limit === undefined ? (offset ? " LIMIT -1 OFFSET ?" : "") : " LIMIT ? OFFSET ?";
+      const paginationParameters = limit === undefined ? (offset ? [offset] : []) : [limit, offset];
+      const rows = this.requireConnection()
+        .prepare(
+          `SELECT
+            "c"."ID" AS "contentId",
+            ${selection.artistExpression} AS "artist",
+            "c"."Title" AS "title",
+            "c"."BPM" AS "bpmHundredths",
+            ${selection.keyExpression} AS "key",
+            "c"."Length" AS "durationSeconds",
+            "c"."FileType" AS "fileType",
+            "c"."Analysed" AS "analyzed",
+            "c"."FolderPath" AS "path",
+            NULL AS "membershipId",
+            NULL AS "position"
+          FROM ${selection.fromSql}
+          WHERE ${selection.whereSql}
+          ORDER BY CAST("c"."ID" AS INTEGER), "c"."ID"${pagination}`,
+        )
+        .all(...selection.parameters, ...paginationParameters) as Array<RawPlaylistTrack>;
+      return mapRows(rows);
+    }
+
+    const select = `SELECT
+      c."ID" AS "contentId",
+      ar."Name" AS "artist",
+      c."Title" AS "title",
+      c."BPM" AS "bpmHundredths",
+      ke."ScaleName" AS "key",
+      c."Length" AS "durationSeconds",
+      c."FileType" AS "fileType",
+      c."Analysed" AS "analyzed",
+      c."FolderPath" AS "path"`;
+    const pagination =
+      limit === undefined ? (offset ? " LIMIT -1 OFFSET ?" : "") : " LIMIT ? OFFSET ?";
+    const paginationParameters = limit === undefined ? (offset ? [offset] : []) : [limit, offset];
+
+    const rows = this.requireConnection()
+      .prepare(
+        `${select}, sp."ID" AS "membershipId", sp."TrackNo" AS "position"
+          FROM "djmdSongPlaylist" sp
+          JOIN "djmdContent" c ON c."ID" = sp."ContentID"
+          LEFT JOIN "djmdArtist" ar ON ar."ID" = c."ArtistID"
+          LEFT JOIN "djmdKey" ke ON ke."ID" = c."KeyID"
+          WHERE sp."PlaylistID" = ?
+          ORDER BY sp."TrackNo", CAST(sp."ID" AS INTEGER), sp."ID"${pagination}`,
+      )
+      .all(playlistRow.ID, ...paginationParameters) as Array<RawPlaylistTrack>;
+    return mapRows(rows);
   }
 
   /** Generate an unused random numeric ID. */

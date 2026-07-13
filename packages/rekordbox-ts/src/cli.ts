@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
+import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
@@ -51,6 +52,7 @@ export const rekordboxCli = Cli.create("rekordbox", {
     suggestions: [
       "search my Rekordbox database",
       "list playlists in my Rekordbox library",
+      "show tracks in a Rekordbox playlist by name",
       "inspect my Rekordbox configuration",
       "inspect an ANLZ file",
       "summarize a Rekordbox XML export",
@@ -912,6 +914,157 @@ databasePlaylistCli.command("contents", {
     }
   },
 });
+
+const playlistShowOutput = z.object({
+  playlist: z.object({
+    id: z.string(),
+    name: z.string(),
+    parentId: z.string(),
+    type: z.enum(["playlist", "smart"]),
+    count: z.number().int().nonnegative(),
+  }),
+  page: z.object({
+    offset: z.number().int().nonnegative(),
+    limit: z.number().int().positive().nullable(),
+    returned: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
+  }),
+  tracks: z.array(
+    z.object({
+      position: z.number().int().positive(),
+      artist: z.string().nullable(),
+      title: z.string().nullable(),
+      bpm: z.number().nullable(),
+      key: z.string().nullable(),
+      duration: z.string().nullable(),
+      format: z.string().nullable(),
+      analyzed: z.number().nullable().optional(),
+      contentId: z.string().optional(),
+      durationSeconds: z.number().nullable().optional(),
+      fileType: z.number().nullable().optional(),
+      membershipId: z.string().nullable().optional(),
+      path: z.string().nullable().optional(),
+    }),
+  ),
+});
+
+databasePlaylistCli.command("show", {
+  description: "Show an exact-name playlist as an ordered metadata table or JSON.",
+  args: z.object({ name: z.string().min(1).describe("Exact playlist name") }),
+  options: dbOpenOptions.extend({
+    id: z.string().optional().describe("Playlist ID used to disambiguate duplicate names"),
+    parentId: z.string().optional().describe("Parent folder ID used to disambiguate the name"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .optional()
+      .describe("Maximum tracks to return; omitted returns the complete playlist"),
+    offset: z.number().int().min(0).default(0).describe("Tracks to skip before returning results"),
+  }),
+  output: playlistShowOutput,
+  format: "md",
+  examples: [
+    {
+      description: "Show an ordered playlist as a table",
+      args: { name: "'Adam Ten — Burning Man 2025 [music-ts E2E]'" },
+    },
+  ],
+  run(c) {
+    const db = openDatabase(c.options);
+    try {
+      const matches = db
+        .query(DjmdPlaylist)
+        .where({
+          Name: c.args.name,
+          ...(c.options.parentId === undefined ? {} : { ParentID: c.options.parentId }),
+        })
+        .all()
+        .filter(
+          (playlist) =>
+            !playlist.isFolder && (c.options.id === undefined || playlist.ID === c.options.id),
+        );
+      if (!matches.length)
+        throw new Error(
+          `No playlist named '${c.args.name}'${c.options.parentId ? ` under parent '${c.options.parentId}'` : ""}${c.options.id ? ` with ID '${c.options.id}'` : ""}`,
+        );
+      if (matches.length > 1) {
+        const candidates = matches
+          .map((playlist) => `${playlist.ID} (parent ${playlist.ParentID})`)
+          .join(", ");
+        throw new Error(
+          `Multiple playlists named '${c.args.name}' match: ${candidates}. Pass --parent-id or --id.`,
+        );
+      }
+
+      const playlist = matches[0]!;
+      const count = db.countPlaylistTracks(playlist);
+      const tracks = db.getPlaylistTracks(playlist, {
+        limit: c.options.limit,
+        offset: c.options.offset,
+      });
+      const machineOutput = c.format !== "md";
+      return {
+        playlist: {
+          id: playlist.ID,
+          name: playlist.Name,
+          parentId: playlist.ParentID,
+          type: playlist.isSmartPlaylist ? ("smart" as const) : ("playlist" as const),
+          count,
+        },
+        page: {
+          offset: c.options.offset,
+          limit: c.options.limit ?? null,
+          returned: tracks.length,
+          hasMore: c.options.offset + tracks.length < count,
+        },
+        tracks: tracks.map((track) => ({
+          position: track.position,
+          artist: machineOutput ? track.artist : (track.artist ?? ""),
+          title: machineOutput ? track.title : (track.title ?? ""),
+          bpm: track.bpm,
+          key: track.key,
+          duration: formatDuration(track.durationSeconds),
+          format: formatFileType(track.fileType, track.path),
+          ...(machineOutput
+            ? {
+                analyzed: track.analyzed,
+                contentId: track.contentId,
+                durationSeconds: track.durationSeconds,
+                fileType: track.fileType,
+                membershipId: track.membershipId,
+                path: track.path,
+              }
+            : {}),
+        })),
+      };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+function formatDuration(seconds: number | null): string | null {
+  if (seconds === null) return null;
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function formatFileType(fileType: number | null, path: string | null): string | null {
+  if (fileType === 1) return "MP3";
+  if (fileType === 4) return "M4A";
+  if (fileType === 5) return "FLAC";
+  if (fileType === 11) return "WAV";
+  if (fileType === 12) return "AIFF";
+  const extension = path ? extname(path).slice(1).toUpperCase() : "";
+  return extension || null;
+}
 
 databasePlaylistCli.command("create", {
   description: "Create a normal playlist, folder, or smart playlist.",
