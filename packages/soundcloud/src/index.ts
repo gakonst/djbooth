@@ -1,6 +1,7 @@
 export * from './auth/index.js'
 export * from './client.js'
 export * from './errors.js'
+export * from './user-client.js'
 export type {
   components,
   operations,

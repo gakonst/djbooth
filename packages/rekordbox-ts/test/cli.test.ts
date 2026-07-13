@@ -5,7 +5,10 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 import Database from "better-sqlite3-multiple-ciphers";
+import { Cli } from "incur";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { rekordboxCli } from "../src/cli.js";
 
 const roots: Array<string> = [];
 
@@ -40,6 +43,26 @@ describe("CLI process boundary", () => {
     expect(llms.status, llms.stderr).toBe(0);
     expect(llms.stdout).toContain("# rekordbox");
     expect(llms.stdout).toContain("rekordbox db table");
+  });
+
+  it("exports an import-safe CLI that composes as a child command", async () => {
+    let output = "";
+    let exitCode: number | undefined;
+    const parent = Cli.create("music");
+    parent.command(rekordboxCli);
+
+    await parent.serve(["rekordbox", "status", "--json"], {
+      stdout(value) {
+        output += value;
+      },
+      exit(code) {
+        exitCode = code;
+      },
+    });
+
+    expect(rekordboxCli.name).toBe("rekordbox");
+    expect(exitCode).toBeUndefined();
+    expect(JSON.parse(output)).toMatchObject({ name: "@gakonst/rekordbox" });
   });
 
   it("queries a plain database and rejects non-object filters", () => {

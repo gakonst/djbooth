@@ -88,6 +88,16 @@ rekordbox db info --format json  # JSON, TOON, YAML, Markdown, or JSONL
 rekordbox db info --token-limit 500
 ```
 
+The complete CLI definition is import-safe and can be mounted beneath another Incur root:
+
+```ts
+import rekordboxCli from "@gakonst/rekordbox/cli";
+
+root.command(rekordboxCli);
+```
+
+`runRekordboxCli()` remains available from the same subpath for standalone launchers.
+
 ## TypeScript API
 
 The root entry point exports the common API. Format-specific subpaths avoid name collisions such as the separate master/device `Content`, `PlaylistType`, and `FileType` models.

@@ -12,11 +12,13 @@ played tracks work without manually copying access tokens.
 
 - Complete request and response types generated from Spotify's official OpenAPI schema.
 - Typed `GET`, `POST`, `PUT`, and `DELETE` methods, plus raw requests and pagination.
+- High-level ordered playlist creation from Spotify track URIs, URLs, or IDs.
 - Interactive Spotify user login with PKCE and a loopback callback.
 - Secure local refresh-token storage with mode `0600` on Unix.
 - Client Credentials and static access-token providers for non-interactive use.
 - Automatic access-token refresh, one-time 401 recovery, `Retry-After` handling, and transient
-  5xx retries.
+  5xx retries for idempotent requests. Unsafe `POST` requests are not retried after rate-limit or
+  transient server errors.
 - All 96 Spotify operations exposed through `incur`, with JSON Schema, structured output, MCP,
   agent skill generation, shell completion, and LLM-readable discovery.
 
@@ -64,7 +66,8 @@ the resulting refreshable session to `~/.config/spots/credentials.json`. Set
 `SPOTS_CREDENTIALS_PATH` to use a different file.
 
 The default login requests read access for playlists, library items, follows, top items, playback
-state, and recently played items. Ask for mutation and playback-control permissions explicitly:
+state, and recently played items, plus public and private playlist modification so playlist
+creation works immediately. Ask for every mutation and playback-control permission explicitly:
 
 ```sh
 spots auth login --all-scopes
@@ -92,6 +95,41 @@ spots me
 spots recent --limit 50
 spots recent --all --format json
 ```
+
+Create a private playlist by repeating `--track` in the desired playlist order. Track references
+may be Spotify track URIs, `open.spotify.com/track/...` URLs, or bare Spotify track IDs. Duplicates
+are retained:
+
+```sh
+spots playlist create 'Late night' \
+  --track spotify:track:4iV5W9uYEdYUVa79Axb7Rh \
+  --track https://open.spotify.com/track/1301WleyT98MSxVHPZCA6M \
+  --description 'After-hours rotation'
+```
+
+Use `--visibility public` for a public playlist. Collaborative playlists must remain private:
+
+```sh
+spots playlist create 'Shared finds' --input-file tracks.txt --collaborative
+spots playlist get spotify:playlist:PLAYLIST_ID
+spots playlist update PLAYLIST_ID --name 'Renamed' --input-file replacement-tracks.txt
+spots playlist delete PLAYLIST_ID
+```
+
+Spotify's Web API “private” state means hidden from the profile and search, not link-level access
+control; anyone with the playlist link may still be able to open it. True access restriction must
+be changed in a Spotify client.
+
+The input file contains one URI, URL, or ID per non-empty line. When both forms are used, repeated
+`--track` values come first, followed by file entries. New logins receive the required
+`playlist-modify-public` and `playlist-modify-private` scopes by default. If an older saved login is
+missing one, the command tells you to run `spots auth login` again.
+
+`playlist update` changes details and can atomically replace the first 100 tracks before appending
+larger ordered batches. `--clear-tracks` removes every item. Spotify does not expose permanent
+playlist deletion: `playlist delete` uses the current `DELETE /me/library` operation, which removes
+the playlist from the user's library even when they own it. The result reports this explicitly as
+`permanentlyDeleted: false`.
 
 The `api` group contains every operation from Spotify's schema:
 
@@ -142,6 +180,15 @@ spots skills add             # install an agent skill for this CLI
 spots completions zsh        # generate shell completions
 spots recent --format json
 spots recent --filter-output 'items[0].track.name'
+```
+
+The complete CLI definition is import-safe and composable as an Incur command group. Only
+`runSpotsCli()` loads `.env` and serves the standalone binary:
+
+```ts
+import spotsCli from '@gakonst/spots/cli'
+
+root.command(spotsCli)
 ```
 
 ## TypeScript client
@@ -199,6 +246,37 @@ for await (const item of spotify.paginate('/me/tracks', { limit: 50 })) {
   console.log(item)
 }
 ```
+
+### Playlist CRUD
+
+```ts
+const created = await spotify.createPlaylistWithTracks({
+  name: 'Late night',
+  tracks: [
+    '4iV5W9uYEdYUVa79Axb7Rh',
+    'spotify:track:1301WleyT98MSxVHPZCA6M',
+    'https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh',
+  ],
+  public: false,
+  description: 'After-hours rotation',
+})
+
+console.log(created.playlist.external_urls.spotify)
+
+const playlist = await spotify.getPlaylist(created.playlist.id)
+await spotify.updatePlaylist(playlist.id, {
+  name: 'Late night — updated',
+  tracks: ['spotify:track:1301WleyT98MSxVHPZCA6M'],
+})
+await spotify.deletePlaylist(playlist.id) // removes it from the user's library
+```
+
+`createPlaylistWithTracks()` validates all input before creating anything, normalizes references to
+track URIs, and appends sequential batches of at most 100 items. Input order and duplicates are
+preserved. Spotify playlist creation and item-addition requests are unsafe `POST`s, so transient
+errors are surfaced instead of retried; callers can decide whether to inspect and resume a
+partially created playlist. A failed later batch throws `SpotifyPlaylistCreationError` with the
+created playlist, completed snapshots, and exact number of tracks already added.
 
 `spotify.raw()` throws `SpotifyApiError` for non-success responses. The generated `GET`/`POST`/
 `PUT`/`DELETE` methods follow `openapi-fetch` conventions and return `{ data, error, response }`.

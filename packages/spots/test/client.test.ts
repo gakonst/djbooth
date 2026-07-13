@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { AccessTokenProvider } from '../src/auth/index.js'
-import { SpotifyClient } from '../src/client.js'
+import { SpotifyClient, SpotifyPlaylistCreationError } from '../src/client.js'
 import { SpotifyApiError } from '../src/errors.js'
 
 describe('SpotifyClient', () => {
@@ -50,6 +50,20 @@ describe('SpotifyClient', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('does not retry unsafe POST requests', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ error: { message: 'temporarily unavailable' } }, { status: 503 }),
+      )
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    await expect(client.raw('POST', '/me/playlists', { body: { name: 'Test' } })).rejects.toThrow(
+      'Spotify API error 503: temporarily unavailable',
+    )
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
   it('throws a structured SpotifyApiError', async () => {
     const client = new SpotifyClient({
       auth: 'token',
@@ -77,5 +91,205 @@ describe('SpotifyClient', () => {
     const items: number[] = []
     for await (const item of client.paginate<number>('/items', { limit: 2 })) items.push(item)
     expect(items).toEqual([1, 2, 3])
+  })
+
+  it('creates a playlist and adds normalized tracks in ordered batches of 100', async () => {
+    const firstId = '4iV5W9uYEdYUVa79Axb7Rh'
+    const secondId = '1301WleyT98MSxVHPZCA6M'
+    const tracks = [
+      firstId,
+      `spotify:track:${secondId}`,
+      `https://open.spotify.com/track/${firstId}?si=test`,
+      ...Array.from({ length: 98 }, () => firstId),
+    ]
+    const requests: Request[] = []
+    const fetch = vi.fn((input: string | URL | Request) => {
+      const request = input as Request
+      requests.push(request)
+      if (request.url.endsWith('/me/playlists')) {
+        return Promise.resolve(
+          Response.json({ id: 'created-playlist', name: 'Ordered' }, { status: 201 }),
+        )
+      }
+      return Promise.resolve(
+        Response.json({ snapshot_id: `snapshot-${requests.length - 1}` }, { status: 201 }),
+      )
+    })
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    const result = await client.createPlaylistWithTracks({
+      name: 'Ordered',
+      tracks,
+      public: false,
+      collaborative: true,
+      description: 'Preserve these duplicates',
+    })
+
+    expect(requests).toHaveLength(3)
+    expect(requests.map((request) => request.method)).toEqual(['POST', 'POST', 'POST'])
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://api.spotify.com/v1/me/playlists',
+      'https://api.spotify.com/v1/playlists/created-playlist/items',
+      'https://api.spotify.com/v1/playlists/created-playlist/items',
+    ])
+    await expect(requests[0]?.clone().json()).resolves.toEqual({
+      name: 'Ordered',
+      public: false,
+      collaborative: true,
+      description: 'Preserve these duplicates',
+    })
+    const firstBatch = (await requests[1]?.clone().json()) as { uris: string[] }
+    const secondBatch = (await requests[2]?.clone().json()) as { uris: string[] }
+    expect(firstBatch.uris).toHaveLength(100)
+    expect(secondBatch.uris).toEqual([`spotify:track:${firstId}`])
+    expect([...firstBatch.uris, ...secondBatch.uris]).toEqual(result.trackUris)
+    expect(result.trackUris.slice(0, 3)).toEqual([
+      `spotify:track:${firstId}`,
+      `spotify:track:${secondId}`,
+      `spotify:track:${firstId}`,
+    ])
+    expect(result.snapshotIds).toEqual(['snapshot-1', 'snapshot-2'])
+  })
+
+  it('validates playlist creation before making requests', async () => {
+    const fetch = vi.fn()
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    await expect(
+      client.createPlaylistWithTracks({ name: ' ', tracks: ['4iV5W9uYEdYUVa79Axb7Rh'] }),
+    ).rejects.toThrow('Playlist name must not be empty')
+    await expect(client.createPlaylistWithTracks({ name: 'Empty', tracks: [] })).rejects.toThrow(
+      'At least one Spotify track URI, URL, or ID is required',
+    )
+    await expect(
+      client.createPlaylistWithTracks({
+        name: 'Invalid',
+        tracks: ['https://open.spotify.com/artist/4iV5W9uYEdYUVa79Axb7Rh'],
+      }),
+    ).rejects.toThrow('Track 1 is not an open.spotify.com track URL')
+    await expect(
+      client.createPlaylistWithTracks({
+        name: 'Public collaboration',
+        tracks: ['4iV5W9uYEdYUVa79Axb7Rh'],
+        collaborative: true,
+      }),
+    ).rejects.toThrow('A collaborative Spotify playlist must be private')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects a malformed playlist creation response before adding tracks', async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({}, { status: 201 }))
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    await expect(
+      client.createPlaylistWithTracks({
+        name: 'Malformed response',
+        tracks: ['4iV5W9uYEdYUVa79Axb7Rh'],
+      }),
+    ).rejects.toThrow('Spotify created a playlist without returning its ID')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('reports recovery context when a later item batch fails', async () => {
+    const trackId = '4iV5W9uYEdYUVa79Axb7Rh'
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            id: 'partial-playlist',
+            external_urls: { spotify: 'https://open.spotify.com/playlist/partial-playlist' },
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ snapshot_id: 'first-batch' }, { status: 201 }))
+      .mockResolvedValueOnce(
+        Response.json({ error: { message: 'temporarily unavailable' } }, { status: 503 }),
+      )
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    const creation = client.createPlaylistWithTracks({
+      name: 'Partial',
+      tracks: Array.from({ length: 101 }, () => trackId),
+    })
+    const error = await creation.catch((cause: unknown) => cause)
+    expect(error).toBeInstanceOf(SpotifyPlaylistCreationError)
+    if (!(error instanceof SpotifyPlaylistCreationError)) throw error
+    expect(error.playlist).toMatchObject({ id: 'partial-playlist' })
+    expect(error.snapshotIds).toEqual(['first-batch'])
+    expect(error.tracksAdded).toBe(100)
+    expect(error.trackUris).toContain(`spotify:track:${trackId}`)
+    expect(error.cause).toMatchObject({ status: 503 })
+    expect(error).toHaveProperty(
+      'message',
+      'Spotify playlist https://open.spotify.com/playlist/partial-playlist was created, but adding tracks failed after 100 of 101 tracks',
+    )
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('reads, updates, replaces tracks, and removes playlists from the library', async () => {
+    const firstId = '4iV5W9uYEdYUVa79Axb7Rh'
+    const requests: Request[] = []
+    const fetch = vi.fn((input: string | URL | Request) => {
+      const request = input as Request
+      requests.push(request)
+      if (request.method === 'GET') {
+        return Promise.resolve(Response.json({ id: 'crud-list', name: 'Before', public: false }))
+      }
+      if (request.method === 'PUT' && request.url.endsWith('/items')) {
+        return Promise.resolve(Response.json({ snapshot_id: 'replace-1' }))
+      }
+      if (request.method === 'POST') {
+        return Promise.resolve(Response.json({ snapshot_id: 'append-2' }, { status: 201 }))
+      }
+      return Promise.resolve(new Response(null, { status: 200 }))
+    })
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    await expect(
+      client.getPlaylist('https://open.spotify.com/playlist/crudlist'),
+    ).resolves.toMatchObject({ id: 'crud-list', name: 'Before' })
+    const tracks = Array.from({ length: 101 }, () => firstId)
+    const updated = await client.updatePlaylist('spotify:playlist:crudlist', {
+      name: 'After',
+      description: 'Updated',
+      public: false,
+      tracks,
+    })
+    expect(updated.playlistId).toBe('crudlist')
+    expect(updated.trackUris).toContain(`spotify:track:${firstId}`)
+    expect(updated.snapshotIds).toEqual(['replace-1', 'append-2'])
+    await expect(client.deletePlaylist('crudlist')).resolves.toEqual({
+      playlistId: 'crudlist',
+      removedFromLibrary: true,
+      permanentlyDeleted: false,
+    })
+
+    expect(requests.map((request) => `${request.method} ${new URL(request.url).pathname}`)).toEqual(
+      [
+        'GET /v1/playlists/crudlist',
+        'PUT /v1/playlists/crudlist',
+        'PUT /v1/playlists/crudlist/items',
+        'POST /v1/playlists/crudlist/items',
+        'DELETE /v1/me/library',
+      ],
+    )
+    expect(new URL(requests[4]?.url ?? '').searchParams.get('uris')).toBe(
+      'spotify:playlist:crudlist',
+    )
+  })
+
+  it('validates playlist updates before making requests', async () => {
+    const fetch = vi.fn()
+    const client = new SpotifyClient({ auth: 'token', fetch })
+
+    await expect(client.updatePlaylist('list', {})).rejects.toThrow(
+      'At least one Spotify playlist update is required',
+    )
+    await expect(client.updatePlaylist('list', { collaborative: true })).rejects.toThrow(
+      'Making a Spotify playlist collaborative requires public: false',
+    )
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
