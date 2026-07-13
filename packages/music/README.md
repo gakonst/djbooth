@@ -1,6 +1,6 @@
 # @gakonst/music
 
-Unified ESM entrypoint for the `music-ts` workspace. It keeps the six focused libraries intact while offering collision-free namespace imports, direct subpath imports, and one agent-friendly `music` CLI.
+Unified ESM entrypoint for the `music-ts` workspace. It keeps the seven focused libraries intact while offering collision-free namespace imports, direct subpath imports, and one agent-friendly `music` CLI.
 
 ## Install
 
@@ -11,14 +11,14 @@ pnpm add --allow-build=better-sqlite3-multiple-ciphers @gakonst/music
 Node.js 22 or newer is required. The explicit build allowance compiles the native encrypted-SQLite
 dependency used by Rekordbox; pnpm otherwise blocks dependency install scripts by default. Prefer
 the focused subpaths below when one process does not need every integration; the root namespace
-entrypoint eagerly loads all six libraries, including Rekordbox.
+entrypoint eagerly loads all seven libraries, including the Rekordbox library workbench.
 
 ## Library
 
 Use root namespaces when composing several packages:
 
 ```ts
-import { rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "@gakonst/music";
+import { library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "@gakonst/music";
 
 const tracklist = await tracks.identify("https://youtu.be/example");
 const spotify = new spots.SpotifyClient({
@@ -32,6 +32,7 @@ await spotify.createPlaylistWithTracks({
 const soulseek = new slsk.SoulseekClient();
 const reference = new ytdlp.ReferenceClient();
 const database = new rekordbox.MasterDatabase({ unlock: false });
+const workbench = new library.RekordboxLibraryService({ writeEnabled: false });
 ```
 
 Use subpaths for focused imports and smaller API surfaces:
@@ -43,11 +44,12 @@ import { SoundCloudClient } from "@gakonst/music/soundcloud";
 import { SoulseekClient } from "@gakonst/music/slsk";
 import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
+import { LibraryMutationError, RekordboxLibraryService } from "@gakonst/music/library";
 ```
 
 ## CLI
 
-The umbrella mounts the six package-owned Incur CLI definitions directly. Every specialist command
+The umbrella mounts the seven package-owned Incur CLI definitions directly. Every specialist command
 and schema remains defined once, in its owning package; `music` adds only the common root and agent
 Skill.
 
@@ -64,10 +66,12 @@ music ytdlp-ts inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
+music library status --format json
+music library serve --open
 ```
 
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
-and `rekordbox` Incur CLIs. Its MCP surface filters those commands to the composable calls used for
+`rekordbox`, and `library` Incur CLIs. Its MCP surface filters those commands to the composable calls used for
 set resolution, metadata lookup, individual acquisition, analysis, and normal Rekordbox database
 maintenance; it does not impose a pipeline command.
 
@@ -128,6 +132,7 @@ const codeMode = await createMusicCodeMcpServer({
 - [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts): Soulseek protocol, search, and transfers.
 - [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts): YouTube/SoundCloud extraction and selected downloads.
 - [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox database and file formats.
+- [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
 
 ## Development
 

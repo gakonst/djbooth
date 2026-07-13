@@ -2,6 +2,7 @@
 
 export { libraryCli, runLibraryCli } from "./cli.js";
 export {
+  LibraryMutationError,
   RekordboxLibraryService,
   type LibraryOptions,
   type TrackFilter,

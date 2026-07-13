@@ -19,6 +19,7 @@ describe("umbrella exports", () => {
     expect(ytdlp.ReferenceClient).toBeTypeOf("function");
     expect(rekordbox.MasterDatabase).toBeTypeOf("function");
     expect(library.RekordboxLibraryService).toBeTypeOf("function");
+    expect(library.LibraryMutationError).toBeTypeOf("function");
   });
 
   test("re-exports each package through its dedicated subpath module", () => {
@@ -30,5 +31,6 @@ describe("umbrella exports", () => {
     expect(ytdlpSubpath.ReferenceClient).toBe(ytdlp.ReferenceClient);
     expect(rekordboxSubpath.MasterDatabase).toBe(rekordbox.MasterDatabase);
     expect(librarySubpath.RekordboxLibraryService).toBe(library.RekordboxLibraryService);
+    expect(librarySubpath.LibraryMutationError).toBe(library.LibraryMutationError);
   });
 });
