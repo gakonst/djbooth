@@ -31,7 +31,7 @@ function playlistFixture(): string {
   const database = new Database(path);
   database.exec(`
     CREATE TABLE djmdPlaylist (
-      ID TEXT PRIMARY KEY, Name TEXT, Attribute INTEGER, ParentID TEXT, SmartList TEXT
+      ID TEXT PRIMARY KEY, Name TEXT, Attribute INTEGER, ParentID TEXT, Seq INTEGER, SmartList TEXT
     );
     CREATE TABLE djmdSongPlaylist (
       ID TEXT PRIMARY KEY, PlaylistID TEXT, ContentID TEXT, TrackNo INTEGER
@@ -43,8 +43,8 @@ function playlistFixture(): string {
       Length INTEGER, FileType INTEGER, Analysed INTEGER
     );
 
-    INSERT INTO djmdPlaylist VALUES ('folder-1', 'DJ Sets', 1, 'root', NULL);
-    INSERT INTO djmdPlaylist VALUES ('playlist-1', 'Festival Set', 0, 'folder-1', NULL);
+    INSERT INTO djmdPlaylist VALUES ('folder-1', 'DJ Sets', 1, 'root', 1, NULL);
+    INSERT INTO djmdPlaylist VALUES ('playlist-1', 'Festival Set', 0, 'folder-1', 1, NULL);
     INSERT INTO djmdArtist VALUES ('artist-1', 'First Artist');
     INSERT INTO djmdArtist VALUES ('artist-2', 'Second Artist');
     INSERT INTO djmdKey VALUES ('key-1', '10A');
@@ -82,6 +82,7 @@ describe("CLI process boundary", () => {
     expect(llms.status, llms.stderr).toBe(0);
     expect(llms.stdout).toContain("# rekordbox");
     expect(llms.stdout).toContain("rekordbox db table");
+    expect(llms.stdout).toContain("rekordbox db playlist list");
     expect(llms.stdout).toContain("rekordbox db playlist show");
   }, 20_000);
 
@@ -188,6 +189,110 @@ describe("CLI process boundary", () => {
     );
     expect(allowed.status, allowed.stderr).toBe(0);
     expect(JSON.parse(allowed.stdout)).toMatchObject({ changes: 1 });
+  }, 20_000);
+
+  it("lists the complete playlist hierarchy as JSON and a compact table", () => {
+    const path = playlistFixture();
+    const database = new Database(path);
+    database.exec(`
+      INSERT INTO djmdPlaylist VALUES ('folder-2', 'Club / Sets', 1, 'folder-1', 2, NULL);
+      INSERT INTO djmdPlaylist VALUES (
+        'smart-1', 'Smart Picks', 4, 'folder-2', 1,
+        '<NODE Id="1" LogicalOperator="1" AutomaticUpdate="1"><CONDITION PropertyName="artist" Operator="1" ValueUnit="" ValueLeft="First Artist" ValueRight=""/></NODE>'
+      );
+    `);
+    database.close();
+
+    const json = runCli("db", "playlist", "list", "--path", path, "--plain", "--json");
+    expect(json.status, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual({
+      summary: { total: 4, playlists: 1, smartPlaylists: 1, folders: 2 },
+      filter: { type: "all" },
+      page: { total: 4, offset: 0, limit: null, returned: 4, hasMore: false },
+      entries: [
+        {
+          path: "DJ Sets",
+          type: "folder",
+          trackCount: null,
+          childCount: 2,
+          id: "folder-1",
+          name: "DJ Sets",
+          parentId: "root",
+          sequence: 1,
+          depth: 0,
+          pathSegments: ["DJ Sets"],
+          idPath: ["folder-1"],
+        },
+        {
+          path: "DJ Sets › Festival Set",
+          type: "playlist",
+          trackCount: 3,
+          childCount: 0,
+          id: "playlist-1",
+          name: "Festival Set",
+          parentId: "folder-1",
+          sequence: 1,
+          depth: 1,
+          pathSegments: ["DJ Sets", "Festival Set"],
+          idPath: ["folder-1", "playlist-1"],
+        },
+        {
+          path: "DJ Sets › Club / Sets",
+          type: "folder",
+          trackCount: null,
+          childCount: 1,
+          id: "folder-2",
+          name: "Club / Sets",
+          parentId: "folder-1",
+          sequence: 2,
+          depth: 1,
+          pathSegments: ["DJ Sets", "Club / Sets"],
+          idPath: ["folder-1", "folder-2"],
+        },
+        {
+          path: "DJ Sets › Club / Sets › Smart Picks",
+          type: "smart",
+          trackCount: 1,
+          childCount: 0,
+          id: "smart-1",
+          name: "Smart Picks",
+          parentId: "folder-2",
+          sequence: 1,
+          depth: 2,
+          pathSegments: ["DJ Sets", "Club / Sets", "Smart Picks"],
+          idPath: ["folder-1", "folder-2", "smart-1"],
+        },
+      ],
+    });
+
+    const markdown = runCli("db", "playlist", "list", "--path", path, "--plain");
+    expect(markdown.status, markdown.stderr).toBe(0);
+    expect(markdown.stdout).toContain("## entries");
+    expect(markdown.stdout).toContain("| path");
+    expect(markdown.stdout).toContain("DJ Sets › Club / Sets › Smart Picks");
+    expect(markdown.stdout).not.toContain("pathSegments");
+
+    const page = runCli(
+      "db",
+      "playlist",
+      "list",
+      "--path",
+      path,
+      "--plain",
+      "--type",
+      "playable",
+      "--limit",
+      "1",
+      "--offset",
+      "1",
+      "--json",
+    );
+    expect(page.status, page.stderr).toBe(0);
+    expect(JSON.parse(page.stdout)).toMatchObject({
+      filter: { type: "playable" },
+      page: { total: 2, offset: 1, limit: 1, returned: 1, hasMore: false },
+      entries: [{ id: "smart-1", type: "smart" }],
+    });
   }, 20_000);
 
   it("shows an exact-name playlist as ordered JSON and Markdown", () => {
@@ -330,15 +435,17 @@ describe("CLI process boundary", () => {
   it("shows joined smart-playlist criteria and fails closed on unsupported criteria", () => {
     const path = playlistFixture();
     const database = new Database(path);
-    const insert = database.prepare("INSERT INTO djmdPlaylist VALUES (?, ?, 4, 'folder-1', ?)");
+    const insert = database.prepare("INSERT INTO djmdPlaylist VALUES (?, ?, 4, 'folder-1', ?, ?)");
     insert.run(
       "smart-1",
       "Smart Festival Set",
+      2,
       '<NODE Id="1" LogicalOperator="1" AutomaticUpdate="1"><CONDITION PropertyName="artist" Operator="1" ValueUnit="" ValueLeft="First Artist" ValueRight=""/><CONDITION PropertyName="key" Operator="1" ValueUnit="" ValueLeft="7B" ValueRight=""/></NODE>',
     );
     insert.run(
       "smart-2",
       "Unsupported Smart Set",
+      3,
       '<NODE Id="2" LogicalOperator="1" AutomaticUpdate="1"><CONDITION PropertyName="mixName" Operator="1" ValueUnit="" ValueLeft="Club Mix" ValueRight=""/></NODE>',
     );
     database.close();
@@ -379,8 +486,8 @@ describe("CLI process boundary", () => {
     const path = playlistFixture();
     const database = new Database(path);
     database.exec(`
-      INSERT INTO djmdPlaylist VALUES ('folder-2', 'Archive', 1, 'root', NULL);
-      INSERT INTO djmdPlaylist VALUES ('playlist-2', 'Festival Set', 0, 'folder-2', NULL);
+      INSERT INTO djmdPlaylist VALUES ('folder-2', 'Archive', 1, 'root', 2, NULL);
+      INSERT INTO djmdPlaylist VALUES ('playlist-2', 'Festival Set', 0, 'folder-2', 1, NULL);
     `);
     database.close();
 
@@ -421,7 +528,7 @@ describe("CLI process boundary", () => {
     const path = playlistFixture();
     const database = new Database(path);
     database.exec(
-      "INSERT INTO djmdPlaylist VALUES ('playlist-2', 'Festival Set', 0, 'folder-1', NULL)",
+      "INSERT INTO djmdPlaylist VALUES ('playlist-2', 'Festival Set', 0, 'folder-1', 2, NULL)",
     );
     database.close();
 

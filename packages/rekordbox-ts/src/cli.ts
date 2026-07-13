@@ -34,6 +34,7 @@ import type {
   DatabaseValue,
   MySettingFilename,
   NodeKeyType,
+  PlaylistSummary,
   TrackAttributes,
   TrackSelector,
 } from "./index.js";
@@ -888,6 +889,193 @@ databaseContentCli.command("sync-analysis-metadata", {
         allowWhileRunning: c.options.allowWhileRunning,
         commit: true,
       });
+    } finally {
+      db.close();
+    }
+  },
+});
+
+type PlaylistTreeEntry = PlaylistSummary & {
+  childCount: number;
+  depth: number;
+  idPath: Array<string>;
+  path: string;
+  pathSegments: Array<string>;
+};
+
+function comparePlaylistSummaries(left: PlaylistSummary, right: PlaylistSummary): number {
+  if (left.sequence !== right.sequence) return left.sequence - right.sequence;
+  const nameOrder = left.name
+    .toLocaleLowerCase("en-US")
+    .localeCompare(right.name.toLocaleLowerCase("en-US"), "en-US");
+  if (nameOrder) return nameOrder;
+  if (/^\d+$/u.test(left.id) && /^\d+$/u.test(right.id)) {
+    const leftId = BigInt(left.id);
+    const rightId = BigInt(right.id);
+    if (leftId !== rightId) return leftId < rightId ? -1 : 1;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+function buildPlaylistTree(playlists: Array<PlaylistSummary>): {
+  entries: Array<PlaylistTreeEntry>;
+  warnings: Array<string>;
+} {
+  const byId = new Map(playlists.map((playlist) => [playlist.id, playlist]));
+  const children = new Map<string, Array<PlaylistSummary>>();
+  for (const playlist of playlists) {
+    const siblings = children.get(playlist.parentId) ?? [];
+    siblings.push(playlist);
+    children.set(playlist.parentId, siblings);
+  }
+  for (const siblings of children.values()) siblings.sort(comparePlaylistSummaries);
+
+  const entries: Array<PlaylistTreeEntry> = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const warnings = new Set<string>();
+  const visit = (
+    playlist: PlaylistSummary,
+    pathSegments: Array<string>,
+    idPath: Array<string>,
+  ): void => {
+    if (visiting.has(playlist.id)) {
+      warnings.add(`Playlist hierarchy cycle reaches '${playlist.name}' (${playlist.id})`);
+      return;
+    }
+    if (visited.has(playlist.id)) return;
+    visiting.add(playlist.id);
+    visited.add(playlist.id);
+    const nextPathSegments = [...pathSegments, playlist.name];
+    const nextIdPath = [...idPath, playlist.id];
+    entries.push({
+      ...playlist,
+      childCount: children.get(playlist.id)?.length ?? 0,
+      depth: pathSegments.length,
+      idPath: nextIdPath,
+      path: nextPathSegments.join(" › "),
+      pathSegments: nextPathSegments,
+    });
+    for (const child of children.get(playlist.id) ?? []) visit(child, nextPathSegments, nextIdPath);
+    visiting.delete(playlist.id);
+  };
+
+  for (const playlist of children.get("root") ?? []) visit(playlist, [], []);
+  for (const playlist of [...playlists].sort(comparePlaylistSummaries)) {
+    if (visited.has(playlist.id)) continue;
+    if (!byId.has(playlist.parentId))
+      warnings.add(
+        `Playlist '${playlist.name}' (${playlist.id}) references missing parent '${playlist.parentId}'`,
+      );
+    else warnings.add(`Playlist '${playlist.name}' (${playlist.id}) is in a disconnected cycle`);
+    visit(playlist, [], []);
+  }
+  return { entries, warnings: [...warnings] };
+}
+
+const playlistListOutput = z.object({
+  summary: z.object({
+    total: z.number().int().nonnegative(),
+    playlists: z.number().int().nonnegative(),
+    smartPlaylists: z.number().int().nonnegative(),
+    folders: z.number().int().nonnegative(),
+  }),
+  filter: z.object({ type: z.enum(["all", "playable", "playlist", "smart", "folder"]) }),
+  page: z.object({
+    total: z.number().int().nonnegative(),
+    offset: z.number().int().nonnegative(),
+    limit: z.number().int().positive().nullable(),
+    returned: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
+  }),
+  entries: z.array(
+    z.object({
+      path: z.string(),
+      type: z.enum(["folder", "playlist", "smart"]),
+      trackCount: z.number().int().nonnegative().nullable(),
+      childCount: z.number().int().nonnegative(),
+      id: z.string(),
+      name: z.string().optional(),
+      parentId: z.string().optional(),
+      sequence: z.number().int().optional(),
+      depth: z.number().int().nonnegative().optional(),
+      pathSegments: z.array(z.string()).optional(),
+      idPath: z.array(z.string()).optional(),
+      countError: z.string().optional(),
+    }),
+  ),
+  warnings: z.array(z.string()).optional(),
+});
+
+databasePlaylistCli.command("list", {
+  description: "List the complete active Rekordbox playlist hierarchy as a table or JSON.",
+  options: dbOpenOptions.extend({
+    type: z
+      .enum(["all", "playable", "playlist", "smart", "folder"])
+      .default("all")
+      .describe("Entry type; playable includes regular and smart playlists"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100_000)
+      .optional()
+      .describe("Maximum entries to return; omitted returns the complete hierarchy"),
+    offset: z.number().int().min(0).default(0).describe("Entries to skip in tree order"),
+  }),
+  output: playlistListOutput,
+  format: "md",
+  examples: [{ description: "List every playlist and folder in Rekordbox tree order" }],
+  run(c) {
+    const db = openDatabase(c.options);
+    try {
+      const playlists = db.listPlaylists();
+      const tree = buildPlaylistTree(playlists);
+      const filtered = tree.entries.filter((entry) => {
+        if (c.options.type === "all") return true;
+        if (c.options.type === "playable") return entry.type !== "folder";
+        return entry.type === c.options.type;
+      });
+      const entries = filtered.slice(
+        c.options.offset,
+        c.options.limit === undefined ? undefined : c.options.offset + c.options.limit,
+      );
+      const machineOutput = c.format !== "md";
+      return {
+        summary: {
+          total: playlists.length,
+          playlists: playlists.filter((playlist) => playlist.type === "playlist").length,
+          smartPlaylists: playlists.filter((playlist) => playlist.type === "smart").length,
+          folders: playlists.filter((playlist) => playlist.type === "folder").length,
+        },
+        filter: { type: c.options.type },
+        page: {
+          total: filtered.length,
+          offset: c.options.offset,
+          limit: c.options.limit ?? null,
+          returned: entries.length,
+          hasMore: c.options.offset + entries.length < filtered.length,
+        },
+        entries: entries.map((entry) => ({
+          path: entry.path,
+          type: entry.type,
+          trackCount: entry.trackCount,
+          childCount: entry.childCount,
+          id: entry.id,
+          ...(machineOutput
+            ? {
+                name: entry.name,
+                parentId: entry.parentId,
+                sequence: entry.sequence,
+                depth: entry.depth,
+                pathSegments: entry.pathSegments,
+                idPath: entry.idPath,
+                ...(entry.countError === undefined ? {} : { countError: entry.countError }),
+              }
+            : {}),
+        })),
+        ...(tree.warnings.length ? { warnings: tree.warnings } : {}),
+      };
     } finally {
       db.close();
     }

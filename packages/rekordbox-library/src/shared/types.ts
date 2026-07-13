@@ -27,12 +27,13 @@ export type LibraryBootstrap = {
 export type PlaylistKind = "playlist" | "folder" | "smart";
 
 export type PlaylistItem = {
+  countError?: string;
   id: string;
   name: string;
   parentId: string;
   seq: number;
   type: PlaylistKind;
-  trackCount: number;
+  trackCount: number | null;
 };
 
 export type TrackSummary = {

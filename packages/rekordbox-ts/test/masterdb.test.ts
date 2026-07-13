@@ -377,6 +377,141 @@ describe("MasterDatabase queries", () => {
     db.close();
   });
 
+  it("lists active playlist metadata with honest regular and smart counts", () => {
+    const { dbPath } = fixture();
+    const supported = new SmartList();
+    supported.playlistId = "502";
+    supported.addCondition(Property.ARTIST, Operator.EQUAL, "Loopmasters");
+    const unsupported = new SmartList();
+    unsupported.playlistId = "503";
+    unsupported.addCondition(Property.MIX_NAME, Operator.EQUAL, "Club Mix");
+    const fixtureDatabase = new Database(dbPath);
+    fixtureDatabase.exec(`
+      ALTER TABLE djmdPlaylist ADD COLUMN rb_local_deleted INTEGER DEFAULT 0;
+      ALTER TABLE djmdSongPlaylist ADD COLUMN rb_local_deleted INTEGER DEFAULT 0;
+      ALTER TABLE djmdContent ADD COLUMN rb_local_deleted INTEGER DEFAULT 0;
+      UPDATE djmdContent SET rb_local_deleted = 1, ArtistID = '100' WHERE ID = '2';
+      UPDATE djmdPlaylist SET ParentID = '501', Seq = 1 WHERE ID = '500';
+    `);
+    fixtureDatabase
+      .prepare(
+        `INSERT INTO djmdPlaylist
+          (ID, Seq, Name, ImagePath, Attribute, ParentID, SmartList, UUID, rb_local_usn,
+           created_at, updated_at, rb_local_deleted)
+         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("501", 1, "Folder", PlaylistType.FOLDER, "root", null, "folder-uuid", 9, now, now, 0);
+    const insertPlaylist = fixtureDatabase.prepare(
+      `INSERT INTO djmdPlaylist
+        (ID, Seq, Name, ImagePath, Attribute, ParentID, SmartList, UUID, rb_local_usn,
+         created_at, updated_at, rb_local_deleted)
+       VALUES (?, ?, ?, NULL, ?, '501', ?, ?, ?, ?, ?, ?)`,
+    );
+    insertPlaylist.run(
+      "502",
+      2,
+      "Supported smart",
+      PlaylistType.SMART_PLAYLIST,
+      supported.toXml(),
+      "smart-uuid",
+      10,
+      now,
+      now,
+      0,
+    );
+    insertPlaylist.run(
+      "503",
+      3,
+      "Unsupported smart",
+      PlaylistType.SMART_PLAYLIST,
+      unsupported.toXml(),
+      "unsupported-uuid",
+      11,
+      now,
+      now,
+      0,
+    );
+    insertPlaylist.run(
+      "504",
+      4,
+      "Deleted",
+      PlaylistType.PLAYLIST,
+      null,
+      "deleted-uuid",
+      12,
+      now,
+      now,
+      1,
+    );
+    fixtureDatabase.exec(`
+      INSERT INTO djmdSongPlaylist
+        (ID, PlaylistID, ContentID, TrackNo, UUID, rb_local_usn, created_at, updated_at,
+         rb_local_deleted)
+      VALUES ('song-deleted-content', '500', '2', 2, 'song-dc-uuid', 13, '${now}', '${now}', 0);
+      INSERT INTO djmdSongPlaylist
+        (ID, PlaylistID, ContentID, TrackNo, UUID, rb_local_usn, created_at, updated_at,
+         rb_local_deleted)
+      VALUES ('song-deleted-membership', '500', '1', 3, 'song-dm-uuid', 14, '${now}', '${now}', 1);
+      INSERT INTO djmdSongPlaylist
+        (ID, PlaylistID, ContentID, TrackNo, UUID, rb_local_usn, created_at, updated_at,
+         rb_local_deleted)
+      VALUES ('song-orphan-list', '500', 'missing', 4, 'song-orphan-uuid', 15, '${now}', '${now}', 0);
+    `);
+    fixtureDatabase.close();
+
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const playlists = db.listPlaylists();
+    expect(playlists.map((playlist) => playlist.id).sort()).toEqual(["500", "501", "502", "503"]);
+    expect(playlists.find((playlist) => playlist.id === "501")).toMatchObject({
+      parentId: "root",
+      sequence: 1,
+      trackCount: null,
+      type: "folder",
+    });
+    expect(playlists.find((playlist) => playlist.id === "500")).toMatchObject({
+      parentId: "501",
+      trackCount: 1,
+      type: "playlist",
+    });
+    expect(playlists.find((playlist) => playlist.id === "502")).toMatchObject({
+      trackCount: 1,
+      type: "smart",
+    });
+    expect(playlists.find((playlist) => playlist.id === "503")).toMatchObject({
+      trackCount: null,
+      type: "smart",
+      countError: expect.stringContaining("unsupported criteria: mixName"),
+    });
+
+    expect(
+      db
+        .getPlaylistContents("500")
+        .all()
+        .map((content) => content.ID),
+    ).toEqual(["1"]);
+    expect(db.countPlaylistTracks("500")).toBe(1);
+    expect(db.getPlaylistTracks("500").map((track) => track.membershipId)).toEqual(["song-1"]);
+
+    expect(
+      db
+        .getPlaylistContents("502")
+        .all()
+        .map((content) => content.ID),
+    ).toEqual(["1"]);
+    expect(db.countPlaylistTracks("502")).toBe(1);
+    expect(db.getPlaylistTracks("502").map((track) => track.contentId)).toEqual(["1"]);
+
+    const deleted = db.query(DjmdPlaylist).where({ ID: "504" }).one();
+    for (const read of [
+      () => db.getPlaylistContents("504"),
+      () => db.countPlaylistTracks("504"),
+      () => db.getPlaylistTracks("504"),
+      () => db.getPlaylistContents(deleted),
+    ])
+      expect(read).toThrow("Playlist '504' was not found or is deleted");
+    db.close();
+  });
+
   it("selects smart playlists with joined artist and key criteria in one metadata query", () => {
     const { dbPath } = fixture();
     const smartList = new SmartList(LogicalOperator.ALL);

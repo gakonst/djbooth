@@ -266,7 +266,26 @@ function PlaylistTreeNode({
           <Icon size={14} aria-hidden="true" />
           <span className="playlist-name">{node.name}</span>
           {!isFolder ? (
-            <span className="sidebar-count">{compactCount(node.trackCount)}</span>
+            <span
+              className={`sidebar-count ${node.countError ? "is-error" : ""}`}
+              aria-label={
+                node.countError
+                  ? `Track count unavailable: ${node.countError}`
+                  : node.trackCount === null
+                    ? "Track count unavailable"
+                    : `${String(node.trackCount)} tracks`
+              }
+              title={
+                node.countError ??
+                (node.trackCount === null ? "Track count unavailable" : undefined)
+              }
+            >
+              {node.countError
+                ? "!"
+                : node.trackCount === null
+                  ? "—"
+                  : compactCount(node.trackCount)}
+            </span>
           ) : null}
         </button>
       </div>

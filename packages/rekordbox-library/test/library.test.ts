@@ -147,6 +147,39 @@ function readJournal(backupDirectory: string): Record<string, any> {
 }
 
 describe("RekordboxLibraryService", () => {
+  it("preserves unsupported smart-playlist count failures as unknown", () => {
+    const fixture = copiedFixture();
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+    database
+      .connection!.prepare(
+        `INSERT INTO djmdPlaylist
+          (ID, Seq, Name, ImagePath, Attribute, ParentID, SmartList, UUID, rb_local_usn,
+           rb_local_deleted, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, ?, 'root', ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(
+        "800",
+        4,
+        "Unsupported smart",
+        4,
+        '<NODE Id="2" LogicalOperator="1" AutomaticUpdate="1"><CONDITION PropertyName="mixName" Operator="1" ValueUnit="" ValueLeft="Club Mix" ValueRight=""/></NODE>',
+        "playlist-800",
+        8,
+        now,
+        now,
+      );
+    database.close();
+
+    const playlist = service(fixture)
+      .getPlaylists()
+      .find((item) => item.id === "800");
+    expect(playlist).toMatchObject({
+      countError: expect.stringContaining("unsupported criteria: mixName"),
+      trackCount: null,
+      type: "smart",
+    });
+  });
+
   it("excludes soft-deleted memberships and playlists from copied-fixture reads", () => {
     const fixture = copiedFixture();
     const library = service(fixture);

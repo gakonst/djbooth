@@ -24,7 +24,6 @@ import type {
   LibraryProcesses,
   MutationReceipt,
   PlaylistItem,
-  PlaylistKind,
   TrackDetail,
   TrackSummary,
   TracksResponse,
@@ -213,13 +212,6 @@ function mapTrack(row: RawTrack): TrackSummary {
     ...(membershipId === null ? {} : { playlistMembershipId: membershipId }),
     ...(trackNumber === null ? {} : { trackNumber }),
   };
-}
-
-function playlistKind(attribute: number): PlaylistKind | undefined {
-  if (attribute === PlaylistType.FOLDER) return "folder";
-  if (attribute === PlaylistType.PLAYLIST) return "playlist";
-  if (attribute === PlaylistType.SMART_PLAYLIST) return "smart";
-  return undefined;
 }
 
 function asError(error: unknown): Error {
@@ -420,40 +412,15 @@ export class RekordboxLibraryService {
   getPlaylists(): PlaylistItem[] {
     const db = this.open();
     try {
-      const rows = db.selectRawRows(
-        `SELECT p."ID" AS id, p."Name" AS name, p."ParentID" AS parentId,
-                p."Seq" AS seq, p."Attribute" AS attribute,
-                COUNT(sp."ID") AS trackCount
-         FROM "djmdPlaylist" p
-         LEFT JOIN "djmdSongPlaylist" sp
-           ON sp."PlaylistID" = p."ID" AND ${this.active(db, "djmdSongPlaylist", "sp")}
-         WHERE ${this.active(db, "djmdPlaylist", "p")} AND p."Attribute" IN (?, ?, ?)
-         GROUP BY p."ID", p."Name", p."ParentID", p."Seq", p."Attribute"
-         ORDER BY p."ParentID", p."Seq", p."Name" COLLATE NOCASE`,
-        [PlaylistType.PLAYLIST, PlaylistType.FOLDER, PlaylistType.SMART_PLAYLIST],
-      );
-      return rows.flatMap((row): PlaylistItem[] => {
-        const type = playlistKind(numberValue(row.attribute, Number.NaN));
-        if (!type) return [];
-        let trackCount = numberValue(row.trackCount);
-        if (type === "smart") {
-          try {
-            trackCount = db.getPlaylistContents(stringValue(row.id)).count();
-          } catch {
-            trackCount = 0;
-          }
-        }
-        return [
-          {
-            id: stringValue(row.id),
-            name: stringValue(row.name, "Untitled playlist"),
-            parentId: stringValue(row.parentId, "root"),
-            seq: numberValue(row.seq),
-            type,
-            trackCount,
-          },
-        ];
-      });
+      return db.listPlaylists().map((playlist) => ({
+        id: playlist.id,
+        name: playlist.name || "Untitled playlist",
+        parentId: playlist.parentId,
+        seq: playlist.sequence,
+        type: playlist.type,
+        trackCount: playlist.trackCount,
+        ...(playlist.countError === undefined ? {} : { countError: playlist.countError }),
+      }));
     } finally {
       db.close();
     }

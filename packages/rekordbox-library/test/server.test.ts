@@ -101,6 +101,15 @@ function mockApi(
         type: "playlist",
         trackCount: 1,
       },
+      {
+        countError: "Unsupported smart-playlist criterion: mixName",
+        id: "smart-1",
+        name: "Unsupported smart",
+        parentId: "root",
+        seq: 2,
+        type: "smart",
+        trackCount: null,
+      },
     ],
     getTrack: () => detail,
     getTracks,
@@ -146,6 +155,18 @@ describe("library server", () => {
     const tracks = await (await fetch(new URL("api/tracks?limit=25", server.url))).json();
     expect(tracks).toMatchObject({ count: 1, items: [{ id: "track-1" }] });
     expect(api.getTracks).toHaveBeenLastCalledWith({ filter: "all", limit: 25, offset: 0 });
+
+    const playlists = await (await fetch(new URL("api/playlists", server.url))).json();
+    expect(playlists).toMatchObject({
+      items: [
+        { id: "playlist-1", trackCount: 1 },
+        {
+          countError: "Unsupported smart-playlist criterion: mixName",
+          id: "smart-1",
+          trackCount: null,
+        },
+      ],
+    });
   });
 
   it("rejects non-exact and duplicate pagination integers", async () => {

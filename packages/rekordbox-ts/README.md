@@ -49,6 +49,8 @@ rekordbox config show
 rekordbox db info
 rekordbox db search "track name"
 rekordbox db playlist contents 123456
+rekordbox db playlist list
+rekordbox db playlist list --type playable --json
 rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
 rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 rekordbox db sql "SELECT Title FROM djmdContent WHERE ArtistID = ?" --parameters '["123"]'
@@ -80,6 +82,13 @@ Top-level command families:
 Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 
 Use `--plain` for an unencrypted SQLite fixture or unlocked copy. The built-in upstream keys handle standard databases; override them with `REKORDBOX_DB_KEY` or `REKORDBOX_DEVICE_DB_KEY` when necessary.
+
+`db playlist list` returns the complete active folder, regular-playlist, and smart-playlist hierarchy
+in Rekordbox tree order by default. Its Markdown table uses a readable display path and includes each
+entry's type, direct track count, direct child count, and ID. Use `--type playable` to keep only
+regular and smart playlists, or `--limit` and `--offset` for explicit, reported pagination. With
+`--json`, `pathSegments` and `idPath` are the canonical hierarchy representation; the joined display
+path is presentation-only because Rekordbox names may themselves contain path separators.
 
 `db playlist show` resolves an exact playlist name and defaults to an aligned Markdown table with
 playlist position, artist, title, BPM, key, duration, and format. It returns the complete playlist by
@@ -121,13 +130,18 @@ const db = new MasterDatabase();
 try {
   const tracks = db.searchContent("Orbital");
   const first = db.query(DjmdContent).orderBy("ID").first();
-  const playlists = db.query(DjmdPlaylist).orderBy("Seq").all();
-  const playlistTracks = playlists[0] ? db.getPlaylistTracks(playlists[0]) : [];
+  const playlistRows = db.query(DjmdPlaylist).orderBy("Seq").all();
+  const playlists = db.listPlaylists();
+  const playlistTracks = playlistRows[0] ? db.getPlaylistTracks(playlistRows[0]) : [];
   console.log(tracks, first?.Artist?.Name, playlists, playlistTracks);
 } finally {
   db.close();
 }
 ```
+
+`MasterDatabase.listPlaylists()` is the shared active-playlist inventory used by the CLI and the
+local Rekordbox library workbench. It returns stable IDs, parent IDs, sibling sequence, entry type,
+and direct track counts without duplicating database-selection rules across those surfaces.
 
 Databases open read-only by default. For a write workflow, pass `readonly: false`, stage changes through helpers such as `createPlaylist`, `addToPlaylist`, `renamePlaylist`, or row `set`, then call `commit()`. `rollback()` restores staged rows. Commits are blocked while Rekordbox is running, and `copyUnlocked()` produces a new plain SQLite logical copy without modifying the encrypted source.
 
