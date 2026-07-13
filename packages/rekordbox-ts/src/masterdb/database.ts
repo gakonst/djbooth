@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -9,6 +17,7 @@ import {
   getAnlzPaths as findAnlzPaths,
   readAnlzFiles as readAnlzFilesInDirectory,
 } from "../anlz/index.js";
+import { readAnalysisResult } from "../analyzer/index.js";
 import { getConfig } from "../config/index.js";
 import { deobfuscate, getRekordboxPid, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
@@ -67,10 +76,103 @@ export type CommitOptions = {
 /** Result of installing generated ANLZ files for a master-library track. */
 export type InstallContentAnalysisResult = {
   analysisDataPath: string;
+  bpmHundredths: number | null;
   contentId: string;
   directory: string;
+  keyId: string | null;
+  keyName: string | null;
   paths: Record<"2EX" | "DAT" | "EXT", string>;
+  tempoBpm: number | null;
 };
+
+/** BPM and key metadata synchronized from a native analyzer summary. */
+export type SyncContentAnalysisMetadataResult = {
+  bpmHundredths: number | null;
+  contentId: string;
+  keyId: string | null;
+  keyName: string | null;
+  tempoBpm: number | null;
+};
+
+type NormalizedMusicalKey = {
+  mode: "major" | "minor";
+  pitchClass: number;
+};
+
+const camelotKeys: ReadonlyArray<NormalizedMusicalKey> = [
+  { mode: "minor", pitchClass: 8 },
+  { mode: "minor", pitchClass: 3 },
+  { mode: "minor", pitchClass: 10 },
+  { mode: "minor", pitchClass: 5 },
+  { mode: "minor", pitchClass: 0 },
+  { mode: "minor", pitchClass: 7 },
+  { mode: "minor", pitchClass: 2 },
+  { mode: "minor", pitchClass: 9 },
+  { mode: "minor", pitchClass: 4 },
+  { mode: "minor", pitchClass: 11 },
+  { mode: "minor", pitchClass: 6 },
+  { mode: "minor", pitchClass: 1 },
+  { mode: "major", pitchClass: 11 },
+  { mode: "major", pitchClass: 6 },
+  { mode: "major", pitchClass: 1 },
+  { mode: "major", pitchClass: 8 },
+  { mode: "major", pitchClass: 3 },
+  { mode: "major", pitchClass: 10 },
+  { mode: "major", pitchClass: 5 },
+  { mode: "major", pitchClass: 0 },
+  { mode: "major", pitchClass: 7 },
+  { mode: "major", pitchClass: 2 },
+  { mode: "major", pitchClass: 9 },
+  { mode: "major", pitchClass: 4 },
+];
+
+function normalizeMusicalKey(value: string): NormalizedMusicalKey | undefined {
+  const normalized = value.trim().replaceAll("♯", "#").replaceAll("♭", "b");
+  const camelot = /^(1[0-2]|[1-9])([AB])$/iu.exec(normalized);
+  if (camelot) {
+    const number = Number(camelot[1]);
+    const offset = camelot[2]!.toUpperCase() === "A" ? 0 : 12;
+    return camelotKeys[offset + number - 1];
+  }
+
+  const musical = /^([A-G])([#b]?)(?:(m|min|minor)|(maj|major))?$/iu.exec(
+    normalized.replaceAll(/\s+/gu, ""),
+  );
+  if (!musical) return undefined;
+  const naturalPitchClasses: Record<string, number> = {
+    A: 9,
+    B: 11,
+    C: 0,
+    D: 2,
+    E: 4,
+    F: 5,
+    G: 7,
+  };
+  const accidental = musical[2] === "#" ? 1 : musical[2] === "b" ? -1 : 0;
+  return {
+    mode: musical[3] ? "minor" : "major",
+    pitchClass: (naturalPitchClasses[musical[1]!.toUpperCase()]! + accidental + 12) % 12,
+  };
+}
+
+function camelotName(key: NormalizedMusicalKey): string {
+  const offset = key.mode === "minor" ? 0 : 12;
+  const index = camelotKeys.findIndex(
+    (candidate, candidateIndex) =>
+      candidateIndex >= offset &&
+      candidateIndex < offset + 12 &&
+      candidate.pitchClass === key.pitchClass,
+  );
+  if (index < 0) throw new TypeError("Unsupported musical key");
+  return `${index - offset + 1}${key.mode === "minor" ? "A" : "B"}`;
+}
+
+/** Normalize a conventional or Camelot musical key to Rekordbox's canonical Camelot name. */
+export function normalizeRekordboxKeyName(value: string): string {
+  const normalized = normalizeMusicalKey(value);
+  if (!normalized) throw new TypeError(`Unsupported musical key '${value}'`);
+  return camelotName(normalized);
+}
 
 /** Callback registered for a transaction/session lifecycle event. */
 export type DatabaseEventHandler = (database: MasterDatabase) => void;
@@ -1926,6 +2028,7 @@ export class MasterDatabase {
     const row = this.resolve(models.DjmdContent, content);
     if (!row.FolderPath) throw new TypeError(`Content '${row.ID}' has no FolderPath`);
     if (!row.UUID) throw new TypeError(`Content '${row.ID}' has no UUID`);
+    const metadata = this.prepareContentAnalysisMetadata(row, analysisDirectory);
     const sourcePaths = findAnlzPaths(analysisDirectory);
     for (const type of ["DAT", "EXT", "2EX"] as const)
       if (!sourcePaths[type]) throw new TypeError(`Analysis directory has no ANLZ0000.${type}`);
@@ -1965,11 +2068,110 @@ export class MasterDatabase {
 
     const analysisDataPath = `/${join(relativeDirectory, "ANLZ0000.DAT").replaceAll("\\", "/")}`;
     row.AnalysisDataPath = analysisDataPath;
+    this.applyContentAnalysisMetadata(row, metadata);
     if (this.hasColumn(row.tableName, "Analysed")) row.set("Analysed", 105);
     if (this.hasColumn(row.tableName, "AnalysisUpdated")) row.set("AnalysisUpdated", "2");
     if (this.hasColumn(row.tableName, "TrackInfoUpdated")) row.set("TrackInfoUpdated", "2");
     if (options.commit ?? true) this.commit({ allowWhileRunning: options.allowWhileRunning });
-    return { analysisDataPath, contentId: row.ID, directory, paths };
+    return { analysisDataPath, contentId: row.ID, directory, paths, ...metadata };
+  }
+
+  /** Synchronize BPM and key from an existing native analyzer summary without recopying ANLZ files. */
+  syncContentAnalysisMetadata(
+    content: models.DjmdContent | string | number,
+    analysisDirectory: string,
+    options: { allowWhileRunning?: boolean; commit?: boolean } = {},
+  ): SyncContentAnalysisMetadataResult {
+    this.assertCommitAllowed(options.allowWhileRunning);
+    const row = this.resolve(models.DjmdContent, content);
+    const metadata = this.prepareContentAnalysisMetadata(row, analysisDirectory);
+    this.applyContentAnalysisMetadata(row, metadata);
+    if (this.hasColumn(row.tableName, "AnalysisUpdated")) row.set("AnalysisUpdated", "2");
+    if (this.hasColumn(row.tableName, "TrackInfoUpdated")) row.set("TrackInfoUpdated", "2");
+    if (options.commit ?? true) this.commit({ allowWhileRunning: options.allowWhileRunning });
+    return { contentId: row.ID, ...metadata };
+  }
+
+  private prepareContentAnalysisMetadata(
+    row: models.DjmdContent,
+    analysisDirectory: string,
+  ): Omit<SyncContentAnalysisMetadataResult, "contentId"> {
+    if (!row.FolderPath) throw new TypeError(`Content '${row.ID}' has no FolderPath`);
+    if (!existsSync(row.FolderPath) || !statSync(row.FolderPath).isFile())
+      throw new TypeError(`Content '${row.ID}' audio file '${row.FolderPath}' does not exist`);
+
+    const summaryPath = join(analysisDirectory, "analysis.json");
+    const analysis = readAnalysisResult(summaryPath);
+    const contentPath = realpathSync(row.FolderPath);
+    let sourcePath: string;
+    let audioPath: string;
+    try {
+      sourcePath = realpathSync(analysis.source.path);
+      audioPath = realpathSync(analysis.audioPath);
+    } catch (cause) {
+      throw new TypeError(
+        `Analysis summary '${summaryPath}' references an unavailable source file`,
+        { cause },
+      );
+    }
+    if (sourcePath !== contentPath || audioPath !== contentPath)
+      throw new TypeError(
+        `Analysis summary '${summaryPath}' does not belong to content '${row.ID}' at '${row.FolderPath}'`,
+      );
+    const source = statSync(contentPath);
+    if (analysis.source.size !== source.size || analysis.source.mtimeMs !== source.mtimeMs)
+      throw new TypeError(
+        `Analysis summary '${summaryPath}' source fingerprint does not match content '${row.ID}'`,
+      );
+
+    const tempoBpm = analysis.summary.tempo_bpm;
+    const bpmHundredths = tempoBpm === null ? null : Math.round(tempoBpm * 100);
+    if (bpmHundredths !== null && !Number.isSafeInteger(bpmHundredths))
+      throw new TypeError(`Analysis summary '${summaryPath}' has an unsafe BPM value`);
+
+    const analyzedKey = analysis.summary.key;
+    let keyId: string | null = null;
+    let keyName: string | null = null;
+    if (analyzedKey !== null) {
+      try {
+        keyName = normalizeRekordboxKeyName(analyzedKey);
+      } catch (cause) {
+        throw new TypeError(
+          `Analysis summary '${summaryPath}' has unsupported key '${analyzedKey}'`,
+          { cause },
+        );
+      }
+      const keys = this.query(models.DjmdKey)
+        .all()
+        .filter(
+          (key) =>
+            key.ScaleName?.trim().toUpperCase() === keyName &&
+            (!this.hasColumn(models.DjmdKey.tableName, "rb_local_deleted") ||
+              Number(key.get("rb_local_deleted") ?? 0) === 0),
+        );
+      if (keys.length !== 1)
+        throw new TypeError(
+          `Expected exactly one djmdKey row for '${keyName}' (${analyzedKey}); found ${keys.length}`,
+        );
+      keyId = keys[0]!.ID;
+    }
+    return { bpmHundredths, keyId, keyName, tempoBpm };
+  }
+
+  private applyContentAnalysisMetadata(
+    row: models.DjmdContent,
+    metadata: Omit<SyncContentAnalysisMetadataResult, "contentId">,
+  ): void {
+    if (metadata.bpmHundredths !== null) {
+      if (!this.hasColumn(row.tableName, "BPM"))
+        throw new TypeError(`Content table '${row.tableName}' has no BPM column`);
+      row.set("BPM", metadata.bpmHundredths);
+    }
+    if (metadata.keyId !== null) {
+      if (!this.hasColumn(row.tableName, "KeyID"))
+        throw new TypeError(`Content table '${row.tableName}' has no KeyID column`);
+      row.set("KeyID", metadata.keyId);
+    }
   }
 
   /** Paths referenced by the `settingFile` table. */

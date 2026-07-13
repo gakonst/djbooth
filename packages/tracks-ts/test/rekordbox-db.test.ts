@@ -420,13 +420,17 @@ describe("Rekordbox direct database planning", () => {
         content.set("AnalysisDataPath", "/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT");
         return {
           analysisDataPath: "/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT",
+          bpmHundredths: 12_801,
           contentId: content.ID,
           directory: "/rekordbox/share/PIONEER/USBANLZ/con/tent",
+          keyId: "key-10a",
+          keyName: "10A",
           paths: {
             DAT: "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT",
             EXT: "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.EXT",
             "2EX": "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.2EX",
           },
+          tempoBpm: 128.006827,
         };
       },
       addToPlaylist(target: { ID: string }, content: { ID: string }, trackNumber: number) {
@@ -483,6 +487,140 @@ describe("Rekordbox direct database planning", () => {
       },
     ]);
     expect(commitCount).toBe(0);
+  });
+
+  test("synchronizes analyzer metadata when ANLZ files are already installed", () => {
+    const row = (tableName: string, values: Record<string, unknown>) => ({
+      ID: `${tableName}-1`,
+      tableName,
+      ...values,
+      get(key: string) {
+        return (this as Record<string, unknown>)[key];
+      },
+      set(key: string, value: unknown) {
+        (this as Record<string, unknown>)[key] = value;
+        return this;
+      },
+    });
+    const models = {
+      DjmdArtist: { tableName: "artist" },
+      DjmdAlbum: { tableName: "album" },
+      DjmdLabel: { tableName: "label" },
+      DjmdContent: { tableName: "content" },
+      DjmdPlaylist: { tableName: "playlist" },
+      DjmdSongPlaylist: { tableName: "membership" },
+    };
+    const folder = row("playlist", { Name: "DJ Sets I Like", Attribute: 0, ParentID: "root" });
+    const playlist = row("playlist", {
+      Name: "Analyzed Set",
+      Attribute: 1,
+      ParentID: folder.ID,
+    });
+    const content = row("content", {
+      FolderPath: "/music/track-1.flac",
+      AnalysisDataPath: "/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT",
+    });
+    const membership = row("membership", {
+      PlaylistID: playlist.ID,
+      ContentID: content.ID,
+      TrackNo: 1,
+    });
+    const syncCalls: Array<{ directory: string; options: Record<string, boolean | undefined> }> =
+      [];
+    const db = {
+      query(model: { tableName: string }) {
+        let filters: Record<string, unknown> = {};
+        const query = {
+          where(next: Record<string, unknown>) {
+            filters = next;
+            return query;
+          },
+          orderBy() {
+            return query;
+          },
+          all() {
+            if (model.tableName === "playlist" && filters.Attribute === 0) return [folder];
+            if (model.tableName === "playlist" && filters.Attribute === 1) return [playlist];
+            if (model.tableName === "membership") return [membership];
+            if (model.tableName === "content" && filters.FolderPath === "/music/track-1.flac")
+              return [content];
+            return [];
+          },
+          one() {
+            if (model.tableName === "content" && filters.ID === content.ID) return content;
+            throw new Error("unexpected one()");
+          },
+          first() {
+            return undefined;
+          },
+        };
+        return query;
+      },
+      addArtist(name: string) {
+        return row("artist", { Name: name });
+      },
+      syncContentAnalysisMetadata(
+        target: { ID: string },
+        directory: string,
+        options: Record<string, boolean | undefined>,
+      ) {
+        expect(target).toBe(content);
+        syncCalls.push({ directory, options });
+        content.set("BPM", 12_801);
+        content.set("KeyID", "key-10a");
+        return {
+          bpmHundredths: 12_801,
+          contentId: content.ID,
+          keyId: "key-10a",
+          keyName: "10A",
+          tempoBpm: 128.006827,
+        };
+      },
+      installContentAnalysis() {
+        throw new Error("unexpected installContentAnalysis()");
+      },
+      addToPlaylist() {
+        throw new Error("unexpected addToPlaylist()");
+      },
+      moveSongInPlaylist() {},
+      hasColumn() {
+        return true;
+      },
+    } as unknown as RekordboxMasterDatabase;
+    const plan: RekordboxImportPlan = {
+      folderName: "DJ Sets I Like",
+      playlistName: "Analyzed Set",
+      items: [
+        {
+          key: "track-1:0",
+          entryId: "track-1",
+          entryOrder: 1,
+          variantIndex: 0,
+          mediaPath: "/music/track-1.flac",
+          analysisDirectory: "/analysis/track-1",
+          download: {
+            backend: "slsk",
+            mediaPath: "/music/track-1.flac",
+            files: ["/music/track-1.flac"],
+          },
+          metadata: { title: "Track 1", artist: "Artist 1", comment: "test" },
+        },
+      ],
+    };
+
+    const result = writeRekordboxPlan(
+      db,
+      { ...models, PlaylistType: { FOLDER: 0, PLAYLIST: 1 } } as unknown as RekordboxLibrary,
+      plan,
+    );
+
+    expect(result.installedAnalysis).toEqual([]);
+    expect(syncCalls).toEqual([
+      {
+        directory: "/analysis/track-1",
+        options: { allowWhileRunning: false, commit: false },
+      },
+    ]);
   });
 
   test("requires every manifest entry to have a completed download", () => {

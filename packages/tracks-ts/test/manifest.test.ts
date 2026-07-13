@@ -276,6 +276,18 @@ describe("pipeline manifests", () => {
       downloadDirectory: "/music/tracks",
       m3u8: "/music/playlist.m3u8",
       rekordboxXml: "/music/playlist.xml",
+      analysis: [
+        {
+          mediaPath: "/music/Artist - Track.m4a",
+          summaryPath: "/music/Artist - Track.rekordbox/analysis.json",
+          backend: "rekordbox-dlopen-rehost",
+          tempoBpm: 128.006827,
+          key: "Bm",
+          keySource: "rekordbox-notify-complete",
+          sourceMtimeMs: 1_000,
+          sourceSize: 42,
+        },
+      ],
     };
     manifest.errors.push({
       stage: "identity",

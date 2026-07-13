@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   analyzeTracks,
@@ -26,7 +27,7 @@ import {
   type BuildAcquisitionPlanOptions,
 } from "./generic-acquisition-plan.js";
 import { identify } from "./identify.js";
-import { createManifest, type SetManifest } from "./manifest.js";
+import { createManifest, type RekordboxAnalysisArtifact, type SetManifest } from "./manifest.js";
 import {
   importManifestToRekordbox,
   type ImportManifestToRekordboxOptions,
@@ -429,7 +430,16 @@ export async function runSetToRekordbox(
     analysisPeakConcurrency,
     analysisDurationMs,
   );
-  const analysisStatus = analysis.analyzed ? "completed" : "resumed";
+  const analysisArtifacts = analysis.results.map(toAnalysisArtifact);
+  const analysisMetadataChanged = !isDeepStrictEqual(
+    manifest.artifacts.analysis,
+    analysisArtifacts,
+  );
+  if (analysisMetadataChanged) {
+    manifest.artifacts.analysis = analysisArtifacts;
+    await dependencies.writeManifest(manifestPath, manifest);
+  }
+  const analysisStatus = analysis.analyzed || analysisMetadataChanged ? "completed" : "resumed";
   stages.push({
     stage: "analysis",
     status: analysisStatus,
@@ -498,6 +508,21 @@ export async function runSetToRekordbox(
       stages,
       caches,
     },
+  };
+}
+
+function toAnalysisArtifact(
+  result: AnalyzeTracksResult["results"][number],
+): RekordboxAnalysisArtifact {
+  return {
+    mediaPath: resolve(result.source.path),
+    summaryPath: resolve(result.summaryPath),
+    backend: result.backend,
+    tempoBpm: result.summary.tempo_bpm,
+    key: result.summary.key,
+    keySource: result.summary.key_source,
+    sourceMtimeMs: result.source.mtimeMs,
+    sourceSize: result.source.size,
   };
 }
 

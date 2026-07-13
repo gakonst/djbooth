@@ -328,12 +328,14 @@ export class UuidIDMap extends DatabaseRow {
 export class DjmdContent extends DatabaseRow {
   static override tableName = "djmdContent";
   declare ID: string;
+  declare BPM: number | null;
   declare Title: string | null;
   declare FolderPath: string | null;
   declare FileNameL: string | null;
   declare ArtistID: string | null;
   declare AlbumID: string | null;
   declare GenreID: string | null;
+  declare KeyID: string | null;
   declare AnalysisDataPath: string | null;
   declare Analysed: number | null;
   declare AnalysisUpdated: string | null;

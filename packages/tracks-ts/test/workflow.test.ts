@@ -49,7 +49,7 @@ function enrichedManifest(): SetManifest {
   return manifest;
 }
 
-function downloadedManifest(): SetManifest {
+function downloadedManifest(withAnalysis = false): SetManifest {
   const manifest = enrichedManifest();
   manifest.entries[0]!.acquisition = {
     status: "downloaded",
@@ -62,6 +62,20 @@ function downloadedManifest(): SetManifest {
       spotifyId: "spotify-track",
     },
   };
+  if (withAnalysis) {
+    manifest.artifacts.analysis = [
+      {
+        mediaPath,
+        summaryPath: resolve(analysisDirectory, "analysis.json"),
+        backend: "rekordbox-dlopen-rehost",
+        tempoBpm: 128.006827,
+        key: "Bm",
+        keySource: "rekordbox-notify-complete",
+        sourceMtimeMs: 1,
+        sourceSize: 1,
+      },
+    ];
+  }
   return manifest;
 }
 
@@ -125,11 +139,19 @@ function analysisResult(cacheHit: boolean) {
     timings: { analyzeMs: 1, preflightMs: 0, totalMs: 1 },
     results: [
       {
+        backend: "rekordbox-dlopen-rehost",
         source: { path: mediaPath, mtimeMs: 1, size: 1 },
+        summary: {
+          beat_grid: null,
+          files: [],
+          key: "Bm",
+          key_source: "rekordbox-notify-complete",
+          tempo_bpm: 128.006827,
+        },
         summaryPath: resolve(analysisDirectory, "analysis.json"),
       },
     ],
-  } as Awaited<ReturnType<RunSetToRekordboxDependencies["analyze"]>>;
+  } as unknown as Awaited<ReturnType<RunSetToRekordboxDependencies["analyze"]>>;
 }
 
 function importResult(manifest: SetManifest, changed: boolean): ImportManifestToRekordboxResult {
@@ -266,7 +288,15 @@ describe("runSetToRekordbox", () => {
       localDirectories: [resolve("/tmp/local-tracks")],
     });
     expect(importedAnalysis).toEqual({ [mediaPath]: analysisDirectory });
-    expect(writes).toHaveLength(2);
+    expect(writes).toHaveLength(3);
+    expect(result.manifest.artifacts.analysis).toEqual([
+      expect.objectContaining({
+        mediaPath,
+        summaryPath: resolve(analysisDirectory, "analysis.json"),
+        tempoBpm: 128.006827,
+        key: "Bm",
+      }),
+    ]);
     expect(result.performance.peakConcurrency).toBe(1);
     expect(result.performance.warmResume).toBe(false);
     expect(result.performance.stages.map(({ stage, status }) => [stage, status])).toEqual([
@@ -280,7 +310,7 @@ describe("runSetToRekordbox", () => {
   });
 
   test("takes the fully cached warm-resume path without resolving or rewriting", async () => {
-    const manifest = downloadedManifest();
+    const manifest = downloadedManifest(true);
     const dependencies: RunSetToRekordboxDependencies = {
       exists: async () => true,
       readManifest: async () => manifest,
@@ -316,6 +346,43 @@ describe("runSetToRekordbox", () => {
       "resumed",
       "resumed",
     ]);
+  });
+
+  test("backfills durable analyzer metadata on an older warm manifest", async () => {
+    const manifest = downloadedManifest();
+    const writeManifest = vi.fn();
+    const dependencies: RunSetToRekordboxDependencies = {
+      exists: async () => true,
+      readManifest: async () => manifest,
+      writeManifest,
+      identify: vi.fn(),
+      createManifest,
+      enrichSpotify: async (current) => spotifyResult(current, 0),
+      describeSourceSet: vi.fn(),
+      buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: "/tmp/staging" }),
+      acquire: async () => acquisitionResult(manifest, true),
+      analyze: async () => analysisResult(true),
+      importRekordbox: async (options) => {
+        expect(options.manifest.artifacts.analysis).toHaveLength(1);
+        return importResult(options.manifest, true);
+      },
+    };
+
+    const result = await runSetToRekordbox({
+      source,
+      manifestPath,
+      outputDirectory,
+      approved: true,
+      spotify: { raw: vi.fn() },
+      acquirers: [],
+      dependencies,
+    });
+
+    expect(writeManifest).toHaveBeenCalledOnce();
+    expect(result.performance.warmResume).toBe(false);
+    expect(result.performance.stages.find((stage) => stage.stage === "analysis")?.status).toBe(
+      "completed",
+    );
   });
 
   test("rejects a local set source unless cue clipping was explicitly allowed", async () => {

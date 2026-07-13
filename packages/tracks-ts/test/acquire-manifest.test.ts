@@ -278,6 +278,18 @@ describe("acquireManifest", () => {
       dbContentId: "content-1",
       playlistMembershipId: "membership-1",
     };
+    manifest.artifacts.analysis = [
+      {
+        backend: "test",
+        key: "Bm",
+        keySource: "test",
+        mediaPath: join(directory, "old.m4a"),
+        sourceMtimeMs: 0,
+        sourceSize: 1,
+        summaryPath: join(directory, "analysis.json"),
+        tempoBpm: 128,
+      },
+    ];
     await writeManifestAtomic(manifestPath, manifest);
 
     const result = await acquireManifest({
@@ -293,6 +305,7 @@ describe("acquireManifest", () => {
     });
 
     expect(result.manifest.entries[0]!.rekordbox).toEqual({ status: "pending" });
+    expect(result.manifest.artifacts.analysis).toBeUndefined();
     expect((await readManifest(manifestPath)).entries[0]!.rekordbox.status).toBe("imported");
   });
 

@@ -158,6 +158,15 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 - Added `MasterDatabase.installContentAnalysis` and
   `rekordbox db content install-analysis` to copy verified artifacts into the UUID-derived share path,
   rewrite PPTH to the permanent content path, and update Rekordbox analysis fields.
+- Extended installation to schema-validate `analysis.json`, bind its source fingerprint to the exact
+  content audio path, persist tempo as integer BPM hundredths, normalize analyzer keys to canonical
+  Camelot names, and resolve the corresponding active `djmdKey` row before commit. Added
+  `MasterDatabase.syncContentAnalysisMetadata` and
+  `rekordbox db content sync-analysis-metadata` for metadata-only repair without recopying ANLZ files.
+- Strengthened set-import postverification to compare the reopened `djmdContent.BPM`, `KeyID`, and
+  active key name with the analyzer summary. A warm checkpoint with installed analysis files but
+  missing or mismatched BPM/key now enters the same backed-up transaction repair path instead of
+  being accepted from `AnalysisDataPath` and `Analysed` alone.
 - Verified native analysis against Rekordbox 6.8.2.0018 and database installation against a decrypted
   temporary copy of the live schema; the live library was not modified.
 - Release, prerelease, and packed-package verification run on macOS, rebuild the signed universal

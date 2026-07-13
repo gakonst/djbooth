@@ -257,7 +257,8 @@ tracks completions zsh
 
 The narrow workspace libraries can be composed directly, or driven by one Incur-native local
 command. `import-set` resumes the same manifest at every boundary, starts native analysis as each
-verified recording lands, and performs one final normal-database transaction:
+verified recording lands, persists the analyzer summary path/BPM/key per recording, and performs
+one final normal-database transaction:
 
 ```sh
 tracks import-set "$SET_URL" \
@@ -327,7 +328,9 @@ The boundary is deliberate:
   Its file preflight, hashing, analysis installation, and backup copies use up to 64 workers;
   encrypted database access stays serialized in one transaction. It requires explicit approval,
   stopped Rekordbox processes, an exclusive backup of the database and companion files, and
-  post-commit integrity, metadata, analysis, and membership verification.
+  post-commit integrity, metadata, analysis, BPM/key, and membership verification. Warm resumes
+  treat missing or stale analyzer BPM/key as repairable checkpoint drift and use the same backed-up
+  transaction to synchronize it.
 
 The same backends remain independently callable for inspection or repair:
 

@@ -12,6 +12,8 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 
+import { z } from "zod";
+
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
 const helperName = "rekordbox-analyzer";
@@ -62,6 +64,69 @@ export type RekordboxAnalysisResult = {
     totalMs: number;
   };
 };
+
+/** Analyzer metadata that can be projected onto a Rekordbox content row. */
+export type RekordboxAnalysisMetadata = {
+  key: string | null;
+  tempoBpm: number | null;
+};
+
+const finiteNumber = z.number().finite();
+const nonNegativeNumber = finiteNumber.min(0);
+const beatSchema = z.object({
+  beat: z.number().int().min(1),
+  bpm: finiteNumber.positive(),
+  time_ms: nonNegativeNumber,
+});
+const beatGridSchema = z.object({
+  avg_bpm: finiteNumber.positive(),
+  beat_count: z.number().int().min(0),
+  first_beats: z.array(beatSchema),
+  first_downbeat_ms: nonNegativeNumber,
+  last_beat_ms: nonNegativeNumber,
+  max_bpm: finiteNumber.positive(),
+  min_bpm: finiteNumber.positive(),
+});
+const analysisResultSchema = z.object({
+  analyzePath: z.string().min(1),
+  audioPath: z.string().min(1),
+  backend: z.string().min(1),
+  binary: z.string().min(1),
+  callbackError: z.string().nullable(),
+  callbackStatus: z.number().int().nullable(),
+  contentId: z.number().int(),
+  nativeLog: z.string(),
+  outputs: z.array(z.tuple([z.string().min(1), z.number().int().min(0)])),
+  source: z.object({
+    mtimeMs: nonNegativeNumber,
+    path: z.string().min(1),
+    size: z.number().int().min(0),
+  }),
+  startResult: z.number().int(),
+  summary: z.object({
+    beat_grid: beatGridSchema.nullable(),
+    files: z.array(
+      z.object({
+        path: z.string().min(1),
+        size: z.number().int().min(0),
+        tags: z.array(z.string()),
+      }),
+    ),
+    key: z.string().trim().min(1).max(64).nullable(),
+    key_source: z.string().nullable(),
+    tempo_bpm: finiteNumber.positive().max(1_000).nullable(),
+  }),
+  summaryPath: z.string().min(1),
+  timings: z.object({
+    analyzeStartMs: nonNegativeNumber,
+    backendMs: nonNegativeNumber,
+    completionMs: nonNegativeNumber,
+    loadMs: nonNegativeNumber,
+    outputPrepareMs: nonNegativeNumber,
+    summarizeMs: nonNegativeNumber,
+    totalMs: nonNegativeNumber,
+  }),
+});
 
 /** Options for producing native Rekordbox DAT, EXT, and 2EX files. */
 export type AnalyzeTrackOptions = {
@@ -383,7 +448,10 @@ function persistAnalysisResult(
     throw new Error(`Audio file '${prepared.source.path}' changed during Rekordbox analysis`);
   const native = JSON.parse(stdout) as Omit<RekordboxAnalysisResult, "source" | "summaryPath">;
   validateAnalysisFiles(prepared.outputDirectory);
-  const result = { ...native, source: prepared.source, summaryPath: prepared.summaryPath };
+  const result = parseAnalysisResult(
+    { ...native, source: prepared.source, summaryPath: prepared.summaryPath },
+    "native analyzer output",
+  );
   const temporary = `${prepared.summaryPath}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`);
   renameSync(temporary, prepared.summaryPath);
@@ -401,5 +469,30 @@ function validateAnalysisFiles(outputDirectory: string): void {
 
 /** Read a previously persisted analyzer summary. */
 export function readAnalysisResult(path: string): RekordboxAnalysisResult {
-  return JSON.parse(readFileSync(path, "utf8")) as RekordboxAnalysisResult;
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (cause) {
+    throw new TypeError(`Invalid Rekordbox analysis summary '${path}': malformed JSON`, { cause });
+  }
+  return parseAnalysisResult(value, `analysis summary '${path}'`);
+}
+
+/** Read validated BPM and key metadata from an analyzer output directory. */
+export function readAnalysisMetadata(analysisDirectory: string): RekordboxAnalysisMetadata {
+  const result = readAnalysisResult(join(resolve(analysisDirectory), "analysis.json"));
+  return { key: result.summary.key, tempoBpm: result.summary.tempo_bpm };
+}
+
+function parseAnalysisResult(value: unknown, source: string): RekordboxAnalysisResult {
+  const parsed = analysisResultSchema.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const location = issue?.path.length ? ` at ${issue.path.join(".")}` : "";
+    throw new TypeError(
+      `Invalid Rekordbox ${source}${location}: ${issue?.message ?? "schema validation failed"}`,
+      { cause: parsed.error },
+    );
+  }
+  return parsed.data;
 }

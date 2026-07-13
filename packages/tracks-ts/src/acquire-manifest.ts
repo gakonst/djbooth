@@ -1939,10 +1939,12 @@ function cacheStatsDelta(after: CacheStats, before?: CacheStats): CacheStats {
 
 function invalidateChangedRekordboxState(previous: SetManifest, current: SetManifest): void {
   let invalidated = false;
+  let analysisInvalidated = false;
   const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
   for (const entry of current.entries) {
     const prior = previousById.get(entry.id);
     if (prior && downstreamFingerprint(prior) === downstreamFingerprint(entry)) continue;
+    analysisInvalidated = true;
     if (
       entry.rekordbox.status === "imported" ||
       entry.rekordbox.status === "exported" ||
@@ -1961,6 +1963,7 @@ function invalidateChangedRekordboxState(previous: SetManifest, current: SetMani
     current.errors = current.errors.filter((error) => error.stage !== "rekordbox");
     delete current.artifacts.rekordbox;
   }
+  if (analysisInvalidated) delete current.artifacts.analysis;
 }
 
 function downstreamFingerprint(entry: ResolvedTrack): string {

@@ -1,4 +1,13 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,6 +37,7 @@ import {
   MasterDatabase,
   MasterPlaylistXml,
   PlaylistType,
+  normalizeRekordboxKeyName,
   stringToDatetime,
 } from "../src/masterdb/index.js";
 
@@ -54,6 +64,51 @@ function analysisFixture(path: string): Buffer {
   header.writeUInt32BE(28, 4);
   header.writeUInt32BE(header.length + tag.length, 8);
   return Buffer.concat([header, tag]);
+}
+
+function writeAnalysisSummary(
+  directory: string,
+  audioPath: string,
+  values: { key?: string | null; tempoBpm?: number | null } = {},
+): void {
+  const source = statSync(audioPath);
+  const summaryPath = join(directory, "analysis.json");
+  writeFileSync(
+    summaryPath,
+    `${JSON.stringify({
+      analyzePath: join(directory, "ANLZ0000.DAT"),
+      audioPath: realpathSync(audioPath),
+      backend: "test",
+      binary: "/test/rekordbox-analyzer",
+      callbackError: null,
+      callbackStatus: 0,
+      contentId: 1,
+      nativeLog: join(directory, "rehost-native.log"),
+      outputs: ["DAT", "EXT", "2EX"].map((type) => [
+        join(directory, `ANLZ0000.${type}`),
+        statSync(join(directory, `ANLZ0000.${type}`)).size,
+      ]),
+      source: { mtimeMs: source.mtimeMs, path: realpathSync(audioPath), size: source.size },
+      startResult: 0,
+      summary: {
+        beat_grid: null,
+        files: [],
+        key: values.key === undefined ? "Bm" : values.key,
+        key_source: "test",
+        tempo_bpm: values.tempoBpm === undefined ? 128.006_827 : values.tempoBpm,
+      },
+      summaryPath,
+      timings: {
+        analyzeStartMs: 0,
+        backendMs: 0,
+        completionMs: 0,
+        loadMs: 0,
+        outputPrepareMs: 0,
+        summarizeMs: 0,
+        totalMs: 0,
+      },
+    })}\n`,
+  );
 }
 
 afterEach(() => {
@@ -337,17 +392,33 @@ describe("MasterDatabase queries", () => {
 });
 
 describe("MasterDatabase mutations", () => {
+  it("normalizes analyzer key names to canonical Camelot names", () => {
+    expect(normalizeRekordboxKeyName("Bm")).toBe("10A");
+    expect(normalizeRekordboxKeyName("Bmin")).toBe("10A");
+    expect(normalizeRekordboxKeyName("G♯min")).toBe("1A");
+    expect(normalizeRekordboxKeyName("Emaj")).toBe("12B");
+    expect(normalizeRekordboxKeyName("10A")).toBe("10A");
+    expect(() => normalizeRekordboxKeyName("not-a-key")).toThrow("Unsupported musical key");
+  });
+
   it("installs native analysis files and updates the content row", () => {
     const { dbPath, root } = fixture();
+    const audioPath = join(root, "Demo 1.mp3");
+    writeFileSync(audioPath, "audio");
     const raw = new Database(dbPath);
     raw.exec(
-      "ALTER TABLE djmdContent ADD COLUMN Analysed INTEGER; ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
+      "ALTER TABLE djmdContent ADD COLUMN BPM INTEGER; ALTER TABLE djmdContent ADD COLUMN Analysed INTEGER; ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
     );
+    raw
+      .prepare("UPDATE djmdContent SET FolderPath = ?, FileNameL = ? WHERE ID = ?")
+      .run(audioPath, "Demo 1.mp3", "1");
+    raw.prepare("INSERT INTO djmdKey VALUES (?, ?)").run("301", "10A");
     raw.close();
     const analysisDirectory = join(root, "analysis");
     mkdirSync(analysisDirectory);
     for (const type of ["DAT", "EXT", "2EX"])
       writeFileSync(join(analysisDirectory, `ANLZ0000.${type}`), analysisFixture("/old/path.mp3"));
+    writeAnalysisSummary(analysisDirectory, audioPath);
 
     const db = new MasterDatabase({
       allowWhileRunning: true,
@@ -359,7 +430,27 @@ describe("MasterDatabase mutations", () => {
       allowWhileRunning: true,
     });
     expect(result.analysisDataPath).toBe("/PIONEER/USBANLZ/con/tent-1/ANLZ0000.DAT");
-    expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe("/Music/Demo 1.mp3");
+    expect(result.bpmHundredths).toBe(12_801);
+    expect(result.keyId).toBe("301");
+    expect(result.keyName).toBe("10A");
+    expect(result.tempoBpm).toBe(128.006_827);
+    expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe(audioPath);
+    const installedDat = readFileSync(result.paths.DAT);
+    const synced = db.syncContentAnalysisMetadata("1", analysisDirectory, {
+      allowWhileRunning: true,
+    });
+    expect(synced).toEqual({
+      bpmHundredths: 12_801,
+      contentId: "1",
+      keyId: "301",
+      keyName: "10A",
+      tempoBpm: 128.006_827,
+    });
+    expect(readFileSync(result.paths.DAT)).toEqual(installedDat);
+    writeFileSync(audioPath, "changed after analysis");
+    expect(() =>
+      db.syncContentAnalysisMetadata("1", analysisDirectory, { allowWhileRunning: true }),
+    ).toThrow("source fingerprint does not match");
     db.close();
 
     const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
@@ -368,6 +459,9 @@ describe("MasterDatabase mutations", () => {
     expect(content.Analysed).toBe(105);
     expect(content.AnalysisUpdated).toBe("2");
     expect(content.TrackInfoUpdated).toBe("2");
+    expect(content.BPM).toBe(12_801);
+    expect(content.KeyID).toBe("301");
+    expect(content.Key?.ScaleName).toBe("10A");
     reopened.close();
   });
 
