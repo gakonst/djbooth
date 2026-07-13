@@ -194,11 +194,15 @@ tracks resolve ./authorized-set.wav \
   --provider acrcloud \
   --interval 60 \
   --clip 12 \
-  --concurrency 3 \
+  --concurrency 64 \
   --limit 20
 ```
 
-`--interval` controls time between samples. `--clip` accepts 5–25 seconds. `--limit` caps billable recognition calls. Sparse sampling reports `complete: false`; this describes coverage, not identification correctness.
+`--interval` controls time between samples. `--clip` accepts 5–25 seconds. Local extraction and
+recognition default to 64 concurrent samples (or the number queued, whichever is lower); lower
+`--concurrency` when required by provider quotas or machine capacity. `--limit` caps billable
+recognition calls. Sparse sampling reports `complete: false`; this describes coverage, not
+identification correctness.
 
 Attempting remote sample recognition fails with:
 
@@ -278,7 +282,7 @@ The boundary is deliberate:
 - `slsk-ts` is preferred. A `ytdlp-ts` individual fallback targets a scored canonical track URL with playlists disabled. True recording ambiguities remain distinct alternatives and are all acquired.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
 - If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
-- Direct Rekordbox import begins only after all planned files are present and checksummed. It requires explicit approval, stopped Rekordbox processes, an exclusive backup of the database and companion files, one transaction, and post-commit integrity/membership verification.
+- Direct Rekordbox import begins only after all planned files are present and checksummed. Its file preflight, hashing, and backup copies use up to 64 workers; encrypted database access stays serialized in one transaction. It requires explicit approval, stopped Rekordbox processes, an exclusive backup of the database and companion files, and post-commit integrity/membership verification.
 
 Illustrative individual-track calls—not an automatic `tracks` command:
 
@@ -324,8 +328,11 @@ Spotify responses may depend on the authenticated account and market, so persist
 an opaque, non-secret `cacheScope` that identifies both. Caching is disabled when callers omit it;
 the bundled runner derives a one-way session fingerprint without storing the credential.
 
-`acquireManifest` defaults to three independent recording workers. Variants of one ambiguous cue,
-candidate fallback, manifest writes, and all Rekordbox operations remain serialized. Completed
+`acquireManifest` defaults to 64 independent recording workers, enough to fan out a typical 30–60
+track playlist—including ambiguity variants—in one wave. Verification, Spotify enrichment, and
+Spotify refresh likewise default to 64. Each limit can be lowered explicitly or raised as high as
+256; actual workers never exceed queued work. Candidate fallback and manifest checkpoints remain
+serialized per recording, and provider clients retain their retry/rate-limit handling. Completed
 media gets one concurrent verification pass; the bundled runner injects a stat-keyed cache that
 eliminates unchanged repeat hash/probe work. Library callers can inject the same `JsonDiskCache`
 through `verificationCache`. A fully verified resume takes the fast path without loading an acquisition backend.
@@ -333,7 +340,7 @@ The normal Rekordbox importer similarly verifies an already-imported playlist an
 `performance.changed: false` without another backup or write.
 
 ```sh
-pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 3
+pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 64
 pnpm exec tsx src/run-brunello-acquisition.ts --refresh-cache
 pnpm exec tsx src/run-brunello-acquisition.ts --no-cache
 ```

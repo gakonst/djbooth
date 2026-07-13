@@ -50,8 +50,13 @@ redownloading the complete 29-file library.
   YouTube metadata, and stat-keyed audio verification receipts. Bounded persisted sweeps delete
   expired or malformed entries.
 - Cache controls: default, refresh, and off; `TRACKS_CACHE_DIR` override.
-- Three independent recording workers; variants and candidate fallback remain serial.
-- Two clip workers; four verification workers.
+- Sixty-four independent recording workers by default; ambiguity variants share the same global
+  queue and candidate fallback remains serial within each recording.
+- Sixty-four clip, verification, Spotify enrichment, and Spotify refresh workers by default. The
+  scheduler caps actual workers to queued work; callers may override each limit from 1 through 256.
+- Sixty-four local recognition workers by default and a 64-call cap. Rekordbox media preflight,
+  checksum verification, and backup copies also fan out to 64 while every encrypted database read,
+  write, and the single commit remain serialized.
 - One serialized manifest commit coordinator; unchanged checkpoints do not write.
 - Fully verified acquisition fast path; no backend loading or repeated probe/hash work.
 - Rekordbox idempotent fast path: full database integrity, sidecar, metadata, ordering, and recovery

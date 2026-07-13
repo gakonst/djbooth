@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, createReadStream, readFileSync } from "node:fs";
-import { availableParallelism } from "node:os";
 import {
   access,
   copyFile,
@@ -32,7 +31,8 @@ import { mapConcurrent } from "./process.js";
 
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
 const DEFAULT_REKORDBOX_MODULE = "@gakonst/rekordbox";
-const REKORDBOX_IO_CONCURRENCY = Math.min(8, Math.max(1, availableParallelism()));
+/** Parallel read/hash/copy work only; database access remains serialized. */
+export const DEFAULT_REKORDBOX_IO_CONCURRENCY = 64;
 
 type DatabaseValue = string | number | bigint | Buffer | Date | null;
 
@@ -482,7 +482,7 @@ export async function backupRekordboxDatabase(
   try {
     const copied = await mapConcurrent(
       rekordboxBackupSources(dbDirectory, options.dbPath),
-      Math.min(4, REKORDBOX_IO_CONCURRENCY),
+      DEFAULT_REKORDBOX_IO_CONCURRENCY,
       async (source): Promise<RekordboxBackupFile | undefined> => {
         let sourceStat;
         try {
@@ -913,7 +913,7 @@ async function assertMediaFilesExist(
   previous?: ReadonlyMap<string, MediaReceipt>,
 ): Promise<Map<string, MediaReceipt>> {
   const receipts = new Map<string, MediaReceipt>();
-  await mapConcurrent(plan.items, REKORDBOX_IO_CONCURRENCY, async (item) => {
+  await mapConcurrent(plan.items, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (item) => {
     let mediaStat;
     try {
       mediaStat = await stat(item.mediaPath);
@@ -1028,7 +1028,7 @@ export async function readRekordboxBackup(directory: string): Promise<RekordboxB
   if (files.length !== value.files.length || !files.length) {
     throw new Error(`Invalid Rekordbox backup file inventory: ${reportPath}`);
   }
-  await mapConcurrent(files, REKORDBOX_IO_CONCURRENCY, async (file) => {
+  await mapConcurrent(files, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (file) => {
     if (
       basename(file.name) !== file.name ||
       resolve(file.backupPath) !== join(resolvedDirectory, file.name)

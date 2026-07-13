@@ -67,10 +67,12 @@ tracks, and unsupported account flows also fall back through `auto`.
 art alongside every track, embeds tags and artwork on the reference path, and only transcodes when
 `--audio-format` explicitly requests a codec.
 
-Batch downloads default to three concurrent tracks while YouTube is capped at one. YouTube requests
-use conservative sleeps, exponential HTTP/fragment/extractor retry delays, throttling detection, and
-one fragment at a time. A durable `.ytdlp-ts-music-archive` in the target directory prevents repeat
-downloads and uses URL fingerprints to skip completed tracks before any network request.
+Batch source inspection and track downloads both default to 64 concurrent operations, including
+YouTube tracks. Set `--concurrency` or `--youtube-concurrency` lower when a provider, account, or
+network requires throttling. Each YouTube transfer still uses exponential HTTP/fragment/extractor
+retry delays, throttling detection, and one fragment at a time. A durable
+`.ytdlp-ts-music-archive` in the target directory prevents repeat downloads and uses URL
+fingerprints to skip completed tracks before any network request.
 
 Progressive downloads resume with HTTP Range requests. HLS/DASH music is routed through yt-dlp's
 fragment-aware downloader so interrupted segmented streams also retain resume state. See

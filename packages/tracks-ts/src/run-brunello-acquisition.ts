@@ -5,6 +5,12 @@ import { pathToFileURL } from "node:url";
 import { JsonDiskCache, cacheDigest, type CacheMode, type CacheStats } from "./cache.js";
 import {
   acquireManifest,
+  DEFAULT_ACQUISITION_CONCURRENCY,
+  DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
+  DEFAULT_VERIFICATION_CONCURRENCY,
+  MAX_ACQUISITION_CONCURRENCY,
+  MAX_SPOTIFY_REFRESH_CONCURRENCY,
+  MAX_VERIFICATION_CONCURRENCY,
   type AcquireManifestOptions,
   type AcquireManifestResult,
   type SpotifyLibraryClient,
@@ -50,8 +56,11 @@ export type RunBrunelloAcquisitionOptions = {
   refreshSpotify?: boolean;
   dryRun?: boolean;
   continueOnError?: boolean;
+  /** Independent recording variants. Defaults to 64; accepts 1 through 256. */
   concurrency?: number;
+  /** Parallel media verification. Defaults to 64; accepts 1 through 256. */
   verificationConcurrency?: number;
+  /** Parallel Spotify metadata refreshes. Defaults to 64; accepts 1 through 256. */
   spotifyConcurrency?: number;
   cacheMode?: CacheMode;
   spotsModule?: SpotsModule;
@@ -111,9 +120,9 @@ export async function runBrunelloAcquisition(
     requireCompletePlan: true,
     dryRun: options.dryRun ?? false,
     continueOnError: options.continueOnError ?? true,
-    concurrency: options.concurrency ?? 3,
-    verificationConcurrency: options.verificationConcurrency ?? 8,
-    spotifyConcurrency: options.spotifyConcurrency ?? 8,
+    concurrency: options.concurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
+    verificationConcurrency: options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
+    spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
     verificationCache,
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   });
@@ -188,20 +197,26 @@ function parseArguments(arguments_: readonly string[]): RunBrunelloAcquisitionOp
       options.continueOnError = false;
     } else if (argument === "--concurrency") {
       const value = Number(arguments_[++index]);
-      if (!Number.isSafeInteger(value) || value < 1 || value > 8) {
-        throw new Error("--concurrency requires an integer between 1 and 8");
+      if (!Number.isSafeInteger(value) || value < 1 || value > MAX_ACQUISITION_CONCURRENCY) {
+        throw new Error(
+          `--concurrency requires an integer between 1 and ${String(MAX_ACQUISITION_CONCURRENCY)}`,
+        );
       }
       options.concurrency = value;
     } else if (argument === "--verification-concurrency") {
       const value = Number(arguments_[++index]);
-      if (!Number.isSafeInteger(value) || value < 1 || value > 16) {
-        throw new Error("--verification-concurrency requires an integer between 1 and 16");
+      if (!Number.isSafeInteger(value) || value < 1 || value > MAX_VERIFICATION_CONCURRENCY) {
+        throw new Error(
+          `--verification-concurrency requires an integer between 1 and ${String(MAX_VERIFICATION_CONCURRENCY)}`,
+        );
       }
       options.verificationConcurrency = value;
     } else if (argument === "--spotify-concurrency") {
       const value = Number(arguments_[++index]);
-      if (!Number.isSafeInteger(value) || value < 1 || value > 32) {
-        throw new Error("--spotify-concurrency requires an integer between 1 and 32");
+      if (!Number.isSafeInteger(value) || value < 1 || value > MAX_SPOTIFY_REFRESH_CONCURRENCY) {
+        throw new Error(
+          `--spotify-concurrency requires an integer between 1 and ${String(MAX_SPOTIFY_REFRESH_CONCURRENCY)}`,
+        );
       }
       options.spotifyConcurrency = value;
     } else if (argument === "--refresh-cache") {
