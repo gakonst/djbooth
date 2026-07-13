@@ -30,9 +30,10 @@ export async function request(url: string, options: RequestOptions = {}): Promis
       })
       if (response.ok) return response
       if (response.status < 500 || attempt === retries) {
-        throw new YtdlpError('HTTP_ERROR', `HTTP ${response.status} for ${url}`, {
+        const displayUrl = redactRequestUrl(url)
+        throw new YtdlpError('HTTP_ERROR', `HTTP ${response.status} for ${displayUrl}`, {
           status: response.status,
-          url,
+          url: displayUrl,
         })
       }
       lastError = new Error(`HTTP ${response.status}`)
@@ -45,9 +46,28 @@ export async function request(url: string, options: RequestOptions = {}): Promis
     await sleep(Math.min(250 * 2 ** attempt, 2_000), options.signal)
   }
 
-  throw new YtdlpError('NETWORK_ERROR', `Unable to fetch ${url}`, {
-    cause: lastError instanceof Error ? lastError.message : String(lastError),
+  const displayUrl = redactRequestUrl(url)
+  const cause = lastError instanceof Error ? lastError.message : String(lastError)
+  throw new YtdlpError('NETWORK_ERROR', `Unable to fetch ${displayUrl}`, {
+    cause: cause.replaceAll(url, displayUrl),
   })
+}
+
+/** Prevent short-lived media capabilities from leaking into errors, logs, or durable manifests. */
+export function redactRequestUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    if (/(^|\.)googlevideo\.com$/iu.test(url.hostname)) {
+      url.search = '?[redacted-transient-query]'
+      return url.toString()
+    }
+    for (const key of ['sig', 'signature', 'lsig', 'pot', 'po_token', 'token']) {
+      if (url.searchParams.has(key)) url.searchParams.set(key, '[redacted]')
+    }
+    return url.toString()
+  } catch {
+    return value
+  }
 }
 
 export async function downloadText(
@@ -60,14 +80,14 @@ export async function downloadText(
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
     throw new YtdlpError('RESPONSE_TOO_LARGE', `Response exceeds ${maxBytes} bytes`, {
       contentLength: declaredLength,
-      url,
+      url: redactRequestUrl(url),
     })
   }
   const buffer = Buffer.from(await response.arrayBuffer())
   if (buffer.byteLength > maxBytes) {
     throw new YtdlpError('RESPONSE_TOO_LARGE', `Response exceeds ${maxBytes} bytes`, {
       contentLength: buffer.byteLength,
-      url,
+      url: redactRequestUrl(url),
     })
   }
   return { response, text: buffer.toString('utf8') }

@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { EngineKind, MediaInfo } from '../src/core/types.js'
+import { YtdlpError } from '../src/core/errors.js'
+import { selectFormats } from '../src/core/format-selector.js'
 import {
   DEFAULT_MUSIC_CONCURRENCY,
   downloadMusicBatch,
@@ -99,7 +101,7 @@ describe('music batch downloads', () => {
     expect(maxActiveYoutube).toBe(1)
     expect(referenceOptions).toEqual([
       expect.objectContaining({
-        format: 'bestaudio/best',
+        format: MUSIC_FORMAT_SPEC,
         concurrentFragments: 1,
         retries: 10,
         fragmentRetries: 10,
@@ -255,6 +257,236 @@ describe('music batch downloads', () => {
     })
   })
 
+  it('routes native YouTube audio through three network-bound track workers', async () => {
+    let active = 0
+    let maximumActive = 0
+    const dependencies: MusicDependencies = {
+      async inspect(url) {
+        const id = url.split('/').at(-1)!
+        return {
+          engine: 'native',
+          data: {
+            id,
+            title: id,
+            extractor_key: 'Youtube',
+            formats: [
+              {
+                format_id: '140',
+                url: `https://rr1.example.googlevideo.com/${id}`,
+                ext: 'm4a',
+                protocol: 'https',
+                vcodec: 'none',
+                acodec: 'mp4a.40.2',
+                filesize: 1_000,
+              },
+            ],
+          },
+        }
+      },
+      async downloadNative() {
+        active += 1
+        maximumActive = Math.max(maximumActive, active)
+        await delay(20)
+        active -= 1
+        return { files: ['track.m4a'], selectedFormats: ['140'] }
+      },
+      async downloadReference() {
+        throw new Error('native YouTube must not use the reference engine')
+      },
+    }
+
+    const result = await downloadMusicBatch(
+      ['https://youtube.test/y1', 'https://youtube.test/y2', 'https://youtube.test/y3'],
+      { engine: 'native', concurrency: 3 },
+      dependencies,
+    )
+
+    expect(result).toMatchObject({ downloaded: 3, failed: 0 })
+    expect(result.items.every((item) => item.engine === 'native')).toBe(true)
+    expect(maximumActive).toBe(3)
+  })
+
+  it('prefers source M4A over higher-bitrate WebM for Rekordbox workflows', async () => {
+    let selectedFormat: string | undefined
+    const dependencies: MusicDependencies = {
+      async inspect() {
+        return {
+          engine: 'native',
+          data: {
+            id: 'video',
+            title: 'Video',
+            extractor_key: 'Youtube',
+            formats: [
+              {
+                format_id: '140',
+                url: 'https://rr1.example.googlevideo.com/m4a',
+                ext: 'm4a',
+                vcodec: 'none',
+                acodec: 'mp4a.40.2',
+                abr: 129,
+                filesize: 1_000,
+              },
+              {
+                format_id: '251',
+                url: 'https://rr1.example.googlevideo.com/webm',
+                ext: 'webm',
+                vcodec: 'none',
+                acodec: 'opus',
+                abr: 160,
+                filesize: 1_200,
+              },
+            ],
+          },
+        }
+      },
+      async downloadNative(info, options) {
+        selectedFormat = selectFormats(info.formats ?? [], options.format)[0]?.format_id
+        return { files: ['video.m4a'], selectedFormats: [selectedFormat!] }
+      },
+      async downloadReference() {
+        throw new Error('compatible native source must not fall back')
+      },
+    }
+
+    const result = await downloadMusicBatch(['https://youtube.test/video'], {}, dependencies)
+
+    expect(result.items[0]).toMatchObject({ status: 'downloaded', engine: 'native' })
+    expect(selectedFormat).toBe('140')
+  })
+
+  it('refreshes native YouTube capabilities before transfer and once after HTTP 403', async () => {
+    let inspections = 0
+    let downloads = 0
+    const dependencies: MusicDependencies = {
+      async inspect() {
+        inspections += 1
+        return {
+          engine: 'native',
+          data: {
+            id: 'video',
+            title: 'Video',
+            extractor_key: 'Youtube',
+            formats: [
+              {
+                format_id: '140',
+                url: `https://rr1.example.googlevideo.com/${inspections}`,
+                ext: 'm4a',
+                protocol: 'https',
+                vcodec: 'none',
+                acodec: 'mp4a.40.2',
+                filesize: 1_000,
+              },
+            ],
+          },
+        }
+      },
+      async downloadNative() {
+        downloads += 1
+        if (downloads === 1) {
+          throw new YtdlpError('HTTP_ERROR', 'expired', { status: 403 })
+        }
+        return { files: ['video.m4a'], selectedFormats: ['140'] }
+      },
+      async downloadReference() {
+        throw new Error('native refresh should recover without reference fallback')
+      },
+    }
+
+    const result = await downloadMusicBatch(
+      ['https://youtube.test/video'],
+      { engine: 'native' },
+      dependencies,
+    )
+
+    expect(result).toMatchObject({ downloaded: 1, failed: 0 })
+    expect(inspections).toBe(3)
+    expect(downloads).toBe(2)
+  })
+
+  it('falls back explicitly when auto native transfer remains unavailable', async () => {
+    let referenceDownloads = 0
+    const dependencies: MusicDependencies = {
+      async inspect() {
+        return {
+          engine: 'native',
+          data: {
+            id: 'video',
+            title: 'Video',
+            extractor_key: 'Youtube',
+            formats: [
+              {
+                format_id: '140',
+                url: 'https://rr1.example.googlevideo.com/video',
+                ext: 'm4a',
+                protocol: 'https',
+                vcodec: 'none',
+                acodec: 'mp4a.40.2',
+                filesize: 1_000,
+              },
+            ],
+          },
+        }
+      },
+      async downloadNative() {
+        throw new YtdlpError('RANGE_NOT_SUPPORTED', 'native transfer unavailable')
+      },
+      async downloadReference() {
+        referenceDownloads += 1
+        return { files: ['video.m4a'], stdout: '', stderr: '' }
+      },
+    }
+
+    const result = await downloadMusicBatch(
+      ['https://youtube.test/video'],
+      { engine: 'auto' },
+      dependencies,
+    )
+
+    expect(result.items[0]).toMatchObject({ status: 'downloaded', engine: 'reference' })
+    expect(referenceDownloads).toBe(1)
+  })
+
+  it.each(['ABORTED', 'OUTPUT_LOCKED', 'WRITE_FAILED'])(
+    'does not invoke the external reference engine after native %s',
+    async (code) => {
+      let referenceDownloads = 0
+      const dependencies: MusicDependencies = {
+        async inspect() {
+          return {
+            engine: 'native',
+            data: {
+              id: 'video',
+              title: 'Video',
+              extractor_key: 'Youtube',
+              formats: [
+                {
+                  format_id: '140',
+                  url: 'https://rr1.example.googlevideo.com/video',
+                  ext: 'm4a',
+                  vcodec: 'none',
+                  acodec: 'mp4a.40.2',
+                  filesize: 1_000,
+                },
+              ],
+            },
+          }
+        },
+        async downloadNative() {
+          throw new YtdlpError(code, code)
+        },
+        async downloadReference() {
+          referenceDownloads += 1
+          return { files: ['video.m4a'], stdout: '', stderr: '' }
+        },
+      }
+
+      const result = await downloadMusicBatch(['https://youtube.test/video'], {}, dependencies)
+
+      expect(result.items[0]).toMatchObject({ status: 'failed', error: code })
+      expect(referenceDownloads).toBe(0)
+    },
+  )
+
   it('routes best-audio HLS through the fragment-resumable reference downloader', async () => {
     let referenceOptions: unknown
     const dependencies: MusicDependencies = {
@@ -296,7 +528,7 @@ describe('music batch downloads', () => {
       status: 'downloaded',
     })
     expect(referenceOptions).toMatchObject({
-      format: 'bestaudio/best',
+      format: MUSIC_FORMAT_SPEC,
       retries: 10,
       fragmentRetries: 10,
       extractAudio: true,

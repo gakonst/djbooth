@@ -13,7 +13,11 @@ import { errorMessage, YtdlpError } from './core/errors.js'
 import { compareMediaInfo } from './core/parity.js'
 import type { EngineKind } from './core/types.js'
 import { ExtractorRegistry } from './extractors/registry.js'
-import { downloadMedia, supportsNativeDownloadOptions } from './downloader/native.js'
+import {
+  downloadMedia,
+  sanitizeMediaInfoForOutput,
+  supportsNativeDownloadOptions,
+} from './downloader/native.js'
 import { downloadMusicBatch } from './music.js'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json') as {
@@ -64,8 +68,12 @@ cli.command('inspect', {
   examples: [{ args: { url: 'https://www.youtube.com/watch?v=BaW_jenozKc' } }],
   async run(c) {
     try {
-      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
-      return { engine: result.engine, info: result.data }
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      return { engine: result.engine, info: sanitizeMediaInfoForOutput(result.data) }
     } catch (error) {
       return fail(c, error)
     }
@@ -78,8 +86,13 @@ cli.command('formats', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
-      const formats = result.data.formats ?? []
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      const safe = sanitizeMediaInfoForOutput(result.data)
+      const formats = safe.formats ?? []
       return {
         engine: result.engine,
         id: result.data.id,
@@ -99,13 +112,18 @@ cli.command('subtitles', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      const safe = sanitizeMediaInfoForOutput(result.data)
       return {
         engine: result.engine,
         id: result.data.id,
         title: result.data.title,
-        subtitles: result.data.subtitles ?? {},
-        automaticCaptions: result.data.automatic_captions ?? {},
+        subtitles: safe.subtitles ?? {},
+        automaticCaptions: safe.automatic_captions ?? {},
       }
     } catch (error) {
       return fail(c, error)
@@ -119,12 +137,17 @@ cli.command('thumbnails', {
   options: inspectOptions,
   async run(c) {
     try {
-      const result = await inspect(c.args.url, c.options.engine as EngineKind, toInspectOptions(c.options))
+      const result = await inspect(
+        c.args.url,
+        c.options.engine as EngineKind,
+        toInspectOptions(c.options),
+      )
+      const safe = sanitizeMediaInfoForOutput(result.data)
       return {
         engine: result.engine,
         id: result.data.id,
         title: result.data.title,
-        thumbnails: result.data.thumbnails ?? [],
+        thumbnails: safe.thumbnails ?? [],
       }
     } catch (error) {
       return fail(c, error)
@@ -195,6 +218,13 @@ cli.command('music', {
     archive: z.string().optional().describe('Durable completed-track archive path'),
     concurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel source inspections and tracks'),
     youtubeConcurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel YouTube tracks'),
+    nativeYoutubeConcurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(16)
+      .default(3)
+      .describe('Maximum parallel native YouTube tracks'),
     retries: z.number().int().min(0).max(100).default(10).describe('Transfer and fragment retries'),
     rateLimit: z.string().optional().describe('Global download rate limit, e.g. 8M'),
     youtubeRateLimit: z.string().optional().describe('YouTube-specific rate limit, e.g. 4M'),
@@ -205,7 +235,10 @@ cli.command('music', {
     writeInfoJson: z.boolean().default(true).describe('Write full metadata JSON alongside audio'),
     writeThumbnail: z.boolean().default(true).describe('Write cover artwork alongside audio'),
     embedMetadata: z.boolean().default(true).describe('Embed tags when using the reference engine'),
-    embedThumbnail: z.boolean().default(true).describe('Embed cover art when using the reference engine'),
+    embedThumbnail: z
+      .boolean()
+      .default(true)
+      .describe('Embed cover art when using the reference engine'),
     cookies: z.string().optional().describe('Netscape cookie file'),
     cookiesFromBrowser: z.string().optional().describe('Browser cookie source specification'),
     proxy: z.string().optional().describe('HTTP/HTTPS/SOCKS proxy URL'),
@@ -253,7 +286,12 @@ cli.command('download', {
     playlist: z.boolean().default(true).describe('Download playlists instead of a single item'),
     noOverwrites: z.boolean().optional().describe('Do not overwrite existing files'),
     continueDownload: z.boolean().default(true).describe('Resume partial downloads'),
-    concurrentFragments: z.number().int().positive().optional().describe('Concurrent fragment count'),
+    concurrentFragments: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('Concurrent fragment count'),
     retries: z.number().int().nonnegative().optional().describe('HTTP retry count'),
     fragmentRetries: z.number().int().nonnegative().optional().describe('Fragment retry count'),
     rateLimit: z.string().optional().describe('Maximum download rate, e.g. 4.2M'),
@@ -272,7 +310,10 @@ cli.command('download', {
     writeInfoJson: z.boolean().optional().describe('Write the info object as JSON'),
     embedMetadata: z.boolean().optional().describe('Embed media metadata'),
     embedChapters: z.boolean().optional().describe('Embed chapter markers'),
-    sponsorblockRemove: z.array(z.string()).optional().describe('SponsorBlock categories to remove'),
+    sponsorblockRemove: z
+      .array(z.string())
+      .optional()
+      .describe('SponsorBlock categories to remove'),
     cookies: z.string().optional().describe('Netscape cookie file'),
     cookiesFromBrowser: z.string().optional().describe('Browser cookie source specification'),
     username: z.string().optional().describe('Account username'),
@@ -351,7 +392,8 @@ cli.command('extractors', {
   async run(c) {
     try {
       const native = new ExtractorRegistry().list()
-      if (c.options.engine === 'native') return { engine: 'native', count: native.length, extractors: native }
+      if (c.options.engine === 'native')
+        return { engine: 'native', count: native.length, extractors: native }
       const result = await new ReferenceClient().run(['--ignore-config', '--list-extractors'])
       const reference = result.stdout.split(/\r?\n/u).filter(Boolean)
       if (c.options.engine === 'reference') {

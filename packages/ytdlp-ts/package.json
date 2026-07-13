@@ -49,7 +49,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "incur": "^0.4.13"
+    "incur": "^0.4.13",
+    "youtubei.js": "^17.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

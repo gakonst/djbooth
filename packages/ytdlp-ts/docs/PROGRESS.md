@@ -2,6 +2,24 @@
 
 This is the append-only engineering journal for the port. Dates use Pacific Time.
 
+## 2026-07-12 — Native YouTube audio and network-bound transfer
+
+- Replaced watch-page-only YouTube extraction with YouTube.js 17.2 Android VR InnerTube metadata.
+- Direct signed M4A/WebM formats feed the existing `MediaInfo` and `downloadMedia` pipeline; no
+  `ReferenceClient`, external `yt-dlp`, SABR client, player retrieval, or remote JavaScript
+  evaluation is used.
+- Extraction fails closed with `YOUTUBE_DIRECT_FORMATS_UNAVAILABLE` when Android VR supplies no direct
+  audio format.
+- Added concurrent 1 MiB HTTP range batches with ordered `.part` commits, exact resume offsets,
+  `Content-Range` validation, two range requests per track, and three independent YouTube track
+  workers by default. Six simultaneous requests passed the production probe; nine showed an
+  intermittent upstream 403.
+- Transient signed URLs are redacted from native info sidecars and network errors. Callers freshly
+  inspect before every download.
+- Live exact validation: 14/14 reviewed music URLs exposed native audio formats in 1.247 s; one
+  3,511,486-byte M4A downloaded and FFprobe-validated in 1.879 s; the production six-request probe
+  downloaded three tracks totaling 12,007,913 bytes in 1.522 s.
+
 ## 2026-07-10 — Repository bootstrap
 
 - Pinned yt-dlp reference revision `59d9ae606a24a80523da35de9fb75b71eb35b501`.

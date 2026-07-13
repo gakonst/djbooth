@@ -9,7 +9,7 @@ import { selectFormats } from './core/format-selector.js'
 import type { EngineKind, MediaInfo } from './core/types.js'
 import { downloadMedia, type NativeDownloadOptions, type NativeDownloadResult } from './downloader/native.js'
 
-export const MUSIC_FORMAT_SPEC = 'bestaudio/best'
+export const MUSIC_FORMAT_SPEC = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best'
 export const MUSIC_OUTPUT_TEMPLATE = '%(uploader,channel)s/%(title)s [%(id)s].%(ext)s'
 export const DEFAULT_MUSIC_CONCURRENCY = 64
 export const MAX_MUSIC_CONCURRENCY = 64
@@ -23,6 +23,7 @@ export interface MusicDownloadOptions extends InspectReferenceOptions {
   archive?: string
   concurrency?: number
   youtubeConcurrency?: number
+  nativeYoutubeConcurrency?: number
   retries?: number
   rateLimit?: string
   youtubeRateLimit?: string
@@ -85,7 +86,8 @@ export async function downloadMusicBatch(
   dependencies: MusicDependencies = defaultDependencies,
 ): Promise<MusicBatchResult> {
   const uniqueSources = [...new Set(sources.map((source) => source.trim()).filter(Boolean))]
-  if (uniqueSources.length === 0) throw new YtdlpError('NO_MUSIC_URLS', 'At least one music URL is required')
+  if (uniqueSources.length === 0)
+    throw new YtdlpError('NO_MUSIC_URLS', 'At least one music URL is required')
   const archive = await DownloadArchive.open(options.archive)
   const concurrency = musicConcurrency(options.concurrency)
   const plannedBySource = await mapConcurrent(uniqueSources, concurrency, async (source) => {
@@ -98,7 +100,11 @@ export async function downloadMusicBatch(
       ] satisfies PlannedItem[]
     }
     try {
-      const result = await dependencies.inspect(source, options.engine ?? 'auto', inspectOptions(options))
+      const result = await dependencies.inspect(
+        source,
+        options.engine ?? 'auto',
+        inspectOptions(options),
+      )
       if (result.data.entries?.length) {
         return result.data.entries.flatMap((entry): PlannedItem[] => {
           const entryUrl = mediaWebpageUrl(entry)
@@ -142,10 +148,18 @@ export async function downloadMusicBatch(
   const completed = new Map<PreparedTrack, MusicDownloadItem>()
   let cursor = 0
   const youtubeSemaphore = new Semaphore(musicConcurrency(options.youtubeConcurrency))
+  const nativeYoutubeSemaphore = new Semaphore(
+    musicConcurrency(options.nativeYoutubeConcurrency ?? 3),
+  )
   const workers = Array.from({ length: Math.min(concurrency, Math.max(queue.length, 1)) }, async () => {
     while (cursor < queue.length) {
       const track = queue[cursor++]!
-      const release = isYouTube(track) ? await youtubeSemaphore.acquire() : () => undefined
+      const release = isYouTube(track)
+        ? await (track.extractionEngine === 'native'
+            ? nativeYoutubeSemaphore
+            : youtubeSemaphore
+          ).acquire()
+        : () => undefined
       try {
         completed.set(track, await downloadPreparedTrack(track, archive, options, dependencies))
       } catch (error) {
@@ -198,42 +212,56 @@ async function downloadPreparedTrack(
     }
   }
 
+  let current = track
+  if (isYouTube(current) && current.extractionEngine === 'native') {
+    try {
+      current = await refreshNativeYoutube(current, options, dependencies)
+    } catch (error) {
+      if (options.engine === 'native' || !isNativeFallbackEligible(error)) throw error
+      current = { ...current, extractionEngine: 'reference' }
+    }
+  }
+
   const useNative =
     options.engine !== 'reference' &&
-    track.extractionEngine === 'native' &&
-    isSoundCloud(track) &&
-    hasNativelyResumableBestAudio(track.info) &&
+    current.extractionEngine === 'native' &&
+    hasNativelyResumableBestAudio(current.info) &&
     (options.audioFormat ?? 'best') === 'best'
-  let files: string[]
-  let selectedEngine: 'native' | 'reference'
+  let files: string[] | undefined
+  let selectedEngine: 'native' | 'reference' | undefined
   if (useNative) {
-    const result = await dependencies.downloadNative(
-      track.info,
-      omitUndefined({
-        format: MUSIC_FORMAT_SPEC,
-        output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
-        paths: options.paths,
-        continueDownload: true,
-        retries: options.retries ?? 5,
-        rateLimit: options.rateLimit,
-        writeInfoJson: options.writeInfoJson ?? true,
-        writeThumbnail: options.writeThumbnail ?? true,
-        signal: options.signal,
-      }) as NativeDownloadOptions,
-    )
-    files = result.files
-    selectedEngine = 'native'
-  } else {
+    try {
+      let result
+      try {
+        result = await dependencies.downloadNative(
+          current.info,
+          nativeMusicOptions(current, options),
+        )
+      } catch (error) {
+        if (!isYouTube(current) || !isForbiddenMediaError(error)) throw error
+        current = await refreshNativeYoutube(current, options, dependencies)
+        result = await dependencies.downloadNative(
+          current.info,
+          nativeMusicOptions(current, options),
+        )
+      }
+      files = result.files
+      selectedEngine = 'native'
+    } catch (error) {
+      if (options.engine === 'native' || !isNativeFallbackEligible(error)) throw error
+    }
+  }
+  if (!files) {
     if (options.engine === 'native') {
       throw new YtdlpError(
         'NATIVE_MUSIC_UNAVAILABLE',
-        'This track requires the reference engine for highest-quality music download',
+        'This track requires behavior unavailable in the TypeScript-native engine',
       )
     }
-    const youtube = isYouTube(track)
+    const youtube = isYouTube(current)
     const audioFormat = options.audioFormat ?? 'best'
     const result = await dependencies.downloadReference(
-      track.url,
+      current.url,
       omitUndefined({
         ...inspectOptions(options),
         playlist: false,
@@ -265,15 +293,70 @@ async function downloadPreparedTrack(
   }
 
   if (archiveKey) await archive.add(archiveKey)
-  await archive.add(makeUrlArchiveKey(track.url))
+  await archive.add(makeUrlArchiveKey(current.url))
   return {
-    url: track.url,
-    id: track.info.id,
-    title: track.info.title,
-    engine: selectedEngine,
+    url: current.url,
+    id: current.info.id,
+    title: current.info.title,
+    ...(selectedEngine ? { engine: selectedEngine } : undefined),
     status: 'downloaded',
     files,
   }
+}
+
+function nativeMusicOptions(
+  track: PreparedTrack,
+  options: MusicDownloadOptions,
+): NativeDownloadOptions {
+  return omitUndefined({
+    format: MUSIC_FORMAT_SPEC,
+    output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
+    paths: options.paths,
+    continueDownload: true,
+    retries: options.retries ?? 5,
+    rateLimit: isYouTube(track)
+      ? (options.youtubeRateLimit ?? options.rateLimit)
+      : options.rateLimit,
+    writeInfoJson: options.writeInfoJson ?? true,
+    writeThumbnail: options.writeThumbnail ?? true,
+    signal: options.signal,
+  }) as NativeDownloadOptions
+}
+
+async function refreshNativeYoutube(
+  track: PreparedTrack,
+  options: MusicDownloadOptions,
+  dependencies: MusicDependencies,
+): Promise<PreparedTrack> {
+  const refreshed = await dependencies.inspect(track.url, 'native', {
+    ...inspectOptions(options),
+    playlist: false,
+  })
+  if (refreshed.engine !== 'native' || refreshed.data.id !== track.info.id) {
+    throw new YtdlpError(
+      'YOUTUBE_IDENTITY_MISMATCH',
+      `Fresh native inspection returned '${refreshed.data.id}' for '${track.info.id}'`,
+    )
+  }
+  return { ...track, info: refreshed.data, extractionEngine: 'native' }
+}
+
+function isForbiddenMediaError(error: unknown): boolean {
+  return error instanceof YtdlpError && error.code === 'HTTP_ERROR' && error.details?.status === 403
+}
+
+const NATIVE_FALLBACK_ERROR_CODES = new Set([
+  'FORMAT_UNAVAILABLE',
+  'NATIVE_PLAYLIST_UNSUPPORTED',
+  'NO_FORMATS',
+  'RANGE_NOT_SUPPORTED',
+  'SOUNDCLOUD_NO_FORMATS',
+  'UNSUPPORTED_URL',
+  'YOUTUBE_DIRECT_FORMATS_UNAVAILABLE',
+])
+
+function isNativeFallbackEligible(error: unknown): boolean {
+  return error instanceof YtdlpError && NATIVE_FALLBACK_ERROR_CODES.has(error.code)
 }
 
 function inspectOptions(options: MusicDownloadOptions): InspectReferenceOptions {
@@ -354,7 +437,8 @@ function makeUrlArchiveKey(value: string): string {
     const url = new URL(normalized)
     url.hash = ''
     for (const key of [...url.searchParams.keys()]) {
-      if (key.startsWith('utm_') || ['si', 'feature', 't'].includes(key)) url.searchParams.delete(key)
+      if (key.startsWith('utm_') || ['si', 'feature', 't'].includes(key))
+        url.searchParams.delete(key)
     }
     normalized = url.href
   } catch {

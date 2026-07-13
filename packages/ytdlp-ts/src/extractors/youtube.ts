@@ -4,12 +4,21 @@ import { downloadText } from '../core/network.js'
 import type { Format, MediaInfo, Subtitle, Thumbnail } from '../core/types.js'
 import { uploadDate } from '../core/utils.js'
 import type { Extractor, ExtractorContext } from './base.js'
+import {
+  extractYoutubeWithInnertube,
+  type YoutubeNativeClientFactory,
+} from './youtube-innertube.js'
 
 type JsonRecord = Record<string, unknown>
 
 export class YoutubeExtractor implements Extractor {
   readonly key = 'Youtube'
   readonly name = 'YouTube videos'
+  readonly #createClient: YoutubeNativeClientFactory | undefined
+
+  constructor(options: { createClient?: YoutubeNativeClientFactory } = {}) {
+    this.#createClient = options.createClient
+  }
 
   suitable(url: URL): boolean {
     return /(^|\.)youtube\.com$/iu.test(url.hostname) || /(^|\.)youtu\.be$/iu.test(url.hostname)
@@ -17,22 +26,9 @@ export class YoutubeExtractor implements Extractor {
 
   async extract(url: URL, context: ExtractorContext): Promise<MediaInfo> {
     const videoId = extractYoutubeId(url)
-    if (!videoId) throw new YtdlpError('INVALID_YOUTUBE_URL', `Could not determine video ID from ${url.href}`)
-    const watchUrl = `https://www.youtube.com/watch?v=${videoId}&bpctr=9999999999&has_verified=1`
-    const { text } = await downloadText(watchUrl, {
-      ...(context.signal ? { signal: context.signal } : undefined),
-      maxBytes: 12 * 1024 * 1024,
-    })
-    const playerResponse = extractPlayerResponse(text)
-    if (!playerResponse) throw new YtdlpError('YOUTUBE_PLAYER_RESPONSE_MISSING', 'YouTube player response was not found')
-    const info = await parseYoutubePlayerResponse(playerResponse, watchUrl, context)
-    if (!info.formats?.length) {
-      throw new YtdlpError(
-        'YOUTUBE_SIGNATURE_REQUIRED',
-        'Available YouTube formats require player signature transformation; use engine auto/reference',
-      )
-    }
-    return info
+    if (!videoId)
+      throw new YtdlpError('INVALID_YOUTUBE_URL', `Could not determine video ID from ${url.href}`)
+    return extractYoutubeWithInnertube(videoId, context, this.#createClient)
   }
 }
 
@@ -50,7 +46,11 @@ function validId(value: string | undefined): string | undefined {
 }
 
 export function extractPlayerResponse(webpage: string): JsonRecord | undefined {
-  for (const marker of ['ytInitialPlayerResponse =', 'ytInitialPlayerResponse=', 'var ytInitialPlayerResponse =']) {
+  for (const marker of [
+    'ytInitialPlayerResponse =',
+    'ytInitialPlayerResponse=',
+    'var ytInitialPlayerResponse =',
+  ]) {
     const index = webpage.indexOf(marker)
     if (index < 0) continue
     const json = extractBalancedJson(webpage, index + marker.length)
@@ -189,7 +189,11 @@ function parseYoutubeFormat(value: JsonRecord | undefined): Format | undefined {
   }
   if (!url) return undefined
   const mime = string(value.mimeType) ?? ''
-  const codecs = /codecs="([^"]+)"/u.exec(mime)?.[1]?.split(',').map((codec) => codec.trim()) ?? []
+  const codecs =
+    /codecs="([^"]+)"/u
+      .exec(mime)?.[1]
+      ?.split(',')
+      .map((codec) => codec.trim()) ?? []
   const video = mime.startsWith('video/')
   const audio = mime.startsWith('audio/')
   const formatNote = string(value.qualityLabel)
@@ -209,8 +213,8 @@ function parseYoutubeFormat(value: JsonRecord | undefined): Format | undefined {
     ...(fps !== undefined ? { fps } : undefined),
     ...(bitrate !== undefined ? { tbr: bitrate / 1_000 } : undefined),
     ...(contentLength !== undefined ? { filesize: contentLength } : undefined),
-    vcodec: audio ? 'none' : codecs[0] ?? (video ? 'unknown' : 'none'),
-    acodec: video && codecs.length < 2 ? 'none' : codecs.at(-1) ?? (audio ? 'unknown' : 'none'),
+    vcodec: audio ? 'none' : (codecs[0] ?? (video ? 'unknown' : 'none')),
+    acodec: video && codecs.length < 2 ? 'none' : (codecs.at(-1) ?? (audio ? 'unknown' : 'none')),
   }
 }
 
@@ -250,7 +254,8 @@ function string(value: unknown): string | undefined {
 }
 
 function number(value: unknown): number | undefined {
-  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
@@ -260,7 +265,8 @@ function text(value: unknown): string | undefined {
     string(object?.simpleText) ??
     (array(object?.runs)
       .map((run) => string(record(run)?.text) ?? '')
-      .join('') || undefined)
+      .join('') ||
+      undefined)
   )
 }
 
