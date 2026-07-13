@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { identify } from "../src/identify.js";
+import { identify, rankTracklistCandidates } from "../src/identify.js";
 import { createManifest } from "../src/manifest.js";
 
 describe("identify", () => {
@@ -51,6 +51,7 @@ describe("identify", () => {
       cacheMode: "off",
       env: { PARSE_API_KEY: "parse" },
       fetch,
+      metadataClient: { inspect: vi.fn(async () => ({})) },
     });
     expect(result).toMatchObject({
       source: "https://youtu.be/known",
@@ -124,6 +125,126 @@ describe("identify", () => {
     expect(requests).toHaveLength(3);
   });
 
+  test("runs metadata and exact lookup concurrently, races ranked title lookup, and cancels the loser", async () => {
+    const requests: string[] = [];
+    const timings: Array<{ stage: string; outcome: string; durationMs: number }> = [];
+    let exactStarted = false;
+    let metadataStarted = false;
+    let exactAborted = false;
+    let releaseMetadata!: () => void;
+    const metadataGate = new Promise<void>((resolve) => {
+      releaseMetadata = resolve;
+    });
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push(url.pathname.split("/").at(-1)!);
+      if (url.pathname.endsWith("/find_by_media_url")) {
+        exactStarted = true;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              exactAborted = true;
+              reject(new DOMException("lookup superseded", "AbortError"));
+            },
+            { once: true },
+          );
+        });
+      }
+      if (url.pathname.endsWith("/search_tracklists")) {
+        return Response.json({
+          data: {
+            items: [
+              {
+                title: "Someone Else @ Another Festival 2024",
+                url: "https://www.1001tracklists.com/tracklist/wrong.html",
+              },
+              {
+                title: "Brunello @ Lightning in a Bottle 2026",
+                djName: "Brunello",
+                durationSeconds: 7_050,
+                url: "https://www.1001tracklists.com/tracklist/right.html",
+              },
+            ],
+          },
+        });
+      }
+      expect(url.searchParams.get("url")).toContain("right.html");
+      return Response.json({
+        data: {
+          url: "https://www.1001tracklists.com/tracklist/right.html",
+          title: "Brunello @ Lightning in a Bottle 2026",
+          entries: [{ position: 1, cueSeconds: 0, artist: "Jansons", title: "Panic" }],
+        },
+      });
+    }) as typeof globalThis.fetch;
+
+    const resolution = identify("https://youtu.be/baDz12J2uNo", {
+      cacheMode: "off",
+      env: { PARSE_API_KEY: "parse" },
+      fetch,
+      metadataClient: {
+        inspect: vi.fn(async () => {
+          metadataStarted = true;
+          await metadataGate;
+          return {
+            title: "BRUNELLO @ LIGHTNING IN A BOTTLE 2026",
+            uploader: "Brunello",
+            durationSeconds: 7_064,
+            description: "No timestamps here",
+          };
+        }),
+      },
+      onStageTiming: (timing) => timings.push(timing),
+    });
+
+    await vi.waitFor(() => {
+      expect(metadataStarted).toBe(true);
+      expect(exactStarted).toBe(true);
+    });
+    releaseMetadata();
+    const result = await resolution;
+    expect(result).toMatchObject({
+      provider: "1001tracklists",
+      url: "https://www.1001tracklists.com/tracklist/right.html",
+    });
+    expect(requests).toEqual(["find_by_media_url", "search_tracklists", "get_tracklist"]);
+    await vi.waitFor(() => expect(exactAborted).toBe(true));
+    await vi.waitFor(() =>
+      expect(timings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ stage: "metadata", outcome: "completed" }),
+          expect.objectContaining({ stage: "database-search", outcome: "completed" }),
+          expect.objectContaining({ stage: "database-tracklist", outcome: "matched" }),
+          expect.objectContaining({ stage: "database-media", outcome: "cancelled" }),
+        ]),
+      ),
+    );
+    expect(timings.every((timing) => timing.durationMs >= 0)).toBe(true);
+  });
+
+  test("ranks title candidates by title, uploader, and duration instead of provider order", () => {
+    const ranked = rankTracklistCandidates(
+      [
+        { title: "Brunello Interview 2026", url: "https://example.com/wrong" },
+        {
+          title: "Brunello @ Lightning in a Bottle Festival 2026",
+          djName: "Brunello",
+          durationSeconds: 7_050,
+          url: "https://example.com/right",
+        },
+      ],
+      {
+        title: "BRUNELLO @ LIGHTNING IN A BOTTLE 2026",
+        uploader: "Brunello",
+        durationSeconds: 7_064,
+      },
+    );
+
+    expect(ranked[0]?.candidate.url).toBe("https://example.com/right");
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
   test("falls through to AudD Enterprise and reports sampling precision", async () => {
     const fetch = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes("parse.bot")) {
@@ -145,6 +266,7 @@ describe("identify", () => {
       cacheMode: "off",
       env: { PARSE_API_KEY: "parse", AUDD_API_TOKEN: "audd" },
       fetch,
+      metadataClient: { inspect: vi.fn(async () => ({})) },
     });
     expect(result).toMatchObject({
       provider: "audd",
@@ -176,6 +298,7 @@ describe("identify", () => {
         cacheMode: "off",
         env: { PARSE_API_KEY: "parse", AUDD_API_TOKEN: "audd" },
         fetch,
+        metadataClient: { inspect: vi.fn(async () => ({})) },
       }),
     ).rejects.toThrow("quota exceeded");
     expect(fetch).toHaveBeenCalledTimes(1);

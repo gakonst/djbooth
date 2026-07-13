@@ -49,6 +49,36 @@ describe("JsonDiskCache", () => {
     await expect(cache.getOrLoad("key", load)).resolves.toBe(4);
   });
 
+  test("supports value-dependent positive and negative TTLs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-cache-value-expiry-"));
+    let now = Date.parse("2026-07-12T00:00:00.000Z");
+    let found = false;
+    let loads = 0;
+    const cache = new JsonDiskCache({
+      namespace: "value-expiry-v1",
+      root,
+      now: () => now,
+    });
+    const load = async () => {
+      loads += 1;
+      return { found };
+    };
+
+    await expect(
+      cache.getOrLoad("key", load, { ttlMs: (value) => (value.found ? 1_000 : 100) }),
+    ).resolves.toEqual({ found: false });
+    now += 101;
+    found = true;
+    await expect(
+      cache.getOrLoad("key", load, { ttlMs: (value) => (value.found ? 1_000 : 100) }),
+    ).resolves.toEqual({ found: true });
+    now += 101;
+    await expect(
+      cache.getOrLoad("key", load, { ttlMs: (value) => (value.found ? 1_000 : 100) }),
+    ).resolves.toEqual({ found: true });
+    expect(loads).toBe(2);
+  });
+
   test("single-flights concurrent misses", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-cache-flight-"));
     const cache = new JsonDiskCache({ namespace: "flight-v1", root });

@@ -102,7 +102,7 @@ describe("Brunello acquisition preset", () => {
       },
     };
 
-    await refreshKnownSpotifyTracks(reconciled, spotify);
+    const result = await refreshKnownSpotifyTracks(reconciled, spotify);
 
     expect(paths).toHaveLength(22);
     expect(paths.every((path) => /^tracks\/[\w-]+$/u.test(path))).toBe(true);
@@ -110,6 +110,14 @@ describe("Brunello acquisition preset", () => {
     expect(reconciled.entries.find((entry) => entry.order === 1)!.spotify).toMatchObject({
       releaseDate: "2026-01-02",
       albumArtists: ["Album Artist"],
+    });
+    expect(result).toMatchObject({
+      ids: 22,
+      requests: 22,
+      networkRequests: 22,
+      received: 22,
+      concurrency: 8,
+      maxConcurrency: 8,
     });
   });
 });

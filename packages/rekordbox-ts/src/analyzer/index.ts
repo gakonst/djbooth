@@ -81,10 +81,18 @@ export type AnalyzeTracksOptions = Omit<AnalyzeTrackOptions, "outputDirectory"> 
 
 /** Ordered results and wall-clock timing for a multi-track analyzer run. */
 export type AnalyzeTracksResult = {
+  analyzed: number;
+  cacheHits: number;
   concurrency: number;
   elapsedMs: number;
   requested: number;
   results: Array<RekordboxAnalysisResult>;
+  throughputTracksPerSecond: number;
+  timings: {
+    analyzeMs: number;
+    preflightMs: number;
+    totalMs: number;
+  };
 };
 
 type PreparedAnalysis = {
@@ -164,7 +172,7 @@ export async function analyzeTracks(
   audioPaths: ReadonlyArray<string>,
   options: AnalyzeTracksOptions = {},
 ): Promise<AnalyzeTracksResult> {
-  const configuredConcurrency = options.concurrency ?? Math.min(4, availableParallelism());
+  const configuredConcurrency = options.concurrency ?? Math.min(8, availableParallelism());
   if (
     !Number.isInteger(configuredConcurrency) ||
     configuredConcurrency < 1 ||
@@ -182,32 +190,50 @@ export async function analyzeTracks(
   }
 
   const started = performance.now();
+  const preflightStarted = performance.now();
+  const prepared = absolutePaths.map((audioPath) => prepareAnalysis(audioPath, options));
+  const preflightMs = roundMilliseconds(performance.now() - preflightStarted);
   const concurrency = Math.min(configuredConcurrency, absolutePaths.length);
   const results = Array.from<RekordboxAnalysisResult>({ length: absolutePaths.length });
   const failures = Array.from<Error | undefined>({ length: absolutePaths.length });
+  const pending: number[] = [];
+  for (const [index, analysis] of prepared.entries()) {
+    if (analysis.cached) results[index] = analysis.cached;
+    else pending.push(index);
+  }
+  const analyzeStarted = performance.now();
   let nextIndex = 0;
   const worker = async () => {
     while (true) {
-      const index = nextIndex++;
-      const audioPath = absolutePaths[index];
-      if (audioPath === undefined) return;
+      const index = pending[nextIndex++];
+      if (index === undefined) return;
+      const audioPath = absolutePaths[index]!;
       try {
-        results[index] = await analyzeTrackAsync(audioPath, options);
+        const analysis = prepared[index]!;
+        const stdout = await runAnalyzer(analysis, options.timeoutMs ?? 300_000);
+        results[index] = persistAnalysisResult(stdout, analysis);
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : String(cause);
         failures[index] = new Error(`Failed to analyze '${audioPath}': ${message}`, { cause });
       }
     }
   };
-  await Promise.all(Array.from({ length: concurrency }, worker));
+  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  const analyzeMs = roundMilliseconds(performance.now() - analyzeStarted);
   const errors = failures.filter((error): error is Error => error !== undefined);
   if (errors.length)
     throw new AggregateError(errors, `Rekordbox analysis failed for ${errors.length} track(s)`);
+  const totalMs = roundMilliseconds(performance.now() - started);
   return {
+    analyzed: pending.length,
+    cacheHits: absolutePaths.length - pending.length,
     concurrency,
-    elapsedMs: Math.round(performance.now() - started),
+    elapsedMs: Math.round(totalMs),
     requested: absolutePaths.length,
     results,
+    throughputTracksPerSecond:
+      pending.length && analyzeMs ? roundMilliseconds((pending.length * 1_000) / analyzeMs) : 0,
+    timings: { analyzeMs, preflightMs, totalMs },
   };
 }
 
@@ -280,6 +306,10 @@ function sourceFingerprint(audioPath: string): RekordboxAnalysisResult["source"]
     path: realpathSync(audioPath),
     size: metadata.size,
   };
+}
+
+function roundMilliseconds(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function defaultOutputDirectory(absoluteAudioPath: string): string {

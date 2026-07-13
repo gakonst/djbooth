@@ -102,6 +102,32 @@ describe("SoulseekLibraryAcquirer", () => {
     expect(candidates.every(({ source }) => source.startsWith("slsk://download?"))).toBe(true);
   });
 
+  test("coalesces identical in-flight searches on one long-lived client", async () => {
+    const responses = [response("peer", [file("Artist - Track.flac", 10_000_000n, {})])];
+    const fake = fakeClient(responses);
+    fake.search.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return responses;
+    });
+    const acquirer = new SoulseekLibraryAcquirer(fake.client, {
+      credentials: { username: "local", password: "secret" },
+    });
+    const target = { title: "Track", artists: ["Artist"], durationSeconds: 300 };
+
+    const [first, second, third] = await Promise.all([
+      acquirer.search(target),
+      acquirer.search(target),
+      acquirer.search(target),
+    ]);
+
+    expect(fake.connect).toHaveBeenCalledTimes(1);
+    expect(fake.search).toHaveBeenCalledTimes(1);
+    expect(first).toEqual(second);
+    expect(second).toEqual(third);
+    await acquirer.search(target);
+    expect(fake.search).toHaveBeenCalledTimes(2);
+  });
+
   test("passes a stable staging path and explicit resume file to the direct client download", async () => {
     const fake = fakeClient([
       response("peer name", [

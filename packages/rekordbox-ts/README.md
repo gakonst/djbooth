@@ -162,7 +162,11 @@ Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`.
 runs a bounded pool of isolated native worker processes, preserves input order, and defaults to at
 most four workers. Keep database installation separate and serialized: call
 `MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
-Analysis requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
+The default worker pool is capped at eight: on a 12-core machine, 26 real set tracks took 60.02
+seconds with four workers, 32.23 seconds with eight, and 28.83 seconds with twelve. Twelve workers
+used 50% more processes for only 10.5% less wall time than eight; pass `concurrency` explicitly when
+that tradeoff is desirable. Warm validation of all 26 cached analyses took 11.65 ms. Analysis
+requires macOS and Rosetta on Apple Silicon. `analyze doctor` validates the vendored binary
 hash, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` can explicitly select another
 compatible `rekordbox.app`.
 

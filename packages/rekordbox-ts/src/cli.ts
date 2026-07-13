@@ -106,7 +106,13 @@ analyzeCli.command("tracks", {
   options: z.object({
     analyzerBinary: z.string().optional().describe("Universal native helper override"),
     audioPath: z.array(z.string()).describe("Existing audio file; repeat for multiple tracks"),
-    concurrency: z.number().int().min(1).max(64).optional().describe("Parallel analyzer workers"),
+    concurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe("Parallel analyzer workers; defaults to at most 8 based on available cores"),
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
     rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
     rekordboxCache: z.string().optional().describe("Native backend cache directory"),

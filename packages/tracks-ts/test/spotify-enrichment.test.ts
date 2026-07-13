@@ -296,4 +296,39 @@ describe("Spotify manifest enrichment", () => {
       },
     });
   });
+
+  test("fans a set out through the bounded global Spotify search pool", async () => {
+    const value = manifest(
+      Array.from({ length: 24 }, (_, index) => ({
+        artist: `Artist ${index + 1}`,
+        title: `Track ${index + 1}`,
+      })),
+    );
+    let active = 0;
+    let maximumActive = 0;
+    let calls = 0;
+    const spotify: SpotifySearchClient = {
+      async raw() {
+        calls += 1;
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active -= 1;
+        return { tracks: { items: [] } } as never;
+      },
+    };
+
+    const result = await enrichSpotifyManifest(value, spotify);
+
+    expect(calls).toBe(24);
+    expect(maximumActive).toBe(8);
+    expect(result).toMatchObject({
+      attempted: 24,
+      requests: 24,
+      networkRequests: 24,
+      concurrency: 8,
+      maxConcurrency: 8,
+      unmatched: 24,
+    });
+  });
 });

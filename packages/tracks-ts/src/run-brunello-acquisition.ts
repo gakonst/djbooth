@@ -51,6 +51,8 @@ export type RunBrunelloAcquisitionOptions = {
   dryRun?: boolean;
   continueOnError?: boolean;
   concurrency?: number;
+  verificationConcurrency?: number;
+  spotifyConcurrency?: number;
   cacheMode?: CacheMode;
   spotsModule?: SpotsModule;
   ytdlpModule?: YtdlpModule;
@@ -110,6 +112,8 @@ export async function runBrunelloAcquisition(
     dryRun: options.dryRun ?? false,
     continueOnError: options.continueOnError ?? true,
     concurrency: options.concurrency ?? 3,
+    verificationConcurrency: options.verificationConcurrency ?? 8,
+    spotifyConcurrency: options.spotifyConcurrency ?? 8,
     verificationCache,
     ...(options.onProgress ? { onProgress: options.onProgress } : {}),
   });
@@ -188,6 +192,18 @@ function parseArguments(arguments_: readonly string[]): RunBrunelloAcquisitionOp
         throw new Error("--concurrency requires an integer between 1 and 8");
       }
       options.concurrency = value;
+    } else if (argument === "--verification-concurrency") {
+      const value = Number(arguments_[++index]);
+      if (!Number.isSafeInteger(value) || value < 1 || value > 16) {
+        throw new Error("--verification-concurrency requires an integer between 1 and 16");
+      }
+      options.verificationConcurrency = value;
+    } else if (argument === "--spotify-concurrency") {
+      const value = Number(arguments_[++index]);
+      if (!Number.isSafeInteger(value) || value < 1 || value > 32) {
+        throw new Error("--spotify-concurrency requires an integer between 1 and 32");
+      }
+      options.spotifyConcurrency = value;
     } else if (argument === "--refresh-cache") {
       options.cacheMode = "refresh";
     } else if (argument === "--no-cache") {

@@ -140,6 +140,7 @@ function completedManifest(): SetManifest {
 describe("Rekordbox direct database planning", () => {
   test("deduplicates albums by name and artist instead of name alone", () => {
     const albumFilters: Array<Record<string, unknown>> = [];
+    const queryCounts = new Map<string, number>();
     let id = 0;
     const row = (tableName: string, values: Record<string, unknown>) => {
       const value = {
@@ -172,6 +173,7 @@ describe("Rekordbox direct database planning", () => {
     });
     const db = {
       query(model: { tableName: string }) {
+        queryCounts.set(model.tableName, (queryCounts.get(model.tableName) ?? 0) + 1);
         let filters: Record<string, unknown> = {};
         const query = {
           where(next: Record<string, unknown>) {
@@ -261,6 +263,7 @@ describe("Rekordbox direct database planning", () => {
       { Name: "Shared Album Name", AlbumArtistID: "artist-3" },
       { Name: "Shared Album Name", AlbumArtistID: "artist-6" },
     ]);
+    expect(queryCounts.get("membership")).toBe(1);
   });
 
   test("expands primary and alternative downloads adjacently in cue order", () => {
