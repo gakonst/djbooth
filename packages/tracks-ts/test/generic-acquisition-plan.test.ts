@@ -66,7 +66,7 @@ function manifest(sourcePath: string): SetManifest {
     query: "Artist Two Track Two",
     candidates: [
       candidate("ambiguous-a", "Track Two", "Artist Two"),
-      candidate("ambiguous-b", "Track Two (Dub)", "Artist Two"),
+      candidate("ambiguous-b", "Track Two", "Artist Two"),
     ],
   };
   value.entries[2]!.spotify = { status: "unmatched", query: "Artist Three Track Three" };
@@ -116,14 +116,20 @@ describe("buildAcquisitionPlan", () => {
   test("adopts unique explicit local matches before backend acquisition", async () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-local-"));
     const localDirectory = join(directory, "library");
+    const duplicateDirectory = join(directory, "duplicate-library");
     await mkdir(join(localDirectory, "nested"), { recursive: true });
+    await mkdir(duplicateDirectory, { recursive: true });
     await Promise.all([
       writeFile(join(localDirectory, "Artist One - Track One [match-1].flac"), "local"),
       writeFile(join(localDirectory, "nested", "Artist Three - Track Three.mp3"), "local"),
+      writeFile(join(duplicateDirectory, "Artist Three - Track Three.mp3"), "duplicate"),
     ]);
-    const plan = await buildAcquisitionPlan(manifest(join(directory, "set.mp3")), {
+    const value = manifest(join(directory, "set.mp3"));
+    if (value.entries[2]!.identity.status !== "identified") throw new Error("test identity");
+    value.entries[2]!.identity.title = "Track Three (Unreleased Edit)";
+    const plan = await buildAcquisitionPlan(value, {
       outputDirectory: join(directory, "output"),
-      localDirectories: [localDirectory],
+      localDirectories: [localDirectory, duplicateDirectory],
     });
 
     expect(plan.recordings[0]!.variants[0]!.localArtifact).toMatchObject({
@@ -136,6 +142,62 @@ describe("buildAcquisitionPlan", () => {
       matchedBy: "artist-title",
     });
     expect(plan.recordings[2]!.variants[0]!.outputPath).toMatch(/\.mp3$/u);
+  });
+
+  test("uses ASCII-safe paths and resumes a failed individual as an approved cue clip", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "generic-fallback-"));
+    const sourcePath = join(directory, "set.m4a");
+    const value = manifest(sourcePath);
+    if (value.entries[2]!.identity.status !== "identified") throw new Error("test identity");
+    value.entries[2]!.identity.artist = "JØRD";
+    value.entries[2]!.errors.push({
+      stage: "acquisition",
+      message: "No reviewed individual candidate passed verification",
+      retryable: true,
+    });
+
+    const plan = await buildAcquisitionPlan(value, {
+      outputDirectory: join(directory, "output"),
+      allowSourceSetClips: true,
+      sourceSetPath: sourcePath,
+    });
+    const variant = plan.recordings[2]!.variants[0]!;
+    expect(variant.outputPath).toContain("JORD");
+    expect([...variant.outputPath].every((character) => character.codePointAt(0)! <= 0x7f)).toBe(
+      true,
+    );
+    expect(variant.sourceClip).toMatchObject({
+      sourcePath,
+      startSeconds: 480,
+      endSeconds: 720,
+      containsTransitions: true,
+    });
+    expect(variant.metadata.title).toContain("[Set Extract]");
+    expect(variant.metadata).not.toHaveProperty("isrc");
+
+    value.entries[2]!.errors = [];
+    value.entries[2]!.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "ytdlp",
+        kind: "source-set-clip",
+        mediaPath: variant.outputPath,
+        files: [variant.outputPath],
+        clip: {
+          sourceSetUrl: value.artifacts.sourceSet!.url,
+          startSeconds: 480,
+          endSeconds: 720,
+          containsTransitions: true,
+          qualityNote: "test",
+        },
+      },
+    };
+    const resumed = await buildAcquisitionPlan(value, {
+      outputDirectory: join(directory, "output"),
+      allowSourceSetClips: true,
+      sourceSetPath: sourcePath,
+    });
+    expect(resumed.recordings[2]!.variants[0]!.sourceClip).toBeDefined();
   });
 
   test("requires explicit verified source opt-in and validates the complete dry-run plan", async () => {

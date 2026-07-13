@@ -1,9 +1,72 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { identify, rankTracklistCandidates } from "../src/identify.js";
+import {
+  identify,
+  mergeDescriptionWithDatabase,
+  rankTracklistCandidates,
+} from "../src/identify.js";
 import { createManifest } from "../src/manifest.js";
 
 describe("identify", () => {
+  test("keeps description cues while aligning and filling 1001Tracklists identities", () => {
+    const described = {
+      source: "https://soundcloud.test/set",
+      provider: "description" as const,
+      complete: true,
+      tracks: [
+        { order: 1, startSeconds: 0, endSeconds: 60, title: "Intro" },
+        { order: 2, startSeconds: 60, endSeconds: 120, artist: "Artist", title: "Known" },
+        {
+          order: 3,
+          startSeconds: 120,
+          endSeconds: 180,
+          artist: "Primary",
+          title: "Around",
+          overlaps: [{ artist: "Guest", title: "Acapella" }],
+        },
+        { order: 4, isId: true, startSeconds: 180, endSeconds: 240 },
+        { order: 5, startSeconds: 240, endSeconds: 300, artist: "Anchor", title: "Track" },
+        { order: 6, isId: true, startSeconds: 300, endSeconds: 360 },
+      ],
+    };
+    const result = mergeDescriptionWithDatabase(described, {
+      url: "https://www.1001tracklists.com/tracklist/set.html",
+      event: { name: "Set", lineup: [] },
+      tracks: [
+        { order: 1, artist: "DJ", title: "Intro Mix" },
+        { order: 2, artist: "Artist", title: "Known" },
+        { order: 3, artist: "Guest", title: "Acapella (Edit)" },
+        { order: 4, artist: "Guest", title: "Acapella" },
+        { order: 5, artist: "Enamour", title: "That's Just Jazz!" },
+        { order: 6, artist: "Anchor", title: "Track" },
+        { order: 7, artist: "ID", title: "ID", isId: true },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      provider: "1001tracklists",
+      url: "https://www.1001tracklists.com/tracklist/set.html",
+      tracks: [
+        { order: 1, startSeconds: 0, endSeconds: 60, artist: "DJ", title: "Intro Mix" },
+        { order: 2, startSeconds: 60, endSeconds: 120, artist: "Artist", title: "Known" },
+        { order: 3, startSeconds: 120, endSeconds: 180, artist: "Primary", title: "Around" },
+        {
+          order: 4,
+          startSeconds: 180,
+          endSeconds: 240,
+          artist: "Enamour",
+          title: "That's Just Jazz!",
+          isId: false,
+        },
+        { order: 5, startSeconds: 240, endSeconds: 300, artist: "Anchor", title: "Track" },
+        { order: 6, isId: true, startSeconds: 300, endSeconds: 360 },
+      ],
+    });
+    expect(result.warnings).toContain(
+      "Enriched 2 unresolved timestamped description entries from 1001Tracklists; retained description cue boundaries.",
+    );
+  });
+
   test("accepts a library metadata client without spawning the ytdlp-ts CLI", async () => {
     const inspect = vi.fn(async () => ({
       id: "set-id",

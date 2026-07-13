@@ -67,7 +67,7 @@ export {
   type DescriptionParseResult,
 } from "./description.js";
 export { isAbortError, TracksError, type TracksErrorCode } from "./errors.js";
-export { identify } from "./identify.js";
+export { identify, mergeDescriptionWithDatabase } from "./identify.js";
 export {
   getYtdlpTsCommand,
   inspectMediaMetadata,

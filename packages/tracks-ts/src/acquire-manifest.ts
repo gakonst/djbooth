@@ -427,7 +427,10 @@ export async function acquireManifest(
     const verificationReceipts = await measure(
       "artifact-preflight",
       () => preflightExistingArtifacts(manifest, plan, verificationConcurrency, verificationCache),
-      { operations: plannedArtifactCount(plan), maxConcurrency: verificationConcurrency },
+      {
+        operations: plannedArtifactCount(plan),
+        maxConcurrency: Math.min(plannedArtifactCount(plan), verificationConcurrency),
+      },
     );
     const plannedPaths = [
       ...plan.clips.map((clip) => clip.outputPath),
@@ -675,7 +678,8 @@ export async function acquireManifest(
                   variant.outputPath,
                   "slsk",
                 ),
-                ...(variant.durationMs === undefined
+                ...(variant.durationMs === undefined ||
+                variant.localArtifact.matchedBy === "artist-title"
                   ? {}
                   : { expectedDurationSeconds: variant.durationMs / 1000 }),
               });
@@ -691,8 +695,12 @@ export async function acquireManifest(
                   files: [variant.outputPath],
                   source: variant.localArtifact.sourcePath,
                   sha256: tagged.sha256,
-                  ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
-                  ...(variant.isrc ? { isrc: variant.isrc } : {}),
+                  ...(variant.localArtifact.matchedBy !== "artist-title" && variant.spotifyId
+                    ? { spotifyId: variant.spotifyId }
+                    : {}),
+                  ...(variant.localArtifact.matchedBy !== "artist-title" && variant.isrc
+                    ? { isrc: variant.isrc }
+                    : {}),
                 },
               };
               warnings.push(
@@ -912,11 +920,7 @@ export async function verifyAcquisitionPlan(
         entryOrder: recording.entryOrder,
         path: variant.outputPath,
         kind: variant.sourceClip ? ("source-set-clip" as const) : ("individual" as const),
-        durationSeconds: variant.sourceClip
-          ? variant.sourceClip.endSeconds - variant.sourceClip.startSeconds
-          : variant.durationMs === undefined
-            ? undefined
-            : variant.durationMs / 1000,
+        durationSeconds: expectedVariantDurationSeconds(variant),
         durationToleranceSeconds: variant.sourceClip
           ? 2
           : Math.max(10, ((variant.durationMs ?? 0) / 1000) * 0.035),
@@ -1439,11 +1443,7 @@ async function preflightExistingArtifacts(
           path: variant.outputPath,
           metadata: variant.metadata,
           expectedSha256: prior?.sha256,
-          expectedDurationSeconds: variant.sourceClip
-            ? variant.sourceClip.endSeconds - variant.sourceClip.startSeconds
-            : variant.durationMs === undefined
-              ? undefined
-              : variant.durationMs / 1000,
+          expectedDurationSeconds: expectedVariantDurationSeconds(variant),
           durationToleranceSeconds: variant.sourceClip
             ? 2
             : Math.max(10, ((variant.durationMs ?? 0) / 1000) * 0.035),
@@ -1731,10 +1731,11 @@ function validatePlan(
           (identityFallback && !overlapVariant && entry.identity.status === "identified"
             ? entry.identity.isrc
             : undefined);
-        if (expectedIsrc && variant.isrc !== expectedIsrc) {
+        const exactLocalIdentity = variant.localArtifact?.matchedBy !== "artist-title";
+        if (expectedIsrc && exactLocalIdentity && variant.isrc !== expectedIsrc) {
           throw new Error(`Recording ISRC does not match Spotify for ${variant.spotifyId}`);
         }
-        if (expectedIsrc && variant.metadata.isrc !== expectedIsrc) {
+        if (expectedIsrc && exactLocalIdentity && variant.metadata.isrc !== expectedIsrc) {
           throw new Error(
             `Recording metadata ISRC does not match Spotify for ${variant.spotifyId}`,
           );
@@ -1768,6 +1769,12 @@ function validatePlan(
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function expectedVariantDurationSeconds(variant: AcquisitionRecordingVariant): number | undefined {
+  if (variant.sourceClip) return variant.sourceClip.endSeconds - variant.sourceClip.startSeconds;
+  if (variant.localArtifact?.matchedBy === "artist-title") return undefined;
+  return variant.durationMs === undefined ? undefined : variant.durationMs / 1000;
 }
 
 type SourceClipShape = {

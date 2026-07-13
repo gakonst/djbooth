@@ -19,6 +19,7 @@ import type {
   IdentifyStageTiming,
   RecognitionMoment,
   Tracklist,
+  TracklistEntry,
   TracklistSummary,
 } from "./types.js";
 
@@ -130,6 +131,20 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     if (metadata.status === "fulfilled") {
       const described = tracklistFromDescription(source, metadata.value);
       if (described) {
+        if (client && exactPromise && described.tracks.some(isUnresolvedTracklistEntry)) {
+          const titlePromise = settleTitleLookup(metadataPromise, client, options);
+          const enrichment = await firstDatabaseMatch(exactPromise, titlePromise);
+          if (enrichment.status === "matched") {
+            localAbort.abort();
+            return mergeDescriptionWithDatabase(described, enrichment.tracklist);
+          }
+          if (enrichment.status === "failed" && !isAbortError(enrichment.error)) {
+            described.warnings = [
+              ...(described.warnings ?? []),
+              `1001Tracklists identity enrichment failed; retained timestamped description: ${errorMessage(enrichment.error)}`,
+            ];
+          }
+        }
         localAbort.abort();
         return described;
       }
@@ -244,6 +259,133 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     ...(warnings.length ? { warnings } : {}),
     ...(options.includeMatches ? { matches: moments } : {}),
   };
+}
+
+/** Keep authoritative description cues while filling its unresolved rows from a database sequence. */
+export function mergeDescriptionWithDatabase(
+  described: Tracklist,
+  database: DatabaseTracklist,
+): Tracklist {
+  const databaseEntries = databaseTracklistToEntries(database);
+  const alignment = alignTracklists(described.tracks, databaseEntries);
+  let enriched = 0;
+  const tracks = described.tracks.map((entry, index) => {
+    if (!isUnresolvedTracklistEntry(entry)) return entry;
+    const databaseIndex = alignment.get(index);
+    const candidate = databaseIndex === undefined ? undefined : databaseEntries[databaseIndex];
+    if (
+      !candidate ||
+      isUnresolvedTracklistEntry(candidate) ||
+      !candidate.artist ||
+      !candidate.title
+    ) {
+      return entry;
+    }
+    enriched += 1;
+    return {
+      ...entry,
+      isId: false,
+      artist: candidate.artist,
+      title: candidate.title,
+      ...(candidate.mix ? { mix: candidate.mix } : {}),
+      ...(candidate.label ? { label: candidate.label } : {}),
+      ...(candidate.songLink ? { songLink: candidate.songLink } : {}),
+    };
+  });
+  if (!enriched) return described;
+  return {
+    ...described,
+    provider: "1001tracklists",
+    url: database.url,
+    tracks,
+    warnings: [
+      ...(described.warnings ?? []),
+      `Enriched ${String(enriched)} unresolved timestamped description entries from 1001Tracklists; retained description cue boundaries.`,
+    ],
+  };
+}
+
+function alignTracklists(
+  described: readonly TracklistEntry[],
+  database: readonly TracklistEntry[],
+): Map<number, number> {
+  const gap = -0.7;
+  const scores = Array.from({ length: described.length + 1 }, () =>
+    Array<number>(database.length + 1).fill(Number.NEGATIVE_INFINITY),
+  );
+  const actions = Array.from({ length: described.length + 1 }, () =>
+    Array<"diagonal" | "up" | "left" | undefined>(database.length + 1),
+  );
+  scores[0]![0] = 0;
+  for (let row = 1; row <= described.length; row += 1) {
+    scores[row]![0] = row * gap;
+    actions[row]![0] = "up";
+  }
+  for (let column = 1; column <= database.length; column += 1) {
+    scores[0]![column] = column * gap;
+    actions[0]![column] = "left";
+  }
+  for (let row = 1; row <= described.length; row += 1) {
+    for (let column = 1; column <= database.length; column += 1) {
+      const diagonal =
+        scores[row - 1]![column - 1]! +
+        trackAlignmentScore(described[row - 1]!, database[column - 1]!);
+      const up = scores[row - 1]![column]! + gap;
+      const left = scores[row]![column - 1]! + gap;
+      const best = Math.max(diagonal, up, left);
+      scores[row]![column] = best;
+      actions[row]![column] = best === diagonal ? "diagonal" : best === left ? "left" : "up";
+    }
+  }
+  const pairs = new Map<number, number>();
+  let row = described.length;
+  let column = database.length;
+  while (row > 0 || column > 0) {
+    const action = actions[row]![column];
+    if (action === "diagonal") {
+      pairs.set(row - 1, column - 1);
+      row -= 1;
+      column -= 1;
+    } else if (action === "up") {
+      row -= 1;
+    } else if (action === "left") {
+      column -= 1;
+    } else {
+      break;
+    }
+  }
+  return pairs;
+}
+
+function trackAlignmentScore(described: TracklistEntry, database: TracklistEntry): number {
+  if (isUnresolvedTracklistEntry(described)) {
+    return isUnresolvedTracklistEntry(database) ? 0.15 : 0.6;
+  }
+  const primary = tokenSimilarity(trackIdentityText(described), trackIdentityText(database));
+  const overlap = Math.max(
+    0,
+    ...(described.overlaps ?? []).map((item) =>
+      tokenSimilarity(`${item.artist} ${item.title}`, trackIdentityText(database)),
+    ),
+  );
+  return Math.max(primary, overlap) * 4 - 1.5;
+}
+
+function trackIdentityText(entry: TracklistEntry): string {
+  return [entry.artist, entry.title, entry.mix].filter(Boolean).join(" ");
+}
+
+function isUnresolvedTracklistEntry(entry: TracklistEntry): boolean {
+  const artist = entry.artist?.trim().toLocaleLowerCase("en-US");
+  const title = entry.title?.trim().toLocaleLowerCase("en-US");
+  return (
+    entry.isId === true ||
+    !artist ||
+    !title ||
+    artist === "id" ||
+    title === "id" ||
+    title === "unknown"
+  );
 }
 
 async function loadMediaMetadata(

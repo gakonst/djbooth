@@ -19,7 +19,7 @@ import {
   type TrackAcquirer,
 } from "./acquire-manifest.js";
 import { probeAudio, readManifest, sha256File, writeManifestAtomic } from "./acquisition.js";
-import type { CacheMode, CacheStats } from "./cache.js";
+import { JsonDiskCache, type CacheMode, type CacheStats } from "./cache.js";
 import { TracksError } from "./errors.js";
 import {
   buildAcquisitionPlan,
@@ -378,6 +378,10 @@ export async function runSetToRekordbox(
       continueOnError: false,
       concurrency: options.acquisitionConcurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
       verificationConcurrency: options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
+      verificationCache: new JsonDiskCache({
+        namespace: "audio-verification-v1",
+        ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+      }),
       spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
       onArtifactVerified: analyzeVerifiedArtifact,
     });

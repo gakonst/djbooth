@@ -101,13 +101,16 @@ root.command(tracksCli);
 
 ## Resolution flow
 
-Automatic resolution is ordered and short-circuits at the first usable tracklist:
+Automatic resolution is ordered. A complete timestamped description remains authoritative for cue
+boundaries; unresolved rows can be aligned with 1001Tracklists identities before resolution returns:
 
 ```text
 YouTube / SoundCloud URL
 └─ 1. ytdlp-ts metadata inspection
-   └─ timestamped description found → manifest
-└─ 2. 1001Tracklists media lookup, when configured
+   └─ timestamped description found
+      ├─ all rows identified → manifest
+      └─ unresolved rows + 1001 configured → retain cues; align/fill database identities
+└─ 2. 1001Tracklists media lookup, when configured and no description tracklist exists
    └─ submitted tracklist found → manifest
 └─ 3. configured recognizer
    ├─ AudD Enterprise → provider processes URL or local file
@@ -307,11 +310,15 @@ The boundary is deliberate:
 - `tracks import-set` composes exported TypeScript clients in-process; it never shells between the
   package CLIs.
 - `buildAcquisitionPlan` preserves Spotify ambiguities and tracklist overlaps as distinct recordings,
-  adopts uniquely matched local files, and leaves unresolved IDs visible unless explicit cue clipping
-  was enabled.
+  adopts deterministic local-directory matches, and leaves unresolved IDs visible unless explicit
+  cue clipping was enabled. Artist/title-only local matches do not claim an exact Spotify ISRC or
+  duration.
 - `slsk-ts` is preferred. A `ytdlp-ts` individual fallback targets a scored canonical track URL with playlists disabled. True recording ambiguities remain distinct alternatives and are all acquired.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
 - If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
+- Identified tracks still try individual acquisition first. With explicit set-clip approval, a
+  checkpointed reviewed failure becomes a cue-bounded source extract on the next resume and stays on
+  that recovery path on later warm runs.
 - Acquisition, verification, Spotify enrichment, native analysis, and Rekordbox file I/O default to
   64-way playlist-scale concurrency. Soulseek and ytdlp candidate searches overlap while download
   priority remains deterministic. Native analysis begins per artifact while remaining downloads

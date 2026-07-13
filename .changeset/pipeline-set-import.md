@@ -2,6 +2,7 @@
 "@gakonst/tracks": minor
 "@gakonst/rekordbox": minor
 "@gakonst/music": patch
+"@gakonst/ytdlp-ts": patch
 ---
 
 Add a resumable set-to-Rekordbox library workflow and Incur command that resolves a set, enriches
@@ -12,3 +13,6 @@ database transaction.
 Add generic acquisition planning with local recording adoption, overlap and ambiguity preservation,
 parallel fallback searches, persistent checkpoints, warm resume, and critical-path performance
 metrics.
+
+Fix the documented ytdlp `--no-overwrites` flag so it maps to the internal negative boolean without
+being rejected by Incur.

@@ -482,7 +482,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set URL. It inspects media metadata once, reads timestamped descriptions, checks an exact 1001Tracklists media association, then searches 1001Tracklists by the inspected title/uploader before recognition. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, fans Spotify, individual-track acquisition, verification, and native analysis out to playlist-scale concurrency, then performs one verified normal Rekordbox database commit. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path.",
+      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, fans Spotify, individual-track acquisition, verification, and native analysis out to playlist-scale concurrency, then performs one verified normal Rekordbox database commit. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
   },
   sync: {
     cwd: import.meta.dirname,

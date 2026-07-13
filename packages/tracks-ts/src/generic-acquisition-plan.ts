@@ -39,6 +39,7 @@ type RecordingIdentity = {
 type LocalArtifact = {
   path: string;
   normalizedStem: string;
+  directoryIndex: number;
 };
 
 const ADOPTABLE_AUDIO_EXTENSIONS = new Set([
@@ -80,7 +81,14 @@ export async function buildAcquisitionPlan(
         variants: identities.map((identity) => {
           const local = selectLocalArtifact(identity, artifacts, adoptedPaths);
           if (local) adoptedPaths.add(local.path);
-          return recordingVariant(manifest, entry, identity, options.outputDirectory, local);
+          return recordingVariant(
+            manifest,
+            entry,
+            identity,
+            options.outputDirectory,
+            local,
+            sourceSet,
+          );
         }),
       },
     ];
@@ -124,9 +132,12 @@ function recordingIdentities(entry: ResolvedTrack): RecordingIdentity[] {
     (identity, index, identities) =>
       identities.findIndex(
         (candidate) =>
-          normalizeIdentity(candidate.title) === normalizeIdentity(identity.title) &&
-          normalizeIdentity(candidate.artists.join(" ")) ===
-            normalizeIdentity(identity.artists.join(" ")),
+          candidate.spotifyId === identity.spotifyId &&
+          candidate.relationship === identity.relationship &&
+          (identity.spotifyId !== undefined ||
+            (normalizeIdentity(candidate.title) === normalizeIdentity(identity.title) &&
+              normalizeIdentity(candidate.artists.join(" ")) ===
+                normalizeIdentity(identity.artists.join(" ")))),
       ) === index,
   );
 }
@@ -170,6 +181,7 @@ function recordingVariant(
   identity: RecordingIdentity,
   outputDirectory: string,
   local: LocalArtifact | undefined,
+  sourceSet: ReturnType<typeof sourceSetForClips>,
 ): AcquisitionRecordingVariant {
   const identityKey =
     identity.spotifyId ??
@@ -186,6 +198,18 @@ function recordingVariant(
   const basename = filesystemSafe(
     `${String(entry.order).padStart(3, "0")} - ${identity.artists.join(", ")} - ${identity.title} [${suffix}]`,
   );
+  const matchedBy = local ? localMatchKind(identity, local) : undefined;
+  const priorSourceClip =
+    entry.acquisition.status === "downloaded" &&
+    [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])].some(
+      (download) => download.kind === "source-set-clip",
+    );
+  const fallbackClip =
+    !local &&
+    (priorSourceClip || entry.errors.some((error) => error.stage === "acquisition")) &&
+    sourceSet
+      ? identifiedFailureClip(entry, sourceSet)
+      : undefined;
   const metadata: AudioMetadata = {
     title: identity.title,
     artists: [...identity.artists],
@@ -197,6 +221,16 @@ function recordingVariant(
     trackTotal: manifest.entries.length,
     grouping: "music-ts resolved set",
   };
+  if (matchedBy === "artist-title" && identity.spotifyId) {
+    delete metadata.isrc;
+    metadata.comment = `${metadata.comment}\n[Local artist/title match; exact Spotify recording identity unconfirmed]`;
+  }
+  if (fallbackClip) {
+    delete metadata.isrc;
+    metadata.title = `${metadata.title} [Set Extract]`;
+    metadata.comment = `${metadata.comment}\n[Individual acquisition failed; recovered from verified set cue ${String(fallbackClip.startSeconds)}–${String(fallbackClip.endSeconds)}s]`;
+    metadata.grouping = "music-ts set extract";
+  }
   return {
     ...(identity.spotifyId ? { spotifyId: identity.spotifyId } : {}),
     ...(identity.isrc ? { isrc: identity.isrc } : {}),
@@ -213,10 +247,30 @@ function recordingVariant(
       ? {
           localArtifact: {
             sourcePath: local.path,
-            matchedBy: localMatchKind(identity, local),
+            matchedBy: matchedBy!,
           },
         }
       : {}),
+    ...(fallbackClip ? { sourceClip: fallbackClip } : {}),
+  };
+}
+
+function identifiedFailureClip(
+  entry: ResolvedTrack,
+  sourceSet: NonNullable<ReturnType<typeof sourceSetForClips>>,
+): NonNullable<AcquisitionRecordingVariant["sourceClip"]> | undefined {
+  const { startSeconds, endSeconds } = entry.cue;
+  if (startSeconds === undefined || endSeconds === undefined || endSeconds <= startSeconds) {
+    return undefined;
+  }
+  return {
+    sourcePath: sourceSet.descriptor.path,
+    sourceUrl: sourceSet.artifact.url,
+    startSeconds,
+    endSeconds,
+    qualityNote:
+      "Cue-bounded set recovery after individual acquisition failed; transitions and lossy ancestry may be present.",
+    containsTransitions: true,
   };
 }
 
@@ -310,17 +364,25 @@ function unresolvedClip(
 }
 
 async function discoverLocalArtifacts(directories: readonly string[]): Promise<LocalArtifact[]> {
-  const paths = (
-    await Promise.all(directories.map((directory) => walkAudioFiles(resolve(directory))))
-  )
-    .flat()
-    .toSorted((left, right) => left.localeCompare(right));
-  return [...new Set(paths)].map((path) => ({
-    path,
-    normalizedStem: normalizeIdentity(
-      path.slice(0, -extname(path).length).split("/").at(-1) ?? path,
+  const groups = await Promise.all(
+    directories.map(async (directory, directoryIndex) =>
+      (await walkAudioFiles(resolve(directory))).map((path) => ({ path, directoryIndex })),
     ),
-  }));
+  );
+  const seen = new Set<string>();
+  return groups.flat().flatMap(({ path, directoryIndex }) => {
+    if (seen.has(path)) return [];
+    seen.add(path);
+    return [
+      {
+        path,
+        directoryIndex,
+        normalizedStem: normalizeIdentity(
+          path.slice(0, -extname(path).length).split("/").at(-1) ?? path,
+        ),
+      },
+    ];
+  });
 }
 
 async function walkAudioFiles(directory: string): Promise<string[]> {
@@ -351,10 +413,11 @@ function selectLocalArtifact(
     .filter(({ score }) => score > 0)
     .toSorted(
       (left, right) =>
-        right.score - left.score || left.artifact.path.localeCompare(right.artifact.path),
+        right.score - left.score ||
+        left.artifact.directoryIndex - right.artifact.directoryIndex ||
+        left.artifact.path.localeCompare(right.artifact.path),
     );
-  if (!ranked[0] || (ranked[1] && ranked[1].score === ranked[0].score)) return undefined;
-  return ranked[0].artifact;
+  return ranked[0]?.artifact;
 }
 
 function localMatchScore(identity: RecordingIdentity, artifact: LocalArtifact): number {
@@ -362,9 +425,21 @@ function localMatchScore(identity: RecordingIdentity, artifact: LocalArtifact): 
   if (identity.spotifyId && stem.includes(normalizeIdentity(identity.spotifyId))) return 300;
   if (identity.isrc && stem.includes(normalizeIdentity(identity.isrc))) return 250;
   const title = normalizeIdentity(identity.title);
+  const baseTitle = normalizeIdentity(identity.title.replace(/\s*[([][^\])]*[\])]\s*$/u, ""));
   const artists = identity.artists.map(normalizeIdentity).filter(Boolean);
-  if (!title || !stem.includes(title) || !artists.some((artist) => stem.includes(artist))) return 0;
-  return stem === normalizeIdentity(`${identity.artists.join(" ")} ${identity.title}`) ? 200 : 100;
+  const artistTokens = new Set(
+    artists.flatMap((artist) => artist.split(" ").filter((token) => token.length >= 3)),
+  );
+  const artistMatch =
+    artists.some((artist) => stem.includes(artist)) ||
+    [...artistTokens].some((token) => stem.split(" ").includes(token));
+  if (!artistMatch) return 0;
+  if (title && stem.includes(title)) {
+    return stem === normalizeIdentity(`${identity.artists.join(" ")} ${identity.title}`)
+      ? 200
+      : 160;
+  }
+  return baseTitle && baseTitle.length >= 4 && stem.includes(baseTitle) ? 120 : 0;
 }
 
 function localMatchKind(
@@ -384,7 +459,7 @@ function localMatchKind(
 }
 
 function normalizeIdentity(value: string): string {
-  return value
+  return latinize(value)
     .normalize("NFKD")
     .replaceAll(/[\u0300-\u036f]/gu, "")
     .toLocaleLowerCase("en-US")
@@ -393,7 +468,12 @@ function normalizeIdentity(value: string): string {
 }
 
 function filesystemSafe(value: string): string {
-  const withoutControls = [...value.normalize("NFKC")]
+  const withoutControls = [
+    ...latinize(value)
+      .normalize("NFKD")
+      .replaceAll(/[\u0300-\u036f]/gu, "")
+      .replaceAll(/[^\x20-\x7e]/gu, " "),
+  ]
     .map((character) => {
       const code = character.codePointAt(0)!;
       return code < 32 || code === 127 ? " " : character;
@@ -405,6 +485,23 @@ function filesystemSafe(value: string): string {
     .replaceAll(/[. ]+$/gu, "")
     .trim();
   return (safe || "track").slice(0, 180).replaceAll(/[. ]+$/gu, "");
+}
+
+function latinize(value: string): string {
+  return value
+    .replaceAll(/[ØÖ]/gu, "O")
+    .replaceAll(/[øö]/gu, "o")
+    .replaceAll(/[ĐÐ]/gu, "D")
+    .replaceAll(/[đð]/gu, "d")
+    .replaceAll(/Þ/gu, "Th")
+    .replaceAll(/þ/gu, "th")
+    .replaceAll(/Ł/gu, "L")
+    .replaceAll(/ł/gu, "l")
+    .replaceAll(/Æ/gu, "AE")
+    .replaceAll(/æ/gu, "ae")
+    .replaceAll(/Œ/gu, "OE")
+    .replaceAll(/œ/gu, "oe")
+    .replaceAll(/ß/gu, "ss");
 }
 
 function adoptedOutputExtension(path: string): ".flac" | ".m4a" | ".mp3" {
