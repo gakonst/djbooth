@@ -36,6 +36,25 @@ describe('CLI version', () => {
     expect(result.stdout.trim()).toBe(version)
   })
 
+  it('accepts the documented --no-overwrites boolean flag', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        'src/cli.ts',
+        'download',
+        'not-a-url',
+        '--no-overwrites',
+        '--format',
+        'json',
+      ],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    )
+
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('Unknown flag: --no-overwrites')
+  })
+
   it('discovers every standalone command', () => {
     const result = spawnSync(
       process.execPath,

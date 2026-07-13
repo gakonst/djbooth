@@ -284,7 +284,7 @@ cli.command('download', {
     output: z.string().optional().describe('Output filename template'),
     paths: z.string().optional().describe('Download directory'),
     playlist: z.boolean().default(true).describe('Download playlists instead of a single item'),
-    noOverwrites: z.boolean().optional().describe('Do not overwrite existing files'),
+    overwrites: z.boolean().default(true).describe('Overwrite existing files'),
     continueDownload: z.boolean().default(true).describe('Resume partial downloads'),
     concurrentFragments: z
       .number()
@@ -328,7 +328,12 @@ cli.command('download', {
   }),
   alias: { mediaFormat: 'f', output: 'o', paths: 'P' },
   async run(c) {
-    const nativeSupported = supportsNativeDownloadOptions(c.options)
+    const options: Record<string, unknown> = {
+      ...c.options,
+      noOverwrites: !c.options.overwrites,
+    }
+    delete options.overwrites
+    const nativeSupported = supportsNativeDownloadOptions(options)
     if (c.options.engine === 'native' && !nativeSupported) {
       return c.error({
         code: 'NATIVE_OPTION_UNAVAILABLE',
@@ -338,7 +343,7 @@ cli.command('download', {
     }
     if (c.options.engine !== 'reference' && nativeSupported) {
       try {
-        const extracted = await inspect(c.args.url, 'native', toInspectOptions(c.options))
+        const extracted = await inspect(c.args.url, 'native', toInspectOptions(options))
         let progressEvents = 0
         let lastProgress: unknown
         const result = await downloadMedia(extracted.data, {
@@ -346,7 +351,7 @@ cli.command('download', {
             format: c.options.mediaFormat,
             output: c.options.output,
             paths: c.options.paths,
-            noOverwrites: c.options.noOverwrites,
+            noOverwrites: !c.options.overwrites,
             continueDownload: c.options.continueDownload,
             retries: c.options.retries,
             rateLimit: c.options.rateLimit,
@@ -371,7 +376,7 @@ cli.command('download', {
       }
     }
     try {
-      const result = await new ReferenceClient().download(c.args.url, toDownloadOptions(c.options))
+      const result = await new ReferenceClient().download(c.args.url, toDownloadOptions(options))
       return {
         engine: 'reference',
         files: result.files,
