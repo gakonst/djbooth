@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, createReadStream, readFileSync } from "node:fs";
+import {
+  constants as fsConstants,
+  createReadStream,
+  lstatSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import {
   access,
   copyFile,
@@ -82,6 +88,7 @@ export type RekordboxMasterDatabase = {
   addLabel(name: string): DjmdLabel;
   addContent(path: string, values?: Record<string, DatabaseValue>): DjmdContent;
   createPlaylist(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
+  createPlaylistFolder(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
   addToPlaylist(
     playlist: DjmdPlaylist,
     content: DjmdContent,
@@ -92,6 +99,17 @@ export type RekordboxMasterDatabase = {
     membership: DjmdSongPlaylist,
     trackNumber: number,
   ): void;
+  installContentAnalysis(
+    content: DjmdContent | string | number,
+    analysisDirectory: string,
+    options?: { allowWhileRunning?: boolean; commit?: boolean; replace?: boolean },
+  ): RekordboxInstalledAnalysis;
+  getContentAnlzPaths(
+    content: DjmdContent | string | number,
+  ): Record<"2EX" | "DAT" | "EXT", string | undefined>;
+  readContentAnlzFiles(
+    content: DjmdContent | string | number,
+  ): Map<string, { get(key: string): unknown }>;
   hasColumn(table: string, column: string): boolean;
   selectRawRows(sql: string, parameters?: unknown[]): Array<Record<string, unknown>>;
   commit(options?: { allowWhileRunning?: boolean }): void;
@@ -138,6 +156,7 @@ export type RekordboxImportItem = {
   entryOrder: number;
   variantIndex: number;
   mediaPath: string;
+  analysisDirectory?: string;
   download: AcquisitionDownload;
   metadata: RekordboxTrackMetadata;
 };
@@ -184,7 +203,17 @@ export type RekordboxVerification = {
   expectedMembershipCount: number;
   playlistMembershipCount: number;
   verifiedMetadataCount: number;
+  expectedAnalysisCount: number;
+  verifiedAnalysisCount: number;
+  verifiedAnalysisPaths: string[];
   verifiedPaths: string[];
+};
+
+export type RekordboxInstalledAnalysis = {
+  analysisDataPath: string;
+  contentId: string;
+  directory: string;
+  paths: Record<"2EX" | "DAT" | "EXT", string>;
 };
 
 export type RekordboxPlaylistArtifact = NonNullable<ManifestArtifacts["rekordbox"]>;
@@ -253,6 +282,8 @@ export type ImportManifestToRekordboxOptions = {
   folderName?: string;
   playlistName?: string;
   backupRoot?: string;
+  /** Native analyzer output directories keyed by absolute media path. */
+  analysisDirectories?: Readonly<Record<string, string>>;
   now?: Date;
   /** Inject the library directly for tests or a custom runtime. */
   rekordboxModule?: RekordboxLibrary;
@@ -333,6 +364,25 @@ export function defaultRekordboxPlaylistName(manifest: SetManifest): string {
   return `${name} [tracks-ts]`;
 }
 
+/** Resolve one native-analysis directory from an absolute-media-path lookup. */
+export function resolveRekordboxAnalysisDirectory(
+  mediaPath: string,
+  analysisDirectories: Readonly<Record<string, string>> | undefined,
+): string | undefined {
+  if (!analysisDirectories) return undefined;
+  const target = resolve(mediaPath);
+  let match: string | undefined;
+  for (const [candidate, directory] of Object.entries(analysisDirectories)) {
+    if (resolve(candidate) !== target) continue;
+    if (!directory.trim())
+      throw new TypeError(`Rekordbox analysis directory for '${target}' is empty`);
+    if (match !== undefined)
+      throw new TypeError(`Multiple Rekordbox analysis directories map to '${target}'`);
+    match = resolve(directory);
+  }
+  return match;
+}
+
 /**
  * Expand each downloaded entry into one primary item followed by its alternatives.
  * Entries remain in cue order and variants remain adjacent.
@@ -343,6 +393,7 @@ export function planRekordboxImport(
     mediaBaseDirectory?: string;
     folderName?: string;
     playlistName?: string;
+    analysisDirectories?: Readonly<Record<string, string>>;
   } = {},
 ): RekordboxImportPlan {
   const manifest = parseManifest(structuredClone(input));
@@ -366,12 +417,17 @@ export function planRekordboxImport(
     const downloads = [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])];
     downloads.forEach((download, variantIndex) => {
       const mediaPath = resolve(mediaBaseDirectory, download.mediaPath);
+      const analysisDirectory = resolveRekordboxAnalysisDirectory(
+        mediaPath,
+        options.analysisDirectories,
+      );
       items.push({
         key: `${entry.id}:${variantIndex}`,
         entryId: entry.id,
         entryOrder: entry.order,
         variantIndex,
         mediaPath,
+        ...(analysisDirectory ? { analysisDirectory } : {}),
         download: structuredClone(download),
         metadata: metadataForDownload(manifest, entry, download, variantIndex),
       });
@@ -385,6 +441,23 @@ export function planRekordboxImport(
       "Downloaded manifest variants must have globally distinct media paths",
       { exitCode: 2 },
     );
+  const analysisDirectories = items.flatMap((item) =>
+    item.analysisDirectory ? [item.analysisDirectory] : [],
+  );
+  if (new Set(analysisDirectories).size !== analysisDirectories.length)
+    throw new TracksError(
+      "INVALID_SOURCE",
+      "Native Rekordbox analysis directories must be globally distinct",
+      { exitCode: 2 },
+    );
+  const plannedPaths = new Set(paths);
+  for (const mediaPath of Object.keys(options.analysisDirectories ?? {}))
+    if (!plannedPaths.has(resolve(mediaPath)))
+      throw new TracksError(
+        "INVALID_SOURCE",
+        `Rekordbox analysis references media outside this manifest: ${resolve(mediaPath)}`,
+        { exitCode: 2 },
+      );
   if (!items.length)
     throw new TracksError("INVALID_SOURCE", "Manifest has no downloaded tracks to import", {
       exitCode: 2,
@@ -592,8 +665,17 @@ async function importManifestToRekordboxLocked(
     mediaBaseDirectory: dirname(manifestPath),
     ...(options.folderName === undefined ? {} : { folderName: options.folderName }),
     ...(options.playlistName === undefined ? {} : { playlistName: options.playlistName }),
+    ...(options.analysisDirectories === undefined
+      ? {}
+      : { analysisDirectories: options.analysisDirectories }),
   });
-  const mediaReceipts = await measure("media-preflight", () => assertMediaFilesExist(plan));
+  const mediaReceipts = await measure("media-preflight", async () => {
+    const [receipts] = await Promise.all([
+      assertMediaFilesExist(plan),
+      assertAnalysisDirectoriesExist(plan),
+    ]);
+    return receipts;
+  });
 
   const rekordbox = await measure("library-load", () => loadRekordboxLibrary(options));
   const location = resolveDatabaseLocation(rekordbox, options);
@@ -667,6 +749,8 @@ async function importManifestToRekordboxLocked(
     let playlistId: string;
     let folderId: string;
     let imported: RekordboxImportedItem[];
+    let installedAnalysis: RekordboxInstalledAnalysis[] = [];
+    let databaseCommitAttempted = false;
     try {
       await measure("database-write-plan", () => {
         writer = new rekordbox.MasterDatabase({
@@ -681,15 +765,18 @@ async function importManifestToRekordboxLocked(
         playlistId = writeResult.playlistId;
         folderId = writeResult.folderId;
         imported = writeResult.imported;
+        installedAnalysis = writeResult.installedAnalysis;
       });
       await measure("media-recheck-before-commit", () =>
         assertMediaFilesExist(plan, mediaReceipts),
       );
       await measure("database-commit", () => {
         assertRekordboxStopped(readProcessState(rekordbox));
+        databaseCommitAttempted = true;
         writer!.commit({ allowWhileRunning: false });
       });
     } catch (error) {
+      if (!databaseCommitAttempted) removeInstalledAnalysis(installedAnalysis);
       throw new TracksError(
         "TOOL_FAILED",
         `Rekordbox database import failed; pre-write backup: ${backup.directory}`,
@@ -959,6 +1046,36 @@ async function assertMediaFilesExist(
   return receipts;
 }
 
+async function assertAnalysisDirectoriesExist(plan: RekordboxImportPlan): Promise<void> {
+  const analyzed = plan.items.filter(
+    (item): item is RekordboxImportItem & { analysisDirectory: string } =>
+      item.analysisDirectory !== undefined,
+  );
+  await mapConcurrent(analyzed, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (item) => {
+    await Promise.all(
+      (["DAT", "EXT", "2EX"] as const).map(async (type) => {
+        const path = join(item.analysisDirectory, `ANLZ0000.${type}`);
+        let fileStat;
+        try {
+          fileStat = await stat(path);
+        } catch (error) {
+          throw new TracksError(
+            "INVALID_SOURCE",
+            `Native Rekordbox analysis is missing ANLZ0000.${type} for '${item.mediaPath}'`,
+            { cause: error, exitCode: 2, details: { analysisDirectory: item.analysisDirectory } },
+          );
+        }
+        if (!fileStat.isFile())
+          throw new TracksError(
+            "INVALID_SOURCE",
+            `Native Rekordbox analysis artifact is not a file: ${path}`,
+            { exitCode: 2 },
+          );
+      }),
+    );
+  });
+}
+
 function checkpointedRekordboxImport(
   manifest: SetManifest,
   plan: RekordboxImportPlan,
@@ -1163,18 +1280,19 @@ export function writeRekordboxPlan(
   db: RekordboxMasterDatabase,
   rekordbox: RekordboxLibrary,
   plan: RekordboxImportPlan,
-): { folderId: string; playlistId: string; imported: RekordboxImportedItem[] } {
+): {
+  folderId: string;
+  playlistId: string;
+  imported: RekordboxImportedItem[];
+  installedAnalysis: RekordboxInstalledAnalysis[];
+} {
   const folders = db
     .query(rekordbox.DjmdPlaylist)
     .where({ Name: plan.folderName, Attribute: rekordbox.PlaylistType.FOLDER })
     .all();
-  if (folders.length !== 1)
-    throw new Error(
-      folders.length
-        ? `Multiple Rekordbox folders named '${plan.folderName}' exist`
-        : `Rekordbox folder '${plan.folderName}' does not exist`,
-    );
-  const folder = folders[0]!;
+  if (folders.length > 1)
+    throw new Error(`Multiple Rekordbox folders named '${plan.folderName}' exist`);
+  const folder = folders[0] ?? db.createPlaylistFolder(plan.folderName);
   const playlists = db
     .query(rekordbox.DjmdPlaylist)
     .where({
@@ -1253,25 +1371,63 @@ export function writeRekordboxPlan(
     contentByPath.set(item.mediaPath, content);
   }
 
-  const imported: RekordboxImportedItem[] = [];
-  for (const [index, item] of plan.items.entries()) {
-    const content = contentByPath.get(item.mediaPath)!;
-    const target = index + 1;
-    const existingMembership = membershipByContentId.get(content.ID);
-    const membership = existingMembership ?? db.addToPlaylist(playlist, content, target);
-    if (existingMembership && membership.TrackNo !== target)
-      db.moveSongInPlaylist(playlist, membership, target);
-    imported.push({
-      key: item.key,
-      entryId: item.entryId,
-      variantIndex: item.variantIndex,
-      mediaPath: item.mediaPath,
-      contentId: content.ID,
-      membershipId: membership.ID,
-      trackNumber: target,
-    });
+  const installedAnalysis: RekordboxInstalledAnalysis[] = [];
+  try {
+    for (const item of plan.items) {
+      if (!item.analysisDirectory) continue;
+      const content = contentByPath.get(item.mediaPath)!;
+      const currentAnalysisPath = content.get("AnalysisDataPath");
+      if (
+        currentAnalysisPath !== null &&
+        currentAnalysisPath !== undefined &&
+        currentAnalysisPath !== ""
+      )
+        continue;
+      const installed = db.installContentAnalysis(content, item.analysisDirectory, {
+        allowWhileRunning: false,
+        commit: false,
+        replace: false,
+      });
+      installedAnalysis.push(installed);
+      if (installed.contentId !== content.ID)
+        throw new Error(
+          `Rekordbox analysis was installed for the wrong content row '${content.ID}'`,
+        );
+    }
+
+    const imported: RekordboxImportedItem[] = [];
+    for (const [index, item] of plan.items.entries()) {
+      const content = contentByPath.get(item.mediaPath)!;
+      const target = index + 1;
+      const existingMembership = membershipByContentId.get(content.ID);
+      const membership = existingMembership ?? db.addToPlaylist(playlist, content, target);
+      if (existingMembership && membership.TrackNo !== target)
+        db.moveSongInPlaylist(playlist, membership, target);
+      imported.push({
+        key: item.key,
+        entryId: item.entryId,
+        variantIndex: item.variantIndex,
+        mediaPath: item.mediaPath,
+        contentId: content.ID,
+        membershipId: membership.ID,
+        trackNumber: target,
+      });
+    }
+    return {
+      folderId: folder.ID,
+      playlistId: playlist.ID,
+      imported,
+      installedAnalysis,
+    };
+  } catch (error) {
+    removeInstalledAnalysis(installedAnalysis);
+    throw error;
   }
-  return { folderId: folder.ID, playlistId: playlist.ID, imported };
+}
+
+function removeInstalledAnalysis(installed: ReadonlyArray<RekordboxInstalledAnalysis>): void {
+  for (const analysis of installed)
+    for (const path of Object.values(analysis.paths)) rmSync(path, { force: true });
 }
 
 function findOrCreateAlbum(
@@ -1378,6 +1534,7 @@ function verifyCommittedImport(
         `Rekordbox playlist has ${memberships.length} memberships; expected ${imported.length}`,
       );
     const verifiedPaths: string[] = [];
+    const verifiedAnalysisPaths: string[] = [];
     const relationCache = new Map<string, DatabaseRow>();
     for (const [index, expected] of imported.entries()) {
       const planned = plan.items[index];
@@ -1393,6 +1550,7 @@ function verifyCommittedImport(
       )
         throw new Error(`Rekordbox membership verification failed at track ${index + 1}`);
       verifyContentMetadata(db, rekordbox, content, planned, relationCache);
+      verifiedAnalysisPaths.push(...verifyContentAnalysis(db, content, planned));
       verifiedPaths.push(content.FolderPath);
     }
     return {
@@ -1402,11 +1560,58 @@ function verifyCommittedImport(
       expectedMembershipCount: imported.length,
       playlistMembershipCount: memberships.length,
       verifiedMetadataCount: imported.length,
+      expectedAnalysisCount: plan.items.filter((item) => item.analysisDirectory !== undefined)
+        .length,
+      verifiedAnalysisCount: verifiedAnalysisPaths.length / 3,
+      verifiedAnalysisPaths,
       verifiedPaths,
     };
   } finally {
     db.close();
   }
+}
+
+function verifyContentAnalysis(
+  db: RekordboxMasterDatabase,
+  content: DjmdContent,
+  planned: RekordboxImportItem,
+): string[] {
+  if (!planned.analysisDirectory) return [];
+  const analysisDataPath = content.get("AnalysisDataPath");
+  if (
+    typeof analysisDataPath !== "string" ||
+    !/^[/\\]PIONEER[/\\]USBANLZ[/\\].+[/\\]ANLZ0000\.DAT$/u.test(analysisDataPath)
+  )
+    throw new Error(`Rekordbox AnalysisDataPath is invalid for '${planned.mediaPath}'`);
+  const expectedFlags: Array<[string, string | number]> = [
+    ["Analysed", 105],
+    ["AnalysisUpdated", "2"],
+    ["TrackInfoUpdated", "2"],
+  ];
+  for (const [column, expected] of expectedFlags)
+    if (db.hasColumn(content.tableName, column))
+      assertMetadataValue(planned, column, content.get(column), expected);
+
+  const paths = db.getContentAnlzPaths(content);
+  const parsed = db.readContentAnlzFiles(content);
+  const verified: string[] = [];
+  const expectedMediaPath = planned.mediaPath.replaceAll("\\", "/");
+  for (const type of ["DAT", "EXT", "2EX"] as const) {
+    const path = paths[type];
+    if (!path) throw new Error(`Rekordbox installed analysis has no ANLZ0000.${type}`);
+    const fileStat = lstatSync(path);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink())
+      throw new Error(`Rekordbox installed analysis is not a regular file: ${path}`);
+    const file = parsed.get(path);
+    if (!file)
+      throw new Error(`Rekordbox installed analysis could not be parsed: ANLZ0000.${type}`);
+    if (file.get("PPTH") !== expectedMediaPath)
+      throw new Error(`Rekordbox installed analysis has the wrong PPTH: ANLZ0000.${type}`);
+    verified.push(path);
+  }
+  if (parsed.size !== 3)
+    throw new Error(`Rekordbox installed analysis has ${parsed.size} parsed files; expected 3`);
+  return verified;
 }
 
 function verifyContentMetadata(

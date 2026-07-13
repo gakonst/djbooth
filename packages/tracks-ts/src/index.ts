@@ -13,6 +13,7 @@ export {
   type AcquireManifestResult,
   type AcquireProgress,
   type AcquisitionClipPlan,
+  type AcquisitionArtifactVerified,
   type AcquisitionPlan,
   type AcquisitionPerformance,
   type AcquisitionRecordingPlan,
@@ -25,6 +26,10 @@ export {
   type SpotifyRefreshResult,
   type TrackAcquirer,
 } from "./acquire-manifest.js";
+export {
+  buildAcquisitionPlan,
+  type BuildAcquisitionPlanOptions,
+} from "./generic-acquisition-plan.js";
 export {
   acquireManifestLock,
   acquirePipelineManifestLock,
@@ -190,6 +195,7 @@ export {
   planRekordboxImport,
   readRekordboxBackup,
   rekordboxBackupSources,
+  resolveRekordboxAnalysisDirectory,
   validateMasterPlaylistSidecar,
   writeRekordboxPlan,
   type ImportManifestToRekordboxOptions,
@@ -200,6 +206,7 @@ export {
   type RekordboxImportedItem,
   type RekordboxImportItem,
   type RekordboxImportPlan,
+  type RekordboxInstalledAnalysis,
   type RekordboxLibrary,
   type RekordboxMasterDatabase,
   type RekordboxPlaylistArtifact,
@@ -222,3 +229,16 @@ export {
 export { buildTimeline, type TimelineOptions } from "./timeline.js";
 export { formatTimestamp, parseTimestamp, requireTimestamp } from "./time.js";
 export type * from "./types.js";
+export {
+  runSetToRekordbox,
+  type RunSetToRekordboxDependencies,
+  type RunSetToRekordboxOptions,
+  type RunSetToRekordboxResult,
+  type SetSourceClip,
+  type WorkflowImportOptions,
+  type WorkflowPerformance,
+  type WorkflowProgress,
+  type WorkflowStage,
+  type WorkflowStageName,
+  type WorkflowStageStatus,
+} from "./workflow.js";

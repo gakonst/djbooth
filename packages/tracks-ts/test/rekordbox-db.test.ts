@@ -15,6 +15,7 @@ import {
   planRekordboxImport,
   readRekordboxBackup,
   rekordboxBackupSources,
+  resolveRekordboxAnalysisDirectory,
   validateMasterPlaylistSidecar,
   writeRekordboxPlan,
   type RekordboxImportPlan,
@@ -313,6 +314,175 @@ describe("Rekordbox direct database planning", () => {
         "Transitions: may be present",
       ].join("\n"),
     );
+  });
+
+  test("maps native analysis directories by absolute media path", () => {
+    const mediaPath = resolve("/music/festival-set/tracks/01-full.m4a");
+    const analysisDirectory = resolve("/analysis/01-full");
+    const analysisDirectories = { [mediaPath]: analysisDirectory };
+
+    expect(resolveRekordboxAnalysisDirectory(mediaPath, analysisDirectories)).toBe(
+      analysisDirectory,
+    );
+    const plan = planRekordboxImport(completedManifest(), {
+      mediaBaseDirectory: "/music/festival-set",
+      analysisDirectories,
+    });
+    expect(plan.items[0]!.analysisDirectory).toBe(analysisDirectory);
+    expect(plan.items[1]).not.toHaveProperty("analysisDirectory");
+    expect(() =>
+      planRekordboxImport(completedManifest(), {
+        mediaBaseDirectory: "/music/festival-set",
+        analysisDirectories: { "/music/not-in-this-set.m4a": analysisDirectory },
+      }),
+    ).toThrow("analysis references media outside this manifest");
+  });
+
+  test("creates a missing folder and installs analysis without committing", () => {
+    let id = 0;
+    let commitCount = 0;
+    let createdFolderName: string | undefined;
+    const installationCalls: Array<{
+      contentId: string;
+      directory: string;
+      options: Record<string, boolean | undefined>;
+    }> = [];
+    const row = (tableName: string, values: Record<string, unknown>) => ({
+      ID: `${tableName}-${++id}`,
+      tableName,
+      ...values,
+      get(key: string) {
+        return (this as Record<string, unknown>)[key];
+      },
+      set(key: string, value: unknown) {
+        (this as Record<string, unknown>)[key] = value;
+        return this;
+      },
+    });
+    const models = {
+      DjmdArtist: { tableName: "artist" },
+      DjmdAlbum: { tableName: "album" },
+      DjmdLabel: { tableName: "label" },
+      DjmdContent: { tableName: "content" },
+      DjmdPlaylist: { tableName: "playlist" },
+      DjmdSongPlaylist: { tableName: "membership" },
+    };
+    const db = {
+      query() {
+        const query = {
+          where() {
+            return query;
+          },
+          orderBy() {
+            return query;
+          },
+          all() {
+            return [];
+          },
+          one() {
+            throw new Error("unexpected one()");
+          },
+          first() {
+            return undefined;
+          },
+        };
+        return query;
+      },
+      addArtist(name: string) {
+        return row("artist", { Name: name });
+      },
+      addAlbum() {
+        throw new Error("unexpected addAlbum()");
+      },
+      addLabel() {
+        throw new Error("unexpected addLabel()");
+      },
+      addContent(path: string, values: Record<string, unknown>) {
+        return row("content", { FolderPath: path, ...values });
+      },
+      createPlaylistFolder(name: string) {
+        createdFolderName = name;
+        return row("playlist", { Name: name, Attribute: 0, ParentID: "root" });
+      },
+      createPlaylist(name: string, options: { parent: { ID: string } }) {
+        return row("playlist", {
+          Name: name,
+          Attribute: 1,
+          ParentID: options.parent.ID,
+        });
+      },
+      installContentAnalysis(
+        content: { ID: string; set(key: string, value: unknown): unknown },
+        directory: string,
+        options: Record<string, boolean | undefined>,
+      ) {
+        installationCalls.push({ contentId: content.ID, directory, options });
+        content.set("AnalysisDataPath", "/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT");
+        return {
+          analysisDataPath: "/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT",
+          contentId: content.ID,
+          directory: "/rekordbox/share/PIONEER/USBANLZ/con/tent",
+          paths: {
+            DAT: "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.DAT",
+            EXT: "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.EXT",
+            "2EX": "/rekordbox/share/PIONEER/USBANLZ/con/tent/ANLZ0000.2EX",
+          },
+        };
+      },
+      addToPlaylist(target: { ID: string }, content: { ID: string }, trackNumber: number) {
+        return row("membership", {
+          PlaylistID: target.ID,
+          ContentID: content.ID,
+          TrackNo: trackNumber,
+        });
+      },
+      moveSongInPlaylist() {},
+      hasColumn() {
+        return true;
+      },
+      commit() {
+        commitCount += 1;
+      },
+    } as unknown as RekordboxMasterDatabase;
+    const plan: RekordboxImportPlan = {
+      folderName: "DJ Sets I Like",
+      playlistName: "Analyzed Set",
+      items: [
+        {
+          key: "track-1:0",
+          entryId: "track-1",
+          entryOrder: 1,
+          variantIndex: 0,
+          mediaPath: "/music/track-1.flac",
+          analysisDirectory: "/analysis/track-1",
+          download: {
+            backend: "slsk",
+            mediaPath: "/music/track-1.flac",
+            files: ["/music/track-1.flac"],
+          },
+          metadata: { title: "Track 1", artist: "Artist 1", comment: "test" },
+        },
+      ],
+    };
+    const result = writeRekordboxPlan(
+      db,
+      {
+        ...models,
+        PlaylistType: { FOLDER: 0, PLAYLIST: 1 },
+      } as unknown as RekordboxLibrary,
+      plan,
+    );
+
+    expect(createdFolderName).toBe("DJ Sets I Like");
+    expect(result.installedAnalysis).toHaveLength(1);
+    expect(installationCalls).toEqual([
+      {
+        contentId: result.imported[0]!.contentId,
+        directory: "/analysis/track-1",
+        options: { allowWhileRunning: false, commit: false, replace: false },
+      },
+    ]);
+    expect(commitCount).toBe(0);
   });
 
   test("requires every manifest entry to have a completed download", () => {

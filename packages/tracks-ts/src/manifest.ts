@@ -120,6 +120,7 @@ export type SpotifyState =
   | { status: "failed"; query?: string; error: PipelineError };
 
 export type AcquisitionBackend = "slsk" | "ytdlp";
+export type AcquisitionDownloadBackend = "local" | AcquisitionBackend;
 export type AcquisitionKind = "individual" | "source-set-clip";
 
 export type AcquisitionCandidate = {
@@ -133,7 +134,7 @@ export type AcquisitionCandidate = {
 };
 
 export type AcquisitionDownload = {
-  backend: AcquisitionBackend;
+  backend: AcquisitionDownloadBackend;
   kind?: AcquisitionKind;
   mediaPath: string;
   files: string[];
@@ -824,7 +825,7 @@ function requireCandidateMembership(
 }
 
 type ValidatedDownload = {
-  backend: AcquisitionBackend;
+  backend: AcquisitionDownloadBackend;
   mediaPath: string;
   source?: string;
 };
@@ -842,7 +843,7 @@ function validateDownload(value: unknown, path: string): ValidatedDownload {
     "isrc",
     "clip",
   ]);
-  const backend = oneOf(record.backend, ["slsk", "ytdlp"], `${path}.backend`);
+  const backend = oneOf(record.backend, ["local", "slsk", "ytdlp"], `${path}.backend`);
   const kind =
     record.kind === undefined
       ? "individual"
