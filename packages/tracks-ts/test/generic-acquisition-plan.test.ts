@@ -144,6 +144,28 @@ describe("buildAcquisitionPlan", () => {
     expect(plan.recordings[2]!.variants[0]!.outputPath).toMatch(/\.mp3$/u);
   });
 
+  test("preserves artist-title provenance when rescanning a generated Spotify-ID path", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "generic-local-resume-"));
+    const outputDirectory = join(directory, "output");
+    await mkdir(outputDirectory, { recursive: true });
+    await writeFile(
+      join(outputDirectory, "001 - Artist One - Track One [spotify-match-1].flac"),
+      "local",
+    );
+    const value = manifest(join(directory, "set.mp3"));
+    value.entries[0]!.warnings.push("match-1 adopted local artifact matched by artist-title");
+
+    const plan = await buildAcquisitionPlan(value, {
+      outputDirectory,
+      localDirectories: [outputDirectory],
+    });
+
+    expect(plan.recordings[0]!.variants[0]!.localArtifact).toMatchObject({
+      matchedBy: "artist-title",
+    });
+    expect(plan.recordings[0]!.variants[0]!.metadata).not.toHaveProperty("isrc");
+  });
+
   test("uses ASCII-safe paths and resumes a failed individual as an approved cue clip", async () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-fallback-"));
     const sourcePath = join(directory, "set.m4a");
