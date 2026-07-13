@@ -1722,9 +1722,6 @@ function validatePlan(
               `Local artifact source must be absolute: ${variant.localArtifact.sourcePath}`,
             );
           }
-          if (resolve(variant.localArtifact.sourcePath) === resolve(variant.outputPath)) {
-            throw new Error("Local artifact source and output must use distinct paths");
-          }
         }
         const expectedIsrc =
           expected?.isrc ??
