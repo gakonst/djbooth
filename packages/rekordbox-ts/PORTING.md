@@ -232,3 +232,33 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   library is absent. Build and packed-package smoke checks now fail if either seed is missing. An
   extracted npm tarball analyzed the same track with an empty HOME and no prebuilt runtime cache in
   14.58 seconds cold, producing the same valid DAT/EXT/2EX, BPM, and key result.
+
+## Content cue checkpoint (2026-07-13)
+
+- Audited the pinned pyrekordbox declarations, the current Rekordbox 7 manual, PCOB/PCO2 parser,
+  and a live database read-only. Confirmed `djmdCue.Kind = 0` for memory cues and `1..16` for Hot Cue
+  slots A through P; `OutMsec = -1` distinguishes a point from a loop; memory ordering is temporal,
+  not a stored sequence column; and master-library cue edits have a denormalized `contentCue.Cues`
+  JSON mirror. No live database was modified.
+- Added typed `ContentCuePoint`, `ContentCueInput`, `HotCueSlot`, and coordinated
+  `getContentCues`, `upsertContentCue`, `deleteContentCue`, and `setContentCues` APIs. Mutations
+  validate ownership, duration, millisecond quantization, cue/loop shape, active-loop use, comment
+  and color bounds, ten-memory-cue capacity, unique Hot Cue slots, and canonical replacement order.
+- Cue mutations stage the physical frame/time fields, increment `djmdContent.CueUpdated`, and sync
+  the active `contentCue` JSON mirror in the same SQLite transaction. New arbitrary-time cues use
+  Rekordbox's observed zero/null physical-field mode. Metadata-only edits preserve native MPEG,
+  microsecond, beat-loop, and seek fields; moving a cue consistently downgrades those fields to the
+  zero/null mode rather than creating a hybrid row. PCOB/PCO2 ANLZ tags remain byte-preserving and
+  read-only until the binary writer can safely update every redundant cue representation.
+- Added Incur `db content cues`, `set-cue`, and `delete-cue`. Mutations require explicit `--write`,
+  reject the general `--allow-while-running` bypass, canonicalize real/relative/symlink database
+  paths onto the shared `.tracks-ts.lock`, serialize stale-lock reclamation, verify the lock inode
+  and UUID ownership token before release, require both Rekordbox processes stopped, create a
+  checksummed pre-write database/companion backup and durable outcome journal, commit once, then
+  reopen read-only for SQLite integrity and exact semantic verification. Update-by-ID uses patch
+  semantics so omitted Hot Cue loop, comment, and color fields are preserved.
+- Added copied plain-SQLite fixture coverage for reads, row classification, creation, slot upsert,
+  deletion, exact replacement, mirror synchronization, physical field values, ordering, limits,
+  malformed input, cross-content ownership, guarded backup/journal receipts, process refusal, and
+  canonical-lock contention, mirror-field corruption, and exact CueUpdated verification. The
+  package suite passes 98 tests.

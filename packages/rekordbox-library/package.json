@@ -55,8 +55,10 @@
     "@tanstack/react-query": "^5.101.2",
     "incur": "0.4.13",
     "lucide-react": "^1.24.0",
+    "music-metadata": "11.13.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "wavesurfer.js": "7.12.10",
     "zod": "^4.4.3"
   },
   "devDependencies": {

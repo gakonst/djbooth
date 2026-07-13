@@ -1,4 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,6 +19,12 @@ import { Cli } from "incur";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { rekordboxCli } from "../src/cli.js";
+import { MasterDatabase } from "../src/index.js";
+import {
+  acquireCueWriteLock,
+  assertContentCueMirrorMatches,
+  performGuardedCueMutation,
+} from "../src/masterdb/safe-cue-write.js";
 
 const roots: Array<string> = [];
 
@@ -60,6 +76,56 @@ function playlistFixture(): string {
     INSERT INTO djmdSongPlaylist VALUES ('membership-3', 'playlist-1', '900', 3);
   `);
   database.close();
+  return path;
+}
+
+function cueFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-cli-cues-"));
+  roots.push(root);
+  const path = join(root, "plain.db");
+  const database = new Database(path);
+  const now = "2026-07-13 12:00:00.000 +00:00";
+  database.exec(`
+    CREATE TABLE agentRegistry (
+      registry_id TEXT PRIMARY KEY, int_1 INTEGER, created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdContent (
+      ID TEXT PRIMARY KEY, UUID TEXT, Length INTEGER, CueUpdated TEXT,
+      rb_local_deleted INTEGER DEFAULT 0, rb_local_usn INTEGER,
+      created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE djmdCue (
+      ID TEXT PRIMARY KEY, ContentID TEXT, InMsec INTEGER, InFrame INTEGER,
+      InMpegFrame INTEGER, InMpegAbs INTEGER, OutMsec INTEGER, OutFrame INTEGER,
+      OutMpegFrame INTEGER, OutMpegAbs INTEGER, Kind INTEGER, Color INTEGER,
+      ColorTableIndex INTEGER, ActiveLoop INTEGER, Comment TEXT, BeatLoopSize INTEGER,
+      CueMicrosec INTEGER, InPointSeekInfo TEXT, OutPointSeekInfo TEXT, ContentUUID TEXT,
+      UUID TEXT, rb_data_status INTEGER DEFAULT 0, rb_local_data_status INTEGER DEFAULT 0,
+      rb_local_deleted INTEGER DEFAULT 0, rb_local_synced INTEGER DEFAULT 0, usn INTEGER,
+      rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    CREATE TABLE contentCue (
+      ID TEXT PRIMARY KEY, ContentID TEXT, Cues TEXT, rb_cue_count INTEGER, UUID TEXT,
+      rb_data_status INTEGER DEFAULT 0, rb_local_data_status INTEGER DEFAULT 0,
+      rb_local_deleted INTEGER DEFAULT 0, rb_local_synced INTEGER DEFAULT 0, usn INTEGER,
+      rb_local_usn INTEGER, created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
+    );
+    INSERT INTO agentRegistry VALUES ('localUpdateCount', 100, '${now}', '${now}');
+    INSERT INTO djmdContent VALUES (
+      'track-1', 'content-uuid-1', 300, NULL, 0, 1, '${now}', '${now}'
+    );
+  `);
+  database.close();
+  writeFileSync(
+    join(root, "masterPlaylists6.xml"),
+    `<?xml version="1.0" encoding="UTF-8"?>
+<MASTER_PLAYLIST Version="3.0.0" AutomaticSync="0">
+  <PRODUCT Name="rekordbox" Version="7.2.1" Company="AlphaTheta"/>
+  <PLAYLISTS/>
+</MASTER_PLAYLIST>
+`,
+  );
   return path;
 }
 
@@ -573,4 +639,429 @@ describe("CLI process boundary", () => {
     expect(result.status).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toContain("explicit --write flag");
   }, 20_000);
+
+  it("lists, sets, updates, and deletes normalized content cues", () => {
+    const path = cueFixture();
+    const denied = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "12.3454",
+      "--path",
+      path,
+      "--plain",
+      "--json",
+    );
+    expect(denied.status).not.toBe(0);
+    expect(`${denied.stdout}\n${denied.stderr}`).toContain("explicit --write flag");
+
+    const bypass = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "12",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--allow-while-running",
+      "--json",
+    );
+    expect(bypass.status).not.toBe(0);
+    expect(`${bypass.stdout}\n${bypass.stderr}`).toContain("allow-while-running");
+
+    const memory = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "12.3454",
+      "--comment",
+      "Intro",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(memory.status, memory.stderr).toBe(0);
+    const memoryReceipt = JSON.parse(memory.stdout) as {
+      backupDirectory: string;
+      backupFiles: Array<{ name: string; sha256: string }>;
+      backupReportPath: string;
+      journalPath: string;
+      cue: { id: string };
+    };
+    expect(memoryReceipt).toMatchObject({
+      operation: "set-cue",
+      quickCheck: "ok",
+      foreignKeyViolationCount: 0,
+      semanticVerification: "exact",
+      cue: {
+        activeLoop: false,
+        color: null,
+        comment: "Intro",
+        contentId: "track-1",
+        endSeconds: null,
+        kind: "memory",
+        slot: null,
+        startSeconds: 12.345,
+        type: "cue",
+      },
+    });
+    expect(memoryReceipt.backupFiles.map(({ name }) => name)).toEqual([
+      "plain.db",
+      "masterPlaylists6.xml",
+    ]);
+    expect(existsSync(memoryReceipt.backupReportPath)).toBe(true);
+    const backedUpDatabase = join(memoryReceipt.backupDirectory, "plain.db");
+    const backupHash = createHash("sha256").update(readFileSync(backedUpDatabase)).digest("hex");
+    expect(memoryReceipt.backupFiles[0]?.sha256).toBe(backupHash);
+    const backup = new Database(backedUpDatabase, { readonly: true });
+    expect(
+      (backup.prepare("SELECT COUNT(*) AS count FROM djmdCue").get() as { count: number }).count,
+    ).toBe(0);
+    backup.close();
+    const journal = JSON.parse(readFileSync(memoryReceipt.journalPath, "utf8")) as {
+      outcome: { committed: boolean; status: string };
+      receipt: { changedId: string };
+      stages: Record<string, { status: string }>;
+    };
+    expect(journal).toMatchObject({
+      outcome: { committed: true, status: "succeeded" },
+      stages: {
+        database: { status: "succeeded" },
+        verification: { status: "succeeded" },
+        receipt: { status: "succeeded" },
+      },
+    });
+    expect(journal.receipt.changedId).toBe(memoryReceipt.cue.id);
+    const committed = new Database(path, { readonly: true });
+    expect(
+      (
+        committed
+          .prepare("SELECT int_1 AS count FROM agentRegistry WHERE registry_id = ?")
+          .get("localUpdateCount") as { count: number }
+      ).count,
+    ).toBe(104);
+    expect(
+      (
+        committed
+          .prepare("SELECT CueUpdated AS value FROM djmdContent WHERE ID = ?")
+          .get("track-1") as { value: string }
+      ).value,
+    ).toBe("1");
+    const mirror = committed
+      .prepare("SELECT Cues FROM contentCue WHERE ContentID = ? AND rb_local_deleted = 0")
+      .get("track-1") as { Cues: string };
+    expect(JSON.parse(mirror.Cues)).toEqual([
+      expect.objectContaining({ ID: memoryReceipt.cue.id, ContentID: "track-1" }),
+    ]);
+    committed.close();
+
+    const hot = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "20",
+      "--kind",
+      "hot",
+      "--slot",
+      "P",
+      "--type",
+      "loop",
+      "--end-seconds",
+      "24.5",
+      "--active-loop",
+      "--comment",
+      "Drop",
+      "--color",
+      "255",
+      "--color-table-index",
+      "36",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(hot.status, hot.stderr).toBe(0);
+    const hotReceipt = JSON.parse(hot.stdout) as { cue: { id: string } };
+    const hotCue = hotReceipt.cue;
+    expect(hotReceipt).toMatchObject({
+      operation: "set-cue",
+      cue: {
+        activeLoop: true,
+        color: 255,
+        colorTableIndex: 36,
+        endSeconds: 24.5,
+        kind: "hot",
+        slot: 16,
+        startSeconds: 20,
+        type: "loop",
+      },
+    });
+
+    const updated = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "21",
+      "--id",
+      hotCue.id,
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(updated.status, updated.stderr).toBe(0);
+    expect(JSON.parse(updated.stdout)).toMatchObject({
+      operation: "set-cue",
+      cue: {
+        activeLoop: true,
+        color: 255,
+        colorTableIndex: 36,
+        comment: "Drop",
+        endSeconds: 24.5,
+        id: hotCue.id,
+        kind: "hot",
+        slot: 16,
+        startSeconds: 21,
+        type: "loop",
+      },
+    });
+
+    const cleared = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "22",
+      "--id",
+      hotCue.id,
+      "--no-active-loop",
+      "--clear-comment",
+      "--clear-color",
+      "--clear-color-table-index",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(cleared.status, cleared.stderr).toBe(0);
+    expect(JSON.parse(cleared.stdout)).toMatchObject({
+      operation: "set-cue",
+      cue: {
+        activeLoop: false,
+        color: null,
+        colorTableIndex: null,
+        comment: "",
+        endSeconds: 24.5,
+        id: hotCue.id,
+        kind: "hot",
+        slot: 16,
+        startSeconds: 22,
+        type: "loop",
+      },
+    });
+
+    const page = runCli(
+      "db",
+      "content",
+      "cues",
+      "track-1",
+      "--limit",
+      "1",
+      "--offset",
+      "1",
+      "--path",
+      path,
+      "--plain",
+      "--json",
+    );
+    expect(page.status, page.stderr).toBe(0);
+    expect(JSON.parse(page.stdout)).toMatchObject({
+      contentId: "track-1",
+      count: 2,
+      limit: 1,
+      offset: 1,
+      rows: [{ id: hotCue.id, kind: "hot", slot: 16 }],
+    });
+
+    const deleted = runCli(
+      "db",
+      "content",
+      "delete-cue",
+      "track-1",
+      hotCue.id,
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(deleted.status, deleted.stderr).toBe(0);
+    expect(JSON.parse(deleted.stdout)).toMatchObject({
+      operation: "delete-cue",
+      contentId: "track-1",
+      deleted: { id: hotCue.id, kind: "hot", slot: 16 },
+      quickCheck: "ok",
+      semanticVerification: "exact",
+    });
+
+    const invalid = runCli(
+      "db",
+      "content",
+      "set-cue",
+      "track-1",
+      "30",
+      "--kind",
+      "hot",
+      "--path",
+      path,
+      "--plain",
+      "--write",
+      "--json",
+    );
+    expect(invalid.status).not.toBe(0);
+    expect(`${invalid.stdout}\n${invalid.stderr}`).toContain("require --slot A through P");
+  }, 40_000);
+
+  it("requires both Rekordbox processes stopped before backup or mutation", async () => {
+    const path = cueFixture();
+    await expect(
+      performGuardedCueMutation(
+        {
+          dbPath: path,
+          unlock: false,
+          getProcessState: () => ({ rekordboxPid: 123, rekordboxAgentPid: 456 }),
+        },
+        {
+          type: "set-cue",
+          contentId: "track-1",
+          cue: { kind: "memory", startSeconds: 10, type: "cue" },
+        },
+      ),
+    ).rejects.toThrow("rekordbox (PID 123), rekordboxAgent (PID 456)");
+    expect(existsSync(`${path}.tracks-ts.lock`)).toBe(false);
+    expect(existsSync(join(path, "..", "tracks-ts-backups"))).toBe(false);
+    const database = new Database(path, { readonly: true });
+    expect(
+      (database.prepare("SELECT COUNT(*) AS count FROM djmdCue").get() as { count: number }).count,
+    ).toBe(0);
+    database.close();
+  });
+
+  it("coordinates cue writes through the exact shared tracks-ts lock", async () => {
+    const path = cueFixture();
+    const alias = `${path}.alias`;
+    symlinkSync(path, alias);
+    const canonicalPath = realpathSync(path);
+    const lock = await acquireCueWriteLock(alias);
+    expect(lock.path).toBe(`${canonicalPath}.tracks-ts.lock`);
+    try {
+      await expect(
+        performGuardedCueMutation(
+          {
+            dbPath: path,
+            unlock: false,
+            getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
+          },
+          {
+            type: "set-cue",
+            contentId: "track-1",
+            cue: { kind: "memory", startSeconds: 10, type: "cue" },
+          },
+        ),
+      ).rejects.toThrow(`write lock already exists: ${canonicalPath}.tracks-ts.lock`);
+    } finally {
+      await lock.release();
+    }
+    expect(existsSync(`${canonicalPath}.tracks-ts.lock`)).toBe(false);
+  });
+
+  it("serializes concurrent cue-writer recovery of one stale shared lock", async () => {
+    const path = cueFixture();
+    const canonicalPath = realpathSync(path);
+    const lockPath = `${canonicalPath}.tracks-ts.lock`;
+    writeFileSync(lockPath, "{}\n");
+    const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+    utimesSync(lockPath, stale, stale);
+
+    const results = await Promise.allSettled([
+      acquireCueWriteLock(path),
+      acquireCueWriteLock(path),
+    ]);
+    const acquired = results.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : [],
+    );
+    expect(acquired).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+
+    await acquired[0]!.release();
+    expect(existsSync(lockPath)).toBe(false);
+    expect(existsSync(`${lockPath}.acquire`)).toBe(false);
+  });
+
+  it("does not remove a replacement shared lock on cue-writer release", async () => {
+    const path = cueFixture();
+    const canonicalPath = realpathSync(path);
+    const lock = await acquireCueWriteLock(path);
+    rmSync(lock.path);
+    const replacement = { pid: process.pid, token: "replacement-owner" };
+    writeFileSync(lock.path, `${JSON.stringify(replacement)}\n`);
+
+    await lock.release();
+
+    expect(JSON.parse(readFileSync(lock.path, "utf8"))).toEqual(replacement);
+    expect(existsSync(`${canonicalPath}.tracks-ts.lock.acquire`)).toBe(false);
+  });
+
+  it("detects semantic contentCue corruption despite matching cue IDs", async () => {
+    const path = cueFixture();
+    await performGuardedCueMutation(
+      {
+        dbPath: path,
+        unlock: false,
+        getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
+      },
+      {
+        type: "set-cue",
+        contentId: "track-1",
+        cue: { kind: "memory", startSeconds: 10, type: "cue" },
+      },
+    );
+    const raw = new Database(path);
+    const row = raw
+      .prepare("SELECT ID, Cues FROM contentCue WHERE ContentID = ?")
+      .get("track-1") as {
+      ID: string;
+      Cues: string;
+    };
+    const entries = JSON.parse(row.Cues) as Array<Record<string, unknown>>;
+    Object.assign(entries[0]!, {
+      ActiveLoop: 1,
+      Color: 7,
+      Comment: "corrupt",
+      InMsec: 99_000,
+      OutMsec: 150_000,
+    });
+    raw.prepare("UPDATE contentCue SET Cues = ? WHERE ID = ?").run(JSON.stringify(entries), row.ID);
+    raw.close();
+
+    const probe = new MasterDatabase({ path, readonly: true, unlock: false });
+    try {
+      expect(() => assertContentCueMirrorMatches(probe, "track-1")).toThrow(
+        "contentCue.Cues mismatch",
+      );
+    } finally {
+      probe.close();
+    }
+  });
 });

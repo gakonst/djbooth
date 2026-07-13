@@ -32,6 +32,7 @@ import {
 import type {
   ConditionInput,
   DatabaseValue,
+  HotCueSlot,
   MySettingFilename,
   NodeKeyType,
   PlaylistSummary,
@@ -45,6 +46,7 @@ import {
   Playlist as DevicePlaylist,
   PlaylistContent as DevicePlaylistContent,
 } from "./devicelib-plus/index.js";
+import { type ContentCuePatch, performGuardedCueMutation } from "./masterdb/safe-cue-write.js";
 
 export const rekordboxCli = Cli.create("rekordbox", {
   version,
@@ -54,6 +56,8 @@ export const rekordboxCli = Cli.create("rekordbox", {
       "search my Rekordbox database",
       "list playlists in my Rekordbox library",
       "show tracks in a Rekordbox playlist by name",
+      "list memory cues and Hot Cues for a Rekordbox track",
+      "set a memory cue or Hot Cue in my Rekordbox library",
       "inspect my Rekordbox configuration",
       "inspect an ANLZ file",
       "summarize a Rekordbox XML export",
@@ -498,6 +502,10 @@ const dbWriteOptions = dbOpenOptions.extend({
   allowWhileRunning: z.boolean().default(false).describe("Allow commit while Rekordbox is running"),
   write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
 });
+const guardedCueWriteOptions = dbOpenOptions.extend({
+  backupRoot: z.string().optional().describe("Directory for checksummed pre-write backups"),
+  write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
+});
 
 function openDatabase(options: { path?: string; plain: boolean }, write = false): MasterDatabase {
   return new MasterDatabase({
@@ -510,6 +518,15 @@ function openDatabase(options: { path?: string; plain: boolean }, write = false)
 
 function requireDatabaseWrite(options: { write: boolean }): void {
   if (!options.write) throw new TypeError("Database mutations require the explicit --write flag");
+}
+
+function resolveDatabasePath(options: { path?: string; plain: boolean }): string {
+  const database = openDatabase(options);
+  try {
+    return database.path;
+  } finally {
+    database.close();
+  }
 }
 
 const databaseCli = Cli.create("db", {
@@ -721,8 +738,33 @@ const databasePlaylistCli = Cli.create("playlist", {
 });
 
 const databaseContentCli = Cli.create("content", {
-  description: "Create tracks and coordinate database/ANLZ paths.",
+  description: "Create tracks and coordinate database, ANLZ, and cue data.",
 });
+
+const hotCueSlotNames = [
+  "A",
+  "B",
+  "C",
+  "D",
+  "E",
+  "F",
+  "G",
+  "H",
+  "I",
+  "J",
+  "K",
+  "L",
+  "M",
+  "N",
+  "O",
+  "P",
+] as const;
+
+type HotCueSlotName = (typeof hotCueSlotNames)[number];
+
+function hotCueSlotNumber(slot: HotCueSlotName): HotCueSlot {
+  return (hotCueSlotNames.indexOf(slot) + 1) as HotCueSlot;
+}
 
 const databaseMetadataCli = Cli.create("metadata", {
   description: "Create common master-library metadata rows.",
@@ -1079,6 +1121,165 @@ databasePlaylistCli.command("list", {
     } finally {
       db.close();
     }
+  },
+});
+
+databaseContentCli.command("cues", {
+  description: "List normalized memory cues and Hot Cues for one content row.",
+  args: z.object({ contentId: z.string().describe("Content ID") }),
+  options: dbOpenOptions.extend({
+    limit: z.number().int().min(1).max(100).default(100).describe("Maximum cues to return"),
+    offset: z.number().int().min(0).default(0).describe("Cues to skip"),
+  }),
+  examples: [
+    {
+      args: { contentId: "123456789" },
+      description: "List memory cues chronologically, then Hot Cues A through P",
+    },
+  ],
+  run(c) {
+    const db = openDatabase(c.options);
+    try {
+      const cues = db.getContentCues(c.args.contentId);
+      return {
+        contentId: c.args.contentId,
+        count: cues.length,
+        limit: c.options.limit,
+        offset: c.options.offset,
+        rows: cues.slice(c.options.offset, c.options.offset + c.options.limit),
+      };
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databaseContentCli.command("set-cue", {
+  description: "Create a cue or patch one by ID without resetting omitted fields.",
+  args: z.object({
+    contentId: z.string().describe("Content ID"),
+    startSeconds: z.coerce.number().min(0).describe("Cue or loop start in seconds"),
+  }),
+  options: guardedCueWriteOptions.extend({
+    activeLoop: z.boolean().optional().describe("Set active loop; pass --no-active-loop to clear"),
+    clearColor: z.boolean().default(false).describe("Clear the existing cue color byte"),
+    clearColorTableIndex: z
+      .boolean()
+      .default(false)
+      .describe("Clear the existing Rekordbox color-table index"),
+    clearComment: z.boolean().default(false).describe("Clear the existing cue comment"),
+    color: z.number().int().min(0).max(255).optional().describe("Rekordbox cue color byte"),
+    colorTableIndex: z
+      .number()
+      .int()
+      .min(0)
+      .max(62)
+      .optional()
+      .describe("Rekordbox color-table index from 0 through 62"),
+    comment: z.string().max(255).optional().describe("Cue comment"),
+    endSeconds: z.number().min(0).optional().describe("Loop end in seconds"),
+    id: z.string().min(1).optional().describe("Existing cue ID to update"),
+    kind: z
+      .enum(["memory", "hot"])
+      .optional()
+      .describe("Cue collection; new cues default to memory"),
+    slot: z.enum(hotCueSlotNames).optional().describe("Hot Cue slot A through P"),
+    type: z
+      .enum(["cue", "loop"])
+      .optional()
+      .describe("Point cue or loop range; new cues default to cue"),
+  }),
+  examples: [
+    {
+      args: { contentId: "123456789", startSeconds: 32 },
+      description: "Create a memory cue at 32 seconds",
+    },
+    {
+      args: { contentId: "123456789", startSeconds: 64 },
+      options: {
+        activeLoop: true,
+        comment: "Drop loop",
+        endSeconds: 72,
+        kind: "hot",
+        slot: "A",
+        type: "loop",
+        write: true,
+      },
+      description: "Set Hot Cue A to an active loop",
+    },
+  ],
+  async run(c) {
+    requireDatabaseWrite(c.options);
+    if (c.options.clearColor && c.options.color !== undefined)
+      throw new TypeError("Pass either --color or --clear-color, not both");
+    if (c.options.clearColorTableIndex && c.options.colorTableIndex !== undefined)
+      throw new TypeError("Pass either --color-table-index or --clear-color-table-index, not both");
+    if (c.options.clearComment && c.options.comment !== undefined)
+      throw new TypeError("Pass either --comment or --clear-comment, not both");
+
+    const input: ContentCuePatch = {
+      ...(c.options.activeLoop === undefined ? {} : { activeLoop: c.options.activeLoop }),
+      ...(c.options.clearColor
+        ? { color: null }
+        : c.options.color === undefined
+          ? {}
+          : { color: c.options.color }),
+      ...(c.options.clearColorTableIndex
+        ? { colorTableIndex: null }
+        : c.options.colorTableIndex === undefined
+          ? {}
+          : { colorTableIndex: c.options.colorTableIndex }),
+      ...(c.options.clearComment
+        ? { comment: "" }
+        : c.options.comment === undefined
+          ? {}
+          : { comment: c.options.comment }),
+      ...(c.options.endSeconds === undefined ? {} : { endSeconds: c.options.endSeconds }),
+      ...(c.options.id === undefined ? {} : { id: c.options.id }),
+      ...(c.options.kind === undefined ? {} : { kind: c.options.kind }),
+      ...(c.options.slot === undefined ? {} : { slot: hotCueSlotNumber(c.options.slot) }),
+      startSeconds: c.args.startSeconds,
+      ...(c.options.type === undefined ? {} : { type: c.options.type }),
+    };
+    const dbPath = resolveDatabasePath(c.options);
+    return performGuardedCueMutation(
+      {
+        dbPath,
+        backupRoot: c.options.backupRoot,
+        key: process.env.REKORDBOX_DB_KEY,
+        unlock: !c.options.plain,
+      },
+      { type: "set-cue", contentId: c.args.contentId, cue: input },
+    );
+  },
+});
+
+databaseContentCli.command("delete-cue", {
+  description: "Delete one memory cue or Hot Cue owned by a content row.",
+  args: z.object({
+    contentId: z.string().describe("Content ID"),
+    cueId: z.string().describe("Cue ID"),
+  }),
+  options: guardedCueWriteOptions,
+  examples: [
+    {
+      args: { contentId: "123456789", cueId: "987654321" },
+      options: { write: true },
+      description: "Delete one cue after explicit write acknowledgement",
+    },
+  ],
+  async run(c) {
+    requireDatabaseWrite(c.options);
+    const dbPath = resolveDatabasePath(c.options);
+    return performGuardedCueMutation(
+      {
+        dbPath,
+        backupRoot: c.options.backupRoot,
+        key: process.env.REKORDBOX_DB_KEY,
+        unlock: !c.options.plain,
+      },
+      { type: "delete-cue", contentId: c.args.contentId, cueId: c.args.cueId },
+    );
   },
 });
 

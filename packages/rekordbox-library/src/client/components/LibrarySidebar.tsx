@@ -26,10 +26,17 @@ type Props = {
   activeFilter: string;
   loading: boolean;
   open: boolean;
+  canWrite: boolean;
   onClose(): void;
   onSelectPlaylist(id: string | null): void;
   onSelectFilter(filter: string): void;
   onCreatePlaylist(parentId?: string): void;
+  onPlaylistContextMenu?(
+    point: { x: number; y: number },
+    playlist: PlaylistItem,
+    returnFocus: HTMLElement,
+    folder?: { expanded: boolean; toggle(): void },
+  ): void;
 };
 
 type PlaylistNode = PlaylistItem & { children: PlaylistNode[] };
@@ -52,10 +59,12 @@ export function LibrarySidebar({
   activeFilter,
   loading,
   open,
+  canWrite,
   onClose,
   onSelectPlaylist,
   onSelectFilter,
   onCreatePlaylist,
+  onPlaylistContextMenu,
 }: Props) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -144,6 +153,7 @@ export function LibrarySidebar({
             <button
               className="small-icon-button"
               type="button"
+              disabled={!canWrite}
               onClick={() => onCreatePlaylist()}
               aria-label="Create playlist"
               title="Create playlist"
@@ -181,6 +191,7 @@ export function LibrarySidebar({
                     onSelectPlaylist(id);
                     onClose();
                   }}
+                  onContextMenu={onPlaylistContextMenu}
                 />
               ))}
             </div>
@@ -213,6 +224,7 @@ function PlaylistTreeNode({
   expanded,
   onToggle,
   onSelect,
+  onContextMenu,
 }: {
   node: PlaylistNode;
   depth: number;
@@ -221,6 +233,12 @@ function PlaylistTreeNode({
   expanded: Set<string>;
   onToggle(id: string): void;
   onSelect(id: string): void;
+  onContextMenu?(
+    point: { x: number; y: number },
+    playlist: PlaylistItem,
+    returnFocus: HTMLElement,
+    folder?: { expanded: boolean; toggle(): void },
+  ): void;
 }) {
   const isFolder = node.type === "folder";
   const descendantsMatch = nodeMatches(node, query);
@@ -261,6 +279,26 @@ function PlaylistTreeNode({
           type="button"
           className="playlist-select"
           onClick={() => (isFolder ? onToggle(node.id) : onSelect(node.id))}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            onContextMenu?.(
+              { x: event.clientX, y: event.clientY },
+              node,
+              event.currentTarget,
+              isFolder ? { expanded: isExpanded, toggle: () => onToggle(node.id) } : undefined,
+            );
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey)) return;
+            event.preventDefault();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            onContextMenu?.(
+              { x: bounds.left + 24, y: bounds.bottom },
+              node,
+              event.currentTarget,
+              isFolder ? { expanded: isExpanded, toggle: () => onToggle(node.id) } : undefined,
+            );
+          }}
           aria-current={active ? "page" : undefined}
         >
           <Icon size={14} aria-hidden="true" />
@@ -301,6 +339,7 @@ function PlaylistTreeNode({
               expanded={expanded}
               onToggle={onToggle}
               onSelect={onSelect}
+              onContextMenu={onContextMenu}
             />
           ))}
         </div>

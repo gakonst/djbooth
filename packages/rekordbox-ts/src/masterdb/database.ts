@@ -131,6 +131,47 @@ export type PlaylistSummary = {
   type: "folder" | "playlist" | "smart";
 };
 
+/** Rekordbox 7 Hot Cue slot number (A through P). */
+export type HotCueSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
+
+/** Whether a content cue is a chronological memory cue or an addressable Hot Cue. */
+export type ContentCueKind = "hot" | "memory";
+
+/** Whether a content cue marks one position or a loop range. */
+export type ContentCueType = "cue" | "loop";
+
+/** Normalized cue point stored in a Rekordbox master library. */
+export type ContentCuePoint = {
+  activeLoop: boolean;
+  color: number | null;
+  colorTableIndex: number | null;
+  comment: string;
+  contentId: string;
+  endSeconds: number | null;
+  id: string;
+  kind: ContentCueKind;
+  slot: HotCueSlot | null;
+  startSeconds: number;
+  type: ContentCueType;
+};
+
+type ContentCueInputCommon = {
+  activeLoop?: boolean;
+  color?: number | null;
+  colorTableIndex?: number | null;
+  comment?: string;
+  endSeconds?: number | null;
+  id?: string;
+  startSeconds: number;
+  type: ContentCueType;
+};
+
+/** Validated desired state for one Rekordbox memory cue or Hot Cue. */
+export type ContentCueInput = ContentCueInputCommon &
+  ({ kind: "hot"; slot: HotCueSlot } | { kind: "memory"; slot?: never });
+
+type NormalizedContentCueInput = Omit<ContentCuePoint, "contentId" | "id"> & { id?: string };
+
 type SmartPlaylistSelection = {
   artistExpression: string;
   fromSql: string;
@@ -1398,8 +1439,8 @@ export class MasterDatabase {
       return byId(models.DjmdMenuItems, row.get("MenuItemID"));
     if (row.tableName === "djmdCue") {
       if (property === "Content") return one(models.DjmdContent, { ID: row.get("ContentID")! });
-      if (property === "isMemoryCue") return Number(row.get("HotCue")) === 0;
-      if (property === "isHotCue") return Number(row.get("HotCue")) > 0;
+      if (property === "isMemoryCue") return Number(row.get("Kind")) === 0;
+      if (property === "isHotCue") return Number(row.get("Kind")) > 0;
     }
     if (row.tableName === "djmdMixerParam") {
       if (property === "Content") return one(models.DjmdContent, { ID: row.get("ContentID")! });
@@ -1551,6 +1592,438 @@ export class MasterDatabase {
   }
   getCue(filters: Record<string, models.DatabaseValue> = {}) {
     return this.lookup(models.DjmdCue, filters);
+  }
+
+  private activeContentCueRows(content: models.DjmdContent): Array<models.DjmdCue> {
+    return this.query(models.DjmdCue)
+      .where({ ContentID: content.ID })
+      .all()
+      .filter((cue) => Number(cue.get("rb_local_deleted") ?? 0) === 0);
+  }
+
+  private assertActiveContent(content: models.DjmdContent): void {
+    if (Number(content.get("rb_local_deleted") ?? 0) !== 0)
+      throw new TypeError(`Content '${content.ID}' is deleted`);
+  }
+
+  private cueFromRow(row: models.DjmdCue): ContentCuePoint {
+    const kind = Number(row.get("Kind"));
+    if (!Number.isInteger(kind) || kind < 0 || kind > 16)
+      throw new RangeError(`Cue '${String(row.get("ID"))}' has unsupported Kind '${kind}'`);
+    const inMsec = Number(row.get("InMsec"));
+    if (!Number.isInteger(inMsec) || inMsec < 0)
+      throw new RangeError(`Cue '${String(row.get("ID"))}' has invalid InMsec '${inMsec}'`);
+    const outMsec = Number(row.get("OutMsec") ?? -1);
+    if (!Number.isInteger(outMsec) || outMsec < -1 || (outMsec >= 0 && outMsec <= inMsec))
+      throw new RangeError(`Cue '${String(row.get("ID"))}' has invalid OutMsec '${outMsec}'`);
+    const color = Number(row.get("Color") ?? -1);
+    return {
+      activeLoop: outMsec >= 0 && Number(row.get("ActiveLoop") ?? 0) !== 0,
+      color: color < 0 ? null : color,
+      colorTableIndex:
+        row.get("ColorTableIndex") == null ? null : Number(row.get("ColorTableIndex")),
+      comment: String(row.get("Comment") ?? ""),
+      contentId: String(row.get("ContentID")),
+      endSeconds: outMsec < 0 ? null : outMsec / 1_000,
+      id: String(row.get("ID")),
+      kind: kind === 0 ? "memory" : "hot",
+      slot: kind === 0 ? null : (kind as HotCueSlot),
+      startSeconds: inMsec / 1_000,
+      type: outMsec < 0 ? "cue" : "loop",
+    };
+  }
+
+  private sortContentCueRows(rows: Array<models.DjmdCue>): Array<models.DjmdCue> {
+    return rows.sort((left, right) => {
+      const leftKind = Number(left.get("Kind"));
+      const rightKind = Number(right.get("Kind"));
+      if ((leftKind === 0) !== (rightKind === 0)) return leftKind === 0 ? -1 : 1;
+      if (leftKind > 0 && leftKind !== rightKind) return leftKind - rightKind;
+      const position = Number(left.get("InMsec")) - Number(right.get("InMsec"));
+      if (position) return position;
+      return String(left.get("ID")).localeCompare(String(right.get("ID")), "en", {
+        numeric: true,
+      });
+    });
+  }
+
+  private normalizeContentCueInput(
+    content: models.DjmdContent,
+    input: ContentCueInput,
+  ): NormalizedContentCueInput {
+    if (input.kind !== "memory" && input.kind !== "hot")
+      throw new TypeError("Cue kind must be 'memory' or 'hot'");
+    if (input.type !== "cue" && input.type !== "loop")
+      throw new TypeError("Cue type must be 'cue' or 'loop'");
+    if (
+      input.kind === "hot" &&
+      (!Number.isInteger(input.slot) || input.slot < 1 || input.slot > 16)
+    )
+      throw new RangeError("Hot Cue slot must be an integer from 1 through 16");
+    if (input.kind === "memory" && input.slot !== undefined)
+      throw new TypeError("Memory cues do not have a Hot Cue slot");
+
+    const toMilliseconds = (value: number, label: string): number => {
+      if (!Number.isFinite(value) || value < 0)
+        throw new RangeError(`${label} must be a finite non-negative number`);
+      const milliseconds = Math.round(value * 1_000);
+      if (!Number.isSafeInteger(milliseconds)) throw new RangeError(`${label} is too large`);
+      return milliseconds;
+    };
+    const startMsec = toMilliseconds(input.startSeconds, "Cue startSeconds");
+    const duration = content.get("Length");
+    const boundedDuration = Number(duration);
+    if (
+      Number.isFinite(boundedDuration) &&
+      boundedDuration > 0 &&
+      startMsec > boundedDuration * 1_000
+    )
+      throw new RangeError("Cue startSeconds exceeds the content duration");
+
+    let endMsec: number | null = null;
+    if (input.type === "loop") {
+      if (input.endSeconds == null) throw new TypeError("Loop cues require endSeconds");
+      endMsec = toMilliseconds(input.endSeconds, "Cue endSeconds");
+      if (endMsec <= startMsec) throw new RangeError("Loop endSeconds must follow startSeconds");
+      if (
+        Number.isFinite(boundedDuration) &&
+        boundedDuration > 0 &&
+        endMsec > boundedDuration * 1_000
+      )
+        throw new RangeError("Cue endSeconds exceeds the content duration");
+    } else {
+      if (input.endSeconds != null) throw new TypeError("Point cues cannot have endSeconds");
+      if (input.activeLoop) throw new TypeError("Only loop cues can be active loops");
+    }
+
+    const comment = input.comment ?? "";
+    if (typeof comment !== "string") throw new TypeError("Cue comment must be a string");
+    if (comment.length > 255) throw new RangeError("Cue comment cannot exceed 255 characters");
+    const color = input.color ?? null;
+    if (color != null && (!Number.isInteger(color) || color < 0 || color > 255))
+      throw new RangeError("Cue color must be a Rekordbox color ID from 0 through 255 or null");
+    const colorTableIndex = input.colorTableIndex ?? null;
+    if (
+      colorTableIndex != null &&
+      (!Number.isInteger(colorTableIndex) || colorTableIndex < 0 || colorTableIndex > 62)
+    )
+      throw new RangeError("Cue colorTableIndex must be an integer from 0 through 62 or null");
+    if (input.id !== undefined && (typeof input.id !== "string" || !input.id.length))
+      throw new TypeError("Cue id must be a non-empty string when supplied");
+
+    return {
+      activeLoop: input.type === "loop" && (input.activeLoop ?? false),
+      color,
+      colorTableIndex,
+      comment,
+      endSeconds: endMsec == null ? null : endMsec / 1_000,
+      id: input.id,
+      kind: input.kind,
+      slot: input.kind === "hot" ? input.slot : null,
+      startSeconds: startMsec / 1_000,
+      type: input.type,
+    };
+  }
+
+  private applyContentCue(
+    content: models.DjmdContent,
+    input: NormalizedContentCueInput,
+    row?: models.DjmdCue,
+  ): models.DjmdCue {
+    const startMsec = Math.round(input.startSeconds * 1_000);
+    const endMsec = input.endSeconds == null ? -1 : Math.round(input.endSeconds * 1_000);
+    const values: Record<string, models.DatabaseValue> = {
+      ActiveLoop: Number(input.activeLoop),
+      Color: input.color ?? (row?.get("Color") === null ? null : -1),
+      ColorTableIndex: input.colorTableIndex ?? (row ? null : 0),
+      Comment: input.comment,
+      ContentID: content.ID,
+      ContentUUID: content.UUID,
+      InFrame: Math.floor((startMsec * 3) / 20),
+      InMsec: startMsec,
+      Kind: input.kind === "memory" ? 0 : input.slot!,
+      OutMsec: endMsec,
+    };
+    if (!row) {
+      return this.create(models.DjmdCue, {
+        ...values,
+        BeatLoopSize: 0,
+        CueMicrosec: 0,
+        ID: String(this.generateUnusedId(models.DjmdCue, { bits: 32 })),
+        InMpegAbs: 0,
+        InMpegFrame: 0,
+        InPointSeekInfo: null,
+        OutMpegAbs: 0,
+        OutMpegFrame: 0,
+        OutFrame: endMsec < 0 ? 0 : Math.floor((endMsec * 3) / 20),
+        OutPointSeekInfo: null,
+      });
+    }
+    const startChanged = Number(row.get("InMsec")) !== startMsec;
+    const endChanged = Number(row.get("OutMsec") ?? -1) !== endMsec;
+    if (startChanged || endChanged) {
+      Object.assign(values, {
+        BeatLoopSize: 0,
+        CueMicrosec: 0,
+        InMpegAbs: 0,
+        InMpegFrame: 0,
+        InPointSeekInfo: null,
+        OutMpegAbs: 0,
+        OutMpegFrame: 0,
+        OutFrame: endMsec < 0 ? 0 : Math.floor((endMsec * 3) / 20),
+        OutPointSeekInfo: null,
+      });
+    }
+    for (const [key, value] of Object.entries(values)) row.set(key, value);
+    if (this.hasColumn(row.tableName, "updated_at")) row.set("updated_at", new Date());
+    return row;
+  }
+
+  private contentCueMirrorJson(
+    rows: Array<models.DjmdCue>,
+    existingJson?: models.DatabaseValue,
+  ): string {
+    const fields = [
+      "ID",
+      "ContentID",
+      "InMsec",
+      "InFrame",
+      "InMpegFrame",
+      "InMpegAbs",
+      "OutMsec",
+      "OutFrame",
+      "OutMpegFrame",
+      "OutMpegAbs",
+      "Kind",
+      "Color",
+      "ColorTableIndex",
+      "ActiveLoop",
+      "Comment",
+      "BeatLoopSize",
+      "CueMicrosec",
+      "InPointSeekInfo",
+      "OutPointSeekInfo",
+      "ContentUUID",
+      "UUID",
+      "created_at",
+      "updated_at",
+    ] as const;
+    const existingById = new Map<string, Record<string, unknown>>();
+    if (existingJson != null && existingJson !== "") {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(existingJson));
+      } catch (error) {
+        throw new TypeError("Existing contentCue.Cues JSON is malformed", { cause: error });
+      }
+      if (!Array.isArray(parsed)) throw new TypeError("Existing contentCue.Cues must be an array");
+      for (const entry of parsed) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry))
+          throw new TypeError("Existing contentCue.Cues entries must be objects");
+        const object = entry as Record<string, unknown>;
+        const id = object.ID;
+        if (typeof id !== "string" && typeof id !== "number")
+          throw new TypeError("Existing contentCue.Cues entry is missing ID");
+        const key = String(id);
+        if (existingById.has(key))
+          throw new TypeError(`Existing contentCue.Cues contains duplicate ID '${key}'`);
+        existingById.set(key, object);
+      }
+    }
+    return JSON.stringify(
+      rows.map((row) => {
+        const result = { ...existingById.get(String(row.ID)) };
+        for (const field of fields) delete result[field];
+        for (const field of fields) {
+          const value = row.get(field);
+          if (value == null || value === "") continue;
+          result[field] =
+            value instanceof Date ? value.toISOString().replace(/Z$/u, "+00:00") : value;
+        }
+        return result;
+      }),
+    );
+  }
+
+  private syncContentCueMirror(content: models.DjmdContent): void {
+    if (!this.tableNames.includes(models.ContentCue.tableName)) return;
+    if (!content.UUID) throw new TypeError(`Content '${content.ID}' has no UUID for contentCue`);
+    const mirrors = this.query(models.ContentCue).where({ ContentID: content.ID }).all();
+    const activeMirrors = mirrors.filter((row) => Number(row.get("rb_local_deleted") ?? 0) === 0);
+    if (activeMirrors.length > 1)
+      throw new Error(`Content '${content.ID}' has multiple active contentCue rows`);
+    const mirror =
+      activeMirrors[0] ?? mirrors.find((row) => String(row.get("ID")) === String(content.UUID));
+    const cues = this.contentCueMirrorJson(this.activeContentCueRows(content), mirror?.get("Cues"));
+    if (mirror) {
+      mirror.set("Cues", cues);
+      if (this.hasColumn(mirror.tableName, "rb_local_deleted")) mirror.set("rb_local_deleted", 0);
+      if (this.hasColumn(mirror.tableName, "updated_at")) mirror.set("updated_at", new Date());
+      return;
+    }
+    this.create(models.ContentCue, {
+      ContentID: content.ID,
+      Cues: cues,
+      ID: content.UUID,
+      rb_cue_count: null,
+    });
+  }
+
+  private assertContentCueMirrorReadable(content: models.DjmdContent): void {
+    if (!this.tableNames.includes(models.ContentCue.tableName)) return;
+    const mirrors = this.query(models.ContentCue).where({ ContentID: content.ID }).all();
+    const activeMirrors = mirrors.filter((row) => Number(row.get("rb_local_deleted") ?? 0) === 0);
+    if (activeMirrors.length > 1)
+      throw new Error(`Content '${content.ID}' has multiple active contentCue rows`);
+    const mirror =
+      activeMirrors[0] ?? mirrors.find((row) => String(row.get("ID")) === String(content.UUID));
+    this.contentCueMirrorJson(this.activeContentCueRows(content), mirror?.get("Cues"));
+  }
+
+  private markContentCuesChanged(content: models.DjmdContent): void {
+    if (this.hasColumn(content.tableName, "CueUpdated")) {
+      const current = Number.parseInt(String(content.get("CueUpdated") ?? "0"), 10);
+      content.set(
+        "CueUpdated",
+        String(Number.isSafeInteger(current) && current >= 0 ? current + 1 : 1),
+      );
+    }
+    if (this.hasColumn(content.tableName, "updated_at")) content.set("updated_at", new Date());
+    this.syncContentCueMirror(content);
+  }
+
+  /** Read active memory cues chronologically, followed by Hot Cues in slot order. */
+  getContentCues(content: models.DjmdContent | string | number): Array<ContentCuePoint> {
+    const contentRow = this.resolve(models.DjmdContent, content);
+    this.assertActiveContent(contentRow);
+    return this.sortContentCueRows(this.activeContentCueRows(contentRow)).map((cue) =>
+      this.cueFromRow(cue),
+    );
+  }
+
+  /**
+   * Create or update one content cue without committing.
+   *
+   * An ID updates that owned cue. A Hot Cue without an ID updates its existing slot. A memory cue
+   * without an ID creates a new row.
+   */
+  upsertContentCue(
+    content: models.DjmdContent | string | number,
+    input: ContentCueInput,
+  ): ContentCuePoint {
+    const contentRow = this.resolve(models.DjmdContent, content);
+    this.assertActiveContent(contentRow);
+    this.assertContentCueMirrorReadable(contentRow);
+    const normalized = this.normalizeContentCueInput(contentRow, input);
+    const existing = this.activeContentCueRows(contentRow);
+    let row: models.DjmdCue | undefined;
+    if (normalized.id) {
+      row = existing.find((candidate) => String(candidate.ID) === normalized.id);
+      if (!row)
+        throw new TypeError(`Cue '${normalized.id}' does not belong to content '${contentRow.ID}'`);
+    } else if (normalized.kind === "hot") {
+      row = existing.find((candidate) => Number(candidate.Kind) === normalized.slot);
+    }
+    if (normalized.kind === "memory" && (!row || Number(row.Kind) !== 0)) {
+      const memoryCount = existing.filter((candidate) => Number(candidate.Kind) === 0).length;
+      if (memoryCount >= 10)
+        throw new RangeError("A track cannot contain more than 10 memory cues");
+    }
+    if (normalized.kind === "hot") {
+      const conflict = existing.find(
+        (candidate) => Number(candidate.Kind) === normalized.slot && candidate.ID !== row?.ID,
+      );
+      if (conflict) throw new Error(`Hot Cue slot ${normalized.slot} is already occupied`);
+    }
+    const updated = this.applyContentCue(contentRow, normalized, row);
+    this.markContentCuesChanged(contentRow);
+    return this.cueFromRow(updated);
+  }
+
+  /** Delete one cue owned by the supplied content without committing. */
+  deleteContentCue(
+    content: models.DjmdContent | string | number,
+    cue: models.DjmdCue | string | number,
+  ): void {
+    const contentRow = this.resolve(models.DjmdContent, content);
+    this.assertActiveContent(contentRow);
+    this.assertContentCueMirrorReadable(contentRow);
+    const cueRow = this.resolve(models.DjmdCue, cue);
+    if (String(cueRow.ContentID) !== String(contentRow.ID))
+      throw new TypeError(`Cue '${cueRow.ID}' does not belong to content '${contentRow.ID}'`);
+    if (Number(cueRow.get("rb_local_deleted") ?? 0) !== 0)
+      throw new TypeError(`Cue '${cueRow.ID}' is deleted`);
+    this.delete(cueRow);
+    this.markContentCuesChanged(contentRow);
+  }
+
+  /**
+   * Replace all cues owned by a content row without committing.
+   *
+   * Inputs are canonical: at most ten chronological memory cues first, then unique Hot Cues in
+   * ascending slot order. IDs retain memory-cue row identity; Hot Cues also match by slot.
+   */
+  setContentCues(
+    content: models.DjmdContent | string | number,
+    inputs: ReadonlyArray<ContentCueInput>,
+  ): Array<ContentCuePoint> {
+    const contentRow = this.resolve(models.DjmdContent, content);
+    this.assertActiveContent(contentRow);
+    this.assertContentCueMirrorReadable(contentRow);
+    const normalized = inputs.map((input) => this.normalizeContentCueInput(contentRow, input));
+    const memory = normalized.filter((input) => input.kind === "memory");
+    if (memory.length > 10) throw new RangeError("A track cannot contain more than 10 memory cues");
+    let sawHotCue = false;
+    let previousMemoryMsec = -1;
+    let previousSlot = 0;
+    const ids = new Set<string>();
+    const slots = new Set<HotCueSlot>();
+    for (const input of normalized) {
+      if (input.id) {
+        if (ids.has(input.id)) throw new Error(`Cue id '${input.id}' occurs more than once`);
+        ids.add(input.id);
+      }
+      if (input.kind === "memory") {
+        if (sawHotCue) throw new TypeError("Memory cues must precede Hot Cues");
+        const msec = Math.round(input.startSeconds * 1_000);
+        if (msec < previousMemoryMsec)
+          throw new TypeError("Memory cues must be ordered chronologically");
+        previousMemoryMsec = msec;
+      } else {
+        sawHotCue = true;
+        if (slots.has(input.slot!))
+          throw new Error(`Hot Cue slot ${input.slot} occurs more than once`);
+        if (input.slot! < previousSlot) throw new TypeError("Hot Cues must be ordered by slot");
+        slots.add(input.slot!);
+        previousSlot = input.slot!;
+      }
+    }
+
+    const existing = this.activeContentCueRows(contentRow);
+    const byId = new Map(existing.map((cue) => [String(cue.ID), cue]));
+    const used = new Set<models.DjmdCue>();
+    const assignments: Array<models.DjmdCue | undefined> = [];
+    for (const input of normalized) {
+      let row: models.DjmdCue | undefined;
+      if (input.id) {
+        row = byId.get(input.id);
+        if (!row)
+          throw new TypeError(`Cue '${input.id}' does not belong to content '${contentRow.ID}'`);
+      } else if (input.kind === "hot") {
+        row = existing.find(
+          (candidate) => Number(candidate.Kind) === input.slot && !used.has(candidate),
+        );
+      }
+      if (row && used.has(row)) throw new Error(`Cue '${row.ID}' is assigned more than once`);
+      if (row) used.add(row);
+      assignments.push(row);
+    }
+    const updated = normalized.map((input, index) =>
+      this.applyContentCue(contentRow, input, assignments[index]),
+    );
+    for (const cue of existing) if (!used.has(cue)) this.delete(cue);
+    this.markContentCuesChanged(contentRow);
+    return this.sortContentCueRows(updated).map((cue) => this.cueFromRow(cue));
   }
   getDevice(filters: Record<string, models.DatabaseValue> = {}) {
     return this.lookup(models.DjmdDevice, filters);

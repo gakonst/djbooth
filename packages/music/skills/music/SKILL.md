@@ -102,6 +102,33 @@ identify database/sidecar partial commits and the recovery path. Never enable ne
 upload the private library, expose `.env` values, follow symlink-backed audio, or test writes against
 the live library; use a copied fixture.
 
+The workbench is the preferred interactive surface for library management. Its WaveSurfer player
+uses bounded precomputed Rekordbox peaks and HTTP-range playback, with a flat streaming placeholder
+when peaks are unavailable, so playback stays network-bound instead of buffering or decoding a
+whole recording. It can show indexed or embedded artwork, configure memory
+cues and Hot Cues A–P (including loops, comments, and colors), and edit playlist membership and
+order. The infinite set canvas keeps loose candidates and layout in browser-local state;
+connections determine order, candidates enter the playlist only when connected, and existing
+playlist nodes leave only when explicitly removed. Nothing persists before an explicit **Apply
+order** write. Replacement and subtree deletion carry optimistic source snapshots and refuse stale
+writes. Prompt commands are planned locally and must cross the same protected mutation boundary
+before they alter the database.
+
+For non-visual cue automation, inspect first and keep `--write` explicit:
+
+```sh
+music rekordbox db content cues "$CONTENT_ID" --format json
+music rekordbox db content set-cue "$CONTENT_ID" 32.5 --kind memory --type cue --write
+music rekordbox db content set-cue "$CONTENT_ID" 64 --kind hot --slot A \
+  --type loop --end-seconds 72 --write
+music rekordbox db content delete-cue "$CONTENT_ID" "$CUE_ID" --write
+```
+
+Treat cue changes like playlist changes: stopped Rekordbox processes, the shared database lock,
+checksummed backup and durable journal, then semantic and SQLite verification. The master database
+and its cue mirror are writable; preserve the unknown/native ANLZ bytes, including PCOB/PCO2,
+unless a separately verified native rewrite path exists.
+
 ## 1. Preflight
 
 Run non-mutating checks:

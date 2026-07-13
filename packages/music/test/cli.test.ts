@@ -1,6 +1,11 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { describe, expect, test } from "vitest";
 
 import { createMusicCli } from "../src/cli.js";
+
+const execFileAsync = promisify(execFile);
 
 async function serve(argv: string[]): Promise<{
   exitCode: number | undefined;
@@ -21,6 +26,16 @@ async function serve(argv: string[]): Promise<{
 }
 
 describe("music CLI", () => {
+  test("runs library help through the source-resolved workspace command", async () => {
+    const { stdout } = await execFileAsync("pnpm", ["music", "library", "status", "--help"], {
+      cwd: new URL("../../..", import.meta.url),
+      env: { ...process.env, NO_COLOR: "1" },
+    });
+
+    expect(stdout).toContain("music library status");
+    expect(stdout).toContain("--path <string>");
+  });
+
   test("composes every package-owned command tree", async () => {
     const { output } = await serve(["--llms-full", "--format", "json"]);
     const manifest = JSON.parse(output) as { commands: { name: string }[] };

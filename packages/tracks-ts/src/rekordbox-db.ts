@@ -13,12 +13,14 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   stat,
   unlink,
 } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { basename, dirname, join, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
@@ -1833,51 +1835,148 @@ async function writeManifestAtomically(
 
 /** Acquire the cross-process lock shared by direct Rekordbox database writers. */
 export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
-  const path = `${dbPath}.tracks-ts.lock`;
+  const canonicalDbPath = await realpath(resolve(dbPath));
+  const path = `${canonicalDbPath}.tracks-ts.lock`;
+  const guard = await acquireRekordboxDatabaseLockGuard(path);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const token = randomUUID();
+  try {
     try {
       handle = await open(path, "wx", 0o600);
-      break;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-      if (attempt === 0 && (await isStaleRekordboxDatabaseLock(path))) {
+      if (await isStaleRekordboxDatabaseLock(path)) {
         await unlink(path).catch(() => undefined);
         await syncDirectory(dirname(path));
-        continue;
+        handle = await open(path, "wx", 0o600);
+      } else {
+        const owner = await readLockOwner(path);
+        throw new TracksError(
+          "TOOL_FAILED",
+          `Rekordbox database import lock already exists: ${path}`,
+          { details: { path, owner } },
+        );
       }
-      const owner = await readLockOwner(path);
-      throw new TracksError(
-        "TOOL_FAILED",
-        `Rekordbox database import lock already exists: ${path}`,
-        { details: { path, owner } },
-      );
     }
-  }
-  if (!handle) throw new TracksError("TOOL_FAILED", `Could not acquire database lock ${path}`);
-  try {
+    if (!handle) throw new TracksError("TOOL_FAILED", `Could not acquire database lock ${path}`);
     await handle.writeFile(
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), dbPath })}\n`,
+      `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), dbPath: canonicalDbPath })}\n`,
       "utf8",
     );
     await handle.sync();
     await syncDirectory(dirname(path));
   } catch (error) {
-    await handle.close().catch(() => undefined);
-    await unlink(path).catch(() => undefined);
+    if (handle) await closeAndRemoveOwnedFile(path, handle, undefined).catch(() => undefined);
     throw error;
+  } finally {
+    await guard.release();
   }
+
   let released = false;
   return async () => {
     if (released) return;
-    released = true;
+    const releaseGuard = await acquireRekordboxDatabaseLockGuard(path);
     try {
-      await handle.close();
+      released = true;
+      await closeAndRemoveOwnedFile(path, handle, token);
     } finally {
-      await unlink(path).catch(() => undefined);
-      await syncDirectory(dirname(path));
+      await releaseGuard.release();
     }
   };
+}
+
+type OwnedLockFile = {
+  handle: Awaited<ReturnType<typeof open>>;
+  path: string;
+  release(): Promise<void>;
+};
+
+async function acquireRekordboxDatabaseLockGuard(lockPath: string): Promise<OwnedLockFile> {
+  const path = `${lockPath}.acquire`;
+  const token = randomUUID();
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  for (let attempt = 0; attempt <= 200; attempt += 1) {
+    try {
+      handle = await open(path, "wx", 0o600);
+      break;
+    } catch (error) {
+      if (!isAlreadyExistsError(error)) throw error;
+      if (attempt === 200)
+        throw new TracksError(
+          "TOOL_FAILED",
+          `Rekordbox database lock acquisition guard already exists: ${path}`,
+          { details: { path, owner: await readLockOwner(path) } },
+        );
+      await delay(10);
+    }
+  }
+  if (!handle)
+    throw new TracksError("TOOL_FAILED", `Could not acquire database lock guard ${path}`);
+  try {
+    await handle.writeFile(
+      `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), lockPath })}\n`,
+      "utf8",
+    );
+    await handle.sync();
+    await syncDirectory(dirname(path));
+  } catch (error) {
+    await closeAndRemoveOwnedFile(path, handle, undefined).catch(() => undefined);
+    throw error;
+  }
+
+  let released = false;
+  return {
+    handle,
+    path,
+    release: async () => {
+      if (released) return;
+      released = true;
+      const removed = await closeAndRemoveOwnedFile(path, handle, token);
+      if (!removed)
+        throw new TracksError(
+          "TOOL_FAILED",
+          `Rekordbox database lock acquisition guard ownership changed: ${path}`,
+        );
+    },
+  };
+}
+
+async function closeAndRemoveOwnedFile(
+  path: string,
+  handle: Awaited<ReturnType<typeof open>>,
+  token: string | undefined,
+): Promise<boolean> {
+  const owned = await pathReferencesOwnedFile(path, handle, token);
+  await handle.close();
+  if (!owned) return false;
+  try {
+    await unlink(path);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  await syncDirectory(dirname(path));
+  return true;
+}
+
+async function pathReferencesOwnedFile(
+  path: string,
+  handle: Awaited<ReturnType<typeof open>>,
+  token: string | undefined,
+): Promise<boolean> {
+  try {
+    const [pathStats, handleStats, owner] = await Promise.all([
+      lstat(path),
+      handle.stat(),
+      token === undefined ? undefined : readLockOwner(path),
+    ]);
+    return (
+      pathStats.dev === handleStats.dev &&
+      pathStats.ino === handleStats.ino &&
+      (token === undefined || owner?.token === token)
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function isStaleRekordboxDatabaseLock(path: string): Promise<boolean> {
@@ -1899,13 +1998,14 @@ async function isStaleRekordboxDatabaseLock(path: string): Promise<boolean> {
 
 async function readLockOwner(
   path: string,
-): Promise<{ pid?: number; createdAt?: string } | undefined> {
+): Promise<{ pid?: number; token?: string; createdAt?: string } | undefined> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as unknown;
     if (!value || typeof value !== "object") return undefined;
     const record = value as Record<string, unknown>;
     return {
       ...(typeof record.pid === "number" ? { pid: record.pid } : {}),
+      ...(typeof record.token === "string" ? { token: record.token } : {}),
       ...(typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}),
     };
   } catch {

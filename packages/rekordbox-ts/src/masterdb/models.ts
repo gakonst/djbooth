@@ -218,6 +218,18 @@ export class DjmdColor extends DatabaseRow {
 }
 export class DjmdCue extends DatabaseRow {
   static override tableName = "djmdCue";
+  /** Track that owns this cue. */
+  declare Content: DjmdContent | undefined;
+  /** Owning track ID. */
+  declare ContentID: string | null;
+  /** Cue row ID. */
+  declare ID: string | null;
+  /** Zero for memory cues; otherwise the Hot Cue slot number. */
+  declare Kind: number | null;
+  /** Whether this row occupies a Hot Cue slot. */
+  declare isHotCue: boolean;
+  /** Whether this row is a chronological memory cue. */
+  declare isMemoryCue: boolean;
 }
 export class DjmdDevice extends DatabaseRow {
   static override tableName = "djmdDevice";

@@ -1,21 +1,39 @@
 import { randomBytes } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import {
+  createReadStream,
+  existsSync,
+  realpathSync,
+  type Stats,
+  statSync,
+  unwatchFile,
+  watchFile,
+} from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import { z } from "zod";
 
 import type {
   ApiError,
   LibraryBootstrap,
+  LibraryEvent,
   LibraryMutation,
   MutationReceipt,
   PlaylistItem,
+  PromptContext,
+  PromptPlan,
   TrackDetail,
+  TrackWaveform,
   TracksResponse,
 } from "../shared/types.js";
-import { RekordboxLibraryService, type TrackFilter } from "./library.js";
+import {
+  LibraryMutationConflictError,
+  RekordboxLibraryService,
+  type ArtworkAsset,
+  type TrackFilter,
+} from "./library.js";
+import { planLibraryPrompt } from "./prompt.js";
 
 const mutationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -29,7 +47,11 @@ const mutationSchema = z.discriminatedUnion("type", [
     playlistId: z.string().min(1),
     name: z.string().trim().min(1).max(255),
   }),
-  z.object({ type: z.literal("delete-playlist"), playlistId: z.string().min(1) }),
+  z.object({
+    type: z.literal("delete-playlist"),
+    playlistId: z.string().min(1),
+    expectedPlaylistIds: z.array(z.string().min(1)).min(1).max(10_000),
+  }),
   z.object({
     type: z.literal("add-track"),
     playlistId: z.string().min(1),
@@ -47,13 +69,51 @@ const mutationSchema = z.discriminatedUnion("type", [
     membershipId: z.string().min(1),
     trackNumber: z.number().int().positive(),
   }),
+  z.object({
+    type: z.literal("replace-playlist-tracks"),
+    playlistId: z.string().min(1),
+    contentIds: z.array(z.string().min(1)).max(10_000),
+    expectedMembershipIds: z.array(z.string().min(1)).max(10_000),
+  }),
+  z.object({
+    type: z.literal("upsert-cue"),
+    contentId: z.string().min(1),
+    cue: z.object({
+      id: z.string().min(1).optional(),
+      kind: z.enum(["memory", "hot"]),
+      type: z.enum(["cue", "loop"]),
+      slot: z.number().int().min(1).max(16).optional(),
+      startSeconds: z.number().finite().nonnegative(),
+      endSeconds: z.number().finite().nonnegative().nullable().optional(),
+      activeLoop: z.boolean().optional(),
+      comment: z.string().max(255).optional(),
+      color: z.number().int().min(0).max(255).nullable().optional(),
+      colorTableIndex: z.number().int().min(0).max(62).nullable().optional(),
+    }),
+  }),
+  z.object({
+    type: z.literal("delete-cue"),
+    contentId: z.string().min(1),
+    cueId: z.string().min(1),
+  }),
 ]);
+
+const promptSchema = z.object({
+  prompt: z.string().trim().min(1).max(2_000),
+  context: z.object({
+    playlistId: z.string().min(1).nullable(),
+    trackId: z.string().min(1).nullable(),
+    playheadSeconds: z.number().finite().nonnegative().nullable(),
+  }),
+});
 
 export type LibraryApi = {
   getAudioPath(id: string): string;
+  getArtwork(id: string): Promise<ArtworkAsset>;
   getBootstrap(csrfToken: string): LibraryBootstrap;
   getPlaylists(): PlaylistItem[];
   getTrack(id: string): TrackDetail;
+  getWaveform(id: string): TrackWaveform;
   getTracks(options?: {
     filter?: TrackFilter;
     limit?: number;
@@ -105,6 +165,14 @@ const audioTypes: Readonly<Record<string, string>> = {
   ".ogg": "audio/ogg",
   ".opus": "audio/ogg",
   ".wav": "audio/wav",
+};
+
+const imageTypes: Readonly<Record<string, string>> = {
+  ".gif": "image/gif",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
 };
 
 class HttpError extends Error {
@@ -188,8 +256,8 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
-    if (bytes > 64 * 1024)
-      throw new HttpError(413, "PAYLOAD_TOO_LARGE", "Request body exceeds 64 KiB");
+    if (bytes > 1024 * 1024)
+      throw new HttpError(413, "PAYLOAD_TOO_LARGE", "Request body exceeds 1 MiB");
     chunks.push(buffer);
   }
   if (!chunks.length) throw new TypeError("Request body is required");
@@ -259,6 +327,29 @@ async function inspectAudio(
   }
 }
 
+async function inspectArtwork(
+  path: string,
+): Promise<{ contentType: string; path: string; size: number }> {
+  const contentType = imageTypes[extname(path).toLocaleLowerCase()];
+  if (!contentType)
+    throw new HttpError(415, "UNSUPPORTED_MEDIA_TYPE", "Artwork is not a supported image file");
+  try {
+    const requestedPath = resolve(path);
+    const requestedSource = await lstat(requestedPath);
+    if (requestedSource.isSymbolicLink() || !requestedSource.isFile())
+      throw new Error("Artwork source is not a regular file");
+    const canonicalPath = await realpath(requestedPath);
+    if (canonicalPath !== requestedPath) throw new Error("Artwork source contains a symbolic link");
+    const canonicalSource = await lstat(canonicalPath);
+    if (canonicalSource.isSymbolicLink() || !canonicalSource.isFile())
+      throw new Error("Artwork source is not a regular file");
+    return { contentType, path: canonicalPath, size: canonicalSource.size };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(404, "NOT_FOUND", "Track artwork is unavailable");
+  }
+}
+
 async function streamAudio(
   request: IncomingMessage,
   response: ServerResponse,
@@ -284,6 +375,37 @@ async function streamAudio(
     return;
   }
   const stream = createReadStream(source.path, { start, end });
+  stream.once("error", () => response.destroy());
+  response.once("close", () => stream.destroy());
+  stream.pipe(response);
+}
+
+async function streamArtwork(
+  request: IncomingMessage,
+  response: ServerResponse,
+  asset: ArtworkAsset,
+): Promise<void> {
+  if (asset.kind === "embedded") {
+    const bytes = Buffer.from(asset.data);
+    response.writeHead(200, {
+      "cache-control": "private, max-age=300",
+      "content-length": bytes.length,
+      "content-type": asset.contentType,
+    });
+    response.end(request.method === "HEAD" ? undefined : bytes);
+    return;
+  }
+  const source = await inspectArtwork(asset.path);
+  response.writeHead(200, {
+    "cache-control": "private, max-age=300",
+    "content-length": source.size,
+    "content-type": source.contentType,
+  });
+  if (request.method === "HEAD" || source.size === 0) {
+    response.end();
+    return;
+  }
+  const stream = createReadStream(source.path);
   stream.once("error", () => response.destroy());
   response.once("close", () => stream.destroy());
   stream.pipe(response);
@@ -345,6 +467,41 @@ export async function startLibraryServer(
     });
   const packageRoot = resolve(import.meta.dirname, "../..");
   const staticDirectory = resolve(options.staticDirectory ?? join(packageRoot, "dist/client"));
+  const eventClients = new Set<ServerResponse>();
+  let eventId = 0;
+  let externalChangeTimer: ReturnType<typeof setTimeout> | undefined;
+  const writeEvent = (client: ServerResponse, message: string): boolean => {
+    if (client.destroyed || client.writableEnded) {
+      eventClients.delete(client);
+      return false;
+    }
+    try {
+      if (client.write(message)) return true;
+    } catch {
+      // A disconnected local browser must not retain an SSE response indefinitely.
+    }
+    eventClients.delete(client);
+    client.end();
+    return false;
+  };
+  const publish = (
+    type: LibraryEvent["type"],
+    details: Pick<LibraryEvent, "changedId" | "mutation"> = {},
+  ) => {
+    const event: LibraryEvent = {
+      id: ++eventId,
+      type,
+      emittedAt: new Date().toISOString(),
+      ...details,
+    };
+    const message = `id: ${String(event.id)}\nevent: library\ndata: ${JSON.stringify(event)}\n\n`;
+    for (const client of eventClients) writeEvent(client, message);
+    return event;
+  };
+  const heartbeat = setInterval(() => {
+    for (const client of eventClients) writeEvent(client, ": keepalive\n\n");
+  }, 20_000);
+  heartbeat.unref();
 
   const server = createServer(async (request, response) => {
     setSecurityHeaders(response);
@@ -354,6 +511,30 @@ export async function startLibraryServer(
       if (url.pathname === "/api/bootstrap") {
         assertMethod(request, ["GET", "HEAD"]);
         json(request, response, 200, api.getBootstrap(token));
+        return;
+      }
+      if (url.pathname === "/api/events") {
+        assertMethod(request, ["GET"]);
+        response.writeHead(200, {
+          "cache-control": "no-cache, no-store",
+          connection: "keep-alive",
+          "content-type": "text/event-stream; charset=utf-8",
+          "x-accel-buffering": "no",
+        });
+        eventClients.add(response);
+        const connected: LibraryEvent = {
+          id: ++eventId,
+          type: "connected",
+          emittedAt: new Date().toISOString(),
+        };
+        writeEvent(
+          response,
+          `id: ${String(connected.id)}\nevent: library\ndata: ${JSON.stringify(connected)}\n\n`,
+        );
+        const removeClient = () => eventClients.delete(response);
+        request.once("close", removeClient);
+        response.once("close", removeClient);
+        response.once("error", removeClient);
         return;
       }
       if (url.pathname === "/api/playlists") {
@@ -394,11 +575,42 @@ export async function startLibraryServer(
         await streamAudio(request, response, api.getAudioPath(decodeURIComponent(audioMatch[1]!)));
         return;
       }
+      const artworkMatch = /^\/api\/artwork\/([^/]+)$/u.exec(url.pathname);
+      if (artworkMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        await streamArtwork(
+          request,
+          response,
+          await api.getArtwork(decodeURIComponent(artworkMatch[1]!)),
+        );
+        return;
+      }
+      const waveformMatch = /^\/api\/waveforms\/([^/]+)$/u.exec(url.pathname);
+      if (waveformMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        json(request, response, 200, {
+          waveform: api.getWaveform(decodeURIComponent(waveformMatch[1]!)),
+        });
+        return;
+      }
       if (url.pathname === "/api/mutations") {
         assertMethod(request, ["POST"]);
         assertMutationRequest(request, token);
         const mutation = mutationSchema.parse(await readJsonBody(request)) as LibraryMutation;
-        json(request, response, 200, { receipt: await api.mutate(mutation) });
+        const receipt: MutationReceipt = await api.mutate(mutation);
+        publish("mutation", { changedId: receipt.changedId, mutation: mutation.type });
+        json(request, response, 200, { receipt });
+        return;
+      }
+      if (url.pathname === "/api/prompts/plan") {
+        assertMethod(request, ["POST"]);
+        assertMutationRequest(request, token);
+        const input = promptSchema.parse(await readJsonBody(request)) as {
+          context: PromptContext;
+          prompt: string;
+        };
+        const plan: PromptPlan = planLibraryPrompt(input.prompt, input.context, api.getPlaylists());
+        json(request, response, 200, { plan });
         return;
       }
       if (url.pathname.startsWith("/api/")) {
@@ -416,18 +628,20 @@ export async function startLibraryServer(
       const responseError =
         error instanceof HttpError
           ? apiError(error.status, error.code, message)
-          : error instanceof z.ZodError ||
-              error instanceof SyntaxError ||
-              error instanceof TypeError ||
-              error instanceof URIError
-            ? apiError(400, "INVALID_REQUEST", message)
-            : error instanceof RangeError
-              ? apiError(404, "NOT_FOUND", message)
-              : /write mode is disabled|session token|Cross-origin/u.test(message)
-                ? apiError(403, "FORBIDDEN", message)
-                : /Untrusted Host/u.test(message)
-                  ? apiError(421, "MISDIRECTED_REQUEST", message)
-                  : apiError(500, "INTERNAL_ERROR", message);
+          : error instanceof LibraryMutationConflictError
+            ? apiError(409, "LIBRARY_CONFLICT", message)
+            : error instanceof z.ZodError ||
+                error instanceof SyntaxError ||
+                error instanceof TypeError ||
+                error instanceof URIError
+              ? apiError(400, "INVALID_REQUEST", message)
+              : error instanceof RangeError
+                ? apiError(404, "NOT_FOUND", message)
+                : /write mode is disabled|session token|Cross-origin/u.test(message)
+                  ? apiError(403, "FORBIDDEN", message)
+                  : /Untrusted Host/u.test(message)
+                    ? apiError(421, "MISDIRECTED_REQUEST", message)
+                    : apiError(500, "INTERNAL_ERROR", message);
       if (error instanceof HttpError)
         for (const [name, value] of Object.entries(error.headers)) response.setHeader(name, value);
       json(request, response, responseError.status, responseError.body);
@@ -444,14 +658,43 @@ export async function startLibraryServer(
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Library server has no TCP address");
   const displayHost = host === "::1" ? "[::1]" : host;
+  const watchers: Array<{ path: string; listener: (current: Stats, previous: Stats) => void }> = [];
+  try {
+    const dbPath = realpathSync(api.getBootstrap(token).library.dbPath);
+    for (const watchedPath of [
+      dbPath,
+      `${dbPath}-wal`,
+      join(dirname(dbPath), "masterPlaylists6.xml"),
+    ]) {
+      const listener = (current: Stats, previous: Stats) => {
+        if (current.mtimeMs === previous.mtimeMs && current.size === previous.size) return;
+        if (externalChangeTimer) clearTimeout(externalChangeTimer);
+        externalChangeTimer = setTimeout(() => {
+          externalChangeTimer = undefined;
+          publish("external-change");
+        }, 200);
+        externalChangeTimer.unref();
+      };
+      watchFile(watchedPath, { interval: 750, persistent: false }, listener);
+      watchers.push({ path: watchedPath, listener });
+    }
+  } catch {
+    // The API remains available and reports its own bootstrap error; live refresh is best-effort.
+  }
   return {
     host,
     port: address.port,
     token,
     url: `http://${displayHost}:${address.port}/`,
-    close: () =>
-      new Promise<void>((resolveClose, reject) => {
+    close: () => {
+      clearInterval(heartbeat);
+      if (externalChangeTimer) clearTimeout(externalChangeTimer);
+      for (const watcher of watchers) unwatchFile(watcher.path, watcher.listener);
+      for (const client of eventClients) client.end();
+      eventClients.clear();
+      return new Promise<void>((resolveClose, reject) => {
         server.close((error) => (error ? reject(error) : resolveClose()));
-      }),
+      });
+    },
   };
 }

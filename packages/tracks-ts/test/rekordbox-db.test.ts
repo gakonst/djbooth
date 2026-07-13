@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -7,6 +7,7 @@ import { describe, expect, test } from "vitest";
 import type { SetManifest } from "../src/manifest.js";
 import {
   applyRekordboxImportResults,
+  acquireRekordboxDatabaseLock,
   assertRekordboxImportApproved,
   assertRekordboxStopped,
   backupRekordboxDatabase,
@@ -819,6 +820,73 @@ describe("Rekordbox direct database planning", () => {
       await expect(readRekordboxBackup(backup.directory)).rejects.toThrow(
         "Rekordbox backup file changed",
       );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("canonicalizes symlink spellings to one Rekordbox database lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-lock-"));
+    const dbPath = join(root, "master.db");
+    const aliasPath = join(root, "library-alias.db");
+    try {
+      await writeFile(dbPath, "fixture");
+      await symlink(dbPath, aliasPath);
+      const release = await acquireRekordboxDatabaseLock(aliasPath);
+      await expect(acquireRekordboxDatabaseLock(dbPath)).rejects.toThrow(
+        "database import lock already exists",
+      );
+      await release();
+      const releaseAgain = await acquireRekordboxDatabaseLock(dbPath);
+      await releaseAgain();
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("serializes concurrent recovery of one stale Rekordbox database lock", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-stale-lock-"));
+    const dbPath = join(root, "master.db");
+    const lockPath = `${dbPath}.tracks-ts.lock`;
+    try {
+      await writeFile(dbPath, "fixture");
+      await writeFile(lockPath, "{}\n");
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+      await utimes(lockPath, stale, stale);
+
+      const results = await Promise.allSettled([
+        acquireRekordboxDatabaseLock(dbPath),
+        acquireRekordboxDatabaseLock(dbPath),
+      ]);
+      const acquired = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      expect(acquired).toHaveLength(1);
+      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+
+      await acquired[0]!();
+      await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(`${lockPath}.acquire`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("does not remove a replacement Rekordbox database lock on release", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-owned-lock-"));
+    const dbPath = join(root, "master.db");
+    const lockPath = `${dbPath}.tracks-ts.lock`;
+    try {
+      await writeFile(dbPath, "fixture");
+      const release = await acquireRekordboxDatabaseLock(dbPath);
+      await rm(lockPath);
+      const replacement = { pid: process.pid, token: "replacement-owner" };
+      await writeFile(lockPath, `${JSON.stringify(replacement)}\n`);
+
+      await release();
+
+      expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(replacement);
+      await expect(readFile(`${lockPath}.acquire`)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(root, { force: true, recursive: true });
     }

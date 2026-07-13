@@ -145,6 +145,57 @@ and direct track counts without duplicating database-selection rules across thos
 
 Databases open read-only by default. For a write workflow, pass `readonly: false`, stage changes through helpers such as `createPlaylist`, `addToPlaylist`, `renamePlaylist`, or row `set`, then call `commit()`. `rollback()` restores staged rows. Commits are blocked while Rekordbox is running, and `copyUnlocked()` produces a new plain SQLite logical copy without modifying the encrypted source.
 
+Content cue helpers keep the normalized `djmdCue` rows and Rekordbox's denormalized `contentCue`
+JSON mirror in the same transaction:
+
+```ts
+const db = new MasterDatabase({ readonly: false });
+try {
+  db.upsertContentCue("CONTENT_ID", {
+    kind: "memory",
+    startSeconds: 32,
+    type: "cue",
+  });
+  db.upsertContentCue("CONTENT_ID", {
+    activeLoop: true,
+    endSeconds: 72,
+    kind: "hot",
+    slot: 1,
+    startSeconds: 64,
+    type: "loop",
+  });
+  console.log(db.getContentCues("CONTENT_ID"));
+  db.commit();
+} finally {
+  db.close();
+}
+```
+
+`getContentCues`, `upsertContentCue`, `deleteContentCue`, and `setContentCues` use seconds at the API
+boundary and Rekordbox's millisecond plus 1/150-second frame fields in the database. They enforce
+track duration, cue/loop shape, chronological memory-cue order, the 10-memory-cue limit, unique Hot
+Cue slots A through P, comments, colors, and row ownership. `setContentCues` stages an exact
+replacement; memory cues come first chronologically and Hot Cues follow in slot order. These master
+database helpers deliberately do not rewrite PCOB/PCO2 tags in installed ANLZ files: the current ANLZ
+port parses and preserves those binary cue lists but does not safely synthesize them.
+
+The Incur CLI exposes the same model through `db content cues`, `set-cue`, and `delete-cue`.
+Cue writes require `--write`, never accept `--allow-while-running`, and refuse to proceed while
+either Rekordbox or rekordboxAgent is running. Each command acquires the canonical
+`<master.db>.tracks-ts.lock`, creates a checksummed backup of the database and existing companions,
+writes a durable intent/outcome journal, commits once, then reopens read-only for `quick_check`,
+`foreign_key_check`, and exact cue verification. The receipt contains the backup and journal paths.
+`set-cue --id` has patch semantics: omitted cue fields remain unchanged; use `--clear-comment`,
+`--clear-color`, or `--clear-color-table-index` for explicit clearing.
+
+```sh
+music rekordbox db content cues CONTENT_ID --format json
+music rekordbox db content set-cue CONTENT_ID 32 --write
+music rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
+  --type loop --end-seconds 72 --active-loop --comment "Drop loop" --write
+music rekordbox db content delete-cue CONTENT_ID CUE_ID --write
+```
+
 For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.
 
 ### ANLZ and My Settings

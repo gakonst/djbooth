@@ -9,6 +9,7 @@ describe("LibrarySidebar", () => {
     const markup = renderToStaticMarkup(
       createElement(LibrarySidebar, {
         activeFilter: "all",
+        canWrite: false,
         items: [
           {
             countError: "Unsupported smart-playlist criterion: mixName",

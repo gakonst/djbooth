@@ -26,6 +26,12 @@ type Props = {
   ordered: boolean;
   canWrite: boolean;
   onSelect(track: TrackSummary): void;
+  onActivate?(track: TrackSummary): void;
+  onContextMenu?(
+    point: { x: number; y: number },
+    track: TrackSummary,
+    returnFocus: HTMLElement,
+  ): void;
   onPage(offset: number): void;
   onMove?(track: TrackSummary, trackNumber: number): void;
   onRetry(): void;
@@ -43,6 +49,8 @@ export function TrackTable({
   ordered,
   canWrite,
   onSelect,
+  onActivate,
+  onContextMenu,
   onPage,
   onMove,
   onRetry,
@@ -126,8 +134,35 @@ export function TrackTable({
                     className={selected ? "is-selected" : ""}
                     aria-selected={selected}
                     tabIndex={0}
+                    draggable
                     onClick={() => onSelect(track)}
+                    onDoubleClick={() => onActivate?.(track)}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      onContextMenu?.(
+                        { x: event.clientX, y: event.clientY },
+                        track,
+                        event.currentTarget,
+                      );
+                    }}
+                    onDragStart={(event) => {
+                      const ids = JSON.stringify([track.id]);
+                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.setData("application/x-rekordbox-track-ids", ids);
+                      event.dataTransfer.setData("application/x-rekordbox-track-id", track.id);
+                      event.dataTransfer.setData("text/plain", track.id);
+                    }}
                     onKeyDown={(event) => {
+                      if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+                        event.preventDefault();
+                        const bounds = event.currentTarget.getBoundingClientRect();
+                        onContextMenu?.(
+                          { x: bounds.left + 32, y: bounds.bottom },
+                          track,
+                          event.currentTarget,
+                        );
+                        return;
+                      }
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         onSelect(track);

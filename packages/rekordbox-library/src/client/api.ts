@@ -1,10 +1,14 @@
 import type {
   ApiError,
   LibraryBootstrap,
+  LibraryEvent,
   LibraryMutation,
   MutationReceipt,
   PlaylistItem,
+  PromptContext,
+  PromptPlan,
   TrackDetail,
+  TrackWaveform,
   TracksResponse,
 } from "../shared/types.js";
 
@@ -47,12 +51,48 @@ export function getTracks(query: TrackQuery, signal?: AbortSignal): Promise<Trac
   return apiRequest<TracksResponse>(`/api/tracks?${params.toString()}`, { signal });
 }
 
+export async function getAllTracks(
+  query: Omit<TrackQuery, "limit" | "offset">,
+  signal?: AbortSignal,
+): Promise<TracksResponse> {
+  const pageSize = 500;
+  const first = await getTracks({ ...query, limit: pageSize, offset: 0 }, signal);
+  const items = [...first.items];
+  while (items.length < first.count) {
+    const page = await getTracks({ ...query, limit: pageSize, offset: items.length }, signal);
+    if (page.items.length === 0)
+      throw new LibraryApiError(409, "INCOMPLETE_PLAYLIST", "Playlist pagination stopped early");
+    items.push(...page.items);
+  }
+  return { items, count: first.count, limit: items.length, offset: 0 };
+}
+
 export async function getTrackDetail(id: string, signal?: AbortSignal): Promise<TrackDetail> {
   const response = await apiRequest<{ track: TrackDetail }>(
     `/api/tracks/${encodeURIComponent(id)}`,
     { signal },
   );
   return response.track;
+}
+
+export async function getTrackWaveform(id: string, signal?: AbortSignal): Promise<TrackWaveform> {
+  const response = await apiRequest<{ waveform: TrackWaveform }>(
+    `/api/waveforms/${encodeURIComponent(id)}`,
+    { signal },
+  );
+  return response.waveform;
+}
+
+export function subscribeLibraryEvents(onEvent: (event: LibraryEvent) => void): () => void {
+  const source = new EventSource("/api/events");
+  source.addEventListener("library", (message) => {
+    try {
+      onEvent(JSON.parse((message as MessageEvent<string>).data) as LibraryEvent);
+    } catch {
+      // Ignore malformed local events; the stream automatically reconnects.
+    }
+  });
+  return () => source.close();
 }
 
 export async function mutateLibrary(
@@ -70,6 +110,24 @@ export async function mutateLibrary(
     body: JSON.stringify(mutation),
   });
   return response.receipt;
+}
+
+export async function planLibraryPrompt(
+  token: string,
+  prompt: string,
+  context: PromptContext,
+  signal?: AbortSignal,
+): Promise<PromptPlan> {
+  const response = await apiRequest<{ plan: PromptPlan }>("/api/prompts/plan", {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      "x-music-library-token": token,
+    },
+    body: JSON.stringify({ prompt, context }),
+  });
+  return response.plan;
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

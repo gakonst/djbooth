@@ -50,6 +50,7 @@ function mockApi(
     rating: 4,
     playCount: 2,
     analyzed: true,
+    artworkAvailable: true,
     fileExists: true,
     path: audioPath,
     comment: null,
@@ -59,6 +60,7 @@ function mockApi(
     sampleRate: 44_100,
     fileSize: 10,
     analysisPath: "/PIONEER/USBANLZ/test/ANLZ0000.DAT",
+    cues: [],
     playlists: [],
   };
   const mutate = vi.fn(
@@ -74,6 +76,11 @@ function mockApi(
   const getTracks = vi.fn(() => ({ items: [detail], count: 1, limit: 100, offset: 0 }));
   return {
     getAudioPath: () => audioPath,
+    getArtwork: async () => ({
+      kind: "embedded",
+      contentType: "image/png",
+      data: Uint8Array.from([1, 2, 3]),
+    }),
     getBootstrap: (csrfToken): LibraryBootstrap => ({
       csrfToken,
       library: {
@@ -113,6 +120,7 @@ function mockApi(
     ],
     getTrack: () => detail,
     getTracks,
+    getWaveform: () => ({ durationSeconds: 300, peaks: [0.2, 1], source: "rekordbox" }),
     mutate,
   };
 }
@@ -167,6 +175,27 @@ describe("library server", () => {
         },
       ],
     });
+
+    const waveform = await (await fetch(new URL("api/waveforms/track-1", server.url))).json();
+    expect(waveform).toEqual({
+      waveform: { durationSeconds: 300, peaks: [0.2, 1], source: "rekordbox" },
+    });
+
+    const artwork = await fetch(new URL("api/artwork/track-1", server.url));
+    expect(artwork.status).toBe(200);
+    expect(artwork.headers.get("content-type")).toBe("image/png");
+    expect([...new Uint8Array(await artwork.arrayBuffer())]).toEqual([1, 2, 3]);
+
+    const streamController = new AbortController();
+    const events = await fetch(new URL("api/events", server.url), {
+      signal: streamController.signal,
+    });
+    expect(events.headers.get("content-type")).toContain("text/event-stream");
+    const reader = events.body!.getReader();
+    const firstEvent = await reader.read();
+    expect(new TextDecoder().decode(firstEvent.value)).toContain('"type":"connected"');
+    await reader.cancel();
+    streamController.abort();
   });
 
   it("rejects non-exact and duplicate pagination integers", async () => {
@@ -244,6 +273,25 @@ describe("library server", () => {
       type: "rename-playlist",
       playlistId: "playlist-1",
       name: "Oldschool",
+    });
+
+    const prompt = await fetch(new URL("api/prompts/plan", server.url), {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: "create playlist called No Static",
+        context: { playlistId: null, trackId: null, playheadSeconds: null },
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: server.url.slice(0, -1),
+        "x-music-library-token": server.token,
+      },
+    });
+    expect(prompt.status).toBe(200);
+    expect(await prompt.json()).toMatchObject({
+      plan: {
+        actions: [{ type: "mutate", mutation: { type: "create-playlist", name: "No Static" } }],
+      },
     });
   });
 

@@ -13,12 +13,14 @@ import {
   LoaderCircle,
   Music2,
   Plus,
+  Pencil,
   RotateCcw,
   Trash2,
   X,
 } from "lucide-react";
 
-import type { PlaylistItem, TrackDetail, TrackSummary } from "../../shared/types.js";
+import type { PlaylistItem, TrackCue, TrackDetail, TrackSummary } from "../../shared/types.js";
+import { rekordboxHotCueColor } from "../cue-palette.js";
 import {
   artworkHue,
   formatBitRate,
@@ -44,6 +46,8 @@ type Props = {
   onRetry(): void;
   onAddTrack(playlistId: string, contentId: string): void;
   onRemoveTrack(playlistId: string, membershipId: string): void;
+  onEditCue(cue: TrackCue): void;
+  onDeleteCue(cue: TrackCue): void;
   onNotice(message: string): void;
 };
 
@@ -61,6 +65,8 @@ export function TrackInspector({
   onRetry,
   onAddTrack,
   onRemoveTrack,
+  onEditCue,
+  onDeleteCue,
   onNotice,
 }: Props) {
   const track = detail ?? summary;
@@ -74,10 +80,13 @@ export function TrackInspector({
     [detail?.playlists, playlists],
   );
   const [targetPlaylist, setTargetPlaylist] = useState("");
+  const [artworkFailed, setArtworkFailed] = useState(false);
 
   useEffect(() => {
     setTargetPlaylist(availablePlaylists[0]?.id ?? "");
   }, [availablePlaylists, track?.id]);
+
+  useEffect(() => setArtworkFailed(false), [track?.id]);
 
   const currentMembership = detail?.playlists.find(
     (membership) => membership.id === selectedPlaylistId,
@@ -114,10 +123,20 @@ export function TrackInspector({
             <div
               className="artwork-placeholder"
               style={{ "--artwork-hue": artworkHue(track.id) } as React.CSSProperties}
-              aria-hidden="true"
             >
-              <span>{titleInitials(track.title, track.artist)}</span>
-              <Disc3 size={82} strokeWidth={0.55} />
+              {!artworkFailed ? (
+                <img
+                  className="track-artwork-image"
+                  src={`/api/artwork/${encodeURIComponent(track.id)}`}
+                  alt={`${track.title} album cover`}
+                  onError={() => setArtworkFailed(true)}
+                />
+              ) : (
+                <>
+                  <span>{titleInitials(track.title, track.artist)}</span>
+                  <Disc3 size={82} strokeWidth={0.55} aria-hidden="true" />
+                </>
+              )}
             </div>
             <div className="track-hero-copy">
               <h2>{track.title || "Untitled"}</h2>
@@ -151,18 +170,6 @@ export function TrackInspector({
               <Activity size={13} /> {String(track.playCount)} plays
             </span>
           </div>
-
-          {detail?.fileExists ? (
-            <div className="audio-preview">
-              <audio
-                key={detail.id}
-                controls
-                preload="metadata"
-                src={`/api/audio/${encodeURIComponent(detail.id)}`}
-                aria-label={`Preview ${detail.title}`}
-              />
-            </div>
-          ) : null}
 
           {loading ? <InspectorSkeleton /> : null}
           {error ? (
@@ -281,6 +288,62 @@ export function TrackInspector({
                     Add
                   </button>
                 </div>
+              </InspectorSection>
+
+              <InspectorSection title="Cue points" icon={<AudioLines size={14} />}>
+                {detail.cues.length ? (
+                  <div className="membership-list cue-point-list">
+                    {detail.cues.map((cue) => {
+                      const paletteColor =
+                        cue.kind === "hot" ? rekordboxHotCueColor(cue.colorTableIndex) : undefined;
+                      return (
+                        <div className="membership-row" key={cue.id}>
+                          <span
+                            className={`cue-kind-chip is-${cue.kind}${
+                              paletteColor ? " has-palette-color" : ""
+                            }`}
+                            style={
+                              paletteColor
+                                ? ({ "--cue-color": paletteColor } as React.CSSProperties)
+                                : undefined
+                            }
+                          >
+                            {cue.kind === "hot" && cue.slot
+                              ? String.fromCharCode(64 + cue.slot)
+                              : "M"}
+                          </span>
+                          <span className="membership-copy">
+                            <strong>{cue.comment || (cue.type === "loop" ? "Loop" : "Cue")}</strong>
+                            <span>
+                              {formatDuration(cue.startSeconds)}
+                              {cue.endSeconds == null ? "" : ` → ${formatDuration(cue.endSeconds)}`}
+                            </span>
+                          </span>
+                          <button
+                            className="small-icon-button"
+                            type="button"
+                            disabled={!canWrite || mutationPending}
+                            onClick={() => onEditCue(cue)}
+                            aria-label={`Edit cue at ${formatDuration(cue.startSeconds)}`}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            className="small-icon-button danger-hover"
+                            type="button"
+                            disabled={!canWrite || mutationPending}
+                            onClick={() => onDeleteCue(cue)}
+                            aria-label={`Delete cue at ${formatDuration(cue.startSeconds)}`}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="section-empty">No memory or Hot Cues.</p>
+                )}
               </InspectorSection>
 
               {detail.comment ? (
