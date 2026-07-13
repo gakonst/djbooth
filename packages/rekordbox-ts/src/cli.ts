@@ -846,10 +846,12 @@ databaseContentCli.command("set-filename", {
 });
 
 databaseContentCli.command("install-analysis", {
-  description: "Install generated DAT/EXT/2EX files and mark a content row analyzed.",
+  description: "Install DAT/EXT/2EX files plus validated analyzer BPM/key metadata.",
   args: z.object({
     contentId: z.string().describe("Content ID"),
-    analysisDirectory: z.string().describe("Directory containing ANLZ0000.DAT/EXT/2EX"),
+    analysisDirectory: z
+      .string()
+      .describe("Directory containing analysis.json and ANLZ0000.DAT/EXT/2EX"),
   }),
   options: dbWriteOptions.extend({
     replace: z.boolean().default(false).describe("Replace existing analysis files"),
@@ -862,6 +864,27 @@ databaseContentCli.command("install-analysis", {
         allowWhileRunning: c.options.allowWhileRunning,
         commit: true,
         replace: c.options.replace,
+      });
+    } finally {
+      db.close();
+    }
+  },
+});
+
+databaseContentCli.command("sync-analysis-metadata", {
+  description: "Sync BPM/key from analysis.json without recopying installed ANLZ files.",
+  args: z.object({
+    contentId: z.string().describe("Content ID"),
+    analysisDirectory: z.string().describe("Directory containing validated analysis.json"),
+  }),
+  options: dbWriteOptions,
+  run(c) {
+    requireDatabaseWrite(c.options);
+    const db = openDatabase(c.options, true);
+    try {
+      return db.syncContentAnalysisMetadata(c.args.contentId, c.args.analysisDirectory, {
+        allowWhileRunning: c.options.allowWhileRunning,
+        commit: true,
       });
     } finally {
       db.close();

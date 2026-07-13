@@ -181,6 +181,18 @@ export type AcquisitionState =
 
 export type RekordboxTarget = "m3u8" | "rekordbox-xml" | "rekordbox-db";
 
+/** Durable analyzer metadata for one acquired recording. */
+export type RekordboxAnalysisArtifact = {
+  mediaPath: string;
+  summaryPath: string;
+  backend: string;
+  tempoBpm: number | null;
+  key: string | null;
+  keySource: string | null;
+  sourceMtimeMs: number;
+  sourceSize: number;
+};
+
 export type RekordboxState =
   | { status: "pending" }
   | {
@@ -222,6 +234,7 @@ export type ManifestArtifacts = {
     codec: string;
     bitrate: number;
   };
+  analysis?: RekordboxAnalysisArtifact[];
   rekordbox?: {
     target: "rekordbox-db";
     dbPath: string;
@@ -350,7 +363,23 @@ export function parseManifest(value: unknown): SetManifest {
   stringArray(root.warnings, "$.warnings");
   errorArray(root.errors, "$.errors");
   validateArtifacts(root.artifacts, "$.artifacts");
-  const rekordboxArtifact = (root.artifacts as ManifestArtifacts).rekordbox;
+  const artifacts = root.artifacts as ManifestArtifacts;
+  const downloadedPaths = new Set(
+    (entries as ResolvedTrack[]).flatMap((entry) =>
+      entry.acquisition.status === "downloaded"
+        ? [
+            entry.acquisition.download.mediaPath,
+            ...(entry.acquisition.alternatives ?? []).map((download) => download.mediaPath),
+          ]
+        : [],
+    ),
+  );
+  artifacts.analysis?.forEach((artifact, index) => {
+    if (!downloadedPaths.has(artifact.mediaPath)) {
+      invalid(`$.artifacts.analysis[${index}].mediaPath`, "must reference a downloaded recording");
+    }
+  });
+  const rekordboxArtifact = artifacts.rekordbox;
   if (rekordboxArtifact) {
     (entries as ResolvedTrack[]).forEach((entry, index) => {
       if (entry.rekordbox.status !== "imported" || entry.rekordbox.target !== "rekordbox-db") {
@@ -1013,6 +1042,7 @@ function validateArtifacts(value: unknown, path: string): void {
     "m3u8",
     "rekordboxXml",
     "sourceSet",
+    "analysis",
     "rekordbox",
   ]);
   for (const key of ["root", "manifest", "downloadDirectory", "m3u8", "rekordboxXml"])
@@ -1035,6 +1065,38 @@ function validateArtifacts(value: unknown, path: string): void {
     positiveNumber(source.durationSeconds, `${path}.sourceSet.durationSeconds`);
     nonemptyString(source.codec, `${path}.sourceSet.codec`);
     positiveInteger(source.bitrate, `${path}.sourceSet.bitrate`);
+  }
+  if (record.analysis !== undefined) {
+    const mediaPaths = new Set<string>();
+    const summaryPaths = new Set<string>();
+    array(record.analysis, `${path}.analysis`).forEach((value, index) => {
+      const itemPath = `${path}.analysis[${index}]`;
+      const item = strictObject(value, itemPath, [
+        "mediaPath",
+        "summaryPath",
+        "backend",
+        "tempoBpm",
+        "key",
+        "keySource",
+        "sourceMtimeMs",
+        "sourceSize",
+      ]);
+      const mediaPath = nonemptyString(item.mediaPath, `${itemPath}.mediaPath`);
+      const summaryPath = nonemptyString(item.summaryPath, `${itemPath}.summaryPath`);
+      if (!isAbsolutePath(mediaPath)) invalid(`${itemPath}.mediaPath`, "must be an absolute path");
+      if (!isAbsolutePath(summaryPath))
+        invalid(`${itemPath}.summaryPath`, "must be an absolute path");
+      if (mediaPaths.has(mediaPath)) invalid(`${itemPath}.mediaPath`, "must be unique");
+      if (summaryPaths.has(summaryPath)) invalid(`${itemPath}.summaryPath`, "must be unique");
+      mediaPaths.add(mediaPath);
+      summaryPaths.add(summaryPath);
+      nonemptyString(item.backend, `${itemPath}.backend`);
+      if (item.tempoBpm !== null) positiveNumber(item.tempoBpm, `${itemPath}.tempoBpm`);
+      if (item.key !== null) nonemptyString(item.key, `${itemPath}.key`);
+      if (item.keySource !== null) nonemptyString(item.keySource, `${itemPath}.keySource`);
+      nonnegativeNumber(item.sourceMtimeMs, `${itemPath}.sourceMtimeMs`);
+      positiveInteger(item.sourceSize, `${itemPath}.sourceSize`);
+    });
   }
   if (record.rekordbox !== undefined) {
     const rekordbox = strictObject(record.rekordbox, `${path}.rekordbox`, [

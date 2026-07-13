@@ -198,7 +198,9 @@ function recordingVariant(
   const basename = filesystemSafe(
     `${String(entry.order).padStart(3, "0")} - ${identity.artists.join(", ")} - ${identity.title} [${suffix}]`,
   );
-  const matchedBy = local ? localMatchKind(identity, local) : undefined;
+  const matchedBy = local
+    ? (priorLocalMatchKind(entry, identity) ?? localMatchKind(identity, local))
+    : undefined;
   const priorSourceClip =
     entry.acquisition.status === "downloaded" &&
     [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])].some(
@@ -253,6 +255,19 @@ function recordingVariant(
       : {}),
     ...(fallbackClip ? { sourceClip: fallbackClip } : {}),
   };
+}
+
+function priorLocalMatchKind(
+  entry: ResolvedTrack,
+  identity: RecordingIdentity,
+): "spotify-id" | "isrc" | "artist-title" | undefined {
+  if (!identity.spotifyId) return undefined;
+  const prefix = `${identity.spotifyId} adopted local artifact matched by `;
+  const warning = entry.warnings.find((value) => value.startsWith(prefix));
+  const matchedBy = warning?.slice(prefix.length);
+  return matchedBy === "spotify-id" || matchedBy === "isrc" || matchedBy === "artist-title"
+    ? matchedBy
+    : undefined;
 }
 
 function identifiedFailureClip(

@@ -168,11 +168,34 @@ content row:
 rekordbox db content install-analysis 123456 /Music/track.rekordbox --write --format json
 ```
 
+Installation also reads `analysis.json`, validates its complete schema, and proves that both analyzer
+source paths plus the recorded size and modification time still identify the content row's exact
+audio file. A malformed, stale, unavailable, or wrong-track summary fails before any database commit.
+The analyzer tempo is stored in `djmdContent.BPM` as integer hundredths of a BPM. Conventional keys
+such as `Bm`, enharmonic spellings, and existing Camelot values are normalized to Rekordbox's
+canonical Camelot name; installation requires one matching active `djmdKey` row and writes its ID to
+`djmdContent.KeyID`. Null analyzer values remain unset rather than being inferred from Spotify or a
+different DSP implementation.
+
+For content whose DAT/EXT/2EX files and `AnalysisDataPath` are already installed, repair only the
+missing database projection without copying the analysis files again:
+
+```sh
+rekordbox db content sync-analysis-metadata \
+  123456 /Music/track.rekordbox --write --format json
+```
+
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
 runs a bounded pool of isolated native worker processes, preserves input order, and defaults to 64
 workers or the number of uncached tracks, whichever is lower. Keep database installation separate
 and serialized: call
 `MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
+Use `MasterDatabase.syncContentAnalysisMetadata()` for an already-installed result. Both methods
+validate `analysis.json` and its source fingerprint; their result includes the analyzer tempo,
+hundredths value, normalized key name, and resolved key ID. The set-import workflow persists this
+summary in its durable manifest, post-verifies `BPM`, `KeyID`, and the active key name after reopening
+the database, and treats missing or mismatched values as repairable checkpoint drift on a warm
+resume.
 The default favors minimum playlist wall time: a 30–60 track playlist can analyze every uncached
 track concurrently. On a 12-core machine, 26 real set tracks took 60.02 seconds with four workers,
 32.23 seconds with eight, and 28.83 seconds with twelve. A 64-default stress run completed 27

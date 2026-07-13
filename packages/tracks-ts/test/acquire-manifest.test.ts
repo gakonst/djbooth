@@ -259,6 +259,55 @@ describe("acquireManifest", () => {
     ).rejects.toThrow("M4A staging target");
   });
 
+  audioToolTest(
+    "recovers a failed checkpoint from a verified output already in place",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-in-place-"));
+      const manifestPath = join(directory, "manifest.json");
+      const outputPath = join(directory, "track.m4a");
+      const contents = "existing audio bytes";
+      await Promise.all([
+        writeManifestAtomic(manifestPath, oneTrackManifest()),
+        writeFile(outputPath, contents),
+      ]);
+      const plan = recordingPlan(directory);
+      plan.recordings[0]!.variants[0]!.localArtifact = {
+        sourcePath: outputPath,
+        matchedBy: "spotify-id",
+      };
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const callbacks: string[] = [];
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [],
+          continueOnError: false,
+          requireCompletePlan: true,
+          onArtifactVerified(artifact) {
+            callbacks.push(artifact.status);
+          },
+        });
+        expect(result.downloaded).toEqual([]);
+        expect(result.resumed).toEqual([outputPath]);
+        expect(callbacks).toEqual(["resumed"]);
+        expect(await readFile(outputPath, "utf8")).toBe(contents);
+        const entry = result.manifest.entries[0]!;
+        expect(entry.acquisition.status).toBe("downloaded");
+        if (entry.acquisition.status !== "downloaded") throw new Error("test acquisition");
+        expect(entry.acquisition.download).toMatchObject({
+          backend: "local",
+          mediaPath: outputPath,
+          source: outputPath,
+        });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
   test("invalidates an imported Rekordbox checkpoint when metadata changes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-invalidate-"));
     const manifestPath = join(directory, "manifest.json");
@@ -278,6 +327,18 @@ describe("acquireManifest", () => {
       dbContentId: "content-1",
       playlistMembershipId: "membership-1",
     };
+    manifest.artifacts.analysis = [
+      {
+        backend: "test",
+        key: "Bm",
+        keySource: "test",
+        mediaPath: join(directory, "old.m4a"),
+        sourceMtimeMs: 0,
+        sourceSize: 1,
+        summaryPath: join(directory, "analysis.json"),
+        tempoBpm: 128,
+      },
+    ];
     await writeManifestAtomic(manifestPath, manifest);
 
     const result = await acquireManifest({
@@ -293,6 +354,7 @@ describe("acquireManifest", () => {
     });
 
     expect(result.manifest.entries[0]!.rekordbox).toEqual({ status: "pending" });
+    expect(result.manifest.artifacts.analysis).toBeUndefined();
     expect((await readManifest(manifestPath)).entries[0]!.rekordbox.status).toBe("imported");
   });
 

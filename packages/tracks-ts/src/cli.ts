@@ -482,7 +482,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, fans Spotify, individual-track acquisition, verification, and native analysis out to playlist-scale concurrency, then performs one verified normal Rekordbox database commit. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
+      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, fans Spotify, individual-track acquisition, verification, and native analysis out to playlist-scale concurrency, persists each analyzer summary, then performs one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -499,7 +499,7 @@ export const tracksCli = Cli.create("tracks", {
 
 tracksCli.command("import-set", {
   description:
-    "Resume an approved set through resolution, Spotify enrichment, individual-track acquisition, 64-way native analysis, and one verified normal Rekordbox database commit.",
+    "Resume an approved set through resolution, Spotify enrichment, individual-track acquisition, 64-way native analysis, and one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({

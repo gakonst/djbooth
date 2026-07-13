@@ -66,7 +66,23 @@ backup. The surrounding pnpm/tsx CLI process measured 2.14 s.
 Independent post-checks returned `PRAGMA quick_check = ok`, zero foreign-key violations, 34 ordered
 distinct playlist memberships, 34 analysis paths with `Analysed = 105`, and 102 installed
 DAT/EXT/2EX files. Repeated warm runs retained playlist ID `86375504` and the same backup instead of
-creating duplicate rows or backups.
+creating duplicate rows or backups. Those original checks did not compare analyzer tempo/key with
+`djmdContent.BPM` and `KeyID`; the resulting gap motivated the stricter checkpoint described below.
+
+The importer now persists each validated `analysis.json` summary in the durable manifest and writes
+its tempo and normalized key during the serialized Rekordbox transaction. Postverification reopens
+the database and requires exact BPM hundredths, a valid active `djmdKey` reference, and the expected
+canonical Camelot name in addition to ANLZ paths, parseability, and flags. An older warm checkpoint
+with valid installed DAT/EXT/2EX files but absent or incorrect BPM/key is repairable drift: the next
+approved run reuses the cached analysis, synchronizes only its metadata inside the normal backed-up
+transaction, and then returns to the no-mutation warm fast path.
+
+The real playlist repair completed in 3.07 s total: 34 recording resumes, 34 analyzer cache hits,
+zero downloads, zero analyzer executions, and a 2.92 s backed-up Rekordbox stage. Independent
+read-only verification found 34/34 BPM values, 34/34 valid canonical key references, 102 parseable
+ANLZ files, no metadata mismatches, `PRAGMA quick_check = ok`, and zero foreign-key violations. The
+next run completed in 1.64 s and retained identical database and manifest checksums plus the same
+backup directory, proving the repaired checkpoint returns to the no-mutation fast path.
 
 ## Implemented changes
 
@@ -85,7 +101,9 @@ creating duplicate rows or backups.
 - One serialized manifest commit coordinator; unchanged checkpoints do not write.
 - Fully verified acquisition fast path; no backend loading or repeated probe/hash work.
 - Rekordbox idempotent fast path: full database integrity, sidecar, metadata, ordering, and recovery
-  backup checksum verification, but no redundant backup or mutation.
+  backup checksum verification, including analyzer BPM/key equality, but no redundant backup or
+  mutation. Legacy checkpoints with analysis-file flags but missing BPM/key take a metadata-only warm
+  repair path and do not rerun native analysis or recopy DAT/EXT/2EX.
 - Structured stage timing, cache counters, checkpoint counts, and wall timestamps in results.
 
 Aggregate provider `loadMs` may exceed wall time because concurrent request durations are summed.

@@ -132,14 +132,14 @@ afterEach(() => {
 });
 
 describe("Rekordbox analyzer wrapper", () => {
-  it("resolves explicit helpers and reads durable summaries", () => {
+  it("resolves explicit helpers and rejects incomplete durable summaries", () => {
     expect(getAnalyzerBinary("./helper")).toBe(resolve("helper"));
     const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
     roots.push(root);
     const path = join(root, "analysis.json");
     const result = { backend: "rekordbox-dlopen-rehost", summaryPath: path };
     writeFileSync(path, JSON.stringify(result));
-    expect(readAnalysisResult(path)).toEqual(result);
+    expect(() => readAnalysisResult(path)).toThrow("Invalid Rekordbox analysis summary");
   });
 
   it("rejects a missing audio file before launching the native helper", () => {

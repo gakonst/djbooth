@@ -104,6 +104,11 @@ export type RekordboxMasterDatabase = {
     analysisDirectory: string,
     options?: { allowWhileRunning?: boolean; commit?: boolean; replace?: boolean },
   ): RekordboxInstalledAnalysis;
+  syncContentAnalysisMetadata(
+    content: DjmdContent | string | number,
+    analysisDirectory: string,
+    options?: { allowWhileRunning?: boolean; commit?: boolean },
+  ): RekordboxAnalysisMetadata;
   getContentAnlzPaths(
     content: DjmdContent | string | number,
   ): Record<"2EX" | "DAT" | "EXT", string | undefined>;
@@ -132,6 +137,11 @@ export type RekordboxLibrary = {
   DjmdPlaylist: RekordboxModel<DjmdPlaylist>;
   DjmdSongPlaylist: RekordboxModel<DjmdSongPlaylist>;
   PlaylistType: { FOLDER: number; PLAYLIST: number };
+  readAnalysisMetadata(analysisDirectory: string): {
+    key: string | null;
+    tempoBpm: number | null;
+  };
+  normalizeRekordboxKeyName(value: string): string;
   getConfig(section: "rekordbox6" | "rekordbox7"): { dbPath: string; dbDir: string } | undefined;
   getRekordboxPid(): number;
   getRekordboxAgentPid(): number;
@@ -211,10 +221,19 @@ export type RekordboxVerification = {
 
 export type RekordboxInstalledAnalysis = {
   analysisDataPath: string;
+  bpmHundredths: number | null;
   contentId: string;
   directory: string;
+  keyId: string | null;
+  keyName: string | null;
   paths: Record<"2EX" | "DAT" | "EXT", string>;
+  tempoBpm: number | null;
 };
+
+export type RekordboxAnalysisMetadata = Pick<
+  RekordboxInstalledAnalysis,
+  "bpmHundredths" | "contentId" | "keyId" | "keyName" | "tempoBpm"
+>;
 
 export type RekordboxPlaylistArtifact = NonNullable<ManifestArtifacts["rekordbox"]>;
 
@@ -1053,15 +1072,15 @@ async function assertAnalysisDirectoriesExist(plan: RekordboxImportPlan): Promis
   );
   await mapConcurrent(analyzed, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (item) => {
     await Promise.all(
-      (["DAT", "EXT", "2EX"] as const).map(async (type) => {
-        const path = join(item.analysisDirectory, `ANLZ0000.${type}`);
+      ["ANLZ0000.DAT", "ANLZ0000.EXT", "ANLZ0000.2EX", "analysis.json"].map(async (name) => {
+        const path = join(item.analysisDirectory, name);
         let fileStat;
         try {
           fileStat = await stat(path);
         } catch (error) {
           throw new TracksError(
             "INVALID_SOURCE",
-            `Native Rekordbox analysis is missing ANLZ0000.${type} for '${item.mediaPath}'`,
+            `Native Rekordbox analysis is missing ${name} for '${item.mediaPath}'`,
             { cause: error, exitCode: 2, details: { analysisDirectory: item.analysisDirectory } },
           );
         }
@@ -1195,6 +1214,7 @@ function isRepairableRekordboxCheckpointDrift(error: unknown): boolean {
     /^Rekordbox import plan\/result mismatch/u,
     /^Rekordbox membership verification failed/u,
     /^Rekordbox (?:Artist|AlbumArtist|Album|Label)ID is missing/u,
+    /^Rekordbox KeyID (?:is missing|'[^']+' is invalid)/u,
     /^Rekordbox \w+ mismatch/u,
   ].some((pattern) => pattern.test(message));
 }
@@ -1258,6 +1278,8 @@ function isRekordboxLibrary(value: unknown): value is RekordboxLibrary {
     typeof module.getConfig === "function" &&
     typeof module.getRekordboxPid === "function" &&
     typeof module.getRekordboxAgentPid === "function" &&
+    typeof module.readAnalysisMetadata === "function" &&
+    typeof module.normalizeRekordboxKeyName === "function" &&
     typeof module.DjmdContent === "function" &&
     typeof module.DjmdPlaylist === "function" &&
     typeof module.DjmdSongPlaylist === "function" &&
@@ -1381,8 +1403,17 @@ export function writeRekordboxPlan(
         currentAnalysisPath !== null &&
         currentAnalysisPath !== undefined &&
         currentAnalysisPath !== ""
-      )
+      ) {
+        const synchronized = db.syncContentAnalysisMetadata(content, item.analysisDirectory, {
+          allowWhileRunning: false,
+          commit: false,
+        });
+        if (synchronized.contentId !== content.ID)
+          throw new Error(
+            `Rekordbox analysis metadata was synchronized for the wrong content row '${content.ID}'`,
+          );
         continue;
+      }
       const installed = db.installContentAnalysis(content, item.analysisDirectory, {
         allowWhileRunning: false,
         commit: false,
@@ -1550,7 +1581,7 @@ function verifyCommittedImport(
       )
         throw new Error(`Rekordbox membership verification failed at track ${index + 1}`);
       verifyContentMetadata(db, rekordbox, content, planned, relationCache);
-      verifiedAnalysisPaths.push(...verifyContentAnalysis(db, content, planned));
+      verifiedAnalysisPaths.push(...verifyContentAnalysis(db, rekordbox, content, planned));
       verifiedPaths.push(content.FolderPath);
     }
     return {
@@ -1573,6 +1604,7 @@ function verifyCommittedImport(
 
 function verifyContentAnalysis(
   db: RekordboxMasterDatabase,
+  rekordbox: RekordboxLibrary,
   content: DjmdContent,
   planned: RekordboxImportItem,
 ): string[] {
@@ -1591,6 +1623,31 @@ function verifyContentAnalysis(
   for (const [column, expected] of expectedFlags)
     if (db.hasColumn(content.tableName, column))
       assertMetadataValue(planned, column, content.get(column), expected);
+
+  const analyzer = rekordbox.readAnalysisMetadata(planned.analysisDirectory);
+  if (analyzer.tempoBpm !== null) {
+    assertMetadataValue(planned, "BPM", content.get("BPM"), Math.round(analyzer.tempoBpm * 100));
+  }
+  if (analyzer.key !== null) {
+    const keyId = content.get("KeyID");
+    if (typeof keyId !== "string" || !keyId)
+      throw new Error(`Rekordbox KeyID is missing for '${planned.mediaPath}'`);
+    const activeClause = db.hasColumn("djmdKey", "rb_local_deleted")
+      ? ' AND ("rb_local_deleted" IS NULL OR "rb_local_deleted" = 0)'
+      : "";
+    const keys = db.selectRawRows(
+      `SELECT "ScaleName" FROM "djmdKey" WHERE "ID" = ?${activeClause}`,
+      [keyId],
+    );
+    if (keys.length !== 1)
+      throw new Error(`Rekordbox KeyID '${keyId}' is invalid for '${planned.mediaPath}'`);
+    assertMetadataValue(
+      planned,
+      "Key",
+      keys[0]?.ScaleName,
+      rekordbox.normalizeRekordboxKeyName(analyzer.key),
+    );
+  }
 
   const paths = db.getContentAnlzPaths(content);
   const parsed = db.readContentAnlzFiles(content);
