@@ -367,7 +367,12 @@ export class SmartList {
   }
 
   /** Compile conditions to a parameterized SQLite WHERE expression. */
-  compileSql(options: { tableAlias?: string } = {}): SmartListSql {
+  compileSql(
+    options: {
+      propertyExpressions?: Partial<Record<Property, string | null>>;
+      tableAlias?: string;
+    } = {},
+  ): SmartListSql {
     SmartList.validateOptions(this.logicalOperator, this.autoUpdate);
     const clauses: Array<string> = [];
     const parameters: Array<unknown> = [];
@@ -375,12 +380,22 @@ export class SmartList {
     const prefix = options.tableAlias ? `${sqlIdentifier(options.tableAlias)}.` : "";
 
     for (const condition of this.conditions) {
+      const hasPropertyExpression = Object.hasOwn(
+        options.propertyExpressions ?? {},
+        condition.property,
+      );
+      const propertyExpression = options.propertyExpressions?.[condition.property];
       const columnName = propertyColumnMap[condition.property];
-      if (!columnName) {
+      if (
+        (hasPropertyExpression && !propertyExpression) ||
+        (!hasPropertyExpression && !columnName)
+      ) {
         unsupported.push(condition.property);
         continue;
       }
-      const column = `${prefix}${sqlIdentifier(columnName)}`;
+      const column = hasPropertyExpression
+        ? propertyExpression!
+        : `${prefix}${sqlIdentifier(columnName!)}`;
       let left: unknown = condition.valueLeft === "" ? null : condition.valueLeft;
       let right: unknown = condition.valueRight;
       if (numberProperties.has(condition.property)) {

@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -59,6 +61,38 @@ function run(command, args, options = {}) {
     );
   }
   return result;
+}
+
+function createPlaylistFixture(path, packageRoot) {
+  const require = createRequire(join(realpathSync(packageRoot), "package.json"));
+  const Database = require("better-sqlite3-multiple-ciphers");
+  const database = new Database(path);
+  try {
+    database.exec(`
+      CREATE TABLE djmdPlaylist (
+        ID TEXT PRIMARY KEY, Name TEXT, Attribute INTEGER, ParentID TEXT, SmartList TEXT
+      );
+      CREATE TABLE djmdSongPlaylist (
+        ID TEXT PRIMARY KEY, PlaylistID TEXT, ContentID TEXT, TrackNo INTEGER
+      );
+      CREATE TABLE djmdArtist (ID TEXT PRIMARY KEY, Name TEXT);
+      CREATE TABLE djmdKey (ID TEXT PRIMARY KEY, ScaleName TEXT);
+      CREATE TABLE djmdContent (
+        ID TEXT PRIMARY KEY, FolderPath TEXT, Title TEXT, ArtistID TEXT, BPM INTEGER, KeyID TEXT,
+        Length INTEGER, FileType INTEGER, Analysed INTEGER
+      );
+
+      INSERT INTO djmdPlaylist VALUES ('playlist-1', 'Packed Festival Set', 0, 'folder-1', NULL);
+      INSERT INTO djmdArtist VALUES ('artist-1', 'Packed Artist');
+      INSERT INTO djmdKey VALUES ('key-1', '10A');
+      INSERT INTO djmdContent VALUES (
+        'content-1', '/Music/Packed.flac', 'Packed Track', 'artist-1', 12801, 'key-1', 165, 5, 105
+      );
+      INSERT INTO djmdSongPlaylist VALUES ('membership-1', 'playlist-1', 'content-1', 1);
+    `);
+  } finally {
+    database.close();
+  }
 }
 
 try {
@@ -166,6 +200,7 @@ try {
     "# music slsk download",
     "# music ytdlp-ts download",
     "# music rekordbox db playlist create",
+    "# music rekordbox db playlist show",
   ];
   if (
     !installedSkillSource.includes("requires_bin: music") ||
@@ -193,6 +228,7 @@ try {
     "@gakonst",
     "rekordbox",
   );
+  const rekordbox = join(consumer, "node_modules", ".bin", "rekordbox");
   const analyzerBinary = join(
     installedRekordbox,
     "vendor",
@@ -216,8 +252,53 @@ try {
     throw new Error("Packed Rekordbox analyzer runtime is incomplete");
   process.stdout.write("✓ packed Rekordbox analyzer runtime\n");
 
+  const playlistFixture = join(consumer, "playlist.db");
+  createPlaylistFixture(playlistFixture, installedRekordbox);
+  const playlistJson = run(
+    rekordbox,
+    [
+      "db",
+      "playlist",
+      "show",
+      "Packed Festival Set",
+      "--path",
+      playlistFixture,
+      "--plain",
+      "--json",
+    ],
+    { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const playlistResult = JSON.parse(playlistJson.stdout);
+  if (
+    playlistResult?.playlist?.id !== "playlist-1" ||
+    playlistResult?.tracks?.length !== 1 ||
+    playlistResult.tracks[0]?.title !== "Packed Track"
+  ) {
+    throw new Error("Packed Rekordbox CLI did not return the fixture playlist as JSON");
+  }
+  const playlistTable = run(
+    music,
+    [
+      "rekordbox",
+      "db",
+      "playlist",
+      "show",
+      "Packed Festival Set",
+      "--path",
+      playlistFixture,
+      "--plain",
+    ],
+    { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (
+    !playlistTable.stdout.includes("| position | artist") ||
+    !playlistTable.stdout.includes("Packed Track")
+  ) {
+    throw new Error("Packed music CLI did not render the fixture playlist table");
+  }
+  process.stdout.write("✓ packed Rekordbox playlist JSON and table\n");
+
   if (process.platform === "darwin") {
-    const rekordbox = join(consumer, "node_modules", ".bin", "rekordbox");
     const doctor = run(
       rekordbox,
       [
@@ -242,7 +323,7 @@ try {
     process.stdout.write("✓ packed Rekordbox analyzer doctor\n");
   }
 
-  const mcpInput = [
+  const mcpDiscoveryInput = [
     {
       jsonrpc: "2.0",
       id: 1,
@@ -254,6 +335,22 @@ try {
       },
     },
     { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
+  ];
+  const mcpInput = [
+    ...mcpDiscoveryInput,
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "rekordbox_db_playlist_show",
+        arguments: {
+          name: "Packed Festival Set",
+          path: playlistFixture,
+          plain: true,
+        },
+      },
+    },
   ];
   const mcp = run(music, ["--mcp"], {
     cwd: consumer,
@@ -275,15 +372,25 @@ try {
     "spots_playlist_delete",
     "spots_playlist_get",
     "spots_playlist_update",
+    "rekordbox_db_playlist_show",
   ];
   const toolNames = new Set(tools?.map((tool) => tool.name));
+  const playlistShowTool = tools?.find((tool) => tool.name === "rekordbox_db_playlist_show");
+  const playlistShowCall = responses.find((response) => response.id === 3)?.result;
   if (
     initialize?.result?.serverInfo?.name !== "music" ||
     !tools ||
     tools?.length < 50 ||
     !tools.some((tool) => tool.name === "slsk_download") ||
     !tools.some((tool) => tool.name === "rekordbox_db_playlist_create") ||
-    requiredTools.some((name) => !toolNames.has(name))
+    requiredTools.some((name) => !toolNames.has(name)) ||
+    playlistShowTool?.inputSchema?.properties?.name?.type !== "string" ||
+    !playlistShowTool?.inputSchema?.required?.includes("name") ||
+    playlistShowTool?.outputSchema?.properties?.playlist?.type !== "object" ||
+    playlistShowTool?.outputSchema?.properties?.tracks?.type !== "array" ||
+    playlistShowCall?.isError ||
+    playlistShowCall?.structuredContent?.playlist?.id !== "playlist-1" ||
+    playlistShowCall?.structuredContent?.tracks?.[0]?.title !== "Packed Track"
   ) {
     throw new Error("Packed music MCP did not initialize with the composable tool surface");
   }
@@ -292,7 +399,7 @@ try {
   const codeMcp = run(music, ["--codemode-mcp"], {
     cwd: consumer,
     input: `${[
-      ...mcpInput,
+      ...mcpDiscoveryInput,
       {
         jsonrpc: "2.0",
         id: 3,

@@ -172,6 +172,20 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 - Release, prerelease, and packed-package verification run on macOS, rebuild the signed universal
   helper, include the vendored runtime, and validate it through `analyze doctor` from a clean install.
 
+## Playlist inspection checkpoint
+
+- Added `MasterDatabase.getPlaylistTracks`, a single joined query that preserves membership
+  duplicates and orders regular playlists by `djmdSongPlaylist.TrackNo`. Smart playlists compile
+  relation-aware criteria into one joined query with deterministic content ordering; unsupported
+  criteria fail closed instead of widening the selection.
+- Added `rekordbox db playlist show <exact-name>`, defaulting to Incur's aligned Markdown table and
+  returning complete, chainable track metadata with `--json`. Exact-name ambiguity fails with
+  candidate playlist and parent IDs; `--parent-id` and `--id` provide explicit scoping.
+- Covered joined artist/key metadata, BPM hundredths, nullable duration, file formats, pagination,
+  playlists over 100 tracks, duplicate memberships, smart criteria, JSON, Markdown, packed CLI/MCP,
+  and ambiguity behavior with plain-database fixtures, then verified both output modes read-only
+  against the encrypted live Adam Ten playlist.
+
 ## Native analyzer performance checkpoint
 
 - Profiled one 6:25 M4A with Xcode 26 Time Profiler. The original wrapper took 18.14 seconds wall;

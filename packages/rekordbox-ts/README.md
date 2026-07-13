@@ -49,6 +49,8 @@ rekordbox config show
 rekordbox db info
 rekordbox db search "track name"
 rekordbox db playlist contents 123456
+rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
+rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 rekordbox db sql "SELECT Title FROM djmdContent WHERE ArtistID = ?" --parameters '["123"]'
 
 # Read an encrypted Device Library Plus export
@@ -78,6 +80,13 @@ Top-level command families:
 Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 
 Use `--plain` for an unencrypted SQLite fixture or unlocked copy. The built-in upstream keys handle standard databases; override them with `REKORDBOX_DB_KEY` or `REKORDBOX_DEVICE_DB_KEY` when necessary.
+
+`db playlist show` resolves an exact playlist name and defaults to an aligned Markdown table with
+playlist position, artist, title, BPM, key, duration, and format. It returns the complete playlist by
+default; use `--limit` and `--offset` for explicit, reported pagination. Pass `--json` for ordered
+machine data including content and membership IDs, local paths, raw duration seconds, file type, and
+analysis status. Duplicate names fail with their candidate IDs instead of choosing silently; use
+`--parent-id` or `--id` to select one.
 
 incur provides structured output and discovery on every command:
 
@@ -113,7 +122,8 @@ try {
   const tracks = db.searchContent("Orbital");
   const first = db.query(DjmdContent).orderBy("ID").first();
   const playlists = db.query(DjmdPlaylist).orderBy("Seq").all();
-  console.log(tracks, first?.Artist?.Name, playlists);
+  const playlistTracks = playlists[0] ? db.getPlaylistTracks(playlists[0]) : [];
+  console.log(tracks, first?.Artist?.Name, playlists, playlistTracks);
 } finally {
   db.close();
 }
