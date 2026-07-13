@@ -26,6 +26,11 @@ const packages = [
     bins: ["tracks", "tracks-ts"],
   },
   { name: "@gakonst/spots", prefix: "gakonst-spots-", bins: ["spots"] },
+  {
+    name: "@gakonst/soundcloud",
+    prefix: "gakonst-soundcloud-",
+    bins: ["soundcloud"],
+  },
   { name: "slsk-ts", prefix: "slsk-ts-", bins: ["slsk"] },
   {
     name: "@gakonst/ytdlp-ts",
@@ -174,7 +179,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
@@ -259,10 +264,28 @@ try {
     .map((line) => JSON.parse(line));
   const initialize = responses.find((response) => response.id === 1);
   const tools = responses.find((response) => response.id === 2)?.result?.tools;
-  if (initialize?.result?.serverInfo?.name !== "music" || tools?.length !== 6) {
-    throw new Error("Packed music MCP did not initialize with six tools");
+  const requiredTools = [
+    "soundcloud_playlist_create",
+    "soundcloud_playlist_delete",
+    "soundcloud_playlist_get",
+    "soundcloud_playlist_update",
+    "spots_playlist_create",
+    "spots_playlist_delete",
+    "spots_playlist_get",
+    "spots_playlist_update",
+  ];
+  const toolNames = new Set(tools?.map((tool) => tool.name));
+  if (
+    initialize?.result?.serverInfo?.name !== "music" ||
+    !tools ||
+    tools.length < 250 ||
+    requiredTools.some((name) => !toolNames.has(name))
+  ) {
+    throw new Error(
+      "Packed music MCP did not expose the composed package command trees",
+    );
   }
-  process.stdout.write("✓ music stdio MCP (6 tools)\n");
+  process.stdout.write(`✓ music stdio MCP (${tools.length} composed tools)\n`);
 } finally {
   if (!suppliedPackDirectory)
     rmSync(packDirectory, { recursive: true, force: true });

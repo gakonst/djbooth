@@ -1,11 +1,23 @@
 #!/usr/bin/env node
+import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { loadEnvFile } from 'node:process'
+import { pathToFileURL } from 'node:url'
 
 import { Cli, z } from 'incur'
 
 import { SoulseekClient } from './client.js'
 import { BinaryWriter, ServerCode, server } from './protocol/index.js'
+
+function loadWorkspaceEnvironment(): void {
+  const candidates = [
+    path.resolve(import.meta.dirname, '../../../.env'),
+    path.resolve(process.cwd(), '.env'),
+  ]
+  const envPath = candidates.find((candidate) => existsSync(candidate))
+  if (envPath) loadEnvFile(envPath)
+}
 
 const auth = z.object({
   SLSK_USERNAME: z.string().min(1).describe('Soulseek username (new names are registered on first login)'),
@@ -45,7 +57,7 @@ async function connected<T>(env: Auth, run: (client: SoulseekClient) => Promise<
   }
 }
 
-const cli = Cli.create('slsk', {
+export const cli = Cli.create('slsk', {
   version: (createRequire(import.meta.url)('../package.json') as { version: string }).version,
   description: 'A complete command-line client for the Soulseek network.',
   sync: {
@@ -269,6 +281,16 @@ cli.command('raw', {
     }),
 })
 
-cli.serve()
+export async function runSlskCli(argv?: string[]): Promise<void> {
+  loadWorkspaceEnvironment()
+  await cli.serve(argv)
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(realpathSync(path.resolve(process.argv[1]))).href
+) {
+  await runSlskCli()
+}
 
 export default cli

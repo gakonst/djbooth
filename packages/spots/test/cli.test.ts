@@ -1,8 +1,10 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { Cli } from 'incur'
 import { describe, expect, it } from 'vitest'
 
+import { spotsCli } from '../src/cli.js'
 import metadata from '../src/generated/metadata.json' with { type: 'json' }
 
 const exec = promisify(execFile)
@@ -29,5 +31,51 @@ describe('spots CLI', () => {
     expect(stdout).toContain('--llms')
     expect(stdout).toContain('mcp')
     expect(stdout).toContain('skills')
+  })
+
+  it('exposes first-class playlist CRUD', async () => {
+    const { stdout } = await exec(process.execPath, [
+      '--import',
+      'tsx',
+      'src/cli.ts',
+      'playlist',
+      'create',
+      '--help',
+    ])
+
+    expect(stdout).toContain('spots playlist create <name>')
+    expect(stdout).toContain('--track')
+    expect(stdout).toContain('--input-file')
+    expect(stdout).toContain('--visibility')
+    expect(stdout).toContain('--collaborative')
+
+    const { stdout: playlistHelp } = await exec(process.execPath, [
+      '--import',
+      'tsx',
+      'src/cli.ts',
+      'playlist',
+      '--help',
+    ])
+    expect(playlistHelp).toContain('create')
+    expect(playlistHelp).toContain('get')
+    expect(playlistHelp).toContain('update')
+    expect(playlistHelp).toContain('delete')
+  })
+
+  it('mounts as a side-effect-free Incur command group', async () => {
+    const parent = Cli.create('music').command(spotsCli)
+    let output = ''
+
+    await parent.serve(['spots', 'playlist', 'create', '--help'], {
+      stdout(value) {
+        output += value
+      },
+      exit(code) {
+        throw new Error(`Unexpected CLI exit ${code}`)
+      },
+    })
+
+    expect(output).toContain('music spots playlist create <name>')
+    expect(output).toContain('--track')
   })
 })

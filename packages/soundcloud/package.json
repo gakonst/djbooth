@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A complete typed SoundCloud API client with OAuth 2.1, account access, and an agent-friendly CLI.",
   "type": "module",
+  "sideEffects": false,
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -27,6 +28,10 @@
     "./auth": {
       "types": "./dist/auth/index.d.ts",
       "import": "./dist/auth/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
     }
   },
   "files": [

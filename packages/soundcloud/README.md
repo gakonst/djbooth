@@ -12,6 +12,7 @@ commands are generated from SoundCloud's official OpenAPI schema.
 - Persistent Client Credentials tokens for public search and URL resolution.
 - Automatic one-time 401 refresh plus bounded 429 and transient-read retries.
 - Safe linked pagination through opaque `next_href` URLs.
+- User-authorized playlist creation from ordered track IDs, URNs, and URLs.
 - Incur structured output, OpenAPI commands, MCP, skills, shell completion, and LLM discovery.
 - Convenience methods and commands for `/me`, likes, and recently played tracks.
 
@@ -23,9 +24,9 @@ Register this exact redirect URI in the SoundCloud application settings:
 http://127.0.0.1:8788/callback
 ```
 
-Copy `.env.example` to `.env` inside this package and set the client ID and secret. The CLI loads
-that package-local file during monorepo development; it is ignored by Git and excluded from the
-published package.
+Copy the workspace `.env.example` to the root `.env` and set the client ID and secret. The CLI loads
+that workspace-root file during monorepo development; it is ignored by Git and excluded from the
+published package. Standalone installs also check `.env` in the current working directory.
 
 SoundCloud currently treats every client as confidential: the client secret is required even
 though Authorization Code also requires PKCE. Access tokens expire after about an hour and refresh
@@ -44,11 +45,28 @@ pnpm soundcloud recent --format json
 pnpm soundcloud search tracks "Burial" --limit 20
 pnpm soundcloud resolve "https://soundcloud.com/artist/track"
 pnpm soundcloud upload ./mix.flac --title "New mix" --sharing private
+pnpm soundcloud playlist create "Late night" \
+  --track soundcloud:tracks:308946187 \
+  --track "https://soundcloud.com/artist/track"
+pnpm soundcloud playlist get soundcloud:playlists:PLAYLIST_ID
+pnpm soundcloud playlist update soundcloud:playlists:PLAYLIST_ID --title "Renamed"
+pnpm soundcloud playlist delete soundcloud:playlists:PLAYLIST_ID
 ```
 
 `--urls` returns canonical `soundcloud.com` track permalinks suitable for inspection and selected
 downloads with `@gakonst/ytdlp-ts`. The API client intentionally handles metadata and account state;
 audio acquisition remains in ytdlp-ts.
+
+`playlist create` accepts numeric track IDs, `soundcloud:tracks:*` URNs, and public or secret
+SoundCloud track URLs. Repeat `--track` to preserve order and duplicates, or append a text file with
+`--input-file` (one reference per line; blank lines and `#` comments are ignored). Playlists default
+to private and are limited to SoundCloud's 500-track platform maximum. This write requires a saved
+user login from `soundcloud auth login` or an explicit user `SOUNDCLOUD_ACCESS_TOKEN`; Client
+Credentials authentication is intentionally rejected.
+
+`playlist get`, `playlist update`, and `playlist delete` complete the lifecycle. Update can replace
+the full ordered track membership or clear it with `--clear-tracks`; unlike Spotify, SoundCloud's
+delete operation permanently deletes an owned playlist.
 
 All official operations are available under the generated Incur command group:
 
@@ -73,6 +91,18 @@ pnpm soundcloud mcp add
 pnpm soundcloud skills add
 pnpm soundcloud completions zsh
 ```
+
+The CLI definition is import-safe and can be composed directly into another Incur root without
+loading `.env` or starting a process:
+
+```ts
+import soundcloudCli from '@gakonst/soundcloud/cli'
+
+root.command(soundcloudCli)
+```
+
+`runSoundCloudCli()` is also exported from that subpath for standalone launchers; only that runner
+loads the workspace environment before serving.
 
 ## TypeScript
 
@@ -100,6 +130,20 @@ const soundcloud = new SoundCloudClient({ auth })
 for await (const track of soundcloud.iterateLikedTracks()) {
   console.log(track.title, track.permalink_url)
 }
+
+const playlist = await soundcloud.createPlaylist({
+  title: 'Late night',
+  sharing: 'private',
+  tracks: [
+    'soundcloud:tracks:308946187',
+    'https://soundcloud.com/artist/track',
+  ],
+})
+await soundcloud.getPlaylist(playlist.urn!)
+await soundcloud.updatePlaylist(playlist.urn!, {
+  title: 'Late night — updated',
+})
+await soundcloud.deletePlaylist(playlist.urn!)
 ```
 
 ### Full typed API
@@ -114,8 +158,10 @@ const page = await soundcloud.GET('/me/likes/tracks', {
 })
 ```
 
-SoundCloud URNs are opaque strings and replace deprecated numeric IDs. `raw()` remains available
-for forward compatibility, including comma-list and deep-object query encoding.
+SoundCloud URNs are opaque strings and replace deprecated numeric IDs. Playlist creation normalizes
+numeric IDs and resolved track URLs to URNs before sending the current official `POST /playlists`
+payload. `raw()` remains available for forward compatibility, including comma-list and deep-object
+query encoding.
 
 ## Keep the API current
 

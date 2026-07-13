@@ -24,7 +24,8 @@ pnpm --filter @gakonst/tracks cli -- providers
 
 The provider libraries are declared with `workspace:*` dependencies, so one root install links the exact local packages and a root build orders them before `@gakonst/tracks`. `YTDLP_TS_PATH` remains available only when an explicit alternative executable is needed. Tests and custom runtimes can still inject module objects directly.
 
-The CLI deliberately does not load `.env`. Copy `.env.example` only as a reference, then export or source values through your shell or secret manager.
+In the music-ts workspace, keep provider credentials in the ignored root `.env`; the CLI loads it
+automatically. For standalone package use, it also checks `.env` in the current working directory.
 
 ## Real example: Adam Ten at Burning Man 2025
 
@@ -87,6 +88,16 @@ Verified result: 29 ordered cue entries, six explicit IDs preserved, and 22 iden
 ```
 
 `identify` remains an alias for `resolve`.
+
+The complete CLI definition can be imported without loading `.env` or serving a process:
+
+```ts
+import tracksCli from "@gakonst/tracks/cli";
+
+root.command(tracksCli);
+```
+
+`runTracksCli()` remains available from the same subpath for standalone launchers.
 
 ## Resolution flow
 

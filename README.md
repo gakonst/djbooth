@@ -1,19 +1,20 @@
 # music-ts
 
-One TypeScript workspace for resolving DJ sets, enriching their metadata, acquiring individual
-recordings, and maintaining Rekordbox playlists. The five original repositories retain their full
+One TypeScript workspace for resolving DJ sets, enriching their metadata, publishing playlists to
+Spotify or SoundCloud, acquiring individual recordings, and maintaining Rekordbox playlists. The five original repositories retain their full
 Git histories under `packages/`.
 
 ## Packages
 
-| Package                                       | CLI         | Responsibility                                                         |
-| --------------------------------------------- | ----------- | ---------------------------------------------------------------------- |
-| [`@gakonst/music`](packages/music)            | `music`     | Unified namespace/subpath API, CLI, agent Skill, and MCP entrypoint    |
-| [`@gakonst/tracks`](packages/tracks-ts)       | `tracks`    | Set/tracklist resolution, orchestration, caches, acquisition manifests |
-| [`@gakonst/spots`](packages/spots)            | `spots`     | Typed Spotify Web API, OAuth, playlists, metadata                      |
-| [`slsk-ts`](packages/slsk-ts)                 | `slsk`      | Soulseek protocol, search, shares, individual-file downloads           |
-| [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)      | `ytdlp-ts`  | YouTube/SoundCloud inspection and resilient media acquisition          |
-| [`@gakonst/rekordbox`](packages/rekordbox-ts) | `rekordbox` | Normal encrypted Rekordbox database and format APIs                    |
+| Package                                       | CLI          | Responsibility                                                         |
+| --------------------------------------------- | ------------ | ---------------------------------------------------------------------- |
+| [`@gakonst/music`](packages/music)            | `music`      | Unified namespace/subpath API, CLI, agent Skill, and MCP entrypoint    |
+| [`@gakonst/tracks`](packages/tracks-ts)       | `tracks`     | Set/tracklist resolution, orchestration, caches, acquisition manifests |
+| [`@gakonst/spots`](packages/spots)            | `spots`      | Typed Spotify Web API, OAuth, playlists, metadata                      |
+| [`@gakonst/soundcloud`](packages/soundcloud)  | `soundcloud` | Typed SoundCloud API, OAuth, account playlists, uploads                |
+| [`slsk-ts`](packages/slsk-ts)                 | `slsk`       | Soulseek protocol, search, shares, individual-file downloads           |
+| [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)      | `ytdlp-ts`   | YouTube/SoundCloud inspection and resilient media acquisition          |
+| [`@gakonst/rekordbox`](packages/rekordbox-ts) | `rekordbox`  | Normal encrypted Rekordbox database and format APIs                    |
 
 Package licenses remain package-local; `ytdlp-ts` uses the Unlicense and the other packages use MIT.
 
@@ -37,6 +38,7 @@ import { MasterDatabase } from "@gakonst/music/rekordbox";
 YouTube / SoundCloud set
   -> tracks: description or 1001Tracklists resolution
   -> spots: Spotify metadata enrichment
+  -> spots / soundcloud: optional ordered playlist publishing on-platform
   -> slsk-ts, then ytdlp-ts: individual recordings
   -> tracks: bounded set extracts only for unavailable IDs
   -> rekordbox: verified playlist in the normal encrypted database
@@ -44,11 +46,15 @@ YouTube / SoundCloud set
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording
 jobs run concurrently; manifest checkpoints and Rekordbox mutations stay serialized and fail closed.
-The umbrella CLI composes their library APIs; it does not shell between package CLIs.
+The umbrella CLI mounts each package's exported Incur CLI definition; it neither shells out nor
+maintains a second set of command schemas.
 
 ## Development
 
 Requirements: Node.js 22 or 24, pnpm 10.30.2, plus ffmpeg/ffprobe for media integration tests.
+
+Copy `.env.example` to the ignored workspace-root `.env`. The `music`, `tracks`, `spots`,
+`soundcloud`, and `slsk` CLIs load this one file; do not keep credentials inside package folders.
 
 ```sh
 pnpm install

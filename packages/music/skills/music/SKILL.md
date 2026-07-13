@@ -1,11 +1,11 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; and import verified playlists into the normal Rekordbox database. Use for DJ-set resolution, music metadata, individual-track downloads, Rekordbox library maintenance, or end-to-end music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; and import verified playlists into the normal Rekordbox database. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, or end-to-end music-ts workflows.
 ---
 
 # Music
 
-Build an auditable `source -> identities -> recordings -> Rekordbox playlist` pipeline with
+Build an auditable `source -> identities -> platform playlist and/or recordings -> Rekordbox playlist` pipeline with
 `@gakonst/music`. Prefer its TypeScript subpath APIs for automation; use the `music` CLI for
 interactive work, diagnostics, Skills, and MCP registration.
 
@@ -35,6 +35,30 @@ import * as rekordbox from "@gakonst/music/rekordbox";
 Do not shell between package CLIs from TypeScript. Construct the exported clients once and pass
 them into the orchestration pipeline.
 
+## ytdlp engine contract
+
+Prefer the TypeScript-native engine. The Incur CLI's engine names are a behavioral contract:
+
+- `native` runs only the TypeScript extractor, selector, downloader, and post-processing code. It
+  never invokes Python or an external `yt-dlp` executable and fails closed for unported behavior.
+- `auto` tries native first and may explicitly fall back to the external reference executable. Do
+  not describe an `auto` result as native; inspect and persist the returned `engine`.
+- `reference` deliberately invokes the external `yt-dlp` compatibility executable.
+
+When the user requires the TypeScript implementation, force `--engine native` or construct
+`ExtractorRegistry` plus `downloadMedia`; never construct `ReferenceClient`. Record the requested
+engine, actual engine, package version, start/finish timestamps, and any typed limitation in the
+manifest. Do not silently install, upgrade, or switch to the reference executable. Current native
+YouTube support fails with `YOUTUBE_SIGNATURE_REQUIRED` when a player-signature transform is
+needed; mark that recording unavailable unless the user separately accepts reference fallback.
+Public progressive SoundCloud tracks are supported natively, while some HLS, sets, profiles, and
+private/account flows may still require reference behavior.
+
+```sh
+music ytdlp-ts inspect "$TRACK_URL" --engine native --format json
+music ytdlp-ts music "$TRACK_URL" --engine native --format json
+```
+
 ## Safety invariants
 
 - Resolve metadata without downloading the source set.
@@ -44,8 +68,12 @@ them into the orchestration pipeline.
 - Never pass a raw `ytsearch...` result to a downloader. Inspect a bounded candidate list, select a
   canonical single-track URL, validate its identity and duration, then download that URL with
   playlists disabled.
-- Keep Spotify metadata-only. Prefer Soulseek for audio, then a reviewed YouTube or SoundCloud
+- Keep Spotify audio metadata-only. Creating a Spotify playlist writes references, never audio.
+  Prefer Soulseek for audio, then a reviewed YouTube or SoundCloud
   single-track fallback.
+- Treat Spotify and SoundCloud playlist creation as external account writes. Require an explicit
+  request, validate every reference before creation, default to private, and preserve order and
+  duplicates. Never retry a playlist-creation POST automatically.
 - Preserve every credible recording when an ambiguity remains. Collapse only confirmed duplicates
   sharing release identity, ISRC, and plausible duration.
 - Persist the manifest atomically after each match, selection, download, extraction, and export.
@@ -59,8 +87,10 @@ Run non-mutating checks:
 
 ```sh
 music tracks resolve --help
-music spots session --format json
-music ytdlp engines --format json
+music spots auth status --format json
+spots auth status --format json
+soundcloud auth status --format json
+music ytdlp-ts engines --format json
 music rekordbox status --format json
 rekordbox analyze doctor --format json
 ```
@@ -94,6 +124,59 @@ persistent cache, and reuse it. Search exact ISRC first; otherwise score normali
 mix/version tokens, and duration. Keep weak or close top-two results ambiguous. Record the query,
 candidates, score, Spotify identity, duration, and ISRC.
 
+## Publish a playlist on Spotify or SoundCloud
+
+Publish without downloading audio. Resolve every input to the target platform first, report any
+unmatched or ambiguous tracks, and create a partial playlist only when the user explicitly accepts
+the omissions.
+
+For Spotify, use a user OAuth session with `playlist-modify-private` for private playlists or
+`playlist-modify-public` for public playlists. Existing sessions created without these scopes must
+log in again. Inputs may be track URIs, `open.spotify.com/track/...` URLs, or track IDs; requests are
+batched at 100 items while retaining order and duplicates:
+
+```sh
+music spots playlist create "$PLAYLIST_NAME" \
+  --input-file spotify-tracks.txt \
+  --visibility private \
+  --format json
+```
+
+Spotify Web API “private” means hidden from profiles/search, not access-controlled; a holder of the
+link may still open it. Do not promise link secrecy from the API visibility flag.
+
+For SoundCloud, use an Authorization Code user session; Client Credentials cannot modify an
+account. Inputs may be track URNs, SoundCloud track URLs, or numeric IDs. URLs are resolved to track
+URNs before one playlist-creation request, with at most 500 tracks:
+
+```sh
+music soundcloud playlist create "$PLAYLIST_NAME" \
+  --input-file soundcloud-tracks.txt \
+  --sharing private \
+  --format json
+```
+
+Input files contain one reference per line; blank lines and lines beginning with `#` are ignored.
+Return the provider playlist ID/URN and URL, normalized ordered track references, batch snapshots
+where applicable, visibility, and the number of tracks added.
+
+Manage the resulting playlist through the same provider group:
+
+```sh
+music spots playlist get "$SPOTIFY_PLAYLIST" --format json
+music spots playlist update "$SPOTIFY_PLAYLIST" --name "$NEW_NAME" --input-file spotify-tracks.txt
+music spots playlist delete "$SPOTIFY_PLAYLIST" --format json
+
+music soundcloud playlist get "$SOUNDCLOUD_PLAYLIST" --format json
+music soundcloud playlist update "$SOUNDCLOUD_PLAYLIST" --title "$NEW_TITLE" --input-file soundcloud-tracks.txt
+music soundcloud playlist delete "$SOUNDCLOUD_PLAYLIST" --format json
+```
+
+SoundCloud deletion permanently removes an owned playlist. Spotify has no permanent playlist-delete
+operation; its delete command removes `spotify:playlist:{id}` from the current user's library and
+returns `permanentlyDeleted: false`. When testing Spotify cleanup, clear tracks before removal and
+verify `/me/library/contains` returns `false`.
+
 Use bounded concurrency and honor `Retry-After`. Cache stable track/search metadata by account and
 market scope. Never cache tokens or authentication failures.
 
@@ -104,11 +187,13 @@ concurrency. Prefer plausible lossless results, but inspect metadata and duratio
 the extension. Record the selected peer and remote file before download, then the absolute path and
 SHA-256 after verification.
 
-When Soulseek has no acceptable result, use one `ReferenceClient` from
-`@gakonst/music/ytdlp`. Inspect at most a small candidate set, reject sets, compilations, covers,
-previews, and the wrong mix, then download only the selected canonical URL. Preserve compatible
-FLAC, MP3, and M4A. Convert WAV/AIFF to FLAC losslessly; transcode unsupported lossy formats only
-when Rekordbox requires it, and record the degradation.
+When Soulseek has no acceptable result, inspect the selected exact URL with the native ytdlp
+extractor and download it with `downloadMedia`. In CLI workflows, force `--engine native` when
+external fallback is not accepted. Inspect at most a small candidate set, reject sets,
+compilations, covers, previews, and the wrong mix, then download only the selected canonical URL.
+Preserve compatible FLAC, MP3, and M4A. Convert WAV/AIFF to FLAC losslessly; transcode unsupported
+lossy formats only when Rekordbox requires it, and record the degradation. Use `auto` or
+`ReferenceClient` only when the user accepts the explicitly reported external compatibility path.
 
 Cap independent downloads at three by default. Resume verified files and completed manifest states;
 do not redownload them.

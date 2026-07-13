@@ -24,6 +24,11 @@ const tracklist = await tracks.identify("https://youtu.be/example");
 const spotify = new spots.SpotifyClient({
   auth: process.env.SPOTIFY_ACCESS_TOKEN!,
 });
+await spotify.createPlaylistWithTracks({
+  name: "Set IDs",
+  tracks: ["spotify:track:4iV5W9uYEdYUVa79Axb7Rh"],
+  public: false,
+});
 const soulseek = new slsk.SoulseekClient();
 const reference = new ytdlp.ReferenceClient();
 const database = new rekordbox.MasterDatabase({ unlock: false });
@@ -42,18 +47,31 @@ import { MasterDatabase } from "@gakonst/music/rekordbox";
 
 ## CLI
 
-The umbrella CLI calls the packages as libraries. It does not spawn their CLIs.
+The umbrella mounts the six package-owned Incur CLI definitions directly. Every specialist command
+and schema remains defined once, in its owning package; `music` adds only the common root and agent
+Skill.
 
 ```sh
 music tracks resolve "https://youtu.be/example" --format json
-music spots session --format json
+music spots auth status --format json
+music spots playlist create "Set IDs" --track "spotify:track:4iV5W9uYEdYUVa79Axb7Rh" --format json
+music spots playlist get spotify:playlist:PLAYLIST_ID --format json
+music soundcloud playlist create "Set IDs" --track "https://soundcloud.com/artist/track" --format json
+music soundcloud playlist update soundcloud:playlists:PLAYLIST_ID --title "Renamed" --format json
 music slsk search "artist track" --timeout 8 --format json
-music ytdlp engines --format json
-music ytdlp inspect "https://youtu.be/example" --format json
+music ytdlp-ts engines --format json
+music ytdlp-ts inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
 ```
 
-The umbrella intentionally exposes the cross-package happy path. The package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp-ts`, and `rekordbox` CLIs retain their complete specialist command surfaces.
+The platform playlist commands preserve track order and duplicate entries, default to private, and
+require a user OAuth login. They create playlists on the remote account and are marked destructive
+in CLI/MCP discovery. Importable definitions are available from each package's `./cli` subpath for
+other Incur parents to compose the same way.
+
+Both provider groups expose `playlist create|get|update|delete`. SoundCloud deletion is permanent;
+Spotify's delete command reflects Spotify's platform model and removes the playlist from the user's
+library because Spotify provides no permanent delete endpoint.
 
 Install the single aggregate agent skill, or register the same command map as MCP:
 

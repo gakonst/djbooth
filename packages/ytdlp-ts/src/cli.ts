@@ -1,7 +1,9 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -40,7 +42,7 @@ const inspectOptions = z.object({
   socketTimeout: z.number().int().positive().optional().describe('Socket timeout in seconds'),
 })
 
-const cli = Cli.create('ytdlp-ts', {
+export const cli = Cli.create('ytdlp-ts', {
   version: VERSION,
   description: 'Download highest-quality music and metadata from YouTube and SoundCloud.',
   mcp: {
@@ -504,4 +506,15 @@ function fail(
   })
 }
 
-await cli.serve()
+export async function runYtdlpCli(argv?: string[]): Promise<void> {
+  await cli.serve(argv)
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href
+) {
+  await runYtdlpCli()
+}
+
+export default cli

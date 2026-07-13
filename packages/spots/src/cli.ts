@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
+import { existsSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+import { loadEnvFile } from 'node:process'
+import { pathToFileURL } from 'node:url'
 
 import { Cli, z } from 'incur'
 
@@ -17,7 +21,13 @@ import { SpotifyClient } from './client.js'
 import { SpotifyApiError } from './errors.js'
 import spotifyOpenApi from './generated/spotify-openapi.json' with { type: 'json' }
 
-const cli = Cli.create('spots', {
+function loadWorkspaceEnvironment(): void {
+  const candidates = [resolve(import.meta.dirname, '../../../.env'), resolve(process.cwd(), '.env')]
+  const path = candidates.find((candidate) => existsSync(candidate))
+  if (path) loadEnvFile(path)
+}
+
+export const spotsCli = Cli.create('spots', {
   version: packageJson.version,
   description: 'Typed Spotify Web API client for humans and agents.',
   sync: {
@@ -26,9 +36,11 @@ const cli = Cli.create('spots', {
       'search Spotify for an artist',
       'show my Spotify profile',
       'list my saved Spotify albums',
+      'create a Spotify playlist from these tracks',
     ],
   },
 })
+const cli = spotsCli
 
 const auth = Cli.create('auth', { description: 'Authenticate with Spotify.' })
 
@@ -189,6 +201,165 @@ cli.command('recent', {
   },
 })
 
+const playlist = Cli.create('playlist', { description: 'Create and manage Spotify playlists.' })
+
+playlist.command('create', {
+  description: 'Create a Spotify playlist and add tracks in the supplied order.',
+  destructive: true,
+  args: z.object({ name: z.string().min(1).describe('Playlist name') }),
+  options: z.object({
+    track: z
+      .array(z.string().min(1))
+      .default([])
+      .describe('Spotify track URI, open.spotify.com URL, or ID; repeat in playlist order'),
+    inputFile: z
+      .string()
+      .optional()
+      .describe('Text file with one Spotify track URI, URL, or ID per line'),
+    visibility: z
+      .enum(['private', 'public'])
+      .default('private')
+      .describe('Whether the playlist is private or public'),
+    collaborative: z.boolean().default(false).describe('Allow other Spotify users to modify it'),
+    description: z.string().optional().describe('Playlist description'),
+  }),
+  examples: [
+    {
+      args: { name: 'Late night' },
+      options: { track: ['spotify:track:4iV5W9uYEdYUVa79Axb7Rh'] },
+      description: 'Create a private playlist from one track',
+    },
+    {
+      args: { name: 'Shared finds' },
+      options: { inputFile: 'tracks.txt', collaborative: true },
+      description: 'Create a collaborative private playlist from a file',
+    },
+  ],
+  async run(context) {
+    const fileTracks = context.options.inputFile
+      ? await readTrackReferences(context.options.inputFile)
+      : []
+    const tracks = [...context.options.track, ...fileTracks]
+    const isPublic = context.options.visibility === 'public'
+    if (context.options.collaborative && isPublic) {
+      throw new Error('A collaborative Spotify playlist must use --visibility private')
+    }
+    await assertPlaylistWriteScopes({
+      public: isPublic,
+      collaborative: context.options.collaborative,
+    })
+
+    try {
+      const result = await (
+        await createSpotifyClient()
+      ).createPlaylistWithTracks({
+        name: context.args.name,
+        tracks,
+        public: isPublic,
+        collaborative: context.options.collaborative,
+        ...(context.options.description === undefined
+          ? {}
+          : { description: context.options.description }),
+      })
+      return {
+        playlist: result.playlist,
+        tracksAdded: result.trackUris.length,
+        batches: result.snapshotIds.length,
+        trackUris: result.trackUris,
+        snapshotIds: result.snapshotIds,
+      }
+    } catch (error) {
+      if (error instanceof SpotifyApiError && error.status === 403) {
+        const scopes = requiredPlaylistWriteScopes(isPublic, context.options.collaborative)
+        throw new Error(
+          `Spotify refused playlist creation; log in again with: spots auth login --scopes '${scopes.join(',')}'`,
+          { cause: error },
+        )
+      }
+      throw error
+    }
+  },
+})
+
+playlist.command('get', {
+  description: 'Read a Spotify playlist by ID, URI, or URL.',
+  args: z.object({ playlist: z.string().min(1).describe('Spotify playlist ID, URI, or URL') }),
+  async run(context) {
+    return (await createSpotifyClient()).getPlaylist(context.args.playlist)
+  },
+})
+
+playlist.command('update', {
+  description: 'Update Spotify playlist details and optionally replace all tracks.',
+  destructive: true,
+  args: z.object({ playlist: z.string().min(1).describe('Spotify playlist ID, URI, or URL') }),
+  options: z.object({
+    name: z.string().min(1).optional().describe('New playlist name'),
+    description: z.string().optional().describe('New playlist description'),
+    visibility: z.enum(['private', 'public']).optional().describe('New playlist visibility'),
+    collaborative: z.boolean().optional().describe('New collaborative state'),
+    track: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Replacement track URI, URL, or ID; repeat in playlist order'),
+    inputFile: z.string().optional().describe('Replacement tracks, one reference per line'),
+    clearTracks: z.boolean().default(false).describe('Remove every track from the playlist'),
+  }),
+  async run(context) {
+    if (
+      context.options.clearTracks &&
+      (context.options.track !== undefined || context.options.inputFile !== undefined)
+    ) {
+      throw new Error('--clear-tracks cannot be combined with --track or --input-file')
+    }
+    const fileTracks = context.options.inputFile
+      ? await readTrackReferences(context.options.inputFile)
+      : []
+    const hasTrackUpdate =
+      context.options.clearTracks ||
+      context.options.track !== undefined ||
+      context.options.inputFile !== undefined
+    const isPublic =
+      context.options.visibility === undefined ? undefined : context.options.visibility === 'public'
+    if (context.options.collaborative === true && isPublic !== false) {
+      throw new Error('Making a playlist collaborative requires --visibility private')
+    }
+    await assertSpotifyScopes(
+      requiredPlaylistWriteScopes(isPublic, context.options.collaborative === true),
+    )
+    return (await createSpotifyClient()).updatePlaylist(context.args.playlist, {
+      ...(context.options.name === undefined ? {} : { name: context.options.name }),
+      ...(context.options.description === undefined
+        ? {}
+        : { description: context.options.description }),
+      ...(isPublic === undefined ? {} : { public: isPublic }),
+      ...(context.options.collaborative === undefined
+        ? {}
+        : { collaborative: context.options.collaborative }),
+      ...(hasTrackUpdate
+        ? {
+            tracks: context.options.clearTracks
+              ? []
+              : [...(context.options.track ?? []), ...fileTracks],
+          }
+        : {}),
+    })
+  },
+})
+
+playlist.command('delete', {
+  description:
+    "Remove a playlist from the current user's library (Spotify has no permanent delete API).",
+  destructive: true,
+  args: z.object({ playlist: z.string().min(1).describe('Spotify playlist ID, URI, or URL') }),
+  async run(context) {
+    await assertSpotifyScopes(['user-library-modify'])
+    return (await createSpotifyClient()).deletePlaylist(context.args.playlist)
+  },
+})
+
+cli.command(playlist)
+
 cli.command('request', {
   description: 'Make a raw authenticated Spotify request (forward-compatibility escape hatch).',
   args: z.object({
@@ -230,9 +401,10 @@ cli.command('api', {
   fetch: async (request: Request) => (await createSpotifyClient()).fetch(request),
 })
 
-void cli.serve()
-
-export default cli
+export async function runSpotsCli(argv = process.argv.slice(2)): Promise<void> {
+  loadWorkspaceEnvironment()
+  await spotsCli.serve(argv)
+}
 
 async function createSpotifyClient(): Promise<SpotifyClient> {
   if (process.env.SPOTIFY_ACCESS_TOKEN) {
@@ -286,6 +458,51 @@ function parseScopes(value: string): string[] {
   const invalid = scopes.filter((scope) => !SPOTIFY_SCOPES.includes(scope as never))
   if (invalid.length) throw new Error(`Unknown Spotify scope(s): ${invalid.join(', ')}`)
   return scopes
+}
+
+async function readTrackReferences(path: string): Promise<string[]> {
+  return (await readFile(path, 'utf8'))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+}
+
+function requiredPlaylistWriteScopes(
+  isPublic: boolean | undefined,
+  collaborative: boolean,
+): string[] {
+  if (collaborative) return ['playlist-modify-private', 'playlist-modify-public']
+  if (isPublic === undefined) return ['playlist-modify-private', 'playlist-modify-public']
+  return [isPublic ? 'playlist-modify-public' : 'playlist-modify-private']
+}
+
+async function assertPlaylistWriteScopes(options: {
+  public: boolean
+  collaborative: boolean
+}): Promise<void> {
+  return assertSpotifyScopes(requiredPlaylistWriteScopes(options.public, options.collaborative))
+}
+
+async function assertSpotifyScopes(required: readonly string[]): Promise<void> {
+  if (process.env.SPOTIFY_ACCESS_TOKEN) return
+
+  const store = new FileSessionStore()
+  const session = await store.load()
+  if (!session) {
+    if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
+      throw new Error(
+        'Spotify playlist creation requires user OAuth; run `spots auth login` (Client Credentials cannot modify user playlists)',
+      )
+    }
+    return
+  }
+
+  const missing = required.filter((scope) => !session.token.scopes.includes(scope))
+  if (missing.length) {
+    throw new Error(
+      `Saved Spotify login is missing ${missing.join(', ')}; run \`spots auth login\` again (playlist creation scopes are now requested by default)`,
+    )
+  }
 }
 
 function parseJsonRecord(value: string, option: string): Record<string, unknown> {
@@ -349,3 +566,17 @@ function queryRecord(
   }
   return result
 }
+
+function isMainModule(): boolean {
+  const entrypoint = process.argv[1]
+  if (!entrypoint) return false
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(resolve(entrypoint))).href
+  } catch {
+    return false
+  }
+}
+
+if (isMainModule()) await runSpotsCli()
+
+export default spotsCli

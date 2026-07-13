@@ -11,6 +11,8 @@ export type SoundCloudUserUrn = `soundcloud:users:${string}`
 export type SoundCloudTrackUrn = `soundcloud:tracks:${string}`
 export type SoundCloudPlaylistUrn = `soundcloud:playlists:${string}`
 export type SoundCloudTrackAccess = 'playable' | 'preview' | 'blocked'
+export type SoundCloudPlaylistSharing = 'public' | 'private'
+export type SoundCloudTrackReference = number | string
 
 export type SoundCloudUser = components['schemas']['User']
 export type SoundCloudMe = components['schemas']['Me']
@@ -63,6 +65,28 @@ export interface LikedTracksOptions extends PaginationOptions {
 
 export interface LikedPlaylistsOptions extends PaginationOptions {
   limit?: number
+}
+
+export interface CreateSoundCloudPlaylistInput {
+  title: string
+  tracks: readonly SoundCloudTrackReference[]
+  description?: string
+  sharing?: SoundCloudPlaylistSharing
+  signal?: AbortSignal
+}
+
+export interface UpdateSoundCloudPlaylistInput {
+  title?: string
+  description?: string
+  sharing?: SoundCloudPlaylistSharing
+  /** When present, replace the complete ordered playlist membership. */
+  tracks?: readonly SoundCloudTrackReference[]
+  signal?: AbortSignal
+}
+
+export interface DeleteSoundCloudPlaylistResult {
+  playlistUrn: SoundCloudPlaylistUrn
+  deleted: true
 }
 
 export class SoundCloudClient {
@@ -258,6 +282,230 @@ export class SoundCloudClient {
     return playlists
   }
 
+  /** Create a user playlist from ordered track IDs, URNs, or SoundCloud URLs. */
+  async createPlaylist(
+    input: CreateSoundCloudPlaylistInput,
+  ): Promise<SoundCloudPlaylist> {
+    const title = input.title.trim()
+    if (!title) throw new Error('SoundCloud playlist title is required')
+    if (input.tracks.length === 0)
+      throw new Error('A SoundCloud playlist requires at least one track')
+    if (input.tracks.length > 500)
+      throw new Error('SoundCloud playlists support at most 500 tracks')
+
+    const tracks: { urn: SoundCloudTrackUrn }[] = []
+    for (const reference of input.tracks) {
+      input.signal?.throwIfAborted()
+      tracks.push({ urn: await this.#resolveTrackUrn(reference, input.signal) })
+    }
+
+    const playlist = await this.raw<SoundCloudPlaylist>('POST', '/playlists', {
+      body: {
+        playlist: {
+          title,
+          ...(input.description === undefined
+            ? {}
+            : { description: input.description }),
+          sharing: input.sharing ?? 'private',
+          tracks,
+        },
+      },
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+    if (
+      !playlist ||
+      typeof playlist.urn !== 'string' ||
+      !/^soundcloud:playlists:[^:]+$/u.test(playlist.urn)
+    )
+      throw new Error('SoundCloud returned no playlist after creation')
+    return playlist
+  }
+
+  /** Read a playlist by numeric ID, URN, or SoundCloud URL. */
+  async getPlaylist(
+    reference: string | number,
+    options: Pick<RawRequestOptions, 'signal'> = {},
+  ): Promise<SoundCloudPlaylist> {
+    const playlistUrn = await this.#resolvePlaylistUrn(
+      reference,
+      options.signal ?? undefined,
+    )
+    const playlist = await this.raw<SoundCloudPlaylist>(
+      'GET',
+      `/playlists/${playlistUrn}`,
+      options,
+    )
+    return requireSoundCloudPlaylist(playlist, 'read')
+  }
+
+  /** Update playlist details and optionally replace the complete ordered track list. */
+  async updatePlaylist(
+    reference: string | number,
+    input: UpdateSoundCloudPlaylistInput,
+  ): Promise<SoundCloudPlaylist> {
+    if (typeof input !== 'object' || input === null) {
+      throw new TypeError(
+        'SoundCloud playlist update options must be an object',
+      )
+    }
+    if (input.title !== undefined && input.title.trim().length === 0) {
+      throw new TypeError('SoundCloud playlist title must not be empty')
+    }
+    if (
+      input.sharing !== undefined &&
+      input.sharing !== 'private' &&
+      input.sharing !== 'public'
+    ) {
+      throw new TypeError(
+        'SoundCloud playlist sharing must be private or public',
+      )
+    }
+    if (
+      input.tracks !== undefined &&
+      !isSoundCloudTrackReferenceArray(input.tracks)
+    ) {
+      throw new TypeError('SoundCloud playlist tracks must be an array')
+    }
+    if (input.tracks && input.tracks.length > 500) {
+      throw new TypeError('SoundCloud playlists support at most 500 tracks')
+    }
+    if (
+      input.title === undefined &&
+      input.description === undefined &&
+      input.sharing === undefined &&
+      input.tracks === undefined
+    ) {
+      throw new TypeError('At least one SoundCloud playlist update is required')
+    }
+
+    const playlistUrn = await this.#resolvePlaylistUrn(reference, input.signal)
+    let tracks: { urn: SoundCloudTrackUrn }[] | undefined
+    if (input.tracks !== undefined) {
+      tracks = []
+      for (const track of input.tracks) {
+        input.signal?.throwIfAborted()
+        tracks.push({ urn: await this.#resolveTrackUrn(track, input.signal) })
+      }
+    }
+
+    const playlist = await this.raw<SoundCloudPlaylist>(
+      'PUT',
+      `/playlists/${playlistUrn}`,
+      {
+        body: {
+          playlist: {
+            ...(input.title === undefined ? {} : { title: input.title.trim() }),
+            ...(input.description === undefined
+              ? {}
+              : { description: input.description }),
+            ...(input.sharing === undefined ? {} : { sharing: input.sharing }),
+            ...(tracks === undefined ? {} : { tracks }),
+          },
+        },
+        ...(input.signal ? { signal: input.signal } : {}),
+      },
+    )
+    return requireSoundCloudPlaylist(playlist, 'update')
+  }
+
+  /** Permanently delete a playlist owned by the authenticated SoundCloud user. */
+  async deletePlaylist(
+    reference: string | number,
+    options: Pick<RawRequestOptions, 'signal'> = {},
+  ): Promise<DeleteSoundCloudPlaylistResult> {
+    const playlistUrn = await this.#resolvePlaylistUrn(
+      reference,
+      options.signal ?? undefined,
+    )
+    await this.raw('DELETE', `/playlists/${playlistUrn}`, options)
+    return { playlistUrn, deleted: true }
+  }
+
+  async #resolveTrackUrn(
+    reference: SoundCloudTrackReference,
+    signal?: AbortSignal,
+  ): Promise<SoundCloudTrackUrn> {
+    if (typeof reference === 'number') {
+      if (!Number.isSafeInteger(reference) || reference <= 0)
+        throw new Error(`Invalid SoundCloud track ID: ${reference}`)
+      return `soundcloud:tracks:${reference}`
+    }
+
+    const value = reference.trim()
+    if (/^[1-9]\d*$/u.test(value)) return `soundcloud:tracks:${value}`
+    if (/^soundcloud:tracks:[^:]+$/u.test(value))
+      return value as SoundCloudTrackUrn
+
+    let url: URL
+    try {
+      url = new URL(value)
+    } catch {
+      throw new Error(`Invalid SoundCloud track reference: ${reference}`)
+    }
+    if (
+      url.protocol !== 'https:' ||
+      !['soundcloud.com', 'www.soundcloud.com', 'on.soundcloud.com'].includes(
+        url.hostname,
+      )
+    ) {
+      throw new Error(`Unsupported SoundCloud track URL: ${reference}`)
+    }
+
+    const resource = await this.raw<SoundCloudTrack>('GET', '/resolve', {
+      query: { url: url.href },
+      ...(signal ? { signal } : {}),
+    })
+    if (
+      !resource ||
+      (resource.kind !== undefined && resource.kind !== 'track') ||
+      typeof resource.urn !== 'string' ||
+      !/^soundcloud:tracks:[^:]+$/u.test(resource.urn)
+    ) {
+      throw new Error(
+        `SoundCloud URL does not resolve to a track: ${reference}`,
+      )
+    }
+    return resource.urn as SoundCloudTrackUrn
+  }
+
+  async #resolvePlaylistUrn(
+    reference: string | number,
+    signal?: AbortSignal,
+  ): Promise<SoundCloudPlaylistUrn> {
+    if (typeof reference === 'number') {
+      if (!Number.isSafeInteger(reference) || reference <= 0) {
+        throw new Error(`Invalid SoundCloud playlist ID: ${reference}`)
+      }
+      return `soundcloud:playlists:${reference}`
+    }
+
+    const value = reference.trim()
+    if (/^[1-9]\d*$/u.test(value)) return `soundcloud:playlists:${value}`
+    if (/^soundcloud:playlists:[^:]+$/u.test(value)) {
+      return value as SoundCloudPlaylistUrn
+    }
+
+    let url: URL
+    try {
+      url = new URL(value)
+    } catch {
+      throw new Error(`Invalid SoundCloud playlist reference: ${reference}`)
+    }
+    if (
+      url.protocol !== 'https:' ||
+      !['soundcloud.com', 'www.soundcloud.com', 'on.soundcloud.com'].includes(
+        url.hostname,
+      )
+    ) {
+      throw new Error(`Unsupported SoundCloud playlist URL: ${reference}`)
+    }
+    const resource = await this.raw<SoundCloudPlaylist>('GET', '/resolve', {
+      query: { url: url.href },
+      ...(signal ? { signal } : {}),
+    })
+    return requireSoundCloudPlaylist(resource, `resolve ${reference}`).urn
+  }
+
   #apiUrl(pathOrUrl: string): URL {
     const url = new URL(pathOrUrl.replace(/^\//, ''), this.#baseUrl)
     if (url.origin !== this.#baseUrl.origin) {
@@ -267,6 +515,29 @@ export class SoundCloudClient {
     }
     return url
   }
+}
+
+function requireSoundCloudPlaylist(
+  playlist: SoundCloudPlaylist | undefined,
+  operation: string,
+): SoundCloudPlaylist & { urn: SoundCloudPlaylistUrn } {
+  if (
+    !playlist ||
+    typeof playlist.urn !== 'string' ||
+    !/^soundcloud:playlists:[^:]+$/u.test(playlist.urn)
+  ) {
+    throw new Error(`SoundCloud returned no playlist after ${operation}`)
+  }
+  return playlist as SoundCloudPlaylist & { urn: SoundCloudPlaylistUrn }
+}
+
+function isSoundCloudTrackReferenceArray(
+  value: unknown,
+): value is readonly SoundCloudTrackReference[] {
+  return (
+    Array.isArray(value) &&
+    value.every((item) => typeof item === 'string' || typeof item === 'number')
+  )
 }
 
 function authenticatedFetch(options: {

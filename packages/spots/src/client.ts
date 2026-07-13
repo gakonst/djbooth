@@ -3,7 +3,7 @@ import createOpenApiClient, { type Client } from 'openapi-fetch'
 import type { AccessTokenProvider, FetchLike } from './auth/types.js'
 import { StaticAccessTokenProvider } from './auth/providers.js'
 import { SpotifyApiError } from './errors.js'
-import type { paths } from './generated/spotify-schema.js'
+import type { components, paths } from './generated/spotify-schema.js'
 
 const defaultBaseUrl = 'https://api.spotify.com/v1'
 
@@ -27,6 +27,76 @@ export interface RawRequestOptions extends Omit<RequestInit, 'body'> {
     string | number | boolean | readonly (string | number | boolean)[] | undefined
   >
 }
+
+export interface CreatePlaylistWithTracksOptions {
+  name: string
+  tracks: readonly string[]
+  public?: boolean
+  collaborative?: boolean
+  description?: string
+}
+
+export interface CreatePlaylistWithTracksResult {
+  playlist: components['schemas']['PlaylistObject']
+  trackUris: string[]
+  snapshotIds: string[]
+}
+
+export interface UpdateSpotifyPlaylistOptions {
+  name?: string
+  description?: string
+  public?: boolean
+  collaborative?: boolean
+  /** When present, replace the complete ordered playlist membership. */
+  tracks?: readonly string[]
+  signal?: AbortSignal
+}
+
+export interface UpdateSpotifyPlaylistResult {
+  playlistId: string
+  trackUris?: string[]
+  snapshotIds: string[]
+}
+
+export interface DeleteSpotifyPlaylistResult {
+  playlistId: string
+  removedFromLibrary: true
+  /** Spotify has no permanent playlist-delete operation. */
+  permanentlyDeleted: false
+}
+
+export class SpotifyPlaylistCreationError extends Error {
+  override readonly name = 'SpotifyPlaylistCreationError'
+  readonly playlist: components['schemas']['PlaylistObject']
+  readonly trackUris: string[]
+  readonly snapshotIds: string[]
+  readonly tracksAdded: number
+
+  constructor(options: {
+    playlist: components['schemas']['PlaylistObject']
+    trackUris: string[]
+    snapshotIds: string[]
+    tracksAdded: number
+    cause: unknown
+  }) {
+    const destination = options.playlist.external_urls?.spotify ?? options.playlist.id ?? 'unknown'
+    super(
+      `Spotify playlist ${destination} was created, but adding tracks failed after ${options.tracksAdded} of ${options.trackUris.length} tracks`,
+      { cause: options.cause },
+    )
+    this.playlist = options.playlist
+    this.trackUris = options.trackUris
+    this.snapshotIds = options.snapshotIds
+    this.tracksAdded = options.tracksAdded
+  }
+}
+
+interface PlaylistSnapshot {
+  snapshot_id: string
+}
+
+const spotifyIdPattern = /^[0-9A-Za-z]+$/
+const playlistBatchSize = 100
 
 export class SpotifyClient {
   readonly api: Client<paths>
@@ -113,6 +183,148 @@ export class SpotifyClient {
       first = false
     }
   }
+
+  /** Create a playlist and append tracks in order, retaining duplicate entries. */
+  async createPlaylistWithTracks(
+    options: CreatePlaylistWithTracksOptions,
+  ): Promise<CreatePlaylistWithTracksResult> {
+    const input = validateCreatePlaylistWithTracksOptions(options)
+    const playlist = await this.raw<components['schemas']['PlaylistObject']>(
+      'POST',
+      '/me/playlists',
+      {
+        body: {
+          name: input.name,
+          public: input.public,
+          collaborative: input.collaborative,
+          ...(input.description === undefined ? {} : { description: input.description }),
+        },
+      },
+    )
+    if (!playlist?.id) throw new Error('Spotify created a playlist without returning its ID')
+
+    const snapshotIds: string[] = []
+    let tracksAdded = 0
+    for (let offset = 0; offset < input.trackUris.length; offset += playlistBatchSize) {
+      const batch = input.trackUris.slice(offset, offset + playlistBatchSize)
+      try {
+        const snapshot = await this.raw<PlaylistSnapshot>(
+          'POST',
+          `/playlists/${encodeURIComponent(playlist.id)}/items`,
+          { body: { uris: batch } },
+        )
+        if (!snapshot?.snapshot_id) {
+          throw new Error('Spotify added playlist items without returning a snapshot ID')
+        }
+        snapshotIds.push(snapshot.snapshot_id)
+        tracksAdded += batch.length
+      } catch (cause) {
+        throw new SpotifyPlaylistCreationError({
+          playlist,
+          trackUris: input.trackUris,
+          snapshotIds,
+          tracksAdded,
+          cause,
+        })
+      }
+    }
+
+    return { playlist, trackUris: input.trackUris, snapshotIds }
+  }
+
+  /** Read a Spotify playlist by ID, URI, or open.spotify.com URL. */
+  async getPlaylist(
+    reference: string,
+    options: Pick<RawRequestOptions, 'signal'> = {},
+  ): Promise<components['schemas']['PlaylistObject']> {
+    const playlistId = normalizeSpotifyPlaylistReference(reference)
+    const playlist = await this.raw<components['schemas']['PlaylistObject']>(
+      'GET',
+      `/playlists/${encodeURIComponent(playlistId)}`,
+      options,
+    )
+    if (!playlist?.id) throw new Error('Spotify returned a playlist without its ID')
+    return playlist
+  }
+
+  /** Update playlist details and optionally replace the complete ordered track list. */
+  async updatePlaylist(
+    reference: string,
+    options: UpdateSpotifyPlaylistOptions,
+  ): Promise<UpdateSpotifyPlaylistResult> {
+    const playlistId = normalizeSpotifyPlaylistReference(reference)
+    const input = validateUpdateSpotifyPlaylistOptions(options)
+    const details = {
+      ...(input.name === undefined ? {} : { name: input.name }),
+      ...(input.description === undefined ? {} : { description: input.description }),
+      ...(input.public === undefined ? {} : { public: input.public }),
+      ...(input.collaborative === undefined ? {} : { collaborative: input.collaborative }),
+    }
+    if (Object.keys(details).length > 0) {
+      await this.raw('PUT', `/playlists/${encodeURIComponent(playlistId)}`, {
+        body: details,
+        ...(input.signal ? { signal: input.signal } : {}),
+      })
+    }
+
+    const snapshotIds: string[] = []
+    if (input.trackUris !== undefined) {
+      const firstBatch = input.trackUris.slice(0, playlistBatchSize)
+      const firstSnapshot = await this.raw<PlaylistSnapshot>(
+        'PUT',
+        `/playlists/${encodeURIComponent(playlistId)}/items`,
+        {
+          body: { uris: firstBatch },
+          ...(input.signal ? { signal: input.signal } : {}),
+        },
+      )
+      if (!firstSnapshot?.snapshot_id) {
+        throw new Error('Spotify replaced playlist items without returning a snapshot ID')
+      }
+      snapshotIds.push(firstSnapshot.snapshot_id)
+
+      for (
+        let offset = playlistBatchSize;
+        offset < input.trackUris.length;
+        offset += playlistBatchSize
+      ) {
+        const snapshot = await this.raw<PlaylistSnapshot>(
+          'POST',
+          `/playlists/${encodeURIComponent(playlistId)}/items`,
+          {
+            body: { uris: input.trackUris.slice(offset, offset + playlistBatchSize) },
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+        )
+        if (!snapshot?.snapshot_id) {
+          throw new Error('Spotify added playlist items without returning a snapshot ID')
+        }
+        snapshotIds.push(snapshot.snapshot_id)
+      }
+    }
+
+    return {
+      playlistId,
+      ...(input.trackUris === undefined ? {} : { trackUris: input.trackUris }),
+      snapshotIds,
+    }
+  }
+
+  /**
+   * Remove a playlist from the current user's library. Spotify exposes no
+   * permanent playlist deletion; owned playlists use this same operation.
+   */
+  async deletePlaylist(
+    reference: string,
+    options: Pick<RawRequestOptions, 'signal'> = {},
+  ): Promise<DeleteSpotifyPlaylistResult> {
+    const playlistId = normalizeSpotifyPlaylistReference(reference)
+    await this.raw('DELETE', '/me/library', {
+      query: { uris: `spotify:playlist:${playlistId}` },
+      ...options,
+    })
+    return { playlistId, removedFromLibrary: true, permanentlyDeleted: false }
+  }
 }
 
 export interface SpotifyPage<T> {
@@ -152,7 +364,12 @@ function authenticatedFetch(options: {
         await options.provider.invalidateAccessToken()
         continue
       }
-      if (attempt >= retry.maxAttempts || !isRetryable(response.status)) return response
+      if (
+        attempt >= retry.maxAttempts ||
+        !isRetryableMethod(request.method) ||
+        !isRetryable(response.status)
+      )
+        return response
 
       const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
       const exponential = Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** (attempt - 1))
@@ -161,6 +378,168 @@ function authenticatedFetch(options: {
       await sleep(delay)
     }
   }
+}
+
+function validateCreatePlaylistWithTracksOptions(options: CreatePlaylistWithTracksOptions): {
+  name: string
+  trackUris: string[]
+  public: boolean
+  collaborative: boolean
+  description?: string
+} {
+  if (typeof options !== 'object' || options === null) {
+    throw new TypeError('Playlist options must be an object')
+  }
+  if (typeof options.name !== 'string' || options.name.trim().length === 0) {
+    throw new TypeError('Playlist name must not be empty')
+  }
+  if (!Array.isArray(options.tracks) || options.tracks.length === 0) {
+    throw new TypeError('At least one Spotify track URI, URL, or ID is required')
+  }
+  if (options.public !== undefined && typeof options.public !== 'boolean') {
+    throw new TypeError('Playlist public must be a boolean')
+  }
+  if (options.collaborative !== undefined && typeof options.collaborative !== 'boolean') {
+    throw new TypeError('Playlist collaborative must be a boolean')
+  }
+  if (options.description !== undefined && typeof options.description !== 'string') {
+    throw new TypeError('Playlist description must be a string')
+  }
+
+  const isPublic = options.public ?? true
+  const collaborative = options.collaborative ?? false
+  if (collaborative && isPublic) {
+    throw new TypeError('A collaborative Spotify playlist must be private (public: false)')
+  }
+
+  return {
+    name: options.name,
+    trackUris: options.tracks.map(normalizeSpotifyTrackReference),
+    public: isPublic,
+    collaborative,
+    ...(options.description === undefined ? {} : { description: options.description }),
+  }
+}
+
+function validateUpdateSpotifyPlaylistOptions(options: UpdateSpotifyPlaylistOptions): {
+  name?: string
+  description?: string
+  public?: boolean
+  collaborative?: boolean
+  trackUris?: string[]
+  signal?: AbortSignal
+} {
+  if (typeof options !== 'object' || options === null) {
+    throw new TypeError('Playlist update options must be an object')
+  }
+  if (options.name !== undefined && options.name.trim().length === 0) {
+    throw new TypeError('Playlist name must not be empty')
+  }
+  if (options.description !== undefined && typeof options.description !== 'string') {
+    throw new TypeError('Playlist description must be a string')
+  }
+  if (options.public !== undefined && typeof options.public !== 'boolean') {
+    throw new TypeError('Playlist public must be a boolean')
+  }
+  if (options.collaborative !== undefined && typeof options.collaborative !== 'boolean') {
+    throw new TypeError('Playlist collaborative must be a boolean')
+  }
+  if (options.collaborative === true && options.public !== false) {
+    throw new TypeError('Making a Spotify playlist collaborative requires public: false')
+  }
+  if (options.tracks !== undefined && !Array.isArray(options.tracks)) {
+    throw new TypeError('Playlist tracks must be an array')
+  }
+  if (
+    options.name === undefined &&
+    options.description === undefined &&
+    options.public === undefined &&
+    options.collaborative === undefined &&
+    options.tracks === undefined
+  ) {
+    throw new TypeError('At least one Spotify playlist update is required')
+  }
+  return {
+    ...(options.name === undefined ? {} : { name: options.name }),
+    ...(options.description === undefined ? {} : { description: options.description }),
+    ...(options.public === undefined ? {} : { public: options.public }),
+    ...(options.collaborative === undefined ? {} : { collaborative: options.collaborative }),
+    ...(options.tracks === undefined
+      ? {}
+      : { trackUris: options.tracks.map(normalizeSpotifyTrackReference) }),
+    ...(options.signal ? { signal: options.signal } : {}),
+  }
+}
+
+function normalizeSpotifyTrackReference(value: string, index: number): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError(`Track ${index + 1} must be a Spotify track URI, URL, or ID`)
+  }
+  const reference = value.trim()
+  if (spotifyIdPattern.test(reference)) return `spotify:track:${reference}`
+
+  const uriMatch = /^spotify:track:([^:]+)$/.exec(reference)
+  if (uriMatch) return spotifyTrackUri(uriMatch[1] ?? '', index)
+
+  let url: URL
+  try {
+    url = new URL(reference)
+  } catch {
+    throw new TypeError(`Track ${index + 1} is not a valid Spotify track URI, URL, or ID`)
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'open.spotify.com') {
+    throw new TypeError(`Track ${index + 1} is not an open.spotify.com track URL`)
+  }
+  const segments = url.pathname.split('/').filter(Boolean)
+  const trackIndex = segments[0]?.startsWith('intl-') ? 1 : 0
+  if (segments[trackIndex] !== 'track' || segments.length !== trackIndex + 2) {
+    throw new TypeError(`Track ${index + 1} is not an open.spotify.com track URL`)
+  }
+  return spotifyTrackUri(segments[trackIndex + 1] ?? '', index)
+}
+
+function spotifyTrackUri(id: string, index: number): string {
+  if (!spotifyIdPattern.test(id)) {
+    throw new TypeError(`Track ${index + 1} has an invalid Spotify track ID`)
+  }
+  return `spotify:track:${id}`
+}
+
+function normalizeSpotifyPlaylistReference(value: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new TypeError('Spotify playlist ID, URI, or URL is required')
+  }
+  const reference = value.trim()
+  if (spotifyIdPattern.test(reference)) return reference
+
+  const uriMatch = /^spotify:playlist:([^:]+)$/.exec(reference)
+  if (uriMatch && spotifyIdPattern.test(uriMatch[1] ?? '')) return uriMatch[1] as string
+
+  let url: URL
+  try {
+    url = new URL(reference)
+  } catch {
+    throw new TypeError('Invalid Spotify playlist ID, URI, or URL')
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'open.spotify.com') {
+    throw new TypeError('Spotify playlist URL must use open.spotify.com')
+  }
+  const segments = url.pathname.split('/').filter(Boolean)
+  const playlistIndex = segments[0]?.startsWith('intl-') ? 1 : 0
+  const id = segments[playlistIndex + 1]
+  if (
+    segments[playlistIndex] !== 'playlist' ||
+    segments.length !== playlistIndex + 2 ||
+    !id ||
+    !spotifyIdPattern.test(id)
+  ) {
+    throw new TypeError('Spotify playlist URL must identify a playlist')
+  }
+  return id
+}
+
+function isRetryableMethod(method: string): boolean {
+  return ['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'].includes(method.toUpperCase())
 }
 
 function isRetryable(status: number): boolean {
