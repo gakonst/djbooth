@@ -30,6 +30,7 @@ describe("music CLI", () => {
       expect.arrayContaining([
         "rekordbox analyze track",
         "rekordbox db playlist create",
+        "rekordbox db playlist list",
         "rekordbox status",
         "library status",
         "slsk download",

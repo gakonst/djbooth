@@ -64,11 +64,17 @@ music slsk search "artist track" --timeout 8 --format json
 music ytdlp-ts engines --format json
 music ytdlp-ts inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
+music rekordbox db playlist list
+music rekordbox db playlist list --json
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 music library status --format json
 music library serve --open
 ```
+
+`music rekordbox db playlist list` prints the complete active folder and playlist hierarchy as a
+table, including direct track and child counts. Add `--json` for the same tree order with stable
+IDs, parent links, path segments, pagination metadata, and explicit smart-playlist count errors.
 
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
 `rekordbox`, and `library` Incur CLIs. Its MCP surface filters those commands to the composable calls used for

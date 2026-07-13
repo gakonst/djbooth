@@ -449,6 +449,10 @@ select:focus-visible,
   font-size: 9px;
 }
 
+.sidebar-count.is-error {
+  color: var(--warning);
+}
+
 .playlist-node-row {
   display: flex;
   align-items: center;

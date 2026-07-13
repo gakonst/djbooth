@@ -182,6 +182,14 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 
 ## Playlist inspection checkpoint
 
+- Added `MasterDatabase.listPlaylists` as the shared active-hierarchy inventory for the Rekordbox CLI
+  and local library workbench. It filters soft-deleted and unsupported rows, batches regular-playlist
+  membership counts, returns folder/regular/smart types with stable parent and sequence metadata, and
+  preserves smart-count failures without failing the complete inventory.
+- Added `rekordbox db playlist list`, returning the complete active hierarchy in Rekordbox tree order
+  as an aligned table by default. `--type playable` selects regular and smart playlists, `--limit`
+  and `--offset` opt into reported pagination, and `--json` adds canonical `pathSegments` and `idPath`
+  alongside the presentation-only display path.
 - Added `MasterDatabase.getPlaylistTracks`, a single joined query that preserves membership
   duplicates and orders regular playlists by `djmdSongPlaylist.TrackNo`. Smart playlists compile
   relation-aware criteria into one joined query with deterministic content ordering; unsupported

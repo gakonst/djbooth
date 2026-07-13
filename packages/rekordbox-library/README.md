@@ -19,3 +19,5 @@ The workbench provides playlist hierarchy and search, health filters, ordered tr
 metadata and analysis inspection, local audio preview, and guarded playlist create, rename, delete,
 membership, and reorder operations. Audio and metadata remain local; the HTTP server rejects
 non-loopback binds, cross-origin resources, unsupported audio types, and symlink-backed audio.
+Smart-playlist count failures remain `null` in the API and appear as an explicit warning in the
+sidebar; the workbench never presents an unavailable count as zero.

@@ -120,6 +120,17 @@ export type PlaylistTrackOptions = {
   offset?: number;
 };
 
+/** Flat metadata for one active Rekordbox playlist-tree entry. */
+export type PlaylistSummary = {
+  countError?: string;
+  id: string;
+  name: string;
+  parentId: string;
+  sequence: number;
+  trackCount: number | null;
+  type: "folder" | "playlist" | "smart";
+};
+
 type SmartPlaylistSelection = {
   artistExpression: string;
   fromSql: string;
@@ -1656,7 +1667,9 @@ export class MasterDatabase {
     return rows.map((row) => this.materialize(models.DjmdContent, row));
   }
 
-  private compileSmartPlaylistSelection(playlist: models.DjmdPlaylist): SmartPlaylistSelection {
+  private compileSmartPlaylistSelection(
+    playlist: Pick<models.DjmdPlaylist, "ID" | "Name" | "SmartList">,
+  ): SmartPlaylistSelection {
     if (!playlist.SmartList) throw new TypeError("Smart playlist has no SmartList XML");
     const smartList = SmartList.fromXml(playlist.SmartList);
     const joins = new Map<string, string>();
@@ -1765,51 +1778,165 @@ export class MasterDatabase {
     };
   }
 
+  private activeRowPredicate(table: string, alias: string): string {
+    return this.hasColumn(table, "rb_local_deleted")
+      ? `(${quoteIdentifier(alias)}."rb_local_deleted" IS NULL OR ${quoteIdentifier(alias)}."rb_local_deleted" = 0)`
+      : "1 = 1";
+  }
+
+  private resolveActivePlaylist(
+    playlist: models.DjmdPlaylist | string | number,
+  ): models.DjmdPlaylist {
+    const id = String(
+      playlist instanceof models.DatabaseRow ? (playlist as models.DjmdPlaylist).ID : playlist,
+    );
+    if (playlist instanceof models.DatabaseRow) {
+      const row = playlist as models.DjmdPlaylist;
+      const deleted = this.hasColumn(models.DjmdPlaylist.tableName, "rb_local_deleted")
+        ? row.get("rb_local_deleted")
+        : null;
+      if (deleted == null || Number(deleted) === 0) return row;
+    } else {
+      const row = this.query(models.DjmdPlaylist)
+        .where({ ID: id })
+        .whereRaw(
+          this.activeRowPredicate(models.DjmdPlaylist.tableName, models.DjmdPlaylist.tableName),
+        )
+        .oneOrNone();
+      if (row) return row;
+    }
+    throw new RangeError(`Playlist '${id}' was not found or is deleted`);
+  }
+
+  /** Return every active folder, regular playlist, and smart playlist with direct track counts. */
+  listPlaylists(): Array<PlaylistSummary> {
+    type RawPlaylistSummary = {
+      attribute: number | null;
+      id: string | number;
+      name: string | null;
+      parentId: string | number | null;
+      sequence: number | null;
+      smartList: string | null;
+      trackCount: number;
+    };
+
+    const playlistActive = this.activeRowPredicate(models.DjmdPlaylist.tableName, "p");
+    const membershipActive = this.activeRowPredicate(models.DjmdSongPlaylist.tableName, "sp");
+    const contentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
+    const rows = this.selectRawRows<RawPlaylistSummary>(
+      `SELECT
+        p."ID" AS "id",
+        p."Name" AS "name",
+        p."ParentID" AS "parentId",
+        p."Seq" AS "sequence",
+        p."Attribute" AS "attribute",
+        p."SmartList" AS "smartList",
+        COUNT(c."ID") AS "trackCount"
+      FROM "djmdPlaylist" p
+      LEFT JOIN "djmdSongPlaylist" sp
+        ON sp."PlaylistID" = p."ID" AND ${membershipActive}
+      LEFT JOIN "djmdContent" c
+        ON c."ID" = sp."ContentID" AND ${contentActive}
+      WHERE ${playlistActive} AND p."Attribute" IN (?, ?, ?)
+      GROUP BY p."ID", p."Name", p."ParentID", p."Seq", p."Attribute", p."SmartList"
+      ORDER BY p."ParentID", p."Seq", p."Name" COLLATE NOCASE,
+        CAST(p."ID" AS INTEGER), p."ID"`,
+      [
+        models.PlaylistType.PLAYLIST,
+        models.PlaylistType.FOLDER,
+        models.PlaylistType.SMART_PLAYLIST,
+      ],
+    );
+
+    return rows.map((row) => {
+      const attribute = Number(row.attribute);
+      const type =
+        attribute === models.PlaylistType.FOLDER
+          ? ("folder" as const)
+          : attribute === models.PlaylistType.SMART_PLAYLIST
+            ? ("smart" as const)
+            : ("playlist" as const);
+      let trackCount = type === "folder" ? null : Number(row.trackCount);
+      let countError: string | undefined;
+      if (type === "smart") {
+        try {
+          const selection = this.compileSmartPlaylistSelection({
+            ID: String(row.id),
+            Name: row.name ?? "",
+            SmartList: row.smartList,
+          });
+          trackCount = this.countRows(
+            `SELECT COUNT(*) AS count FROM ${selection.fromSql}
+              WHERE (${selection.whereSql}) AND ${contentActive}`,
+            selection.parameters,
+          );
+        } catch (error) {
+          trackCount = null;
+          countError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return {
+        id: String(row.id),
+        name: row.name ?? "",
+        parentId: row.parentId == null ? "root" : String(row.parentId),
+        sequence: row.sequence == null ? 0 : Number(row.sequence),
+        trackCount,
+        type,
+        ...(countError === undefined ? {} : { countError }),
+      };
+    });
+  }
+
   /** Return content rows selected by a regular or smart playlist. */
   getPlaylistContents(playlist: models.DjmdPlaylist | string | number): Query<models.DjmdContent> {
-    const row =
-      playlist instanceof models.DatabaseRow
-        ? (playlist as models.DjmdPlaylist)
-        : this.query(models.DjmdPlaylist)
-            .where({ ID: String(playlist) })
-            .one();
+    const row = this.resolveActivePlaylist(playlist);
     if (Number(row.Attribute) === models.PlaylistType.FOLDER)
       throw new TypeError("Playlist is a folder");
+    const contentActive = this.activeRowPredicate(
+      models.DjmdContent.tableName,
+      models.DjmdContent.tableName,
+    );
     if (Number(row.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
       const selection = this.compileSmartPlaylistSelection(row);
-      return this.query(models.DjmdContent).whereRaw(
-        `"ID" IN (SELECT "c"."ID" FROM ${selection.fromSql} WHERE ${selection.whereSql})`,
-        selection.parameters,
-      );
+      const selectedContentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
+      return this.query(models.DjmdContent)
+        .whereRaw(contentActive)
+        .whereRaw(
+          `"ID" IN (SELECT "c"."ID" FROM ${selection.fromSql}
+            WHERE (${selection.whereSql}) AND ${selectedContentActive})`,
+          selection.parameters,
+        );
     }
-    return this.query(models.DjmdContent).whereRaw(
-      '"ID" IN (SELECT "ContentID" FROM "djmdSongPlaylist" WHERE "PlaylistID" = ?)',
-      [row.ID],
-    );
+    const membershipActive = this.activeRowPredicate(models.DjmdSongPlaylist.tableName, "sp");
+    return this.query(models.DjmdContent)
+      .whereRaw(contentActive)
+      .whereRaw(
+        `"ID" IN (SELECT sp."ContentID" FROM "djmdSongPlaylist" sp
+          WHERE sp."PlaylistID" = ? AND ${membershipActive})`,
+        [row.ID],
+      );
   }
 
   /** Count track rows selected by a regular or smart playlist. */
   countPlaylistTracks(playlist: models.DjmdPlaylist | string | number): number {
-    const row =
-      playlist instanceof models.DatabaseRow
-        ? (playlist as models.DjmdPlaylist)
-        : this.query(models.DjmdPlaylist)
-            .where({ ID: String(playlist) })
-            .one();
+    const row = this.resolveActivePlaylist(playlist);
     if (Number(row.Attribute) === models.PlaylistType.FOLDER)
       throw new TypeError("Playlist is a folder");
+    const contentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
     if (Number(row.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
       const selection = this.compileSmartPlaylistSelection(row);
       return this.countRows(
-        `SELECT COUNT(*) AS count FROM ${selection.fromSql} WHERE ${selection.whereSql}`,
+        `SELECT COUNT(*) AS count FROM ${selection.fromSql}
+          WHERE (${selection.whereSql}) AND ${contentActive}`,
         selection.parameters,
       );
     }
+    const membershipActive = this.activeRowPredicate(models.DjmdSongPlaylist.tableName, "sp");
     return this.countRows(
       `SELECT COUNT(*) AS count
         FROM "djmdSongPlaylist" sp
         JOIN "djmdContent" c ON c."ID" = sp."ContentID"
-        WHERE sp."PlaylistID" = ?`,
+        WHERE sp."PlaylistID" = ? AND ${membershipActive} AND ${contentActive}`,
       [row.ID],
     );
   }
@@ -1826,12 +1953,7 @@ export class MasterDatabase {
     if (!Number.isSafeInteger(offset) || offset < 0)
       throw new RangeError("Playlist track offset must be a non-negative integer");
 
-    const playlistRow =
-      playlist instanceof models.DatabaseRow
-        ? (playlist as models.DjmdPlaylist)
-        : this.query(models.DjmdPlaylist)
-            .where({ ID: String(playlist) })
-            .one();
+    const playlistRow = this.resolveActivePlaylist(playlist);
     if (Number(playlistRow.Attribute) === models.PlaylistType.FOLDER)
       throw new TypeError("Playlist is a folder");
     if (this.tracked.size && !this.autoflushDisabled) this.flush();
@@ -1867,6 +1989,7 @@ export class MasterDatabase {
 
     if (Number(playlistRow.Attribute) === models.PlaylistType.SMART_PLAYLIST) {
       const selection = this.compileSmartPlaylistSelection(playlistRow);
+      const contentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
       const pagination =
         limit === undefined ? (offset ? " LIMIT -1 OFFSET ?" : "") : " LIMIT ? OFFSET ?";
       const paginationParameters = limit === undefined ? (offset ? [offset] : []) : [limit, offset];
@@ -1885,7 +2008,7 @@ export class MasterDatabase {
             NULL AS "membershipId",
             NULL AS "position"
           FROM ${selection.fromSql}
-          WHERE ${selection.whereSql}
+          WHERE (${selection.whereSql}) AND ${contentActive}
           ORDER BY CAST("c"."ID" AS INTEGER), "c"."ID"${pagination}`,
         )
         .all(...selection.parameters, ...paginationParameters) as Array<RawPlaylistTrack>;
@@ -1905,6 +2028,8 @@ export class MasterDatabase {
     const pagination =
       limit === undefined ? (offset ? " LIMIT -1 OFFSET ?" : "") : " LIMIT ? OFFSET ?";
     const paginationParameters = limit === undefined ? (offset ? [offset] : []) : [limit, offset];
+    const membershipActive = this.activeRowPredicate(models.DjmdSongPlaylist.tableName, "sp");
+    const contentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
 
     const rows = this.requireConnection()
       .prepare(
@@ -1913,7 +2038,7 @@ export class MasterDatabase {
           JOIN "djmdContent" c ON c."ID" = sp."ContentID"
           LEFT JOIN "djmdArtist" ar ON ar."ID" = c."ArtistID"
           LEFT JOIN "djmdKey" ke ON ke."ID" = c."KeyID"
-          WHERE sp."PlaylistID" = ?
+          WHERE sp."PlaylistID" = ? AND ${membershipActive} AND ${contentActive}
           ORDER BY sp."TrackNo", CAST(sp."ID" AS INTEGER), sp."ID"${pagination}`,
       )
       .all(playlistRow.ID, ...paginationParameters) as Array<RawPlaylistTrack>;

@@ -75,7 +75,7 @@ function createPlaylistFixture(path, packageRoot) {
   try {
     database.exec(`
       CREATE TABLE djmdPlaylist (
-        ID TEXT PRIMARY KEY, Name TEXT, Attribute INTEGER, ParentID TEXT, SmartList TEXT
+        ID TEXT PRIMARY KEY, Name TEXT, Attribute INTEGER, ParentID TEXT, Seq INTEGER, SmartList TEXT
       );
       CREATE TABLE djmdSongPlaylist (
         ID TEXT PRIMARY KEY, PlaylistID TEXT, ContentID TEXT, TrackNo INTEGER
@@ -87,7 +87,10 @@ function createPlaylistFixture(path, packageRoot) {
         Length INTEGER, FileType INTEGER, Analysed INTEGER
       );
 
-      INSERT INTO djmdPlaylist VALUES ('playlist-1', 'Packed Festival Set', 0, 'folder-1', NULL);
+      INSERT INTO djmdPlaylist VALUES ('folder-1', 'Packed Sets', 1, 'root', 1, NULL);
+      INSERT INTO djmdPlaylist VALUES (
+        'playlist-1', 'Packed Festival Set', 0, 'folder-1', 1, NULL
+      );
       INSERT INTO djmdArtist VALUES ('artist-1', 'Packed Artist');
       INSERT INTO djmdKey VALUES ('key-1', '10A');
       INSERT INTO djmdContent VALUES (
@@ -217,7 +220,11 @@ try {
     ["music-ytdlp-ts", ["# music ytdlp-ts download"]],
     [
       "music-rekordbox",
-      ["# music rekordbox db playlist create", "# music rekordbox db playlist show"],
+      [
+        "# music rekordbox db playlist create",
+        "# music rekordbox db playlist list",
+        "# music rekordbox db playlist show",
+      ],
     ],
   ];
   for (const [skill, commands] of generatedSkills) {
@@ -260,6 +267,32 @@ try {
 
   const playlistFixture = join(consumer, "playlist.db");
   createPlaylistFixture(playlistFixture, installedRekordbox);
+  const playlistListJson = run(
+    rekordbox,
+    ["db", "playlist", "list", "--path", playlistFixture, "--plain", "--json"],
+    { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const playlistListResult = JSON.parse(playlistListJson.stdout);
+  if (
+    playlistListResult?.summary?.total !== 2 ||
+    playlistListResult?.entries?.length !== 2 ||
+    playlistListResult.entries[1]?.id !== "playlist-1" ||
+    playlistListResult.entries[1]?.path !== "Packed Sets › Packed Festival Set" ||
+    playlistListResult.entries[1]?.trackCount !== 1
+  ) {
+    throw new Error("Packed Rekordbox CLI did not list the fixture playlist hierarchy as JSON");
+  }
+  const playlistListTable = run(
+    music,
+    ["rekordbox", "db", "playlist", "list", "--path", playlistFixture, "--plain"],
+    { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (
+    !playlistListTable.stdout.includes("| path") ||
+    !playlistListTable.stdout.includes("Packed Sets › Packed Festival Set")
+  ) {
+    throw new Error("Packed music CLI did not render the fixture playlist hierarchy table");
+  }
   const playlistJson = run(
     rekordbox,
     [
@@ -332,6 +365,18 @@ try {
         },
       },
     },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "rekordbox_db_playlist_list",
+        arguments: {
+          path: playlistFixture,
+          plain: true,
+        },
+      },
+    },
   ];
   const mcp = run(music, ["--mcp"], {
     cwd: consumer,
@@ -354,10 +399,13 @@ try {
     "spots_playlist_delete",
     "spots_playlist_get",
     "spots_playlist_update",
+    "rekordbox_db_playlist_list",
     "rekordbox_db_playlist_show",
   ];
   const toolNames = new Set(tools?.map((tool) => tool.name));
+  const playlistListTool = tools?.find((tool) => tool.name === "rekordbox_db_playlist_list");
   const playlistShowTool = tools?.find((tool) => tool.name === "rekordbox_db_playlist_show");
+  const playlistListCall = responses.find((response) => response.id === 4)?.result;
   const playlistShowCall = responses.find((response) => response.id === 3)?.result;
   if (
     initialize?.result?.serverInfo?.name !== "music" ||
@@ -366,13 +414,20 @@ try {
     !tools.some((tool) => tool.name === "slsk_download") ||
     !tools.some((tool) => tool.name === "rekordbox_db_playlist_create") ||
     requiredTools.some((name) => !toolNames.has(name)) ||
+    playlistListTool?.inputSchema?.properties?.path?.type !== "string" ||
+    playlistListTool?.outputSchema?.properties?.summary?.type !== "object" ||
+    playlistListTool?.outputSchema?.properties?.entries?.type !== "array" ||
     playlistShowTool?.inputSchema?.properties?.name?.type !== "string" ||
     !playlistShowTool?.inputSchema?.required?.includes("name") ||
     playlistShowTool?.outputSchema?.properties?.playlist?.type !== "object" ||
     playlistShowTool?.outputSchema?.properties?.tracks?.type !== "array" ||
     playlistShowCall?.isError ||
     playlistShowCall?.structuredContent?.playlist?.id !== "playlist-1" ||
-    playlistShowCall?.structuredContent?.tracks?.[0]?.title !== "Packed Track"
+    playlistShowCall?.structuredContent?.tracks?.[0]?.title !== "Packed Track" ||
+    playlistListCall?.isError ||
+    playlistListCall?.structuredContent?.summary?.total !== 2 ||
+    playlistListCall?.structuredContent?.entries?.[1]?.id !== "playlist-1" ||
+    playlistListCall?.structuredContent?.entries?.[1]?.trackCount !== 1
   ) {
     throw new Error("Packed music MCP did not initialize with the composable tool surface");
   }
