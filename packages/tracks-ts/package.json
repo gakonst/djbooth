@@ -1,6 +1,6 @@
 {
   "name": "@gakonst/tracks",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Resolve DJ sets into enriched tracks and Rekordbox playlists",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
