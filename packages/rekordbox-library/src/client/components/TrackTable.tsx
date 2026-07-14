@@ -1,19 +1,20 @@
 import {
-  AudioLines,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
-  Check,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  FileQuestion,
+  GripVertical,
   LoaderCircle,
   Music,
 } from "lucide-react";
+import { useState } from "react";
 
 import type { TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
 import { formatBpm, formatDuration } from "../format.js";
+import { playlistDropTrackNumber } from "./playlist-order.js";
+import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
 
 type Props = {
   items: TrackSummary[];
@@ -62,6 +63,15 @@ export function TrackTable({
 }: Props) {
   const first = count === 0 ? 0 : offset + 1;
   const last = Math.min(offset + items.length, count);
+  const [draggedTrack, setDraggedTrack] = useState<{
+    membershipId: string;
+    trackNumber: number;
+  }>();
+  const [dropTarget, setDropTarget] = useState<{
+    membershipId: string;
+    placement: "before" | "after";
+  }>();
+  const canReorder = ordered && canWrite && Boolean(onMove);
 
   return (
     <section className="track-table-shell" aria-label="Tracks">
@@ -95,12 +105,6 @@ export function TrackTable({
               <th className="key-column" scope="col" aria-sort={sortAria(sort, "key")}>
                 <SortButton label="Key" field="key" sort={sort} onSort={onSort} />
               </th>
-              <th className="plays-column numeric" scope="col" aria-sort={sortAria(sort, "plays")}>
-                <SortButton label="Plays" field="plays" sort={sort} onSort={onSort} align="end" />
-              </th>
-              <th className="status-column" scope="col" aria-sort={sortAria(sort, "status")}>
-                <SortButton label="Status" field="status" sort={sort} onSort={onSort} />
-              </th>
               <th
                 className="duration-column numeric"
                 scope="col"
@@ -120,7 +124,7 @@ export function TrackTable({
               <TrackRowsSkeleton ordered={ordered} />
             ) : error ? (
               <tr>
-                <td colSpan={ordered ? 10 : 9}>
+                <td colSpan={ordered ? 8 : 7}>
                   <TableMessage
                     icon={<CircleAlert size={20} />}
                     title="Couldn’t read the library"
@@ -132,7 +136,7 @@ export function TrackTable({
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td colSpan={ordered ? 10 : 9}>
+                <td colSpan={ordered ? 8 : 7}>
                   <TableMessage
                     icon={<Music size={21} />}
                     title="No tracks here"
@@ -147,7 +151,14 @@ export function TrackTable({
                 return (
                   <tr
                     key={`${track.id}:${track.playlistMembershipId ?? "library"}`}
-                    className={selected ? "is-selected" : ""}
+                    className={[
+                      selected ? "is-selected" : "",
+                      dropTarget && dropTarget.membershipId === track.playlistMembershipId
+                        ? `is-drop-${dropTarget.placement}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                     aria-selected={selected}
                     tabIndex={0}
                     draggable
@@ -163,10 +174,65 @@ export function TrackTable({
                     }}
                     onDragStart={(event) => {
                       const ids = JSON.stringify([track.id]);
-                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.effectAllowed = canReorder ? "copyMove" : "copy";
                       event.dataTransfer.setData("application/x-rekordbox-track-ids", ids);
                       event.dataTransfer.setData("application/x-rekordbox-track-id", track.id);
                       event.dataTransfer.setData("text/plain", track.id);
+                      if (canReorder && track.playlistMembershipId) {
+                        event.dataTransfer.setData(
+                          "application/x-rekordbox-playlist-membership-id",
+                          track.playlistMembershipId,
+                        );
+                        setDraggedTrack({
+                          membershipId: track.playlistMembershipId,
+                          trackNumber,
+                        });
+                      }
+                    }}
+                    onDragOver={(event) => {
+                      if (
+                        !draggedTrack ||
+                        !track.playlistMembershipId ||
+                        track.playlistMembershipId === draggedTrack.membershipId
+                      )
+                        return;
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      setDropTarget({
+                        membershipId: track.playlistMembershipId,
+                        placement:
+                          event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+                      });
+                    }}
+                    onDrop={(event) => {
+                      if (
+                        !draggedTrack ||
+                        !dropTarget ||
+                        dropTarget.membershipId !== track.playlistMembershipId
+                      )
+                        return;
+                      const placement = dropTarget.placement;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onMove?.(
+                        items.find(
+                          (candidate) =>
+                            candidate.playlistMembershipId === draggedTrack.membershipId,
+                        ) ?? track,
+                        playlistDropTrackNumber(
+                          draggedTrack.trackNumber,
+                          trackNumber,
+                          placement,
+                          count,
+                        ),
+                      );
+                      setDraggedTrack(undefined);
+                      setDropTarget(undefined);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTrack(undefined);
+                      setDropTarget(undefined);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
@@ -179,6 +245,22 @@ export function TrackTable({
                         );
                         return;
                       }
+                      if (
+                        event.altKey &&
+                        canReorder &&
+                        track.playlistMembershipId &&
+                        (event.key === "ArrowUp" || event.key === "ArrowDown")
+                      ) {
+                        event.preventDefault();
+                        onMove?.(
+                          track,
+                          Math.min(
+                            count,
+                            Math.max(1, trackNumber + (event.key === "ArrowUp" ? -1 : 1)),
+                          ),
+                        );
+                        return;
+                      }
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         onSelect(track);
@@ -188,9 +270,18 @@ export function TrackTable({
                     <td className="track-number-column numeric muted-cell">{trackNumber}</td>
                     <td className="title-column">
                       <div className="track-title-cell">
-                        <span className="track-file-icon" aria-hidden="true">
-                          <Music size={14} />
-                        </span>
+                        {selected && ordered ? (
+                          <span className="track-waveform-preview-wrap">
+                            <TrackWaveformPreview
+                              trackId={track.id}
+                              className="track-waveform-preview"
+                            />
+                          </span>
+                        ) : (
+                          <span className="track-file-icon" aria-hidden="true">
+                            <Music size={14} />
+                          </span>
+                        )}
                         <span className="track-primary-copy">
                           <strong title={track.title}>{track.title || "Untitled"}</strong>
                           <span title={track.artist ?? undefined}>
@@ -209,43 +300,22 @@ export function TrackTable({
                     <td className="key-column">
                       {track.key ? <span className="key-chip">{track.key}</span> : <span>—</span>}
                     </td>
-                    <td className="plays-column numeric tabular">{track.playCount || "—"}</td>
-                    <td className="status-column">
-                      <TrackStatus track={track} />
-                    </td>
                     <td className="duration-column numeric tabular muted-cell">
                       {formatDuration(track.durationSeconds)}
                     </td>
                     {ordered ? (
                       <td className="reorder-column">
                         {track.playlistMembershipId ? (
-                          <span className="reorder-actions">
-                            <button
-                              className="table-icon-button"
-                              type="button"
-                              disabled={!canWrite || trackNumber <= 1}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onMove?.(track, trackNumber - 1);
-                              }}
-                              aria-label={`Move ${track.title} up`}
-                              title="Move up"
-                            >
-                              <ArrowUp size={13} />
-                            </button>
-                            <button
-                              className="table-icon-button"
-                              type="button"
-                              disabled={!canWrite || trackNumber >= count}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onMove?.(track, trackNumber + 1);
-                              }}
-                              aria-label={`Move ${track.title} down`}
-                              title="Move down"
-                            >
-                              <ArrowDown size={13} />
-                            </button>
+                          <span
+                            className={`track-drag-handle ${canReorder ? "" : "is-disabled"}`}
+                            aria-hidden="true"
+                            title={
+                              canReorder
+                                ? "Drag to reorder · Alt+↑/↓"
+                                : "Sort by position to reorder"
+                            }
+                          >
+                            <GripVertical size={15} />
                           </span>
                         ) : null}
                       </td>
@@ -331,28 +401,6 @@ function sortAria(sort: TrackSort | undefined, field: TrackSortField) {
   return sort.direction === "asc" ? ("ascending" as const) : ("descending" as const);
 }
 
-function TrackStatus({ track }: { track: TrackSummary }) {
-  if (!track.fileExists) {
-    return (
-      <span className="status-pill status-missing" title="The referenced audio file is unavailable">
-        <FileQuestion size={12} /> Missing
-      </span>
-    );
-  }
-  if (!track.analyzed) {
-    return (
-      <span className="status-pill status-pending" title="Rekordbox analysis is missing">
-        <AudioLines size={12} /> Pending
-      </span>
-    );
-  }
-  return (
-    <span className="status-pill status-ready" title="Audio and Rekordbox analysis are available">
-      <Check size={12} /> Ready
-    </span>
-  );
-}
-
 function TableMessage({
   icon,
   title,
@@ -406,12 +454,6 @@ function TrackRowsSkeleton({ ordered }: { ordered: boolean }) {
       </td>
       <td className="key-column">
         <span className="skeleton-block skeleton-small" />
-      </td>
-      <td className="plays-column">
-        <span className="skeleton-block skeleton-small" />
-      </td>
-      <td className="status-column">
-        <span className="skeleton-block skeleton-medium" />
       </td>
       <td className="duration-column">
         <span className="skeleton-block skeleton-small" />

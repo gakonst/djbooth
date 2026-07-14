@@ -28,7 +28,7 @@ import type { HotCueSlot, TrackCue, TrackWaveform } from "../../shared/types.js"
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
 import { formatBpm } from "../format.js";
-import { renderRgbWaveform, RgbWaveform } from "./RgbWaveform.js";
+import { renderRgbWaveform } from "./RgbWaveform.js";
 
 export type PlayerTrack = {
   id: string;
@@ -159,7 +159,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const [volume, setVolumeState] = useState(0.85);
   const [muted, setMuted] = useState(false);
   const [mediaError, setMediaError] = useState<string>();
-  const [waveformData, setWaveformData] = useState<PlayerWaveform>();
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selectedHotCueSlot, setSelectedHotCueSlot] = useState<HotCueSlot>();
 
@@ -246,7 +245,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setCurrentTime(0);
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
-    setWaveformData(undefined);
     if (!container || !track || !audioUrl || track.fileExists === false) return;
     const controller = new AbortController();
     const regions = RegionsPlugin.create();
@@ -308,7 +306,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     void (async () => {
       try {
         waveform = await adapter.loadWaveform?.(track, controller.signal);
-        if (!controller.signal.aborted) setWaveformData(waveform ?? undefined);
       } catch {
         // Audio remains playable when optional precomputed peaks are unavailable.
       }
@@ -420,9 +417,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   return (
     <section className="player-panel" aria-label="Track player">
       <div className="player-identity">
-        <span className="player-mini-waveform-wrap">
-          <RgbWaveform waveform={waveformData} className="player-mini-waveform" />
-        </span>
         <div className="player-track-copy">
           <strong title={track?.title}>{track?.title || "No track selected"}</strong>
           <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
@@ -442,6 +436,66 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
               </span>
             </div>
           ) : null}
+        </div>
+        <div className="player-transport" aria-label="Playback controls">
+          <button
+            className="player-control-button"
+            type="button"
+            disabled={previousDisabled || !onPrevious}
+            onClick={onPrevious}
+            aria-label="Previous track"
+            title="Previous track"
+          >
+            <SkipBack size={17} fill="currentColor" />
+          </button>
+          <button
+            className="player-control-button"
+            type="button"
+            disabled={unavailable || !ready}
+            onClick={() => seekTo(currentTime - 10)}
+            aria-label="Go back 10 seconds"
+            title="Back 10 seconds"
+          >
+            <RotateCcw size={16} />
+            <span className="player-skip-label">10</span>
+          </button>
+          <button
+            className="player-play-button"
+            type="button"
+            disabled={unavailable || !ready}
+            onClick={() => void toggle()}
+            aria-label={playing ? "Pause" : "Play"}
+            title={playing ? "Pause (Space)" : "Play (Space)"}
+          >
+            {!ready && track?.fileExists ? (
+              <LoaderCircle size={21} className="spin" />
+            ) : playing ? (
+              <Pause size={21} fill="currentColor" />
+            ) : (
+              <Play size={21} fill="currentColor" />
+            )}
+          </button>
+          <button
+            className="player-control-button"
+            type="button"
+            disabled={unavailable || !ready}
+            onClick={() => seekTo(currentTime + 10)}
+            aria-label="Go forward 10 seconds"
+            title="Forward 10 seconds"
+          >
+            <RotateCcw className="player-forward-icon" size={16} />
+            <span className="player-skip-label">10</span>
+          </button>
+          <button
+            className="player-control-button"
+            type="button"
+            disabled={nextDisabled || !onNext}
+            onClick={onNext}
+            aria-label="Next track"
+            title="Next track"
+          >
+            <SkipForward size={17} fill="currentColor" />
+          </button>
         </div>
       </div>
 
@@ -478,67 +532,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
           ) : null}
           <span>−{formatTime(Math.max(0, effectiveDuration - currentTime))}</span>
         </div>
-      </div>
-
-      <div className="player-transport" aria-label="Playback controls">
-        <button
-          className="player-control-button"
-          type="button"
-          disabled={previousDisabled || !onPrevious}
-          onClick={onPrevious}
-          aria-label="Previous track"
-          title="Previous track"
-        >
-          <SkipBack size={17} fill="currentColor" />
-        </button>
-        <button
-          className="player-control-button"
-          type="button"
-          disabled={unavailable || !ready}
-          onClick={() => seekTo(currentTime - 10)}
-          aria-label="Go back 10 seconds"
-          title="Back 10 seconds"
-        >
-          <RotateCcw size={16} />
-          <span className="player-skip-label">10</span>
-        </button>
-        <button
-          className="player-play-button"
-          type="button"
-          disabled={unavailable || !ready}
-          onClick={() => void toggle()}
-          aria-label={playing ? "Pause" : "Play"}
-          title={playing ? "Pause (Space)" : "Play (Space)"}
-        >
-          {!ready && track?.fileExists ? (
-            <LoaderCircle size={21} className="spin" />
-          ) : playing ? (
-            <Pause size={21} fill="currentColor" />
-          ) : (
-            <Play size={21} fill="currentColor" />
-          )}
-        </button>
-        <button
-          className="player-control-button"
-          type="button"
-          disabled={unavailable || !ready}
-          onClick={() => seekTo(currentTime + 10)}
-          aria-label="Go forward 10 seconds"
-          title="Forward 10 seconds"
-        >
-          <RotateCcw className="player-forward-icon" size={16} />
-          <span className="player-skip-label">10</span>
-        </button>
-        <button
-          className="player-control-button"
-          type="button"
-          disabled={nextDisabled || !onNext}
-          onClick={onNext}
-          aria-label="Next track"
-          title="Next track"
-        >
-          <SkipForward size={17} fill="currentColor" />
-        </button>
       </div>
 
       <div className="player-volume">

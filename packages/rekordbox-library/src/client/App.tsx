@@ -482,6 +482,20 @@ export function App() {
   const modalOpen = Boolean(
     playlistDialog || deleteDialogPlaylist || cueDialog || shortcutsOpen || contextMenu.open,
   );
+  const managedPlaylist = editorOpen && editingPlaylist ? editingPlaylist : normalPlaylist;
+  const selectedTrack =
+    detailQuery.data ?? tracks.find((track) => track.id === selectedTrackIdRef.current);
+  const selectedMembership = managedPlaylist
+    ? (detailQuery.data?.playlists.find((membership) => membership.id === managedPlaylist.id) ??
+      (managedPlaylist.id === normalPlaylist?.id && selectedTrack?.playlistMembershipId
+        ? {
+            id: managedPlaylist.id,
+            name: managedPlaylist.name,
+            membershipId: selectedTrack.playlistMembershipId,
+            trackNumber: selectedTrack.trackNumber ?? 1,
+          }
+        : undefined))
+    : undefined;
 
   const openCanvas = useCallback(
     (playlist?: PlaylistItem) => {
@@ -591,10 +605,130 @@ export function App() {
     {
       id: "new-playlist",
       label: "New playlist",
-      category: "Library",
+      category: "Playlist",
       shortcut: "mod+n",
       enabled: canWrite,
       handler: () => setPlaylistDialog({ mode: "create" }),
+      when: () => !modalOpen,
+    },
+    {
+      id: "toggle-playlist-editor",
+      label: editorOpen ? "Close playlist editor" : "Edit current playlist",
+      category: "Playlist",
+      shortcut: "e",
+      enabled: editorOpen || Boolean(normalPlaylist),
+      handler: () => {
+        if (editorOpen) setEditorOpen(false);
+        else if (normalPlaylist) {
+          setEditingPlaylistId(normalPlaylist.id);
+          setEditorOpen(true);
+        }
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "add-to-editing-playlist",
+      label: "Add selected track to editing playlist",
+      category: "Playlist",
+      shortcut: "mod+enter",
+      enabled: Boolean(
+        canWrite && editorOpen && editingPlaylist && selectedTrack && !selectedMembership,
+      ),
+      handler: () => {
+        if (!editingPlaylist || !selectedTrack) return;
+        applyMutation({
+          type: "add-track",
+          playlistId: editingPlaylist.id,
+          contentId: selectedTrack.id,
+        });
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "move-playlist-track-up",
+      label: "Move selected playlist track up",
+      category: "Playlist",
+      shortcut: "alt+arrowup",
+      allowRepeat: true,
+      enabled: Boolean(canWrite && managedPlaylist && selectedMembership?.trackNumber !== 1),
+      handler: () => {
+        if (!managedPlaylist || !selectedMembership) return;
+        applyMutation({
+          type: "move-track",
+          playlistId: managedPlaylist.id,
+          membershipId: selectedMembership.membershipId,
+          trackNumber: Math.max(1, selectedMembership.trackNumber - 1),
+        });
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "move-playlist-track-down",
+      label: "Move selected playlist track down",
+      category: "Playlist",
+      shortcut: "alt+arrowdown",
+      allowRepeat: true,
+      enabled: Boolean(
+        canWrite &&
+        managedPlaylist &&
+        selectedMembership &&
+        (managedPlaylist.trackCount === null ||
+          selectedMembership.trackNumber < managedPlaylist.trackCount),
+      ),
+      handler: () => {
+        if (!managedPlaylist || !selectedMembership) return;
+        applyMutation({
+          type: "move-track",
+          playlistId: managedPlaylist.id,
+          membershipId: selectedMembership.membershipId,
+          trackNumber: Math.min(
+            managedPlaylist.trackCount ?? selectedMembership.trackNumber + 1,
+            selectedMembership.trackNumber + 1,
+          ),
+        });
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "remove-from-playlist",
+      label: "Remove selected track from playlist",
+      category: "Playlist",
+      shortcut: "mod+delete",
+      enabled: Boolean(canWrite && managedPlaylist && selectedMembership),
+      handler: () => {
+        if (!managedPlaylist || !selectedMembership) return;
+        applyMutation({
+          type: "remove-track",
+          playlistId: managedPlaylist.id,
+          membershipId: selectedMembership.membershipId,
+        });
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "rename-playlist",
+      label: "Rename current playlist",
+      category: "Playlist",
+      shortcut: "f2",
+      enabled: Boolean(canWrite && managedPlaylist),
+      handler: () => {
+        if (managedPlaylist) setPlaylistDialog({ mode: "rename", playlist: managedPlaylist });
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "delete-playlist",
+      label: "Delete current playlist…",
+      category: "Playlist",
+      shortcut: "mod+shift+delete",
+      enabled: Boolean(canWrite && managedPlaylist),
+      handler: () => {
+        if (!managedPlaylist) return;
+        setDeleteDialogPlaylist({
+          ...managedPlaylist,
+          expectedPlaylistIds: playlistSubtreeIds(playlists, managedPlaylist.id),
+        });
+      },
       when: () => !modalOpen,
     },
     {

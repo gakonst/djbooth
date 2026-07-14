@@ -1,7 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronLeft,
   CircleAlert,
   GripVertical,
@@ -14,6 +12,8 @@ import { useMemo, useRef, useState } from "react";
 import type { PlaylistItem, TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
 import { getAllTracks } from "../api.js";
 import { formatBpm, formatDuration } from "../format.js";
+import { playlistDropTrackNumber } from "./playlist-order.js";
+import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
 
 const MIN_WIDTH = 300;
 const MAX_WIDTH = 720;
@@ -48,6 +48,14 @@ export function PlaylistEditor({
     return Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : 380;
   });
   const [sort, setSort] = useState<TrackSort>({ field: "position", direction: "asc" });
+  const [draggedTrack, setDraggedTrack] = useState<{
+    membershipId: string;
+    trackNumber: number;
+  }>();
+  const [dropTarget, setDropTarget] = useState<{
+    membershipId: string;
+    placement: "before" | "after";
+  }>();
   const resizeRef = useRef<{ x: number; width: number } | undefined>(undefined);
   const query = useQuery({
     queryKey: ["editor-tracks", playlist.id],
@@ -76,6 +84,7 @@ export function PlaylistEditor({
       }}
       onDrop={(event) => {
         if (!canWrite) return;
+        if (event.dataTransfer.getData("application/x-rekordbox-playlist-membership-id")) return;
         event.preventDefault();
         for (const id of droppedTrackIds(event.dataTransfer)) onAddTrack(id);
       }}
@@ -140,7 +149,7 @@ export function PlaylistEditor({
       </header>
 
       <div className="playlist-editor-drop-hint">
-        <GripVertical size={12} /> Drag tracks here while browsing
+        <GripVertical size={12} /> Drop tracks from the library · drag rows to reorder
       </div>
 
       <div className="playlist-editor-scroll">
@@ -176,16 +185,114 @@ export function PlaylistEditor({
                 return (
                   <tr
                     key={track.playlistMembershipId ?? `${track.id}:${String(trackNumber)}`}
-                    className={track.id === selectedTrackId ? "is-selected" : ""}
+                    className={[
+                      track.id === selectedTrackId ? "is-selected" : "",
+                      dropTarget && dropTarget.membershipId === track.playlistMembershipId
+                        ? `is-drop-${dropTarget.placement}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    tabIndex={0}
+                    draggable={Boolean(canWrite && orderVisible && track.playlistMembershipId)}
                     onClick={() => onSelectTrack(track)}
                     onDoubleClick={() => onSelectTrack(track, true)}
+                    onDragStart={(event) => {
+                      if (!track.playlistMembershipId || !orderVisible) return;
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData(
+                        "application/x-rekordbox-playlist-membership-id",
+                        track.playlistMembershipId,
+                      );
+                      event.dataTransfer.setData(
+                        "application/x-rekordbox-track-ids",
+                        JSON.stringify([track.id]),
+                      );
+                      setDraggedTrack({
+                        membershipId: track.playlistMembershipId,
+                        trackNumber,
+                      });
+                    }}
+                    onDragOver={(event) => {
+                      if (
+                        !draggedTrack ||
+                        !track.playlistMembershipId ||
+                        track.playlistMembershipId === draggedTrack.membershipId
+                      )
+                        return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      event.dataTransfer.dropEffect = "move";
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      setDropTarget({
+                        membershipId: track.playlistMembershipId,
+                        placement:
+                          event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+                      });
+                    }}
+                    onDrop={(event) => {
+                      if (
+                        !draggedTrack ||
+                        !dropTarget ||
+                        dropTarget.membershipId !== track.playlistMembershipId
+                      )
+                        return;
+                      const placement = dropTarget.placement;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onMoveTrack(
+                        draggedTrack.membershipId,
+                        playlistDropTrackNumber(
+                          draggedTrack.trackNumber,
+                          trackNumber,
+                          placement,
+                          items.length,
+                        ),
+                      );
+                      setDraggedTrack(undefined);
+                      setDropTarget(undefined);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTrack(undefined);
+                      setDropTarget(undefined);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.altKey &&
+                        canWrite &&
+                        orderVisible &&
+                        track.playlistMembershipId &&
+                        (event.key === "ArrowUp" || event.key === "ArrowDown")
+                      ) {
+                        event.preventDefault();
+                        onMoveTrack(
+                          track.playlistMembershipId,
+                          Math.min(
+                            items.length,
+                            Math.max(1, trackNumber + (event.key === "ArrowUp" ? -1 : 1)),
+                          ),
+                        );
+                      }
+                    }}
                   >
                     <td>{String(trackNumber)}</td>
                     <td>
-                      <strong title={track.title}>{track.title}</strong>
-                      <span title={track.artist ?? undefined}>
-                        {track.artist ?? "Unknown artist"}
-                      </span>
+                      <div className="playlist-editor-track-copy">
+                        {track.id === selectedTrackId ? (
+                          <span className="playlist-editor-waveform-wrap">
+                            <TrackWaveformPreview
+                              trackId={track.id}
+                              className="playlist-editor-waveform"
+                            />
+                          </span>
+                        ) : null}
+                        <span>
+                          <strong title={track.title}>{track.title}</strong>
+                          <span title={track.artist ?? undefined}>
+                            {track.artist ?? "Unknown artist"}
+                          </span>
+                        </span>
+                      </div>
                     </td>
                     <td>{formatBpm(track.bpm)}</td>
                     <td>{track.key ?? "—"}</td>
@@ -193,28 +300,17 @@ export function PlaylistEditor({
                     <td>
                       {track.playlistMembershipId ? (
                         <span className="playlist-editor-actions">
-                          <button
-                            type="button"
-                            disabled={!canWrite || !orderVisible || trackNumber <= 1}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onMoveTrack(track.playlistMembershipId!, trackNumber - 1);
-                            }}
-                            aria-label={`Move ${track.title} up`}
+                          <span
+                            className={`playlist-editor-drag-handle ${canWrite && orderVisible ? "" : "is-disabled"}`}
+                            aria-hidden="true"
+                            title={
+                              orderVisible
+                                ? "Drag to reorder · Alt+↑/↓"
+                                : "Sort by position to reorder"
+                            }
                           >
-                            <ArrowUp size={11} />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canWrite || !orderVisible || trackNumber >= items.length}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              onMoveTrack(track.playlistMembershipId!, trackNumber + 1);
-                            }}
-                            aria-label={`Move ${track.title} down`}
-                          >
-                            <ArrowDown size={11} />
-                          </button>
+                            <GripVertical size={13} />
+                          </span>
                           <button
                             className="is-danger"
                             type="button"
