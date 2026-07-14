@@ -8,6 +8,7 @@ import type {
   TrackCue,
   TrackCueInput,
   TrackDetail,
+  TrackMetadataInput,
   TrackPlaylistMembership,
   TrackSummary,
   TracksResponse,
@@ -27,6 +28,7 @@ export type OptimisticLibraryMutation = {
   temporaryMembershipId?: string;
   temporaryPlaylistId?: string;
   optimisticCueId?: string;
+  revalidateTrackQueries?: boolean;
 };
 
 export type LibraryCacheSnapshot = Array<readonly [QueryKey, unknown]>;
@@ -112,6 +114,13 @@ export function applyOptimisticLibraryMutation(
     );
     for (const playlist of deleted) updateBootstrapPlaylistStats(queryClient, playlist.type, -1);
     return { mutation };
+  }
+
+  if (mutation.type === "update-track") {
+    updateTrackMetadata(queryClient, mutation.contentId, mutation.metadata);
+    // Search membership, pagination, and every metadata sort can change. Keep the visible row
+    // instant, then revalidate browser queries after SQLite commits.
+    return { mutation, revalidateTrackQueries: true };
   }
 
   if (mutation.type === "add-track") {
@@ -235,6 +244,8 @@ export function resolveOptimisticMutationIds(
         playlistId: playlistId(mutation.playlistId),
         expectedPlaylistIds: mutation.expectedPlaylistIds.map(playlistId),
       };
+    case "update-track":
+      return mutation;
     case "add-track":
       return { ...mutation, playlistId: playlistId(mutation.playlistId) };
     case "remove-track":
@@ -258,6 +269,48 @@ export function resolveOptimisticMutationIds(
     case "delete-cue":
       return { ...mutation, cueId: cueId(mutation.cueId) };
   }
+}
+
+function updateTrackMetadata(
+  queryClient: QueryClient,
+  contentId: string,
+  metadata: TrackMetadataInput,
+): void {
+  const summary = {
+    title: metadata.title.trim(),
+    artist: metadata.artist,
+    album: metadata.album,
+    genre: metadata.genre,
+    key: metadata.key,
+    bpm: metadata.bpm,
+    rating: metadata.rating,
+  };
+  queryClient.setQueriesData<TracksResponse>(
+    {
+      predicate: (query) =>
+        query.queryKey[0] === "tracks" || query.queryKey[0] === "playlist-tracks",
+    },
+    (response) =>
+      response
+        ? {
+            ...response,
+            items: response.items.map((track) =>
+              track.id === contentId ? { ...track, ...summary } : track,
+            ),
+          }
+        : response,
+  );
+  queryClient.setQueryData<TrackDetail>(["track", contentId], (track) =>
+    track
+      ? {
+          ...track,
+          ...summary,
+          comment: metadata.comment,
+          releaseYear: metadata.releaseYear,
+          isrc: metadata.isrc,
+        }
+      : track,
+  );
 }
 
 function isLibraryQuery(query: { queryKey: QueryKey }): boolean {

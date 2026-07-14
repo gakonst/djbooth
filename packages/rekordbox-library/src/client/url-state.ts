@@ -13,7 +13,7 @@ function readUrlState(): LibraryUrlState {
     playlistId: params.get("playlist"),
     trackId: params.get("track"),
     query: params.get("q") ?? "",
-    filter: params.get("filter") ?? "all",
+    filter: "all",
   };
 }
 
@@ -33,7 +33,7 @@ export function useLibraryUrlState() {
       setParam(params, "playlist", values.playlistId);
       setParam(params, "track", values.trackId);
       setParam(params, "q", values.query);
-      setParam(params, "filter", values.filter === "all" ? null : values.filter);
+      params.delete("filter");
       const url = `${window.location.pathname}${params.size ? `?${params.toString()}` : ""}`;
       window.history[options.replace ? "replaceState" : "pushState"]({}, "", url);
       setState(values);

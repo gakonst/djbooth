@@ -135,6 +135,19 @@ export type TracksResponse = {
   offset: number;
 };
 
+export type TrackMetadataInput = {
+  title: string;
+  artist: string | null;
+  album: string | null;
+  genre: string | null;
+  key: string | null;
+  bpm: number | null;
+  rating: number;
+  comment: string | null;
+  releaseYear: number | null;
+  isrc: string | null;
+};
+
 export type LibraryMutation =
   | {
       type: "create-playlist";
@@ -144,6 +157,7 @@ export type LibraryMutation =
     }
   | { type: "rename-playlist"; playlistId: string; name: string }
   | { type: "delete-playlist"; playlistId: string; expectedPlaylistIds: string[] }
+  | { type: "update-track"; contentId: string; metadata: TrackMetadataInput }
   | { type: "add-track"; playlistId: string; contentId: string; trackNumber?: number }
   | { type: "remove-track"; playlistId: string; membershipId: string }
   | {

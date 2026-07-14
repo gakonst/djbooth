@@ -431,9 +431,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
               {track.genre ? <span>{track.genre}</span> : null}
               {track.rating ? <span>{"★".repeat(Math.min(5, track.rating))}</span> : null}
               <span>{String(track.playCount ?? 0)} plays</span>
-              <span className={track.fileExists === false ? "is-error" : ""}>
-                {track.fileExists === false ? "Missing" : track.analyzed ? "Analyzed" : "Pending"}
-              </span>
             </div>
           ) : null}
         </div>

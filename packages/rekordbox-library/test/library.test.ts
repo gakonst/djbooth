@@ -247,6 +247,41 @@ describe("RekordboxLibraryService", () => {
     expect(sidecar.get(child.changedId)).toBeUndefined();
   });
 
+  it("updates track metadata in the Rekordbox database", async () => {
+    const fixture = copiedFixture();
+    const library = service(fixture);
+
+    await library.mutate({
+      type: "update-track",
+      contentId: "1",
+      metadata: {
+        title: "Edited title",
+        artist: "Test Artist",
+        album: "Test Album",
+        genre: "House",
+        key: "Fm",
+        bpm: 128.25,
+        rating: 5,
+        comment: "Edited comment",
+        releaseYear: 2026,
+        isrc: "EDIT00000001",
+      },
+    });
+
+    expect(library.getTrack("1")).toMatchObject({
+      title: "Edited title",
+      artist: "Test Artist",
+      album: "Test Album",
+      genre: "House",
+      key: "Fm",
+      bpm: 128.25,
+      rating: 5,
+      comment: "Edited comment",
+      releaseYear: 2026,
+      isrc: "EDIT00000001",
+    });
+  });
+
   it("atomically replaces playlist order", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);

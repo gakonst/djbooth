@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 
 import {
   type ContentCueInput,
+  DjmdAlbum,
+  DjmdArtist,
   DjmdContent,
+  DjmdGenre,
+  DjmdKey,
   DjmdPlaylist,
   MasterDatabase,
   PlaylistType,
@@ -131,6 +135,11 @@ function stringValue(value: unknown, fallback = ""): string {
 
 function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.length ? value : null;
+}
+
+function cleanMetadataValue(value: string | null): string | null {
+  const cleaned = value?.trim();
+  return cleaned ? cleaned : null;
 }
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -932,6 +941,50 @@ export class RekordboxLibraryService {
       case "delete-playlist": {
         db.deletePlaylist(mutation.playlistId);
         return { changedId: mutation.playlistId };
+      }
+      case "update-track": {
+        this.requireActiveContent(db, mutation.contentId);
+        const content = db.query(DjmdContent).where({ ID: mutation.contentId }).one();
+        const metadata = mutation.metadata;
+        const artistName = cleanMetadataValue(metadata.artist);
+        const albumName = cleanMetadataValue(metadata.album);
+        const genreName = cleanMetadataValue(metadata.genre);
+        const keyName = cleanMetadataValue(metadata.key);
+        const artist = artistName
+          ? (db.query(DjmdArtist).where({ Name: artistName }).first() ??
+            db.addArtist(artistName, artistName))
+          : undefined;
+        const genre = genreName
+          ? (db.query(DjmdGenre).where({ Name: genreName }).first() ?? db.addGenre(genreName))
+          : undefined;
+        const album = albumName
+          ? (db
+              .query(DjmdAlbum)
+              .where({ Name: albumName, AlbumArtistID: artist?.ID ?? null })
+              .first() ?? db.addAlbum(albumName, artist ? { artist } : {}))
+          : undefined;
+        const key = keyName
+          ? db
+              .query(DjmdKey)
+              .all()
+              .find((candidate) => candidate.ScaleName.toLowerCase() === keyName.toLowerCase())
+          : undefined;
+        if (keyName && !key) throw new TypeError(`Rekordbox key '${keyName}' was not found`);
+
+        content.Title = metadata.title.trim();
+        content.set("ArtistID", artist?.ID ?? null);
+        content.set("AlbumID", album?.ID ?? null);
+        content.set("GenreID", genre?.ID ?? null);
+        content.KeyID = key?.ID ?? null;
+        content.BPM = metadata.bpm === null ? null : Math.round(metadata.bpm * 100);
+        content.set("Rating", metadata.rating);
+        content.set("Commnt", cleanMetadataValue(metadata.comment));
+        content.set("ReleaseYear", metadata.releaseYear);
+        content.set("ISRC", cleanMetadataValue(metadata.isrc));
+        if (db.hasColumn(content.tableName, "TrackInfoUpdated")) content.TrackInfoUpdated = "2";
+        if (db.hasColumn(content.tableName, "updated_at"))
+          content.set("updated_at", new Date());
+        return { changedId: mutation.contentId };
       }
       case "add-track": {
         this.requireNormalPlaylist(db, mutation.playlistId);

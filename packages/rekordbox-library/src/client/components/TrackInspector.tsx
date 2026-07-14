@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AudioLines,
-  Check,
   CircleAlert,
   Copy,
   Disc3,
@@ -157,15 +156,7 @@ export function TrackInspector({
               <span className="detail-status is-error">
                 <CircleAlert size={13} /> File missing
               </span>
-            ) : track.analyzed ? (
-              <span className="detail-status is-success">
-                <Check size={13} /> Analyzed
-              </span>
-            ) : (
-              <span className="detail-status is-warning">
-                <AudioLines size={13} /> Analysis pending
-              </span>
-            )}
+            ) : null}
             <span className="detail-status">
               <Activity size={13} /> {String(track.playCount)} plays
             </span>

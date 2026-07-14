@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Activity,
-  AudioLines,
   ChevronDown,
   ChevronRight,
   Disc3,
@@ -43,16 +41,7 @@ type Props = {
 
 type PlaylistNode = PlaylistItem & { children: PlaylistNode[] };
 
-const smartViews = [
-  { id: "all", label: "All tracks", icon: Music2, count: "tracks" as const },
-  { id: "analyzed", label: "Analyzed", icon: Activity, count: "analyzed" as const },
-  {
-    id: "attention",
-    label: "Needs attention",
-    icon: AudioLines,
-    count: "missingAnalysis" as const,
-  },
-];
+const smartViews = [{ id: "all", label: "All tracks", icon: Music2, count: "tracks" as const }];
 
 export function LibrarySidebar({
   bootstrap,

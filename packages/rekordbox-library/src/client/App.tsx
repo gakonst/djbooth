@@ -7,7 +7,6 @@ import {
   Flag,
   Keyboard,
   Library,
-  ListFilter,
   Menu,
   PanelRightOpen,
   Pencil,
@@ -56,6 +55,7 @@ import {
   type SetCanvasNode,
 } from "./components/SetCanvas.js";
 import { TrackTable } from "./components/TrackTable.js";
+import { TrackMetadataDialog } from "./components/TrackMetadataDialog.js";
 import { libraryMutationCoalesceKey, useLibraryMutationQueue } from "./useLibraryMutationQueue.js";
 import { buildHotkeyPalette, type HotkeyBinding, useHotkeys } from "./useHotkeys.js";
 import {
@@ -75,8 +75,6 @@ const PAGE_SIZE = 100;
 
 const filterLabels: Record<string, string> = {
   all: "All tracks",
-  analyzed: "Analyzed",
-  attention: "Needs attention",
 };
 
 type PlaylistDialogState =
@@ -138,6 +136,7 @@ export function App() {
   const [playlistDialog, setPlaylistDialog] = useState<PlaylistDialogState>(null);
   const [deleteDialogPlaylist, setDeleteDialogPlaylist] = useState<DeletePlaylistState>();
   const [cueDialog, setCueDialog] = useState<CueDialogState>(null);
+  const [metadataTarget, setMetadataTarget] = useState<TrackSummary>();
   const [toast, setToast] = useState<ToastState>(null);
   const [viewMode, setViewMode] = useState<"table" | "canvas">("table");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -237,6 +236,11 @@ export function App() {
     queryKey: ["track", playerTrackId],
     queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
     enabled: Boolean(playerTrackId),
+  });
+  const metadataDetailQuery = useQuery({
+    queryKey: ["track", metadataTarget?.id],
+    queryFn: ({ signal }) => getTrackDetail(metadataTarget!.id, signal),
+    enabled: Boolean(metadataTarget),
   });
 
   const processes = bootstrapQuery.data?.library.processes;
@@ -525,7 +529,12 @@ export function App() {
   const nextTrack = playerIndex >= 0 ? tracks[playerIndex + 1] : undefined;
 
   const modalOpen = Boolean(
-    playlistDialog || deleteDialogPlaylist || cueDialog || shortcutsOpen || contextMenu.open,
+    playlistDialog ||
+    deleteDialogPlaylist ||
+    cueDialog ||
+    metadataTarget ||
+    shortcutsOpen ||
+    contextMenu.open,
   );
   const managedPlaylist = editorOpen && editingPlaylist ? editingPlaylist : normalPlaylist;
   const selectedTrack =
@@ -660,7 +669,7 @@ export function App() {
       id: "toggle-playlist-editor",
       label: editorOpen ? "Close playlist editor" : "Edit current playlist",
       category: "Playlist",
-      shortcut: "e",
+      shortcut: "shift+e",
       enabled: editorOpen || Boolean(normalPlaylist),
       handler: () => {
         if (editorOpen) setEditorOpen(false);
@@ -668,6 +677,17 @@ export function App() {
           setEditingPlaylistId(normalPlaylist.id);
           setEditorOpen(true);
         }
+      },
+      when: () => !modalOpen,
+    },
+    {
+      id: "edit-track-metadata",
+      label: "Edit selected track metadata",
+      category: "Library",
+      shortcut: "e",
+      enabled: Boolean(canWrite && selectedTrack),
+      handler: () => {
+        if (selectedTrack) setMetadataTarget(selectedTrack);
       },
       when: () => !modalOpen,
     },
@@ -920,6 +940,13 @@ export function App() {
       { kind: "heading", label: track.title },
       { id: "play-track", label: "Play", icon: <Play size={14} />, shortcut: "Space" },
       {
+        id: "edit-track",
+        label: "Edit metadata…",
+        icon: <Pencil size={14} />,
+        shortcut: "E",
+        disabled: !canWrite,
+      },
+      {
         id: "add-canvas",
         label:
           target.kind === "canvas-node"
@@ -1043,6 +1070,10 @@ export function App() {
     const track = target.kind === "track" ? target.track : node?.track;
     if (!track) return;
     if (id === "play-track") selectTrack(track, true);
+    if (id === "edit-track") {
+      selectTrack(track);
+      setMetadataTarget(track);
+    }
     if (id === "add-canvas") addTrackToCanvas(track);
     if (id === "add-editing-playlist" && editingPlaylist)
       applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId: track.id });
@@ -1269,7 +1300,7 @@ export function App() {
           <section className="browser-workspace" aria-label={`Browsing ${selectedTitle}`}>
             {viewMode === "table" ? (
               <>
-                <section className="search-toolbar" aria-label="Track search and filters">
+                <section className="search-toolbar" aria-label="Track search">
                   <label className="track-search">
                     <Search size={15} aria-hidden="true" />
                     <input
@@ -1291,18 +1322,6 @@ export function App() {
                     ) : (
                       <kbd>/</kbd>
                     )}
-                  </label>
-                  <label className="filter-select">
-                    <ListFilter size={14} aria-hidden="true" />
-                    <span className="sr-only">Track filter</span>
-                    <select
-                      value={urlState.filter}
-                      onChange={(event) => updateUrl({ filter: event.target.value, trackId: null })}
-                    >
-                      <option value="all">All tracks</option>
-                      <option value="analyzed">Analyzed</option>
-                      <option value="attention">Needs attention</option>
-                    </select>
                   </label>
                 </section>
 
@@ -1521,6 +1540,25 @@ export function App() {
         onSubmit={(cue) => {
           if (!cueDialog) return;
           applyMutation({ type: "upsert-cue", contentId: cueDialog.contentId, cue });
+        }}
+      />
+
+      <TrackMetadataDialog
+        open={Boolean(metadataTarget)}
+        targetTitle={metadataTarget?.title}
+        track={
+          metadataDetailQuery.data?.id === metadataTarget?.id ? metadataDetailQuery.data : undefined
+        }
+        loading={metadataDetailQuery.isLoading}
+        error={metadataDetailQuery.isError ? errorMessage(metadataDetailQuery.error) : undefined}
+        onClose={() => {
+          writes.reset();
+          setMetadataTarget(undefined);
+        }}
+        onSubmit={(metadata) => {
+          if (!metadataTarget) return;
+          applyMutation({ type: "update-track", contentId: metadataTarget.id, metadata });
+          setMetadataTarget(undefined);
         }}
       />
 

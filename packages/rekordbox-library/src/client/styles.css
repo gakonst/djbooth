@@ -827,34 +827,6 @@ select:focus-visible,
   text-align: center;
 }
 
-.filter-select {
-  position: relative;
-  display: flex;
-  height: 31px;
-  flex: none;
-  align-items: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface-raised);
-  color: var(--muted);
-}
-
-.filter-select > svg {
-  position: absolute;
-  left: 9px;
-  pointer-events: none;
-}
-
-.filter-select select {
-  height: 100%;
-  padding: 0 28px 0 29px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text-soft);
-  font-size: 10px;
-}
-
 /* Track table */
 
 .track-table-shell {
@@ -1791,8 +1763,23 @@ select:focus-visible,
   font-size: 11px;
 }
 
+.field-label textarea {
+  width: 100%;
+  min-height: 70px;
+  padding: 8px 9px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  outline: 0;
+  background: #0b0d11;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+}
+
 .field-label input:focus,
-.field-label select:focus {
+.field-label select:focus,
+.field-label textarea:focus {
   border-color: rgb(167 139 250 / 60%);
   box-shadow: 0 0 0 2px rgb(139 92 246 / 10%);
 }
@@ -2123,20 +2110,6 @@ select:focus-visible,
     padding-inline: 9px;
   }
 
-  .filter-select select {
-    width: 34px;
-    padding: 0;
-    opacity: 0;
-  }
-
-  .filter-select {
-    width: 34px;
-  }
-
-  .filter-select > svg {
-    left: 9px;
-  }
-
   .track-table {
     min-width: 600px;
   }
@@ -2270,10 +2243,6 @@ select:focus-visible,
 .player-track-metadata b {
   color: var(--accent-bright);
   font-weight: 650;
-}
-
-.player-track-metadata .is-error {
-  color: var(--danger);
 }
 
 .player-waveform-wrap {
@@ -4077,6 +4046,27 @@ select:focus-visible,
   width: min(520px, calc(100vw - 32px));
 }
 
+.track-metadata-dialog {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.track-metadata-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metadata-wide-field {
+  grid-column: 1 / -1;
+}
+
+.track-metadata-loading {
+  min-height: 180px;
+  place-content: center;
+  place-items: center;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .cue-dialog-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4432,6 +4422,7 @@ select:focus-visible,
 
 @media (max-width: 520px) {
   .cue-dialog-grid,
+  .track-metadata-grid,
   .shortcut-groups {
     grid-template-columns: 1fr;
   }

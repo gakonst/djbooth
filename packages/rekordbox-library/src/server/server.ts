@@ -55,6 +55,22 @@ const mutationSchema = z.discriminatedUnion("type", [
     expectedPlaylistIds: z.array(z.string().min(1)).min(1).max(10_000),
   }),
   z.object({
+    type: z.literal("update-track"),
+    contentId: z.string().min(1),
+    metadata: z.object({
+      title: z.string().trim().min(1).max(255),
+      artist: z.string().trim().max(255).nullable(),
+      album: z.string().trim().max(255).nullable(),
+      genre: z.string().trim().max(255).nullable(),
+      key: z.string().trim().max(64).nullable(),
+      bpm: z.number().finite().positive().max(999).nullable(),
+      rating: z.number().int().min(0).max(5),
+      comment: z.string().trim().max(255).nullable(),
+      releaseYear: z.number().int().min(0).max(9999).nullable(),
+      isrc: z.string().trim().max(32).nullable(),
+    }),
+  }),
+  z.object({
     type: z.literal("add-track"),
     playlistId: z.string().min(1),
     contentId: z.string().min(1),
