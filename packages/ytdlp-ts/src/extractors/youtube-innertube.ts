@@ -70,7 +70,85 @@ export type YoutubeNativeClient = {
 
 export type YoutubeNativeClientFactory = () => Promise<YoutubeNativeClient>
 
-let sharedDirectClient: Promise<YoutubeNativeClient> | undefined
+type YoutubeSearchVideo = {
+  video_id?: string
+  content_id?: string
+  content_type?: string
+  title?: unknown
+  author?: { id?: string; name?: string }
+  duration?: unknown
+  length_text?: unknown
+  is_live?: boolean
+}
+
+type YoutubeSearchPage = {
+  videos: readonly YoutubeSearchVideo[]
+  has_continuation?: boolean
+  getContinuation?(): Promise<YoutubeSearchPage>
+}
+
+export type YoutubeNativeSearchClient = {
+  search(query: string, filters: { type: 'video' }): Promise<YoutubeSearchPage>
+}
+
+export type YoutubeNativeSearchClientFactory = () => Promise<YoutubeNativeSearchClient>
+
+type YoutubeInnertubeClient = YoutubeNativeClient & YoutubeNativeSearchClient
+
+export interface YoutubeSearchOptions {
+  limit?: number
+  signal?: AbortSignal
+}
+
+export interface YoutubeSearchResult {
+  id: string
+  title: string
+  url: string
+  uploader?: string
+  uploaderId?: string
+  durationSeconds?: number
+}
+
+export const DEFAULT_YOUTUBE_SEARCH_RESULTS = 10
+export const MAX_YOUTUBE_SEARCH_RESULTS = 50
+const MAX_YOUTUBE_SEARCH_PAGES = 5
+
+let sharedClient: Promise<YoutubeInnertubeClient> | undefined
+
+export async function searchYoutube(
+  query: string,
+  options: YoutubeSearchOptions = {},
+  createClient: YoutubeNativeSearchClientFactory = defaultClient,
+): Promise<YoutubeSearchResult[]> {
+  const normalizedQuery = query.trim()
+  if (!normalizedQuery) throw new YtdlpError('EMPTY_SEARCH_QUERY', 'YouTube search query is empty')
+  const limit = youtubeSearchLimit(options.limit)
+  throwIfAborted(options.signal)
+  const client = await abortable(createClient(), options.signal)
+  let page = await abortable(client.search(normalizedQuery, { type: 'video' }), options.signal)
+  const results: YoutubeSearchResult[] = []
+  const seen = new Set<string>()
+
+  for (let pageNumber = 0; pageNumber < MAX_YOUTUBE_SEARCH_PAGES; pageNumber += 1) {
+    throwIfAborted(options.signal)
+    for (const value of page.videos) {
+      const result = youtubeSearchResult(value)
+      if (!result || seen.has(result.id)) continue
+      seen.add(result.id)
+      results.push(result)
+      if (results.length >= limit) return results
+    }
+    if (
+      pageNumber + 1 >= MAX_YOUTUBE_SEARCH_PAGES ||
+      !page.has_continuation ||
+      !page.getContinuation
+    ) {
+      break
+    }
+    page = await abortable(page.getContinuation(), options.signal)
+  }
+  return results
+}
 
 export async function extractYoutubeWithInnertube(
   videoId: string,
@@ -141,21 +219,77 @@ export async function extractYoutubeWithInnertube(
   }
 }
 
-async function defaultClient(): Promise<YoutubeNativeClient> {
-  sharedDirectClient ??= (
+async function defaultClient(): Promise<YoutubeInnertubeClient> {
+  sharedClient ??= (
     Innertube.create({
       lang: 'en',
       location: 'US',
       retrieve_player: false,
       generate_session_locally: false,
       enable_session_cache: false,
-      client_type: ClientType.ANDROID_VR,
-    }) as Promise<YoutubeNativeClient>
+      client_type: ClientType.WEB,
+    }) as Promise<YoutubeInnertubeClient>
   ).catch((error: unknown) => {
-    sharedDirectClient = undefined
+    sharedClient = undefined
     throw error
   })
-  return sharedDirectClient
+  return sharedClient
+}
+
+function youtubeSearchLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_YOUTUBE_SEARCH_RESULTS
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new YtdlpError('INVALID_SEARCH_LIMIT', `YouTube search limit must be a positive integer: ${value}`)
+  }
+  return Math.min(value, MAX_YOUTUBE_SEARCH_RESULTS)
+}
+
+function youtubeSearchResult(value: YoutubeSearchVideo): YoutubeSearchResult | undefined {
+  if (value.is_live) return undefined
+  const id =
+    typeof value.video_id === 'string'
+      ? value.video_id
+      : value.content_type === 'VIDEO' && typeof value.content_id === 'string'
+        ? value.content_id
+        : undefined
+  const title = textValue(value.title)
+  if (!id || !/^[\w-]{11}$/u.test(id) || !title) return undefined
+  const durationSeconds = youtubeSearchDuration(value)
+  return {
+    id,
+    title,
+    url: `https://www.youtube.com/watch?v=${id}`,
+    ...(value.author?.name ? { uploader: value.author.name } : undefined),
+    ...(value.author?.id ? { uploaderId: value.author.id } : undefined),
+    ...(durationSeconds === undefined ? {} : { durationSeconds }),
+  }
+}
+
+function youtubeSearchDuration(value: YoutubeSearchVideo): number | undefined {
+  const duration = record(value.duration)
+  if (typeof duration?.seconds === 'number' && Number.isFinite(duration.seconds) && duration.seconds > 0) {
+    return duration.seconds
+  }
+  const text = textValue(duration?.text) ?? textValue(value.length_text)
+  if (!text || !/^\d+(?::\d{1,2}){1,2}$/u.test(text)) return undefined
+  const parts = text.split(':').map(Number)
+  return parts.reduce((total, part) => total * 60 + part, 0)
+}
+
+function textValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined
+  const item = record(value)
+  if (!item) return undefined
+  if (typeof item.text === 'string') return item.text.trim() || undefined
+  if (typeof item.toString !== 'function') return undefined
+  const rendered = String(item.toString()).trim()
+  return rendered && rendered !== '[object Object]' ? rendered : undefined
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
 }
 
 function youtubeFormat(source: YoutubeFormat, url: string): Format | undefined {

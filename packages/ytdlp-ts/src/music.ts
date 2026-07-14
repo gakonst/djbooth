@@ -2,17 +2,29 @@ import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { ReferenceClient, type DownloadReferenceOptions, type InspectReferenceOptions } from './bridge/reference.js'
+import {
+  ReferenceClient,
+  type DownloadReferenceOptions,
+  type InspectReferenceOptions,
+} from './bridge/reference.js'
 import { inspect, type EngineResult } from './core/engine.js'
-import { errorMessage, YtdlpError } from './core/errors.js'
+import { errorMessage, nativeFallbackFor, type NativeFallback, YtdlpError } from './core/errors.js'
 import { selectFormats } from './core/format-selector.js'
 import type { EngineKind, MediaInfo } from './core/types.js'
-import { downloadMedia, type NativeDownloadOptions, type NativeDownloadResult } from './downloader/native.js'
+import {
+  downloadMedia,
+  type NativeDownloadOptions,
+  type NativeDownloadResult,
+} from './downloader/native.js'
 
 export const MUSIC_FORMAT_SPEC = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best'
 export const MUSIC_OUTPUT_TEMPLATE = '%(uploader,channel)s/%(title)s [%(id)s].%(ext)s'
-export const DEFAULT_MUSIC_CONCURRENCY = 64
-export const MAX_MUSIC_CONCURRENCY = 64
+export const DEFAULT_MUSIC_CONCURRENCY = 3
+export const MAX_MUSIC_CONCURRENCY = 16
+export const DEFAULT_YOUTUBE_CONCURRENCY = 1
+export const MAX_YOUTUBE_CONCURRENCY = 4
+export const DEFAULT_NATIVE_YOUTUBE_CONCURRENCY = 3
+export const MAX_NATIVE_YOUTUBE_CONCURRENCY = 16
 
 export interface MusicDownloadOptions extends InspectReferenceOptions {
   engine?: EngineKind
@@ -43,6 +55,7 @@ export interface MusicDownloadItem {
   id?: string
   title?: string
   engine?: 'native' | 'reference'
+  fallback?: NativeFallback
   status: 'downloaded' | 'skipped' | 'failed'
   files?: string[]
   error?: string
@@ -58,7 +71,11 @@ export interface MusicBatchResult {
 }
 
 export interface MusicDependencies {
-  inspect(url: string, engine: EngineKind, options: InspectReferenceOptions): Promise<EngineResult<MediaInfo>>
+  inspect(
+    url: string,
+    engine: EngineKind,
+    options: InspectReferenceOptions,
+  ): Promise<EngineResult<MediaInfo>>
   downloadNative(info: MediaInfo, options: NativeDownloadOptions): Promise<NativeDownloadResult>
   downloadReference(
     url: string,
@@ -76,9 +93,11 @@ interface PreparedTrack {
   url: string
   info: MediaInfo
   extractionEngine: 'native' | 'reference'
+  fallback?: NativeFallback
 }
 
-type PlannedItem = { kind: 'track'; track: PreparedTrack } | { kind: 'result'; item: MusicDownloadItem }
+type PlannedItem =
+  { kind: 'track'; track: PreparedTrack } | { kind: 'result'; item: MusicDownloadItem }
 
 export async function downloadMusicBatch(
   sources: string[],
@@ -88,99 +107,152 @@ export async function downloadMusicBatch(
   const uniqueSources = [...new Set(sources.map((source) => source.trim()).filter(Boolean))]
   if (uniqueSources.length === 0)
     throw new YtdlpError('NO_MUSIC_URLS', 'At least one music URL is required')
-  const archive = await DownloadArchive.open(options.archive)
-  const concurrency = musicConcurrency(options.concurrency)
-  const plannedBySource = await mapConcurrent(uniqueSources, concurrency, async (source) => {
-    if (archive.has(makeUrlArchiveKey(source))) {
-      return [
-        {
-          kind: 'result',
-          item: { url: source, status: 'skipped', files: [] },
-        },
-      ] satisfies PlannedItem[]
-    }
-    try {
-      const result = await dependencies.inspect(
-        source,
-        options.engine ?? 'auto',
-        inspectOptions(options),
-      )
-      if (result.data.entries?.length) {
-        return result.data.entries.flatMap((entry): PlannedItem[] => {
-          const entryUrl = mediaWebpageUrl(entry)
-          return entryUrl
-            ? [
-                {
-                  kind: 'track',
-                  track: {
-                    url: entryUrl,
-                    info: entry,
-                    extractionEngine: result.engine,
-                  },
-                },
-              ]
-            : []
-        })
-      }
-      return [
-        {
-          kind: 'track',
-          track: {
-            url: source,
-            info: result.data,
-            extractionEngine: result.engine,
+  const controller = new AbortController()
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal
+  const controlledOptions: MusicDownloadOptions = { ...options, signal }
+  throwIfAborted(signal)
+  const archive = await DownloadArchive.open(controlledOptions.archive)
+  const concurrency = boundedConcurrency(
+    controlledOptions.concurrency,
+    DEFAULT_MUSIC_CONCURRENCY,
+    MAX_MUSIC_CONCURRENCY,
+  )
+  const concurrentControl = { controller, signal }
+  const plannedBySource = await mapConcurrent(
+    uniqueSources,
+    concurrency,
+    async (source) => {
+      throwIfAborted(signal)
+      if (archive.has(makeUrlArchiveKey(source))) {
+        return [
+          {
+            kind: 'result',
+            item: { url: source, status: 'skipped', files: [] },
           },
-        },
-      ] satisfies PlannedItem[]
-    } catch (error) {
-      if (options.continueOnError === false) throw error
-      return [
-        {
-          kind: 'result',
-          item: { url: source, status: 'failed', error: errorMessage(error) },
-        },
-      ] satisfies PlannedItem[]
-    }
-  })
+        ] satisfies PlannedItem[]
+      }
+      try {
+        const requestedEngine = controlledOptions.engine ?? 'auto'
+        const optionGap = nativeInspectionCapabilityGap(controlledOptions)
+        let inspectionEngine = requestedEngine
+        let fallback: NativeFallback | undefined
+        if (requestedEngine !== 'reference' && optionGap) {
+          const nativeFallback = nativeFallbackFor(optionGap)
+          if (requestedEngine === 'native' || !nativeFallback) throw optionGap
+          inspectionEngine = 'reference'
+          fallback = nativeFallback
+        }
+        const result = await dependencies.inspect(
+          source,
+          inspectionEngine,
+          inspectOptions(controlledOptions),
+        )
+        throwIfAborted(signal)
+        fallback ??= inspectionFallback(result, requestedEngine)
+        if (result.data.entries?.length) {
+          return result.data.entries.flatMap((entry): PlannedItem[] => {
+            const entryUrl = mediaWebpageUrl(entry)
+            return entryUrl
+              ? [
+                  {
+                    kind: 'track',
+                    track: {
+                      url: entryUrl,
+                      info: entry,
+                      extractionEngine: result.engine,
+                      ...(fallback ? { fallback } : undefined),
+                    },
+                  },
+                ]
+              : []
+          })
+        }
+        return [
+          {
+            kind: 'track',
+            track: {
+              url: source,
+              info: result.data,
+              extractionEngine: result.engine,
+              ...(fallback ? { fallback } : undefined),
+            },
+          },
+        ] satisfies PlannedItem[]
+      } catch (error) {
+        if (signal.aborted || controlledOptions.continueOnError === false) throw error
+        return [
+          {
+            kind: 'result',
+            item: { url: source, status: 'failed', error: errorMessage(error) },
+          },
+        ] satisfies PlannedItem[]
+      }
+    },
+    concurrentControl,
+  )
 
+  throwIfAborted(signal)
   const plan = deduplicatePlan(plannedBySource.flat())
   const queue = plan.flatMap((item) => (item.kind === 'track' ? [item.track] : []))
   const completed = new Map<PreparedTrack, MusicDownloadItem>()
-  let cursor = 0
-  const youtubeSemaphore = new Semaphore(musicConcurrency(options.youtubeConcurrency))
-  const nativeYoutubeSemaphore = new Semaphore(
-    musicConcurrency(options.nativeYoutubeConcurrency ?? 3),
+  const youtubeSemaphore = new Semaphore(
+    boundedConcurrency(
+      controlledOptions.youtubeConcurrency,
+      DEFAULT_YOUTUBE_CONCURRENCY,
+      MAX_YOUTUBE_CONCURRENCY,
+    ),
   )
-  const workers = Array.from({ length: Math.min(concurrency, Math.max(queue.length, 1)) }, async () => {
-    while (cursor < queue.length) {
-      const track = queue[cursor++]!
+  const nativeYoutubeSemaphore = new Semaphore(
+    boundedConcurrency(
+      controlledOptions.nativeYoutubeConcurrency,
+      DEFAULT_NATIVE_YOUTUBE_CONCURRENCY,
+      MAX_NATIVE_YOUTUBE_CONCURRENCY,
+    ),
+  )
+  await mapConcurrent(
+    queue,
+    concurrency,
+    async (track) => {
+      throwIfAborted(signal)
       const release = isYouTube(track)
-        ? await (track.extractionEngine === 'native'
-            ? nativeYoutubeSemaphore
-            : youtubeSemaphore
-          ).acquire()
+        ? await (
+            track.extractionEngine === 'native' ? nativeYoutubeSemaphore : youtubeSemaphore
+          ).acquire(signal)
         : () => undefined
       try {
-        completed.set(track, await downloadPreparedTrack(track, archive, options, dependencies))
+        throwIfAborted(signal)
+        completed.set(
+          track,
+          await downloadPreparedTrack(track, archive, controlledOptions, dependencies),
+        )
       } catch (error) {
+        if (signal.aborted || controlledOptions.continueOnError === false) throw error
         completed.set(track, {
           url: track.url,
           id: track.info.id,
           title: track.info.title,
+          ...(track.extractionEngine === 'reference'
+            ? { engine: 'reference' as const }
+            : undefined),
+          ...(track.fallback ? { fallback: track.fallback } : undefined),
           status: 'failed',
           error: errorMessage(error),
         })
-        if (options.continueOnError === false) throw error
       } finally {
         release()
       }
-    }
-  })
-  await Promise.all(workers)
+    },
+    concurrentControl,
+  )
+
+  throwIfAborted(signal)
   const items = plan.map((item) => {
     if (item.kind === 'result') return item.item
     const completedItem = completed.get(item.track)
-    if (!completedItem) throw new YtdlpError('MUSIC_BATCH_INCOMPLETE', `No result for ${item.track.url}`)
+    if (!completedItem)
+      throw new YtdlpError('MUSIC_BATCH_INCOMPLETE', `No result for ${item.track.url}`)
     return completedItem
   })
 
@@ -200,33 +272,46 @@ async function downloadPreparedTrack(
   options: MusicDownloadOptions,
   dependencies: MusicDependencies,
 ): Promise<MusicDownloadItem> {
+  throwIfAborted(options.signal)
   const archiveKey = makeArchiveKey(track.info)
   if (archiveKey && archive.has(archiveKey)) {
-    await archive.add(makeUrlArchiveKey(track.url))
+    await archive.add(makeUrlArchiveKey(track.url), options.signal)
     return {
       url: track.url,
       id: track.info.id,
       title: track.info.title,
+      ...(track.fallback ? { fallback: track.fallback } : undefined),
       status: 'skipped',
       files: [],
     }
   }
 
   let current = track
+  let fallback = track.fallback
   if (isYouTube(current) && current.extractionEngine === 'native') {
     try {
       current = await refreshNativeYoutube(current, options, dependencies)
     } catch (error) {
-      if (options.engine === 'native' || !isNativeFallbackEligible(error)) throw error
+      const nativeFallback = nativeFallbackFor(error)
+      if (options.engine === 'native' || !nativeFallback) throw error
+      fallback = nativeFallback
       current = { ...current, extractionEngine: 'reference' }
     }
   }
-
+  throwIfAborted(options.signal)
+  const nativeCapabilityGap =
+    options.engine !== 'reference' && current.extractionEngine === 'native'
+      ? nativeMusicCapabilityGap(current.info, options)
+      : undefined
+  if (nativeCapabilityGap) {
+    const nativeFallback = nativeFallbackFor(nativeCapabilityGap)
+    if (options.engine === 'native' || !nativeFallback) throw nativeCapabilityGap
+    fallback = nativeFallback
+  }
   const useNative =
     options.engine !== 'reference' &&
     current.extractionEngine === 'native' &&
-    hasNativelyResumableBestAudio(current.info) &&
-    (options.audioFormat ?? 'best') === 'best'
+    nativeCapabilityGap === undefined
   let files: string[] | undefined
   let selectedEngine: 'native' | 'reference' | undefined
   if (useNative) {
@@ -245,10 +330,13 @@ async function downloadPreparedTrack(
           nativeMusicOptions(current, options),
         )
       }
+      throwIfAborted(options.signal)
       files = result.files
       selectedEngine = 'native'
     } catch (error) {
-      if (options.engine === 'native' || !isNativeFallbackEligible(error)) throw error
+      const nativeFallback = nativeFallbackFor(error)
+      if (options.engine === 'native' || !nativeFallback) throw error
+      fallback = nativeFallback
     }
   }
   if (!files) {
@@ -258,47 +346,73 @@ async function downloadPreparedTrack(
         'This track requires behavior unavailable in the TypeScript-native engine',
       )
     }
+    if (options.engine !== 'reference' && !fallback) {
+      throw new YtdlpError(
+        'NATIVE_FALLBACK_PROVENANCE_MISSING',
+        'Auto mode refused reference execution without a typed native capability fallback',
+      )
+    }
     const youtube = isYouTube(current)
     const audioFormat = options.audioFormat ?? 'best'
-    const result = await dependencies.downloadReference(
-      current.url,
-      omitUndefined({
-        ...inspectOptions(options),
-        playlist: false,
-        format: MUSIC_FORMAT_SPEC,
-        output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
-        paths: options.paths,
-        continueDownload: true,
-        concurrentFragments: youtube ? 1 : undefined,
-        retries: options.retries ?? 10,
-        fragmentRetries: options.retries ?? 10,
-        rateLimit: youtube ? (options.youtubeRateLimit ?? options.rateLimit) : options.rateLimit,
-        extractAudio: true,
-        audioFormat,
-        audioQuality: options.audioQuality ?? '0',
-        writeInfoJson: options.writeInfoJson ?? true,
-        writeThumbnail: options.writeThumbnail ?? true,
-        embedMetadata: options.embedMetadata ?? true,
-        embedThumbnail: options.embedThumbnail ?? true,
-        embedChapters: true,
-        sleepRequests: youtube ? (options.youtubeRequestInterval ?? 1) : undefined,
-        sleepInterval: youtube ? (options.youtubeMinSleep ?? 2) : undefined,
-        maxSleepInterval: youtube ? (options.youtubeMaxSleep ?? 5) : undefined,
-        throttledRate: youtube ? '100K' : undefined,
-        retrySleep: ['http:exp=1:20', 'fragment:exp=1:20', 'extractor:exp=1:20'],
-      }) as DownloadReferenceOptions,
-    )
-    files = result.files
+    try {
+      const result = await dependencies.downloadReference(
+        current.url,
+        omitUndefined({
+          ...inspectOptions(options),
+          playlist: false,
+          format: MUSIC_FORMAT_SPEC,
+          output: options.output ?? MUSIC_OUTPUT_TEMPLATE,
+          paths: options.paths,
+          continueDownload: true,
+          concurrentFragments: youtube ? 1 : undefined,
+          retries: options.retries ?? 10,
+          fragmentRetries: options.retries ?? 10,
+          rateLimit: youtube ? (options.youtubeRateLimit ?? options.rateLimit) : options.rateLimit,
+          extractAudio: true,
+          audioFormat,
+          audioQuality: options.audioQuality ?? '0',
+          writeInfoJson: options.writeInfoJson ?? true,
+          writeThumbnail: options.writeThumbnail ?? true,
+          embedMetadata: options.embedMetadata ?? true,
+          embedThumbnail: options.embedThumbnail ?? true,
+          embedChapters: true,
+          sleepRequests: youtube ? (options.youtubeRequestInterval ?? 1) : undefined,
+          sleepInterval: youtube ? (options.youtubeMinSleep ?? 2) : undefined,
+          maxSleepInterval: youtube ? (options.youtubeMaxSleep ?? 5) : undefined,
+          throttledRate: youtube ? '100K' : undefined,
+          retrySleep: ['http:exp=1:20', 'fragment:exp=1:20', 'extractor:exp=1:20'],
+        }) as DownloadReferenceOptions,
+      )
+      throwIfAborted(options.signal)
+      files = result.files
+    } catch (error) {
+      if (options.signal?.aborted || options.continueOnError === false) throw error
+      return {
+        url: current.url,
+        id: current.info.id,
+        title: current.info.title,
+        engine: 'reference',
+        ...(fallback ? { fallback } : undefined),
+        status: 'failed',
+        error: errorMessage(error),
+      }
+    }
     selectedEngine = 'reference'
   }
 
-  if (archiveKey) await archive.add(archiveKey)
-  await archive.add(makeUrlArchiveKey(current.url))
+  throwIfAborted(options.signal)
+  await archive.addAll(
+    [archiveKey, makeUrlArchiveKey(current.url)].filter(
+      (value): value is string => value !== undefined,
+    ),
+    options.signal,
+  )
   return {
     url: current.url,
     id: current.info.id,
     title: current.info.title,
     ...(selectedEngine ? { engine: selectedEngine } : undefined),
+    ...(fallback ? { fallback } : undefined),
     status: 'downloaded',
     files,
   }
@@ -345,22 +459,9 @@ function isForbiddenMediaError(error: unknown): boolean {
   return error instanceof YtdlpError && error.code === 'HTTP_ERROR' && error.details?.status === 403
 }
 
-const NATIVE_FALLBACK_ERROR_CODES = new Set([
-  'FORMAT_UNAVAILABLE',
-  'NATIVE_PLAYLIST_UNSUPPORTED',
-  'NO_FORMATS',
-  'RANGE_NOT_SUPPORTED',
-  'SOUNDCLOUD_NO_FORMATS',
-  'UNSUPPORTED_URL',
-  'YOUTUBE_DIRECT_FORMATS_UNAVAILABLE',
-])
-
-function isNativeFallbackEligible(error: unknown): boolean {
-  return error instanceof YtdlpError && NATIVE_FALLBACK_ERROR_CODES.has(error.code)
-}
-
 function inspectOptions(options: MusicDownloadOptions): InspectReferenceOptions {
   return omitUndefined({
+    signal: options.signal,
     playlist: options.playlist,
     flatPlaylist: options.flatPlaylist,
     cookies: options.cookies,
@@ -401,25 +502,45 @@ function deduplicatePlan(items: PlannedItem[]): PlannedItem[] {
   })
 }
 
-function musicConcurrency(value?: number): number {
-  if (value === undefined || !Number.isFinite(value)) return DEFAULT_MUSIC_CONCURRENCY
-  return Math.min(MAX_MUSIC_CONCURRENCY, Math.max(1, Math.trunc(value)))
+function boundedConcurrency(
+  value: number | undefined,
+  defaultValue: number,
+  maximum: number,
+): number {
+  if (value === undefined || !Number.isFinite(value)) return defaultValue
+  return Math.min(maximum, Math.max(1, Math.trunc(value)))
 }
 
 async function mapConcurrent<Input, Output>(
   values: Input[],
   concurrency: number,
   operation: (value: Input, index: number) => Promise<Output>,
+  control: { controller: AbortController; signal: AbortSignal },
 ): Promise<Output[]> {
   const output = new Array<Output>(values.length)
   let cursor = 0
-  const workers = Array.from({ length: Math.min(concurrency, Math.max(values.length, 1)) }, async () => {
-    while (cursor < values.length) {
-      const index = cursor++
-      output[index] = await operation(values[index]!, index)
-    }
-  })
-  await Promise.all(workers)
+  const noFailure = Symbol('no-failure')
+  let firstFailure: unknown | typeof noFailure = noFailure
+  const workers = Array.from(
+    { length: Math.min(concurrency, Math.max(values.length, 1)) },
+    async () => {
+      while (!control.signal.aborted && cursor < values.length) {
+        const index = cursor++
+        try {
+          output[index] = await operation(values[index]!, index)
+        } catch (error) {
+          if (firstFailure === noFailure) {
+            firstFailure = error
+            control.controller.abort(error)
+          }
+          return
+        }
+      }
+    },
+  )
+  await Promise.allSettled(workers)
+  if (firstFailure !== noFailure) throw firstFailure
+  throwIfAborted(control.signal)
   return output
 }
 
@@ -461,17 +582,93 @@ function isSoundCloud(track: PreparedTrack): boolean {
   )
 }
 
-function hasNativelyResumableBestAudio(info: MediaInfo): boolean {
-  try {
-    return selectFormats(info.formats ?? [], MUSIC_FORMAT_SPEC).every(
-      (format) =>
-        !format.protocol?.startsWith('m3u8') &&
-        format.protocol !== 'dash' &&
-        !/\.(?:m3u8|mpd)(?:$|\?)/iu.test(format.url),
+function nativeMusicCapabilityGap(
+  info: MediaInfo,
+  options: MusicDownloadOptions,
+): YtdlpError | undefined {
+  if ((options.audioFormat ?? 'best') !== 'best') {
+    return new YtdlpError(
+      'NATIVE_OPTION_UNAVAILABLE',
+      `Native music downloads do not yet support --audio-format ${options.audioFormat}`,
+      { option: 'audioFormat', value: options.audioFormat },
     )
-  } catch {
-    return false
   }
+  try {
+    const selected = selectFormats(info.formats ?? [], MUSIC_FORMAT_SPEC)
+    if (
+      selected.some(
+        (format) =>
+          format.protocol?.startsWith('m3u8') ||
+          format.protocol === 'dash' ||
+          /\.(?:m3u8|mpd)(?:$|\?)/iu.test(format.url),
+      )
+    ) {
+      return new YtdlpError(
+        'RANGE_NOT_SUPPORTED',
+        'The selected audio requires fragment-aware transfer unavailable in the native music downloader',
+      )
+    }
+    return undefined
+  } catch (error) {
+    if (nativeFallbackFor(error)) return error as YtdlpError
+    throw error
+  }
+}
+
+const NATIVE_UNSUPPORTED_INSPECTION_OPTIONS = [
+  'cookies',
+  'cookiesFromBrowser',
+  'username',
+  'password',
+  'videoPassword',
+  'proxy',
+  'geoBypassCountry',
+  'impersonate',
+  'extractorArgs',
+  'noCheckCertificates',
+  'socketTimeout',
+] as const satisfies readonly (keyof InspectReferenceOptions)[]
+
+function nativeInspectionCapabilityGap(options: MusicDownloadOptions): YtdlpError | undefined {
+  const option = NATIVE_UNSUPPORTED_INSPECTION_OPTIONS.find((key) => {
+    const value = options[key]
+    if (Array.isArray(value)) return value.length > 0
+    return value !== undefined && value !== false
+  })
+  return option
+    ? new YtdlpError(
+        'NATIVE_OPTION_UNAVAILABLE',
+        `Native music inspection does not yet support --${option.replace(/[A-Z]/gu, (value) => `-${value.toLowerCase()}`)}`,
+        { option },
+      )
+    : undefined
+}
+
+function inspectionFallback(
+  result: EngineResult<MediaInfo>,
+  requestedEngine: EngineKind,
+): NativeFallback | undefined {
+  if (result.engine === 'native' || requestedEngine === 'reference') return undefined
+  if (!result.fallback) {
+    throw new YtdlpError(
+      'NATIVE_FALLBACK_PROVENANCE_MISSING',
+      'Auto inspection returned a reference result without typed native fallback provenance',
+    )
+  }
+  const fallback = nativeFallbackFor(
+    new YtdlpError(result.fallback.code, 'Revalidate inspection fallback provenance'),
+  )
+  if (!fallback) {
+    throw new YtdlpError(
+      'NATIVE_FALLBACK_PROVENANCE_INVALID',
+      `Auto inspection returned an unsupported native fallback code: ${result.fallback.code}`,
+    )
+  }
+  return fallback
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new YtdlpError('ABORTED', 'Music batch was aborted')
 }
 
 class DownloadArchive {
@@ -496,13 +693,21 @@ class DownloadArchive {
     return this.values.has(value)
   }
 
-  async add(value: string): Promise<void> {
-    if (this.values.has(value)) return
-    this.values.add(value)
+  async add(value: string, signal?: AbortSignal): Promise<void> {
+    await this.addAll([value], signal)
+  }
+
+  async addAll(values: readonly string[], signal?: AbortSignal): Promise<void> {
+    throwIfAborted(signal)
+    const additions = [...new Set(values)].filter((value) => !this.values.has(value))
+    if (additions.length === 0) return
+    for (const value of additions) this.values.add(value)
     if (!this.path) return
     this.appendChain = this.appendChain.then(async () => {
+      throwIfAborted(signal)
       await mkdir(dirname(this.path!), { recursive: true })
-      await appendFile(this.path!, `${value}\n`, 'utf8')
+      throwIfAborted(signal)
+      await appendFile(this.path!, `${additions.join('\n')}\n`, 'utf8')
     })
     await this.appendChain
   }
@@ -510,16 +715,49 @@ class DownloadArchive {
 
 class Semaphore {
   private active = 0
-  private readonly waiters: Array<() => void> = []
+  private readonly waiters: Array<{
+    resolve(): void
+    reject(error: unknown): void
+    signal?: AbortSignal
+    abort?: () => void
+  }> = []
 
   constructor(private readonly limit: number) {}
 
-  async acquire(): Promise<() => void> {
-    if (this.active >= this.limit) await new Promise<void>((resolve) => this.waiters.push(resolve))
-    this.active += 1
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    throwIfAborted(signal)
+    if (this.active < this.limit) {
+      this.active += 1
+    } else {
+      await new Promise<void>((resolve, reject) => {
+        const waiter: (typeof this.waiters)[number] = {
+          resolve,
+          reject,
+          ...(signal ? { signal } : undefined),
+        }
+        const abort = () => {
+          const index = this.waiters.indexOf(waiter)
+          if (index < 0) return
+          this.waiters.splice(index, 1)
+          signal?.removeEventListener('abort', abort)
+          reject(new YtdlpError('ABORTED', 'Music batch was aborted'))
+        }
+        waiter.abort = abort
+        this.waiters.push(waiter)
+        signal?.addEventListener('abort', abort, { once: true })
+      })
+    }
+    let released = false
     return () => {
-      this.active -= 1
-      this.waiters.shift()?.()
+      if (released) return
+      released = true
+      const next = this.waiters.shift()
+      if (next) {
+        next.signal?.removeEventListener('abort', next.abort!)
+        next.resolve()
+      } else {
+        this.active -= 1
+      }
     }
   }
 }

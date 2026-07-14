@@ -79,7 +79,7 @@ export interface IdentifyOptions {
   startSeconds?: number;
   intervalSeconds?: number;
   clipSeconds?: number;
-  /** Concurrent local sample extraction/recognition calls. Defaults to 64; maximum 64. */
+  /** Concurrent local sample extraction/recognition calls. Defaults to 3; maximum 8. */
   concurrency?: number;
   minScore?: number;
   blendScore?: number;

@@ -123,6 +123,11 @@ export type AcquisitionBackend = "slsk" | "ytdlp";
 export type AcquisitionDownloadBackend = "local" | AcquisitionBackend;
 export type AcquisitionKind = "individual" | "source-set-clip";
 
+export type AcquisitionFallback = {
+  from: "native";
+  code: string;
+};
+
 export type AcquisitionCandidate = {
   backend: AcquisitionBackend;
   id: string;
@@ -140,9 +145,11 @@ export type AcquisitionDownload = {
   files: string[];
   source?: string;
   engine?: "native" | "reference";
+  fallback?: AcquisitionFallback;
   sha256?: string;
   spotifyId?: string;
   isrc?: string;
+  variantKey?: string;
   clip?: {
     sourceSetUrl: string;
     sourceSetTitle?: string;
@@ -193,6 +200,19 @@ export type RekordboxAnalysisArtifact = {
   sourceSize: number;
 };
 
+/** Durable timing/counter checkpoint for one analysis-only invocation. */
+export type RekordboxAnalysisRunArtifact = {
+  analyzed: number;
+  cacheHits: number;
+  cancelled: number;
+  failed: number;
+  finishedAt: string;
+  requested: number;
+  startedAt: string;
+  status: "completed" | "failed" | "cancelled";
+  totalMs: number;
+};
+
 export type RekordboxState =
   | { status: "pending" }
   | {
@@ -235,6 +255,7 @@ export type ManifestArtifacts = {
     bitrate: number;
   };
   analysis?: RekordboxAnalysisArtifact[];
+  analysisRuns?: RekordboxAnalysisRunArtifact[];
   rekordbox?: {
     target: "rekordbox-db";
     dbPath: string;
@@ -867,9 +888,11 @@ function validateDownload(value: unknown, path: string): ValidatedDownload {
     "files",
     "source",
     "engine",
+    "fallback",
     "sha256",
     "spotifyId",
     "isrc",
+    "variantKey",
     "clip",
   ]);
   const backend = oneOf(record.backend, ["local", "slsk", "ytdlp"], `${path}.backend`);
@@ -888,7 +911,13 @@ function validateDownload(value: unknown, path: string): ValidatedDownload {
   optionalString(record, "source", path);
   optionalString(record, "spotifyId", path);
   optionalString(record, "isrc", path);
+  optionalString(record, "variantKey", path);
   if (record.engine !== undefined) oneOf(record.engine, ["native", "reference"], `${path}.engine`);
+  if (record.fallback !== undefined) {
+    const fallback = strictObject(record.fallback, `${path}.fallback`, ["from", "code"]);
+    oneOf(fallback.from, ["native"], `${path}.fallback.from`);
+    nonemptyString(fallback.code, `${path}.fallback.code`);
+  }
   if (record.sha256 !== undefined) {
     const sha256 = nonemptyString(record.sha256, `${path}.sha256`);
     if (!/^[a-f\d]{64}$/iu.test(sha256))
@@ -1043,6 +1072,7 @@ function validateArtifacts(value: unknown, path: string): void {
     "rekordboxXml",
     "sourceSet",
     "analysis",
+    "analysisRuns",
     "rekordbox",
   ]);
   for (const key of ["root", "manifest", "downloadDirectory", "m3u8", "rekordboxXml"])
@@ -1096,6 +1126,34 @@ function validateArtifacts(value: unknown, path: string): void {
       if (item.keySource !== null) nonemptyString(item.keySource, `${itemPath}.keySource`);
       nonnegativeNumber(item.sourceMtimeMs, `${itemPath}.sourceMtimeMs`);
       positiveInteger(item.sourceSize, `${itemPath}.sourceSize`);
+    });
+  }
+  if (record.analysisRuns !== undefined) {
+    array(record.analysisRuns, `${path}.analysisRuns`).forEach((value, index) => {
+      const itemPath = `${path}.analysisRuns[${index}]`;
+      const item = strictObject(value, itemPath, [
+        "analyzed",
+        "cacheHits",
+        "cancelled",
+        "failed",
+        "finishedAt",
+        "requested",
+        "startedAt",
+        "status",
+        "totalMs",
+      ]);
+      const analyzed = nonnegativeInteger(item.analyzed, `${itemPath}.analyzed`);
+      const cacheHits = nonnegativeInteger(item.cacheHits, `${itemPath}.cacheHits`);
+      const cancelled = nonnegativeInteger(item.cancelled, `${itemPath}.cancelled`);
+      const failed = nonnegativeInteger(item.failed, `${itemPath}.failed`);
+      const requested = nonnegativeInteger(item.requested, `${itemPath}.requested`);
+      if (analyzed + cacheHits + cancelled + failed !== requested) {
+        invalid(itemPath, "analysis counters must sum to requested");
+      }
+      isoTimestamp(item.startedAt, `${itemPath}.startedAt`);
+      isoTimestamp(item.finishedAt, `${itemPath}.finishedAt`);
+      oneOf(item.status, ["completed", "failed", "cancelled"], `${itemPath}.status`);
+      nonnegativeNumber(item.totalMs, `${itemPath}.totalMs`);
     });
   }
   if (record.rekordbox !== undefined) {
@@ -1191,6 +1249,18 @@ function positiveInteger(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
     invalid(path, "must be a positive safe integer");
   return value;
+}
+
+function nonnegativeInteger(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    invalid(path, "must be a non-negative safe integer");
+  return value;
+}
+
+function isoTimestamp(value: unknown, path: string): string {
+  const timestamp = nonemptyString(value, path);
+  if (!Number.isFinite(Date.parse(timestamp))) invalid(path, "must be an ISO timestamp");
+  return timestamp;
 }
 
 function positiveNumber(value: unknown, path: string): number {

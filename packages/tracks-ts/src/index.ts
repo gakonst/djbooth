@@ -12,6 +12,8 @@ export {
   type AcquireManifestOptions,
   type AcquireManifestResult,
   type AcquireProgress,
+  type AcquirerFallback,
+  type AcquirerFailurePhase,
   type AcquisitionClipPlan,
   type AcquisitionArtifactVerified,
   type AcquisitionPlan,
@@ -27,6 +29,13 @@ export {
   type TrackAcquirer,
 } from "./acquire-manifest.js";
 export {
+  analyzeExistingManifest,
+  type AnalyzeExistingManifestDependencies,
+  type AnalyzeExistingManifestOptions,
+  type AnalyzeExistingManifestProgress,
+  type AnalyzeExistingManifestResult,
+} from "./analyze-existing.js";
+export {
   buildAcquisitionPlan,
   type BuildAcquisitionPlanOptions,
 } from "./generic-acquisition-plan.js";
@@ -37,6 +46,7 @@ export {
   normalizeMatchText,
   probeAudio,
   readManifest,
+  readManifestSnapshot,
   retagAudio,
   safeFilename,
   scoreYoutubeCandidate,
@@ -46,6 +56,7 @@ export {
   writeManifestAtomic,
   type AudioMetadata,
   type AudioProbe,
+  type ManifestSnapshot,
   type ScoredYoutubeCandidate,
   type VerifyAudioOptions,
   type WriteManifestOptions,
@@ -95,9 +106,12 @@ export {
   type SpotifyRawClient,
 } from "./integrations/spotify-cache.js";
 export {
+  YtdlpNativeAcquirer,
   YtdlpReferenceAcquirer,
   unavailableTrackAcquirer,
   type YtdlpMediaInfo,
+  type YtdlpNativeAcquirerDependencies,
+  type YtdlpNativeAcquirerOptions,
   type YtdlpReferenceClient,
 } from "./integrations/ytdlp-library.js";
 export {
@@ -109,6 +123,7 @@ export {
   type AcquisitionBackend,
   type AcquisitionCandidate,
   type AcquisitionDownload,
+  type AcquisitionFallback,
   type AcquisitionKind,
   type AcquisitionState,
   type ManifestArtifacts,
@@ -116,6 +131,8 @@ export {
   type ManifestTracklist,
   type PipelineError,
   type PipelineStage,
+  type RekordboxAnalysisArtifact,
+  type RekordboxAnalysisRunArtifact,
   type RekordboxState,
   type RekordboxTarget,
   type ResolvedTrack,
@@ -231,6 +248,8 @@ export { buildTimeline, type TimelineOptions } from "./timeline.js";
 export { formatTimestamp, parseTimestamp, requireTimestamp } from "./time.js";
 export type * from "./types.js";
 export {
+  DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
+  MAX_NATIVE_ANALYSIS_CONCURRENCY,
   runSetToRekordbox,
   type RunSetToRekordboxDependencies,
   type RunSetToRekordboxOptions,

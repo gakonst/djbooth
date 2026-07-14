@@ -116,8 +116,8 @@ describe("Brunello acquisition preset", () => {
       requests: 22,
       networkRequests: 22,
       received: 22,
-      concurrency: 64,
-      maxConcurrency: 22,
+      concurrency: 8,
+      maxConcurrency: 8,
     });
   });
 });

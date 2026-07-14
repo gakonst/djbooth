@@ -207,15 +207,15 @@ tracks resolve ./authorized-set.wav \
   --provider acrcloud \
   --interval 60 \
   --clip 12 \
-  --concurrency 64 \
+  --concurrency 3 \
   --limit 20
 ```
 
 `--interval` controls time between samples. `--clip` accepts 5–25 seconds. Local extraction and
-recognition default to 64 concurrent samples (or the number queued, whichever is lower); lower
-`--concurrency` when required by provider quotas or machine capacity. `--limit` caps billable
-recognition calls. Sparse sampling reports `complete: false`; this describes coverage, not
-identification correctness.
+recognition default to three concurrent samples (or the number queued, whichever is lower); adjust
+`--concurrency` within the eight-call cap when required by provider quotas or machine capacity.
+`--limit` caps billable recognition calls. Sparse sampling reports `complete: false`; this describes
+coverage, not identification correctness.
 
 Attempting remote sample recognition fails with:
 
@@ -273,7 +273,37 @@ tracks import-set "$SET_URL" \
 
 `--write` is required. The command never downloads a remote source set. Cue recovery additionally
 requires `--allow-set-clips` and an existing `--source-set-path`; external reference yt-dlp requires
-`--reference-ytdlp`.
+`--reference-ytdlp`. Individual-track acquisition always registers the TypeScript-native YouTube
+search/extractor/downloader after Soulseek; the external executable is neither constructed nor
+invoked by the default path.
+
+Resume native analysis independently when media is already checkpointed. This command loads no
+Spotify, Soulseek, or downloader credentials and never acquires, retags, or imports media. It writes
+successful analyzer artifacts back to the same locked manifest, including cache hits and partial
+successes when another item fails or the run is interrupted. Its compare-and-swap checkpoint
+refuses to overwrite a non-cooperating edit made after the exact manifest snapshot was read.
+`artifacts.analysisRuns` retains start/finish timestamps, duration, status, and analyzed/cache/
+failed/cancelled counts for later performance study:
+
+```sh
+tracks analyze-existing ./adam-ten/manifest.json \
+  --concurrency 4 \
+  --progress always \
+  --format json
+```
+
+Once acquisition and analysis are complete, import that checkpoint without rerunning network
+stages. `--write` remains mandatory; the importer coordinates the database lock with the open
+library workbench, creates one recovery backup only when a mutation is needed, commits once, and
+reopens read-only for integrity/metadata/analysis verification:
+
+```sh
+tracks import-existing ./adam-ten/manifest.json \
+  --folder-name 'DJ Sets I Like' \
+  --playlist-name 'Adam Ten — Burning Man 2025 [music-ts]' \
+  --write \
+  --format json
+```
 
 ```text
 set URL ── tracks-ts ───────────────┐
@@ -285,8 +315,8 @@ Spotify playlists ── spots ─────────┤
                                     │
                ┌────────────────────┴───────────────────┐
                ▼                                        ▼
-       slsk-ts search/download               ytdlp-ts single-track fallback
-       preferred individual file             selected track URL; no playlist
+       slsk-ts search/download               ytdlp-ts native single-track fallback
+       preferred individual file             bounded search; exact M4A URL
                └────────────────────┬───────────────────┘
                                     │ unavailable/ID only
                                     ├── bounded annotated source-set clip
@@ -308,29 +338,41 @@ Spotify playlists ── spots ─────────┤
 The boundary is deliberate:
 
 - `tracks resolve` only resolves metadata and creates a manifest.
-- `tracks import-set` composes exported TypeScript clients in-process; it never shells between the
-  package CLIs.
+- `tracks analyze-existing` resumes only the manifest's existing downloaded media; `tracks
+import-set` composes exported TypeScript clients in-process and never shells between package CLIs.
 - `buildAcquisitionPlan` preserves Spotify ambiguities and tracklist overlaps as distinct recordings,
   adopts deterministic local-directory matches, and leaves unresolved IDs visible unless explicit
   cue clipping was enabled. Artist/title-only local matches do not claim an exact Spotify ISRC or
   duration.
-- `slsk-ts` is preferred. A `ytdlp-ts` individual fallback targets a scored canonical track URL with playlists disabled. True recording ambiguities remain distinct alternatives and are all acquired.
+- `slsk-ts` is preferred. The default `ytdlp-ts` fallback uses bounded native YouTube search, scores
+  stable canonical URLs with duration metadata, freshly extracts the exact selection, and downloads
+  direct M4A through TypeScript. True recording ambiguities remain distinct alternatives and are all
+  acquired.
+- `--reference-ytdlp` appends the external compatibility client after native acquisition. It may
+  search or download only after a centralized typed native capability gap; abort, network,
+  output-lock, write, identity, and content-validation failures stop instead of starting a second
+  engine.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
 - If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
 - Identified tracks still try individual acquisition first. With explicit set-clip approval, a
   checkpointed reviewed failure becomes a cue-bounded source extract on the next resume and stays on
   that recovery path on later warm runs.
-- Acquisition, verification, Spotify enrichment, native analysis, and Rekordbox file I/O default to
-  64-way playlist-scale concurrency. Soulseek and ytdlp candidate searches overlap while download
-  priority remains deterministic. Native analysis begins per artifact while remaining downloads
-  continue.
+- Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
+  native analysis uses four. Soulseek and native ytdlp candidate searches overlap while download
+  priority remains deterministic. Explicit reference search stays deferred until native reports a
+  safe capability gap. Native analysis begins per artifact while remaining downloads continue.
 - Direct Rekordbox import begins only after all planned files are present, checksummed, and analyzed.
-  Its file preflight, hashing, analysis installation, and backup copies use up to 64 workers;
-  encrypted database access stays serialized in one transaction. It requires explicit approval,
+  Its file preflight, hashing, analysis installation, and backup copies use up to eight workers,
+  bounded further by Node's available parallelism. Encrypted database access stays serialized in
+  one transaction. It requires explicit approval,
   stopped Rekordbox processes, an exclusive backup of the database and companion files, and
   post-commit integrity, metadata, analysis, BPM/key, and membership verification. Warm resumes
   treat missing or stale analyzer BPM/key as repairable checkpoint drift and use the same backed-up
   transaction to synchronize it.
+- Rekordbox `Length` is the rounded duration probed from each verified media artifact. Spotify and
+  cue durations remain identity/provenance data and never substitute for the recording measurement.
+  The stat-keyed preflight receipt carries both checksum and duration through warm verification and
+  commit rechecks, so unchanged media is not probed again within the import.
 
 The same backends remain independently callable for inspection or repair:
 
@@ -353,8 +395,9 @@ Use acquisition backends only for media you are authorized to download.
 Provider metadata is public but not immutable. `tracks` uses TTL-bounded, versioned JSON cache
 entries under `TRACKS_CACHE_DIR` or `~/.cache/tracks-ts`; directories are mode `0700`, entries are
 mode `0600`, writes are atomic, and credentials/cookies are never included. Volatile signed media
-URLs are stripped before YouTube metadata is stored. A bounded, persisted sweep periodically removes
-expired or malformed entries.
+URLs are never cached. Native YouTube search caches only bounded, sanitized result identities; exact
+extraction remains fresh for every download. A bounded, persisted sweep periodically removes expired
+or malformed entries.
 
 | Namespace                       | Default freshness |
 | ------------------------------- | ----------------- |
@@ -376,19 +419,20 @@ Spotify responses may depend on the authenticated account and market, so persist
 an opaque, non-secret `cacheScope` that identifies both. Caching is disabled when callers omit it;
 the bundled runner derives a one-way session fingerprint without storing the credential.
 
-`acquireManifest` defaults to 64 independent recording workers, enough to fan out a typical 30–60
-track playlist—including ambiguity variants—in one wave. Verification, Spotify enrichment, and
-Spotify refresh likewise default to 64. Each limit can be lowered explicitly or raised as high as
-256; actual workers never exceed queued work. Candidate fallback and manifest checkpoints remain
-serialized per recording, and provider clients retain their retry/rate-limit handling. Completed
-media gets one concurrent verification pass; the bundled runner injects a stat-keyed cache that
-eliminates unchanged repeat hash/probe work. Library callers can inject the same `JsonDiskCache`
-through `verificationCache`. A fully verified resume takes the fast path without loading an acquisition backend.
+`acquireManifest` defaults to three independent recording workers. Verification, Spotify enrichment,
+and Spotify refresh default to eight. Acquisition accepts up to 8 workers, verification up to 16,
+and Spotify work up to 32; actual
+workers never exceed queued work. Native analysis defaults to four with a 64-worker cap. Candidate
+fallback and manifest checkpoints remain serialized per recording, and provider clients retain
+their retry/rate-limit handling. Completed media gets one concurrent verification pass; the bundled
+runner injects a stat-keyed cache that eliminates unchanged repeat hash/probe work. Library callers
+can inject the same `JsonDiskCache` through `verificationCache`. A fully verified resume takes the
+fast path without loading an acquisition backend.
 The normal Rekordbox importer similarly verifies an already-imported playlist and returns
 `performance.changed: false` without another backup or write.
 
 ```sh
-pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 64
+pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 3
 pnpm exec tsx src/run-brunello-acquisition.ts --refresh-cache
 pnpm exec tsx src/run-brunello-acquisition.ts --no-cache
 ```
@@ -460,7 +504,7 @@ console.log(
 );
 ```
 
-Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `analyzeExistingManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpNativeAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition and analysis checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
 
 The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject module objects when running it elsewhere.
 

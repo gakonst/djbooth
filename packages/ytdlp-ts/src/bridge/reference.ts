@@ -21,6 +21,7 @@ export interface ReferenceResult {
 }
 
 export interface InspectReferenceOptions {
+  signal?: AbortSignal
   playlist?: boolean
   flatPlaylist?: boolean
   cookies?: string
@@ -79,6 +80,9 @@ export class ReferenceClient {
 
   async run(args: string[], options: ReferenceRunOptions = {}): Promise<ReferenceResult> {
     const maxCaptureBytes = options.maxCaptureBytes ?? DEFAULT_MAX_CAPTURE_BYTES
+    if (options.signal?.aborted) {
+      throw new YtdlpError('ABORTED', 'Reference engine execution was aborted')
+    }
 
     return new Promise((resolve, reject) => {
       const child = spawn(this.binary, args, {
@@ -90,13 +94,30 @@ export class ReferenceClient {
       let stdout = ''
       let stderr = ''
       let captureBytes = 0
-      let aborted = false
+      let terminalError: YtdlpError | undefined
+      let settled = false
+      let killTimer: NodeJS.Timeout | undefined
+
+      const cleanup = () => {
+        options.signal?.removeEventListener('abort', abort)
+        if (killTimer) clearTimeout(killTimer)
+      }
+
+      const terminate = (error: YtdlpError) => {
+        if (terminalError) return
+        terminalError = error
+        child.kill('SIGTERM')
+        killTimer = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+        }, 1_000)
+        killTimer.unref()
+      }
 
       const capture = (target: 'stdout' | 'stderr', chunk: Buffer) => {
+        if (terminalError) return
         captureBytes += chunk.byteLength
         if (captureBytes > maxCaptureBytes) {
-          child.kill('SIGTERM')
-          reject(
+          terminate(
             new YtdlpError('REFERENCE_OUTPUT_LIMIT', 'Reference engine output exceeded the limit', {
               maxCaptureBytes,
             }),
@@ -111,13 +132,18 @@ export class ReferenceClient {
       child.stderr.on('data', (chunk: Buffer) => capture('stderr', chunk))
 
       const abort = () => {
-        aborted = true
-        child.kill('SIGTERM')
+        terminate(new YtdlpError('ABORTED', 'Reference engine execution was aborted'))
       }
       options.signal?.addEventListener('abort', abort, { once: true })
 
       child.once('error', (error: NodeJS.ErrnoException) => {
-        options.signal?.removeEventListener('abort', abort)
+        if (settled) return
+        settled = true
+        cleanup()
+        if (terminalError) {
+          reject(terminalError)
+          return
+        }
         if (error.code === 'ENOENT') {
           reject(
             new YtdlpError(
@@ -131,19 +157,25 @@ export class ReferenceClient {
       })
 
       child.once('close', (exitCode, signal) => {
-        options.signal?.removeEventListener('abort', abort)
-        if (aborted) {
-          reject(new YtdlpError('ABORTED', 'Reference engine execution was aborted'))
+        if (settled) return
+        settled = true
+        cleanup()
+        if (terminalError) {
+          reject(terminalError)
           return
         }
         const code = exitCode ?? 1
         const result = { command: this.binary, args, exitCode: code, stdout, stderr }
         if (code !== 0) {
           reject(
-            new YtdlpError('REFERENCE_ENGINE_FAILED', lastMeaningfulLine(stderr) || `yt-dlp exited via ${signal ?? code}`, {
-              exitCode: code,
-              stderr: tail(stderr, 8_000),
-            }),
+            new YtdlpError(
+              'REFERENCE_ENGINE_FAILED',
+              lastMeaningfulLine(stderr) || `yt-dlp exited via ${signal ?? code}`,
+              {
+                exitCode: code,
+                stderr: tail(stderr, 8_000),
+              },
+            ),
           )
           return
         }
@@ -159,17 +191,25 @@ export class ReferenceClient {
 
   async inspect(url: string, options: InspectReferenceOptions = {}): Promise<MediaInfo> {
     const args = buildInspectArgs(url, options)
-    const result = await this.run(args)
+    const result = await this.run(args, {
+      ...(options.signal ? { signal: options.signal } : undefined),
+    })
     return parseSingleJson(result.stdout)
   }
 
-  async download(url: string, options: DownloadReferenceOptions = {}): Promise<{
+  async download(
+    url: string,
+    options: DownloadReferenceOptions = {},
+  ): Promise<{
     files: string[]
     stdout: string
     stderr: string
   }> {
     const args = buildDownloadArgs(url, options)
-    const result = await this.run(args, { maxCaptureBytes: 64 * 1024 * 1024 })
+    const result = await this.run(args, {
+      maxCaptureBytes: 64 * 1024 * 1024,
+      ...(options.signal ? { signal: options.signal } : undefined),
+    })
     const files = result.stdout
       .split(/\r?\n/u)
       .filter((line) => line.startsWith('__YTDLP_TS_FILE__:'))

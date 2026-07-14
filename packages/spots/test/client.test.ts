@@ -50,6 +50,84 @@ describe('SpotifyClient', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('shares rate-limit cooldowns and serializes recovery requests', async () => {
+    vi.useFakeTimers()
+    try {
+      const retryResponses: Array<(response: Response) => void> = []
+      let activeRetries = 0
+      let maxActiveRetries = 0
+      const fetch = vi.fn(() => {
+        const call = fetch.mock.calls.length
+        if (call <= 2) {
+          return Promise.resolve(
+            Response.json(
+              { error: 'slow down' },
+              { status: 429, headers: { 'retry-after': call === 1 ? '0.1' : '0.2' } },
+            ),
+          )
+        }
+        activeRetries++
+        maxActiveRetries = Math.max(maxActiveRetries, activeRetries)
+        return new Promise<Response>((resolve) => {
+          retryResponses.push((response) => {
+            activeRetries--
+            resolve(response)
+          })
+        })
+      })
+      const client = new SpotifyClient({ auth: 'token', fetch })
+
+      const first = client.raw('GET', '/me')
+      const second = client.raw('GET', '/me/player')
+      await flushMicrotasks()
+      expect(fetch).toHaveBeenCalledTimes(2)
+
+      await vi.advanceTimersByTimeAsync(199)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetch).toHaveBeenCalledTimes(3)
+      expect(maxActiveRetries).toBe(1)
+
+      retryResponses.shift()?.(Response.json({ request: 'first' }))
+      await flushMicrotasks()
+      expect(fetch).toHaveBeenCalledTimes(4)
+      expect(maxActiveRetries).toBe(1)
+
+      retryResponses.shift()?.(Response.json({ request: 'second' }))
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { request: 'first' },
+        { request: 'second' },
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts promptly while waiting for Retry-After', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ error: 'slow down' }, { status: 429, headers: { 'retry-after': '60' } }),
+        )
+      const client = new SpotifyClient({ auth: 'token', fetch })
+      const controller = new AbortController()
+
+      const request = client.raw('GET', '/me', { signal: controller.signal })
+      await flushMicrotasks()
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(1)
+
+      controller.abort()
+      await expect(request).rejects.toMatchObject({ name: 'AbortError' })
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not retry unsafe POST requests', async () => {
     const fetch = vi
       .fn()
@@ -293,3 +371,7 @@ describe('SpotifyClient', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 })
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 10; index++) await Promise.resolve()
+}

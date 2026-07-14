@@ -19,6 +19,7 @@ import type {
   AcquisitionBackend,
   AcquisitionCandidate,
   AcquisitionDownload,
+  AcquisitionFallback,
   ResolvedTrack,
   SetManifest,
   SpotifyCandidate,
@@ -30,7 +31,10 @@ export type SpotifyLibraryClient = {
   raw<T = unknown>(
     method: string,
     path: string,
-    options?: { query?: Record<string, string | number | boolean | readonly string[] | undefined> },
+    options?: {
+      query?: Record<string, string | number | boolean | readonly string[] | undefined>;
+      signal?: AbortSignal;
+    },
   ): Promise<T | undefined>;
   cacheStats?(): CacheStats | undefined;
 };
@@ -41,13 +45,19 @@ export type IndividualDownload = {
   path: string;
   source: string;
   engine?: "native" | "reference";
+  fallback?: AcquisitionFallback;
   temporary?: boolean;
   qualityNote?: string;
   transcoded?: boolean;
 };
 
+export type AcquirerFailurePhase = "search" | "download";
+export type AcquirerFallback = AcquisitionFallback;
+
 export type TrackAcquirer = {
   backend: AcquisitionBackend;
+  /** Delay search and download until an earlier acquirer reports a safe capability fallback. */
+  requiresPriorCapabilityFailure?: boolean;
   availability(): Promise<BackendAvailability>;
   search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]>;
   download(
@@ -55,6 +65,11 @@ export type TrackAcquirer = {
     destinationDirectory: string,
     basename: string,
   ): Promise<IndividualDownload>;
+  /** Restrict delegation after an acquirer failure. Validation failures remain candidate-local. */
+  shouldContinueAfterError?(
+    error: unknown,
+    phase: AcquirerFailurePhase,
+  ): AcquirerFallback | false | undefined;
 };
 
 export type AcquisitionClipPlan = {
@@ -193,13 +208,13 @@ export type AcquisitionVerification = {
   metadataVerified: number;
 };
 
-/** Playlist-scale defaults: fan a typical 30-60 track set out immediately. */
-export const DEFAULT_ACQUISITION_CONCURRENCY = 64;
-export const MAX_ACQUISITION_CONCURRENCY = 256;
-export const DEFAULT_VERIFICATION_CONCURRENCY = 64;
-export const MAX_VERIFICATION_CONCURRENCY = 256;
-export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 64;
-export const MAX_SPOTIFY_REFRESH_CONCURRENCY = 256;
+/** Network-bound acquisition stays conservative; callers can explicitly raise the cap. */
+export const DEFAULT_ACQUISITION_CONCURRENCY = 3;
+export const MAX_ACQUISITION_CONCURRENCY = 8;
+export const DEFAULT_VERIFICATION_CONCURRENCY = 8;
+export const MAX_VERIFICATION_CONCURRENCY = 16;
+export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 8;
+export const MAX_SPOTIFY_REFRESH_CONCURRENCY = 32;
 
 export type AcquireManifestOptions = {
   manifestPath: string;
@@ -212,14 +227,16 @@ export type AcquireManifestOptions = {
   requireCompletePlan?: boolean;
   dryRun?: boolean;
   continueOnError?: boolean;
-  /** Global limit for independent recording variants, including ambiguity alternatives. Defaults to 64. */
+  /** Global limit for independent recording variants, including ambiguity alternatives. Defaults to 3. */
   concurrency?: number;
-  /** Parallel stat/hash/tag checks. Defaults to 64 and is independent of transfer concurrency. */
+  /** Parallel stat/hash/tag checks. Defaults to 8 and is independent of transfer concurrency. */
   verificationConcurrency?: number;
-  /** Parallel Spotify single-track metadata requests. Defaults to 64; Spotify removed its batch endpoint. */
+  /** Parallel Spotify single-track metadata requests. Defaults to 8; Spotify removed its batch endpoint. */
   spotifyConcurrency?: number;
   /** Optional stat-keyed cache for successful SHA/tag/duration verification receipts. */
   verificationCache?: JsonDiskCache | false;
+  /** Cancels queued work and prevents new provider/download tasks from starting. */
+  signal?: AbortSignal;
   onProgress?: (progress: AcquireProgress) => void;
   /** Starts downstream work as soon as one durable, verified artifact is ready. */
   onArtifactVerified?: (artifact: AcquisitionArtifactVerified) => void | Promise<void>;
@@ -395,6 +412,7 @@ export async function acquireManifest(
           async () => {
             const result = await refreshKnownSpotifyTracks(manifest, options.spotify!, {
               concurrency: spotifyConcurrency,
+              ...(options.signal ? { signal: options.signal } : {}),
             });
             metrics.operations = result.ids;
             metrics.requests = result.networkRequests;
@@ -403,6 +421,7 @@ export async function acquireManifest(
           metrics,
         );
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         const warning = `Spotify refresh failed; retained checkpointed metadata: ${errorMessage(error)}`;
         if (!manifest.warnings.includes(warning)) manifest.warnings.push(warning);
       }
@@ -411,7 +430,8 @@ export async function acquireManifest(
     const plan = await measure("acquisition-plan", async () =>
       typeof options.plan === "function" ? options.plan(manifest) : options.plan,
     );
-    validatePlan(manifest, plan, options.requireCompletePlan ?? false);
+    reconcileCheckpointedPlan(manifest, plan);
+    validatePlan(manifest, plan, options.requireCompletePlan ?? false, true);
     if (options.dryRun) {
       invalidateChangedRekordboxState(checkpointedManifest, manifest);
       return {
@@ -426,7 +446,14 @@ export async function acquireManifest(
 
     const verificationReceipts = await measure(
       "artifact-preflight",
-      () => preflightExistingArtifacts(manifest, plan, verificationConcurrency, verificationCache),
+      () =>
+        preflightExistingArtifacts(
+          manifest,
+          plan,
+          verificationConcurrency,
+          verificationCache,
+          options.signal,
+        ),
       {
         operations: plannedArtifactCount(plan),
         maxConcurrency: Math.min(plannedArtifactCount(plan), verificationConcurrency),
@@ -580,286 +607,313 @@ export async function acquireManifest(
     const clipsTask = measure(
       "clips",
       () =>
-        mapConcurrent(plan.clips, concurrency, async (clip) => {
-          activeClips += 1;
-          clipMetrics.maxConcurrency = Math.max(clipMetrics.maxConcurrency ?? 0, activeClips);
-          options.onProgress?.({
-            phase: "clip",
-            entryOrder: clip.entryOrder,
-            message: `Extracting set cue ${clip.entryOrder}`,
-          });
-          try {
-            let sha256 = verificationReceipts.get(clip.outputPath)?.sha256;
-            if (sha256) {
-              resumed.push(clip.outputPath);
-            } else {
-              const verified = await createSourceSetClip({
-                sourcePath: clip.sourcePath,
-                outputPath: clip.outputPath,
-                startSeconds: clip.startSeconds,
-                endSeconds: clip.endSeconds,
-                metadata: clip.metadata,
-              });
-              sha256 = verified.sha256;
-              verificationReceipts.set(
-                clip.outputPath,
-                await verificationReceipt(clip.outputPath, sha256),
-              );
-              downloaded.push(clip.outputPath);
-            }
-            await checkpoint(() => {
-              const entry = requireEntry(manifest, clip.entryOrder);
-              entry.acquisition = clipState(clip, sha256);
-              clearAcquisitionErrors(entry);
-            });
-            scheduleArtifactCallback({
+        mapConcurrent(
+          plan.clips,
+          concurrency,
+          async (clip) => {
+            activeClips += 1;
+            clipMetrics.maxConcurrency = Math.max(clipMetrics.maxConcurrency ?? 0, activeClips);
+            options.onProgress?.({
+              phase: "clip",
               entryOrder: clip.entryOrder,
-              path: clip.outputPath,
-              sha256,
-              kind: "source-set-clip",
-              status: downloaded.includes(clip.outputPath) ? "downloaded" : "resumed",
+              message: `Extracting set cue ${clip.entryOrder}`,
             });
-          } catch (error) {
-            const failure = toFailure(clip.entryOrder, undefined, error);
-            failures.push(failure);
-            await checkpoint(() =>
-              markFailure(requireEntry(manifest, clip.entryOrder), failure.message),
-            );
-            if (options.continueOnError === false) throw error;
-          } finally {
-            activeClips -= 1;
-          }
-        }),
+            try {
+              let sha256 = verificationReceipts.get(clip.outputPath)?.sha256;
+              if (sha256) {
+                resumed.push(clip.outputPath);
+              } else {
+                const verified = await createSourceSetClip({
+                  sourcePath: clip.sourcePath,
+                  outputPath: clip.outputPath,
+                  startSeconds: clip.startSeconds,
+                  endSeconds: clip.endSeconds,
+                  metadata: clip.metadata,
+                });
+                sha256 = verified.sha256;
+                verificationReceipts.set(
+                  clip.outputPath,
+                  await verificationReceipt(clip.outputPath, sha256),
+                );
+                downloaded.push(clip.outputPath);
+              }
+              options.signal?.throwIfAborted();
+              await checkpoint(() => {
+                const entry = requireEntry(manifest, clip.entryOrder);
+                entry.acquisition = clipState(clip, sha256);
+                clearAcquisitionErrors(entry);
+              });
+              scheduleArtifactCallback({
+                entryOrder: clip.entryOrder,
+                path: clip.outputPath,
+                sha256,
+                kind: "source-set-clip",
+                status: downloaded.includes(clip.outputPath) ? "downloaded" : "resumed",
+              });
+            } catch (error) {
+              throwIfAcquisitionCancelled(options.signal, error);
+              const failure = toFailure(clip.entryOrder, undefined, error);
+              failures.push(failure);
+              await checkpoint(() =>
+                markFailure(requireEntry(manifest, clip.entryOrder), failure.message),
+              );
+              if (options.continueOnError === false) throw error;
+            } finally {
+              activeClips -= 1;
+            }
+          },
+          options.signal,
+        ),
       clipMetrics,
     );
 
     const recordingsTask = measure(
       "recordings",
       () =>
-        mapConcurrent(recordingJobs, concurrency, async ({ recording, variant, variantIndex }) => {
-          activeVariants += 1;
-          recordingMetrics.maxConcurrency = Math.max(
-            recordingMetrics.maxConcurrency ?? 0,
-            activeVariants,
-          );
-          const state = recordingStates.get(recording.entryOrder)!;
-          options.onProgress?.({
-            phase: "recording",
-            entryOrder: recording.entryOrder,
-            variant: variantIndex + 1,
-            totalVariants: recording.variants.length,
-            message: `Acquiring ${variant.artists.join(", ")} — ${variant.title}`,
-          });
-          try {
-            const prior = priorDownloadForVariant(state.priorDownloads, variant);
-            if (prior && prior.mediaPath !== variant.outputPath)
-              variant.outputPath = prior.mediaPath;
-            const receipt = verificationReceipts.get(variant.outputPath);
-            let completed: CompletedRecording;
-            const warnings: string[] = [];
-            if (receipt) {
-              const priorCandidate = candidateFromDownload(prior, state.priorAcquisition, variant);
-              completed = {
-                download:
-                  prior ??
-                  (variant.sourceClip
-                    ? recordingClipDownload(variant, receipt.sha256)
-                    : individualDownload(variant, variant.outputPath, receipt.sha256)),
-                ...(priorCandidate ? { candidate: priorCandidate } : {}),
-              };
-              resumed.push(variant.outputPath);
-            } else if (variant.localArtifact) {
-              const tagged = await retagAudio({
-                sourcePath: variant.localArtifact.sourcePath,
-                outputPath: variant.outputPath,
-                metadata: variant.metadata,
-                audioCodec: retagCodecForSource(
-                  variant.localArtifact.sourcePath,
-                  variant.outputPath,
-                  "slsk",
-                ),
-                ...(variant.durationMs === undefined ||
-                variant.localArtifact.matchedBy === "artist-title"
-                  ? {}
-                  : { expectedDurationSeconds: variant.durationMs / 1000 }),
-              });
-              verificationReceipts.set(
-                variant.outputPath,
-                await verificationReceipt(variant.outputPath, tagged.sha256),
-              );
-              completed = {
-                download: {
-                  backend: "local",
-                  kind: "individual",
-                  mediaPath: variant.outputPath,
-                  files: [variant.outputPath],
-                  source: variant.localArtifact.sourcePath,
-                  sha256: tagged.sha256,
-                  ...(variant.localArtifact.matchedBy !== "artist-title" && variant.spotifyId
-                    ? { spotifyId: variant.spotifyId }
-                    : {}),
-                  ...(variant.localArtifact.matchedBy !== "artist-title" && variant.isrc
-                    ? { isrc: variant.isrc }
-                    : {}),
-                },
-              };
-              warnings.push(
-                `${variantLabel(variant)} adopted local artifact matched by ${variant.localArtifact.matchedBy}`,
-              );
-              downloaded.push(variant.outputPath);
-            } else if (variant.sourceClip) {
-              const clip = variant.sourceClip;
-              const verified = await createSourceSetClip({
-                sourcePath: clip.sourcePath,
-                outputPath: variant.outputPath,
-                startSeconds: clip.startSeconds,
-                endSeconds: clip.endSeconds,
-                metadata: variant.metadata,
-              });
-              verificationReceipts.set(
-                variant.outputPath,
-                await verificationReceipt(variant.outputPath, verified.sha256),
-              );
-              completed = {
-                download: {
-                  backend: "ytdlp",
-                  kind: "source-set-clip",
-                  mediaPath: variant.outputPath,
-                  files: [variant.outputPath],
-                  source: clip.sourceUrl,
-                  engine: "reference",
-                  sha256: verified.sha256,
-                  ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
-                  clip: {
-                    sourceSetUrl: clip.sourceUrl,
-                    ...(clip.sourceTitle ? { sourceSetTitle: clip.sourceTitle } : {}),
-                    startSeconds: clip.startSeconds,
-                    endSeconds: clip.endSeconds,
-                    containsTransitions: clip.containsTransitions,
-                    qualityNote: clip.qualityNote,
-                  },
-                },
-              };
-              warnings.push(
-                `${variantLabel(variant)} is a cue-based source-set extract, not a verified release master; ISRC deliberately omitted`,
-              );
-              downloaded.push(variant.outputPath);
-            } else {
-              const target: YoutubeTarget = {
-                title: variant.title,
-                artists: variant.artists,
-                ...(variant.durationMs === undefined
-                  ? {}
-                  : { durationSeconds: variant.durationMs / 1000 }),
-              };
-              const acquired = await acquireVariant(
-                target,
-                variant,
-                availableAcquirers,
-                plan.stagingDirectory,
-                minimumScore,
-                variant.preferredCandidate,
-              );
-              const adaptedOutputPath = outputPathForSource(
-                variant.outputPath,
-                acquired.source.path,
-                acquired.acquirer.backend,
-              );
-              assertAdaptedOutputUnique(plan, variant, adaptedOutputPath);
-              variant.outputPath = adaptedOutputPath;
-              const retagCodec = retagCodecForSource(
-                acquired.source.path,
-                variant.outputPath,
-                acquired.acquirer.backend,
-              );
-              const tagged = await retagAudio({
-                sourcePath: acquired.source.path,
-                outputPath: variant.outputPath,
-                metadata: variant.metadata,
-                audioCodec: retagCodec,
-                ...(variant.durationMs === undefined
-                  ? {}
-                  : { expectedDurationSeconds: variant.durationMs / 1000 }),
-              });
-              verificationReceipts.set(
-                variant.outputPath,
-                await verificationReceipt(variant.outputPath, tagged.sha256),
-              );
-              if (acquired.source.temporary !== false)
-                await rm(acquired.source.path, { force: true });
-              completed = {
-                download: {
-                  backend: acquired.acquirer.backend,
-                  kind: "individual",
-                  mediaPath: variant.outputPath,
-                  files: [variant.outputPath],
-                  source: acquired.candidate.source,
-                  ...(acquired.source.engine ? { engine: acquired.source.engine } : {}),
-                  sha256: tagged.sha256,
-                  ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
-                  ...(variant.isrc ? { isrc: variant.isrc } : {}),
-                },
-                candidate: manifestCandidate(acquired.acquirer, acquired.candidate),
-              };
-              if (acquired.source.qualityNote) {
-                warnings.push(
-                  `${variantLabel(variant)} acquisition quality: ${acquired.source.qualityNote}`,
-                );
-              }
-              if (acquired.source.transcoded) {
-                warnings.push(`${variantLabel(variant)} required a lossy compatibility transcode`);
-              }
-              if (retagCodec === "aac") {
-                warnings.push(
-                  `${variantLabel(variant)} Soulseek source required a lossy AAC compatibility transcode`,
-                );
-              } else if (retagCodec === "flac") {
-                warnings.push(
-                  `${variantLabel(variant)} Soulseek PCM source was losslessly converted to FLAC`,
-                );
-              }
-              downloaded.push(variant.outputPath);
-            }
-            await checkpoint(() => {
-              state.completed.set(variantIndex, completed);
-              for (const warning of warnings) addUniqueWarning(state.entry, warning);
-              persistPartial(
-                state.entry,
-                recording,
-                [...state.completed.entries()]
-                  .sort(([left], [right]) => left - right)
-                  .map(([, item]) => item),
-              );
-              if (!state.failed.size && state.completed.size === recording.variants.length) {
-                clearAcquisitionErrors(state.entry);
-              }
-              replaceEntry(manifest, structuredClone(state.entry));
-            });
-            const verifiedReceipt = verificationReceipts.get(variant.outputPath);
-            if (!verifiedReceipt)
-              throw new Error(`Missing verification receipt for ${variant.outputPath}`);
-            scheduleArtifactCallback({
+        mapConcurrent(
+          recordingJobs,
+          concurrency,
+          async ({ recording, variant, variantIndex }) => {
+            activeVariants += 1;
+            recordingMetrics.maxConcurrency = Math.max(
+              recordingMetrics.maxConcurrency ?? 0,
+              activeVariants,
+            );
+            const state = recordingStates.get(recording.entryOrder)!;
+            options.onProgress?.({
+              phase: "recording",
               entryOrder: recording.entryOrder,
-              variantIndex,
-              path: variant.outputPath,
-              sha256: verifiedReceipt.sha256,
-              kind: completed.download.kind ?? "individual",
-              status: downloaded.includes(variant.outputPath) ? "downloaded" : "resumed",
+              variant: variantIndex + 1,
+              totalVariants: recording.variants.length,
+              message: `Acquiring ${variant.artists.join(", ")} — ${variant.title}`,
             });
-          } catch (error) {
-            const failure = toFailure(recording.entryOrder, variant.spotifyId, error);
-            failures.push(failure);
-            await checkpoint(() => {
-              state.failed.add(variantIndex);
-              if (state.completed.size) addAcquisitionError(state.entry, failure.message);
-              else markFailure(state.entry, failure.message, variant.searchQuery);
-              replaceEntry(manifest, structuredClone(state.entry));
-            });
-            if (options.continueOnError === false) throw error;
-          } finally {
-            activeVariants -= 1;
-          }
-        }),
+            try {
+              const prior = priorDownloadForVariant(state.priorDownloads, variant);
+              if (prior && prior.mediaPath !== variant.outputPath)
+                variant.outputPath = prior.mediaPath;
+              const receipt = verificationReceipts.get(variant.outputPath);
+              let completed: CompletedRecording;
+              const warnings: string[] = [];
+              if (receipt) {
+                const priorCandidate = candidateFromDownload(
+                  prior,
+                  state.priorAcquisition,
+                  variant,
+                );
+                completed = {
+                  download:
+                    prior ??
+                    (variant.sourceClip
+                      ? recordingClipDownload(variant, receipt.sha256)
+                      : individualDownload(variant, variant.outputPath, receipt.sha256)),
+                  ...(priorCandidate ? { candidate: priorCandidate } : {}),
+                };
+                resumed.push(variant.outputPath);
+              } else if (variant.localArtifact) {
+                const tagged = await retagAudio({
+                  sourcePath: variant.localArtifact.sourcePath,
+                  outputPath: variant.outputPath,
+                  metadata: variant.metadata,
+                  audioCodec: retagCodecForSource(
+                    variant.localArtifact.sourcePath,
+                    variant.outputPath,
+                    "slsk",
+                  ),
+                  ...(variant.durationMs === undefined ||
+                  variant.localArtifact.matchedBy === "artist-title"
+                    ? {}
+                    : { expectedDurationSeconds: variant.durationMs / 1000 }),
+                });
+                verificationReceipts.set(
+                  variant.outputPath,
+                  await verificationReceipt(variant.outputPath, tagged.sha256),
+                );
+                completed = {
+                  download: {
+                    backend: "local",
+                    kind: "individual",
+                    mediaPath: variant.outputPath,
+                    files: [variant.outputPath],
+                    source: variant.localArtifact.sourcePath,
+                    sha256: tagged.sha256,
+                    ...(variant.localArtifact.matchedBy !== "artist-title"
+                      ? { variantKey: variantKey(variant) }
+                      : {}),
+                    ...(variant.localArtifact.matchedBy !== "artist-title" && variant.spotifyId
+                      ? { spotifyId: variant.spotifyId }
+                      : {}),
+                    ...(variant.localArtifact.matchedBy !== "artist-title" && variant.isrc
+                      ? { isrc: variant.isrc }
+                      : {}),
+                  },
+                };
+                warnings.push(
+                  `${variantLabel(variant)} adopted local artifact matched by ${variant.localArtifact.matchedBy}`,
+                );
+                downloaded.push(variant.outputPath);
+              } else if (variant.sourceClip) {
+                const clip = variant.sourceClip;
+                const verified = await createSourceSetClip({
+                  sourcePath: clip.sourcePath,
+                  outputPath: variant.outputPath,
+                  startSeconds: clip.startSeconds,
+                  endSeconds: clip.endSeconds,
+                  metadata: variant.metadata,
+                });
+                verificationReceipts.set(
+                  variant.outputPath,
+                  await verificationReceipt(variant.outputPath, verified.sha256),
+                );
+                completed = {
+                  download: {
+                    backend: "ytdlp",
+                    kind: "source-set-clip",
+                    mediaPath: variant.outputPath,
+                    files: [variant.outputPath],
+                    source: clip.sourceUrl,
+                    engine: "reference",
+                    sha256: verified.sha256,
+                    variantKey: variantKey(variant),
+                    ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
+                    clip: {
+                      sourceSetUrl: clip.sourceUrl,
+                      ...(clip.sourceTitle ? { sourceSetTitle: clip.sourceTitle } : {}),
+                      startSeconds: clip.startSeconds,
+                      endSeconds: clip.endSeconds,
+                      containsTransitions: clip.containsTransitions,
+                      qualityNote: clip.qualityNote,
+                    },
+                  },
+                };
+                warnings.push(
+                  `${variantLabel(variant)} is a cue-based source-set extract, not a verified release master; ISRC deliberately omitted`,
+                );
+                downloaded.push(variant.outputPath);
+              } else {
+                const target: YoutubeTarget = {
+                  title: variant.title,
+                  artists: variant.artists,
+                  ...(variant.durationMs === undefined
+                    ? {}
+                    : { durationSeconds: variant.durationMs / 1000 }),
+                };
+                const acquired = await acquireVariant(
+                  target,
+                  variant,
+                  availableAcquirers,
+                  plan.stagingDirectory,
+                  minimumScore,
+                  variant.preferredCandidate,
+                  options.signal,
+                );
+                const adaptedOutputPath = outputPathForSource(
+                  variant.outputPath,
+                  acquired.source.path,
+                  acquired.acquirer.backend,
+                );
+                assertAdaptedOutputUnique(plan, variant, adaptedOutputPath);
+                variant.outputPath = adaptedOutputPath;
+                const retagCodec = retagCodecForSource(
+                  acquired.source.path,
+                  variant.outputPath,
+                  acquired.acquirer.backend,
+                );
+                const tagged = await retagAudio({
+                  sourcePath: acquired.source.path,
+                  outputPath: variant.outputPath,
+                  metadata: variant.metadata,
+                  audioCodec: retagCodec,
+                  ...(variant.durationMs === undefined
+                    ? {}
+                    : { expectedDurationSeconds: variant.durationMs / 1000 }),
+                });
+                verificationReceipts.set(
+                  variant.outputPath,
+                  await verificationReceipt(variant.outputPath, tagged.sha256),
+                );
+                if (acquired.source.temporary !== false)
+                  await rm(acquired.source.path, { force: true });
+                completed = {
+                  download: {
+                    backend: acquired.acquirer.backend,
+                    kind: "individual",
+                    mediaPath: variant.outputPath,
+                    files: [variant.outputPath],
+                    source: acquired.candidate.source,
+                    ...(acquired.source.engine ? { engine: acquired.source.engine } : {}),
+                    ...(acquired.source.fallback ? { fallback: acquired.source.fallback } : {}),
+                    sha256: tagged.sha256,
+                    variantKey: variantKey(variant),
+                    ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
+                    ...(variant.isrc ? { isrc: variant.isrc } : {}),
+                  },
+                  candidate: manifestCandidate(acquired.acquirer, acquired.candidate),
+                };
+                if (acquired.source.qualityNote) {
+                  warnings.push(
+                    `${variantLabel(variant)} acquisition quality: ${acquired.source.qualityNote}`,
+                  );
+                }
+                if (acquired.source.transcoded) {
+                  warnings.push(
+                    `${variantLabel(variant)} required a lossy compatibility transcode`,
+                  );
+                }
+                if (retagCodec === "aac") {
+                  warnings.push(
+                    `${variantLabel(variant)} Soulseek source required a lossy AAC compatibility transcode`,
+                  );
+                } else if (retagCodec === "flac") {
+                  warnings.push(
+                    `${variantLabel(variant)} Soulseek PCM source was losslessly converted to FLAC`,
+                  );
+                }
+                downloaded.push(variant.outputPath);
+              }
+              options.signal?.throwIfAborted();
+              await checkpoint(() => {
+                state.completed.set(variantIndex, completed);
+                for (const warning of warnings) addUniqueWarning(state.entry, warning);
+                persistPartial(
+                  state.entry,
+                  recording,
+                  [...state.completed.entries()]
+                    .sort(([left], [right]) => left - right)
+                    .map(([, item]) => item),
+                );
+                if (!state.failed.size && state.completed.size === recording.variants.length) {
+                  clearAcquisitionErrors(state.entry);
+                }
+                replaceEntry(manifest, structuredClone(state.entry));
+              });
+              const verifiedReceipt = verificationReceipts.get(variant.outputPath);
+              if (!verifiedReceipt)
+                throw new Error(`Missing verification receipt for ${variant.outputPath}`);
+              scheduleArtifactCallback({
+                entryOrder: recording.entryOrder,
+                variantIndex,
+                path: variant.outputPath,
+                sha256: verifiedReceipt.sha256,
+                kind: completed.download.kind ?? "individual",
+                status: downloaded.includes(variant.outputPath) ? "downloaded" : "resumed",
+              });
+            } catch (error) {
+              throwIfAcquisitionCancelled(options.signal, error);
+              const failure = toFailure(recording.entryOrder, variant.spotifyId, error);
+              failures.push(failure);
+              await checkpoint(() => {
+                state.failed.add(variantIndex);
+                if (state.completed.size) addAcquisitionError(state.entry, failure.message);
+                else markFailure(state.entry, failure.message, variant.searchQuery);
+                replaceEntry(manifest, structuredClone(state.entry));
+              });
+              if (options.continueOnError === false) throw error;
+            } finally {
+              activeVariants -= 1;
+            }
+          },
+          options.signal,
+        ),
       recordingMetrics,
     );
 
@@ -905,6 +959,7 @@ export async function verifyAcquisitionPlan(
     "concurrency",
     MAX_VERIFICATION_CONCURRENCY,
   );
+  reconcileCheckpointedPlan(manifest, plan);
   validatePlan(manifest, plan, false, true);
   const expected = [
     ...plan.clips.map((clip) => ({
@@ -983,8 +1038,9 @@ export async function verifyAcquisitionPlan(
 }
 
 export type SpotifyRefreshOptions = {
-  /** Parallel individual-track requests. Defaults to 64; callers may set 1 through 256. */
+  /** Parallel individual-track requests. Defaults to 8; callers may set 1 through 32. */
   concurrency?: number;
+  signal?: AbortSignal;
 };
 
 export type SpotifyRefreshResult = {
@@ -1024,17 +1080,26 @@ export async function refreshKnownSpotifyTracks(
   const tracksById = new Map<string, SpotifyApiTrack>();
   let active = 0;
   let maxConcurrency = 0;
-  await mapConcurrent(ids, concurrency, async (id) => {
-    active += 1;
-    maxConcurrency = Math.max(maxConcurrency, active);
-    try {
-      const response = await spotify.raw<unknown>("GET", `tracks/${encodeURIComponent(id)}`);
-      const track = parseSpotifyApiTrack(response);
-      if (track) tracksById.set(track.id, track);
-    } finally {
-      active -= 1;
-    }
-  });
+  await mapConcurrent(
+    ids,
+    concurrency,
+    async (id) => {
+      active += 1;
+      maxConcurrency = Math.max(maxConcurrency, active);
+      try {
+        const response = await spotify.raw<unknown>(
+          "GET",
+          `tracks/${encodeURIComponent(id)}`,
+          options.signal ? { signal: options.signal } : {},
+        );
+        const track = parseSpotifyApiTrack(response);
+        if (track) tracksById.set(track.id, track);
+      } finally {
+        active -= 1;
+      }
+    },
+    options.signal,
+  );
   for (const entry of manifest.entries) {
     if (entry.spotify.status === "matched") {
       const fresh = tracksById.get(entry.spotify.id);
@@ -1090,12 +1155,15 @@ async function acquireVariant(
   stagingDirectory: string,
   minimumScore: number,
   preferredCandidate?: YoutubeSearchCandidate & { backend: AcquisitionBackend },
+  signal?: AbortSignal,
 ): Promise<{
   acquirer: TrackAcquirer;
   candidate: ScoredYoutubeCandidate;
   source: IndividualDownload;
 }> {
+  signal?.throwIfAborted();
   const failures: string[] = [];
+  let capabilityFallback: AcquirerFallback | undefined;
   if (preferredCandidate) {
     const preferredAcquirer = acquirers.find(
       (acquirer) => acquirer.backend === preferredCandidate.backend,
@@ -1103,23 +1171,33 @@ async function acquireVariant(
     if (preferredAcquirer) {
       const selected: ScoredYoutubeCandidate = { ...preferredCandidate, score: 1 };
       let source: IndividualDownload | undefined;
+      let validating = false;
       try {
         source = await preferredAcquirer.download(
           selected,
           candidateStagingDirectory(stagingDirectory, variant, preferredAcquirer.backend, selected),
           variantKey(variant),
         );
+        signal?.throwIfAborted();
+        validating = true;
         await validateAcquiredSource(source, target);
+        signal?.throwIfAborted();
         return { acquirer: preferredAcquirer, candidate: selected, source };
       } catch (error) {
         if (source && source.temporary !== false) await rm(source.path, { force: true });
+        throwIfAcquisitionCancelled(signal, error);
         failures.push(`${preferredAcquirer.backend} audited source: ${errorMessage(error)}`);
+        if (!validating) {
+          const shouldContinue = preferredAcquirer.shouldContinueAfterError?.(error, "download");
+          if (shouldContinue === false) throw error;
+          if (shouldContinue) capabilityFallback = shouldContinue;
+        }
       }
     } else {
       failures.push(`${preferredCandidate.backend}: audited source backend unavailable`);
     }
   }
-  const searches = acquirers.map(async (acquirer) => {
+  const searchAcquirer = async (acquirer: TrackAcquirer) => {
     try {
       return {
         ok: true as const,
@@ -1128,11 +1206,23 @@ async function acquireVariant(
     } catch (error) {
       return { ok: false as const, error };
     }
-  });
+  };
+  const searches = acquirers.map((acquirer) =>
+    acquirer.requiresPriorCapabilityFailure ? undefined : searchAcquirer(acquirer),
+  );
   for (const [index, acquirer] of acquirers.entries()) {
-    const search = await searches[index]!;
+    if (acquirer.requiresPriorCapabilityFailure && !capabilityFallback) {
+      failures.push(`${acquirer.backend}: no typed native capability gap permitted reference use`);
+      continue;
+    }
+    const search = await (searches[index] ?? searchAcquirer(acquirer));
+    signal?.throwIfAborted();
     if (!search.ok) {
+      throwIfAcquisitionCancelled(signal, search.error);
       failures.push(`${acquirer.backend} search: ${errorMessage(search.error)}`);
+      const shouldContinue = acquirer.shouldContinueAfterError?.(search.error, "search");
+      if (shouldContinue === false) throw search.error;
+      if (shouldContinue) capabilityFallback = shouldContinue;
       continue;
     }
     const { candidates } = search;
@@ -1148,17 +1238,34 @@ async function acquireVariant(
     }
     for (const selected of eligible) {
       let source: IndividualDownload | undefined;
+      let validating = false;
       try {
         source = await acquirer.download(
           selected,
           candidateStagingDirectory(stagingDirectory, variant, acquirer.backend, selected),
           variantKey(variant),
         );
+        signal?.throwIfAborted();
+        validating = true;
         await validateAcquiredSource(source, target);
-        return { acquirer, candidate: selected, source };
+        signal?.throwIfAborted();
+        return {
+          acquirer,
+          candidate: selected,
+          source:
+            acquirer.requiresPriorCapabilityFailure && capabilityFallback
+              ? { ...source, fallback: capabilityFallback }
+              : source,
+        };
       } catch (error) {
         if (source && source.temporary !== false) await rm(source.path, { force: true });
+        throwIfAcquisitionCancelled(signal, error);
         failures.push(`${acquirer.backend} ${selected.id}: ${errorMessage(error)}`);
+        if (!validating) {
+          const shouldContinue = acquirer.shouldContinueAfterError?.(error, "download");
+          if (shouldContinue === false) throw error;
+          if (shouldContinue) capabilityFallback = shouldContinue;
+        }
       }
     }
   }
@@ -1233,15 +1340,18 @@ function individualDownload(
   path: string,
   sha256: string,
 ): AcquisitionDownload {
+  const exactIdentity =
+    !variant.localArtifact || variant.localArtifact.matchedBy !== "artist-title";
   return {
     backend: variant.localArtifact ? "local" : "ytdlp",
     kind: "individual",
     mediaPath: path,
     files: [path],
     sha256,
+    ...(exactIdentity ? { variantKey: variantKey(variant) } : {}),
     ...(variant.localArtifact ? { source: variant.localArtifact.sourcePath } : {}),
-    ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
-    ...(variant.isrc ? { isrc: variant.isrc } : {}),
+    ...(exactIdentity && variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
+    ...(exactIdentity && variant.isrc ? { isrc: variant.isrc } : {}),
   };
 }
 
@@ -1261,10 +1371,34 @@ function priorDownloadForVariant(
   downloads: readonly AcquisitionDownload[],
   variant: AcquisitionRecordingVariant,
 ): AcquisitionDownload | undefined {
-  return downloads.find((download) =>
-    variant.spotifyId
-      ? download.spotifyId === variant.spotifyId
-      : download.spotifyId === undefined && download.mediaPath === variant.outputPath,
+  if (variant.spotifyId) {
+    return downloads.find((download) => download.spotifyId === variant.spotifyId);
+  }
+  if (variant.isrc) {
+    const isrc = variant.isrc.toLocaleUpperCase("en-US");
+    const byIsrc = downloads.find(
+      (download) =>
+        download.spotifyId === undefined && download.isrc?.toLocaleUpperCase("en-US") === isrc,
+    );
+    if (byIsrc) return byIsrc;
+  }
+  if (variant.sourceClip) {
+    const byCue = downloads.find(
+      (download) =>
+        download.clip !== undefined &&
+        nearlyEqual(download.clip.startSeconds, variant.sourceClip!.startSeconds) &&
+        nearlyEqual(download.clip.endSeconds, variant.sourceClip!.endSeconds),
+    );
+    if (byCue) return byCue;
+  }
+  const key = variantKey(variant);
+  const keyed = downloads.find((download) => download.variantKey === key);
+  if (keyed) return keyed;
+  return downloads.find(
+    (download) =>
+      download.spotifyId === undefined &&
+      download.variantKey === undefined &&
+      download.mediaPath === variant.outputPath,
   );
 }
 
@@ -1333,6 +1467,7 @@ function recordingClipDownload(
     source: clip.sourceUrl,
     engine: "reference",
     sha256,
+    variantKey: variantKey(variant),
     ...(variant.spotifyId ? { spotifyId: variant.spotifyId } : {}),
     clip: {
       sourceSetUrl: clip.sourceUrl,
@@ -1412,18 +1547,60 @@ function downloadForPath(entry: ResolvedTrack, path: string): AcquisitionDownloa
   );
 }
 
+function checkpointedDownloads(entry: ResolvedTrack): AcquisitionDownload[] {
+  return entry.acquisition.status === "downloaded"
+    ? [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])]
+    : [];
+}
+
+function priorDownloadForClip(
+  entry: ResolvedTrack,
+  clip: AcquisitionClipPlan,
+): AcquisitionDownload | undefined {
+  const clips = checkpointedDownloads(entry).filter(
+    (download) => download.kind === "source-set-clip" || download.clip !== undefined,
+  );
+  const matchingRange = clips.find(
+    (download) =>
+      download.clip !== undefined &&
+      nearlyEqual(download.clip.startSeconds, clip.startSeconds) &&
+      nearlyEqual(download.clip.endSeconds, clip.endSeconds),
+  );
+  return (
+    matchingRange ?? (clips.length === 1 && clips[0]!.clip === undefined ? clips[0] : undefined)
+  );
+}
+
+/** Preserve durable legacy paths before validating or executing a freshly generated plan. */
+function reconcileCheckpointedPlan(manifest: SetManifest, plan: AcquisitionPlan): void {
+  for (const clip of plan.clips) {
+    const prior = priorDownloadForClip(requireEntry(manifest, clip.entryOrder), clip);
+    if (prior) clip.outputPath = prior.mediaPath;
+  }
+  for (const recording of plan.recordings) {
+    const downloads = checkpointedDownloads(requireEntry(manifest, recording.entryOrder));
+    recording.variants.forEach((variant) => {
+      const prior = priorDownloadForVariant(downloads, variant);
+      if (prior) variant.outputPath = prior.mediaPath;
+    });
+  }
+}
+
 async function preflightExistingArtifacts(
   manifest: SetManifest,
   plan: AcquisitionPlan,
   concurrency: number,
   cache?: JsonDiskCache,
+  signal?: AbortSignal,
 ): Promise<Map<string, AcquisitionVerificationReceipt>> {
   const expected = [
     ...plan.clips.map((clip) => {
-      const prior = downloadForPath(requireEntry(manifest, clip.entryOrder), clip.outputPath);
+      const entry = requireEntry(manifest, clip.entryOrder);
+      const prior = downloadForPath(entry, clip.outputPath) ?? priorDownloadForClip(entry, clip);
+      if (prior) clip.outputPath = prior.mediaPath;
       return {
         path: clip.outputPath,
-        metadata: clip.metadata,
+        metadata: prior?.sha256 ? undefined : clip.metadata,
         expectedSha256: prior?.sha256,
         expectedDurationSeconds: clip.endSeconds - clip.startSeconds,
         durationToleranceSeconds: 2,
@@ -1441,7 +1618,7 @@ async function preflightExistingArtifacts(
         if (prior && prior.mediaPath !== variant.outputPath) variant.outputPath = prior.mediaPath;
         return {
           path: variant.outputPath,
-          metadata: variant.metadata,
+          metadata: prior?.sha256 ? undefined : variant.metadata,
           expectedSha256: prior?.sha256,
           expectedDurationSeconds: expectedVariantDurationSeconds(variant),
           durationToleranceSeconds: variant.sourceClip
@@ -1456,37 +1633,43 @@ async function preflightExistingArtifacts(
     }),
   ];
   const receipts = new Map<string, AcquisitionVerificationReceipt>();
-  await mapConcurrent(expected, concurrency, async (item) => {
-    if (!item.eligible) return;
-    try {
-      const before = await stat(item.path);
-      const verified = await verifyAudioCached(
-        item.path,
-        {
-          ...(item.expectedSha256 ? { expectedSha256: item.expectedSha256 } : {}),
-          ...(item.expectedDurationSeconds === undefined
-            ? {}
-            : { expectedDurationSeconds: item.expectedDurationSeconds }),
-          durationToleranceSeconds: item.durationToleranceSeconds,
-          expectedMetadata: item.metadata,
-        },
-        cache,
-      );
-      const after = await stat(item.path);
-      if (!sameFileStat(before, after)) {
-        throw new Error(`Audio file changed during verification: ${item.path}`);
+  await mapConcurrent(
+    expected,
+    concurrency,
+    async (item) => {
+      if (!item.eligible) return;
+      try {
+        const before = await stat(item.path);
+        const verified = await verifyAudioCached(
+          item.path,
+          {
+            ...(item.expectedSha256 ? { expectedSha256: item.expectedSha256 } : {}),
+            ...(item.expectedDurationSeconds === undefined
+              ? {}
+              : { expectedDurationSeconds: item.expectedDurationSeconds }),
+            durationToleranceSeconds: item.durationToleranceSeconds,
+            ...(item.metadata ? { expectedMetadata: item.metadata } : {}),
+          },
+          cache,
+        );
+        const after = await stat(item.path);
+        if (!sameFileStat(before, after)) {
+          throw new Error(`Audio file changed during verification: ${item.path}`);
+        }
+        receipts.set(item.path, {
+          sha256: verified.sha256,
+          size: after.size,
+          mtimeMs: after.mtimeMs,
+          ctimeMs: after.ctimeMs,
+          ino: after.ino,
+        });
+      } catch (error) {
+        throwIfAcquisitionCancelled(signal, error);
+        // A missing or invalid artifact is reacquired by the normal stage below.
       }
-      receipts.set(item.path, {
-        sha256: verified.sha256,
-        size: after.size,
-        mtimeMs: after.mtimeMs,
-        ctimeMs: after.ctimeMs,
-        ino: after.ino,
-      });
-    } catch {
-      // A missing or invalid artifact is reacquired by the normal stage below.
-    }
-  });
+    },
+    signal,
+  );
   return receipts;
 }
 
@@ -2138,21 +2321,51 @@ async function mapConcurrent<T>(
   values: readonly T[],
   concurrency: number,
   task: (value: T) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let cursor = 0;
+  let stopped = false;
   let firstError: unknown;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
     while (cursor < values.length) {
-      if (firstError !== undefined) return;
+      if (stopped) return;
+      try {
+        signal?.throwIfAborted();
+      } catch (error) {
+        if (!stopped) firstError = error;
+        stopped = true;
+        return;
+      }
       const index = cursor++;
       try {
         await task(values[index]!);
       } catch (error) {
-        firstError ??= error;
+        if (!stopped) firstError = error;
+        stopped = true;
         return;
       }
     }
   });
-  await Promise.all(workers);
-  if (firstError !== undefined) throw firstError;
+  const settled = await Promise.allSettled(workers);
+  const unexpected = settled.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (unexpected && !stopped) {
+    firstError = unexpected.reason;
+    stopped = true;
+  }
+  if (!stopped && signal?.aborted) {
+    try {
+      signal.throwIfAborted();
+    } catch (error) {
+      firstError = error;
+      stopped = true;
+    }
+  }
+  if (stopped) throw firstError;
+}
+
+function throwIfAcquisitionCancelled(signal: AbortSignal | undefined, error: unknown): void {
+  if (signal?.aborted) signal.throwIfAborted();
+  if (error instanceof Error && error.name === "AbortError") throw error;
 }

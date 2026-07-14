@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildDownloadArgs, buildInspectArgs } from '../src/bridge/reference.js'
+import {
+  buildDownloadArgs,
+  buildInspectArgs,
+  ReferenceClient,
+  type ReferenceResult,
+  type ReferenceRunOptions,
+} from '../src/bridge/reference.js'
 
 describe('reference argument construction', () => {
   it('makes inspection deterministic and protects URL position', () => {
@@ -95,5 +101,56 @@ describe('reference argument construction', () => {
     expect(args).toContain('--write-info-json')
     expect(args).toContain('--embed-metadata')
     expect(args).toContain('--embed-thumbnail')
+  })
+
+  it('threads cancellation from inspect and download into reference execution', async () => {
+    class CapturingReferenceClient extends ReferenceClient {
+      readonly calls: Array<{ args: string[]; options: ReferenceRunOptions }> = []
+
+      override async run(
+        args: string[],
+        options: ReferenceRunOptions = {},
+      ): Promise<ReferenceResult> {
+        this.calls.push({ args, options })
+        const inspecting = args.includes('--dump-single-json')
+        return {
+          command: 'captured',
+          args,
+          exitCode: 0,
+          stdout: inspecting
+            ? JSON.stringify({ id: 'track', title: 'Track' })
+            : '__YTDLP_TS_FILE__:/tmp/track.m4a\n',
+          stderr: '',
+        }
+      }
+    }
+    const controller = new AbortController()
+    const client = new CapturingReferenceClient()
+
+    await client.inspect('https://example.com/track', { signal: controller.signal })
+    await client.download('https://example.com/track', { signal: controller.signal })
+
+    expect(client.calls).toHaveLength(2)
+    expect(client.calls.every((call) => call.options.signal === controller.signal)).toBe(true)
+  })
+
+  it('does not spawn an already-aborted reference execution', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      new ReferenceClient('definitely-not-a-real-binary').run([], { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'ABORTED' })
+  })
+
+  it('terminates and drains an in-flight reference execution on abort', async () => {
+    const controller = new AbortController()
+    const running = new ReferenceClient(process.execPath).run(
+      ['-e', 'setInterval(() => {}, 1_000)'],
+      { signal: controller.signal },
+    )
+    controller.abort()
+
+    await expect(running).rejects.toMatchObject({ code: 'ABORTED' })
   })
 })

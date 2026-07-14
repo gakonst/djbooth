@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -48,6 +48,9 @@ export type SetSourceClip = {
 };
 
 type SourceSetArtifact = NonNullable<SetManifest["artifacts"]["sourceSet"]>;
+
+export const DEFAULT_NATIVE_ANALYSIS_CONCURRENCY = 4;
+export const MAX_NATIVE_ANALYSIS_CONCURRENCY = 64;
 
 export type WorkflowStageName =
   | "resolve"
@@ -113,6 +116,7 @@ export type RunSetToRekordboxOptions = {
   spotifyConcurrency?: number;
   analysisConcurrency?: number;
   analysis?: Omit<AnalyzeTracksOptions, "concurrency">;
+  signal?: AbortSignal;
   rekordbox?: WorkflowImportOptions;
   onProgress?: (progress: WorkflowProgress) => void;
   dependencies?: Partial<RunSetToRekordboxDependencies>;
@@ -177,8 +181,8 @@ const defaultDependencies: RunSetToRekordboxDependencies = {
  * Resolve, enrich, acquire, analyze, and import one set through library calls only.
  *
  * Durable manifests, metadata caches, completed audio, analyzer outputs, and the verified
- * Rekordbox checkpoint are reused on later runs. Independent work inside each stage fans out to
- * the configured playlist-scale limits; the encrypted database still commits exactly once.
+ * Rekordbox checkpoint are reused on later runs. Independent work inside each stage uses its
+ * configured bounded limit; the encrypted database still commits exactly once.
  */
 export async function runSetToRekordbox(
   options: RunSetToRekordboxOptions,
@@ -209,6 +213,7 @@ export async function runSetToRekordbox(
     stage: WorkflowStageName,
     task: () => Promise<{ value: T; details: Omit<WorkflowStage, "durationMs" | "stage"> }>,
   ): Promise<T> => {
+    options.signal?.throwIfAborted();
     options.onProgress?.({ stage, status: "started", message: `${stage} started` });
     const stageStarted = performance.now();
     const { value, details } = await task();
@@ -238,6 +243,7 @@ export async function runSetToRekordbox(
     const resolved = dependencies.createManifest(
       await dependencies.identify(options.source, {
         ...options.identify,
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.cacheMode && options.identify?.cacheMode === undefined
           ? { cacheMode: options.cacheMode }
           : {}),
@@ -287,6 +293,7 @@ export async function runSetToRekordbox(
     spotifyResult = await runStage("spotify", async () => {
       const result = await dependencies.enrichSpotify(manifest, options.spotify!, {
         ...options.spotifyOptions,
+        ...(options.signal ? { signal: options.signal } : {}),
         concurrency:
           options.spotifyConcurrency ??
           options.spotifyOptions?.concurrency ??
@@ -322,17 +329,32 @@ export async function runSetToRekordbox(
   }
 
   const sourceSet = options.allowSourceSetClips ? manifest.artifacts.sourceSet : undefined;
-  const analysisConcurrency = options.analysisConcurrency ?? 64;
+  const analysisConcurrency = options.analysisConcurrency ?? DEFAULT_NATIVE_ANALYSIS_CONCURRENCY;
   const analysisRuns: AnalyzeTracksResult[] = [];
   const analysisByPath = new Map<string, AnalyzeTracksResult["results"][number]>();
+  const analysisByIdentity = new Map<string, AnalyzeTracksResult["results"][number]>();
   const analysisTasks = new Map<string, Promise<void>>();
   const analysisLimit = createPromiseLimiter(analysisConcurrency);
   let analysisStarted: number | undefined;
   let analysisPeakConcurrency = 0;
   let activeAnalysis = 0;
-  const analyzeVerifiedArtifact = (artifact: AcquisitionArtifactVerified): Promise<void> => {
+  const analyzerOptions = (concurrency: number): AnalyzeTracksOptions => ({
+    ...options.analysis,
+    concurrency,
+    ...(options.signal ? { signal: options.signal } : {}),
+    onProgress(progress) {
+      options.analysis?.onProgress?.(progress);
+      options.onProgress?.({
+        stage: "analysis",
+        status: "started",
+        message: `${progress.phase} ${String(progress.completed)}/${String(progress.total)} ${basename(progress.audioPath)}`,
+      });
+    },
+  });
+  const analyzeVerifiedArtifact = async (artifact: AcquisitionArtifactVerified): Promise<void> => {
     const path = resolve(artifact.path);
-    const existing = analysisTasks.get(path);
+    const identity = await analysisIdentity(path);
+    const existing = analysisTasks.get(identity);
     if (existing) return existing;
     analysisStarted ??= performance.now();
     if (analysisTasks.size === 0) {
@@ -349,60 +371,89 @@ export async function runSetToRekordbox(
         recordAnalysisRun(
           analysisRuns,
           analysisByPath,
-          await dependencies.analyze([path], { ...options.analysis, concurrency: 1 }),
+          analysisByIdentity,
+          [{ path, identity }],
+          await dependencies.analyze([path], analyzerOptions(1)),
         );
       } finally {
         activeAnalysis -= 1;
       }
     });
-    analysisTasks.set(path, task);
+    analysisTasks.set(identity, task);
     return task;
   };
-  const acquisition = await runStage("acquisition", async () => {
-    const result = await dependencies.acquire({
-      manifestPath,
-      plan: (current) =>
-        dependencies.buildPlan(current, {
-          outputDirectory,
-          ...(options.stagingDirectory
-            ? { stagingDirectory: resolve(options.stagingDirectory) }
-            : {}),
-          localDirectories: (options.localArtifactDirectories ?? []).map((path) => resolve(path)),
-          ...(sourceSet
-            ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
-            : {}),
+  let acquisition: AcquireManifestResult;
+  try {
+    acquisition = await runStage("acquisition", async () => {
+      const result = await dependencies.acquire({
+        manifestPath,
+        plan: (current) =>
+          dependencies.buildPlan(current, {
+            outputDirectory,
+            ...(options.stagingDirectory
+              ? { stagingDirectory: resolve(options.stagingDirectory) }
+              : {}),
+            localDirectories: (options.localArtifactDirectories ?? []).map((path) => resolve(path)),
+            ...(sourceSet
+              ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
+              : {}),
+          }),
+        acquirers: options.acquirers,
+        ...(options.spotify ? { spotify: options.spotify } : {}),
+        refreshSpotify: false,
+        requireCompletePlan: true,
+        continueOnError: false,
+        concurrency: options.acquisitionConcurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
+        verificationConcurrency:
+          options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
+        verificationCache: new JsonDiskCache({
+          namespace: "audio-verification-v1",
+          ...(options.cacheMode ? { mode: options.cacheMode } : {}),
         }),
-      acquirers: options.acquirers,
-      ...(options.spotify ? { spotify: options.spotify } : {}),
-      refreshSpotify: false,
-      requireCompletePlan: true,
-      continueOnError: false,
-      concurrency: options.acquisitionConcurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
-      verificationConcurrency: options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
-      verificationCache: new JsonDiskCache({
-        namespace: "audio-verification-v1",
-        ...(options.cacheMode ? { mode: options.cacheMode } : {}),
-      }),
-      spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
-      onArtifactVerified: analyzeVerifiedArtifact,
+        spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
+        ...(options.signal ? { signal: options.signal } : {}),
+        onProgress(progress) {
+          options.onProgress?.({
+            stage: "acquisition",
+            status: "started",
+            message: `${progress.phase}: ${progress.message}`,
+          });
+        },
+        onArtifactVerified: analyzeVerifiedArtifact,
+      });
+      return {
+        value: result,
+        details: {
+          status: result.downloaded.length ? "completed" : "resumed",
+          operations: result.downloaded.length + result.resumed.length,
+          ...(sumCacheMetric(result.performance.caches, "hits") === undefined
+            ? {}
+            : { cacheHits: sumCacheMetric(result.performance.caches, "hits")! }),
+          concurrency: maximumObservedAcquisitionConcurrency(result),
+        },
+      };
     });
-    return {
-      value: result,
-      details: {
-        status: result.downloaded.length ? "completed" : "resumed",
-        operations: result.downloaded.length + result.resumed.length,
-        ...(sumCacheMetric(result.performance.caches, "hits") === undefined
-          ? {}
-          : { cacheHits: sumCacheMetric(result.performance.caches, "hits")! }),
-        concurrency: maximumObservedAcquisitionConcurrency(result),
-      },
-    };
-  });
+  } catch (error) {
+    await Promise.allSettled(analysisTasks.values());
+    throw error;
+  }
   manifest = acquisition.manifest;
   assertAcquisitionComplete(manifest, acquisition);
 
   const mediaPaths = acquiredMediaPaths(manifest);
-  const missingAnalysis = mediaPaths.filter((path) => !analysisByPath.has(resolve(path)));
+  const analysisRequests = await Promise.all(
+    mediaPaths.map(async (path) => ({
+      path: resolve(path),
+      identity: await analysisIdentity(path),
+    })),
+  );
+  assertDistinctAnalysisIdentities(analysisRequests);
+  await Promise.all(analysisTasks.values());
+  for (const request of analysisRequests) {
+    const existing = analysisByIdentity.get(request.identity);
+    if (existing && !analysisByPath.has(request.path)) analysisByPath.set(request.path, existing);
+  }
+  const missingAnalysis = analysisRequests.filter(({ path }) => !analysisByPath.has(path));
   if (missingAnalysis.length) {
     analysisStarted ??= performance.now();
     if (analysisTasks.size === 0) {
@@ -412,14 +463,13 @@ export async function runSetToRekordbox(
         message: "analysis started",
       });
     }
-    const fallback = await dependencies.analyze(missingAnalysis, {
-      ...options.analysis,
-      concurrency: analysisConcurrency,
-    });
+    const fallback = await dependencies.analyze(
+      missingAnalysis.map(({ path }) => path),
+      analyzerOptions(analysisConcurrency),
+    );
     analysisPeakConcurrency = Math.max(analysisPeakConcurrency, fallback.concurrency);
-    recordAnalysisRun(analysisRuns, analysisByPath, fallback);
+    recordAnalysisRun(analysisRuns, analysisByPath, analysisByIdentity, missingAnalysis, fallback);
   }
-  await Promise.all(analysisTasks.values());
   const analysisDurationMs = roundMilliseconds(
     performance.now() - (analysisStarted ?? performance.now()),
   );
@@ -430,7 +480,9 @@ export async function runSetToRekordbox(
     analysisPeakConcurrency,
     analysisDurationMs,
   );
-  const analysisArtifacts = analysis.results.map(toAnalysisArtifact);
+  const analysisArtifacts = analysis.results.map((result, index) =>
+    toAnalysisArtifact(mediaPaths[index]!, result),
+  );
   const analysisMetadataChanged = !isDeepStrictEqual(
     manifest.artifacts.analysis,
     analysisArtifacts,
@@ -455,7 +507,10 @@ export async function runSetToRekordbox(
     durationMs: analysisDurationMs,
   });
   const analysisDirectories = Object.fromEntries(
-    analysis.results.map((result) => [resolve(result.source.path), dirname(result.summaryPath)]),
+    analysis.results.map((result, index) => [
+      resolve(mediaPaths[index]!),
+      dirname(result.summaryPath),
+    ]),
   );
 
   const rekordbox = await runStage("rekordbox", async () => {
@@ -512,10 +567,11 @@ export async function runSetToRekordbox(
 }
 
 function toAnalysisArtifact(
+  mediaPath: string,
   result: AnalyzeTracksResult["results"][number],
 ): RekordboxAnalysisArtifact {
   return {
-    mediaPath: resolve(result.source.path),
+    mediaPath: resolve(mediaPath),
     summaryPath: resolve(result.summaryPath),
     backend: result.backend,
     tempoBpm: result.summary.tempo_bpm,
@@ -597,14 +653,65 @@ function sumCacheMetric(
 function recordAnalysisRun(
   runs: AnalyzeTracksResult[],
   byPath: Map<string, AnalyzeTracksResult["results"][number]>,
+  byIdentity: Map<string, AnalyzeTracksResult["results"][number]>,
+  requests: readonly AnalysisRequest[],
   run: AnalyzeTracksResult,
 ): void {
+  if (run.results.length !== requests.length) {
+    throw new Error(
+      `Native analysis returned ${String(run.results.length)} results for ${String(requests.length)} requested media paths`,
+    );
+  }
+  for (const [index, request] of requests.entries()) {
+    const result = run.results[index]!;
+    const resultIdentity = resolve(result.source.path);
+    if (resultIdentity !== request.identity) {
+      throw new Error(
+        `Native analysis result '${resultIdentity}' does not match requested media identity '${request.identity}'`,
+      );
+    }
+    if (byPath.has(request.path))
+      throw new Error(`Native analysis returned duplicate media path '${request.path}'`);
+    if (byIdentity.has(request.identity))
+      throw new Error(`Native analysis returned duplicate media identity '${request.identity}'`);
+  }
   runs.push(run);
-  for (const result of run.results) {
-    const path = resolve(result.source.path);
-    if (byPath.has(path))
-      throw new Error(`Native analysis returned duplicate media path '${path}'`);
-    byPath.set(path, result);
+  for (const [index, request] of requests.entries()) {
+    const result = run.results[index]!;
+    byPath.set(request.path, result);
+    byIdentity.set(request.identity, result);
+  }
+}
+
+type AnalysisRequest = {
+  /** Manifest-owned durable key; never replace this with an analyzer realpath. */
+  path: string;
+  /** Canonical filesystem identity used only to correlate analyzer work/results. */
+  identity: string;
+};
+
+async function analysisIdentity(path: string): Promise<string> {
+  const lexical = resolve(path);
+  try {
+    return await realpath(lexical);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return lexical;
+    throw error;
+  }
+}
+
+function assertDistinctAnalysisIdentities(requests: readonly AnalysisRequest[]): void {
+  const byIdentity = new Map<string, string>();
+  for (const request of requests) {
+    const prior = byIdentity.get(request.identity);
+    if (prior && prior !== request.path) {
+      throw new TracksError(
+        "INVALID_SOURCE",
+        `Downloaded manifest paths '${prior}' and '${request.path}' resolve to the same media file`,
+        { exitCode: 2 },
+      );
+    }
+    byIdentity.set(request.identity, request.path);
   }
 }
 
@@ -640,18 +747,25 @@ function combineAnalysisRuns(
 }
 
 function createPromiseLimiter(concurrency: number) {
-  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 64) {
-    throw new RangeError("analysisConcurrency must be an integer between 1 and 64");
+  if (
+    !Number.isSafeInteger(concurrency) ||
+    concurrency < 1 ||
+    concurrency > MAX_NATIVE_ANALYSIS_CONCURRENCY
+  ) {
+    throw new RangeError(
+      `analysisConcurrency must be an integer between 1 and ${String(MAX_NATIVE_ANALYSIS_CONCURRENCY)}`,
+    );
   }
   let active = 0;
   const queue: Array<() => void> = [];
   const release = (): void => {
-    active -= 1;
-    queue.shift()?.();
+    const next = queue.shift();
+    if (next) next();
+    else active -= 1;
   };
   return async <T>(task: () => Promise<T>): Promise<T> => {
-    if (active >= concurrency) await new Promise<void>((resolve) => queue.push(resolve));
-    active += 1;
+    if (active < concurrency) active += 1;
+    else await new Promise<void>((resolve) => queue.push(resolve));
     try {
       return await task();
     } finally {

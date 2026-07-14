@@ -49,8 +49,8 @@ the same invocation, sends `Range: bytes=<part-size>-`, and verifies the final b
 ## YouTube transfer policy
 
 - Native YouTube defaults to three tracks at a time, two bounded ranges per track.
-- Reference YouTube supports up to 64 tracks at a time by default, bounded by the global 64-track
-  limit.
+- Reference YouTube defaults to one track with an explicit cap of four, bounded by the global
+  16-track limit.
 - The explicit reference route retains its conservative per-request sleeps and retries.
 - One fragment at a time.
 - One-second request spacing and randomized two-to-five-second spacing inside each transfer.

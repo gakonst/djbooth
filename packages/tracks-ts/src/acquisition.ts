@@ -59,15 +59,27 @@ export type WriteManifestOptions = {
   expectedContents?: string;
 };
 
-/** Read and validate a pipeline manifest without weakening its strict schema. */
-export async function readManifest(path: string): Promise<SetManifest> {
-  let value: unknown;
+export type ManifestSnapshot = {
+  contents: string;
+  manifest: SetManifest;
+};
+
+/** Read one exact durable snapshot so later compare-and-swap writes protect that same version. */
+export async function readManifestSnapshot(path: string): Promise<ManifestSnapshot> {
   try {
-    value = JSON.parse(await readFile(path, "utf8"));
+    const contents = await readFile(path, "utf8");
+    return {
+      contents,
+      manifest: parseManifest(JSON.parse(contents) as unknown),
+    };
   } catch (error) {
     throw new TracksError("INVALID_SOURCE", `Could not read manifest ${path}`, { cause: error });
   }
-  return parseManifest(value);
+}
+
+/** Read and validate a pipeline manifest without weakening its strict schema. */
+export async function readManifest(path: string): Promise<SetManifest> {
+  return (await readManifestSnapshot(path)).manifest;
 }
 
 /**

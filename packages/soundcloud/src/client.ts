@@ -559,10 +559,14 @@ function authenticatedFetch(options: {
           maxDelayMs: options.retry?.maxDelayMs ?? 10_000,
           retryUnsafeMethods: options.retry?.retryUnsafeMethods ?? false,
         }
+  const cooldown = new RequestCooldownGate(
+    Math.min(250, Math.max(25, retry.baseDelayMs)),
+  )
 
   return async (request) => {
     let refreshedAfterUnauthorized = false
     for (let attempt = 1; ; attempt++) {
+      await cooldown.wait(request.signal)
       const headers = new Headers(request.headers)
       let injectedAccessToken: string | undefined
       if (!headers.has('authorization')) {
@@ -600,23 +604,97 @@ function authenticatedFetch(options: {
         await response.body?.cancel()
         continue
       }
+      const serverCooldown = await responseCooldown(response)
+      const retryable = isRetryable(response.status)
+      const retryDelay =
+        serverCooldown ??
+        (retryable
+          ? backoff(attempt, retry.baseDelayMs, retry.maxDelayMs)
+          : undefined)
+      if (serverCooldown !== undefined) cooldown.defer(serverCooldown)
       if (
         attempt >= retry.maxAttempts ||
         !canRetry(request.method, retry.retryUnsafeMethods) ||
-        !isRetryable(response.status)
+        !retryable
       ) {
         return response
       }
 
-      const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
-      if (retryAfter !== undefined && retryAfter > retry.maxDelayMs)
+      if (serverCooldown !== undefined && serverCooldown > retry.maxDelayMs)
         return response
-      const delay =
-        retryAfter ?? backoff(attempt, retry.baseDelayMs, retry.maxDelayMs)
       await response.body?.cancel()
-      await sleep(delay, request.signal)
+      if (serverCooldown === undefined && retryDelay !== undefined)
+        await sleep(retryDelay, request.signal)
     }
   }
+}
+
+class RequestCooldownGate {
+  #notBefore = 0
+  #nextStart = 0
+
+  constructor(readonly spacingMs: number) {}
+
+  defer(milliseconds: number): void {
+    this.#notBefore = Math.max(
+      this.#notBefore,
+      Date.now() + Math.max(0, milliseconds),
+    )
+    this.#nextStart = Math.max(this.#nextStart, this.#notBefore)
+  }
+
+  async wait(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
+    let releaseAt = Math.max(this.#notBefore, this.#nextStart)
+    if (releaseAt <= Date.now()) return
+    this.#nextStart = releaseAt + this.spacingMs
+
+    for (;;) {
+      await sleep(Math.max(0, releaseAt - Date.now()), signal)
+      if (this.#notBefore <= Date.now()) return
+      releaseAt = Math.max(this.#notBefore, this.#nextStart)
+      this.#nextStart = releaseAt + this.spacingMs
+    }
+  }
+}
+
+async function responseCooldown(
+  response: Response,
+): Promise<number | undefined> {
+  const delays: number[] = []
+  const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
+  if (retryAfter !== undefined) delays.push(retryAfter)
+
+  if (rateLimitExhausted(response)) {
+    for (const name of [
+      'ratelimit-reset',
+      'x-ratelimit-reset',
+      'x-rate-limit-reset',
+    ]) {
+      const delay = parseRateLimitReset(response.headers.get(name))
+      if (delay !== undefined) delays.push(delay)
+    }
+    if (response.status === 429) {
+      const error = await SoundCloudApiError.fromResponse(response)
+      const delay = parseRateLimitReset(error.rateLimit?.resetTime ?? null)
+      if (delay !== undefined) delays.push(delay)
+    }
+  }
+
+  return delays.length ? Math.max(...delays) : undefined
+}
+
+function rateLimitExhausted(response: Response): boolean {
+  if (response.status === 429) return true
+  for (const name of [
+    'ratelimit-remaining',
+    'x-ratelimit-remaining',
+    'x-rate-limit-remaining',
+  ]) {
+    const remaining = response.headers.get(name)
+    if (remaining !== null && Number(remaining) === 0) return true
+  }
+  return false
 }
 
 function appendQuery(url: URL, query: RawRequestOptions['query']): void {
@@ -658,6 +736,24 @@ function parseRetryAfter(value: string | null): number | undefined {
   if (!value) return undefined
   const seconds = Number(value)
   if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
+  const timestamp = Date.parse(value)
+  return Number.isNaN(timestamp)
+    ? undefined
+    : Math.max(0, timestamp - Date.now())
+}
+
+function parseRateLimitReset(value: string | null): number | undefined {
+  if (!value) return undefined
+  const numeric = Number(value)
+  if (Number.isFinite(numeric)) {
+    const timestamp =
+      numeric >= 1_000_000_000_000
+        ? numeric
+        : numeric >= 1_000_000_000
+          ? numeric * 1000
+          : Date.now() + numeric * 1000
+    return Math.max(0, timestamp - Date.now())
+  }
   const timestamp = Date.parse(value)
   return Number.isNaN(timestamp)
     ? undefined

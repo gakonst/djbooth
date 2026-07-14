@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 
+import { nativeFallbackFor, YtdlpError } from "@gakonst/ytdlp-ts";
 import { describe, expect, test } from "vitest";
 
 import {
@@ -11,6 +12,7 @@ import {
   type TrackAcquirer,
 } from "../src/acquire-manifest.js";
 import { acquireManifestLock, readManifest, writeManifestAtomic } from "../src/acquisition.js";
+import { buildAcquisitionPlan } from "../src/generic-acquisition-plan.js";
 import { createManifest, parseManifest, type SetManifest } from "../src/manifest.js";
 
 const audioToolTest = process.platform === "win32" ? test.skip : test;
@@ -301,6 +303,280 @@ describe("acquireManifest", () => {
           backend: "local",
           mediaPath: outputPath,
           source: outputPath,
+        });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "preserves legacy two-digit recording and clip paths without enforcing regenerated tags",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-legacy-resume-"));
+      const manifestPath = join(directory, "manifest.json");
+      const outputDirectory = join(directory, "tracks");
+      const sourcePath = join(directory, "source", "set.mp3");
+      const value = createManifest({
+        source: "https://youtube.test/legacy-set",
+        provider: "description",
+        complete: true,
+        tracks: [
+          {
+            order: 1,
+            startSeconds: 0,
+            endSeconds: 100,
+            artist: "Legacy Artist",
+            title: "Legacy Recording",
+          },
+          { order: 2, isId: true, startSeconds: 100, endSeconds: 200 },
+        ],
+      });
+      value.entries[0]!.spotify = {
+        status: "unmatched",
+        query: "Legacy Artist Legacy Recording",
+      };
+      value.entries[1]!.spotify = { status: "skipped", reason: "Unresolved ID" };
+      value.artifacts.sourceSet = {
+        url: "https://soundcloud.test/legacy-set",
+        path: sourcePath,
+        sha256: "a".repeat(64),
+        durationSeconds: 200,
+        codec: "mp3",
+        bitrate: 128_000,
+      };
+
+      const legacyPaths = [
+        join(outputDirectory, "01 - Legacy Artist - Legacy Recording [set-extract].mp3"),
+        join(outputDirectory, "02 - Unknown Artist - ID [set-extract].mp3"),
+      ];
+      const contents = ["legacy recording bytes", "legacy id bytes"];
+      await mkdir(outputDirectory, { recursive: true });
+      await Promise.all(legacyPaths.map((path, index) => writeFile(path, contents[index]!)));
+      for (const [index, entry] of value.entries.entries()) {
+        const mediaPath = legacyPaths[index]!;
+        const sha256 = createHash("sha256").update(contents[index]!).digest("hex");
+        entry.acquisition = {
+          status: "downloaded",
+          query: entry.identity.title ?? `Track ${entry.order}`,
+          download: {
+            backend: "ytdlp",
+            kind: "source-set-clip",
+            mediaPath,
+            files: [mediaPath],
+            source: value.artifacts.sourceSet.url,
+            engine: "reference",
+            sha256,
+            clip: {
+              sourceSetUrl: value.artifacts.sourceSet.url,
+              startSeconds: entry.cue.startSeconds!,
+              endSeconds: entry.cue.endSeconds!,
+              containsTransitions: true,
+              qualityNote: "legacy checkpoint",
+            },
+          },
+        };
+        entry.rekordbox = {
+          status: "imported",
+          target: "rekordbox-db",
+          dbContentId: `content-${entry.order}`,
+          playlistMembershipId: `membership-${entry.order}`,
+        };
+      }
+      value.artifacts.rekordbox = {
+        target: "rekordbox-db",
+        dbPath: "/rekordbox/master.db",
+        folderName: "DJ Sets I Like",
+        folderId: "folder-1",
+        playlistName: "Legacy Set",
+        playlistId: "playlist-1",
+        backupDirectory: "/backups/legacy",
+      };
+      await writeManifestAtomic(manifestPath, value);
+
+      const plan = await buildAcquisitionPlan(value, {
+        outputDirectory,
+        allowSourceSetClips: true,
+        sourceSetPath: sourcePath,
+      });
+      expect(plan.recordings[0]!.variants[0]!.outputPath).toMatch(/001 -/u);
+      expect(plan.clips[0]!.outputPath).toMatch(/002 -/u);
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const callbacks: string[] = [];
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [],
+          continueOnError: false,
+          requireCompletePlan: true,
+          onArtifactVerified(artifact) {
+            callbacks.push(artifact.path);
+          },
+        });
+
+        expect(result.downloaded).toEqual([]);
+        expect(result.resumed).toEqual(legacyPaths.toSorted());
+        expect(callbacks.toSorted()).toEqual(legacyPaths.toSorted());
+        expect(plan.recordings[0]!.variants[0]!.outputPath).toBe(legacyPaths[0]);
+        expect(plan.clips[0]!.outputPath).toBe(legacyPaths[1]);
+        expect(
+          result.manifest.entries.map((entry) =>
+            entry.acquisition.status === "downloaded"
+              ? entry.acquisition.download.mediaPath
+              : undefined,
+          ),
+        ).toEqual(legacyPaths);
+        expect(
+          result.manifest.entries.every((entry) => entry.rekordbox.status === "imported"),
+        ).toBe(true);
+        expect(result.manifest.artifacts.rekordbox?.playlistId).toBe("playlist-1");
+        await Promise.all(
+          legacyPaths.map(async (path, index) => {
+            expect(basename(path)).toMatch(/^0[12] -/u);
+            expect(await readFile(path, "utf8")).toBe(contents[index]);
+          }),
+        );
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "does not bind unkeyed checkpoint variants by position after paths change",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-legacy-variants-"));
+      const manifestPath = join(directory, "manifest.json");
+      const outputDirectory = join(directory, "tracks");
+      const value = oneTrackManifest();
+      value.entries[0]!.spotify = { status: "unmatched", query: "Artist Track" };
+      value.entries[0]!.identity.overlaps = [
+        { artist: "Overlap Artist", title: "Overlap Track", confidence: 0.9 },
+      ];
+      const legacyPaths = [
+        join(outputDirectory, "01 - Artist - Track.m4a"),
+        join(outputDirectory, "01 - Overlap Artist - Overlap Track.m4a"),
+      ];
+      const contents = ["primary legacy bytes", "overlap legacy bytes"];
+      await mkdir(outputDirectory, { recursive: true });
+      await Promise.all(legacyPaths.map((path, index) => writeFile(path, contents[index]!)));
+      const downloads = legacyPaths.map((mediaPath, index) => ({
+        backend: "ytdlp" as const,
+        kind: "individual" as const,
+        mediaPath,
+        files: [mediaPath],
+        source: `https://youtube.test/legacy-${index + 1}`,
+        engine: "reference" as const,
+        sha256: createHash("sha256").update(contents[index]!).digest("hex"),
+      }));
+      value.entries[0]!.acquisition = {
+        status: "downloaded",
+        query: "Artist Track",
+        download: downloads[0]!,
+        alternatives: [downloads[1]!],
+      };
+      await writeManifestAtomic(manifestPath, value);
+
+      const plan = await buildAcquisitionPlan(value, { outputDirectory });
+      expect(plan.recordings[0]!.variants).toHaveLength(2);
+      expect(
+        plan.recordings[0]!.variants.every((variant) => /001 -/u.test(variant.outputPath)),
+      ).toBe(true);
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        await expect(
+          acquireManifest({
+            manifestPath,
+            plan,
+            acquirers: [],
+            continueOnError: false,
+            requireCompletePlan: true,
+          }),
+        ).rejects.toThrow(/no available backend/iu);
+        expect(plan.recordings[0]!.variants.map((variant) => variant.outputPath)).not.toEqual(
+          legacyPaths,
+        );
+        await Promise.all(
+          legacyPaths.map(async (path, index) => {
+            expect(await readFile(path, "utf8")).toBe(contents[index]);
+          }),
+        );
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "maps reordered plan variants by durable key without rewriting checkpoint order",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-keyed-variants-"));
+      const manifestPath = join(directory, "manifest.json");
+      const outputDirectory = join(directory, "tracks");
+      const value = oneTrackManifest();
+      value.entries[0]!.spotify = { status: "unmatched", query: "Artist Track" };
+      value.entries[0]!.identity.overlaps = [
+        { artist: "Overlap Artist", title: "Overlap Track", confidence: 0.9 },
+      ];
+      const plan = await buildAcquisitionPlan(value, { outputDirectory });
+      const variants = plan.recordings[0]!.variants;
+      const legacyPaths = [
+        join(outputDirectory, "01 - primary.m4a"),
+        join(outputDirectory, "01 - overlap.m4a"),
+      ];
+      const contents = ["primary keyed bytes", "overlap keyed bytes"];
+      await mkdir(outputDirectory, { recursive: true });
+      await Promise.all(legacyPaths.map((path, index) => writeFile(path, contents[index]!)));
+      const downloads = variants.map((variant, index) => ({
+        backend: "ytdlp" as const,
+        kind: "individual" as const,
+        mediaPath: legacyPaths[index]!,
+        files: [legacyPaths[index]!],
+        source: `https://youtube.test/keyed-${String(index + 1)}`,
+        engine: "native" as const,
+        sha256: createHash("sha256").update(contents[index]!).digest("hex"),
+        variantKey:
+          variant.spotifyId ??
+          createHash("sha256")
+            .update(
+              `${variant.artists.join("\u0000")}\u0000${variant.title}\u0000${variant.isrc ?? ""}`,
+            )
+            .digest("hex")
+            .slice(0, 20),
+      }));
+      value.entries[0]!.acquisition = {
+        status: "downloaded",
+        query: "Artist Track",
+        download: downloads[0]!,
+        alternatives: [downloads[1]!],
+      };
+      await writeManifestAtomic(manifestPath, value);
+      variants.reverse();
+
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [],
+          continueOnError: false,
+          requireCompletePlan: true,
+        });
+
+        expect(result.downloaded).toEqual([]);
+        expect(result.resumed.toSorted()).toEqual(legacyPaths.toSorted());
+        expect(variants.map((variant) => variant.outputPath)).toEqual(legacyPaths.toReversed());
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: { variantKey: downloads[0]!.variantKey },
+          alternatives: [{ variantKey: downloads[1]!.variantKey }],
         });
       } finally {
         process.env.PATH = previousPath;
@@ -690,6 +966,123 @@ describe("acquireManifest", () => {
     }
   });
 
+  test("does not download through a later acquirer after a fail-closed native error", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-fail-closed-acquirer-"));
+    const manifestPath = join(directory, "manifest.json");
+    await writeManifestAtomic(manifestPath, oneTrackManifest());
+    const nativeError = new Error("native write failed");
+    let referenceSearches = 0;
+    let referenceDownloads = 0;
+    const native: TrackAcquirer = {
+      backend: "ytdlp",
+      availability: () => Promise.resolve({ available: true }),
+      search: () => Promise.reject(nativeError),
+      download: () => Promise.reject(new Error("not used")),
+      shouldContinueAfterError: () => false,
+    };
+    const reference: TrackAcquirer = {
+      backend: "ytdlp",
+      requiresPriorCapabilityFailure: true,
+      availability: () => Promise.resolve({ available: true }),
+      search: () => {
+        referenceSearches += 1;
+        return Promise.resolve([
+          {
+            id: "abcdefghijk",
+            source: "https://www.youtube.com/watch?v=abcdefghijk",
+            title: "Artist - Track",
+            artist: "Artist",
+            durationSeconds: 100,
+          },
+        ]);
+      },
+      download: () => {
+        referenceDownloads += 1;
+        return Promise.reject(new Error("reference download must not run"));
+      },
+    };
+
+    await expect(
+      acquireManifest({
+        manifestPath,
+        plan: recordingPlan(directory),
+        acquirers: [native, reference],
+        requireCompletePlan: true,
+        continueOnError: false,
+      }),
+    ).rejects.toBe(nativeError);
+    expect(referenceSearches).toBe(0);
+    expect(referenceDownloads).toBe(0);
+  });
+
+  audioToolTest("unlocks a deferred reference acquirer after a typed capability gap", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-typed-reference-fallback-"));
+    const manifestPath = join(directory, "manifest.json");
+    const bin = await installFakeAudioTools(directory);
+    await writeManifestAtomic(manifestPath, oneTrackManifest());
+    const candidate = {
+      id: "abcdefghijk",
+      source: "https://www.youtube.com/watch?v=abcdefghijk",
+      title: "Artist - Track",
+      artist: "Artist",
+      durationSeconds: 100,
+    };
+    const native: TrackAcquirer = {
+      backend: "ytdlp",
+      availability: () => Promise.resolve({ available: true }),
+      search: () => Promise.resolve([candidate]),
+      download: () =>
+        Promise.reject(new YtdlpError("YOUTUBE_DIRECT_FORMATS_UNAVAILABLE", "no direct M4A")),
+      shouldContinueAfterError: (error) => nativeFallbackFor(error) ?? false,
+    };
+    let referenceSearches = 0;
+    let referenceDownloads = 0;
+    const reference: TrackAcquirer = {
+      backend: "ytdlp",
+      requiresPriorCapabilityFailure: true,
+      availability: () => Promise.resolve({ available: true }),
+      search: () => {
+        referenceSearches += 1;
+        return Promise.resolve([candidate]);
+      },
+      async download(selected, destination) {
+        referenceDownloads += 1;
+        await mkdir(destination, { recursive: true });
+        const path = join(destination, "track.m4a");
+        await writeFile(path, "reference audio");
+        return {
+          path,
+          source: selected.source,
+          engine: "reference",
+          temporary: true,
+        };
+      },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+    try {
+      const result = await acquireManifest({
+        manifestPath,
+        plan: recordingPlan(directory),
+        acquirers: [native, reference],
+        requireCompletePlan: true,
+        continueOnError: false,
+      });
+
+      expect(referenceSearches).toBe(1);
+      expect(referenceDownloads).toBe(1);
+      expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+        status: "downloaded",
+        download: {
+          engine: "reference",
+          fallback: { from: "native", code: "YOUTUBE_DIRECT_FORMATS_UNAVAILABLE" },
+        },
+      });
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   audioToolTest(
     "runs independent recording jobs concurrently with serialized checkpoints",
     async () => {
@@ -790,6 +1183,156 @@ describe("acquireManifest", () => {
           (await readManifest(manifestPath)).entries.map((entry) => entry.acquisition.status),
         ).toEqual(["downloaded", "downloaded", "downloaded"]);
       } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "awaits active workers and leaves unfinished entries pending on cancellation",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-cancel-workers-"));
+      const manifestPath = join(directory, "manifest.json");
+      const manifest = createManifest({
+        source: "https://youtube.test/cancel-set",
+        provider: "description",
+        complete: true,
+        tracks: [1, 2, 3].map((order) => ({
+          order,
+          startSeconds: order * 100,
+          endSeconds: (order + 1) * 100,
+          artist: "Artist",
+          title: "Track",
+        })),
+      });
+      for (const entry of manifest.entries) {
+        entry.spotify = {
+          status: "matched",
+          query: "Artist - Track",
+          score: 1,
+          id: "spotify-shared",
+          uri: "spotify:track:spotify-shared",
+          name: "Track",
+          artists: ["Artist"],
+          durationMs: 100_000,
+        };
+      }
+      await writeManifestAtomic(manifestPath, manifest);
+      const plan: AcquisitionPlan = {
+        clips: [],
+        recordings: manifest.entries.map((entry) => ({
+          entryOrder: entry.order,
+          variants: [
+            {
+              spotifyId: "spotify-shared",
+              title: "Track",
+              artists: ["Artist"],
+              durationMs: 100_000,
+              outputPath: join(directory, `track-${entry.order}.m4a`),
+              metadata: { title: "Track", artists: ["Artist"], comment: "test" },
+            },
+          ],
+        })),
+        stagingDirectory: join(directory, "staging"),
+      };
+      const controller = new AbortController();
+      let releaseFirst = (): void => undefined;
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let notifyFirstStarted = (): void => undefined;
+      const firstStarted = new Promise<void>((resolve) => {
+        notifyFirstStarted = resolve;
+      });
+      let notifyAborted = (): void => undefined;
+      const aborted = new Promise<void>((resolve) => {
+        notifyAborted = resolve;
+      });
+      let searches = 0;
+      let thirdSearches = 0;
+      const acquirer: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: () => Promise.resolve({ available: true }),
+        async search(target) {
+          searches += 1;
+          if (searches === 2) {
+            await firstStarted;
+            controller.abort(new DOMException("test cancellation", "AbortError"));
+            notifyAborted();
+            throw controller.signal.reason;
+          }
+          if (searches > 2) thirdSearches += 1;
+          return [
+            {
+              id: searches === 1 ? "first" : "unexpected",
+              source: `https://youtube.test/${String(searches)}`,
+              title: target.title,
+              artist: target.artists[0]!,
+              ...(target.durationSeconds === undefined
+                ? {}
+                : { durationSeconds: target.durationSeconds }),
+            },
+          ];
+        },
+        async download(candidate, destination) {
+          if (candidate.id === "first") {
+            notifyFirstStarted();
+            await firstGate;
+          }
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, `${candidate.id}.m4a`);
+          await writeFile(path, "audio");
+          return { path, source: candidate.source, temporary: true };
+        },
+      };
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        let settled = false;
+        const outcome = acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          continueOnError: false,
+          concurrency: 2,
+          signal: controller.signal,
+        }).then(
+          () => {
+            settled = true;
+            return undefined;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+
+        await aborted;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        try {
+          expect(settled).toBe(false);
+          expect(thirdSearches).toBe(0);
+        } finally {
+          releaseFirst();
+        }
+
+        const error = await outcome;
+        expect(error).toMatchObject({ name: "AbortError" });
+        const durable = await readManifest(manifestPath);
+        expect(durable.entries.map((entry) => entry.acquisition.status)).toEqual([
+          "pending",
+          "pending",
+          "pending",
+        ]);
+        expect(
+          durable.entries.flatMap((entry) =>
+            entry.errors.filter((item) => item.stage === "acquisition"),
+          ),
+        ).toEqual([]);
+      } finally {
+        releaseFirst();
         process.env.PATH = previousPath;
       }
     },
@@ -918,18 +1461,18 @@ describe("acquireManifest", () => {
         }
 
         expect(downloadCalls).toBe(34);
-        expect(maximumActive).toBe(34);
+        expect(maximumActive).toBe(3);
         expect(result.downloaded).toHaveLength(34);
         expect(result.performance).toMatchObject({
-          concurrency: 64,
-          verificationConcurrency: 64,
-          spotifyConcurrency: 64,
+          concurrency: 3,
+          verificationConcurrency: 8,
+          spotifyConcurrency: 8,
         });
         expect(result.performance.stages).toContainEqual(
           expect.objectContaining({
             stage: "recordings",
             operations: 34,
-            maxConcurrency: 34,
+            maxConcurrency: 3,
           }),
         );
         expect(result.performance.checkpoints).toMatchObject({ calls: 36 });

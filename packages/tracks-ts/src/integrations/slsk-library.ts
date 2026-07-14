@@ -50,16 +50,16 @@ export type SoulseekDownloadResult = {
 /** The structural subset of slsk-ts used by this adapter. */
 export type SoulseekLibraryClient = {
   state?: "disconnected" | "connecting" | "connected" | "disconnecting";
-  connect?(username: string, password: string): Promise<void>;
+  connect?(username: string, password: string, options?: { signal?: AbortSignal }): Promise<void>;
   search(
     query: string,
-    options?: { timeout?: number; maxResults?: number },
+    options?: { timeout?: number; maxResults?: number; signal?: AbortSignal },
   ): Promise<readonly SoulseekSearchResult[]>;
   download(
     username: string,
     filename: string,
     destination: string,
-    options?: { resume?: boolean; temporaryPath?: string; timeout?: number },
+    options?: { resume?: boolean; signal?: AbortSignal; temporaryPath?: string; timeout?: number },
   ): Promise<SoulseekDownloadResult>;
 };
 
@@ -92,6 +92,8 @@ export type SoulseekLibraryAcquirerOptions = {
   maxPeerResults?: number;
   maxCandidates?: number;
   transferTimeoutMs?: number;
+  /** Cancels connection setup, search waits, and active peer transfers. */
+  signal?: AbortSignal;
 };
 
 export type SoulseekRemoteFile = {
@@ -125,6 +127,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
   readonly #maxPeerResults: number;
   readonly #maxCandidates: number;
   readonly #transferTimeoutMs: number | undefined;
+  readonly #signal: AbortSignal | undefined;
   #connecting: Promise<void> | undefined;
   readonly #searches = new Map<string, Promise<SoulseekSearchCandidate[]>>();
 
@@ -145,6 +148,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
       options.transferTimeoutMs,
       "transferTimeoutMs",
     );
+    this.#signal = options.signal;
   }
 
   availability(): Promise<BackendAvailability> {
@@ -197,6 +201,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
     const responses = await client.search(query, {
       timeout: this.#searchTimeoutMs,
       maxResults: this.#maxPeerResults,
+      ...(this.#signal ? { signal: this.#signal } : {}),
     });
     const seen = new Set<string>();
     const candidates = responses.flatMap((response) =>
@@ -229,6 +234,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
   ): Promise<IndividualDownload> {
     const client = await this.#connectedClient();
     const remote = parseSoulseekSource(candidate.source);
+    this.#signal?.throwIfAborted();
     await mkdir(destinationDirectory, { recursive: true });
     const extension = audioExtension(remote.filename) ?? remote.extension ?? ".audio";
     const destination = resolve(
@@ -237,6 +243,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
     const partial = `${destination}.part`;
 
     if (await nonemptyFile(destination)) {
+      this.#signal?.throwIfAborted();
       return {
         path: destination,
         source: candidate.source,
@@ -249,6 +256,7 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
     await client.download(remote.username, remote.filename, destination, {
       resume: true,
       temporaryPath: partial,
+      ...(this.#signal ? { signal: this.#signal } : {}),
       ...(this.#transferTimeoutMs === undefined ? {} : { timeout: this.#transferTimeoutMs }),
     });
     return {
@@ -261,8 +269,10 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
   }
 
   async #connectedClient(): Promise<SoulseekLibraryClient> {
+    this.#signal?.throwIfAborted();
     if (this.#connecting) {
       await this.#connecting;
+      this.#signal?.throwIfAborted();
       return this.#client!;
     }
     const availability = await this.availability();
@@ -270,12 +280,16 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
     const client = this.#client!;
     if (client.state === "connected") return client;
     if (!client.connect) return client;
-    this.#connecting ??= client
-      .connect(this.#credentials.username!, this.#credentials.password!)
-      .finally(() => {
-        this.#connecting = undefined;
-      });
+    const connecting = this.#signal
+      ? client.connect(this.#credentials.username!, this.#credentials.password!, {
+          signal: this.#signal,
+        })
+      : client.connect(this.#credentials.username!, this.#credentials.password!);
+    this.#connecting ??= connecting.finally(() => {
+      this.#connecting = undefined;
+    });
     await this.#connecting;
+    this.#signal?.throwIfAborted();
     return client;
   }
 }

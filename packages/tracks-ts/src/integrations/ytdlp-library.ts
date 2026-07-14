@@ -1,6 +1,21 @@
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
+import {
+  DEFAULT_YOUTUBE_SEARCH_RESULTS,
+  ExtractorRegistry,
+  MAX_YOUTUBE_SEARCH_RESULTS,
+  downloadMedia,
+  nativeFallbackFor,
+  searchYoutube,
+  type MediaInfo,
+  type NativeDownloadOptions,
+  type NativeDownloadResult,
+  type YoutubeSearchOptions,
+  type YoutubeSearchResult,
+  YtdlpError,
+} from "@gakonst/ytdlp-ts";
+
 import { JsonDiskCache, type CacheMode, type CacheStats } from "../cache.js";
 import type {
   BackendAvailability,
@@ -58,8 +73,169 @@ export type YtdlpReferenceClient = {
   ): Promise<{ files: string[]; stdout: string; stderr: string }>;
 };
 
+export type YtdlpNativeAcquirerOptions = {
+  searchLimit?: number;
+  cache?: JsonDiskCache | false;
+  cacheMode?: CacheMode;
+  searchTtlMs?: number;
+  signal?: AbortSignal;
+};
+
+export type YtdlpNativeAcquirerDependencies = {
+  searchYoutube(query: string, options?: YoutubeSearchOptions): Promise<YoutubeSearchResult[]>;
+  extract(url: string, context?: { signal?: AbortSignal }): Promise<MediaInfo>;
+  downloadMedia(info: MediaInfo, options?: NativeDownloadOptions): Promise<NativeDownloadResult>;
+  probeAudio(path: string): Promise<unknown>;
+};
+
+const defaultNativeDependencies: YtdlpNativeAcquirerDependencies = {
+  searchYoutube,
+  extract: (url, context) => new ExtractorRegistry().extract(url, context),
+  downloadMedia,
+  probeAudio,
+};
+
+/** Native-only ytdlp-ts adapter. It never constructs or invokes ReferenceClient. */
+export class YtdlpNativeAcquirer implements TrackAcquirer {
+  readonly backend = "ytdlp" as const;
+  readonly #searchLimit: number;
+  readonly #cache: JsonDiskCache | undefined;
+  readonly #cacheMode: CacheMode;
+  readonly #searchTtlMs: number;
+  readonly #signal: AbortSignal | undefined;
+  readonly #dependencies: YtdlpNativeAcquirerDependencies;
+
+  constructor(
+    options: YtdlpNativeAcquirerOptions = {},
+    dependencies: Partial<YtdlpNativeAcquirerDependencies> = {},
+  ) {
+    this.#searchLimit = boundedSearchLimit(options.searchLimit);
+    this.#cacheMode = options.cacheMode ?? "default";
+    this.#cache =
+      options.cache === false
+        ? undefined
+        : (options.cache ??
+          new JsonDiskCache({
+            namespace: "youtube-native-search-v1",
+            ...(options.cacheMode ? { mode: options.cacheMode } : {}),
+          }));
+    this.#searchTtlMs = options.searchTtlMs ?? 6 * 60 * 60 * 1000;
+    this.#signal = options.signal;
+    this.#dependencies = { ...defaultNativeDependencies, ...dependencies };
+  }
+
+  cacheStats(): CacheStats | undefined {
+    return this.#cache?.snapshot();
+  }
+
+  availability(): Promise<BackendAvailability> {
+    return Promise.resolve({ available: true });
+  }
+
+  shouldContinueAfterError(error: unknown) {
+    return nativeFallbackFor(error) ?? false;
+  }
+
+  async search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]> {
+    const query = [...target.artists, target.title].join(" ").trim();
+    const load = async () =>
+      sanitizeNativeSearchResults(
+        await this.#dependencies.searchYoutube(query, {
+          limit: this.#searchLimit,
+          ...(this.#signal ? { signal: this.#signal } : {}),
+        }),
+      );
+    const results = this.#cache
+      ? await this.#cache.getOrLoad(
+          {
+            schemaVersion: 1,
+            kind: "native-youtube-search",
+            query,
+            limit: this.#searchLimit,
+          },
+          load,
+          { ttlMs: this.#searchTtlMs, mode: this.#cacheMode },
+        )
+      : await load();
+    return sanitizeNativeSearchResults(results);
+  }
+
+  async download(
+    candidate: ScoredYoutubeCandidate,
+    destinationDirectory: string,
+    basename: string,
+  ): Promise<IndividualDownload> {
+    await mkdir(destinationDirectory, { recursive: true });
+    const existing = await existingOutput(destinationDirectory, basename);
+    if (existing) {
+      try {
+        await this.#dependencies.probeAudio(existing);
+        return {
+          path: existing,
+          source: candidate.source,
+          engine: "native",
+          temporary: true,
+          qualityNote: "Resumed a previously completed native ytdlp-ts staging artifact.",
+        };
+      } catch {
+        await rm(existing, { force: true });
+      }
+    }
+
+    const context = this.#signal ? { signal: this.#signal } : {};
+    let info = await this.#dependencies.extract(candidate.source, context);
+    assertYoutubeIdentity(info.id, candidate.id);
+    const downloadOptions: NativeDownloadOptions = {
+      format: "bestaudio[ext=m4a]",
+      paths: destinationDirectory,
+      output: `${basename}.%(ext)s`,
+      noOverwrites: true,
+      continueDownload: true,
+      retries: 5,
+      writeInfoJson: false,
+      writeThumbnail: false,
+      ...(this.#signal ? { signal: this.#signal } : {}),
+    };
+    let result: NativeDownloadResult;
+    try {
+      result = await this.#dependencies.downloadMedia(info, downloadOptions);
+    } catch (error) {
+      if (!isForbiddenMediaError(error)) throw error;
+      const refreshed = await this.#dependencies.extract(candidate.source, context);
+      assertYoutubeIdentity(refreshed.id, info.id);
+      assertYoutubeIdentity(refreshed.id, candidate.id);
+      info = refreshed;
+      result = await this.#dependencies.downloadMedia(info, downloadOptions);
+    }
+    const path = await findOutputFile(result.files, destinationDirectory, basename);
+    return {
+      path,
+      source: candidate.source,
+      engine: "native",
+      temporary: true,
+      transcoded: false,
+      qualityNote: "Downloaded direct source AAC/M4A with the TypeScript-native ytdlp-ts engine.",
+    };
+  }
+}
+
+function assertYoutubeIdentity(actual: string, expected: string): void {
+  if (actual === expected) return;
+  throw new YtdlpError(
+    "YOUTUBE_IDENTITY_MISMATCH",
+    `Native inspection returned '${actual}' for '${expected}'`,
+  );
+}
+
+function isForbiddenMediaError(error: unknown): boolean {
+  return (
+    error instanceof YtdlpError && error.code === "HTTP_ERROR" && error.details?.status === 403
+  );
+}
+
 export class YtdlpReferenceAcquirer implements TrackAcquirer {
   readonly backend = "ytdlp" as const;
+  readonly requiresPriorCapabilityFailure: boolean;
   readonly #client: YtdlpReferenceClient;
   readonly #searchLimit: number;
   readonly #cache: JsonDiskCache | undefined;
@@ -75,9 +251,11 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
       cacheMode?: CacheMode;
       searchTtlMs?: number;
       metadataTtlMs?: number;
+      requiresPriorCapabilityFailure?: boolean;
     } = {},
   ) {
     this.#client = client;
+    this.requiresPriorCapabilityFailure = options.requiresPriorCapabilityFailure ?? false;
     this.#searchLimit = options.searchLimit ?? 10;
     this.#cacheMode = options.cacheMode ?? "default";
     this.#cache =
@@ -210,6 +388,52 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     );
     return cached.value;
   }
+}
+
+function boundedSearchLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_YOUTUBE_SEARCH_RESULTS;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError("searchLimit must be a positive integer");
+  }
+  return Math.min(value, MAX_YOUTUBE_SEARCH_RESULTS);
+}
+
+type NativeSearchIdentity = Pick<
+  YoutubeSearchResult,
+  "id" | "title" | "uploader" | "durationSeconds"
+>;
+
+function sanitizeNativeSearchResults(
+  results: readonly NativeSearchIdentity[],
+): YoutubeSearchCandidate[] {
+  const seen = new Set<string>();
+  return results.flatMap((result) => {
+    if (
+      typeof result.id !== "string" ||
+      !/^[\w-]{11}$/u.test(result.id) ||
+      typeof result.title !== "string" ||
+      !result.title.trim() ||
+      seen.has(result.id)
+    ) {
+      return [];
+    }
+    seen.add(result.id);
+    return [
+      {
+        id: result.id,
+        source: `https://www.youtube.com/watch?v=${result.id}`,
+        title: result.title.trim(),
+        ...(typeof result.uploader === "string" && result.uploader.trim()
+          ? { uploader: result.uploader.trim() }
+          : {}),
+        ...(typeof result.durationSeconds === "number" &&
+        Number.isFinite(result.durationSeconds) &&
+        result.durationSeconds > 0
+          ? { durationSeconds: result.durationSeconds }
+          : {}),
+      },
+    ];
+  });
 }
 
 function sanitizeMediaInfo(info: YtdlpMediaInfo): YtdlpMediaInfo {

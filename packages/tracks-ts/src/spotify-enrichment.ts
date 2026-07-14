@@ -42,7 +42,7 @@ export type SpotifyEnrichmentOptions = {
   market?: string;
   /** Spotify reduced Search's maximum to 10 in February 2026. */
   searchLimit?: number;
-  /** Parallel Spotify searches. Defaults to 64; callers may set 1 through 256. */
+  /** Parallel Spotify searches. Defaults to 8; callers may set 1 through 32. */
   concurrency?: number;
   minimumMatchScore?: number;
   minimumCandidateScore?: number;
@@ -72,9 +72,9 @@ export type SpotifyEnrichmentResult = {
   cache?: CacheStats;
 };
 
-/** Fan a typical 30-60 track set out in one wave; callers can still choose a lower bound. */
-export const DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY = 64;
-export const MAX_SPOTIFY_ENRICHMENT_CONCURRENCY = 256;
+/** Keep Spotify requests bounded while allowing explicit larger pools. */
+export const DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY = 8;
+export const MAX_SPOTIFY_ENRICHMENT_CONCURRENCY = 32;
 
 type ResolvedOptions = {
   market?: string;

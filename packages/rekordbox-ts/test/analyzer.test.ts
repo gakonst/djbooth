@@ -5,6 +5,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,10 +13,14 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { AnlzFile } from "../src/anlz/index.js";
 import {
   analyzeTrack,
   analyzeTrackAsync,
   analyzeTracks,
+  AnalyzeTracksCancelledError,
+  AnalyzeTracksError,
+  DEFAULT_ANALYZER_CONCURRENCY,
   diagnoseAnalyzer,
   getAnalyzerBinary,
   readAnalysisResult,
@@ -53,19 +58,35 @@ if (mode === "fail" || basename(audioPath).includes("fail")) {
   console.error("fake analyzer failure");
   process.exit(2);
 }
+if (mode === "unicode-path" && /[^\\x00-\\x7F]/u.test(audioPath)) {
+  console.error("Rekordbox startAnalyze failed with status -1");
+  process.exit(1);
+}
+if (mode === "ignore-term") {
+  process.on("SIGTERM", () => undefined);
+  await new Promise((resolve) => setTimeout(resolve, 60_000));
+}
 if (mode === "hang") await new Promise((resolve) => setTimeout(resolve, 60_000));
 
 mkdirSync(outputDirectory, { recursive: true });
+const encodedPath = Buffer.from("?/" + basename(audioPath) + "\\0", "utf16le").swap16();
+const pathTag = Buffer.alloc(16 + encodedPath.length);
+pathTag.write("PPTH", 0, "ascii");
+pathTag.writeUInt32BE(16, 4);
+pathTag.writeUInt32BE(pathTag.length, 8);
+pathTag.writeUInt32BE(encodedPath.length, 12);
+encodedPath.copy(pathTag, 16);
 const header = Buffer.alloc(28);
 header.write("PMAI", 0, "ascii");
 header.writeUInt32BE(28, 4);
-header.writeUInt32BE(28, 8);
+header.writeUInt32BE(28 + pathTag.length, 8);
+const anlz = Buffer.concat([header, pathTag]);
 const outputs = [];
 for (const suffix of ["DAT", "EXT", "2EX"]) {
   if (mode === "missing-twoex" && suffix === "2EX") continue;
   const path = join(outputDirectory, \`ANLZ0000.\${suffix}\`);
-  writeFileSync(path, header);
-  outputs.push([path, header.length]);
+  writeFileSync(path, anlz);
+  outputs.push([path, anlz.length]);
 }
 if (mode === "invalid-json") {
   console.log("not json");
@@ -84,7 +105,7 @@ console.log(JSON.stringify({
   startResult: 0,
   summary: {
     beat_grid: null,
-    files: [],
+    files: outputs.map(([path, size]) => ({ path, size, tags: [] })),
     key: "F",
     key_source: "fake",
     tempo_bpm: 125,
@@ -164,6 +185,160 @@ describe("Rekordbox analyzer wrapper", () => {
     await expect(analyzeTracks(["same.mp3", "same.mp3"])).rejects.toThrow(
       "Multiple tracks resolve",
     );
+  });
+
+  it("defaults to four workers and reports cached and completed progress", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPaths = [makeAudio(root, "one.mp3"), makeAudio(root, "two.mp3")];
+    const firstProgress: Array<string> = [];
+    const first = await analyzeTracks(audioPaths, {
+      analyzerBinary: process.execPath,
+      force: true,
+      onProgress(progress) {
+        firstProgress.push(progress.phase);
+      },
+    });
+    expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(4);
+    expect(first.concurrency).toBe(2);
+    expect(firstProgress.filter((phase) => phase === "started")).toHaveLength(2);
+    expect(firstProgress.filter((phase) => phase === "completed")).toHaveLength(2);
+
+    const warmProgress: Array<string> = [];
+    await analyzeTracks(audioPaths, {
+      analyzerBinary: process.execPath,
+      onProgress(progress) {
+        warmProgress.push(progress.phase);
+      },
+    });
+    expect(warmProgress).toEqual(["cached", "cached"]);
+  });
+
+  it("does not let progress observer failures interrupt analyzer workers", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPaths = [makeAudio(root, "one.mp3"), makeAudio(root, "two.mp3")];
+
+    const result = await analyzeTracks(audioPaths, {
+      analyzerBinary: process.execPath,
+      force: true,
+      onProgress() {
+        throw new Error("broken observer");
+      },
+    });
+
+    expect(result.results).toHaveLength(2);
+    expect(result.analyzed).toBe(2);
+  });
+
+  it("aborts active asynchronous analyzer workers with ordered partial results", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const cachedPath = makeAudio(root, "cached.mp3");
+    const cancelledPath = makeAudio(root, "cancelled.mp3");
+    await analyzeTrackAsync(cachedPath, {
+      analyzerBinary: process.execPath,
+      force: true,
+    });
+    const controller = new AbortController();
+    process.env.FAKE_ANALYZER_MODE = "hang";
+    const pending = analyzeTracks([cachedPath, cancelledPath], {
+      analyzerBinary: process.execPath,
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(new DOMException("test abort", "AbortError")), 20);
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AnalyzeTracksCancelledError);
+    expect(error).toMatchObject({
+      name: "AbortError",
+      partialResult: {
+        analyzed: 0,
+        cacheHits: 1,
+        cancelled: 1,
+        failed: 0,
+        requested: 2,
+      },
+    });
+    const cancelled = error as AnalyzeTracksCancelledError;
+    expect(cancelled.partialResult.results[0]?.audioPath).toBe(realpathSync(cachedPath));
+    expect(cancelled.partialResult.results[1]).toBeUndefined();
+  });
+
+  it("escalates an ignored abort signal to SIGKILL", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const controller = new AbortController();
+    process.env.FAKE_ANALYZER_MODE = "ignore-term";
+    const pending = analyzeTrackAsync(audioPath, {
+      analyzerBinary: process.execPath,
+      force: true,
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const started = performance.now();
+    controller.abort(new DOMException("test abort", "AbortError"));
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(900);
+    expect(performance.now() - started).toBeLessThan(2_500);
+  });
+
+  it("retries the native Unicode-path failure through an exact ASCII staging copy", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root, "Sébastien.mp3");
+    process.env.FAKE_ANALYZER_MODE = "unicode-path";
+    const result = await analyzeTrackAsync(audioPath, {
+      analyzerBinary: process.execPath,
+      force: true,
+    });
+    expect(result.audioPath).toBe(realpathSync(audioPath));
+    expect(result.source.path).toBe(realpathSync(audioPath));
+    expect(readAnalysisResult(result.summaryPath).audioPath).toBe(realpathSync(audioPath));
+    expect(result.outputs.every(([path]) => dirname(path) === dirname(result.summaryPath))).toBe(
+      true,
+    );
+    for (const [path] of result.outputs) {
+      expect(AnlzFile.parseFile(path).get("PPTH")).toBe("?/Sébastien.mp3");
+    }
+    expect(result.outputs.every(([path, size]) => statSync(path).size === size)).toBe(true);
+    expect(result.summary.files.every(({ path, size }) => statSync(path).size === size)).toBe(true);
+  });
+
+  it("retains indexed partial results when one batch item fails", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const successful = makeAudio(root, "good.mp3");
+    const failed = makeAudio(root, "fail.mp3");
+    const error = await analyzeTracks([successful, failed], {
+      analyzerBinary: process.execPath,
+      force: true,
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AnalyzeTracksError);
+    const batchError = error as AnalyzeTracksError;
+    expect(batchError.failures).toMatchObject([
+      { audioPath: resolve(failed), index: 1, kind: "process" },
+    ]);
+    expect(batchError.partialResult).toMatchObject({
+      analyzed: 1,
+      cancelled: 0,
+      failed: 1,
+      requested: 2,
+    });
+    expect(batchError.partialResult.results[0]?.audioPath).toBe(realpathSync(successful));
+    expect(batchError.partialResult.results[1]).toBeUndefined();
   });
 
   it("rejects missing audio asynchronously before launching a worker", async () => {

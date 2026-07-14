@@ -66,15 +66,35 @@ sidecars and errors. Public progressive SoundCloud tracks also use the native Ty
 and Range-resumable downloader. Sets, profiles, private/account flows, and unsupported sites remain
 explicit `auto`/`reference` compatibility cases.
 
+The library also exposes bounded native YouTube video search through the same shared
+[`youtubei.js`](https://ytjs.dev/guide/creating-an-innertube-instance) client. Search uses a Web
+session because its result parser supports the current search response; exact extraction explicitly
+requests Android VR and keeps signed formats in memory. Results are canonical public page URLs with
+stable IDs, uploader data, and durations. The default is 10 results, the hard cap is 50, and an
+`AbortSignal` stops client creation, search, or pagination:
+
+```ts
+import { ExtractorRegistry, downloadMedia, searchYoutube } from '@gakonst/ytdlp-ts'
+
+const [candidate] = await searchYoutube('Artist Track', { limit: 10, signal })
+if (!candidate) throw new Error('No candidate')
+const info = await new ExtractorRegistry().extract(candidate.url, { signal })
+await downloadMedia(info, {
+  format: 'bestaudio[ext=m4a]',
+  output: '%(title)s.%(ext)s',
+  signal,
+})
+```
+
 `music` keeps the highest-quality Rekordbox-compatible source audio by default, preferring M4A and
 then MP3 without transcoding. It writes `.info.json` metadata and cover art alongside every track,
 embeds tags and artwork on the reference path, and only transcodes when `--audio-format` explicitly
 requests a codec. Use the lower-level `download --media-format ...` command when container
 compatibility is not required and another source format is preferred.
 
-Batch source inspection and track downloads both default to 64 concurrent operations, including
-YouTube tracks. Set `--concurrency` or `--youtube-concurrency` lower when a provider, account, or
-network requires throttling. Native YouTube transfers have a separate three-track default, with up
+Batch source inspection and native YouTube downloads default to three concurrent tracks; reference
+YouTube downloads default to one. The explicit caps are 16 for `--concurrency`, 4 for
+`--youtube-concurrency`, and 16 for `--native-youtube-concurrency`. Native YouTube transfers use up
 to two concurrent 1 MiB ranges per track; ordered commits keep the workload network-bound without
 sacrificing exact resume state. Reference YouTube transfers retain exponential
 HTTP/fragment/extractor retry delays, throttling detection, and one fragment at a time. A durable
@@ -107,11 +127,14 @@ Cli.create('music').command(ytdlpCli)
 
 - `native` is the TypeScript extractor, selector, downloader, and post-processing path.
 - `reference` invokes an installed yt-dlp executable for exact long-tail compatibility.
-- `auto` attempts native behavior and falls back explicitly when a URL or option is not yet ported.
+- `auto` delegates only for an allowlisted, typed native capability gap detected before media bytes
+  are committed. Abort, network, lock, write, identity, and content-validation errors fail closed.
 - `parity` runs both extractors and reports stable metadata, format, and subtitle differences.
 
 Native support never silently invokes Python. Each structured result reports the engine that handled
-it, and the compatibility matrix distinguishes complete, partial, and delegated subsystems.
+it; delegated results also report the typed native fallback reason. The compatibility matrix
+distinguishes complete, partial, and delegated subsystems. See
+[`docs/PORTING.md`](docs/PORTING.md) for the engine boundary and scheduler contract.
 
 ## Attribution
 

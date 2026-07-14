@@ -12,14 +12,14 @@ const unusedRecognizer: ClipRecognizer = {
 };
 
 describe("sample recognition concurrency", () => {
-  test("defaults to one full 30–60 track playlist wave", () => {
-    expect(DEFAULT_RECOGNITION_CONCURRENCY).toBe(64);
-    expect(MAX_RECOGNITION_CONCURRENCY).toBe(64);
+  test("defaults to a bounded three-request pool", () => {
+    expect(DEFAULT_RECOGNITION_CONCURRENCY).toBe(3);
+    expect(MAX_RECOGNITION_CONCURRENCY).toBe(8);
   });
 
   test("rejects programmatic callers above the CLI cap before media work", async () => {
     await expect(
       recognizeSamples("/missing/set.wav", unusedRecognizer, { concurrency: 65 }),
-    ).rejects.toThrow("Recognition concurrency must be an integer between 1 and 64");
+    ).rejects.toThrow("Recognition concurrency must be an integer between 1 and 8");
   });
 });

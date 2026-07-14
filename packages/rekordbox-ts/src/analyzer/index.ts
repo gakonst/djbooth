@@ -1,6 +1,9 @@
 import {
+  copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -8,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -136,12 +139,26 @@ export type AnalyzeTrackOptions = {
   outputDirectory?: string;
   rekordboxApp?: string;
   rekordboxCache?: string;
+  signal?: AbortSignal;
   timeoutMs?: number;
+};
+
+/** Conservative default for process-isolated native analyzer workers. */
+export const DEFAULT_ANALYZER_CONCURRENCY = 4;
+
+/** Progress emitted by a bounded multi-track analyzer run. */
+export type AnalyzeTracksProgress = {
+  audioPath: string;
+  completed: number;
+  index: number;
+  phase: "cached" | "started" | "completed" | "failed" | "cancelled";
+  total: number;
 };
 
 /** Options for bounded, process-isolated native Rekordbox analysis. */
 export type AnalyzeTracksOptions = Omit<AnalyzeTrackOptions, "outputDirectory"> & {
   concurrency?: number;
+  onProgress?: (progress: AnalyzeTracksProgress) => void;
 };
 
 /** Ordered results and wall-clock timing for a multi-track analyzer run. */
@@ -160,11 +177,63 @@ export type AnalyzeTracksResult = {
   };
 };
 
+/** Stable failure classification for one item in a batch analyzer run. */
+export type AnalyzeTrackFailure = {
+  audioPath: string;
+  error: Error;
+  index: number;
+  kind: "timeout" | "native-incompatible" | "invalid-output" | "process" | "unknown";
+};
+
+/** Successful/cache-hit work retained when another batch item fails. */
+export type AnalyzeTracksPartialResult = Omit<AnalyzeTracksResult, "results"> & {
+  cancelled: number;
+  failed: number;
+  results: Array<RekordboxAnalysisResult | undefined>;
+};
+
+/** Batch error carrying indexed failures and every durable partial result. */
+export class AnalyzeTracksError extends AggregateError {
+  readonly failures: AnalyzeTrackFailure[];
+  readonly partialResult: AnalyzeTracksPartialResult;
+
+  constructor(failures: AnalyzeTrackFailure[], partialResult: AnalyzeTracksPartialResult) {
+    super(
+      failures.map((failure) => failure.error),
+      `Rekordbox analysis failed for ${String(failures.length)} track(s)`,
+    );
+    this.name = "AnalyzeTracksError";
+    this.failures = failures;
+    this.partialResult = partialResult;
+  }
+}
+
+/** Abort-compatible batch error carrying every durable result completed before cancellation. */
+export class AnalyzeTracksCancelledError extends Error {
+  readonly failures: AnalyzeTrackFailure[];
+  readonly partialResult: AnalyzeTracksPartialResult;
+
+  constructor(
+    reason: Error,
+    partialResult: AnalyzeTracksPartialResult,
+    failures: AnalyzeTrackFailure[] = [],
+  ) {
+    super(
+      `Rekordbox analysis cancelled with ${String(partialResult.cancelled)} track(s) unfinished`,
+      { cause: reason },
+    );
+    this.name = "AbortError";
+    this.failures = failures;
+    this.partialResult = partialResult;
+  }
+}
+
 type PreparedAnalysis = {
   args: Array<string>;
   cached?: RekordboxAnalysisResult;
   command: string;
   env: NodeJS.ProcessEnv;
+  inputPath: string;
   outputDirectory: string;
   source: RekordboxAnalysisResult["source"];
   summaryPath: string;
@@ -216,6 +285,7 @@ export function analyzeTrack(
   audioPath: string,
   options: AnalyzeTrackOptions = {},
 ): RekordboxAnalysisResult {
+  throwIfAborted(options.signal);
   const prepared = prepareAnalysis(audioPath, options);
   if (prepared.cached) return prepared.cached;
   const child = spawnSync(prepared.command, prepared.args, {
@@ -237,9 +307,14 @@ export async function analyzeTrackAsync(
   audioPath: string,
   options: AnalyzeTrackOptions = {},
 ): Promise<RekordboxAnalysisResult> {
+  throwIfAborted(options.signal);
   const prepared = prepareAnalysis(audioPath, options);
   if (prepared.cached) return prepared.cached;
-  const stdout = await runAnalyzer(prepared, options.timeoutMs ?? 300_000);
+  const stdout = await runAnalyzerWithCompatibilityFallback(
+    prepared,
+    options.timeoutMs ?? 300_000,
+    options.signal,
+  );
   return persistAnalysisResult(stdout, prepared);
 }
 
@@ -248,7 +323,7 @@ export async function analyzeTracks(
   audioPaths: ReadonlyArray<string>,
   options: AnalyzeTracksOptions = {},
 ): Promise<AnalyzeTracksResult> {
-  const configuredConcurrency = options.concurrency ?? 64;
+  const configuredConcurrency = options.concurrency ?? DEFAULT_ANALYZER_CONCURRENCY;
   if (
     !Number.isInteger(configuredConcurrency) ||
     configuredConcurrency < 1 ||
@@ -257,6 +332,21 @@ export async function analyzeTracks(
     throw new TypeError("Analyzer concurrency must be an integer between 1 and 64");
 
   const absolutePaths = audioPaths.map((audioPath) => resolve(audioPath));
+  if (options.signal?.aborted) {
+    const requested = absolutePaths.length;
+    throw new AnalyzeTracksCancelledError(abortError(options.signal), {
+      analyzed: 0,
+      cacheHits: 0,
+      cancelled: requested,
+      concurrency: Math.min(configuredConcurrency, requested),
+      elapsedMs: 0,
+      failed: 0,
+      requested,
+      results: Array.from({ length: requested }),
+      throughputTracksPerSecond: 0,
+      timings: { analyzeMs: 0, preflightMs: 0, totalMs: 0 },
+    });
+  }
   const outputDirectories = absolutePaths.map(defaultOutputDirectory);
   const destinations = new Set<string>();
   for (const outputDirectory of outputDirectories) {
@@ -271,38 +361,117 @@ export async function analyzeTracks(
   const preflightMs = roundMilliseconds(performance.now() - preflightStarted);
   const concurrency = Math.min(configuredConcurrency, absolutePaths.length);
   const results = Array.from<RekordboxAnalysisResult>({ length: absolutePaths.length });
-  const failures = Array.from<Error | undefined>({ length: absolutePaths.length });
+  const failures = Array.from<AnalyzeTrackFailure | undefined>({ length: absolutePaths.length });
   const pending: number[] = [];
+  let completed = 0;
   for (const [index, analysis] of prepared.entries()) {
-    if (analysis.cached) results[index] = analysis.cached;
-    else pending.push(index);
+    if (analysis.cached) {
+      results[index] = analysis.cached;
+      completed += 1;
+      emitAnalyzeProgress(options.onProgress, {
+        audioPath: absolutePaths[index]!,
+        completed,
+        index,
+        phase: "cached",
+        total: absolutePaths.length,
+      });
+    } else pending.push(index);
   }
   const analyzeStarted = performance.now();
   let nextIndex = 0;
   const worker = async () => {
     while (true) {
+      if (options.signal?.aborted) return;
       const index = pending[nextIndex++];
       if (index === undefined) return;
       const audioPath = absolutePaths[index]!;
+      emitAnalyzeProgress(options.onProgress, {
+        audioPath,
+        completed,
+        index,
+        phase: "started",
+        total: absolutePaths.length,
+      });
       try {
         const analysis = prepared[index]!;
-        const stdout = await runAnalyzer(analysis, options.timeoutMs ?? 300_000);
+        const stdout = await runAnalyzerWithCompatibilityFallback(
+          analysis,
+          options.timeoutMs ?? 300_000,
+          options.signal,
+        );
         results[index] = persistAnalysisResult(stdout, analysis);
+        completed += 1;
+        emitAnalyzeProgress(options.onProgress, {
+          audioPath,
+          completed,
+          index,
+          phase: "completed",
+          total: absolutePaths.length,
+        });
       } catch (cause) {
+        if (options.signal?.aborted) {
+          emitAnalyzeProgress(options.onProgress, {
+            audioPath,
+            completed,
+            index,
+            phase: "cancelled",
+            total: absolutePaths.length,
+          });
+          return;
+        }
         const message = cause instanceof Error ? cause.message : String(cause);
-        failures[index] = new Error(`Failed to analyze '${audioPath}': ${message}`, { cause });
+        const error = new Error(`Failed to analyze '${audioPath}': ${message}`, { cause });
+        failures[index] = {
+          audioPath,
+          error,
+          index,
+          kind: classifyAnalyzerFailure(cause),
+        };
+        completed += 1;
+        emitAnalyzeProgress(options.onProgress, {
+          audioPath,
+          completed,
+          index,
+          phase: "failed",
+          total: absolutePaths.length,
+        });
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
   const analyzeMs = roundMilliseconds(performance.now() - analyzeStarted);
-  const errors = failures.filter((error): error is Error => error !== undefined);
-  if (errors.length)
-    throw new AggregateError(errors, `Rekordbox analysis failed for ${errors.length} track(s)`);
   const totalMs = roundMilliseconds(performance.now() - started);
+  const itemFailures = failures.filter(
+    (failure): failure is AnalyzeTrackFailure => failure !== undefined,
+  );
+  const cacheHits = absolutePaths.length - pending.length;
+  const durableResults = results.filter(
+    (result): result is RekordboxAnalysisResult => result !== undefined,
+  ).length;
+  const analyzed = Math.max(0, durableResults - cacheHits);
+  const cancelled = Math.max(0, absolutePaths.length - durableResults - itemFailures.length);
+  const partialResult: AnalyzeTracksPartialResult = {
+    analyzed,
+    cacheHits,
+    cancelled,
+    concurrency,
+    elapsedMs: Math.round(totalMs),
+    failed: itemFailures.length,
+    requested: absolutePaths.length,
+    results,
+    throughputTracksPerSecond:
+      analyzed && analyzeMs ? roundMilliseconds((analyzed * 1_000) / analyzeMs) : 0,
+    timings: { analyzeMs, preflightMs, totalMs },
+  };
+  if (options.signal?.aborted) {
+    throw new AnalyzeTracksCancelledError(abortError(options.signal), partialResult, itemFailures);
+  }
+  if (itemFailures.length) {
+    throw new AnalyzeTracksError(itemFailures, partialResult);
+  }
   return {
     analyzed: pending.length,
-    cacheHits: absolutePaths.length - pending.length,
+    cacheHits,
     concurrency,
     elapsedMs: Math.round(totalMs),
     requested: absolutePaths.length,
@@ -311,6 +480,28 @@ export async function analyzeTracks(
       pending.length && analyzeMs ? roundMilliseconds((pending.length * 1_000) / analyzeMs) : 0,
     timings: { analyzeMs, preflightMs, totalMs },
   };
+}
+
+function emitAnalyzeProgress(
+  observer: AnalyzeTracksOptions["onProgress"],
+  progress: AnalyzeTracksProgress,
+): void {
+  try {
+    observer?.(progress);
+  } catch {
+    // Progress is observational; callback failures must not orphan analyzer workers.
+  }
+}
+
+function classifyAnalyzerFailure(cause: unknown): AnalyzeTrackFailure["kind"] {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (/timed out/iu.test(message)) return "timeout";
+  if (/startAnalyze failed with status -1/iu.test(message)) return "native-incompatible";
+  if (/did not produce|invalid Rekordbox|schema|malformed JSON/iu.test(message)) {
+    return "invalid-output";
+  }
+  if (/exited with|spawn|output exceeded|abort trap/iu.test(message)) return "process";
+  return "unknown";
 }
 
 function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): PreparedAnalysis {
@@ -346,12 +537,13 @@ function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): Prepa
         cached.source.size === source.size &&
         cached.source.mtimeMs === source.mtimeMs
       ) {
-        validateAnalysisFiles(outputDirectory);
+        validateAnalysisFiles(outputDirectory, source.path);
         return {
           args: [],
           cached,
           command: analyzerBinary,
           env: process.env,
+          inputPath: absoluteAudioPath,
           outputDirectory,
           source,
           summaryPath,
@@ -371,7 +563,7 @@ function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): Prepa
     process.arch === "arm64"
       ? ["-x86_64", analyzerBinary, "analyze", absoluteAudioPath, outputDirectory, nativeLogPath]
       : ["analyze", absoluteAudioPath, outputDirectory, nativeLogPath];
-  return { args, command, env, outputDirectory, source, summaryPath };
+  return { args, command, env, inputPath: absoluteAudioPath, outputDirectory, source, summaryPath };
 }
 
 function sourceFingerprint(audioPath: string): RekordboxAnalysisResult["source"] {
@@ -395,10 +587,16 @@ function defaultOutputDirectory(absoluteAudioPath: string): string {
   );
 }
 
-function runAnalyzer(prepared: PreparedAnalysis, timeoutMs: number): Promise<string> {
+function runAnalyzer(
+  prepared: PreparedAnalysis,
+  timeoutMs: number,
+  optionsSignal?: AbortSignal,
+): Promise<string> {
+  throwIfAborted(optionsSignal);
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(prepared.command, prepared.args, {
       env: prepared.env,
+      ...(optionsSignal ? { signal: optionsSignal } : {}),
       stdio: ["ignore", "pipe", "pipe"],
     });
     const maxBuffer = 4 * 1024 * 1024;
@@ -406,6 +604,7 @@ function runAnalyzer(prepared: PreparedAnalysis, timeoutMs: number): Promise<str
     let stderr = "";
     let captureError: Error | undefined;
     let spawnError: Error | undefined;
+    let aborted = false;
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
     const append = (current: string, chunk: Buffer): string => {
@@ -425,14 +624,22 @@ function runAnalyzer(prepared: PreparedAnalysis, timeoutMs: number): Promise<str
     child.once("error", (error) => {
       spawnError = error;
     });
+    const abort = () => {
+      aborted = true;
+      child.kill("SIGTERM");
+      killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1_000);
+    };
+    optionsSignal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      killTimer ??= setTimeout(() => child.kill("SIGKILL"), 1_000);
     }, timeoutMs);
-    child.once("close", (status, signal) => {
+    child.once("close", (status, exitSignal) => {
       clearTimeout(timeout);
       if (killTimer) clearTimeout(killTimer);
+      optionsSignal?.removeEventListener("abort", abort);
+      if (aborted) return rejectPromise(abortError(optionsSignal));
       if (spawnError) return rejectPromise(spawnError);
       if (captureError) return rejectPromise(captureError);
       if (timedOut)
@@ -440,12 +647,182 @@ function runAnalyzer(prepared: PreparedAnalysis, timeoutMs: number): Promise<str
       if (status !== 0)
         return rejectPromise(
           new Error(
-            `Rekordbox analyzer exited with ${status ?? `signal ${signal ?? "unknown"}`}: ${stderr.trim() || stdout.trim()}`,
+            `Rekordbox analyzer exited with ${status ?? `signal ${exitSignal ?? "unknown"}`}: ${stderr.trim() || stdout.trim()}`,
           ),
         );
       resolvePromise(stdout);
     });
   });
+}
+
+async function runAnalyzerWithCompatibilityFallback(
+  prepared: PreparedAnalysis,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    return await runAnalyzer(prepared, timeoutMs, signal);
+  } catch (cause) {
+    if (!requiresAsciiInputFallback(cause, prepared.source.path)) throw cause;
+  }
+
+  throwIfAborted(signal);
+  const stagingDirectory = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+  const extension = extname(prepared.source.path).toLowerCase() || ".audio";
+  const stagedAudioPath = join(stagingDirectory, `track${extension}`);
+  const stagedOutputDirectory = join(stagingDirectory, "output");
+  const installDirectory = mkdtempSync(
+    join(dirname(prepared.outputDirectory), ".rekordbox-install-"),
+  );
+  try {
+    copyFileSync(prepared.source.path, stagedAudioPath);
+    mkdirSync(stagedOutputDirectory, { recursive: true });
+    const staged: PreparedAnalysis = {
+      ...prepared,
+      args: prepared.args.map((argument) => {
+        if (argument === prepared.inputPath) return stagedAudioPath;
+        if (argument === prepared.outputDirectory) return stagedOutputDirectory;
+        if (argument.startsWith(`${prepared.outputDirectory}/`)) {
+          return `${stagedOutputDirectory}${argument.slice(prepared.outputDirectory.length)}`;
+        }
+        return argument;
+      }),
+      inputPath: stagedAudioPath,
+      outputDirectory: stagedOutputDirectory,
+      summaryPath: join(stagedOutputDirectory, "analysis.json"),
+    };
+    const stdout = await runAnalyzer(staged, timeoutMs, signal);
+    cpSync(stagedOutputDirectory, installDirectory, { recursive: true });
+    rewriteAnalysisTrackPaths(installDirectory, prepared.source.path);
+    validateAnalysisFiles(installDirectory, prepared.source.path);
+    const rewritten = rewriteStagedAnalyzerPaths(
+      stdout,
+      stagedAudioPath,
+      stagedOutputDirectory,
+      installDirectory,
+      prepared,
+    );
+    validateNativeAnalyzerOutput(rewritten, prepared);
+    replaceDirectoryAtomically(installDirectory, prepared.outputDirectory);
+    return rewritten;
+  } finally {
+    rmSync(stagingDirectory, { force: true, recursive: true });
+    rmSync(installDirectory, { force: true, recursive: true });
+  }
+}
+
+function rewriteAnalysisTrackPaths(outputDirectory: string, audioPath: string): void {
+  const nativePath = analyzerTrackPath(audioPath);
+  for (const path of Object.values(getAnlzPaths(outputDirectory))) {
+    if (!path) continue;
+    const file = AnlzFile.parseFile(path);
+    if (!file.has("PPTH")) continue;
+    file.setPath(nativePath);
+    file.save();
+  }
+}
+
+function analyzerTrackPath(audioPath: string): string {
+  return `?/${basename(audioPath)}`;
+}
+
+function validateNativeAnalyzerOutput(stdout: string, prepared: PreparedAnalysis): void {
+  const native = JSON.parse(stdout) as Omit<RekordboxAnalysisResult, "source" | "summaryPath">;
+  native.audioPath = prepared.source.path;
+  parseAnalysisResult(
+    { ...native, source: prepared.source, summaryPath: prepared.summaryPath },
+    "staged native analyzer output",
+  );
+}
+
+function replaceDirectoryAtomically(source: string, destination: string): void {
+  const previous = `${source}-previous`;
+  let movedPrevious = false;
+  if (existsSync(destination)) {
+    renameSync(destination, previous);
+    movedPrevious = true;
+  }
+  try {
+    renameSync(source, destination);
+  } catch (cause) {
+    if (movedPrevious && !existsSync(destination)) renameSync(previous, destination);
+    throw cause;
+  }
+  if (movedPrevious) rmSync(previous, { force: true, recursive: true });
+}
+
+function rewriteStagedAnalyzerPaths(
+  stdout: string,
+  stagedAudioPath: string,
+  stagedOutputDirectory: string,
+  installDirectory: string,
+  prepared: PreparedAnalysis,
+): string {
+  const replacePaths = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      if (value === stagedAudioPath) return prepared.source.path;
+      if (value.startsWith(`${stagedOutputDirectory}/`)) {
+        return `${prepared.outputDirectory}${value.slice(stagedOutputDirectory.length)}`;
+      }
+      return value;
+    }
+    if (Array.isArray(value)) return value.map(replacePaths);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        replacePaths(item),
+      ]),
+    );
+  };
+  const updateInstalledSizes = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      const items = value.map(updateInstalledSizes);
+      if (items.length === 2 && typeof items[0] === "string" && typeof items[1] === "number") {
+        const path = stagedInstallPath(items[0], installDirectory, prepared.outputDirectory);
+        if (path) items[1] = statSync(path).size;
+      }
+      return items;
+    }
+    if (!value || typeof value !== "object") return value;
+    const record = Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        updateInstalledSizes(item),
+      ]),
+    );
+    if (typeof record.path === "string" && typeof record.size === "number") {
+      const path = stagedInstallPath(record.path, installDirectory, prepared.outputDirectory);
+      if (path) record.size = statSync(path).size;
+    }
+    return record;
+  };
+  return JSON.stringify(updateInstalledSizes(replacePaths(JSON.parse(stdout) as unknown)));
+}
+
+function stagedInstallPath(
+  canonicalPath: string,
+  installDirectory: string,
+  outputDirectory: string,
+): string | undefined {
+  if (!canonicalPath.startsWith(`${outputDirectory}/`)) return undefined;
+  return `${installDirectory}${canonicalPath.slice(outputDirectory.length)}`;
+}
+
+function requiresAsciiInputFallback(cause: unknown, sourcePath: string): boolean {
+  if (![...sourcePath].some((character) => (character.codePointAt(0) ?? 0) > 0x7f)) return false;
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return message.includes("Rekordbox startAnalyze failed with status -1");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw abortError(signal);
+}
+
+function abortError(signal: AbortSignal | undefined): Error {
+  if (signal?.reason instanceof Error) return signal.reason;
+  return new DOMException("Rekordbox analysis aborted", "AbortError");
 }
 
 function persistAnalysisResult(
@@ -459,7 +836,8 @@ function persistAnalysisResult(
   )
     throw new Error(`Audio file '${prepared.source.path}' changed during Rekordbox analysis`);
   const native = JSON.parse(stdout) as Omit<RekordboxAnalysisResult, "source" | "summaryPath">;
-  validateAnalysisFiles(prepared.outputDirectory);
+  native.audioPath = prepared.source.path;
+  validateAnalysisFiles(prepared.outputDirectory, prepared.source.path);
   const result = parseAnalysisResult(
     { ...native, source: prepared.source, summaryPath: prepared.summaryPath },
     "native analyzer output",
@@ -470,12 +848,17 @@ function persistAnalysisResult(
   return result;
 }
 
-function validateAnalysisFiles(outputDirectory: string): void {
+function validateAnalysisFiles(outputDirectory: string, audioPath?: string): void {
   const paths = getAnlzPaths(outputDirectory);
   for (const type of ["DAT", "EXT", "2EX"] as const) {
     const path = paths[type];
     if (!path) throw new Error(`Rekordbox analyzer did not produce ANLZ0000.${type}`);
-    AnlzFile.parseFile(path);
+    const file = AnlzFile.parseFile(path);
+    if (audioPath && file.has("PPTH") && file.get("PPTH") !== analyzerTrackPath(audioPath)) {
+      throw new Error(
+        `Rekordbox analyzer PPTH path does not match '${basename(audioPath)}' in ANLZ0000.${type}`,
+      );
+    }
   }
 }
 

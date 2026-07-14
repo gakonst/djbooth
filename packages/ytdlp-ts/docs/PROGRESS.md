@@ -2,6 +2,24 @@
 
 This is the append-only engineering journal for the port. Dates use Pacific Time.
 
+## 2026-07-13 — Fail-closed delegation and bounded defaults
+
+- Changed total music workers and native YouTube tracks to a network-bound default of three;
+  reference YouTube defaults to one. Explicit caps are 16, 4, and 16 respectively.
+- Centralized typed native capability fallback. `auto` no longer starts the reference engine after
+  abort, HTTP/network, output-lock, write, identity, content-length/range, or other validation
+  errors, and untyped native exceptions fail closed.
+- Added fallback provenance to delegated structured engine results; music batch items continue to
+  report the engine that actually downloaded each track.
+- Added isolated engine-boundary fixtures plus batch coverage for defaults, caps, safe range
+  negotiation, and forbidden post-transfer fallback classes.
+- Added abort-aware native YouTube video search over the shared YouTube.js Web session, with stable
+  canonical results, duration/uploader metadata, deduplication, five-page pagination, a 10-result
+  default, and a 50-result cap. Exact direct-format extraction remains Android VR.
+- Wired `tracks import-set` to use native search plus exact M4A extraction/download by default.
+  External `ReferenceClient` construction now requires `--reference-ytdlp`, and delegation remains
+  limited to the centralized pre-transfer capability allowlist.
+
 ## 2026-07-12 — Native YouTube audio and network-bound transfer
 
 - Replaced watch-page-only YouTube extraction with YouTube.js 17.2 Android VR InnerTube metadata.

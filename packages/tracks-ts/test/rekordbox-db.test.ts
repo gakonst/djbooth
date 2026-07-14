@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -14,6 +15,7 @@ import {
   DEFAULT_REKORDBOX_IO_CONCURRENCY,
   defaultRekordboxPlaylistName,
   planRekordboxImport,
+  preflightRekordboxMedia,
   readRekordboxBackup,
   rekordboxBackupSources,
   resolveRekordboxAnalysisDirectory,
@@ -140,9 +142,128 @@ function completedManifest(): SetManifest {
   };
 }
 
+function captureContentValues(plan: RekordboxImportPlan): Array<Record<string, unknown>> {
+  let id = 0;
+  const values: Array<Record<string, unknown>> = [];
+  const row = (tableName: string, fields: Record<string, unknown>) => ({
+    ID: `${tableName}-${++id}`,
+    tableName,
+    ...fields,
+    get(key: string) {
+      return (this as Record<string, unknown>)[key];
+    },
+    set(key: string, value: unknown) {
+      (this as Record<string, unknown>)[key] = value;
+      return this;
+    },
+  });
+  const models = {
+    DjmdArtist: { tableName: "artist" },
+    DjmdAlbum: { tableName: "album" },
+    DjmdLabel: { tableName: "label" },
+    DjmdContent: { tableName: "content" },
+    DjmdPlaylist: { tableName: "playlist" },
+    DjmdSongPlaylist: { tableName: "membership" },
+  };
+  const folder = row("playlist", { Name: plan.folderName, Attribute: 0, ParentID: "root" });
+  const playlist = row("playlist", {
+    Name: plan.playlistName,
+    Attribute: 1,
+    ParentID: folder.ID,
+  });
+  const db = {
+    query(model: { tableName: string }) {
+      let filters: Record<string, unknown> = {};
+      const query = {
+        where(next: Record<string, unknown>) {
+          filters = next;
+          return query;
+        },
+        orderBy() {
+          return query;
+        },
+        all() {
+          if (model.tableName === "playlist" && filters.Attribute === 0) return [folder];
+          if (model.tableName === "playlist" && filters.Attribute === 1) return [playlist];
+          return [];
+        },
+        one() {
+          throw new Error("unexpected one()");
+        },
+        first() {
+          return undefined;
+        },
+      };
+      return query;
+    },
+    addArtist(name: string) {
+      return row("artist", { Name: name });
+    },
+    addAlbum(name: string, options: { artist?: { ID: string } }) {
+      return row("album", { Name: name, AlbumArtistID: options.artist?.ID });
+    },
+    addLabel(name: string) {
+      return row("label", { Name: name });
+    },
+    addContent(path: string, contentValues: Record<string, unknown>) {
+      values.push(structuredClone(contentValues));
+      return row("content", { FolderPath: path, ...contentValues });
+    },
+    addToPlaylist(target: { ID: string }, content: { ID: string }, trackNumber: number) {
+      return row("membership", {
+        PlaylistID: target.ID,
+        ContentID: content.ID,
+        TrackNo: trackNumber,
+      });
+    },
+    moveSongInPlaylist() {},
+    hasColumn() {
+      return false;
+    },
+  } as unknown as RekordboxMasterDatabase;
+  writeRekordboxPlan(
+    db,
+    { ...models, PlaylistType: { FOLDER: 0, PLAYLIST: 1 } } as unknown as RekordboxLibrary,
+    plan,
+  );
+  return values;
+}
+
+async function durationPlanFixture() {
+  const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-duration-"));
+  const manifest = completedManifest();
+  manifest.entries = [manifest.entries[0]!];
+  const entry = manifest.entries[0]!;
+  if (entry.spotify.status !== "ambiguous" || entry.acquisition.status !== "downloaded")
+    throw new Error("invalid duration fixture");
+  entry.spotify.candidates[0]!.durationMs = 999_000;
+  delete entry.spotify.candidates[1]!.durationMs;
+  const downloads = [entry.acquisition.download, ...entry.acquisition.alternatives!];
+  const durations = new Map<string, number>();
+  for (const [index, download] of downloads.entries()) {
+    const path = join(root, `track-${index + 1}.flac`);
+    const contents = `verified audio ${index + 1}`;
+    await writeFile(path, contents);
+    download.mediaPath = path;
+    download.files = [path];
+    download.sha256 = createHash("sha256").update(contents).digest("hex");
+    durations.set(path, index === 0 ? 101.4 : 201.6);
+  }
+  let probes = 0;
+  return {
+    root,
+    plan: planRekordboxImport(manifest),
+    probe: async (path: string) => {
+      probes += 1;
+      return { durationSeconds: durations.get(path)! };
+    },
+    probeCount: () => probes,
+  };
+}
+
 describe("Rekordbox direct database planning", () => {
-  test("defaults parallel read/hash/copy work to a full playlist wave", () => {
-    expect(DEFAULT_REKORDBOX_IO_CONCURRENCY).toBe(64);
+  test("caps parallel read/hash/copy work at eight available workers", () => {
+    expect(DEFAULT_REKORDBOX_IO_CONCURRENCY).toBe(Math.min(8, availableParallelism()));
   });
 
   test("deduplicates albums by name and artist instead of name alone", () => {
@@ -249,6 +370,7 @@ describe("Rekordbox direct database planning", () => {
         entryOrder: index + 1,
         variantIndex: 0,
         mediaPath: `/music/${index}.m4a`,
+        measuredDurationSeconds: 180 + index,
         download: {
           backend: "ytdlp" as const,
           mediaPath: `/music/${index}.m4a`,
@@ -291,20 +413,19 @@ describe("Rekordbox direct database planning", () => {
       title: "Nen Lambo (Rampa Edit)",
       artist: "Bill Loko, Rampa",
       album: "Nen Lambo",
-      durationSeconds: 376,
       isrc: "DEEC32000011",
     });
     expect(plan.items[1]!.metadata).toMatchObject({
       title: "Nen Lambo (&ME Edit) [Mixed]",
       artist: "Bill Loko, &ME",
-      durationSeconds: 346,
       isrc: "QM24S2300834",
     });
     expect(plan.items[2]!.metadata).toMatchObject({
       title: "ID [Set Extract @ 00:05:00]",
       artist: "Unknown Artist",
-      durationSeconds: 300,
     });
+    expect(plan.items.every((item) => item.measuredDurationSeconds === undefined)).toBe(true);
+    expect(plan.items.every((item) => !("durationSeconds" in item.metadata))).toBe(true);
     expect(plan.items[2]!.metadata.comment).toBe(
       [
         "[Set Extract]",
@@ -315,6 +436,51 @@ describe("Rekordbox direct database planning", () => {
         "Transitions: may be present",
       ].join("\n"),
     );
+  });
+
+  test("writes actual media duration for mismatched and missing Spotify durations", async () => {
+    const fixture = await durationPlanFixture();
+    try {
+      expect(fixture.plan.items[0]!.metadata).toMatchObject({
+        title: "Nen Lambo (Rampa Edit)",
+        artist: "Bill Loko, Rampa",
+        isrc: "DEEC32000011",
+      });
+      expect(fixture.plan.items[1]!.metadata).toMatchObject({
+        title: "Nen Lambo (&ME Edit) [Mixed]",
+        artist: "Bill Loko, &ME",
+        isrc: "QM24S2300834",
+      });
+      expect(fixture.plan.items.every((item) => !("durationSeconds" in item.metadata))).toBe(true);
+
+      await preflightRekordboxMedia(fixture.plan, undefined, fixture.probe);
+
+      expect(fixture.plan.items.map((item) => item.measuredDurationSeconds)).toEqual([101, 202]);
+      expect(captureContentValues(fixture.plan).map((values) => values.Length)).toEqual([101, 202]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("refuses to write Length before artifact duration preflight", () => {
+    expect(() => captureContentValues(planRekordboxImport(completedManifest()))).toThrow(
+      "media duration was not measured",
+    );
+  });
+
+  test("reuses a warm preflight receipt without probing unchanged media again", async () => {
+    const fixture = await durationPlanFixture();
+    try {
+      const receipts = await preflightRekordboxMedia(fixture.plan, undefined, fixture.probe);
+      expect(fixture.probeCount()).toBe(2);
+
+      await preflightRekordboxMedia(fixture.plan, receipts, fixture.probe);
+
+      expect(fixture.probeCount()).toBe(2);
+      expect(fixture.plan.items.map((item) => item.measuredDurationSeconds)).toEqual([101, 202]);
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
   });
 
   test("maps native analysis directories by absolute media path", () => {
@@ -459,6 +625,7 @@ describe("Rekordbox direct database planning", () => {
           entryOrder: 1,
           variantIndex: 0,
           mediaPath: "/music/track-1.flac",
+          measuredDurationSeconds: 180,
           analysisDirectory: "/analysis/track-1",
           download: {
             backend: "slsk",
@@ -598,6 +765,7 @@ describe("Rekordbox direct database planning", () => {
           entryOrder: 1,
           variantIndex: 0,
           mediaPath: "/music/track-1.flac",
+          measuredDurationSeconds: 180,
           analysisDirectory: "/analysis/track-1",
           download: {
             backend: "slsk",
@@ -670,8 +838,8 @@ describe("Rekordbox direct database planning", () => {
     expect(alternative).toMatchObject({
       title: "Nen Lambo (&ME Edit) [Mixed] [Set Extract]",
       artist: "Bill Loko, &ME",
-      durationSeconds: 40,
     });
+    expect(alternative).not.toHaveProperty("durationSeconds");
     expect(alternative).not.toHaveProperty("album");
     expect(alternative).not.toHaveProperty("releaseDate");
     expect(alternative).not.toHaveProperty("isrc");

@@ -345,6 +345,7 @@ function authenticatedFetch(options: {
           baseDelayMs: options.retry?.baseDelayMs ?? 250,
           maxDelayMs: options.retry?.maxDelayMs ?? 10_000,
         }
+  const rateLimitGate = new SpotifyRateLimitGate()
 
   return async (request) => {
     let refreshedAfterUnauthorized = false
@@ -353,7 +354,11 @@ function authenticatedFetch(options: {
       if (!headers.has('authorization')) {
         headers.set('authorization', `Bearer ${await options.provider.getAccessToken()}`)
       }
-      const response = await options.fetch(new Request(request.clone(), { headers }))
+      const response = await rateLimitGate.dispatch(
+        request.signal,
+        () => options.fetch(new Request(request.clone(), { headers })),
+        (rateLimitedResponse) => retryDelay(rateLimitedResponse, attempt, retry),
+      )
 
       if (
         response.status === 401 &&
@@ -371,11 +376,74 @@ function authenticatedFetch(options: {
       )
         return response
 
-      const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
-      const exponential = Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** (attempt - 1))
-      const delay = retryAfter ?? Math.round(exponential * (0.5 + Math.random() * 0.5))
       await response.body?.cancel()
-      await sleep(delay)
+      if (response.status !== 429) {
+        await sleep(retryDelay(response, attempt, retry), request.signal)
+      }
+    }
+  }
+}
+
+class SpotifyRateLimitGate {
+  #notBefore = 0
+  #recovering = false
+  #queued = 0
+  #successfulProbe = false
+  #tail = Promise.resolve()
+
+  async dispatch(
+    signal: AbortSignal,
+    fetch: () => Promise<Response>,
+    getRetryDelay: (response: Response) => number,
+  ): Promise<Response> {
+    const execute = async (recoveryProbe: boolean): Promise<Response> => {
+      await this.#wait(signal)
+      const response = await fetch()
+      if (response.status === 429) {
+        this.#recovering = true
+        this.#successfulProbe = false
+        this.#notBefore = Math.max(this.#notBefore, monotonicNow() + getRetryDelay(response))
+      } else if (recoveryProbe) {
+        this.#successfulProbe = true
+      }
+      return response
+    }
+
+    if (!this.#recovering) return execute(false)
+
+    this.#queued++
+    try {
+      return await this.#serialize(signal, () => execute(true))
+    } finally {
+      this.#queued--
+      if (this.#queued === 0 && this.#successfulProbe) {
+        this.#recovering = false
+        this.#successfulProbe = false
+      }
+    }
+  }
+
+  async #wait(signal: AbortSignal): Promise<void> {
+    for (;;) {
+      throwIfAborted(signal)
+      const remaining = this.#notBefore - monotonicNow()
+      if (remaining <= 0) return
+      await sleep(remaining, signal)
+    }
+  }
+
+  async #serialize<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    let release = (): void => undefined
+    const turn = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const previous = this.#tail
+    this.#tail = previous.then(() => turn)
+    try {
+      await waitFor(previous, signal)
+      return await operation()
+    } finally {
+      release()
     }
   }
 }
@@ -554,8 +622,67 @@ function parseRetryAfter(value: string | null): number | undefined {
   return Number.isNaN(timestamp) ? undefined : Math.max(0, timestamp - Date.now())
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+function retryDelay(response: Response, attempt: number, retry: Required<RetryOptions>): number {
+  const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
+  const exponential = Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** (attempt - 1))
+  return retryAfter ?? Math.round(exponential * (0.5 + Math.random() * 0.5))
+}
+
+function monotonicNow(): number {
+  return performance.now()
+}
+
+function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
+  throwIfAborted(signal)
+  if (milliseconds <= 0) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(finish, milliseconds)
+    signal.addEventListener('abort', abort, { once: true })
+
+    function finish(): void {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }
+
+    function abort(): void {
+      clearTimeout(timeout)
+      reject(abortReason(signal))
+    }
+  })
+}
+
+function waitFor(promise: Promise<void>, signal: AbortSignal): Promise<void> {
+  throwIfAborted(signal)
+  return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', abort, { once: true })
+    void promise.then(finish, fail)
+
+    function finish(): void {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }
+
+    function fail(error: unknown): void {
+      signal.removeEventListener('abort', abort)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+
+    function abort(): void {
+      reject(abortReason(signal))
+    }
+  })
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw abortReason(signal)
+}
+
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason
+  return new DOMException(
+    typeof signal.reason === 'string' ? signal.reason : 'This operation was aborted',
+    'AbortError',
+  )
 }
 
 function isBodyInit(value: unknown): value is BodyInit {

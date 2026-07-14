@@ -9,7 +9,7 @@ import { Cli, z } from 'incur'
 
 import { ReferenceClient, type DownloadReferenceOptions, type InspectReferenceOptions } from './bridge/reference.js'
 import { inspect } from './core/engine.js'
-import { errorMessage, YtdlpError } from './core/errors.js'
+import { errorMessage, nativeFallbackFor, type NativeFallback, YtdlpError } from './core/errors.js'
 import { compareMediaInfo } from './core/parity.js'
 import type { EngineKind } from './core/types.js'
 import { ExtractorRegistry } from './extractors/registry.js'
@@ -18,7 +18,15 @@ import {
   sanitizeMediaInfoForOutput,
   supportsNativeDownloadOptions,
 } from './downloader/native.js'
-import { downloadMusicBatch } from './music.js'
+import {
+  DEFAULT_MUSIC_CONCURRENCY,
+  DEFAULT_NATIVE_YOUTUBE_CONCURRENCY,
+  DEFAULT_YOUTUBE_CONCURRENCY,
+  downloadMusicBatch,
+  MAX_MUSIC_CONCURRENCY,
+  MAX_NATIVE_YOUTUBE_CONCURRENCY,
+  MAX_YOUTUBE_CONCURRENCY,
+} from './music.js'
 
 const { version: VERSION } = createRequire(import.meta.url)('../package.json') as {
   version: string
@@ -73,7 +81,11 @@ cli.command('inspect', {
         c.options.engine as EngineKind,
         toInspectOptions(c.options),
       )
-      return { engine: result.engine, info: sanitizeMediaInfoForOutput(result.data) }
+      return {
+        engine: result.engine,
+        ...(result.fallback ? { fallback: result.fallback } : undefined),
+        info: sanitizeMediaInfoForOutput(result.data),
+      }
     } catch (error) {
       return fail(c, error)
     }
@@ -95,6 +107,7 @@ cli.command('formats', {
       const formats = safe.formats ?? []
       return {
         engine: result.engine,
+        ...(result.fallback ? { fallback: result.fallback } : undefined),
         id: result.data.id,
         title: result.data.title,
         count: formats.length,
@@ -120,6 +133,7 @@ cli.command('subtitles', {
       const safe = sanitizeMediaInfoForOutput(result.data)
       return {
         engine: result.engine,
+        ...(result.fallback ? { fallback: result.fallback } : undefined),
         id: result.data.id,
         title: result.data.title,
         subtitles: safe.subtitles ?? {},
@@ -145,6 +159,7 @@ cli.command('thumbnails', {
       const safe = sanitizeMediaInfoForOutput(result.data)
       return {
         engine: result.engine,
+        ...(result.fallback ? { fallback: result.fallback } : undefined),
         id: result.data.id,
         title: result.data.title,
         thumbnails: safe.thumbnails ?? [],
@@ -216,14 +231,26 @@ cli.command('music', {
       .describe('Keep source audio or convert after download'),
     audioQuality: z.string().default('0').describe('FFmpeg quality when converting audio'),
     archive: z.string().optional().describe('Durable completed-track archive path'),
-    concurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel source inspections and tracks'),
-    youtubeConcurrency: z.number().int().min(1).max(64).default(64).describe('Maximum parallel YouTube tracks'),
+    concurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_MUSIC_CONCURRENCY)
+      .default(DEFAULT_MUSIC_CONCURRENCY)
+      .describe('Maximum parallel source inspections and tracks'),
+    youtubeConcurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_YOUTUBE_CONCURRENCY)
+      .default(DEFAULT_YOUTUBE_CONCURRENCY)
+      .describe('Maximum parallel reference YouTube tracks'),
     nativeYoutubeConcurrency: z
       .number()
       .int()
       .min(1)
-      .max(16)
-      .default(3)
+      .max(MAX_NATIVE_YOUTUBE_CONCURRENCY)
+      .default(DEFAULT_NATIVE_YOUTUBE_CONCURRENCY)
       .describe('Maximum parallel native YouTube tracks'),
     retries: z.number().int().min(0).max(100).default(10).describe('Transfer and fragment retries'),
     rateLimit: z.string().optional().describe('Global download rate limit, e.g. 8M'),
@@ -334,6 +361,10 @@ cli.command('download', {
     }
     delete options.overwrites
     const nativeSupported = supportsNativeDownloadOptions(options)
+    let fallback: NativeFallback | undefined =
+      c.options.engine === 'auto' && !nativeSupported
+        ? { from: 'native', code: 'NATIVE_OPTION_UNAVAILABLE' }
+        : undefined
     if (c.options.engine === 'native' && !nativeSupported) {
       return c.error({
         code: 'NATIVE_OPTION_UNAVAILABLE',
@@ -372,13 +403,16 @@ cli.command('download', {
         })
         return { engine: 'native', ...result, progressEvents, lastProgress }
       } catch (error) {
-        if (c.options.engine === 'native') return fail(c, error)
+        const nativeFallback = nativeFallbackFor(error)
+        if (c.options.engine === 'native' || !nativeFallback) return fail(c, error)
+        fallback = nativeFallback
       }
     }
     try {
       const result = await new ReferenceClient().download(c.args.url, toDownloadOptions(options))
       return {
         engine: 'reference',
+        ...(fallback ? { fallback } : undefined),
         files: result.files,
         log: result.stdout,
         warnings: result.stderr,

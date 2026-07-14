@@ -262,29 +262,40 @@ rekordbox db content sync-analysis-metadata \
 ```
 
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
-runs a bounded pool of isolated native worker processes, preserves input order, and defaults to 64
-workers or the number of uncached tracks, whichever is lower. Keep database installation separate
+runs a bounded pool of isolated native worker processes, preserves input order, and defaults to four
+workers or the number of uncached tracks, whichever is lower. The CLI reports cache, start,
+completion, failure, and cancellation progress on stderr; `--progress never` disables it.
+SIGINT/SIGTERM stop active child analyzers and prevent new work. Keep database installation separate
 and serialized: call
 `MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
+If some tracks fail, `AnalyzeTracksError` retains indexed typed failures and the ordered partial
+results/cache hits. Cancellation throws the abort-compatible `AnalyzeTracksCancelledError`, whose
+partial result also reports the exact unfinished count. Every successful `analysis.json` remains
+durable for the next resume.
 Use `MasterDatabase.syncContentAnalysisMetadata()` for an already-installed result. Both methods
 validate `analysis.json` and its source fingerprint; their result includes the analyzer tempo,
 hundredths value, normalized key name, and resolved key ID. The set-import workflow persists this
 summary in its durable manifest, post-verifies `BPM`, `KeyID`, and the active key name after reopening
 the database, and treats missing or mismatched values as repairable checkpoint drift on a warm
 resume.
-The default favors minimum playlist wall time: a 30–60 track playlist can analyze every uncached
-track concurrently. On a 12-core machine, 26 real set tracks took 60.02 seconds with four workers,
+Four workers is the stable interactive default. On a 12-core machine, 26 real set tracks took 60.02 seconds with four workers,
 32.23 seconds with eight, and 28.83 seconds with twelve. A 64-default stress run completed 27
 compatible real artifacts in 23.85 seconds at an effective concurrency of 27 (1.13 tracks/second).
 Two additional source files returned the same native `startAnalyze` incompatibility alone at
-concurrency one and were excluded from that timing. Higher concurrency consumes more CPU and memory;
-pass `concurrency` explicitly to constrain resource use. Warm validation of all 26 cached analyses
+concurrency one and were excluded from that timing. Moving from 12 to 27 workers used more than twice
+as many native processes for roughly 17% lower wall time, so higher concurrency remains an explicit,
+measured override. Warm validation of all 26 cached analyses
 took 11.65 ms. Analysis
 requires macOS and Rosetta on Apple Silicon. The public package does not redistribute an analyzer
 helper or AlphaTheta/Rekordbox runtime. Set `REKORDBOX_ANALYZER_BINARY`, place a locally built
 `rekordbox-analyzer` on `PATH`, or pass `analyzerBinary`; `analyze doctor` validates that local
 helper, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` selects the user's compatible
 `rekordbox.app`.
+
+The native backend can reject otherwise valid Unicode-heavy source paths with `startAnalyze` status
+`-1`. The async wrapper retries only that exact failure through a byte-identical ASCII input/output
+staging directory, then atomically moves validated artifacts back to their canonical output path and
+records the original source path in `analysis.json`. Other native failures remain fail-closed.
 
 ### Collection XML interchange
 

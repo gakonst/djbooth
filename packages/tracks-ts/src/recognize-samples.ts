@@ -6,8 +6,8 @@ import { extractClip, hasCompleteSampleCoverage, prepareMedia, sampleOffsets } f
 import { mapConcurrent } from "./process.js";
 import type { IdentifyOptions, RecognitionMoment } from "./types.js";
 
-export const DEFAULT_RECOGNITION_CONCURRENCY = 64;
-export const MAX_RECOGNITION_CONCURRENCY = 64;
+export const DEFAULT_RECOGNITION_CONCURRENCY = 3;
+export const MAX_RECOGNITION_CONCURRENCY = 8;
 
 export interface ClipRecognizer {
   recognizeClip(clip: Blob, scanSeconds: number, filename?: string): Promise<RecognitionMoment>;

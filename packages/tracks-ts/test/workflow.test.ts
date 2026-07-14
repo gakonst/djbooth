@@ -1,13 +1,20 @@
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { describe, expect, test, vi } from "vitest";
 
 import type { AcquireManifestResult, AcquisitionPerformance } from "../src/acquire-manifest.js";
 import { createManifest, type SetManifest } from "../src/manifest.js";
-import type { ImportManifestToRekordboxResult } from "../src/rekordbox-db.js";
+import { planRekordboxImport, type ImportManifestToRekordboxResult } from "../src/rekordbox-db.js";
 import type { SpotifyEnrichmentResult } from "../src/spotify-enrichment.js";
 import type { Tracklist } from "../src/types.js";
-import { runSetToRekordbox, type RunSetToRekordboxDependencies } from "../src/workflow.js";
+import {
+  DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
+  MAX_NATIVE_ANALYSIS_CONCURRENCY,
+  runSetToRekordbox,
+  type RunSetToRekordboxDependencies,
+} from "../src/workflow.js";
 
 const source = "https://youtu.be/example-set";
 const manifestPath = resolve("/tmp/music-ts-workflow/manifest.json");
@@ -84,9 +91,9 @@ function acquisitionPerformance(): AcquisitionPerformance {
     startedAt: new Date(0).toISOString(),
     finishedAt: new Date(0).toISOString(),
     totalMs: 1,
-    concurrency: 64,
-    verificationConcurrency: 64,
-    spotifyConcurrency: 64,
+    concurrency: 3,
+    verificationConcurrency: 8,
+    spotifyConcurrency: 8,
     stages: [{ stage: "recordings", durationMs: 1, operations: 1, maxConcurrency: 1 }],
     checkpoints: {
       calls: 1,
@@ -116,7 +123,7 @@ function spotifyResult(manifest: SetManifest, attempted: number): SpotifyEnrichm
     attempted,
     requests: attempted,
     networkRequests: attempted,
-    concurrency: 64,
+    concurrency: 8,
     maxConcurrency: attempted ? 1 : 0,
     matched: attempted,
     ambiguous: 0,
@@ -201,6 +208,11 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
 }
 
 describe("runSetToRekordbox", () => {
+  test("uses a four-worker native analysis default without lowering the explicit cap", () => {
+    expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBe(4);
+    expect(MAX_NATIVE_ANALYSIS_CONCURRENCY).toBe(64);
+  });
+
   test("composes the entire approved flow as libraries and installs native analysis", async () => {
     const writes: SetManifest[] = [];
     const calls: string[] = [];
@@ -217,7 +229,8 @@ describe("runSetToRekordbox", () => {
         return tracklist();
       },
       createManifest,
-      enrichSpotify: async (manifest) => {
+      enrichSpotify: async (manifest, _spotify, options) => {
+        expect(options?.concurrency).toBe(8);
         calls.push("spotify");
         manifest.entries[0]!.spotify = enrichedManifest().entries[0]!.spotify;
         return spotifyResult(manifest, 1);
@@ -233,6 +246,11 @@ describe("runSetToRekordbox", () => {
         };
       },
       acquire: async (options) => {
+        expect(options).toMatchObject({
+          concurrency: 3,
+          verificationConcurrency: 8,
+          spotifyConcurrency: 8,
+        });
         calls.push("acquire");
         await (options.plan as (manifest: SetManifest) => Promise<unknown>)(enrichedManifest());
         const analysisTask = options.onArtifactVerified?.({
@@ -243,10 +261,9 @@ describe("runSetToRekordbox", () => {
           kind: "individual",
           status: "downloaded",
         });
-        await Promise.resolve();
+        await analysisTask;
         expect(calls).toContain("analyze");
         calls.push("acquire-finish");
-        await analysisTask;
         return acquisitionResult(downloadedManifest(), false);
       },
       analyze: async (paths, options) => {
@@ -307,6 +324,91 @@ describe("runSetToRekordbox", () => {
       ["analysis", "completed"],
       ["rekordbox", "completed"],
     ]);
+  });
+
+  test("keeps a manifest symlink as the Rekordbox key when analysis returns its realpath", async () => {
+    const directory = await mkdtemp(resolve(tmpdir(), "music-ts-workflow-symlink-"));
+    try {
+      const canonicalMediaPath = resolve(directory, "canonical.m4a");
+      const manifestMediaPath = resolve(directory, "manifest-link.m4a");
+      const symlinkAnalysisDirectory = resolve(directory, ".rekordbox-analysis");
+      await writeFile(canonicalMediaPath, "verified audio fixture");
+      await symlink(canonicalMediaPath, manifestMediaPath);
+      const canonicalIdentity = await realpath(manifestMediaPath);
+      const manifest = downloadedManifest();
+      const acquisition = manifest.entries[0]!.acquisition;
+      if (acquisition.status !== "downloaded") throw new Error("Expected downloaded fixture");
+      acquisition.download.mediaPath = manifestMediaPath;
+      acquisition.download.files = [manifestMediaPath];
+
+      const analyze = vi.fn<RunSetToRekordboxDependencies["analyze"]>(async (paths) => {
+        expect(paths).toEqual([manifestMediaPath]);
+        const result = analysisResult(false);
+        result.results[0]!.source.path = canonicalIdentity;
+        result.results[0]!.summaryPath = resolve(symlinkAnalysisDirectory, "analysis.json");
+        return result;
+      });
+      const dependencies: RunSetToRekordboxDependencies = {
+        exists: async () => true,
+        readManifest: async () => manifest,
+        writeManifest: vi.fn(),
+        identify: vi.fn(),
+        createManifest,
+        enrichSpotify: async (current) => spotifyResult(current, 0),
+        describeSourceSet: vi.fn(),
+        buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: directory }),
+        acquire: async (options) => {
+          await options.onArtifactVerified?.({
+            entryOrder: 1,
+            variantIndex: 0,
+            path: manifestMediaPath,
+            sha256: "a".repeat(64),
+            kind: "individual",
+            status: "resumed",
+          });
+          return {
+            ...acquisitionResult(manifest, true),
+            resumed: [manifestMediaPath],
+          };
+        },
+        analyze,
+        importRekordbox: async (options) => {
+          const analysisDirectories = options.analysisDirectories;
+          expect(analysisDirectories).toEqual({
+            [manifestMediaPath]: symlinkAnalysisDirectory,
+          });
+          if (!analysisDirectories) throw new Error("Expected analysis directory handoff");
+          const plan = planRekordboxImport(options.manifest, {
+            analysisDirectories,
+          });
+          expect(plan.items[0]).toMatchObject({
+            mediaPath: manifestMediaPath,
+            analysisDirectory: symlinkAnalysisDirectory,
+          });
+          return importResult(options.manifest, true);
+        },
+      };
+
+      const result = await runSetToRekordbox({
+        source,
+        manifestPath: resolve(directory, "manifest.json"),
+        outputDirectory: directory,
+        approved: true,
+        acquirers: [],
+        dependencies,
+      });
+
+      expect(analyze).toHaveBeenCalledOnce();
+      expect(result.analysis.results[0]!.source.path).toBe(canonicalIdentity);
+      expect(result.manifest.artifacts.analysis).toEqual([
+        expect.objectContaining({ mediaPath: manifestMediaPath }),
+      ]);
+      expect(result.analysisDirectories).toEqual({
+        [manifestMediaPath]: symlinkAnalysisDirectory,
+      });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 
   test("takes the fully cached warm-resume path without resolving or rewriting", async () => {

@@ -10,7 +10,7 @@ commands are generated from SoundCloud's official OpenAPI schema.
 - OAuth 2.1 Authorization Code with required PKCE and client secret for account access.
 - Secure mode-`0600` saved sessions and atomic, cross-process refresh-token rotation.
 - Persistent Client Credentials tokens for public search and URL resolution.
-- Automatic one-time 401 refresh plus bounded 429 and transient-read retries.
+- Automatic one-time 401 refresh plus coordinated, bounded 429 and transient-read retries.
 - Safe linked pagination through opaque `next_href` URLs.
 - User-authorized playlist creation from ordered track IDs, URNs, and URLs.
 - Incur structured output, OpenAPI commands, MCP, skills, shell completion, and LLM discovery.
@@ -145,6 +145,14 @@ await soundcloud.updatePlaylist(playlist.urn!, {
 })
 await soundcloud.deletePlaylist(playlist.urn!)
 ```
+
+All requests made through one `SoundCloudClient` share a provider cooldown gate. A `Retry-After`
+header or SoundCloud's structured [rate-limit `reset_time`](https://developers.soundcloud.com/docs/api/rate-limits)
+delays later calls as well as the current safe-method retry, so concurrent callers cannot bypass the
+cooldown. Waiting callers are released in small staggered slots to avoid a retry herd, and an
+`AbortSignal` cancels a queued wait before any credentials or request are sent. Unsafe methods are
+not retried by default, but their rate-limit responses still update the shared gate for subsequent
+calls.
 
 ### Full typed API
 

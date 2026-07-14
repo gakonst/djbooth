@@ -3,7 +3,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { readFile, stat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -19,14 +19,21 @@ import {
   MAX_ACQUISITION_CONCURRENCY,
   MAX_SPOTIFY_REFRESH_CONCURRENCY,
   MAX_VERIFICATION_CONCURRENCY,
+  type TrackAcquirer,
 } from "./acquire-manifest.js";
-import { cacheDigest } from "./cache.js";
+import { readManifest } from "./acquisition.js";
+import { analyzeExistingManifest } from "./analyze-existing.js";
+import { cacheDigest, type CacheMode } from "./cache.js";
 import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
 import { CachedSpotifyClient } from "./integrations/spotify-cache.js";
 import { SoulseekLibraryAcquirer } from "./integrations/slsk-library.js";
 import { getYtdlpTsCommand } from "./integrations/ytdlp.js";
-import { YtdlpReferenceAcquirer } from "./integrations/ytdlp-library.js";
+import {
+  YtdlpNativeAcquirer,
+  YtdlpReferenceAcquirer,
+  type YtdlpReferenceClient,
+} from "./integrations/ytdlp-library.js";
 import { createManifest, parseManifest } from "./manifest.js";
 import { runProcess } from "./process.js";
 import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
@@ -35,9 +42,14 @@ import {
   MAX_RECOGNITION_CONCURRENCY,
 } from "./recognize-samples.js";
 import { parseTracklistJson, renderTracklist } from "./render.js";
+import { importManifestToRekordbox } from "./rekordbox-db.js";
 import { requireTimestamp } from "./time.js";
 import type { Environment } from "./types.js";
-import { runSetToRekordbox } from "./workflow.js";
+import {
+  DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
+  MAX_NATIVE_ANALYSIS_CONCURRENCY,
+  runSetToRekordbox,
+} from "./workflow.js";
 
 const { version: VERSION } = createRequire(import.meta.url)("../package.json") as {
   version: string;
@@ -85,6 +97,31 @@ const cacheModeOption = z
   .enum(["default", "refresh", "off"])
   .default("default")
   .describe("Use, refresh, or bypass the persistent provider metadata cache");
+
+export type ImportSetAcquirerFactories = {
+  soulseek(): TrackAcquirer;
+  nativeYtdlp(): TrackAcquirer;
+  referenceYtdlp(): TrackAcquirer;
+};
+
+export function orderedImportSetAcquirers(
+  referenceYtdlp: boolean,
+  factories: ImportSetAcquirerFactories,
+): TrackAcquirer[] {
+  const acquirers = [factories.soulseek(), factories.nativeYtdlp()];
+  if (referenceYtdlp) acquirers.push(factories.referenceYtdlp());
+  return acquirers;
+}
+
+export function createImportSetReferenceAcquirer(
+  client: YtdlpReferenceClient,
+  cacheMode: CacheMode,
+): YtdlpReferenceAcquirer {
+  return new YtdlpReferenceAcquirer(client, {
+    cacheMode,
+    requiresPriorCapabilityFailure: true,
+  });
+}
 
 const identifyOptions = z.object({
   provider,
@@ -482,7 +519,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, fans Spotify, individual-track acquisition, verification, and native analysis out to playlist-scale concurrency, persists each analyzer summary, then performs one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
+      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use analyze-existing to analyze only media already checkpointed in a manifest, without loading acquisition credentials or mutating media. Use import-existing for one explicitly approved, verified Rekordbox commit from those checkpointed media/analysis artifacts. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, runs Spotify, individual-track acquisition, verification, and native analysis through stage-specific bounded pools, persists each analyzer summary, then performs one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -491,15 +528,181 @@ export const tracksCli = Cli.create("tracks", {
       "resolve a YouTube DJ set into a versioned track manifest",
       "find the 1001Tracklists entry for a YouTube URL",
       "search 1001Tracklists for a DJ set",
-      "import an approved resolved set into Rekordbox at playlist-scale concurrency",
+      "analyze only the downloaded recordings in a durable manifest",
+      "import a fully acquired and analyzed manifest into Rekordbox",
+      "import an approved resolved set into Rekordbox with bounded stage concurrency",
       "render a tracklist as YouTube chapters",
     ],
   },
 });
 
+tracksCli.command("import-existing", {
+  description:
+    "Import checkpointed media and native analysis from one manifest in a single verified Rekordbox transaction.",
+  args: z.object({ manifest: z.string().describe("Durable dj-set-pipeline manifest path") }),
+  options: z.object({
+    dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
+    dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
+    folderName: z.string().optional().describe("Destination Rekordbox folder"),
+    playlistName: z.string().optional().describe("Destination Rekordbox playlist"),
+    backupRoot: z.string().optional().describe("Backup directory root"),
+    write: z
+      .boolean()
+      .default(false)
+      .describe("Required acknowledgement for normal Rekordbox database mutation"),
+  }),
+  output: z.object({
+    manifestPath: z.string(),
+    dbPath: z.string(),
+    folderId: z.string(),
+    playlistId: z.string(),
+    imported: z.number().int().nonnegative(),
+    expectedAnalysis: z.number().int().nonnegative(),
+    verifiedAnalysis: z.number().int().nonnegative(),
+    backupDirectory: z.string(),
+    changed: z.boolean(),
+    startedAt: z.string(),
+    finishedAt: z.string(),
+    totalMs: z.number().nonnegative(),
+  }),
+  async run(context) {
+    try {
+      if (!context.options.write) {
+        throw new TracksError(
+          "INVALID_SOURCE",
+          "Manifest import requires the explicit --write acknowledgement",
+          { exitCode: 2 },
+        );
+      }
+      const manifestPath = resolve(context.args.manifest);
+      const manifest = await readManifest(manifestPath);
+      const analysisDirectories = Object.fromEntries(
+        (manifest.artifacts.analysis ?? []).map((artifact) => [
+          resolve(artifact.mediaPath),
+          dirname(resolve(artifact.summaryPath)),
+        ]),
+      );
+      const result = await importManifestToRekordbox({
+        approved: true,
+        manifest,
+        manifestPath,
+        analysisDirectories,
+        ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+        ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+        ...(context.options.folderName ? { folderName: context.options.folderName } : {}),
+        ...(context.options.playlistName ? { playlistName: context.options.playlistName } : {}),
+        ...(context.options.backupRoot ? { backupRoot: context.options.backupRoot } : {}),
+      });
+      return {
+        manifestPath,
+        dbPath: result.dbPath,
+        folderId: result.folderId,
+        playlistId: result.playlistId,
+        imported: result.imported.length,
+        expectedAnalysis: result.verification.expectedAnalysisCount,
+        verifiedAnalysis: result.verification.verifiedAnalysisCount,
+        backupDirectory: result.backup.directory,
+        changed: result.performance.changed,
+        startedAt: result.performance.startedAt,
+        finishedAt: result.performance.finishedAt,
+        totalMs: result.performance.totalMs,
+      };
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+tracksCli.command("analyze-existing", {
+  description:
+    "Analyze only downloaded media already recorded in a durable manifest; never acquire, retag, or import.",
+  args: z.object({ manifest: z.string().describe("Durable dj-set-pipeline manifest path") }),
+  options: z.object({
+    concurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
+      .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
+      .describe("Parallel native analyzer workers; defaults to 4"),
+    force: z.boolean().default(false).describe("Ignore valid cached analyzer summaries"),
+    analyzerBinary: z.string().optional().describe("Native analyzer helper override"),
+    rekordboxApp: z.string().optional().describe("Rekordbox application directory override"),
+    rekordboxCache: z.string().optional().describe("Rekordbox analysis cache override"),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .default(300_000)
+      .describe("Per-track analyzer timeout in milliseconds"),
+    progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
+  }),
+  output: z.object({
+    manifestPath: z.string(),
+    requested: z.number().int().nonnegative(),
+    analyzed: z.number().int().nonnegative(),
+    cacheHits: z.number().int().nonnegative(),
+    concurrency: z.number().int().nonnegative(),
+    analysisDirectories: z.record(z.string(), z.string()),
+    startedAt: z.string(),
+    finishedAt: z.string(),
+    totalMs: z.number().nonnegative(),
+  }),
+  async run(context) {
+    const controller = new AbortController();
+    const cancel = () => controller.abort(new Error("Analysis cancelled by process signal"));
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      const showProgress =
+        context.options.progress === "always" ||
+        (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
+      const result = await analyzeExistingManifest({
+        manifestPath: context.args.manifest,
+        concurrency: context.options.concurrency,
+        force: context.options.force,
+        timeoutMs: context.options.timeoutMs,
+        signal: controller.signal,
+        ...(context.options.analyzerBinary
+          ? { analyzerBinary: context.options.analyzerBinary }
+          : {}),
+        ...(context.options.rekordboxApp ? { rekordboxApp: context.options.rekordboxApp } : {}),
+        ...(context.options.rekordboxCache
+          ? { rekordboxCache: context.options.rekordboxCache }
+          : {}),
+        ...(showProgress
+          ? {
+              onProgress(progress) {
+                process.stderr.write(
+                  `[${new Date().toISOString()}] [analysis:${progress.phase}] ${String(progress.completed)}/${String(progress.total)} ${progress.audioPath}\n`,
+                );
+              },
+            }
+          : {}),
+      });
+      return {
+        manifestPath: result.manifestPath,
+        requested: result.analysis.requested,
+        analyzed: result.analysis.analyzed,
+        cacheHits: result.analysis.cacheHits,
+        concurrency: result.analysis.concurrency,
+        analysisDirectories: result.analysisDirectories,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+        totalMs: result.totalMs,
+      };
+    } catch (error) {
+      return fail(context, error);
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
+  },
+});
+
 tracksCli.command("import-set", {
   description:
-    "Resume an approved set through resolution, Spotify enrichment, individual-track acquisition, 64-way native analysis, and one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
+    "Resume an approved set through resolution, bounded Spotify enrichment and acquisition, four-worker native analysis, and one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
@@ -514,7 +717,9 @@ tracksCli.command("import-set", {
     referenceYtdlp: z
       .boolean()
       .default(false)
-      .describe("Explicitly permit the external yt-dlp reference fallback after Soulseek"),
+      .describe(
+        "Explicitly permit external yt-dlp after Soulseek and a typed native capability gap",
+      ),
     allowSetClips: z
       .boolean()
       .default(false)
@@ -533,28 +738,28 @@ tracksCli.command("import-set", {
       .min(1)
       .max(MAX_ACQUISITION_CONCURRENCY)
       .default(DEFAULT_ACQUISITION_CONCURRENCY)
-      .describe("Parallel independent recording variants; defaults to one 64-track wave"),
+      .describe("Parallel independent recording variants; defaults to 3"),
     verificationConcurrency: z
       .number()
       .int()
       .min(1)
       .max(MAX_VERIFICATION_CONCURRENCY)
       .default(DEFAULT_VERIFICATION_CONCURRENCY)
-      .describe("Parallel media stat/hash/probe checks; defaults to 64"),
+      .describe("Parallel media stat/hash/probe checks; defaults to 8"),
     spotifyConcurrency: z
       .number()
       .int()
       .min(1)
       .max(MAX_SPOTIFY_REFRESH_CONCURRENCY)
       .default(DEFAULT_SPOTIFY_REFRESH_CONCURRENCY)
-      .describe("Parallel Spotify metadata requests; defaults to 64"),
+      .describe("Parallel Spotify metadata requests; defaults to 8"),
     analysisConcurrency: z
       .number()
       .int()
       .min(1)
-      .max(64)
-      .default(64)
-      .describe("Parallel native Rekordbox analyzer workers; defaults to 64"),
+      .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
+      .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
+      .describe("Parallel native Rekordbox analyzer workers; defaults to 4"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     folderName: z.string().optional().describe("Destination Rekordbox folder"),
@@ -583,6 +788,10 @@ tracksCli.command("import-set", {
   }),
   async run(context) {
     let soulseek: SoulseekClient | undefined;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(new DOMException("Import interrupted", "AbortError"));
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
     try {
       if (!context.options.write) {
         throw new TracksError(
@@ -593,24 +802,26 @@ tracksCli.command("import-set", {
       }
       const spotify = await workflowSpotifyClient(context.options.cacheMode);
       soulseek = new SoulseekClient();
-      const acquirers = [
-        new SoulseekLibraryAcquirer(soulseek, {
-          environment: {
-            SLSK_USERNAME: context.env.SLSK_USERNAME,
-            SLSK_PASSWORD: context.env.SLSK_PASSWORD,
-          },
-        }),
-        ...(context.options.referenceYtdlp
-          ? [
-              new YtdlpReferenceAcquirer(new ReferenceClient(), {
-                cacheMode: context.options.cacheMode,
-              }),
-            ]
-          : []),
-      ];
+      const acquirers = orderedImportSetAcquirers(context.options.referenceYtdlp, {
+        soulseek: () =>
+          new SoulseekLibraryAcquirer(soulseek!, {
+            signal: controller.signal,
+            environment: {
+              SLSK_USERNAME: context.env.SLSK_USERNAME,
+              SLSK_PASSWORD: context.env.SLSK_PASSWORD,
+            },
+          }),
+        nativeYtdlp: () =>
+          new YtdlpNativeAcquirer({
+            cacheMode: context.options.cacheMode,
+            signal: controller.signal,
+          }),
+        referenceYtdlp: () =>
+          createImportSetReferenceAcquirer(new ReferenceClient(), context.options.cacheMode),
+      });
       const showProgress =
         context.options.progress === "always" ||
-        (context.options.progress === "auto" && !context.agent && !context.formatExplicit);
+        (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
       const result = await runSetToRekordbox({
         source: context.args.source,
         manifestPath: context.options.manifest,
@@ -638,6 +849,7 @@ tracksCli.command("import-set", {
         verificationConcurrency: context.options.verificationConcurrency,
         spotifyConcurrency: context.options.spotifyConcurrency,
         analysisConcurrency: context.options.analysisConcurrency,
+        signal: controller.signal,
         rekordbox: {
           ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
           ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
@@ -648,7 +860,9 @@ tracksCli.command("import-set", {
         ...(showProgress
           ? {
               onProgress(progress) {
-                process.stderr.write(`[${progress.stage}] ${progress.message}\n`);
+                process.stderr.write(
+                  `[${new Date().toISOString()}] [${progress.stage}] ${progress.message}\n`,
+                );
               },
             }
           : {}),
@@ -671,6 +885,8 @@ tracksCli.command("import-set", {
     } catch (error) {
       return fail(context, error);
     } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
       if (soulseek?.state !== "disconnected") await soulseek?.disconnect();
     }
   },
@@ -731,13 +947,15 @@ tracksCli.command("resolve", {
           onProgress(progress) {
             if (
               context.options.progress === "always" ||
-              (context.options.progress === "auto" && !context.agent && !context.formatExplicit)
+              (context.options.progress === "auto" && (context.agent || !context.formatExplicit))
             ) {
               const count =
                 progress.current === undefined
                   ? ""
                   : ` ${progress.current}/${progress.total ?? "?"}`;
-              process.stderr.write(`[${progress.phase}]${count} ${progress.message}\n`);
+              process.stderr.write(
+                `[${new Date().toISOString()}] [${progress.phase}]${count} ${progress.message}\n`,
+              );
             }
           },
         }),

@@ -102,6 +102,44 @@ describe("SoulseekLibraryAcquirer", () => {
     expect(candidates.every(({ source }) => source.startsWith("slsk://download?"))).toBe(true);
   });
 
+  test("forwards one cancellation signal through connect, search, and download", async () => {
+    const fake = fakeClient([
+      response("peer", [file("Artist - Track.flac", 52_920_000n, { length: 300 })]),
+    ]);
+    const controller = new AbortController();
+    const acquirer = new SoulseekLibraryAcquirer(fake.client, {
+      credentials: { username: "local", password: "secret" },
+      signal: controller.signal,
+    });
+    const [candidate] = await acquirer.search({
+      title: "Track",
+      artists: ["Artist"],
+      durationSeconds: 300,
+    });
+    const root = await mkdtemp(join(tmpdir(), "tracks-slsk-signal-"));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    await acquirer.download({ ...candidate!, score: 1 }, root, "track");
+
+    expect(fake.connect).toHaveBeenCalledWith("local", "secret", {
+      signal: controller.signal,
+    });
+    expect(fake.search).toHaveBeenCalledWith(
+      "Artist Track",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(fake.download).toHaveBeenCalledWith(
+      "peer",
+      "Artist - Track.flac",
+      join(root, "track.flac"),
+      expect.objectContaining({ signal: controller.signal }),
+    );
+
+    controller.abort(new DOMException("test cancellation", "AbortError"));
+    await expect(
+      acquirer.search({ title: "Another", artists: ["Artist"], durationSeconds: 300 }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   test("coalesces identical in-flight searches on one long-lived client", async () => {
     const responses = [response("peer", [file("Artist - Track.flac", 10_000_000n, {})])];
     const fake = fakeClient(responses);

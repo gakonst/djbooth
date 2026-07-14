@@ -19,12 +19,13 @@ import {
   unlink,
 } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { availableParallelism } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
-import { acquirePipelineManifestLock } from "./acquisition.js";
+import { acquirePipelineManifestLock, probeAudio } from "./acquisition.js";
 import { TracksError } from "./errors.js";
 import {
   parseManifest,
@@ -40,7 +41,7 @@ import { mapConcurrent } from "./process.js";
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
 const DEFAULT_REKORDBOX_MODULE = "@gakonst/rekordbox";
 /** Parallel read/hash/copy work only; database access remains serialized. */
-export const DEFAULT_REKORDBOX_IO_CONCURRENCY = 64;
+export const DEFAULT_REKORDBOX_IO_CONCURRENCY = Math.min(8, availableParallelism());
 
 type DatabaseValue = string | number | bigint | Buffer | Date | null;
 
@@ -158,7 +159,6 @@ export type RekordboxTrackMetadata = {
   releaseDate?: string;
   releaseYear?: number;
   isrc?: string;
-  durationSeconds?: number;
   comment: string;
 };
 
@@ -168,6 +168,8 @@ export type RekordboxImportItem = {
   entryOrder: number;
   variantIndex: number;
   mediaPath: string;
+  /** Rounded duration measured from the verified media artifact during import preflight. */
+  measuredDurationSeconds?: number;
   analysisDirectory?: string;
   download: AcquisitionDownload;
   metadata: RekordboxTrackMetadata;
@@ -332,14 +334,17 @@ export type RekordboxPerformance = {
   stages: Array<{ stage: string; durationMs: number }>;
 };
 
-type MediaReceipt = {
+export type RekordboxMediaReceipt = {
   path: string;
   size: number;
   mtimeMs: number;
   ctimeMs: number;
   ino: number | bigint;
   sha256: string;
+  durationSeconds: number;
 };
+
+export type RekordboxMediaProbe = (path: string) => Promise<{ durationSeconds: number }>;
 
 type ProcessState = { rekordboxPid: number; rekordboxAgentPid: number };
 
@@ -352,7 +357,6 @@ type SpotifyMetadata = {
   album?: string;
   albumArtists?: string[];
   releaseDate?: string;
-  durationMs?: number;
   isrc?: string;
 };
 
@@ -692,7 +696,7 @@ async function importManifestToRekordboxLocked(
   });
   const mediaReceipts = await measure("media-preflight", async () => {
     const [receipts] = await Promise.all([
-      assertMediaFilesExist(plan),
+      preflightRekordboxMedia(plan),
       assertAnalysisDirectoriesExist(plan),
     ]);
     return receipts;
@@ -717,7 +721,7 @@ async function importManifestToRekordboxLocked(
           checkpointed.imported,
           plan,
         );
-        await assertMediaFilesExist(plan, mediaReceipts);
+        await preflightRekordboxMedia(plan, mediaReceipts);
         const backup = await readRekordboxBackup(checkpointed.backupDirectory);
         return {
           manifest,
@@ -789,7 +793,7 @@ async function importManifestToRekordboxLocked(
         installedAnalysis = writeResult.installedAnalysis;
       });
       await measure("media-recheck-before-commit", () =>
-        assertMediaFilesExist(plan, mediaReceipts),
+        preflightRekordboxMedia(plan, mediaReceipts),
       );
       await measure("database-commit", () => {
         assertRekordboxStopped(readProcessState(rekordbox));
@@ -826,7 +830,9 @@ async function importManifestToRekordboxLocked(
           plan,
         );
       });
-      await measure("media-recheck-after-commit", () => assertMediaFilesExist(plan, mediaReceipts));
+      await measure("media-recheck-after-commit", () =>
+        preflightRekordboxMedia(plan, mediaReceipts),
+      );
     } catch (error) {
       throw new TracksError(
         "TOOL_FAILED",
@@ -909,12 +915,6 @@ function metadataForDownload(
   const isrc = isSetExtract
     ? undefined
     : download.isrc?.trim() || spotify?.isrc?.trim() || entry.identity.isrc?.trim();
-  const durationSeconds = isSetExtract
-    ? clipDuration(download)
-    : spotify?.durationMs === undefined
-      ? clipDuration(download)
-      : Math.max(1, Math.round(spotify.durationMs / 1000));
-
   return {
     title,
     artist,
@@ -924,7 +924,6 @@ function metadataForDownload(
     ...(releaseDate ? { releaseDate } : {}),
     ...(releaseYear === undefined ? {} : { releaseYear }),
     ...(isrc ? { isrc } : {}),
-    ...(durationSeconds === undefined ? {} : { durationSeconds }),
     comment: downloadComment(manifest, entry, download),
   };
 }
@@ -959,11 +958,6 @@ function matchSpotifyCandidate(
     return candidates.find((candidate) => candidate.isrc?.toLocaleUpperCase() === isrc);
   }
   return undefined;
-}
-
-function clipDuration(download: AcquisitionDownload): number | undefined {
-  if (!download.clip) return undefined;
-  return Math.max(1, Math.round(download.clip.endSeconds - download.clip.startSeconds));
 }
 
 function releaseDateYear(releaseDate: string | undefined): number | undefined {
@@ -1016,11 +1010,13 @@ function downloadComment(
   ].join("\n");
 }
 
-async function assertMediaFilesExist(
+/** Verify each artifact once and attach its measured duration to the mutable import plan. */
+export async function preflightRekordboxMedia(
   plan: RekordboxImportPlan,
-  previous?: ReadonlyMap<string, MediaReceipt>,
-): Promise<Map<string, MediaReceipt>> {
-  const receipts = new Map<string, MediaReceipt>();
+  previous?: ReadonlyMap<string, RekordboxMediaReceipt>,
+  probe: RekordboxMediaProbe = defaultRekordboxMediaProbe,
+): Promise<Map<string, RekordboxMediaReceipt>> {
+  const receipts = new Map<string, RekordboxMediaReceipt>();
   await mapConcurrent(plan.items, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (item) => {
     let mediaStat;
     try {
@@ -1048,13 +1044,21 @@ async function assertMediaFilesExist(
       prior.mtimeMs === mediaStat.mtimeMs &&
       prior.ctimeMs === mediaStat.ctimeMs &&
       prior.ino === mediaStat.ino;
-    const actualSha256 = unchanged ? prior.sha256 : await sha256File(item.mediaPath);
+    const [actualSha256, durationSeconds] = unchanged
+      ? [prior.sha256, measuredDurationSeconds(prior.durationSeconds, item.mediaPath)]
+      : await Promise.all([
+          sha256File(item.mediaPath),
+          probe(item.mediaPath).then((result) =>
+            measuredDurationSeconds(result.durationSeconds, item.mediaPath),
+          ),
+        ]);
     if (actualSha256 !== item.download.sha256)
       throw new TracksError(
         "INVALID_SOURCE",
         `Downloaded media SHA-256 changed: ${item.mediaPath}`,
         { exitCode: 2 },
       );
+    item.measuredDurationSeconds = durationSeconds;
     receipts.set(item.mediaPath, {
       path: item.mediaPath,
       size: mediaStat.size,
@@ -1062,9 +1066,19 @@ async function assertMediaFilesExist(
       ctimeMs: mediaStat.ctimeMs,
       ino: mediaStat.ino,
       sha256: actualSha256,
+      durationSeconds,
     });
   });
   return receipts;
+}
+
+const defaultRekordboxMediaProbe: RekordboxMediaProbe = (path) =>
+  probeAudio(path, process.env.FFPROBE_PATH ?? "ffprobe");
+
+function measuredDurationSeconds(value: number, path: string): number {
+  if (!Number.isFinite(value) || value <= 0)
+    throw new TracksError("INVALID_RESPONSE", `Media duration is invalid for '${path}'`);
+  return Math.max(1, Math.round(value));
 }
 
 async function assertAnalysisDirectoriesExist(plan: RekordboxImportPlan): Promise<void> {
@@ -1215,6 +1229,7 @@ function isRepairableRekordboxCheckpointDrift(error: unknown): boolean {
     /^Rekordbox playlist has \d+ memberships/u,
     /^Rekordbox import plan\/result mismatch/u,
     /^Rekordbox membership verification failed/u,
+    /^Rekordbox AnalysisDataPath is invalid/u,
     /^Rekordbox (?:Artist|AlbumArtist|Album|Label)ID is missing/u,
     /^Rekordbox KeyID (?:is missing|'[^']+' is invalid)/u,
     /^Rekordbox \w+ mismatch/u,
@@ -1342,6 +1357,7 @@ export function writeRekordboxPlan(
   const membershipByContentId = new Map<string, DjmdSongPlaylist>();
   const contentByPath = new Map<string, DjmdContent>();
   const expectedPaths = new Set(plan.items.map((item) => item.mediaPath));
+  for (const item of plan.items) requireMeasuredDuration(item);
   for (const membership of existingMemberships) {
     if (membershipByContentId.has(membership.ContentID))
       throw new Error(`Duplicate playlist memberships exist for content '${membership.ContentID}'`);
@@ -1377,7 +1393,7 @@ export function writeRekordboxPlan(
       ArtistID: artist.ID,
       AlbumID: album?.ID ?? null,
       LabelID: label?.ID ?? null,
-      Length: item.metadata.durationSeconds ?? null,
+      Length: requireMeasuredDuration(item),
       ISRC: item.metadata.isrc ?? null,
       ReleaseDate: item.metadata.releaseDate ?? null,
       ReleaseYear: item.metadata.releaseYear ?? null,
@@ -1687,7 +1703,7 @@ function verifyContentMetadata(
     planned,
     "Length",
     content.get("Length") == null ? null : Number(content.get("Length")),
-    metadata.durationSeconds ?? null,
+    requireMeasuredDuration(planned),
   );
   assertMetadataValue(planned, "Commnt", content.get("Commnt") ?? null, metadata.comment);
   assertMetadataValue(
@@ -1801,6 +1817,13 @@ function assertMetadataValue(
     throw new Error(
       `Rekordbox ${field} mismatch for '${planned.mediaPath}': expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
     );
+}
+
+function requireMeasuredDuration(item: RekordboxImportItem): number {
+  const value = item.measuredDurationSeconds;
+  if (value === undefined || !Number.isSafeInteger(value) || value < 1)
+    throw new Error(`Rekordbox media duration was not measured for '${item.mediaPath}'`);
+  return value;
 }
 
 async function writeManifestAtomically(

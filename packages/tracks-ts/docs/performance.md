@@ -90,20 +90,24 @@ backup directory, proving the repaired checkpoint returns to the no-mutation fas
   YouTube metadata, and stat-keyed audio verification receipts. Bounded persisted sweeps delete
   expired or malformed entries.
 - Cache controls: default, refresh, and off; `TRACKS_CACHE_DIR` override.
-- Sixty-four independent recording workers by default; ambiguity variants share the same global
-  queue. Backend searches start together while candidate downloads retain deterministic backend
-  priority.
-- Sixty-four clip, verification, Spotify enrichment, and Spotify refresh workers by default. The
-  scheduler caps actual workers to queued work; callers may override each limit from 1 through 256.
-- Sixty-four local recognition workers by default and a 64-call cap. Rekordbox media preflight,
-  checksum verification, and backup copies also fan out to 64 while every encrypted database read,
-  write, and the single commit remain serialized.
+- Three acquisition workers by default; ambiguity variants share the same global queue. Backend
+  searches overlap while candidate downloads retain deterministic backend priority.
+- Eight verification, Spotify enrichment, and Spotify refresh workers by default. Callers may
+  override acquisition up to 8, verification up to 16, and Spotify work up to 32; actual workers
+  never exceed queued work.
+- Three local recognition workers by default with an eight-call cap; native analysis defaults to
+  four with an explicit 64-worker expert cap. Rekordbox media preflight, checksum verification, and backup copies use up to
+  eight workers or Node's available parallelism, whichever is lower, while every encrypted database
+  read, write, and the single commit remain serialized.
 - One serialized manifest commit coordinator; unchanged checkpoints do not write.
 - Fully verified acquisition fast path; no backend loading or repeated probe/hash work.
 - Rekordbox idempotent fast path: full database integrity, sidecar, metadata, ordering, and recovery
   backup checksum verification, including analyzer BPM/key equality, but no redundant backup or
-  mutation. Legacy checkpoints with analysis-file flags but missing BPM/key take a metadata-only warm
-  repair path and do not rerun native analysis or recopy DAT/EXT/2EX.
+  mutation. Media preflight records the artifact's probed, rounded duration beside its checksum and
+  reuses that receipt for unchanged warm-path and commit rechecks instead of running ffprobe again.
+  Legacy checkpoints with analysis-file flags but missing BPM/key, or with a `Length` derived from
+  platform metadata, take a metadata-only warm repair path and do not rerun native analysis or
+  recopy DAT/EXT/2EX.
 - Structured stage timing, cache counters, checkpoint counts, and wall timestamps in results.
 
 Aggregate provider `loadMs` may exceed wall time because concurrent request durations are summed.

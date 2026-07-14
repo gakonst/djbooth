@@ -195,6 +195,109 @@ describe('SoundCloudClient', () => {
     expect(postFetch).toHaveBeenCalledOnce()
   })
 
+  it('shares Retry-After across concurrent callers and staggers their release', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-13T10:00:00.000Z'))
+    try {
+      const startedAt: number[] = []
+      let rateLimited = true
+      const fetch = vi.fn((input: string | URL | Request) => {
+        startedAt.push(Date.now())
+        if (rateLimited) {
+          rateLimited = false
+          return Promise.resolve(
+            Response.json(
+              { message: 'slow down' },
+              { status: 429, headers: { 'retry-after': '1' } },
+            ),
+          )
+        }
+        return Promise.resolve(
+          Response.json({ path: new URL((input as Request).url).pathname }),
+        )
+      })
+      const client = new SoundCloudClient({
+        auth: 'token',
+        fetch,
+        retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 2_000 },
+      })
+
+      const first = client.raw('GET', '/first')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fetch).toHaveBeenCalledOnce()
+      const second = client.raw('GET', '/second')
+      await vi.advanceTimersByTimeAsync(999)
+      expect(fetch).toHaveBeenCalledOnce()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(24)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(fetch).toHaveBeenCalledTimes(3)
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { path: '/first' },
+        { path: '/second' },
+      ])
+      expect(startedAt).toEqual([
+        Date.parse('2026-07-13T10:00:00.000Z'),
+        Date.parse('2026-07-13T10:00:01.000Z'),
+        Date.parse('2026-07-13T10:00:01.025Z'),
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honors the structured reset time and aborts a caller waiting at the gate', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-13T10:00:00.000Z'))
+    try {
+      const fetch = vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            message: 'rate limited',
+            errors: [
+              {
+                meta: {
+                  rate_limit: { group: 'plays', time_window: 'PT24H' },
+                  remaining_requests: 0,
+                  reset_time: '2026/07/13 10:00:02 +0000',
+                },
+              },
+            ],
+          },
+          { status: 429 },
+        ),
+      )
+      const getAccessToken = vi.fn().mockResolvedValue('token')
+      const client = new SoundCloudClient({
+        auth: { getAccessToken },
+        fetch,
+        retry: false,
+      })
+
+      await expect(client.raw('GET', '/limited')).rejects.toMatchObject({
+        status: 429,
+      })
+      const controller = new AbortController()
+      const waiting = client.raw('GET', '/waiting', {
+        signal: controller.signal,
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(fetch).toHaveBeenCalledOnce()
+
+      const reason = new Error('caller cancelled')
+      controller.abort(reason)
+      await expect(waiting).rejects.toBe(reason)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(getAccessToken).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('creates a private playlist from ordered IDs, URNs, and resolved URLs', async () => {
     const requestedUrls: string[] = []
     const fetch = vi.fn(async (input: string | URL | Request) => {

@@ -11,7 +11,10 @@ neither idiomatic nor reliably testable in TypeScript.
 ## ADR-002: Transparent reference bridge during migration
 
 **Decision:** Keep an explicit `reference` engine that invokes an installed yt-dlp executable for
-unported behavior. `auto` may fall back to it, and every response reports the selected engine.
+unported behavior. `auto` may fall back only for typed, allowlisted capability failures before
+media bytes are committed. Abort, network, lock, write, identity, and validation failures fail
+closed. Every response reports the selected engine and delegated responses include fallback
+provenance.
 
 **Why:** The upstream has more than 2,000 extractor classes and changes daily. The bridge makes the
 CLI useful from the first milestone while differential tests drive native replacement. It is a
@@ -40,6 +43,6 @@ archives, playlist-wide concurrency, provider-specific overrides, and automatic 
 `download` as the lower-level compatibility surface.
 
 **Why:** Audio quality is harmed by unnecessary transcoding, while large batches need stronger
-idempotency and much higher throughput than one-off video downloads. A 64-operation default fills a
-typical 30–60-track playlist immediately; callers can lower either the global or YouTube limit for
-provider-specific rate limits.
+idempotency and network-bound throughput. Three concurrent tracks avoid provider bursts while each
+native YouTube track can still issue two bounded-range requests. Explicit global/reference caps of
+16 and 4, plus a native YouTube cap of 16, preserve opt-in throughput for controlled networks.

@@ -21,4 +21,5 @@ without delegation.
 | Plugins                         | planned | yes       | TypeScript plugin ABI to be specified                                               |
 
 Parity is measured with differential fixtures against the pinned yt-dlp revision, not by counting
-files with matching names.
+files with matching names. `auto` is not a general error-recovery mode: delegation is limited to the
+typed pre-transfer capability cases documented in [`PORTING.md`](PORTING.md).

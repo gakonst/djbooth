@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
-import { extname } from "node:path";
+import { basename, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
 
 import {
   AnlzFile,
-  analyzeTrack,
+  analyzeTrackAsync,
   analyzeTracks,
   BeatGridTag,
+  DEFAULT_ANALYZER_CONCURRENCY,
   ExtendedBeatGridTag,
   createMySettingFile,
   diagnoseAnalyzer,
@@ -103,8 +104,20 @@ analyzeCli.command("track", {
       .default(300_000)
       .describe("Analyzer timeout in milliseconds"),
   }),
-  run(c) {
-    return analyzeTrack(c.args.audioPath, c.options);
+  async run(c) {
+    const controller = new AbortController();
+    const abort = () => controller.abort(new DOMException("Interrupted", "AbortError"));
+    process.once("SIGINT", abort);
+    process.once("SIGTERM", abort);
+    try {
+      return await analyzeTrackAsync(c.args.audioPath, {
+        ...c.options,
+        signal: controller.signal,
+      });
+    } finally {
+      process.removeListener("SIGINT", abort);
+      process.removeListener("SIGTERM", abort);
+    }
   },
 });
 
@@ -119,10 +132,13 @@ analyzeCli.command("tracks", {
       .min(1)
       .max(64)
       .optional()
-      .describe("Parallel analyzer workers; defaults to 64 (bounded by uncached track count)"),
+      .describe(
+        `Parallel analyzer workers; defaults to ${String(DEFAULT_ANALYZER_CONCURRENCY)} (bounded by uncached track count)`,
+      ),
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
     rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
     rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
     timeoutMs: z
       .number()
       .int()
@@ -131,14 +147,36 @@ analyzeCli.command("tracks", {
       .describe("Per-track analyzer timeout in milliseconds"),
   }),
   async run(c) {
-    return analyzeTracks(c.options.audioPath, {
-      analyzerBinary: c.options.analyzerBinary,
-      concurrency: c.options.concurrency,
-      force: c.options.force,
-      rekordboxApp: c.options.rekordboxApp,
-      rekordboxCache: c.options.rekordboxCache,
-      timeoutMs: c.options.timeoutMs,
-    });
+    const controller = new AbortController();
+    const abort = () => controller.abort(new DOMException("Interrupted", "AbortError"));
+    process.once("SIGINT", abort);
+    process.once("SIGTERM", abort);
+    const showProgress =
+      c.options.progress === "always" ||
+      (c.options.progress === "auto" && (c.agent || !c.formatExplicit));
+    try {
+      return await analyzeTracks(c.options.audioPath, {
+        analyzerBinary: c.options.analyzerBinary,
+        concurrency: c.options.concurrency,
+        force: c.options.force,
+        rekordboxApp: c.options.rekordboxApp,
+        rekordboxCache: c.options.rekordboxCache,
+        signal: controller.signal,
+        timeoutMs: c.options.timeoutMs,
+        ...(showProgress
+          ? {
+              onProgress(progress) {
+                process.stderr.write(
+                  `[analyze] ${String(progress.completed)}/${String(progress.total)} ${progress.phase} ${basename(progress.audioPath)}\n`,
+                );
+              },
+            }
+          : {}),
+      });
+    } finally {
+      process.removeListener("SIGINT", abort);
+      process.removeListener("SIGTERM", abort);
+    }
   },
 });
 

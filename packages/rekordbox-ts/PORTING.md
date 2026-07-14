@@ -224,14 +224,34 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   profile measured 26 real tracks at 60.02 seconds with four workers, 32.23 seconds with eight, and
   28.83 seconds with twelve. A 64-default stress run completed 27 compatible real artifacts in 23.85
   seconds at effective concurrency 27 and 1.13 tracks/second; two other files reproduced a native
-  `startAnalyze` incompatibility at concurrency one and were excluded. The default remains 64
-  (bounded by the uncached track count) to prioritize set-level wall time; callers can lower it to
-  constrain CPU and memory. The batch result reports preflight time, analyzer time, cache hits, and
-  throughput; a warm 26-track cache validation took 11.65 ms.
+  `startAnalyze` incompatibility at concurrency one and were excluded. The default is four workers
+  (bounded by the uncached track count); higher values remain explicit measured overrides. The batch
+  result reports preflight time, analyzer time, cache hits, and throughput; a warm 26-track cache
+  validation took 11.65 ms.
 - Packaged sanitized DAT/EXT seed shapes and made them the fallback when a local Rekordbox analysis
   library is absent. Build and packed-package smoke checks now fail if either seed is missing. An
   extracted npm tarball analyzed the same track with an empty HOME and no prebuilt runtime cache in
   14.58 seconds cold, producing the same valid DAT/EXT/2EX, BPM, and key result.
+
+## Analyzer scheduler/cancellation checkpoint (2026-07-14)
+
+- Historical Codex sessions and the benchmark above showed that a blanket 64-worker default
+  oversubscribed interactive hosts. Batch analysis now defaults to four process-isolated workers.
+- Batch analysis exposes structured cache/start/completion/failure/cancellation progress. The Incur
+  CLI renders it on stderr by default for humans and agents, with `--progress never` available.
+- Progress callbacks are observational; callback exceptions are isolated from analyzer workers.
+- A mixed-success batch throws `AnalyzeTracksError`, which carries indexed failure classes and the
+  ordered partial result. Successful summaries stay durable and become cache hits on resume.
+- A cancelled batch throws abort-compatible `AnalyzeTracksCancelledError` with the ordered sparse
+  partial result and exact cancelled count, so callers can checkpoint completed/cache-hit work.
+- Async analysis accepts an `AbortSignal`; SIGINT/SIGTERM abort active native children, escalate to
+  SIGKILL after one second, and stop scheduling queued tracks. The synchronous single-track wrapper
+  can reject an already-aborted signal but cannot interrupt `spawnSync()` after launch.
+- The exact native `startAnalyze` status `-1` on Unicode-heavy paths retries through byte-identical
+  ASCII input/output staging. Validated DAT/EXT/2EX/log artifacts move atomically to the canonical
+  output path and the persisted summary is rewritten to the original source/output paths. Both real
+  Brunello “Duel” variants completed through this compatibility path; unrelated failures do not
+  trigger it.
 
 ## Content cue checkpoint (2026-07-13)
 

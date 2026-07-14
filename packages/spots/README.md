@@ -22,6 +22,12 @@ played tracks work without manually copying access tokens.
 - All 96 Spotify operations exposed through `incur`, with JSON Schema, structured output, MCP,
   agent skill generation, shell completion, and LLM-readable discovery.
 
+All requests made through one `SpotifyClient` share a rate-limit recovery gate. After any `429`,
+later calls honor the longest [`Retry-After`](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)
+value and recovery probes are serialized until one succeeds, preventing concurrent callers from
+forming a retry herd. An `AbortSignal` cancels a queued API dispatch. Unsafe methods are not retried
+automatically, but their rate-limit response still delays later calls through the same client.
+
 ## Requirements
 
 - Node.js 22 or newer.
