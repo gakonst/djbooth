@@ -6,7 +6,6 @@ import {
   ChevronRight,
   CircleAlert,
   GripVertical,
-  LoaderCircle,
   Music,
 } from "lucide-react";
 import { useState } from "react";
@@ -22,7 +21,6 @@ type Props = {
   limit: number;
   offset: number;
   loading: boolean;
-  fetching: boolean;
   error?: string;
   selectedTrackId: string | null;
   ordered: boolean;
@@ -47,7 +45,6 @@ export function TrackTable({
   limit,
   offset,
   loading,
-  fetching,
   error,
   selectedTrackId,
   ordered,
@@ -326,11 +323,6 @@ export function TrackTable({
             )}
           </tbody>
         </table>
-        {fetching && !loading ? (
-          <div className="table-fetch-indicator" role="status">
-            <LoaderCircle size={14} className="spin" /> Updating
-          </div>
-        ) : null}
       </div>
 
       <footer className="table-pagination" aria-label="Track pagination">
@@ -341,7 +333,7 @@ export function TrackTable({
           <button
             className="secondary-button compact-button"
             type="button"
-            disabled={offset === 0 || fetching}
+            disabled={offset === 0}
             onClick={() => onPage(Math.max(0, offset - limit))}
           >
             <ChevronLeft size={14} /> Previous
@@ -349,7 +341,7 @@ export function TrackTable({
           <button
             className="secondary-button compact-button"
             type="button"
-            disabled={offset + limit >= count || fetching}
+            disabled={offset + limit >= count}
             onClick={() => onPage(offset + limit)}
           >
             Next <ChevronRight size={14} />

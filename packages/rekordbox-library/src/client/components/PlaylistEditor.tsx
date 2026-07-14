@@ -12,6 +12,7 @@ import { useMemo, useRef, useState } from "react";
 import type { PlaylistItem, TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
 import { getAllTracks } from "../api.js";
 import { formatBpm, formatDuration } from "../format.js";
+import { isOptimisticPlaylistId } from "../optimistic-library.js";
 import { playlistDropTrackNumber } from "./playlist-order.js";
 import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
 
@@ -60,6 +61,7 @@ export function PlaylistEditor({
   const query = useQuery({
     queryKey: ["editor-tracks", playlist.id],
     queryFn: ({ signal }) => getAllTracks({ playlistId: playlist.id, filter: "all" }, signal),
+    enabled: !isOptimisticPlaylistId(playlist.id),
   });
   const items = useMemo(() => sortEditorTracks(query.data?.items ?? [], sort), [query.data, sort]);
   const orderVisible = sort.field === "position" && sort.direction === "asc";

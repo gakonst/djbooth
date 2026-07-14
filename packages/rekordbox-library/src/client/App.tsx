@@ -1,9 +1,4 @@
-import {
-  keepPreviousData,
-  type QueryClient,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ChevronRight,
@@ -36,7 +31,6 @@ import type {
   TrackCueInput,
   TrackSort,
   TrackSummary,
-  TracksResponse,
 } from "../shared/types.js";
 import {
   getBootstrap,
@@ -64,6 +58,17 @@ import {
 import { TrackTable } from "./components/TrackTable.js";
 import { libraryMutationCoalesceKey, useLibraryMutationQueue } from "./useLibraryMutationQueue.js";
 import { buildHotkeyPalette, type HotkeyBinding, useHotkeys } from "./useHotkeys.js";
+import {
+  applyOptimisticLibraryMutation,
+  cancelLibraryQueries,
+  captureLibraryCache,
+  isOptimisticPlaylistId,
+  type LibraryCacheSnapshot,
+  type OptimisticLibraryMutation,
+  reconcileOptimisticLibraryMutation,
+  resolveOptimisticMutationIds,
+  restoreLibraryCache,
+} from "./optimistic-library.js";
 import { useLibraryUrlState } from "./url-state.js";
 
 const PAGE_SIZE = 100;
@@ -112,8 +117,13 @@ type CanvasState = {
 };
 
 type LibraryMutationCommit = {
-  mutation: LibraryMutation;
+  optimistic: OptimisticLibraryMutation;
   receipt: MutationReceipt;
+};
+
+type OptimisticWriteSession = {
+  ready: Promise<void>;
+  snapshot: LibraryCacheSnapshot;
 };
 
 export function App() {
@@ -148,6 +158,10 @@ export function App() {
   const canvasFingerprintRef = useRef("");
   const canvasQueuedFingerprintRef = useRef<string | undefined>(undefined);
   const localWritePendingRef = useRef(false);
+  const optimisticWriteSessionRef = useRef<OptimisticWriteSession | undefined>(undefined);
+  const optimisticPlaylistIdsRef = useRef(new Map<string, string>());
+  const optimisticMembershipIdsRef = useRef(new Map<string, string>());
+  const optimisticCueIdsRef = useRef(new Map<string, string>());
   const suppressExternalUntilRef = useRef(0);
   const membershipsChangedRef = useRef(new Set<string>());
   const contextMenu = useContextMenu<ContextTarget>();
@@ -193,7 +207,8 @@ export function App() {
         },
         signal,
       ),
-    placeholderData: keepPreviousData,
+    enabled: !isOptimisticPlaylistId(urlState.playlistId),
+    placeholderData: isOptimisticPlaylistId(urlState.playlistId) ? undefined : keepPreviousData,
   });
 
   const canvasTracksQuery = useQuery({
@@ -206,7 +221,10 @@ export function App() {
         },
         signal,
       ),
-    enabled: viewMode === "canvas" && Boolean(canvasPlaylist),
+    enabled:
+      viewMode === "canvas" &&
+      Boolean(canvasPlaylist) &&
+      !isOptimisticPlaylistId(canvasPlaylist?.id),
   });
 
   const tracks = tracksQuery.data?.items ?? [];
@@ -240,12 +258,16 @@ export function App() {
     ]);
   }, [queryClient]);
 
-  const writes = useLibraryMutationQueue<LibraryMutation, LibraryMutationCommit>({
-    coalesceKey: libraryMutationCoalesceKey,
-    execute: async (queuedMutation) => {
+  const writes = useLibraryMutationQueue<OptimisticLibraryMutation, LibraryMutationCommit>({
+    coalesceKey: (queued) => libraryMutationCoalesceKey(queued.mutation),
+    execute: async (optimistic) => {
       const token = bootstrapQuery.data?.csrfToken;
       if (!token) throw new Error("The local write token is unavailable. Refresh the workbench.");
-      let input = queuedMutation;
+      let input = resolveOptimisticMutationIds(optimistic.mutation, {
+        playlists: optimisticPlaylistIdsRef.current,
+        memberships: optimisticMembershipIdsRef.current,
+        cues: optimisticCueIdsRef.current,
+      });
       if (
         input.type === "replace-playlist-tracks" &&
         membershipsChangedRef.current.has(input.playlistId)
@@ -264,50 +286,42 @@ export function App() {
       ) {
         membershipsChangedRef.current.add(input.playlistId);
       }
-      return { mutation: input, receipt };
+      return { optimistic, receipt };
     },
     onPendingChange: (count) => {
       localWritePendingRef.current = count > 0;
     },
-    onSuccess: ({ mutation: input, receipt }) => {
+    onSuccess: ({ optimistic, receipt }) => {
       suppressExternalUntilRef.current = Date.now() + 1_500;
-      if (input.type === "create-playlist") {
-        void queryClient.invalidateQueries({ queryKey: ["playlists"] });
-        updateUrl({ playlistId: receipt.changedId, filter: "all", trackId: null });
+      reconcileOptimisticLibraryMutation(queryClient, optimistic, receipt);
+      if (optimistic.temporaryPlaylistId) {
+        const temporaryId = optimistic.temporaryPlaylistId;
+        optimisticPlaylistIdsRef.current.set(temporaryId, receipt.changedId);
+        setEditingPlaylistId((id) => (id === temporaryId ? receipt.changedId : id));
+        setCanvasPlaylistId((id) => (id === temporaryId ? receipt.changedId : id));
+        if (urlState.playlistId === temporaryId) updateUrl({ playlistId: receipt.changedId });
       }
-      if (input.type === "delete-playlist" && input.playlistId === urlState.playlistId) {
-        updateUrl({ playlistId: null, filter: "all", trackId: null });
-        setViewMode("table");
+      if (optimistic.temporaryMembershipId) {
+        optimisticMembershipIdsRef.current.set(optimistic.temporaryMembershipId, receipt.changedId);
       }
-      if (input.type === "delete-playlist" && input.playlistId === canvasPlaylistId) {
-        setCanvasPlaylistId(undefined);
-        setCanvasState({ nodes: [], connections: [] });
-        setCanvasExpectedMembershipIds([]);
-        setViewMode("table");
-      }
-      if (input.type === "delete-playlist" && input.playlistId === editingPlaylistId) {
-        setEditorOpen(false);
-        setEditingPlaylistId(undefined);
-      }
-      if (
-        input.type === "add-track" ||
-        input.type === "remove-track" ||
-        input.type === "move-track"
-      )
-        void queryClient.invalidateQueries({ queryKey: ["editor-tracks", input.playlistId] });
-      if (input.type === "add-track")
-        void queryClient.invalidateQueries({ queryKey: ["track", input.contentId] });
-      if (input.type === "upsert-cue" || input.type === "delete-cue")
-        void queryClient.invalidateQueries({ queryKey: ["track", input.contentId] });
+      if (optimistic.optimisticCueId)
+        optimisticCueIdsRef.current.set(optimistic.optimisticCueId, receipt.changedId);
     },
     onError: (error) => {
+      const session = optimisticWriteSessionRef.current;
+      if (session) restoreLibraryCache(queryClient, session.snapshot);
+      optimisticWriteSessionRef.current = undefined;
       if (canvasQueuedFingerprintRef.current)
         setCanvasFailedFingerprint(canvasFingerprintRef.current);
       setToast({ tone: "error", message: errorMessage(error) });
-      refreshAll();
     },
     onIdle: () => {
       localWritePendingRef.current = false;
+      optimisticWriteSessionRef.current = undefined;
+      optimisticPlaylistIdsRef.current.clear();
+      optimisticMembershipIdsRef.current.clear();
+      optimisticCueIdsRef.current.clear();
+      refreshAll();
     },
   });
 
@@ -324,15 +338,46 @@ export function App() {
   const applyMutationAsync = useCallback(
     async (input: LibraryMutation) => {
       assertWritable();
-      optimisticallyApplyLibraryMutation(queryClient, input);
+      let session = optimisticWriteSessionRef.current;
+      if (!session) {
+        session = {
+          snapshot: captureLibraryCache(queryClient),
+          ready: cancelLibraryQueries(queryClient),
+        };
+        optimisticWriteSessionRef.current = session;
+      }
+      await session.ready;
+      const optimistic = applyOptimisticLibraryMutation(queryClient, input);
       if (input.type === "create-playlist" || input.type === "rename-playlist")
         setPlaylistDialog(null);
       if (input.type === "delete-playlist") setDeleteDialogPlaylist(undefined);
       if (input.type === "upsert-cue") setCueDialog(null);
-      const commit = await writes.enqueue(input);
+      if (input.type === "delete-playlist" && input.playlistId === urlState.playlistId) {
+        updateUrl({ playlistId: null, filter: "all", trackId: null });
+        setViewMode("table");
+      }
+      if (input.type === "delete-playlist" && input.playlistId === canvasPlaylistId) {
+        setCanvasPlaylistId(undefined);
+        setCanvasState({ nodes: [], connections: [] });
+        setCanvasExpectedMembershipIds([]);
+        setViewMode("table");
+      }
+      if (input.type === "delete-playlist" && input.playlistId === editingPlaylistId) {
+        setEditorOpen(false);
+        setEditingPlaylistId(undefined);
+      }
+      const commit = await writes.enqueue(optimistic);
       return commit.receipt;
     },
-    [assertWritable, queryClient, writes],
+    [
+      assertWritable,
+      canvasPlaylistId,
+      editingPlaylistId,
+      queryClient,
+      updateUrl,
+      urlState.playlistId,
+      writes,
+    ],
   );
 
   const applyMutation = useCallback(
@@ -1158,13 +1203,9 @@ export function App() {
               className="icon-button"
               type="button"
               onClick={refreshAll}
-              disabled={tracksQuery.isFetching || bootstrapQuery.isFetching}
               title="Refresh library"
             >
-              <RefreshCw
-                size={15}
-                className={tracksQuery.isFetching || bootstrapQuery.isFetching ? "spin" : ""}
-              />
+              <RefreshCw size={15} />
               <span className="sr-only">Refresh library</span>
             </button>
           </div>
@@ -1271,7 +1312,6 @@ export function App() {
                   limit={tracksQuery.data?.limit ?? PAGE_SIZE}
                   offset={tracksQuery.data?.offset ?? offset}
                   loading={tracksQuery.isLoading}
-                  fetching={tracksQuery.isFetching}
                   error={tracksQuery.isError ? errorMessage(tracksQuery.error) : undefined}
                   selectedTrackId={urlState.trackId}
                   ordered={Boolean(normalPlaylist)}
@@ -1563,142 +1603,6 @@ function playlistSubtreeIds(playlists: readonly PlaylistItem[], rootId: string):
 function errorMessage(error: unknown): string {
   if (error instanceof LibraryApiError || error instanceof Error) return error.message;
   return String(error);
-}
-
-function optimisticallyApplyLibraryMutation(
-  queryClient: QueryClient,
-  mutation: LibraryMutation,
-): void {
-  if (mutation.type === "rename-playlist") {
-    queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
-      items?.map((playlist) =>
-        playlist.id === mutation.playlistId
-          ? { ...playlist, name: mutation.name.trim() }
-          : playlist,
-      ),
-    );
-    return;
-  }
-  if (mutation.type === "delete-playlist") {
-    const deleted = new Set(mutation.expectedPlaylistIds);
-    queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
-      items?.filter((playlist) => !deleted.has(playlist.id)),
-    );
-    return;
-  }
-  if (mutation.type === "move-track") {
-    updateOptimisticPlaylistTracks(queryClient, mutation.playlistId, (response) =>
-      moveTrackInResponse(response, mutation.membershipId, mutation.trackNumber),
-    );
-    return;
-  }
-  if (mutation.type === "remove-track") {
-    updateOptimisticPlaylistTracks(queryClient, mutation.playlistId, (response) =>
-      removeTrackFromResponse(response, mutation.membershipId),
-    );
-    updateOptimisticPlaylistCount(queryClient, mutation.playlistId, -1);
-    return;
-  }
-  if (mutation.type === "add-track")
-    updateOptimisticPlaylistCount(queryClient, mutation.playlistId, 1);
-}
-
-function updateOptimisticPlaylistTracks(
-  queryClient: QueryClient,
-  playlistId: string,
-  update: (response: TracksResponse) => TracksResponse,
-): void {
-  queryClient.setQueriesData<TracksResponse>(
-    {
-      predicate: (query) => {
-        if (query.queryKey[0] !== "tracks") return false;
-        const options = query.queryKey[1];
-        return (
-          typeof options === "object" &&
-          options !== null &&
-          "playlistId" in options &&
-          options.playlistId === playlistId
-        );
-      },
-    },
-    (response) => (response ? update(response) : response),
-  );
-  queryClient.setQueryData<TracksResponse>(["canvas-tracks", playlistId], (response) =>
-    response ? update(response) : response,
-  );
-  queryClient.setQueryData<TracksResponse>(["editor-tracks", playlistId], (response) =>
-    response ? update(response) : response,
-  );
-}
-
-function updateOptimisticPlaylistCount(
-  queryClient: QueryClient,
-  playlistId: string,
-  delta: number,
-): void {
-  queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
-    items?.map((playlist) =>
-      playlist.id === playlistId && playlist.trackCount !== null
-        ? { ...playlist, trackCount: Math.max(0, playlist.trackCount + delta) }
-        : playlist,
-    ),
-  );
-}
-
-function moveTrackInResponse(
-  response: TracksResponse,
-  membershipId: string,
-  targetTrackNumber: number,
-): TracksResponse {
-  const moving = response.items.find((track) => track.playlistMembershipId === membershipId);
-  const currentTrackNumber = moving?.trackNumber;
-  if (!moving || currentTrackNumber === undefined || currentTrackNumber === targetTrackNumber)
-    return response;
-  const items = response.items
-    .map((track) => {
-      const trackNumber = track.trackNumber;
-      if (track.playlistMembershipId === membershipId)
-        return { ...track, trackNumber: targetTrackNumber };
-      if (trackNumber === undefined) return track;
-      if (
-        targetTrackNumber < currentTrackNumber &&
-        trackNumber >= targetTrackNumber &&
-        trackNumber < currentTrackNumber
-      )
-        return { ...track, trackNumber: trackNumber + 1 };
-      if (
-        targetTrackNumber > currentTrackNumber &&
-        trackNumber <= targetTrackNumber &&
-        trackNumber > currentTrackNumber
-      )
-        return { ...track, trackNumber: trackNumber - 1 };
-      return track;
-    })
-    .sort(
-      (left, right) =>
-        (left.trackNumber ?? Number.MAX_SAFE_INTEGER) -
-        (right.trackNumber ?? Number.MAX_SAFE_INTEGER),
-    );
-  return { ...response, items };
-}
-
-function removeTrackFromResponse(response: TracksResponse, membershipId: string): TracksResponse {
-  const removed = response.items.find((track) => track.playlistMembershipId === membershipId);
-  if (!removed) return response;
-  const removedTrackNumber = removed.trackNumber;
-  return {
-    ...response,
-    count: Math.max(0, response.count - 1),
-    items: response.items
-      .filter((track) => track.playlistMembershipId !== membershipId)
-      .map((track) =>
-        removedTrackNumber !== undefined &&
-        track.trackNumber !== undefined &&
-        track.trackNumber > removedTrackNumber
-          ? { ...track, trackNumber: track.trackNumber - 1 }
-          : track,
-      ),
-  };
 }
 
 function browserId(prefix: string): string {
