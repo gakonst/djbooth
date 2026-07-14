@@ -205,7 +205,8 @@ try {
     "## ytdlp engine contract",
     "## Local library workbench",
     "--engine native",
-    "durable stage journal",
+    "shared cross-process database lock",
+    "offline bulk workflows",
     "packages do not redistribute the proprietary helper",
   ];
   if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {

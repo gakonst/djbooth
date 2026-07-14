@@ -44,7 +44,7 @@ import { SoundCloudClient } from "@gakonst/music/soundcloud";
 import { SoulseekClient } from "@gakonst/music/slsk";
 import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
-import { LibraryMutationError, RekordboxLibraryService } from "@gakonst/music/library";
+import { LibraryMutationConflictError, RekordboxLibraryService } from "@gakonst/music/library";
 ```
 
 ## CLI

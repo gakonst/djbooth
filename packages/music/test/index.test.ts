@@ -19,6 +19,7 @@ describe("umbrella exports", () => {
     expect(ytdlp.ReferenceClient).toBeTypeOf("function");
     expect(rekordbox.MasterDatabase).toBeTypeOf("function");
     expect(library.RekordboxLibraryService).toBeTypeOf("function");
+    expect(library.LibraryMutationConflictError).toBeTypeOf("function");
     expect(library.LibraryMutationError).toBeTypeOf("function");
   });
 
@@ -31,6 +32,7 @@ describe("umbrella exports", () => {
     expect(ytdlpSubpath.ReferenceClient).toBe(ytdlp.ReferenceClient);
     expect(rekordboxSubpath.MasterDatabase).toBe(rekordbox.MasterDatabase);
     expect(librarySubpath.RekordboxLibraryService).toBe(library.RekordboxLibraryService);
+    expect(librarySubpath.LibraryMutationConflictError).toBe(library.LibraryMutationConflictError);
     expect(librarySubpath.LibraryMutationError).toBe(library.LibraryMutationError);
   });
 });

@@ -42,18 +42,23 @@ Prefer the TypeScript-native engine. The Incur CLI's engine names are a behavior
 
 - `native` runs only the TypeScript extractor, selector, downloader, and post-processing code. It
   never invokes Python or an external `yt-dlp` executable and fails closed for unported behavior.
-- `auto` tries native first and may explicitly fall back to the external reference executable. Do
-  not describe an `auto` result as native; inspect and persist the returned `engine`.
+- `auto` tries native first and may invoke the external reference executable only after a
+  centralized, typed capability gap detected before response bytes are committed. Abort,
+  HTTP/network, lock, write, identity, content-range/length, and other validation failures fail
+  closed. Do not describe an `auto` result as native; inspect and persist the returned `engine` and
+  fallback provenance.
 - `reference` deliberately invokes the external `yt-dlp` compatibility executable.
 
 When the user requires the TypeScript implementation, force `--engine native` or construct
 `ExtractorRegistry` plus `downloadMedia`; never construct `ReferenceClient`. Record the requested
 engine, actual engine, package version, start/finish timestamps, and any typed limitation in the
 manifest. Do not silently install, upgrade, or switch to the reference executable. Current native
-YouTube support fails with `YOUTUBE_SIGNATURE_REQUIRED` when a player-signature transform is
-needed; mark that recording unavailable unless the user separately accepts reference fallback.
-Public progressive SoundCloud tracks are supported natively, while some HLS, sets, profiles, and
-private/account flows may still require reference behavior.
+YouTube support uses a YouTube.js Web session for bounded search and explicitly requests Android VR
+for direct signed M4A/WebM extraction without player-code evaluation. It fails with
+`YOUTUBE_DIRECT_FORMATS_UNAVAILABLE` when no direct audio is available; mark that recording
+unavailable unless the user separately accepts reference fallback. Public progressive SoundCloud
+tracks are supported natively, while some HLS, sets, profiles, and private/account flows may still
+require reference behavior.
 
 ```sh
 music ytdlp-ts inspect "$TRACK_URL" --engine native --format json
@@ -94,13 +99,15 @@ music library serve --open
 
 The server binds to loopback, opens the database read-only by default, streams only audio paths
 already indexed by Rekordbox, and requires a per-run request token. Playlist mutations are disabled
-unless the user explicitly launches `music library serve --write`. Before each mutation, require
-Rekordbox and `rekordboxAgent` to be stopped, hold the shared database lock, create a checksummed
-backup, commit once, pass `quick_check` plus `foreign_key_check`, and semantically verify the exact
-playlist/membership state and `masterPlaylists6.xml`. A durable stage journal beside the backup must
-identify database/sidecar partial commits and the recovery path. Never enable network binding,
-upload the private library, expose `.env` values, follow symlink-backed audio, or test writes against
-the live library; use a copied fixture.
+unless the user explicitly launches `music library serve --write`. Each interactive mutation checks
+that Rekordbox and `rekordboxAgent` are stopped, holds the shared cross-process database lock only
+for one short SQLite transaction, and updates the client optimistically. Do not create a full library
+backup or heavyweight verification pass for every drag, reorder, or cue edit. Long-running imports
+and explicitly approved offline bulk workflows still use their own backup/checkpoint contract. The
+server watches the database and sidecar and publishes an external-change event, so writes made
+through another local `music` CLI refresh the open workbench without stopping it. Never enable
+network binding, upload the private library, expose `.env` values, follow symlink-backed audio, or
+test write code against the live library; use a copied fixture.
 
 The workbench is the preferred interactive surface for library management. Its WaveSurfer player
 uses bounded precomputed Rekordbox peaks and HTTP-range playback, with a flat streaming placeholder
@@ -124,10 +131,12 @@ music rekordbox db content set-cue "$CONTENT_ID" 64 --kind hot --slot A \
 music rekordbox db content delete-cue "$CONTENT_ID" "$CUE_ID" --write
 ```
 
-Treat cue changes like playlist changes: stopped Rekordbox processes, the shared database lock,
-checksummed backup and durable journal, then semantic and SQLite verification. The master database
-and its cue mirror are writable; preserve the unknown/native ANLZ bytes, including PCOB/PCO2,
-unless a separately verified native rewrite path exists.
+Workbench cue changes use the same instant boundary as other interactive edits: stopped Rekordbox
+processes, shared database lock, short transaction, optimistic UI, and conflict-safe rollback. The
+standalone `music rekordbox db content set-cue` and `delete-cue` commands retain their checksummed
+backup, durable journal, and read-only post-write verification contract. The master database and its
+cue mirror are writable; preserve the unknown/native ANLZ bytes, including PCOB/PCO2, unless a
+separately verified native rewrite path exists.
 
 ## 1. Preflight
 
@@ -235,16 +244,22 @@ concurrency. Prefer plausible lossless results, but inspect metadata and duratio
 the extension. Record the selected peer and remote file before download, then the absolute path and
 SHA-256 after verification.
 
-When Soulseek has no acceptable result, inspect the selected exact URL with the native ytdlp
-extractor and download it with `downloadMedia`. In CLI workflows, force `--engine native` when
-external fallback is not accepted. Inspect at most a small candidate set, reject sets,
+When Soulseek has no acceptable result, use bounded native `searchYoutube`, score its stable
+identity/duration fields, inspect the selected exact URL with `ExtractorRegistry`, and download its
+direct M4A with `downloadMedia`. `tracks import-set` always registers that native path after
+Soulseek; it constructs and appends `ReferenceClient` only when the user explicitly passes
+`--reference-ytdlp`. Even then, reference download may follow only a centralized typed capability
+gap; reference search stays deferred until that gap, and post-transfer or untyped failures stop.
+Inspect at most a small candidate set, reject sets,
 compilations, covers, previews, and the wrong mix, then download only the selected canonical URL.
 Preserve compatible FLAC, MP3, and M4A. Convert WAV/AIFF to FLAC losslessly; transcode unsupported
 lossy formats only when Rekordbox requires it, and record the degradation. Use `auto` or
 `ReferenceClient` only when the user accepts the explicitly reported external compatibility path.
 
-Cap independent downloads at three by default. Resume verified files and completed manifest states;
-do not redownload them.
+Cap independent downloads at three by default (explicit cap eight). Keep native YouTube transfers
+at three by default (cap sixteen) and explicit reference transfers at one (cap four). These are
+separate network pools, not one blanket concurrency value. Resume verified files and completed
+manifest states; do not redownload them.
 
 ## 5. Recover unavailable tracks
 
@@ -281,9 +296,31 @@ processes and preserves input order. Default to at most four workers unless meas
 machine supports another limit. Parallelize analysis only. Keep Rekordbox database installation
 stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
 
+For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
+does not load provider credentials or download anything. It checkpoints per-item cache results and a
+timestamped run ledger in the manifest:
+
+```sh
+music tracks analyze-existing "$MANIFEST" --concurrency 4 --progress always --format json
+```
+
 ## 7. Import into Rekordbox
 
 Use `@gakonst/music/rekordbox` against the normal encrypted database:
+
+```sh
+music tracks import-existing "$MANIFEST" \
+  --db-path "$REKORDBOX_DB" \
+  --folder-name "DJ Sets I Like" \
+  --playlist-name "$PLAYLIST_NAME" \
+  --backup-root "$BACKUP_ROOT" \
+  --write --format json
+```
+
+`import-existing` loads only checkpointed media and native analysis, takes one verified backup when
+state must change, commits once, and is a no-backup `changed: false` verification on a warm rerun.
+Its result includes UTC start/finish timestamps and stage duration. Keep the workbench open; the
+shared lock serializes the brief write and the database watcher refreshes the UI.
 
 1. Confirm Rekordbox and `rekordboxAgent` are stopped.
 2. Hold the manifest lock and a database-path lock.
