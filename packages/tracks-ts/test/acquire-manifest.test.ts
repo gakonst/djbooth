@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, delimiter, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 
 import { nativeFallbackFor, YtdlpError } from "@gakonst/ytdlp-ts";
 import { describe, expect, test } from "vitest";
@@ -316,6 +316,7 @@ describe("acquireManifest", () => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-legacy-resume-"));
       const manifestPath = join(directory, "manifest.json");
       const outputDirectory = join(directory, "tracks");
+      const legacyDirectory = join(directory, "legacy");
       const sourcePath = join(directory, "source", "set.mp3");
       const value = createManifest({
         source: "https://youtube.test/legacy-set",
@@ -347,11 +348,11 @@ describe("acquireManifest", () => {
       };
 
       const legacyPaths = [
-        join(outputDirectory, "01 - Legacy Artist - Legacy Recording [set-extract].mp3"),
-        join(outputDirectory, "02 - Unknown Artist - ID [set-extract].mp3"),
+        join(legacyDirectory, "01 - Legacy Artist - Legacy Recording [set-extract].mp3"),
+        join(legacyDirectory, "02 - Unknown Artist - ID [set-extract].mp3"),
       ];
       const contents = ["legacy recording bytes", "legacy id bytes"];
-      await mkdir(outputDirectory, { recursive: true });
+      await mkdir(legacyDirectory, { recursive: true });
       await Promise.all(legacyPaths.map((path, index) => writeFile(path, contents[index]!)));
       for (const [index, entry] of value.entries.entries()) {
         const mediaPath = legacyPaths[index]!;
@@ -399,8 +400,12 @@ describe("acquireManifest", () => {
         allowSourceSetClips: true,
         sourceSetPath: sourcePath,
       });
-      expect(plan.recordings[0]!.variants[0]!.outputPath).toMatch(/001 -/u);
-      expect(plan.clips[0]!.outputPath).toMatch(/002 -/u);
+      expect(dirname(plan.recordings[0]!.variants[0]!.outputPath)).toBe(
+        join(outputDirectory, "Legacy Artist", "Singles"),
+      );
+      expect(dirname(plan.clips[0]!.outputPath)).toBe(
+        join(outputDirectory, "Unknown Artist", "DJ Set Extract"),
+      );
       const bin = await installFakeAudioTools(directory);
       const previousPath = process.env.PATH;
       process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
@@ -451,17 +456,18 @@ describe("acquireManifest", () => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-legacy-variants-"));
       const manifestPath = join(directory, "manifest.json");
       const outputDirectory = join(directory, "tracks");
+      const legacyDirectory = join(directory, "legacy");
       const value = oneTrackManifest();
       value.entries[0]!.spotify = { status: "unmatched", query: "Artist Track" };
       value.entries[0]!.identity.overlaps = [
         { artist: "Overlap Artist", title: "Overlap Track", confidence: 0.9 },
       ];
       const legacyPaths = [
-        join(outputDirectory, "01 - Artist - Track.m4a"),
-        join(outputDirectory, "01 - Overlap Artist - Overlap Track.m4a"),
+        join(legacyDirectory, "01 - Artist - Track.m4a"),
+        join(legacyDirectory, "01 - Overlap Artist - Overlap Track.m4a"),
       ];
       const contents = ["primary legacy bytes", "overlap legacy bytes"];
-      await mkdir(outputDirectory, { recursive: true });
+      await mkdir(legacyDirectory, { recursive: true });
       await Promise.all(legacyPaths.map((path, index) => writeFile(path, contents[index]!)));
       const downloads = legacyPaths.map((mediaPath, index) => ({
         backend: "ytdlp" as const,
@@ -482,9 +488,10 @@ describe("acquireManifest", () => {
 
       const plan = await buildAcquisitionPlan(value, { outputDirectory });
       expect(plan.recordings[0]!.variants).toHaveLength(2);
-      expect(
-        plan.recordings[0]!.variants.every((variant) => /001 -/u.test(variant.outputPath)),
-      ).toBe(true);
+      expect(plan.recordings[0]!.variants.map((variant) => dirname(variant.outputPath))).toEqual([
+        join(outputDirectory, "Artist", "Singles"),
+        join(outputDirectory, "Overlap Artist", "Singles"),
+      ]);
       const bin = await installFakeAudioTools(directory);
       const previousPath = process.env.PATH;
       process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
