@@ -14,6 +14,7 @@
     "format:check": "pnpm -r --if-present run format:check",
     "lint": "pnpm -r --if-present run lint",
     "library": "pnpm --filter @gakonst/rekordbox-library cli",
+    "library:dev": "pnpm --filter @gakonst/rekordbox-library dev",
     "music": "pnpm --filter @gakonst/music cli",
     "music:mcp": "pnpm --silent --filter @gakonst/music exec tsx --tsconfig tsconfig.cli.json src/bin.ts --mcp",
     "music:mcp:code": "pnpm --silent --filter @gakonst/music exec tsx --tsconfig tsconfig.cli.json src/bin.ts --codemode-mcp",

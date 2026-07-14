@@ -92,14 +92,15 @@ database or shelling through another CLI:
 ```sh
 pnpm music library status --format json
 pnpm music library serve --open
+pnpm library:dev # repository checkout: writes + Vite HMR on 127.0.0.1:4179
 ```
 
 The server binds only to loopback and opens `master.db` read-only by default. Launch with `--write`
 only for an intentional playlist edit. Every mutation refuses to run while Rekordbox or
-`rekordboxAgent` is active, holds the shared database lock, takes a checksummed backup, and verifies
-the exact database and `masterPlaylists6.xml` outcome after commit. A durable stage journal beside
-the backup records partial commits and the recovery path instead of hiding them behind a generic
-error.
+`rekordboxAgent` is active and holds the shared database lock. Interactive edits update the UI
+optimistically and commit in one serialized SQLite transaction without a per-edit backup, journal,
+or heavyweight post-write verification pass. The repository-only `library:dev` workflow enables
+writes by default and serves live source through Vite; pass `--read-only` when needed.
 
 ## Claude Code and Codex plugins
 

@@ -9,6 +9,17 @@ music library serve --open
 music library serve --write
 ```
 
+For repository development, one command starts the SQLite/API server on an ephemeral loopback port
+and the Vite client with HMR on `http://127.0.0.1:4179/`:
+
+```sh
+pnpm library:dev
+pnpm library:dev -- --read-only # optional
+```
+
+Development writes are enabled by default. `--path`, `--port`, `--api-port`, and `--open` are also
+available; the browser always reaches the API through Vite's same-origin `/api` proxy.
+
 The server binds to `127.0.0.1`. Browsing is read-only. `--write` enables serialized local SQLite
 mutations behind the cross-process lock and stopped Rekordbox/rekordboxAgent check. Writes update
 the optimistic UI immediately and commit once; they do not create per-edit backups, journals, or
@@ -26,7 +37,6 @@ The workstation provides:
 - guarded playlist create, rename, delete, membership, reorder, and atomic visual-order replacement;
 - a persistent infinite set canvas whose connected track chain becomes playlist order;
 - right-click track/playlist/canvas actions and a discoverable keyboard-shortcut palette;
-- a local prompt dock for deterministic playlist, search, canvas, and cue commands; and
 - server-sent library change events so successful web or local-server mutations refresh immediately.
 
 Canvas layout and loose candidates stay in browser-local state until **Apply order** is pressed.
