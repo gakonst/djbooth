@@ -313,7 +313,7 @@ export function PromptDock({
               <span className={`prompt-write-state${disabled ? " is-disabled" : ""}`}>
                 {disabled
                   ? (disabledReason ?? "Library writes unavailable")
-                  : "Changes are backed up and verified"}
+                  : "Changes appear instantly and save in the background"}
               </span>
               <span className="prompt-submit-wrap">
                 <kbd>⌘↵</kbd>
@@ -400,7 +400,7 @@ function labelForStatus(status: PromptActionStatus): string {
     case "optimistic":
       return "Applying locally…";
     case "pending":
-      return "Writing and verifying…";
+      return "Saving in the background…";
     case "succeeded":
       return "Changes applied";
     case "failed":

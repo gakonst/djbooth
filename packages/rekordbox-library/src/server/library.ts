@@ -1,25 +1,17 @@
-import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
-import { open, rename, rm } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   type ContentCueInput,
-  type ContentCuePoint,
   DjmdContent,
   DjmdPlaylist,
   MasterDatabase,
   PlaylistType,
   getRekordboxAgentPid,
   getRekordboxPid,
-  version as rekordboxVersion,
 } from "@gakonst/rekordbox";
-import {
-  acquireRekordboxDatabaseLock,
-  assertRekordboxStopped,
-  backupRekordboxDatabase,
-} from "@gakonst/tracks";
+import { acquireRekordboxDatabaseLock, assertRekordboxStopped } from "@gakonst/tracks";
 import { parseFile, selectCover } from "music-metadata";
 
 import type {
@@ -31,6 +23,8 @@ import type {
   TrackDetail,
   TrackCue,
   TrackSummary,
+  TrackSort,
+  TrackSortField,
   TrackWaveform,
   TracksResponse,
 } from "../shared/types.js";
@@ -43,9 +37,11 @@ export type TrackQuery = {
   offset?: number;
   playlistId?: string;
   q?: string;
+  sort?: TrackSort;
 };
 
 export type LibraryOptions = {
+  /** @deprecated Interactive mutations no longer create per-edit backups. */
   backupRoot?: string;
   dbPath?: string;
   getProcessState?: () => LibraryProcesses;
@@ -59,40 +55,6 @@ export type ArtworkAsset =
   | { kind: "embedded"; contentType: string; data: Uint8Array };
 
 type RawTrack = Record<string, unknown>;
-
-type MutationStageStatus =
-  | "pending"
-  | "in-progress"
-  | "succeeded"
-  | "failed"
-  | "skipped"
-  | "not-applicable";
-
-type MutationStage = {
-  status: MutationStageStatus;
-  finishedAt?: string;
-  message?: string;
-};
-
-type MutationJournal = {
-  schemaVersion: 1;
-  mutationId: string;
-  rekordboxVersion: string;
-  dbPath: string;
-  backupDirectory: string;
-  startedAt: string;
-  updatedAt: string;
-  mutation: LibraryMutation;
-  changedId?: string;
-  stages: {
-    database: MutationStage;
-    sidecar: MutationStage;
-    verification: MutationStage;
-    receipt: MutationStage;
-  };
-  receipt?: MutationReceipt;
-  error?: { name: string; message: string };
-};
 
 type PlaylistExpectation = {
   id: string;
@@ -108,66 +70,36 @@ type MembershipExpectation = {
   trackNumber: number;
 };
 
-type MutationExpectation =
-  | {
-      type: "create-playlist";
-      changedId: string;
-      playlist: PlaylistExpectation;
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "rename-playlist";
-      changedId: string;
-      playlist: PlaylistExpectation;
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "delete-playlist";
-      changedId: string;
-      deletedPlaylists: PlaylistExpectation[];
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "add-track" | "move-track";
-      changedId: string;
-      membership: MembershipExpectation;
-      playlist: PlaylistExpectation;
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "remove-track";
-      changedId: string;
-      membershipId: string;
-      playlist: PlaylistExpectation;
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "replace-playlist-tracks";
-      changedId: string;
-      contentIds: string[];
-      memberships: MembershipExpectation[];
-      playlist: PlaylistExpectation;
-      sidecarExpected: boolean;
-    }
-  | {
-      type: "upsert-cue";
-      changedId: string;
-      cue: ContentCuePoint;
-      sidecarExpected: false;
-    }
-  | {
-      type: "delete-cue";
-      changedId: string;
-      contentId: string;
-      sidecarExpected: false;
-    };
+type MutationResult = { changedId: string };
 
-type MutationProbe = {
-  databaseError?: Error;
-  sidecarError?: Error;
-};
+const sqliteBusyTimeoutMs = 5_000;
+const databaseLockTimeoutMs = 10_000;
 
-/** Mutation failure with durable recovery locations and observed commit state. */
+function databaseLockBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /Rekordbox database (?:import lock|lock acquisition guard) already exists:/u.test(error.message)
+  );
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+/** Refuses a stale destructive write whose source snapshot no longer matches master.db. */
+export class LibraryMutationConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LibraryMutationConflictError";
+  }
+}
+
+/**
+ * Legacy bulk-mutation recovery error retained for API compatibility.
+ *
+ * Interactive workbench mutations no longer create a backup and journal per edit, so new code
+ * receives the underlying transaction error directly. Bulk workflows may still use this shape.
+ */
 export class LibraryMutationError extends Error {
   readonly backupDirectory: string;
   readonly journalPath: string;
@@ -178,7 +110,7 @@ export class LibraryMutationError extends Error {
     message: string,
     options: {
       backupDirectory: string;
-      cause: unknown;
+      cause?: unknown;
       databaseCommitted: boolean | undefined;
       journalPath: string;
       sidecarCommitted: boolean | undefined;
@@ -190,14 +122,6 @@ export class LibraryMutationError extends Error {
     this.journalPath = options.journalPath;
     this.databaseCommitted = options.databaseCommitted;
     this.sidecarCommitted = options.sidecarCommitted;
-  }
-}
-
-/** Refuses a stale destructive write whose source snapshot no longer matches master.db. */
-export class LibraryMutationConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "LibraryMutationConflictError";
   }
 }
 
@@ -254,21 +178,142 @@ function mapTrack(row: RawTrack): TrackSummary {
   };
 }
 
-function normalizeWaveform(values: number[], maximum = 2_048): number[] {
-  if (!values.length) return [];
+const trackSortSql: Record<TrackSortField, string> = {
+  position: `membership."TrackNo"`,
+  title: `content."Title" COLLATE NOCASE`,
+  album: `album."Name" COLLATE NOCASE`,
+  genre: `genre."Name" COLLATE NOCASE`,
+  bpm: `content."BPM"`,
+  key: `keyRow."ScaleName" COLLATE NOCASE`,
+  plays: `content."DJPlayCount"`,
+  status: `CASE
+    WHEN content."FolderPath" IS NULL OR content."FolderPath" = '' THEN 0
+    WHEN content."AnalysisDataPath" IS NULL OR content."AnalysisDataPath" = ''
+      OR COALESCE(content."Analysed", 0) <= 0 THEN 1
+    ELSE 2 END`,
+  duration: `content."Length"`,
+};
+
+function trackOrderSql(sort: TrackSort | undefined, inPlaylist: boolean): string {
+  if (!sort)
+    return inPlaylist
+      ? `membership."TrackNo", content."Title" COLLATE NOCASE, membership."ID"`
+      : `content."Title" COLLATE NOCASE, artist."Name" COLLATE NOCASE, content."ID"`;
+  const field = sort.field === "position" && !inPlaylist ? "title" : sort.field;
+  const direction = sort.direction === "desc" ? "DESC" : "ASC";
+  return `${trackSortSql[field]} ${direction}, content."Title" COLLATE NOCASE, content."ID"`;
+}
+
+function trackComparator(
+  sort: TrackSort | undefined,
+): (left: TrackSummary, right: TrackSummary) => number {
+  if (!sort) return (left, right) => left.title.localeCompare(right.title);
+  const direction = sort.direction === "desc" ? -1 : 1;
+  return (left, right) => {
+    const compared = compareNullable(
+      trackSortValue(left, sort.field),
+      trackSortValue(right, sort.field),
+    );
+    return (
+      direction * compared ||
+      left.title.localeCompare(right.title) ||
+      left.id.localeCompare(right.id)
+    );
+  };
+}
+
+function trackSortValue(track: TrackSummary, field: TrackSortField): string | number | null {
+  switch (field) {
+    case "position":
+      return track.trackNumber ?? null;
+    case "title":
+      return track.title;
+    case "album":
+      return track.album;
+    case "genre":
+      return track.genre;
+    case "bpm":
+      return track.bpm;
+    case "key":
+      return track.key;
+    case "plays":
+      return track.playCount;
+    case "status":
+      return track.fileExists ? (track.analyzed ? 2 : 1) : 0;
+    case "duration":
+      return track.durationSeconds;
+  }
+}
+
+function compareNullable(left: string | number | null, right: string | number | null): number {
+  if (left === null) return right === null ? 0 : 1;
+  if (right === null) return -1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function waveformColor(value: unknown): [number, number, number] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = value.slice(0, 3);
+  if (values.length !== 3 || !values.every((entry) => typeof entry === "number")) return undefined;
+  const maximum = Math.max(...values, 1);
+  const scale = maximum <= 7 ? 255 / 7 : maximum <= 127 ? 255 / 127 : 1;
+  return values.map((entry) => Math.round(Math.max(0, Math.min(255, entry * scale)))) as [
+    number,
+    number,
+    number,
+  ];
+}
+
+function waveformColors(value: unknown): Array<[number, number, number]> {
+  if (!value || typeof value !== "object") return [];
+  const colors = (value as { colors?: unknown }).colors;
+  if (!Array.isArray(colors)) return [];
+  return colors.flatMap((color): Array<[number, number, number]> => {
+    const direct = waveformColor(color);
+    if (direct) return [direct];
+    const foreground = waveformColor(Array.isArray(color) ? color[0] : undefined);
+    return foreground ? [foreground] : [];
+  });
+}
+
+function normalizeWaveform(
+  values: number[],
+  colors: Array<[number, number, number]>,
+  maximum = 2_048,
+): { peaks: number[]; colors?: Array<[number, number, number]> } {
+  if (!values.length) return { peaks: [] };
   const finite = values.map((value) => (Number.isFinite(value) ? Math.max(0, value) : 0));
   const peak = finite.reduce((maximumValue, value) => Math.max(maximumValue, value), 1);
-  if (finite.length <= maximum)
-    return finite.map((value) => Math.round((value / peak) * 10_000) / 10_000);
+  const normalized = (value: number) => Math.round((value / peak) * 10_000) / 10_000;
+  if (finite.length <= maximum) {
+    return {
+      peaks: finite.map(normalized),
+      ...(colors.length === finite.length ? { colors } : {}),
+    };
+  }
   const reduced = Array.from({ length: maximum }, (_, index) => {
     const start = Math.floor((index * finite.length) / maximum);
     const end = Math.max(start + 1, Math.floor(((index + 1) * finite.length) / maximum));
     let binPeak = 0;
+    let peakIndex = start;
     for (let offset = start; offset < end; offset++)
-      binPeak = Math.max(binPeak, finite[offset] ?? 0);
-    return binPeak / peak;
+      if ((finite[offset] ?? 0) > binPeak) {
+        binPeak = finite[offset] ?? 0;
+        peakIndex = offset;
+      }
+    return { peak: normalized(binPeak), color: colors[peakIndex] };
   });
-  return reduced.map((value) => Math.round(value * 10_000) / 10_000);
+  const reducedColors = reduced.map((entry) => entry.color);
+  return {
+    peaks: reduced.map((entry) => entry.peak),
+    ...(reducedColors.every((color): color is [number, number, number] => Boolean(color))
+      ? { colors: reducedColors }
+      : {}),
+  };
 }
 
 function waveformHeights(value: unknown): number[] {
@@ -294,96 +339,17 @@ function normalizeArtworkContentType(format: string, source: string): string {
   throw new TypeError(`Embedded artwork in '${source}' uses unsupported format '${format}'`);
 }
 
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function errorRecord(error: unknown): { name: string; message: string } {
-  const normalized = asError(error);
-  return { name: normalized.name, message: normalized.message };
-}
-
-function stageStatus(status: MutationStageStatus, error?: unknown): MutationStage {
-  return {
-    status,
-    ...(status === "pending" || status === "in-progress"
-      ? {}
-      : { finishedAt: new Date().toISOString() }),
-    ...(error === undefined ? {} : { message: asError(error).message }),
-  };
-}
-
-function committed(status: MutationStageStatus): boolean | undefined {
-  if (status === "succeeded") return true;
-  if (status === "failed" || status === "skipped") return false;
-  return undefined;
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(path, "r");
-    await handle.sync();
-  } catch (error) {
-    if (
-      !(error instanceof Error) ||
-      !("code" in error) ||
-      !["EINVAL", "ENOTSUP", "EISDIR", "EPERM"].includes(String(error.code))
-    )
-      throw error;
-  } finally {
-    await handle?.close();
-  }
-}
-
-async function writeJournal(
-  path: string,
-  journal: MutationJournal,
-  exclusive = false,
-): Promise<void> {
-  journal.updatedAt = new Date().toISOString();
-  const contents = `${JSON.stringify(journal, null, 2)}\n`;
-  if (exclusive) {
-    const handle = await open(path, "wx", 0o600);
-    try {
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await syncDirectory(dirname(path));
-    return;
-  }
-
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", 0o600);
-  try {
-    await handle.writeFile(contents, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await rename(temporary, path);
-    await syncDirectory(dirname(path));
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
-}
-
 /** Direct TypeScript service behind the local Rekordbox library workbench. */
 export class RekordboxLibraryService {
-  readonly backupRoot: string | undefined;
   readonly dbPath: string | undefined;
   readonly key: string | undefined;
   readonly unlock: boolean;
   readonly writeEnabled: boolean;
 
   private readonly getProcessState: () => LibraryProcesses;
+  private readonly mutationTails = new Map<string, Promise<void>>();
 
   constructor(options: LibraryOptions = {}) {
-    this.backupRoot = options.backupRoot;
     this.dbPath = options.dbPath;
     this.key = options.key;
     this.unlock = options.unlock ?? true;
@@ -397,24 +363,63 @@ export class RekordboxLibraryService {
   }
 
   private open(readonly = true): MasterDatabase {
-    return new MasterDatabase({
-      readonly,
-      unlock: this.unlock,
-      ...(this.dbPath === undefined ? {} : { path: this.dbPath }),
-      ...(this.key === undefined ? {} : { key: this.key }),
-    });
+    return this.configureConnection(
+      new MasterDatabase({
+        readonly,
+        unlock: this.unlock,
+        ...(this.dbPath === undefined ? {} : { path: this.dbPath }),
+        ...(this.key === undefined ? {} : { key: this.key }),
+      }),
+    );
   }
 
-  private openAt(dbPath: string, readonly = true, includeSidecar = true): MasterDatabase {
-    return new MasterDatabase({
-      path: dbPath,
-      readonly,
-      unlock: this.unlock,
-      ...(includeSidecar
-        ? {}
-        : { dbDirectory: join(dirname(dbPath), ".rekordbox-library-database-only") }),
-      ...(this.key === undefined ? {} : { key: this.key }),
-    });
+  private openAt(dbPath: string, readonly = true): MasterDatabase {
+    return this.configureConnection(
+      new MasterDatabase({
+        path: dbPath,
+        readonly,
+        unlock: this.unlock,
+        ...(this.key === undefined ? {} : { key: this.key }),
+      }),
+    );
+  }
+
+  private configureConnection(database: MasterDatabase): MasterDatabase {
+    // Connection-local wait only: preserve Rekordbox's existing DELETE/WAL journal mode.
+    database.connection?.pragma(`busy_timeout = ${sqliteBusyTimeoutMs}`);
+    return database;
+  }
+
+  private async acquireDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
+    const deadline = Date.now() + databaseLockTimeoutMs;
+    let retryDelayMs = 20;
+    for (;;) {
+      try {
+        return await acquireRekordboxDatabaseLock(dbPath);
+      } catch (error) {
+        if (!databaseLockBusy(error) || Date.now() >= deadline) throw error;
+        await delay(retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 250);
+      }
+    }
+  }
+
+  private async serializeMutation<result>(
+    dbPath: string,
+    operation: () => Promise<result>,
+  ): Promise<result> {
+    const previous = this.mutationTails.get(dbPath) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.mutationTails.set(dbPath, tail);
+    try {
+      return await result;
+    } finally {
+      if (this.mutationTails.get(dbPath) === tail) this.mutationTails.delete(dbPath);
+    }
   }
 
   private active(db: MasterDatabase, table: string, alias: string): string {
@@ -565,9 +570,7 @@ export class RekordboxLibraryService {
         `SELECT COUNT(*) AS count ${from} WHERE ${predicate}`,
         parameters,
       );
-      const order = options.playlistId
-        ? `membership."TrackNo", content."Title" COLLATE NOCASE, membership."ID"`
-        : `content."Title" COLLATE NOCASE, artist."Name" COLLATE NOCASE, content."ID"`;
+      const order = trackOrderSql(options.sort, Boolean(options.playlistId));
       const rows = db.selectRawRows(
         `SELECT content."ID" AS id, content."Title" AS title,
                 content."FolderPath" AS path, content."BPM" AS bpmHundredths,
@@ -589,7 +592,10 @@ export class RekordboxLibraryService {
   private getSmartPlaylistTracks(
     db: MasterDatabase,
     playlist: DjmdPlaylist,
-    options: Required<Pick<TrackQuery, "filter" | "limit" | "offset">> & { q: string },
+    options: Required<Pick<TrackQuery, "filter" | "limit" | "offset">> & {
+      q: string;
+      sort?: TrackSort;
+    },
   ): TracksResponse {
     const normalizedQuery = options.q.toLocaleLowerCase();
     const rows = db
@@ -607,7 +613,8 @@ export class RekordboxLibraryService {
         if (options.filter === "analyzed") return track.analyzed;
         if (options.filter === "attention") return !track.analyzed || !track.bpm || !track.key;
         return true;
-      });
+      })
+      .sort(trackComparator(options.sort));
     return {
       items: rows.slice(options.offset, options.offset + options.limit),
       count: rows.length,
@@ -786,12 +793,14 @@ export class RekordboxLibraryService {
       )[0];
       if (!row) throw new RangeError(`Track '${id}' was not found`);
       let peaks: number[] = [];
+      let colors: Array<[number, number, number]> = [];
       try {
         const files = [...db.readContentAnlzFiles(id).values()];
         for (const key of ["PWV5", "PWV4", "PWV3", "PWV2", "PWAV"]) {
           for (const file of files) {
             if (!file.has(key)) continue;
             peaks = waveformHeights(file.get(key));
+            colors = waveformColors(file.get(key));
             if (peaks.length) break;
           }
           if (peaks.length) break;
@@ -799,9 +808,10 @@ export class RekordboxLibraryService {
       } catch {
         // Missing or malformed analysis is expected for unanalysed tracks; WaveSurfer decodes audio.
       }
+      const waveform = normalizeWaveform(peaks, colors);
       return {
         durationSeconds: nullableNumber(row.durationSeconds),
-        peaks: normalizeWaveform(peaks),
+        ...waveform,
         source: peaks.length ? "rekordbox" : "placeholder",
       };
     } finally {
@@ -809,149 +819,48 @@ export class RekordboxLibraryService {
     }
   }
 
-  /** Apply one guarded playlist mutation and return its recovery receipt. */
+  /** Apply one serialized local mutation using SQLite's transaction boundary. */
   async mutate(mutation: LibraryMutation): Promise<MutationReceipt> {
     if (!this.writeEnabled)
       throw new Error("Library write mode is disabled; restart with the explicit --write flag");
 
     const location = this.open();
-    const dbPath = realpathSync(location.path);
-    const dbDirectory = dirname(dbPath);
-    location.close();
-    const releaseLock = await acquireRekordboxDatabaseLock(dbPath);
+    let dbPath: string;
+    try {
+      dbPath = realpathSync(location.path);
+    } finally {
+      location.close();
+    }
+    return this.serializeMutation(dbPath, () => this.mutateSerialized(dbPath, mutation));
+  }
+
+  private async mutateSerialized(
+    dbPath: string,
+    mutation: LibraryMutation,
+  ): Promise<MutationReceipt> {
+    const releaseLock = await this.acquireDatabaseLock(dbPath);
     try {
       this.assertStopped();
-      const preflight = this.openAt(dbPath, true, false);
+      const writer = this.openAt(dbPath, false);
       try {
-        this.assertMutationPrecondition(preflight, mutation);
-      } finally {
-        preflight.close();
-      }
-      const backup = await backupRekordboxDatabase(dbDirectory, {
-        dbPath,
-        ...(this.backupRoot === undefined ? {} : { backupRoot: this.backupRoot }),
-      });
-      const mutationId = randomUUID();
-      const journalPath = join(backup.directory, `library-mutation-${mutationId}.json`);
-      const startedAt = new Date().toISOString();
-      const journal: MutationJournal = {
-        schemaVersion: 1,
-        mutationId,
-        rekordboxVersion,
-        dbPath,
-        backupDirectory: backup.directory,
-        startedAt,
-        updatedAt: startedAt,
-        mutation,
-        stages: {
-          database: stageStatus("pending"),
-          sidecar: stageStatus("pending"),
-          verification: stageStatus("pending"),
-          receipt: stageStatus("pending"),
-        },
-      };
-      let journalWritten = false;
-      let expectation: MutationExpectation | undefined;
-      let commitStarted = false;
-      try {
-        await writeJournal(journalPath, journal, true);
-        journalWritten = true;
+        this.assertMutationPrecondition(writer, mutation);
+        const expectation = this.applyMutation(writer, mutation);
         this.assertStopped();
-        const writer = this.openAt(dbPath, false);
-        try {
-          expectation = this.applyMutation(writer, mutation);
-          journal.changedId = expectation.changedId;
-          journal.stages.database = stageStatus("in-progress");
-          journal.stages.sidecar = stageStatus(
-            expectation.sidecarExpected ? "in-progress" : "not-applicable",
-          );
-          await writeJournal(journalPath, journal);
-          this.assertStopped();
-          commitStarted = true;
-          writer.commit({ allowWhileRunning: false });
-        } finally {
-          writer.close();
-        }
-
-        journal.stages.database = stageStatus("succeeded");
-        if (expectation.sidecarExpected) journal.stages.sidecar = stageStatus("succeeded");
-        await writeJournal(journalPath, journal);
-
-        journal.stages.verification = stageStatus("in-progress");
-        await writeJournal(journalPath, journal);
-        const probe = this.probeMutation(dbPath, expectation);
-        const verificationErrors = [probe.databaseError, probe.sidecarError].filter(
-          (error): error is Error => error !== undefined,
-        );
-        if (verificationErrors.length)
-          throw new AggregateError(verificationErrors, "Rekordbox mutation verification failed");
-        journal.stages.verification = stageStatus("succeeded");
-        await writeJournal(journalPath, journal);
-
-        const receipt: MutationReceipt = {
+        writer.commit({ allowWhileRunning: false });
+        return {
           operation: mutation.type,
           changedId: expectation.changedId,
-          backupDirectory: backup.directory,
-          quickCheck: "ok",
-          foreignKeyViolationCount: 0,
           finishedAt: new Date().toISOString(),
         };
-        journal.receipt = receipt;
-        journal.stages.receipt = stageStatus("succeeded");
-        await writeJournal(journalPath, journal);
-        return receipt;
       } catch (error) {
-        let failure: unknown = error;
-        if (commitStarted && expectation) {
-          const probe = this.probeMutation(dbPath, expectation);
-          journal.stages.database = probe.databaseError
-            ? stageStatus("failed", probe.databaseError)
-            : stageStatus("succeeded");
-          journal.stages.sidecar = expectation.sidecarExpected
-            ? probe.sidecarError
-              ? stageStatus("failed", probe.sidecarError)
-              : stageStatus("succeeded")
-            : stageStatus("not-applicable");
-          const verificationError = probe.databaseError ?? probe.sidecarError;
-          journal.stages.verification = verificationError
-            ? stageStatus("failed", verificationError)
-            : stageStatus("succeeded");
-        } else {
-          journal.stages.database = stageStatus("skipped", error);
-          journal.stages.sidecar = stageStatus("skipped", error);
-          journal.stages.verification = stageStatus("skipped", error);
-        }
-        journal.stages.receipt = stageStatus("failed", error);
-        journal.error = errorRecord(error);
         try {
-          if (journalWritten || existsSync(journalPath)) await writeJournal(journalPath, journal);
-        } catch (journalError) {
-          failure = new AggregateError(
-            [asError(error), asError(journalError)],
-            "Mutation failed and its outcome journal could not be updated",
-          );
+          writer.rollback();
+        } catch {
+          // Preserve the original SQLite or sidecar error.
         }
-
-        if (error instanceof LibraryMutationConflictError && !commitStarted) throw error;
-
-        const databaseCommitted = committed(journal.stages.database.status);
-        const sidecarCommitted = committed(journal.stages.sidecar.status);
-        const state =
-          databaseCommitted === true && journal.stages.sidecar.status === "failed"
-            ? " after the database committed but before the playlist sidecar was verified"
-            : databaseCommitted === true
-              ? " after the database and playlist sidecar committed"
-              : " before a verified database commit";
-        throw new LibraryMutationError(
-          `Library mutation '${mutation.type}' failed${state}; recovery backup: ${backup.directory}; outcome journal: ${journalPath}`,
-          {
-            backupDirectory: backup.directory,
-            cause: failure,
-            databaseCommitted,
-            journalPath,
-            sidecarCommitted,
-          },
-        );
+        throw error;
+      } finally {
+        writer.close();
       }
     } finally {
       await releaseLock();
@@ -996,8 +905,7 @@ export class RekordboxLibraryService {
     }
   }
 
-  private applyMutation(db: MasterDatabase, mutation: LibraryMutation): MutationExpectation {
-    const sidecarExpected = db.playlistXml !== undefined;
+  private applyMutation(db: MasterDatabase, mutation: LibraryMutation): MutationResult {
     switch (mutation.type) {
       case "create-playlist": {
         const name = mutation.name.trim();
@@ -1012,45 +920,21 @@ export class RekordboxLibraryService {
           mutation.kind === "folder"
             ? db.createPlaylistFolder(name, options)
             : db.createPlaylist(name, options);
-        return {
-          type: mutation.type,
-          changedId: playlist.ID,
-          playlist: {
-            id: playlist.ID,
-            name,
-            parentId: playlist.ParentID,
-            attribute: Number(playlist.Attribute),
-          },
-          sidecarExpected,
-        };
+        return { changedId: playlist.ID };
       }
       case "rename-playlist": {
         const name = mutation.name.trim();
         if (!name) throw new TypeError("Playlist name must not be empty");
-        const playlist = this.requireActivePlaylist(db, mutation.playlistId);
+        this.requireActivePlaylist(db, mutation.playlistId);
         db.renamePlaylist(mutation.playlistId, name);
-        return {
-          type: mutation.type,
-          changedId: mutation.playlistId,
-          playlist: { ...playlist, name },
-          sidecarExpected,
-        };
+        return { changedId: mutation.playlistId };
       }
       case "delete-playlist": {
-        this.assertMutationPrecondition(db, mutation);
-        const deletedPlaylists = this.getActivePlaylistSubtree(db, mutation.playlistId);
-        if (!deletedPlaylists.length)
-          throw new RangeError(`Playlist '${mutation.playlistId}' was not found`);
         db.deletePlaylist(mutation.playlistId);
-        return {
-          type: mutation.type,
-          changedId: mutation.playlistId,
-          deletedPlaylists,
-          sidecarExpected,
-        };
+        return { changedId: mutation.playlistId };
       }
       case "add-track": {
-        const playlist = this.requireNormalPlaylist(db, mutation.playlistId);
+        this.requireNormalPlaylist(db, mutation.playlistId);
         this.requireActiveContent(db, mutation.contentId);
         this.assertSafeMembershipState(db, mutation.playlistId);
         const membership = db.addToPlaylist(
@@ -1058,52 +942,28 @@ export class RekordboxLibraryService {
           mutation.contentId,
           mutation.trackNumber,
         );
-        return {
-          type: mutation.type,
-          changedId: membership.ID,
-          membership: {
-            id: membership.ID,
-            playlistId: membership.PlaylistID,
-            contentId: membership.ContentID,
-            trackNumber: Number(membership.TrackNo),
-          },
-          playlist,
-          sidecarExpected,
-        };
+        return { changedId: membership.ID };
       }
       case "remove-track": {
-        const playlist = this.requireNormalPlaylist(db, mutation.playlistId);
+        this.requireNormalPlaylist(db, mutation.playlistId);
         this.assertSafeMembershipState(db, mutation.playlistId);
         const membership = this.requireActiveMembership(db, mutation.membershipId);
         if (membership.playlistId !== mutation.playlistId)
           throw new TypeError("Song is not in the supplied playlist");
         db.removeFromPlaylist(mutation.playlistId, mutation.membershipId);
-        return {
-          type: mutation.type,
-          changedId: mutation.membershipId,
-          membershipId: mutation.membershipId,
-          playlist,
-          sidecarExpected,
-        };
+        return { changedId: mutation.membershipId };
       }
       case "move-track": {
-        const playlist = this.requireNormalPlaylist(db, mutation.playlistId);
+        this.requireNormalPlaylist(db, mutation.playlistId);
         this.assertSafeMembershipState(db, mutation.playlistId);
         const membership = this.requireActiveMembership(db, mutation.membershipId);
         if (membership.playlistId !== mutation.playlistId)
           throw new TypeError("Song is not in the supplied playlist");
         db.moveSongInPlaylist(mutation.playlistId, mutation.membershipId, mutation.trackNumber);
-        return {
-          type: mutation.type,
-          changedId: mutation.membershipId,
-          membership: { ...membership, trackNumber: mutation.trackNumber },
-          playlist,
-          sidecarExpected,
-        };
+        return { changedId: mutation.membershipId };
       }
       case "replace-playlist-tracks": {
-        this.assertMutationPrecondition(db, mutation);
-        const playlist = this.requireNormalPlaylist(db, mutation.playlistId);
+        this.requireNormalPlaylist(db, mutation.playlistId);
         this.assertSafeMembershipState(db, mutation.playlistId);
         for (const contentId of mutation.contentIds) this.requireActiveContent(db, contentId);
         const existing = db.selectRawRows(
@@ -1133,210 +993,27 @@ export class RekordboxLibraryService {
         ))
           db.removeFromPlaylist(mutation.playlistId, membership.id);
 
-        const memberships = desired.map((entry, index): MembershipExpectation => {
+        desired.forEach((entry, index) => {
           const trackNumber = index + 1;
           if (entry.existing) {
             db.moveSongInPlaylist(mutation.playlistId, entry.existing.id, trackNumber);
-            return {
-              id: entry.existing.id,
-              playlistId: mutation.playlistId,
-              contentId: entry.contentId,
-              trackNumber,
-            };
+            return;
           }
-          const membership = db.addToPlaylist(mutation.playlistId, entry.contentId, trackNumber);
-          return {
-            id: membership.ID,
-            playlistId: membership.PlaylistID,
-            contentId: membership.ContentID,
-            trackNumber: Number(membership.TrackNo),
-          };
+          db.addToPlaylist(mutation.playlistId, entry.contentId, trackNumber);
         });
-        return {
-          type: mutation.type,
-          changedId: mutation.playlistId,
-          contentIds: [...mutation.contentIds],
-          memberships,
-          playlist,
-          sidecarExpected,
-        };
+        return { changedId: mutation.playlistId };
       }
       case "upsert-cue": {
         this.requireActiveContent(db, mutation.contentId);
         const cue = db.upsertContentCue(mutation.contentId, mutation.cue as ContentCueInput);
-        return {
-          type: mutation.type,
-          changedId: cue.id,
-          cue,
-          sidecarExpected: false,
-        };
+        return { changedId: cue.id };
       }
       case "delete-cue": {
         this.requireActiveContent(db, mutation.contentId);
         db.deleteContentCue(mutation.contentId, mutation.cueId);
-        return {
-          type: mutation.type,
-          changedId: mutation.cueId,
-          contentId: mutation.contentId,
-          sidecarExpected: false,
-        };
+        return { changedId: mutation.cueId };
       }
     }
-  }
-
-  private probeMutation(dbPath: string, expectation: MutationExpectation): MutationProbe {
-    const probe: MutationProbe = {};
-    let database: MasterDatabase | undefined;
-    try {
-      database = this.openAt(dbPath, true, false);
-      this.verifyDatabaseMutation(database, expectation);
-    } catch (error) {
-      probe.databaseError = asError(error);
-    } finally {
-      database?.close();
-    }
-
-    if (!expectation.sidecarExpected) return probe;
-    let sidecar: MasterDatabase | undefined;
-    try {
-      sidecar = this.openAt(dbPath);
-      this.verifySidecarMutation(sidecar, expectation);
-    } catch (error) {
-      probe.sidecarError = asError(error);
-    } finally {
-      sidecar?.close();
-    }
-    return probe;
-  }
-
-  private verifyDatabaseMutation(db: MasterDatabase, expectation: MutationExpectation): void {
-    const quickRows = db.selectRawRows("PRAGMA quick_check");
-    const quickValues = quickRows.map((row) => String(Object.values(row)[0]));
-    if (quickValues.length !== 1 || quickValues[0]?.toLocaleLowerCase() !== "ok")
-      throw new Error(`Rekordbox quick_check failed: ${quickValues.join("; ")}`);
-    const foreignKeys = db.selectRawRows("PRAGMA foreign_key_check");
-    if (foreignKeys.length)
-      throw new Error(`Rekordbox foreign_key_check found ${foreignKeys.length} violation(s)`);
-
-    switch (expectation.type) {
-      case "create-playlist":
-      case "rename-playlist":
-        this.assertPlaylistMatches(
-          this.requireActivePlaylist(db, expectation.changedId),
-          expectation.playlist,
-        );
-        return;
-      case "delete-playlist":
-        for (const playlist of expectation.deletedPlaylists) {
-          const playlistCount = this.scalar(
-            db,
-            `SELECT COUNT(*) AS count FROM "djmdPlaylist" p
-             WHERE p."ID" = ? AND ${this.active(db, "djmdPlaylist", "p")}`,
-            [playlist.id],
-          );
-          if (playlistCount)
-            throw new Error(`Deleted playlist '${playlist.id}' is still active in master.db`);
-          const membershipCount = this.scalar(
-            db,
-            `SELECT COUNT(*) AS count FROM "djmdSongPlaylist" membership
-             WHERE membership."PlaylistID" = ?
-               AND ${this.active(db, "djmdSongPlaylist", "membership")}`,
-            [playlist.id],
-          );
-          if (membershipCount)
-            throw new Error(
-              `Deleted playlist '${playlist.id}' still has ${membershipCount} active membership(s)`,
-            );
-        }
-        return;
-      case "add-track":
-      case "move-track":
-        this.assertPlaylistMatches(
-          this.requireActivePlaylist(db, expectation.playlist.id),
-          expectation.playlist,
-        );
-        this.assertMembershipMatches(
-          this.requireActiveMembership(db, expectation.membership.id),
-          expectation.membership,
-        );
-        this.assertMembershipSequence(db, expectation.playlist.id);
-        return;
-      case "remove-track": {
-        this.assertPlaylistMatches(
-          this.requireActivePlaylist(db, expectation.playlist.id),
-          expectation.playlist,
-        );
-        const count = this.scalar(
-          db,
-          `SELECT COUNT(*) AS count FROM "djmdSongPlaylist" membership
-           WHERE membership."ID" = ?
-             AND ${this.active(db, "djmdSongPlaylist", "membership")}`,
-          [expectation.membershipId],
-        );
-        if (count)
-          throw new Error(
-            `Removed playlist membership '${expectation.membershipId}' is still active`,
-          );
-        this.assertMembershipSequence(db, expectation.playlist.id);
-        return;
-      }
-      case "replace-playlist-tracks": {
-        this.assertPlaylistMatches(
-          this.requireActivePlaylist(db, expectation.playlist.id),
-          expectation.playlist,
-        );
-        const rows = db.selectRawRows(
-          `SELECT membership."ID" AS id, membership."ContentID" AS contentId,
-                  membership."TrackNo" AS trackNumber
-           FROM "djmdSongPlaylist" membership
-           WHERE membership."PlaylistID" = ?
-             AND ${this.active(db, "djmdSongPlaylist", "membership")}
-           ORDER BY membership."TrackNo", membership."ID"`,
-          [expectation.playlist.id],
-        );
-        const contentIds = rows.map((row) => stringValue(row.contentId));
-        if (JSON.stringify(contentIds) !== JSON.stringify(expectation.contentIds))
-          throw new Error(
-            `Playlist '${expectation.playlist.id}' content order verification mismatch`,
-          );
-        for (const membership of expectation.memberships)
-          this.assertMembershipMatches(this.requireActiveMembership(db, membership.id), membership);
-        this.assertMembershipSequence(db, expectation.playlist.id);
-        return;
-      }
-      case "upsert-cue": {
-        const cue = db
-          .getContentCues(expectation.cue.contentId)
-          .find((candidate) => candidate.id === expectation.cue.id);
-        if (!cue || JSON.stringify(cue) !== JSON.stringify(expectation.cue))
-          throw new Error(`Cue '${expectation.cue.id}' verification mismatch`);
-        this.assertContentCueMirror(db, expectation.cue.contentId);
-        return;
-      }
-      case "delete-cue": {
-        const cue = db
-          .getContentCues(expectation.contentId)
-          .find((candidate) => candidate.id === expectation.changedId);
-        if (cue) throw new Error(`Deleted cue '${expectation.changedId}' is still active`);
-        this.assertContentCueMirror(db, expectation.contentId);
-        return;
-      }
-    }
-  }
-
-  private verifySidecarMutation(db: MasterDatabase, expectation: MutationExpectation): void {
-    const sidecar = db.playlistXml;
-    if (!sidecar) throw new Error("masterPlaylists6.xml disappeared during library mutation");
-    if (expectation.type === "upsert-cue" || expectation.type === "delete-cue") return;
-    if (expectation.type === "delete-playlist") {
-      for (const playlist of expectation.deletedPlaylists)
-        if (sidecar.get(playlist.id))
-          throw new Error(
-            `Deleted playlist '${playlist.id}' is still present in masterPlaylists6.xml`,
-          );
-      return;
-    }
-    this.assertSidecarPlaylist(sidecar.get(expectation.playlist.id), expectation.playlist);
   }
 
   private requireActivePlaylist(db: MasterDatabase, id: string): PlaylistExpectation {
@@ -1444,102 +1121,6 @@ export class RekordboxLibraryService {
     if (trackNumbers.some((trackNumber, index) => trackNumber !== expected[index]))
       throw new Error(
         `Playlist '${playlistId}' has a non-contiguous active track order: ${trackNumbers.join(", ")}`,
-      );
-  }
-
-  private assertContentCueMirror(db: MasterDatabase, contentId: string): void {
-    if (!db.tableNames.includes("contentCue")) return;
-    const rows = db.selectRawRows(
-      `SELECT mirror."Cues" AS cues FROM "contentCue" mirror
-       WHERE mirror."ContentID" = ? AND ${this.active(db, "contentCue", "mirror")}`,
-      [contentId],
-    );
-    if (rows.length !== 1)
-      throw new Error(`Content '${contentId}' has ${rows.length} active cue mirrors`);
-    let entries: unknown;
-    try {
-      entries = JSON.parse(stringValue(rows[0]!.cues, "[]"));
-    } catch (error) {
-      throw new Error(`Content '${contentId}' has malformed cue mirror JSON`, { cause: error });
-    }
-    if (!Array.isArray(entries))
-      throw new Error(`Content '${contentId}' cue mirror is not an array`);
-    const expected = db.getContentCues(contentId);
-    const mirrored = entries.map((entry) => {
-      if (!entry || typeof entry !== "object")
-        throw new Error(`Content '${contentId}' cue mirror contains a non-object entry`);
-      const row = entry as Record<string, unknown>;
-      const kind = numberValue(row.Kind, Number.NaN);
-      const startMsec = numberValue(row.InMsec, Number.NaN);
-      const endMsec = numberValue(row.OutMsec, -1);
-      const color = numberValue(row.Color, -1);
-      return {
-        activeLoop: endMsec >= 0 && numberValue(row.ActiveLoop, 0) !== 0,
-        color: color < 0 ? null : color,
-        colorTableIndex:
-          row.ColorTableIndex == null ? null : numberValue(row.ColorTableIndex, Number.NaN),
-        comment: stringValue(row.Comment),
-        contentId: stringValue(row.ContentID),
-        endSeconds: endMsec < 0 ? null : endMsec / 1_000,
-        id: stringValue(row.ID),
-        kind: kind === 0 ? "memory" : "hot",
-        slot: kind === 0 ? null : kind,
-        startSeconds: startMsec / 1_000,
-        type: endMsec < 0 ? "cue" : "loop",
-      };
-    });
-    if (mirrored.length !== expected.length)
-      throw new Error(`Content '${contentId}' cue mirror count verification mismatch`);
-    const mirroredById = new Map<string, (typeof mirrored)[number]>();
-    for (const cue of mirrored) {
-      if (!cue.id || mirroredById.has(cue.id))
-        throw new Error(`Content '${contentId}' cue mirror has a missing or duplicate cue ID`);
-      mirroredById.set(cue.id, cue);
-    }
-    for (const cue of expected)
-      if (JSON.stringify(mirroredById.get(cue.id)) !== JSON.stringify(cue))
-        throw new Error(`Content '${contentId}' cue mirror verification mismatch for '${cue.id}'`);
-  }
-
-  private assertPlaylistMatches(actual: PlaylistExpectation, expected: PlaylistExpectation): void {
-    if (
-      actual.id !== expected.id ||
-      actual.name !== expected.name ||
-      actual.parentId !== expected.parentId ||
-      actual.attribute !== expected.attribute
-    )
-      throw new Error(
-        `Playlist '${expected.id}' verification mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-      );
-  }
-
-  private assertMembershipMatches(
-    actual: MembershipExpectation,
-    expected: MembershipExpectation,
-  ): void {
-    if (
-      actual.id !== expected.id ||
-      actual.playlistId !== expected.playlistId ||
-      actual.contentId !== expected.contentId ||
-      actual.trackNumber !== expected.trackNumber
-    )
-      throw new Error(
-        `Playlist membership '${expected.id}' verification mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-      );
-  }
-
-  private assertSidecarPlaylist(
-    actual: { Attribute: number; Id: string; ParentId: string } | undefined,
-    expected: PlaylistExpectation,
-  ): void {
-    if (!actual) throw new Error(`Playlist '${expected.id}' is missing from masterPlaylists6.xml`);
-    const parentId =
-      expected.parentId === "root"
-        ? "0"
-        : Number(expected.parentId).toString(16).toLocaleUpperCase();
-    if (actual.Attribute !== expected.attribute || actual.ParentId !== parentId)
-      throw new Error(
-        `Playlist '${expected.id}' sidecar mismatch: expected parent ${parentId} / attribute ${expected.attribute}, got parent ${actual.ParentId} / attribute ${actual.Attribute}`,
       );
   }
 }

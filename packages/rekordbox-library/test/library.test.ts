@@ -1,30 +1,18 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { MasterDatabase, MasterPlaylistXml } from "@gakonst/rekordbox";
+import { acquireRekordboxDatabaseLock } from "@gakonst/tracks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  LibraryMutationConflictError,
-  LibraryMutationError,
-  RekordboxLibraryService,
-} from "../src/server/library.js";
+import { LibraryMutationConflictError, RekordboxLibraryService } from "../src/server/library.js";
 
 const roots: string[] = [];
 const now = "2026-07-12 12:00:00.000 +00:00";
 
 type Fixture = {
-  backupRoot: string;
   dbPath: string;
   root: string;
   xmlPath: string;
@@ -40,7 +28,6 @@ function copiedFixture(): Fixture {
   roots.push(root);
   const source = join(root, "source");
   const target = join(root, "working-copy");
-  const backupRoot = join(root, "backups");
   mkdirSync(source);
   mkdirSync(target);
   const sourceDbPath = join(source, "master.db");
@@ -141,25 +128,16 @@ function copiedFixture(): Fixture {
   const xmlPath = join(target, "masterPlaylists6.xml");
   copyFileSync(sourceDbPath, dbPath);
   copyFileSync(sourceXmlPath, xmlPath);
-  return { backupRoot, dbPath, root, xmlPath };
+  return { dbPath, root, xmlPath };
 }
 
 function service(fixture: Fixture): RekordboxLibraryService {
   return new RekordboxLibraryService({
-    backupRoot: fixture.backupRoot,
     dbPath: fixture.dbPath,
     getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
     unlock: false,
     writeEnabled: true,
   });
-}
-
-function readJournal(backupDirectory: string): Record<string, any> {
-  const names = readdirSync(backupDirectory).filter(
-    (name) => name.startsWith("library-mutation-") && name.endsWith(".json"),
-  );
-  expect(names).toHaveLength(1);
-  return JSON.parse(readFileSync(join(backupDirectory, names[0]!), "utf8")) as Record<string, any>;
 }
 
 describe("RekordboxLibraryService", () => {
@@ -209,7 +187,7 @@ describe("RekordboxLibraryService", () => {
     expect(() => library.getTracks({ playlistId: "700" })).toThrow("was not found");
   });
 
-  it("journals and semantically verifies every playlist mutation on a copied fixture", async () => {
+  it("directly commits every playlist mutation on a copied fixture", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
 
@@ -242,23 +220,10 @@ describe("RekordboxLibraryService", () => {
       expectedPlaylistIds: [folder.changedId, child.changedId],
     });
 
-    const successJournal = readJournal(removedFolder.backupDirectory);
-    expect(successJournal).toMatchObject({
-      schemaVersion: 1,
-      mutation: {
-        type: "delete-playlist",
-        playlistId: folder.changedId,
-        expectedPlaylistIds: [folder.changedId, child.changedId],
-      },
-      stages: {
-        database: { status: "succeeded" },
-        sidecar: { status: "succeeded" },
-        verification: { status: "succeeded" },
-        receipt: { status: "succeeded" },
-      },
-      receipt: removedFolder,
+    expect(removedFolder).toMatchObject({
+      operation: "delete-playlist",
+      changedId: folder.changedId,
     });
-    expect(existsSync(join(removedFolder.backupDirectory, "backup.json"))).toBe(true);
 
     const db = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
     expect(
@@ -282,11 +247,11 @@ describe("RekordboxLibraryService", () => {
     expect(sidecar.get(child.changedId)).toBeUndefined();
   });
 
-  it("atomically replaces playlist order and verifies the exact content sequence", async () => {
+  it("atomically replaces playlist order", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
 
-    const receipt = await library.mutate({
+    await library.mutate({
       type: "replace-playlist-tracks",
       playlistId: "500",
       contentIds: ["2", "1"],
@@ -309,22 +274,9 @@ describe("RekordboxLibraryService", () => {
       { contentId: "1", id: "song-1", trackNumber: 2, uuid: "song-1-uuid" },
     ]);
     db.close();
-    expect(readJournal(receipt.backupDirectory)).toMatchObject({
-      mutation: {
-        type: "replace-playlist-tracks",
-        playlistId: "500",
-        contentIds: ["2", "1"],
-        expectedMembershipIds: ["song-1"],
-      },
-      stages: {
-        database: { status: "succeeded" },
-        sidecar: { status: "succeeded" },
-        verification: { status: "succeeded" },
-      },
-    });
   });
 
-  it("rejects a stale canvas snapshot before creating a backup", async () => {
+  it("rejects a stale canvas snapshot before writing", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
 
@@ -336,7 +288,6 @@ describe("RekordboxLibraryService", () => {
         expectedMembershipIds: ["stale-membership"],
       }),
     ).rejects.toBeInstanceOf(LibraryMutationConflictError);
-    expect(existsSync(fixture.backupRoot)).toBe(false);
   });
 
   it("rejects deletion when a confirmed playlist subtree has changed", async () => {
@@ -347,15 +298,11 @@ describe("RekordboxLibraryService", () => {
       name: "Folder",
       kind: "folder",
     });
-    const backupCount = () =>
-      existsSync(fixture.backupRoot) ? readdirSync(fixture.backupRoot).length : 0;
-    const beforeChild = backupCount();
     await library.mutate({
       type: "create-playlist",
       name: "Late child",
       parentId: folder.changedId,
     });
-    const beforeDelete = backupCount();
 
     await expect(
       library.mutate({
@@ -364,8 +311,6 @@ describe("RekordboxLibraryService", () => {
         expectedPlaylistIds: [folder.changedId],
       }),
     ).rejects.toBeInstanceOf(LibraryMutationConflictError);
-    expect(beforeDelete).toBe(beforeChild + 1);
-    expect(backupCount()).toBe(beforeDelete);
     expect(library.getPlaylists()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: folder.changedId, name: "Folder" }),
@@ -374,7 +319,7 @@ describe("RekordboxLibraryService", () => {
     );
   });
 
-  it("backs up, journals, reads, and deletes memory and A-P Hot Cues", async () => {
+  it("writes, reads, and deletes memory and A-P Hot Cues", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
 
@@ -401,49 +346,84 @@ describe("RekordboxLibraryService", () => {
       { id: hot.changedId, kind: "hot", slot: 16, type: "loop", comment: "Drop" },
     ]);
 
-    const removed = await library.mutate({
+    await library.mutate({
       type: "delete-cue",
       contentId: "1",
       cueId: memory.changedId,
     });
     expect(library.getTrack("1").cues.map((cue) => cue.id)).toEqual([hot.changedId]);
-    expect(readJournal(removed.backupDirectory)).toMatchObject({
-      mutation: { type: "delete-cue", contentId: "1", cueId: memory.changedId },
-      stages: {
-        database: { status: "succeeded" },
-        sidecar: { status: "not-applicable" },
-        verification: { status: "succeeded" },
-      },
-    });
   });
 
-  it("records a recoverable partial commit when sidecar persistence fails", async () => {
+  it("waits for a concurrent external WAL writer and serializes queued mutations", async () => {
+    const fixture = copiedFixture();
+    const library = service(fixture);
+    const journalSetup = new MasterDatabase({
+      path: fixture.dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    expect(journalSetup.connection!.pragma("journal_mode = WAL", { simple: true })).toBe("wal");
+    journalSetup.close();
+
+    const releaseExternalWriter = await acquireRekordboxDatabaseLock(fixture.dbPath);
+    const externalWriter = new MasterDatabase({
+      path: fixture.dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    externalWriter.renamePlaylist("500", "External");
+    externalWriter.flush();
+
+    let firstSettled = false;
+    const first = library.mutate({
+      type: "add-track",
+      playlistId: "500",
+      contentId: "2",
+    });
+    void first.then(
+      () => {
+        firstSettled = true;
+      },
+      () => {
+        firstSettled = true;
+      },
+    );
+    const second = library.mutate({
+      type: "upsert-cue",
+      contentId: "1",
+      cue: { kind: "memory", type: "cue", startSeconds: 30 },
+    });
+
+    await delay(75);
+    const waitedForExternalWriter = !firstSettled;
+    externalWriter.commit({ allowWhileRunning: true });
+    externalWriter.close();
+    await releaseExternalWriter();
+    expect(waitedForExternalWriter).toBe(true);
+    await Promise.all([first, second]);
+
+    expect(library.getPlaylists()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "500", name: "External" })]),
+    );
+    expect(library.getTracks({ playlistId: "500" }).items.map((track) => track.id)).toEqual([
+      "1",
+      "2",
+    ]);
+    expect(library.getTrack("1").cues).toEqual([
+      expect.objectContaining({ kind: "memory", startSeconds: 30 }),
+    ]);
+  });
+
+  it("surfaces a sidecar failure after SQLite commits", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
     vi.spyOn(MasterPlaylistXml.prototype, "save").mockImplementation(() => {
       throw new Error("injected sidecar failure");
     });
 
-    let failure: LibraryMutationError | undefined;
-    try {
-      await library.mutate({ type: "create-playlist", name: "Partial" });
-    } catch (error) {
-      expect(error).toBeInstanceOf(LibraryMutationError);
-      failure = error as LibraryMutationError;
-    }
-    expect(failure).toBeDefined();
-    expect(failure).toMatchObject({ databaseCommitted: true, sidecarCommitted: false });
-    expect(failure!.message).toContain(failure!.backupDirectory);
-    expect(existsSync(failure!.journalPath)).toBe(true);
-    expect(readJournal(failure!.backupDirectory)).toMatchObject({
-      mutation: { type: "create-playlist", name: "Partial" },
-      stages: {
-        database: { status: "succeeded" },
-        sidecar: { status: "failed" },
-        verification: { status: "failed" },
-        receipt: { status: "failed" },
-      },
-    });
+    await expect(library.mutate({ type: "create-playlist", name: "Partial" })).rejects.toThrow(
+      "injected sidecar failure",
+    );
 
     const db = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
     const committed = db.selectRawRows('SELECT "ID" AS id FROM "djmdPlaylist" WHERE "Name" = ?', [

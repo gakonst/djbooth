@@ -78,12 +78,11 @@ libraryCli.command("status", {
 libraryCli.command("serve", {
   description: "Serve the loopback-only Rekordbox library workbench until interrupted.",
   options: z.object({
-    backupRoot: z.string().optional().describe("Directory for checksummed pre-write backups"),
     host: z.enum(["127.0.0.1", "localhost", "::1"]).default("127.0.0.1"),
     open: z.boolean().default(false).describe("Open the workbench in the default browser"),
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
     port: z.number().int().min(0).max(65_535).default(4179),
-    write: z.boolean().default(false).describe("Enable guarded playlist mutations"),
+    write: z.boolean().default(false).describe("Enable direct local playlist mutations"),
   }),
   output: z.object({
     action: z.literal("stopped"),
@@ -93,7 +92,6 @@ libraryCli.command("serve", {
   }),
   async run(c) {
     const server = await startLibraryServer({
-      backupRoot: c.options.backupRoot,
       dbPath: c.options.path,
       host: c.options.host,
       port: c.options.port,

@@ -1,7 +1,6 @@
 import {
   Flag,
   LoaderCircle,
-  Music2,
   Pause,
   Pencil,
   Play,
@@ -28,6 +27,8 @@ import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { HotCueSlot, TrackCue, TrackWaveform } from "../../shared/types.js";
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
+import { formatBpm } from "../format.js";
+import { renderRgbWaveform, RgbWaveform } from "./RgbWaveform.js";
 
 export type PlayerTrack = {
   id: string;
@@ -37,6 +38,13 @@ export type PlayerTrack = {
   durationSeconds?: number | null;
   fileExists?: boolean;
   artworkAvailable?: boolean;
+  analyzed?: boolean;
+  bpm?: number | null;
+  genre?: string | null;
+  key?: string | null;
+  path?: string | null;
+  playCount?: number;
+  rating?: number;
 };
 
 export type PlayerCue = TrackCue;
@@ -151,7 +159,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const [volume, setVolumeState] = useState(0.85);
   const [muted, setMuted] = useState(false);
   const [mediaError, setMediaError] = useState<string>();
-  const [artworkFailed, setArtworkFailed] = useState(false);
+  const [waveformData, setWaveformData] = useState<PlayerWaveform>();
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selectedHotCueSlot, setSelectedHotCueSlot] = useState<HotCueSlot>();
 
@@ -238,14 +246,15 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setCurrentTime(0);
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
-    setArtworkFailed(false);
+    setWaveformData(undefined);
     if (!container || !track || !audioUrl || track.fileExists === false) return;
     const controller = new AbortController();
     const regions = RegionsPlugin.create();
+    let waveform: PlayerWaveform | null | undefined;
     const waveSurfer = WaveSurfer.create({
       container,
       backend: "MediaElement",
-      height: 92,
+      height: 52,
       waveColor: "#3c3d47",
       progressColor: "#a78bfa",
       cursorColor: "#f8fafc",
@@ -256,6 +265,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       dragToSeek: { debounceTime: 40 },
       normalize: true,
       mediaControls: false,
+      renderFunction: (peaks, context) => renderRgbWaveform(peaks, waveform?.colors, context),
       plugins: [regions],
     });
     waveSurferRef.current = waveSurfer;
@@ -296,9 +306,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     ];
 
     void (async () => {
-      let waveform: PlayerWaveform | null | undefined;
       try {
         waveform = await adapter.loadWaveform?.(track, controller.signal);
+        if (!controller.signal.aborted) setWaveformData(waveform ?? undefined);
       } catch {
         // Audio remains playable when optional precomputed peaks are unavailable.
       }
@@ -409,26 +419,30 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 
   return (
     <section className="player-panel" aria-label="Track player">
-      <div className="player-artwork">
-        {artworkUrl && !artworkFailed ? (
-          <img
-            src={artworkUrl}
-            alt={`${track?.title ?? "Track"} album artwork`}
-            onError={() => setArtworkFailed(true)}
-          />
-        ) : (
-          <span className="player-artwork-fallback" aria-hidden="true">
-            <Music2 size={28} />
-          </span>
-        )}
-      </div>
-
-      <div className="player-track-copy">
-        <strong title={track?.title}>{track?.title || "No track selected"}</strong>
-        <span title={track?.artist ?? undefined}>
-          {track?.artist ?? "Choose a track to preview"}
+      <div className="player-identity">
+        <span className="player-mini-waveform-wrap">
+          <RgbWaveform waveform={waveformData} className="player-mini-waveform" />
         </span>
-        {track?.album ? <small title={track.album}>{track.album}</small> : null}
+        <div className="player-track-copy">
+          <strong title={track?.title}>{track?.title || "No track selected"}</strong>
+          <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
+            {track
+              ? [track.artist ?? "Unknown artist", track.album].filter(Boolean).join(" · ")
+              : "Double-click a track to load it"}
+          </span>
+          {track ? (
+            <div className="player-track-metadata" aria-label="Track metadata">
+              <b>{formatBpm(track.bpm)} BPM</b>
+              <b>{track.key ?? "—"}</b>
+              {track.genre ? <span>{track.genre}</span> : null}
+              {track.rating ? <span>{"★".repeat(Math.min(5, track.rating))}</span> : null}
+              <span>{String(track.playCount ?? 0)} plays</span>
+              <span className={track.fileExists === false ? "is-error" : ""}>
+                {track.fileExists === false ? "Missing" : track.analyzed ? "Analyzed" : "Pending"}
+              </span>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="player-waveform-wrap">

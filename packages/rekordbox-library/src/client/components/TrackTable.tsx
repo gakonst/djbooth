@@ -2,6 +2,7 @@ import {
   AudioLines,
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -11,7 +12,7 @@ import {
   Music,
 } from "lucide-react";
 
-import type { TrackSummary } from "../../shared/types.js";
+import type { TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
 import { formatBpm, formatDuration } from "../format.js";
 
 type Props = {
@@ -25,6 +26,7 @@ type Props = {
   selectedTrackId: string | null;
   ordered: boolean;
   canWrite: boolean;
+  sort?: TrackSort;
   onSelect(track: TrackSummary): void;
   onActivate?(track: TrackSummary): void;
   onContextMenu?(
@@ -34,6 +36,7 @@ type Props = {
   ): void;
   onPage(offset: number): void;
   onMove?(track: TrackSummary, trackNumber: number): void;
+  onSort(sort: TrackSort): void;
   onRetry(): void;
 };
 
@@ -48,11 +51,13 @@ export function TrackTable({
   selectedTrackId,
   ordered,
   canWrite,
+  sort,
   onSelect,
   onActivate,
   onContextMenu,
   onPage,
   onMove,
+  onSort,
   onRetry,
 }: Props) {
   const first = count === 0 ? 0 : offset + 1;
@@ -64,33 +69,44 @@ export function TrackTable({
         <table className="track-table">
           <thead>
             <tr>
-              <th className="track-number-column" scope="col">
-                <span className="sr-only">Track number</span>
-                <span aria-hidden="true">#</span>
+              <th
+                className="track-number-column"
+                scope="col"
+                aria-sort={sortAria(sort, "position")}
+              >
+                {ordered ? (
+                  <SortButton label="#" field="position" sort={sort} onSort={onSort} />
+                ) : (
+                  <span aria-hidden="true">#</span>
+                )}
               </th>
-              <th className="title-column" scope="col">
-                Title
+              <th className="title-column" scope="col" aria-sort={sortAria(sort, "title")}>
+                <SortButton label="Title" field="title" sort={sort} onSort={onSort} />
               </th>
-              <th className="album-column" scope="col">
-                Album
+              <th className="album-column" scope="col" aria-sort={sortAria(sort, "album")}>
+                <SortButton label="Album" field="album" sort={sort} onSort={onSort} />
               </th>
-              <th className="genre-column" scope="col">
-                Genre
+              <th className="genre-column" scope="col" aria-sort={sortAria(sort, "genre")}>
+                <SortButton label="Genre" field="genre" sort={sort} onSort={onSort} />
               </th>
-              <th className="bpm-column numeric" scope="col">
-                BPM
+              <th className="bpm-column numeric" scope="col" aria-sort={sortAria(sort, "bpm")}>
+                <SortButton label="BPM" field="bpm" sort={sort} onSort={onSort} align="end" />
               </th>
-              <th className="key-column" scope="col">
-                Key
+              <th className="key-column" scope="col" aria-sort={sortAria(sort, "key")}>
+                <SortButton label="Key" field="key" sort={sort} onSort={onSort} />
               </th>
-              <th className="plays-column numeric" scope="col">
-                Plays
+              <th className="plays-column numeric" scope="col" aria-sort={sortAria(sort, "plays")}>
+                <SortButton label="Plays" field="plays" sort={sort} onSort={onSort} align="end" />
               </th>
-              <th className="status-column" scope="col">
-                Status
+              <th className="status-column" scope="col" aria-sort={sortAria(sort, "status")}>
+                <SortButton label="Status" field="status" sort={sort} onSort={onSort} />
               </th>
-              <th className="duration-column numeric" scope="col">
-                Time
+              <th
+                className="duration-column numeric"
+                scope="col"
+                aria-sort={sortAria(sort, "duration")}
+              >
+                <SortButton label="Time" field="duration" sort={sort} onSort={onSort} align="end" />
               </th>
               {ordered ? (
                 <th className="reorder-column" scope="col">
@@ -272,6 +288,47 @@ export function TrackTable({
       </footer>
     </section>
   );
+}
+
+function SortButton({
+  label,
+  field,
+  sort,
+  onSort,
+  align = "start",
+}: {
+  label: string;
+  field: TrackSortField;
+  sort?: TrackSort;
+  onSort(sort: TrackSort): void;
+  align?: "start" | "end";
+}) {
+  const active = sort?.field === field;
+  const direction = active && sort.direction === "asc" ? "desc" : "asc";
+  return (
+    <button
+      className={`table-sort-button is-${align} ${active ? "is-active" : ""}`}
+      type="button"
+      onClick={() => onSort({ field, direction })}
+      title={`Sort by ${label}`}
+    >
+      <span>{label}</span>
+      {active ? (
+        sort.direction === "asc" ? (
+          <ArrowUp size={10} />
+        ) : (
+          <ArrowDown size={10} />
+        )
+      ) : (
+        <ArrowUpDown size={10} />
+      )}
+    </button>
+  );
+}
+
+function sortAria(sort: TrackSort | undefined, field: TrackSortField) {
+  if (sort?.field !== field) return undefined;
+  return sort.direction === "asc" ? ("ascending" as const) : ("descending" as const);
 }
 
 function TrackStatus({ track }: { track: TrackSummary }) {

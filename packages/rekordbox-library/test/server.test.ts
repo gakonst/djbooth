@@ -67,9 +67,6 @@ function mockApi(
     async (mutation: LibraryMutation): Promise<MutationReceipt> => ({
       operation: mutation.type,
       changedId: "playlist-1",
-      backupDirectory: "/tmp/backup",
-      quickCheck: "ok",
-      foreignKeyViolationCount: 0,
       finishedAt: "2026-07-12T00:00:00.000Z",
     }),
   );

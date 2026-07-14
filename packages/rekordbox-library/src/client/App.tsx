@@ -1,27 +1,26 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  type QueryClient,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   Activity,
-  AudioLines,
   ChevronRight,
   CircleAlert,
   Copy,
-  Database,
   Flag,
   Keyboard,
   Library,
   ListFilter,
-  LoaderCircle,
   Menu,
-  MoreHorizontal,
   PanelRightOpen,
   Pencil,
   Play,
   Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
   Sparkles,
-  Table2,
   Trash2,
   Workflow,
   X,
@@ -31,11 +30,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   HotCueSlot,
   LibraryMutation,
+  MutationReceipt,
   PlaylistItem,
-  PromptAction,
   TrackCue,
   TrackCueInput,
+  TrackSort,
   TrackSummary,
+  TracksResponse,
 } from "../shared/types.js";
 import {
   getBootstrap,
@@ -45,14 +46,13 @@ import {
   getTracks,
   LibraryApiError,
   mutateLibrary,
-  planLibraryPrompt,
   subscribeLibraryEvents,
 } from "./api.js";
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from "./components/ContextMenu.js";
 import { CueDialog, DeletePlaylistDialog, PlaylistDialog, Toast } from "./components/Dialogs.js";
 import { LibrarySidebar } from "./components/LibrarySidebar.js";
 import { PlayerPanel, type PlayerPanelHandle } from "./components/PlayerPanel.js";
-import { PromptDock } from "./components/PromptDock.js";
+import { PlaylistEditor } from "./components/PlaylistEditor.js";
 import {
   deriveConnectedOrder,
   playlistMembershipSnapshot,
@@ -61,9 +61,8 @@ import {
   type SetCanvasConnection,
   type SetCanvasNode,
 } from "./components/SetCanvas.js";
-import { TrackInspector } from "./components/TrackInspector.js";
 import { TrackTable } from "./components/TrackTable.js";
-import { compactCount } from "./format.js";
+import { libraryMutationCoalesceKey, useLibraryMutationQueue } from "./useLibraryMutationQueue.js";
 import { buildHotkeyPalette, type HotkeyBinding, useHotkeys } from "./useHotkeys.js";
 import { useLibraryUrlState } from "./url-state.js";
 
@@ -112,13 +111,20 @@ type CanvasState = {
   connections: SetCanvasConnection[];
 };
 
+type LibraryMutationCommit = {
+  mutation: LibraryMutation;
+  receipt: MutationReceipt;
+};
+
 export function App() {
   const queryClient = useQueryClient();
   const { state: urlState, update: updateUrl } = useLibraryUrlState();
   const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<TrackSort>();
   const [searchInput, setSearchInput] = useState(urlState.query);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(Boolean(urlState.trackId));
+  const [editingPlaylistId, setEditingPlaylistId] = useState<string>();
+  const [editorOpen, setEditorOpen] = useState(false);
   const [playlistDialog, setPlaylistDialog] = useState<PlaylistDialogState>(null);
   const [deleteDialogPlaylist, setDeleteDialogPlaylist] = useState<DeletePlaylistState>();
   const [cueDialog, setCueDialog] = useState<CueDialogState>(null);
@@ -126,10 +132,12 @@ export function App() {
   const [viewMode, setViewMode] = useState<"table" | "canvas">("table");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [autoPlayTrackId, setAutoPlayTrackId] = useState<string>();
+  const [playerTrackId, setPlayerTrackId] = useState<string | null>(urlState.trackId);
+  const [playerSummary, setPlayerSummary] = useState<TrackSummary>();
   const [canvasPlaylistId, setCanvasPlaylistId] = useState<string>();
   const [canvasState, setCanvasState] = useState<CanvasState>({ nodes: [], connections: [] });
   const [canvasExpectedMembershipIds, setCanvasExpectedMembershipIds] = useState<string[]>([]);
-  const [canvasDirty, setCanvasDirty] = useState(false);
+  const [canvasFailedFingerprint, setCanvasFailedFingerprint] = useState<string>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
   const [pendingCanvasTrack, setPendingCanvasTrack] = useState<TrackSummary>();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -137,6 +145,11 @@ export function App() {
   const playheadSecondsRef = useRef<number | null>(null);
   const selectedTrackIdRef = useRef<string | null>(urlState.trackId);
   const canvasHydratedKeyRef = useRef<string | undefined>(undefined);
+  const canvasFingerprintRef = useRef("");
+  const canvasQueuedFingerprintRef = useRef<string | undefined>(undefined);
+  const localWritePendingRef = useRef(false);
+  const suppressExternalUntilRef = useRef(0);
+  const membershipsChangedRef = useRef(new Set<string>());
   const contextMenu = useContextMenu<ContextTarget>();
 
   const bootstrapQuery = useQuery({
@@ -150,6 +163,9 @@ export function App() {
   const playlists = playlistsQuery.data ?? [];
   const selectedPlaylist = playlists.find((playlist) => playlist.id === urlState.playlistId);
   const normalPlaylist = selectedPlaylist?.type === "playlist" ? selectedPlaylist : undefined;
+  const editingPlaylist = playlists.find(
+    (playlist) => playlist.id === editingPlaylistId && playlist.type === "playlist",
+  );
   const canvasPlaylist = playlists.find(
     (playlist) => playlist.id === canvasPlaylistId && playlist.type === "playlist",
   );
@@ -162,6 +178,7 @@ export function App() {
         playlistId: urlState.playlistId,
         filter: urlState.filter,
         offset,
+        sort,
       },
     ],
     queryFn: ({ signal }) =>
@@ -172,6 +189,7 @@ export function App() {
           filter: urlState.filter,
           limit: PAGE_SIZE,
           offset,
+          ...(sort ? { sort } : {}),
         },
         signal,
       ),
@@ -192,33 +210,69 @@ export function App() {
   });
 
   const tracks = tracksQuery.data?.items ?? [];
-  const selectedSummary = useMemo(
-    () =>
-      tracks.find((track) => track.id === urlState.trackId) ??
-      canvasState.nodes.find((node) => node.track.id === urlState.trackId)?.track,
-    [canvasState.nodes, tracks, urlState.trackId],
-  );
   const detailQuery = useQuery({
     queryKey: ["track", urlState.trackId],
     queryFn: ({ signal }) => getTrackDetail(urlState.trackId!, signal),
     enabled: Boolean(urlState.trackId),
   });
+  const playerDetailQuery = useQuery({
+    queryKey: ["track", playerTrackId],
+    queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
+    enabled: Boolean(playerTrackId),
+  });
 
-  const mutation = useMutation({
-    mutationFn: (input: LibraryMutation) => {
+  const processes = bootstrapQuery.data?.library.processes;
+  const rekordboxRunning = Boolean(
+    (processes?.rekordboxPid ?? 0) > 0 || (processes?.rekordboxAgentPid ?? 0) > 0,
+  );
+  const writeEnabled = bootstrapQuery.data?.library.writeEnabled === true;
+  const writeReady = writeEnabled && !rekordboxRunning;
+  const canWrite = writeReady;
+
+  const refreshAll = useCallback(() => {
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
+      queryClient.invalidateQueries({ queryKey: ["playlists"] }),
+      queryClient.invalidateQueries({ queryKey: ["tracks"] }),
+      queryClient.invalidateQueries({ queryKey: ["canvas-tracks"] }),
+      queryClient.invalidateQueries({ queryKey: ["editor-tracks"] }),
+      queryClient.invalidateQueries({ queryKey: ["track"] }),
+    ]);
+  }, [queryClient]);
+
+  const writes = useLibraryMutationQueue<LibraryMutation, LibraryMutationCommit>({
+    coalesceKey: libraryMutationCoalesceKey,
+    execute: async (queuedMutation) => {
       const token = bootstrapQuery.data?.csrfToken;
       if (!token) throw new Error("The local write token is unavailable. Refresh the workbench.");
-      return mutateLibrary(token, input);
+      let input = queuedMutation;
+      if (
+        input.type === "replace-playlist-tracks" &&
+        membershipsChangedRef.current.has(input.playlistId)
+      ) {
+        const current = await getAllTracks({ playlistId: input.playlistId, filter: "all" });
+        input = {
+          ...input,
+          expectedMembershipIds: playlistMembershipSnapshot(current.items),
+        };
+      }
+      const receipt = await mutateLibrary(token, input);
+      if (
+        input.type === "add-track" ||
+        input.type === "remove-track" ||
+        input.type === "replace-playlist-tracks"
+      ) {
+        membershipsChangedRef.current.add(input.playlistId);
+      }
+      return { mutation: input, receipt };
     },
-    onSuccess: async (receipt, input) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
-        queryClient.invalidateQueries({ queryKey: ["playlists"] }),
-        queryClient.invalidateQueries({ queryKey: ["tracks"] }),
-        queryClient.invalidateQueries({ queryKey: ["canvas-tracks"] }),
-        queryClient.invalidateQueries({ queryKey: ["track"] }),
-      ]);
+    onPendingChange: (count) => {
+      localWritePendingRef.current = count > 0;
+    },
+    onSuccess: ({ mutation: input, receipt }) => {
+      suppressExternalUntilRef.current = Date.now() + 1_500;
       if (input.type === "create-playlist") {
+        void queryClient.invalidateQueries({ queryKey: ["playlists"] });
         updateUrl({ playlistId: receipt.changedId, filter: "all", trackId: null });
       }
       if (input.type === "delete-playlist" && input.playlistId === urlState.playlistId) {
@@ -231,35 +285,31 @@ export function App() {
         setCanvasExpectedMembershipIds([]);
         setViewMode("table");
       }
-      if (input.type === "replace-playlist-tracks") setCanvasDirty(false);
-      if (input.type === "upsert-cue") setCueDialog(null);
-      setPlaylistDialog(null);
-      setDeleteDialogPlaylist(undefined);
-      setToast({
-        tone: "success",
-        message: `Library updated · verified ${receipt.quickCheck} · backup ${receipt.backupDirectory}`,
-      });
+      if (input.type === "delete-playlist" && input.playlistId === editingPlaylistId) {
+        setEditorOpen(false);
+        setEditingPlaylistId(undefined);
+      }
+      if (
+        input.type === "add-track" ||
+        input.type === "remove-track" ||
+        input.type === "move-track"
+      )
+        void queryClient.invalidateQueries({ queryKey: ["editor-tracks", input.playlistId] });
+      if (input.type === "add-track")
+        void queryClient.invalidateQueries({ queryKey: ["track", input.contentId] });
+      if (input.type === "upsert-cue" || input.type === "delete-cue")
+        void queryClient.invalidateQueries({ queryKey: ["track", input.contentId] });
     },
-    onError: (error) => setToast({ tone: "error", message: errorMessage(error) }),
+    onError: (error) => {
+      if (canvasQueuedFingerprintRef.current)
+        setCanvasFailedFingerprint(canvasFingerprintRef.current);
+      setToast({ tone: "error", message: errorMessage(error) });
+      refreshAll();
+    },
+    onIdle: () => {
+      localWritePendingRef.current = false;
+    },
   });
-
-  const processes = bootstrapQuery.data?.library.processes;
-  const rekordboxRunning = Boolean(
-    (processes?.rekordboxPid ?? 0) > 0 || (processes?.rekordboxAgentPid ?? 0) > 0,
-  );
-  const writeEnabled = bootstrapQuery.data?.library.writeEnabled === true;
-  const writeReady = writeEnabled && !rekordboxRunning;
-  const canWrite = writeReady && !mutation.isPending;
-
-  const refreshAll = useCallback(() => {
-    void Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
-      queryClient.invalidateQueries({ queryKey: ["playlists"] }),
-      queryClient.invalidateQueries({ queryKey: ["tracks"] }),
-      queryClient.invalidateQueries({ queryKey: ["canvas-tracks"] }),
-      queryClient.invalidateQueries({ queryKey: ["track"] }),
-    ]);
-  }, [queryClient]);
 
   const assertWritable = useCallback(() => {
     if (!writeReady) {
@@ -269,15 +319,20 @@ export function App() {
           : "Library writes are disabled; restart this workbench with --write.",
       );
     }
-    if (mutation.isPending) throw new Error("Another protected library write is still running.");
-  }, [mutation.isPending, rekordboxRunning, writeReady]);
+  }, [rekordboxRunning, writeReady]);
 
   const applyMutationAsync = useCallback(
     async (input: LibraryMutation) => {
       assertWritable();
-      return mutation.mutateAsync(input);
+      optimisticallyApplyLibraryMutation(queryClient, input);
+      if (input.type === "create-playlist" || input.type === "rename-playlist")
+        setPlaylistDialog(null);
+      if (input.type === "delete-playlist") setDeleteDialogPlaylist(undefined);
+      if (input.type === "upsert-cue") setCueDialog(null);
+      const commit = await writes.enqueue(input);
+      return commit.receipt;
     },
-    [assertWritable, mutation],
+    [assertWritable, queryClient, writes],
   );
 
   const applyMutation = useCallback(
@@ -289,34 +344,36 @@ export function App() {
 
   const openCueDialog = useCallback(
     (next: NonNullable<CueDialogState>) => {
-      mutation.reset();
+      writes.reset();
       setCueDialog(next);
     },
-    [mutation],
+    [writes],
   );
 
   const dismissToast = useCallback(() => setToast(null), []);
 
   const selectTrack = useCallback(
-    (track: TrackSummary, autoplay = false) => {
-      const sameTrack = selectedTrackIdRef.current === track.id;
+    (track: TrackSummary, activate = false) => {
       selectedTrackIdRef.current = track.id;
       updateUrl({ trackId: track.id });
-      setInspectorOpen(true);
+      if (!activate) return;
+      const sameTrack = playerTrackId === track.id;
+      setPlayerTrackId(track.id);
+      setPlayerSummary(track);
       if (!sameTrack) playheadSecondsRef.current = 0;
-      if (autoplay && sameTrack) {
+      if (sameTrack) {
         setAutoPlayTrackId(undefined);
         void playerRef.current?.play();
-      } else if (autoplay) {
+      } else {
         setAutoPlayTrackId(track.id);
       }
     },
-    [updateUrl],
+    [playerTrackId, updateUrl],
   );
 
   const quickCue = useCallback(
     (kind: "memory" | "hot", startSeconds: number, slot?: HotCueSlot) => {
-      if (!urlState.trackId) {
+      if (!playerTrackId) {
         setToast({ tone: "error", message: "Select a track before setting a cue." });
         return;
       }
@@ -329,9 +386,9 @@ export function App() {
       };
       const cue: TrackCueInput =
         kind === "hot" && slot ? { ...common, kind: "hot", slot } : { ...common, kind: "memory" };
-      applyMutation({ type: "upsert-cue", contentId: urlState.trackId, cue });
+      applyMutation({ type: "upsert-cue", contentId: playerTrackId, cue });
     },
-    [applyMutation, urlState.trackId],
+    [applyMutation, playerTrackId],
   );
 
   useEffect(() => setSearchInput(urlState.query), [urlState.query]);
@@ -345,14 +402,16 @@ export function App() {
   }, [searchInput, updateUrl, urlState.query]);
 
   useEffect(() => setOffset(0), [urlState.filter, urlState.playlistId, urlState.query]);
-  useEffect(() => setInspectorOpen(Boolean(urlState.trackId)), [urlState.trackId]);
   useEffect(() => {
     selectedTrackIdRef.current = urlState.trackId;
   }, [urlState.trackId]);
 
   useEffect(
     () =>
-      subscribeLibraryEvents(() => {
+      subscribeLibraryEvents((event) => {
+        if (event.type !== "external-change") return;
+        if (localWritePendingRef.current) return;
+        if (Date.now() < suppressExternalUntilRef.current) return;
         refreshAll();
       }),
     [refreshAll],
@@ -364,6 +423,25 @@ export function App() {
       ? `music-library:canvas:v2:${dbPath}:${canvasPlaylist.id}`
       : undefined;
   }, [bootstrapQuery.data?.library.dbPath, canvasPlaylist]);
+
+  const canvasContentIds = useMemo(() => {
+    const byId = new Map(canvasState.nodes.map((node) => [node.id, node]));
+    return deriveConnectedOrder(canvasState.nodes, canvasState.connections).flatMap((nodeId) => {
+      const node = byId.get(nodeId);
+      return node ? [node.track.id] : [];
+    });
+  }, [canvasState.connections, canvasState.nodes]);
+  const persistedCanvasContentIds = useMemo(
+    () => canvasTracksQuery.data?.items.map((track) => track.id) ?? [],
+    [canvasTracksQuery.data?.items],
+  );
+  const canvasFingerprint = JSON.stringify(canvasContentIds);
+  const canvasDirty = Boolean(
+    canvasStorageKey &&
+    canvasHydratedKeyRef.current === canvasStorageKey &&
+    canvasFingerprint !== JSON.stringify(persistedCanvasContentIds),
+  );
+  canvasFingerprintRef.current = canvasFingerprint;
 
   useEffect(() => {
     const playlistTracks = canvasTracksQuery.data?.items;
@@ -379,7 +457,6 @@ export function App() {
     const stored = readCanvasState(canvasStorageKey);
     setCanvasState(mergeCanvasState(playlistTracks, stored));
     setCanvasExpectedMembershipIds(playlistMembershipSnapshot(playlistTracks));
-    setCanvasDirty(false);
     canvasHydratedKeyRef.current = canvasStorageKey;
   }, [canvasDirty, canvasPlaylist?.id, canvasStorageKey, canvasTracksQuery.data?.items]);
 
@@ -394,11 +471,10 @@ export function App() {
   useEffect(() => {
     if (!pendingCanvasTrack || viewMode !== "canvas" || !canvasTracksQuery.data) return;
     setCanvasState((current) => addCandidateNode(current, pendingCanvasTrack));
-    setCanvasDirty(true);
     setPendingCanvasTrack(undefined);
   }, [canvasTracksQuery.data, pendingCanvasTrack, viewMode]);
 
-  const playerTrack = detailQuery.data ?? selectedSummary;
+  const playerTrack = playerDetailQuery.data ?? playerSummary;
   const playerIndex = tracks.findIndex((track) => track.id === playerTrack?.id);
   const previousTrack = playerIndex > 0 ? tracks[playerIndex - 1] : undefined;
   const nextTrack = playerIndex >= 0 ? tracks[playerIndex + 1] : undefined;
@@ -418,7 +494,8 @@ export function App() {
         canvasHydratedKeyRef.current = undefined;
         setCanvasState({ nodes: [], connections: [] });
         setCanvasExpectedMembershipIds([]);
-        setCanvasDirty(false);
+        setCanvasFailedFingerprint(undefined);
+        canvasQueuedFingerprintRef.current = undefined;
         setSelectedCanvasNodeId(undefined);
         setPendingCanvasTrack(undefined);
       }
@@ -536,12 +613,6 @@ export function App() {
     viewMode === "canvas"
       ? (canvasPlaylist?.name ?? "Set canvas")
       : (selectedPlaylist?.name ?? filterLabels[urlState.filter] ?? "All tracks");
-  const selectedDescription = selectedPlaylist
-    ? selectedPlaylist.type === "smart"
-      ? "Smart playlist · managed by Rekordbox rules"
-      : `${compactCount(tracksQuery.data?.count)} tracks in playlist order`
-    : descriptionForFilter(urlState.filter, bootstrapQuery.data?.library.stats);
-
   const addTrackToCanvas = (track: TrackSummary) => {
     const target = canvasPlaylist ?? normalPlaylist;
     if (!target) {
@@ -555,7 +626,8 @@ export function App() {
       canvasHydratedKeyRef.current = undefined;
       setCanvasState({ nodes: [], connections: [] });
       setCanvasExpectedMembershipIds([]);
-      setCanvasDirty(false);
+      setCanvasFailedFingerprint(undefined);
+      canvasQueuedFingerprintRef.current = undefined;
       setSelectedCanvasNodeId(undefined);
     }
     setCanvasPlaylistId(target.id);
@@ -563,22 +635,45 @@ export function App() {
     setViewMode("canvas");
   };
 
-  const syncCanvas = () => {
+  const openPlaylistEditor = useCallback((playlist: PlaylistItem) => {
+    if (playlist.type !== "playlist") return;
+    setEditingPlaylistId(playlist.id);
+    setEditorOpen(true);
+  }, []);
+
+  const syncCanvas = useCallback(() => {
     if (!canvasPlaylist || !canvasTracksQuery.data) return;
-    const byId = new Map(canvasState.nodes.map((node) => [node.id, node]));
-    const contentIds = deriveConnectedOrder(canvasState.nodes, canvasState.connections).flatMap(
-      (nodeId) => {
-        const node = byId.get(nodeId);
-        return node ? [node.track.id] : [];
-      },
-    );
+    canvasQueuedFingerprintRef.current = canvasFingerprint;
+    setCanvasFailedFingerprint(undefined);
     applyMutation({
       type: "replace-playlist-tracks",
       playlistId: canvasPlaylist.id,
-      contentIds,
+      contentIds: canvasContentIds,
       expectedMembershipIds: canvasExpectedMembershipIds,
     });
-  };
+  }, [
+    applyMutation,
+    canvasContentIds,
+    canvasExpectedMembershipIds,
+    canvasFingerprint,
+    canvasPlaylist,
+    canvasTracksQuery.data,
+  ]);
+
+  useEffect(() => {
+    if (!canvasDirty) {
+      canvasQueuedFingerprintRef.current = undefined;
+      return;
+    }
+    if (
+      !canWrite ||
+      canvasFailedFingerprint === canvasFingerprint ||
+      canvasQueuedFingerprintRef.current === canvasFingerprint
+    )
+      return;
+    const timeout = window.setTimeout(syncCanvas, 220);
+    return () => window.clearTimeout(timeout);
+  }, [canWrite, canvasDirty, canvasFailedFingerprint, canvasFingerprint, syncCanvas]);
 
   const contextEntries = useMemo<ContextMenuEntry[]>(() => {
     const target = contextMenu.value;
@@ -599,6 +694,11 @@ export function App() {
         },
         ...(playlist.type === "playlist"
           ? [
+              {
+                id: "edit-playlist",
+                label: "Edit in split view",
+                icon: <PanelRightOpen size={14} />,
+              } satisfies ContextMenuEntry,
               {
                 id: "open-canvas",
                 label: "Build on set canvas",
@@ -653,6 +753,16 @@ export function App() {
         icon: <Workflow size={14} />,
         disabled: target.kind === "canvas-node" || (!canvasPlaylist && !normalPlaylist),
       },
+      ...(editingPlaylist
+        ? [
+            {
+              id: "add-editing-playlist",
+              label: `Add to ${editingPlaylist.name}`,
+              icon: <Plus size={14} />,
+              disabled: !canWrite,
+            } satisfies ContextMenuEntry,
+          ]
+        : []),
       ...(normalPlaylist
         ? [
             inSelectedPlaylist
@@ -711,6 +821,7 @@ export function App() {
     canvasPlaylist,
     canvasState.nodes,
     contextMenu.value,
+    editingPlaylist,
     normalPlaylist,
     urlState.playlistId,
   ]);
@@ -729,6 +840,8 @@ export function App() {
       } else if (id === "open-canvas" && playlist.type === "playlist") {
         updateUrl({ playlistId: playlist.id, filter: "all", trackId: null });
         openCanvas(playlist);
+      } else if (id === "edit-playlist" && playlist.type === "playlist") {
+        openPlaylistEditor(playlist);
       } else if (id === "create-child") {
         setPlaylistDialog({
           mode: "create",
@@ -752,6 +865,8 @@ export function App() {
     if (!track) return;
     if (id === "play-track") selectTrack(track, true);
     if (id === "add-canvas") addTrackToCanvas(track);
+    if (id === "add-editing-playlist" && editingPlaylist)
+      applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId: track.id });
     if (id === "add-selected-playlist" && normalPlaylist)
       applyMutation({ type: "add-track", playlistId: normalPlaylist.id, contentId: track.id });
     if (id === "remove-selected-playlist" && normalPlaylist && track.playlistMembershipId)
@@ -796,7 +911,6 @@ export function App() {
     }
     if (id === "remove-canvas-node" && node) {
       setCanvasState((current) => removeCanvasNode(current, node.id));
-      setCanvasDirty(true);
     }
     if (id === "copy-path" && track.path)
       void navigator.clipboard
@@ -826,6 +940,7 @@ export function App() {
         onCreatePlaylist={(defaultParentId) =>
           setPlaylistDialog({ mode: "create", defaultParentId })
         }
+        onEditPlaylist={openPlaylistEditor}
         onPlaylistContextMenu={(point, playlist, returnFocus, folder) =>
           contextMenu.openAt(
             point,
@@ -839,16 +954,12 @@ export function App() {
         }
       />
 
-      {sidebarOpen || inspectorOpen ? (
+      {sidebarOpen ? (
         <button
           className="mobile-scrim"
           type="button"
           onClick={() => {
             setSidebarOpen(false);
-            if (inspectorOpen) {
-              setInspectorOpen(false);
-              updateUrl({ trackId: null });
-            }
           }}
           aria-label="Close open panel"
         />
@@ -875,23 +986,31 @@ export function App() {
             </nav>
           </div>
           <div className="topbar-actions">
-            {bootstrapQuery.isError ? (
-              <span className="topbar-health is-error">
-                <CircleAlert size={13} /> Offline
-              </span>
-            ) : rekordboxRunning ? (
-              <span className="topbar-health is-warning">
-                <Activity size={13} /> Read only · Rekordbox open
-              </span>
-            ) : writeEnabled ? (
-              <span className="topbar-health is-ready">
-                <ShieldCheck size={13} /> Safe writes ready
-              </span>
-            ) : (
-              <span className="topbar-health">
-                <Database size={13} /> Read only
-              </span>
-            )}
+            <button
+              className={`split-editor-button ${editorOpen ? "is-active" : ""}`}
+              type="button"
+              onClick={() => {
+                if (editorOpen) {
+                  setEditorOpen(false);
+                  return;
+                }
+                const target =
+                  editingPlaylist ??
+                  normalPlaylist ??
+                  playlists.find((item) => item.type === "playlist");
+                if (target) openPlaylistEditor(target);
+                else
+                  setToast({
+                    tone: "error",
+                    message: "Create a playlist before opening the editor.",
+                  });
+              }}
+              aria-expanded={editorOpen}
+              title={editorOpen ? "Collapse edit playlist" : "Open edit playlist"}
+            >
+              <PanelRightOpen size={14} />
+              <span>{editorOpen && editingPlaylist ? editingPlaylist.name : "Edit playlist"}</span>
+            </button>
             <button
               className="icon-button"
               type="button"
@@ -917,6 +1036,43 @@ export function App() {
           </div>
         </header>
 
+        <div className="player-dock">
+          <PlayerPanel
+            ref={playerRef}
+            track={playerTrack}
+            cues={playerDetailQuery.data?.cues ?? []}
+            canEditCues={canWrite}
+            cueMutationPending={false}
+            previousDisabled={!previousTrack}
+            nextDisabled={!nextTrack}
+            onPrevious={() => previousTrack && selectTrack(previousTrack, true)}
+            onNext={() => nextTrack && selectTrack(nextTrack, true)}
+            onReady={() => {
+              if (autoPlayTrackId && autoPlayTrackId === playerTrack?.id) {
+                setAutoPlayTrackId(undefined);
+                void playerRef.current?.play();
+              }
+            }}
+            onTimeChange={(seconds) => {
+              playheadSecondsRef.current = seconds;
+            }}
+            onAddMemoryCue={(seconds) => quickCue("memory", seconds)}
+            onAddHotCue={(slot, seconds) => quickCue("hot", seconds, slot)}
+            onEditCue={(cue) =>
+              openCueDialog({
+                contentId: cue.contentId,
+                trackTitle: playerTrack?.title ?? "Selected track",
+                durationSeconds: playerTrack?.durationSeconds ?? null,
+                cue,
+              })
+            }
+            onDeleteCue={(cue) =>
+              applyMutation({ type: "delete-cue", contentId: cue.contentId, cueId: cue.id })
+            }
+            onError={(error) => setToast({ tone: "error", message: error.message })}
+          />
+        </div>
+
         {bootstrapQuery.isError ? (
           <div className="connection-banner is-error" role="alert">
             <CircleAlert size={16} />
@@ -930,393 +1086,205 @@ export function App() {
         ) : rekordboxRunning ? (
           <div className="connection-banner is-warning">
             <Activity size={15} />
-            <span>
-              Browsing is available. Quit Rekordbox and rekordboxAgent for protected writes.
-            </span>
+            <span>Browsing is available. Quit Rekordbox and rekordboxAgent to enable writes.</span>
           </div>
         ) : null}
 
-        <section className="collection-toolbar">
-          <div className="collection-title">
-            <span className="collection-icon" aria-hidden="true">
-              {viewMode === "canvas" ? (
-                <Workflow size={18} />
-              ) : urlState.filter === "attention" ? (
-                <AudioLines size={18} />
-              ) : (
-                <Library size={18} />
-              )}
-            </span>
-            <div>
-              <h1>{selectedTitle}</h1>
-              <p>
-                {viewMode === "canvas"
-                  ? "Visual set sequencing · connect tracks left to right"
-                  : selectedDescription}
-              </p>
-            </div>
-          </div>
-          <div className="collection-actions">
-            {normalPlaylist ? (
-              <div className="view-switcher" role="group" aria-label="Playlist view">
-                <button
-                  type="button"
-                  className={viewMode === "table" ? "is-active" : ""}
-                  onClick={() => setViewMode("table")}
-                  aria-pressed={viewMode === "table"}
-                >
-                  <Table2 size={14} /> Tracks
-                </button>
-                <button
-                  type="button"
-                  className={viewMode === "canvas" ? "is-active" : ""}
-                  onClick={() => openCanvas(normalPlaylist)}
-                  aria-pressed={viewMode === "canvas"}
-                >
-                  <Workflow size={14} /> Canvas
-                </button>
-              </div>
-            ) : null}
-            {selectedPlaylist && selectedPlaylist.type !== "smart" ? (
+        <div className={`workspace-split ${editorOpen && editingPlaylist ? "has-editor" : ""}`}>
+          <section className="browser-workspace" aria-label={`Browsing ${selectedTitle}`}>
+            {viewMode === "table" ? (
               <>
-                <button
-                  className="secondary-button action-label-button"
-                  type="button"
-                  disabled={!canWrite}
-                  onClick={() => setPlaylistDialog({ mode: "rename", playlist: selectedPlaylist })}
-                >
-                  <Pencil size={14} /> <span>Rename</span>
-                </button>
-                <button
-                  className="secondary-button action-label-button danger-hover"
-                  type="button"
-                  disabled={!canWrite}
-                  onClick={() =>
-                    setDeleteDialogPlaylist({
-                      ...selectedPlaylist,
-                      expectedPlaylistIds: playlistSubtreeIds(playlists, selectedPlaylist.id),
-                    })
+                <section className="search-toolbar" aria-label="Track search and filters">
+                  <label className="track-search">
+                    <Search size={15} aria-hidden="true" />
+                    <input
+                      ref={searchRef}
+                      value={searchInput}
+                      onChange={(event) => setSearchInput(event.target.value)}
+                      type="search"
+                      placeholder="Search title, artist, album, genre…"
+                      aria-label="Search tracks"
+                    />
+                    {searchInput ? (
+                      <button
+                        type="button"
+                        onClick={() => setSearchInput("")}
+                        aria-label="Clear track search"
+                      >
+                        <X size={14} />
+                      </button>
+                    ) : (
+                      <kbd>/</kbd>
+                    )}
+                  </label>
+                  <label className="filter-select">
+                    <ListFilter size={14} aria-hidden="true" />
+                    <span className="sr-only">Track filter</span>
+                    <select
+                      value={urlState.filter}
+                      onChange={(event) => updateUrl({ filter: event.target.value, trackId: null })}
+                    >
+                      <option value="all">All tracks</option>
+                      <option value="analyzed">Analyzed</option>
+                      <option value="attention">Needs attention</option>
+                    </select>
+                  </label>
+                </section>
+
+                <TrackTable
+                  items={tracks}
+                  count={tracksQuery.data?.count ?? 0}
+                  limit={tracksQuery.data?.limit ?? PAGE_SIZE}
+                  offset={tracksQuery.data?.offset ?? offset}
+                  loading={tracksQuery.isLoading}
+                  fetching={tracksQuery.isFetching}
+                  error={tracksQuery.isError ? errorMessage(tracksQuery.error) : undefined}
+                  selectedTrackId={urlState.trackId}
+                  ordered={Boolean(normalPlaylist)}
+                  canWrite={
+                    canWrite && (!sort || (sort.field === "position" && sort.direction === "asc"))
                   }
-                >
-                  <Trash2 size={14} /> <span>Delete</span>
-                </button>
-              </>
-            ) : null}
-            {viewMode === "canvas" && canvasPlaylist ? (
-              <button
-                className="primary-button action-label-button"
-                type="button"
-                disabled={!canWrite || !canvasDirty || !canvasTracksQuery.data}
-                onClick={syncCanvas}
-              >
-                <ShieldCheck size={14} /> <span>Apply order</span>
-              </button>
-            ) : (
-              <button
-                className="primary-button action-label-button"
-                type="button"
-                disabled={!canWrite}
-                onClick={() => setPlaylistDialog({ mode: "create" })}
-              >
-                <Plus size={14} /> <span>New playlist</span>
-              </button>
-            )}
-            <button
-              className="icon-button more-button"
-              type="button"
-              aria-label="More actions"
-              disabled
-            >
-              <MoreHorizontal size={16} />
-            </button>
-          </div>
-        </section>
-
-        {viewMode === "table" ? (
-          <>
-            <section className="search-toolbar" aria-label="Track search and filters">
-              <label className="track-search">
-                <Search size={15} aria-hidden="true" />
-                <input
-                  ref={searchRef}
-                  value={searchInput}
-                  onChange={(event) => setSearchInput(event.target.value)}
-                  type="search"
-                  placeholder="Search title, artist, album, genre…"
-                  aria-label="Search tracks"
+                  sort={sort}
+                  onSort={(nextSort) => {
+                    setSort(nextSort);
+                    setOffset(0);
+                  }}
+                  onSelect={(track) => selectTrack(track)}
+                  onActivate={(track) => selectTrack(track, true)}
+                  onContextMenu={(point, track, returnFocus) =>
+                    contextMenu.openAt(point, { kind: "track", track }, returnFocus)
+                  }
+                  onPage={setOffset}
+                  onRetry={() => void tracksQuery.refetch()}
+                  onMove={(track, trackNumber) => {
+                    if (!normalPlaylist || !track.playlistMembershipId) return;
+                    applyMutation({
+                      type: "move-track",
+                      playlistId: normalPlaylist.id,
+                      membershipId: track.playlistMembershipId,
+                      trackNumber,
+                    });
+                  }}
                 />
-                {searchInput ? (
-                  <button
-                    type="button"
-                    onClick={() => setSearchInput("")}
-                    aria-label="Clear track search"
-                  >
-                    <X size={14} />
-                  </button>
+              </>
+            ) : canvasPlaylist ? (
+              <div className="canvas-workspace">
+                {canvasTracksQuery.isError ? (
+                  <div className="table-message">
+                    <CircleAlert size={20} />
+                    <strong>Couldn’t load the playlist canvas</strong>
+                    <span>{errorMessage(canvasTracksQuery.error)}</span>
+                  </div>
                 ) : (
-                  <kbd>/</kbd>
+                  <SetCanvas
+                    nodes={canvasState.nodes}
+                    connections={canvasState.connections}
+                    selectedNodeId={selectedCanvasNodeId}
+                    canWrite={canWrite}
+                    onSelectNode={(nodeId) => {
+                      setSelectedCanvasNodeId(nodeId ?? undefined);
+                      const node = canvasState.nodes.find((candidate) => candidate.id === nodeId);
+                      if (node) selectTrack(node.track);
+                    }}
+                    onNodesChange={(changes, options) => {
+                      if (!options.commit) return;
+                      setCanvasState((current) => ({
+                        ...current,
+                        nodes: current.nodes.map((node) => {
+                          const change = changes.find((candidate) => candidate.nodeId === node.id);
+                          return change ? { ...node, position: change.position } : node;
+                        }),
+                      }));
+                    }}
+                    onConnect={(intent) => {
+                      setCanvasState((current) => ({
+                        ...current,
+                        connections: [
+                          ...current.connections.filter(
+                            (connection) => !intent.replaceConnectionIds.includes(connection.id),
+                          ),
+                          {
+                            id: browserId("connection"),
+                            fromNodeId: intent.fromNodeId,
+                            toNodeId: intent.toNodeId,
+                          },
+                        ],
+                      }));
+                    }}
+                    onDisconnect={(connectionId) => {
+                      setCanvasState((current) => ({
+                        ...current,
+                        connections: current.connections.filter(
+                          (connection) => connection.id !== connectionId,
+                        ),
+                      }));
+                    }}
+                    onRemoveNode={(nodeId) => {
+                      setCanvasState((current) => removeCanvasNode(current, nodeId));
+                    }}
+                    onDropTrackIds={(trackIds, position) => {
+                      const sources = [
+                        ...tracks,
+                        ...(canvasTracksQuery.data?.items ?? []),
+                        ...(detailQuery.data ? [detailQuery.data] : []),
+                      ];
+                      setCanvasState((current) =>
+                        trackIds.reduce((next, id, index) => {
+                          const track = sources.find((candidate) => candidate.id === id);
+                          return track
+                            ? addCandidateNode(next, track, {
+                                x: position.x + index * 32,
+                                y: position.y + index * 32,
+                              })
+                            : next;
+                        }, current),
+                      );
+                    }}
+                    onNodeContextMenu={(nodeId, context) =>
+                      contextMenu.openAt(context.client, { kind: "canvas-node", nodeId })
+                    }
+                  />
                 )}
-              </label>
-              <label className="filter-select">
-                <ListFilter size={14} aria-hidden="true" />
-                <span className="sr-only">Track filter</span>
-                <select
-                  value={urlState.filter}
-                  onChange={(event) => updateUrl({ filter: event.target.value, trackId: null })}
-                >
-                  <option value="all">All tracks</option>
-                  <option value="analyzed">Analyzed</option>
-                  <option value="attention">Needs attention</option>
-                </select>
-              </label>
-              {urlState.trackId ? (
-                <button
-                  className="secondary-button inspector-mobile-button"
-                  type="button"
-                  onClick={() => setInspectorOpen(true)}
-                  aria-expanded={inspectorOpen}
-                >
-                  <PanelRightOpen size={14} /> Details
-                </button>
-              ) : null}
-            </section>
-
-            <TrackTable
-              items={tracks}
-              count={tracksQuery.data?.count ?? 0}
-              limit={tracksQuery.data?.limit ?? PAGE_SIZE}
-              offset={tracksQuery.data?.offset ?? offset}
-              loading={tracksQuery.isLoading}
-              fetching={tracksQuery.isFetching}
-              error={tracksQuery.isError ? errorMessage(tracksQuery.error) : undefined}
-              selectedTrackId={urlState.trackId}
-              ordered={Boolean(normalPlaylist)}
+              </div>
+            ) : (
+              <div className="table-message">
+                <Workflow size={22} />
+                <strong>Open a normal playlist</strong>
+                <span>The set canvas maps its connected track chain back to playlist order.</span>
+              </div>
+            )}
+          </section>
+          {editorOpen && editingPlaylist ? (
+            <PlaylistEditor
+              playlist={editingPlaylist}
+              playlists={playlists}
               canWrite={canWrite}
-              onSelect={(track) => selectTrack(track)}
-              onActivate={(track) => selectTrack(track, true)}
-              onContextMenu={(point, track, returnFocus) =>
-                contextMenu.openAt(point, { kind: "track", track }, returnFocus)
+              selectedTrackId={urlState.trackId}
+              onClose={() => setEditorOpen(false)}
+              onSelectPlaylist={(id) => setEditingPlaylistId(id)}
+              onSelectTrack={selectTrack}
+              onAddTrack={(contentId) =>
+                applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId })
               }
-              onPage={setOffset}
-              onRetry={() => void tracksQuery.refetch()}
-              onMove={(track, trackNumber) => {
-                if (!normalPlaylist || !track.playlistMembershipId) return;
+              onRemoveTrack={(membershipId) =>
+                applyMutation({
+                  type: "remove-track",
+                  playlistId: editingPlaylist.id,
+                  membershipId,
+                })
+              }
+              onMoveTrack={(membershipId, trackNumber) =>
                 applyMutation({
                   type: "move-track",
-                  playlistId: normalPlaylist.id,
-                  membershipId: track.playlistMembershipId,
+                  playlistId: editingPlaylist.id,
+                  membershipId,
                   trackNumber,
-                });
-              }}
-            />
-          </>
-        ) : canvasPlaylist ? (
-          <div className="canvas-workspace">
-            {canvasTracksQuery.isError ? (
-              <div className="table-message">
-                <CircleAlert size={20} />
-                <strong>Couldn’t load the playlist canvas</strong>
-                <span>{errorMessage(canvasTracksQuery.error)}</span>
-              </div>
-            ) : (
-              <SetCanvas
-                nodes={canvasState.nodes}
-                connections={canvasState.connections}
-                selectedNodeId={selectedCanvasNodeId}
-                canWrite={!mutation.isPending}
-                onSelectNode={(nodeId) => {
-                  setSelectedCanvasNodeId(nodeId ?? undefined);
-                  const node = canvasState.nodes.find((candidate) => candidate.id === nodeId);
-                  if (node) selectTrack(node.track);
-                }}
-                onNodesChange={(changes, options) => {
-                  if (!options.commit) return;
-                  setCanvasState((current) => ({
-                    ...current,
-                    nodes: current.nodes.map((node) => {
-                      const change = changes.find((candidate) => candidate.nodeId === node.id);
-                      return change ? { ...node, position: change.position } : node;
-                    }),
-                  }));
-                }}
-                onConnect={(intent) => {
-                  setCanvasState((current) => ({
-                    ...current,
-                    connections: [
-                      ...current.connections.filter(
-                        (connection) => !intent.replaceConnectionIds.includes(connection.id),
-                      ),
-                      {
-                        id: browserId("connection"),
-                        fromNodeId: intent.fromNodeId,
-                        toNodeId: intent.toNodeId,
-                      },
-                    ],
-                  }));
-                  setCanvasDirty(true);
-                }}
-                onDisconnect={(connectionId) => {
-                  setCanvasState((current) => ({
-                    ...current,
-                    connections: current.connections.filter(
-                      (connection) => connection.id !== connectionId,
-                    ),
-                  }));
-                  setCanvasDirty(true);
-                }}
-                onRemoveNode={(nodeId) => {
-                  setCanvasState((current) => removeCanvasNode(current, nodeId));
-                  setCanvasDirty(true);
-                }}
-                onDropTrackIds={(trackIds, position) => {
-                  const sources = [
-                    ...tracks,
-                    ...(canvasTracksQuery.data?.items ?? []),
-                    ...(detailQuery.data ? [detailQuery.data] : []),
-                  ];
-                  setCanvasState((current) =>
-                    trackIds.reduce((next, id, index) => {
-                      const track = sources.find((candidate) => candidate.id === id);
-                      return track
-                        ? addCandidateNode(next, track, {
-                            x: position.x + index * 32,
-                            y: position.y + index * 32,
-                          })
-                        : next;
-                    }, current),
-                  );
-                  setCanvasDirty(true);
-                }}
-                onNodeContextMenu={(nodeId, context) =>
-                  contextMenu.openAt(context.client, { kind: "canvas-node", nodeId })
-                }
-              />
-            )}
-          </div>
-        ) : (
-          <div className="table-message">
-            <Workflow size={22} />
-            <strong>Open a normal playlist</strong>
-            <span>The set canvas maps its connected track chain back to playlist order.</span>
-          </div>
-        )}
-
-        <PromptDock
-          playlistName={viewMode === "canvas" ? canvasPlaylist?.name : selectedPlaylist?.name}
-          disabled={!bootstrapQuery.data}
-          disabledReason="Waiting for the local library session"
-          globalShortcutEnabled={!modalOpen}
-          suggestions={[
-            normalPlaylist ? `add current track to ${normalPlaylist.name}` : "open Oldschool",
-            "search tracks for funky house",
-            "set memory cue at playhead",
-            "show set canvas",
-          ]}
-          onSubmit={async (submission) => {
-            const token = bootstrapQuery.data?.csrfToken;
-            if (!token) throw new Error("The local library session is not ready.");
-            const plan = await planLibraryPrompt(token, submission.prompt, {
-              playlistId: urlState.playlistId ?? canvasPlaylist?.id ?? null,
-              trackId: urlState.trackId,
-              playheadSeconds: playheadSecondsRef.current,
-            });
-            for (const action of plan.actions) {
-              if (action.type === "open-playlist") {
-                updateUrl({ playlistId: action.playlistId, filter: "all", trackId: null });
-                setViewMode("table");
-              } else if (action.type === "search-tracks") {
-                setSearchInput(action.query);
-                updateUrl({ query: action.query, playlistId: null, filter: "all", trackId: null });
-                setViewMode("table");
-              } else if (action.type === "show-canvas") {
-                const target = normalPlaylist ?? canvasPlaylist;
-                if (!target)
-                  throw new Error("Open a normal playlist before showing its set canvas.");
-                openCanvas(target);
-              } else {
-                await applyMutationAsync(action.mutation);
+                })
               }
-            }
-            return {
-              summary: plan.summary,
-              details: plan.actions.map((action: PromptAction) => action.label),
-            };
-          }}
-        />
+            />
+          ) : null}
+        </div>
       </main>
-
-      <TrackInspector
-        open={inspectorOpen}
-        summary={selectedSummary}
-        detail={detailQuery.data}
-        playlists={playlists}
-        selectedPlaylistId={urlState.playlistId}
-        loading={detailQuery.isLoading}
-        error={detailQuery.isError ? errorMessage(detailQuery.error) : undefined}
-        canWrite={canWrite}
-        mutationPending={mutation.isPending}
-        onClose={() => {
-          setInspectorOpen(false);
-          updateUrl({ trackId: null });
-        }}
-        onRetry={() => void detailQuery.refetch()}
-        onAddTrack={(playlistId, contentId) =>
-          applyMutation({ type: "add-track", playlistId, contentId })
-        }
-        onRemoveTrack={(playlistId, membershipId) =>
-          applyMutation({ type: "remove-track", playlistId, membershipId })
-        }
-        onEditCue={(cue) =>
-          openCueDialog({
-            contentId: cue.contentId,
-            trackTitle: detailQuery.data?.title ?? selectedSummary?.title ?? "Selected track",
-            durationSeconds:
-              detailQuery.data?.durationSeconds ?? selectedSummary?.durationSeconds ?? null,
-            cue,
-          })
-        }
-        onDeleteCue={(cue) =>
-          applyMutation({ type: "delete-cue", contentId: cue.contentId, cueId: cue.id })
-        }
-        onNotice={(message) => setToast({ message, tone: "success" })}
-      />
-
-      <div className="player-dock">
-        <PlayerPanel
-          ref={playerRef}
-          track={playerTrack}
-          cues={detailQuery.data?.cues ?? []}
-          canEditCues={canWrite}
-          cueMutationPending={mutation.isPending}
-          previousDisabled={!previousTrack}
-          nextDisabled={!nextTrack}
-          onPrevious={() => previousTrack && selectTrack(previousTrack, true)}
-          onNext={() => nextTrack && selectTrack(nextTrack, true)}
-          onReady={() => {
-            if (autoPlayTrackId && autoPlayTrackId === playerTrack?.id) {
-              setAutoPlayTrackId(undefined);
-              void playerRef.current?.play();
-            }
-          }}
-          onTimeChange={(seconds) => {
-            playheadSecondsRef.current = seconds;
-          }}
-          onAddMemoryCue={(seconds) => quickCue("memory", seconds)}
-          onAddHotCue={(slot, seconds) => quickCue("hot", seconds, slot)}
-          onEditCue={(cue) =>
-            openCueDialog({
-              contentId: cue.contentId,
-              trackTitle: playerTrack?.title ?? "Selected track",
-              durationSeconds: playerTrack?.durationSeconds ?? null,
-              cue,
-            })
-          }
-          onDeleteCue={(cue) =>
-            applyMutation({ type: "delete-cue", contentId: cue.contentId, cueId: cue.id })
-          }
-          onError={(error) => setToast({ tone: "error", message: error.message })}
-        />
-      </div>
 
       <PlaylistDialog
         open={playlistDialog !== null}
@@ -1326,13 +1294,11 @@ export function App() {
         defaultParentId={
           playlistDialog?.mode === "create" ? playlistDialog.defaultParentId : undefined
         }
-        pending={mutation.isPending}
-        error={mutation.isError ? errorMessage(mutation.error) : undefined}
+        pending={false}
+        error={writes.isError ? errorMessage(writes.error) : undefined}
         onClose={() => {
-          if (!mutation.isPending) {
-            mutation.reset();
-            setPlaylistDialog(null);
-          }
+          writes.reset();
+          setPlaylistDialog(null);
         }}
         onSubmit={({ name, parentId, kind }) => {
           if (playlistDialog?.mode === "rename") {
@@ -1350,13 +1316,11 @@ export function App() {
       <DeletePlaylistDialog
         open={Boolean(deleteDialogPlaylist)}
         playlist={deleteDialogPlaylist}
-        pending={mutation.isPending}
-        error={mutation.isError ? errorMessage(mutation.error) : undefined}
+        pending={false}
+        error={writes.isError ? errorMessage(writes.error) : undefined}
         onClose={() => {
-          if (!mutation.isPending) {
-            mutation.reset();
-            setDeleteDialogPlaylist(undefined);
-          }
+          writes.reset();
+          setDeleteDialogPlaylist(undefined);
         }}
         onConfirm={() => {
           if (deleteDialogPlaylist)
@@ -1374,11 +1338,10 @@ export function App() {
         initial={cueDialog && "initial" in cueDialog ? cueDialog.initial : undefined}
         targetTitle={cueDialog?.trackTitle}
         durationSeconds={cueDialog?.durationSeconds}
-        pending={mutation.isPending}
-        error={mutation.isError ? errorMessage(mutation.error) : undefined}
+        pending={false}
+        error={writes.isError ? errorMessage(writes.error) : undefined}
         onClose={() => {
-          if (mutation.isPending) return;
-          mutation.reset();
+          writes.reset();
           setCueDialog(null);
         }}
         onSubmit={(cue) => {
@@ -1441,12 +1404,6 @@ export function App() {
       />
 
       {toast ? <Toast message={toast.message} tone={toast.tone} onDismiss={dismissToast} /> : null}
-
-      {mutation.isPending ? (
-        <div className="mutation-indicator" role="status">
-          <LoaderCircle size={14} className="spin" /> Backing up and verifying library…
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1469,29 +1426,145 @@ function playlistSubtreeIds(playlists: readonly PlaylistItem[], rootId: string):
   return [...visited].sort();
 }
 
-function descriptionForFilter(
-  filter: string,
-  stats:
-    | {
-        tracks: number;
-        analyzed: number;
-        missingAnalysis: number;
-        missingBpm: number;
-        missingKey: number;
-      }
-    | undefined,
-): string {
-  if (!stats) return "Reading the local Rekordbox collection";
-  if (filter === "analyzed")
-    return `${compactCount(stats.analyzed)} tracks with Rekordbox analysis`;
-  if (filter === "attention")
-    return `${compactCount(stats.missingAnalysis)} missing analysis · ${compactCount(stats.missingBpm)} missing BPM · ${compactCount(stats.missingKey)} missing key`;
-  return `${compactCount(stats.tracks)} tracks in the local Rekordbox collection`;
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof LibraryApiError || error instanceof Error) return error.message;
   return String(error);
+}
+
+function optimisticallyApplyLibraryMutation(
+  queryClient: QueryClient,
+  mutation: LibraryMutation,
+): void {
+  if (mutation.type === "rename-playlist") {
+    queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
+      items?.map((playlist) =>
+        playlist.id === mutation.playlistId
+          ? { ...playlist, name: mutation.name.trim() }
+          : playlist,
+      ),
+    );
+    return;
+  }
+  if (mutation.type === "delete-playlist") {
+    const deleted = new Set(mutation.expectedPlaylistIds);
+    queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
+      items?.filter((playlist) => !deleted.has(playlist.id)),
+    );
+    return;
+  }
+  if (mutation.type === "move-track") {
+    updateOptimisticPlaylistTracks(queryClient, mutation.playlistId, (response) =>
+      moveTrackInResponse(response, mutation.membershipId, mutation.trackNumber),
+    );
+    return;
+  }
+  if (mutation.type === "remove-track") {
+    updateOptimisticPlaylistTracks(queryClient, mutation.playlistId, (response) =>
+      removeTrackFromResponse(response, mutation.membershipId),
+    );
+    updateOptimisticPlaylistCount(queryClient, mutation.playlistId, -1);
+    return;
+  }
+  if (mutation.type === "add-track")
+    updateOptimisticPlaylistCount(queryClient, mutation.playlistId, 1);
+}
+
+function updateOptimisticPlaylistTracks(
+  queryClient: QueryClient,
+  playlistId: string,
+  update: (response: TracksResponse) => TracksResponse,
+): void {
+  queryClient.setQueriesData<TracksResponse>(
+    {
+      predicate: (query) => {
+        if (query.queryKey[0] !== "tracks") return false;
+        const options = query.queryKey[1];
+        return (
+          typeof options === "object" &&
+          options !== null &&
+          "playlistId" in options &&
+          options.playlistId === playlistId
+        );
+      },
+    },
+    (response) => (response ? update(response) : response),
+  );
+  queryClient.setQueryData<TracksResponse>(["canvas-tracks", playlistId], (response) =>
+    response ? update(response) : response,
+  );
+  queryClient.setQueryData<TracksResponse>(["editor-tracks", playlistId], (response) =>
+    response ? update(response) : response,
+  );
+}
+
+function updateOptimisticPlaylistCount(
+  queryClient: QueryClient,
+  playlistId: string,
+  delta: number,
+): void {
+  queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
+    items?.map((playlist) =>
+      playlist.id === playlistId && playlist.trackCount !== null
+        ? { ...playlist, trackCount: Math.max(0, playlist.trackCount + delta) }
+        : playlist,
+    ),
+  );
+}
+
+function moveTrackInResponse(
+  response: TracksResponse,
+  membershipId: string,
+  targetTrackNumber: number,
+): TracksResponse {
+  const moving = response.items.find((track) => track.playlistMembershipId === membershipId);
+  const currentTrackNumber = moving?.trackNumber;
+  if (!moving || currentTrackNumber === undefined || currentTrackNumber === targetTrackNumber)
+    return response;
+  const items = response.items
+    .map((track) => {
+      const trackNumber = track.trackNumber;
+      if (track.playlistMembershipId === membershipId)
+        return { ...track, trackNumber: targetTrackNumber };
+      if (trackNumber === undefined) return track;
+      if (
+        targetTrackNumber < currentTrackNumber &&
+        trackNumber >= targetTrackNumber &&
+        trackNumber < currentTrackNumber
+      )
+        return { ...track, trackNumber: trackNumber + 1 };
+      if (
+        targetTrackNumber > currentTrackNumber &&
+        trackNumber <= targetTrackNumber &&
+        trackNumber > currentTrackNumber
+      )
+        return { ...track, trackNumber: trackNumber - 1 };
+      return track;
+    })
+    .sort(
+      (left, right) =>
+        (left.trackNumber ?? Number.MAX_SAFE_INTEGER) -
+        (right.trackNumber ?? Number.MAX_SAFE_INTEGER),
+    );
+  return { ...response, items };
+}
+
+function removeTrackFromResponse(response: TracksResponse, membershipId: string): TracksResponse {
+  const removed = response.items.find((track) => track.playlistMembershipId === membershipId);
+  if (!removed) return response;
+  const removedTrackNumber = removed.trackNumber;
+  return {
+    ...response,
+    count: Math.max(0, response.count - 1),
+    items: response.items
+      .filter((track) => track.playlistMembershipId !== membershipId)
+      .map((track) =>
+        removedTrackNumber !== undefined &&
+        track.trackNumber !== undefined &&
+        track.trackNumber > removedTrackNumber
+          ? { ...track, trackNumber: track.trackNumber - 1 }
+          : track,
+      ),
+  };
 }
 
 function browserId(prefix: string): string {

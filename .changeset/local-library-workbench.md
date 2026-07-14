@@ -1,13 +1,16 @@
 ---
-"@gakonst/rekordbox-library": patch
+"@gakonst/rekordbox-library": minor
 "@gakonst/music": minor
 "@gakonst/rekordbox": patch
 "@gakonst/tracks": patch
 ---
 
 Add a loopback-only React workbench over the native TypeScript Rekordbox APIs, with library health,
-playlist hierarchy, track search and inspection, audio preview, and explicitly enabled guarded
-playlist mutations.
+playlist hierarchy, sortable track search, a persistent range-streamed RGB waveform player, artwork,
+cue editing, keyboard/context actions, an infinite set canvas, and explicitly enabled guarded
+playlist mutations. Keep interactive edits instant with optimistic updates and short lock-coordinated
+SQLite transactions instead of per-edit backups; retain backups for imports and explicitly approved
+offline bulk workflows.
 
 Package one generated Music skill for both Claude Code and Codex marketplaces, expose the workbench
 through the aggregate Incur CLI, share its database-writer lock, reject commits while either

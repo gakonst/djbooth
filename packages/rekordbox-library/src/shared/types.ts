@@ -55,6 +55,22 @@ export type TrackSummary = {
   trackNumber?: number;
 };
 
+export type TrackSortField =
+  | "position"
+  | "title"
+  | "album"
+  | "genre"
+  | "bpm"
+  | "key"
+  | "plays"
+  | "status"
+  | "duration";
+
+export type TrackSort = {
+  field: TrackSortField;
+  direction: "asc" | "desc";
+};
+
 export type HotCueSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 
 export type TrackCue = {
@@ -107,6 +123,8 @@ export type TrackDetail = TrackSummary & {
 export type TrackWaveform = {
   durationSeconds: number | null;
   peaks: number[];
+  /** Rekordbox RGB frequency colours, one entry per peak when colour analysis is available. */
+  colors?: Array<[number, number, number]>;
   source: "rekordbox" | "placeholder";
 };
 
@@ -150,9 +168,12 @@ export type LibraryMutation =
 export type MutationReceipt = {
   operation: LibraryMutation["type"];
   changedId: string;
-  backupDirectory: string;
-  quickCheck: "ok";
-  foreignKeyViolationCount: 0;
+  /** @deprecated Interactive mutations no longer create per-edit backups. */
+  backupDirectory?: string;
+  /** @deprecated Integrity checks are reserved for bulk workflows, not each interactive edit. */
+  quickCheck?: "ok";
+  /** @deprecated Integrity checks are reserved for bulk workflows, not each interactive edit. */
+  foreignKeyViolationCount?: 0;
   finishedAt: string;
 };
 

@@ -10,6 +10,7 @@ import {
   ListMusic,
   Music2,
   PanelLeftClose,
+  PanelRightOpen,
   Plus,
   Search,
   Sparkles,
@@ -31,6 +32,7 @@ type Props = {
   onSelectPlaylist(id: string | null): void;
   onSelectFilter(filter: string): void;
   onCreatePlaylist(parentId?: string): void;
+  onEditPlaylist?(playlist: PlaylistItem): void;
   onPlaylistContextMenu?(
     point: { x: number; y: number },
     playlist: PlaylistItem,
@@ -64,6 +66,7 @@ export function LibrarySidebar({
   onSelectPlaylist,
   onSelectFilter,
   onCreatePlaylist,
+  onEditPlaylist,
   onPlaylistContextMenu,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -192,6 +195,7 @@ export function LibrarySidebar({
                     onClose();
                   }}
                   onContextMenu={onPlaylistContextMenu}
+                  onEdit={(playlist) => onEditPlaylist?.(playlist)}
                 />
               ))}
             </div>
@@ -225,6 +229,7 @@ function PlaylistTreeNode({
   onToggle,
   onSelect,
   onContextMenu,
+  onEdit,
 }: {
   node: PlaylistNode;
   depth: number;
@@ -239,6 +244,7 @@ function PlaylistTreeNode({
     returnFocus: HTMLElement,
     folder?: { expanded: boolean; toggle(): void },
   ): void;
+  onEdit(playlist: PlaylistItem): void;
 }) {
   const isFolder = node.type === "folder";
   const descendantsMatch = nodeMatches(node, query);
@@ -279,6 +285,7 @@ function PlaylistTreeNode({
           type="button"
           className="playlist-select"
           onClick={() => (isFolder ? onToggle(node.id) : onSelect(node.id))}
+          onDoubleClick={() => !isFolder && node.type === "playlist" && onEdit(node)}
           onContextMenu={(event) => {
             event.preventDefault();
             onContextMenu?.(
@@ -326,6 +333,17 @@ function PlaylistTreeNode({
             </span>
           ) : null}
         </button>
+        {node.type === "playlist" ? (
+          <button
+            className="playlist-edit-button"
+            type="button"
+            onClick={() => onEdit(node)}
+            aria-label={`Edit ${node.name} in split view`}
+            title="Edit in split view"
+          >
+            <PanelRightOpen size={12} />
+          </button>
+        ) : null}
       </div>
       {isFolder && isExpanded && node.children.length ? (
         <div role="group">
@@ -340,6 +358,7 @@ function PlaylistTreeNode({
               onToggle={onToggle}
               onSelect={onSelect}
               onContextMenu={onContextMenu}
+              onEdit={onEdit}
             />
           ))}
         </div>

@@ -26,6 +26,8 @@ import type {
   TrackDetail,
   TrackWaveform,
   TracksResponse,
+  TrackSort,
+  TrackSortField,
 } from "../shared/types.js";
 import {
   LibraryMutationConflictError,
@@ -120,13 +122,13 @@ export type LibraryApi = {
     offset?: number;
     playlistId?: string;
     q?: string;
+    sort?: TrackSort;
   }): TracksResponse;
   mutate(mutation: LibraryMutation): Promise<MutationReceipt>;
 };
 
 export type LibraryServerOptions = {
   api?: LibraryApi;
-  backupRoot?: string;
   dbPath?: string;
   host?: string;
   key?: string;
@@ -460,7 +462,6 @@ export async function startLibraryServer(
   const api =
     options.api ??
     new RekordboxLibraryService({
-      backupRoot: options.backupRoot,
       dbPath: options.dbPath,
       key: options.key,
       writeEnabled: options.writeEnabled,
@@ -547,6 +548,23 @@ export async function startLibraryServer(
         const filter = url.searchParams.get("filter") ?? "all";
         if (filter !== "all" && filter !== "analyzed" && filter !== "attention")
           throw new TypeError("Invalid track filter");
+        const sort = url.searchParams.get("sort");
+        const direction = url.searchParams.get("direction") ?? "asc";
+        const sortFields: TrackSortField[] = [
+          "position",
+          "title",
+          "album",
+          "genre",
+          "bpm",
+          "key",
+          "plays",
+          "status",
+          "duration",
+        ];
+        if (sort && !sortFields.includes(sort as TrackSortField))
+          throw new TypeError("Invalid track sort field");
+        if (direction !== "asc" && direction !== "desc")
+          throw new TypeError("Invalid track sort direction");
         json(
           request,
           response,
@@ -559,6 +577,7 @@ export async function startLibraryServer(
               ? { playlistId: url.searchParams.get("playlistId")! }
               : {}),
             ...(url.searchParams.get("q") ? { q: url.searchParams.get("q")! } : {}),
+            ...(sort ? { sort: { field: sort as TrackSortField, direction } } : {}),
           }),
         );
         return;

@@ -227,8 +227,8 @@ export function DeletePlaylistDialog({
           <div className="safety-note">
             <ShieldCheck size={16} />
             <span>
-              <strong>Protected write</strong>A database backup and integrity check are required
-              before this can finish.
+              <strong>Queued write</strong>The playlist disappears immediately; the local writer
+              commits the change in the background.
             </span>
           </div>
           {error ? (

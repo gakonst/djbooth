@@ -8,6 +8,7 @@ import type {
   PromptContext,
   PromptPlan,
   TrackDetail,
+  TrackSort,
   TrackWaveform,
   TracksResponse,
 } from "../shared/types.js";
@@ -30,6 +31,7 @@ export type TrackQuery = {
   filter?: string;
   limit?: number;
   offset?: number;
+  sort?: TrackSort;
 };
 
 export function getBootstrap(signal?: AbortSignal): Promise<LibraryBootstrap> {
@@ -48,6 +50,10 @@ export function getTracks(query: TrackQuery, signal?: AbortSignal): Promise<Trac
   if (query.filter && query.filter !== "all") params.set("filter", query.filter);
   params.set("limit", String(query.limit ?? 100));
   params.set("offset", String(query.offset ?? 0));
+  if (query.sort) {
+    params.set("sort", query.sort.field);
+    params.set("direction", query.sort.direction);
+  }
   return apiRequest<TracksResponse>(`/api/tracks?${params.toString()}`, { signal });
 }
 
