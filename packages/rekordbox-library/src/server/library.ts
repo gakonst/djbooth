@@ -1,19 +1,23 @@
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   type ContentCueInput,
+  type DatabaseRow,
   DjmdAlbum,
   DjmdArtist,
   DjmdContent,
   DjmdGenre,
   DjmdKey,
   DjmdPlaylist,
+  DjmdSongPlaylist,
   MasterDatabase,
+  type ModelClass,
   PlaylistType,
-  getRekordboxAgentPid,
-  getRekordboxPid,
+  getRekordboxProcessState,
+  normalizeRekordboxKeyName,
 } from "@gakonst/rekordbox";
 import { acquireRekordboxDatabaseLock, assertRekordboxStopped } from "@gakonst/tracks";
 import { parseFile, selectCover } from "music-metadata";
@@ -32,6 +36,7 @@ import type {
   TrackWaveform,
   TracksResponse,
 } from "../shared/types.js";
+import { normalizeTrackMetadataInput } from "../shared/track-metadata.js";
 
 export type TrackFilter = "all" | "analyzed" | "attention";
 
@@ -67,17 +72,18 @@ type PlaylistExpectation = {
   attribute: number;
 };
 
-type MembershipExpectation = {
-  id: string;
-  playlistId: string;
-  contentId: string;
-  trackNumber: number;
-};
+type MutationResult = { changedId: string; membershipIds?: string[] };
 
-type MutationResult = { changedId: string };
+type WaveformCacheEntry = {
+  analysisPaths: string[];
+  analysisVersion: string;
+  retryAt: number | null;
+  waveform: TrackWaveform;
+};
 
 const sqliteBusyTimeoutMs = 5_000;
 const databaseLockTimeoutMs = 10_000;
+const placeholderWaveformRetryMs = 5_000;
 
 function databaseLockBusy(error: unknown): boolean {
   return (
@@ -137,9 +143,10 @@ function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.length ? value : null;
 }
 
-function cleanMetadataValue(value: string | null): string | null {
-  const cleaned = value?.trim();
-  return cleaned ? cleaned : null;
+function trackRevision(value: unknown): string {
+  const revision = nullableString(value);
+  if (!revision) throw new TypeError("Track metadata revision is unavailable");
+  return revision;
 }
 
 function numberValue(value: unknown, fallback = 0): number {
@@ -161,7 +168,23 @@ function fileExists(path: string | null): boolean {
   }
 }
 
-function mapTrack(row: RawTrack): TrackSummary {
+function fileVersion(paths: string[]): string {
+  return paths
+    .map((path) => {
+      try {
+        const metadata = statSync(path);
+        return `${path}:${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`;
+      } catch {
+        return `${path}:missing`;
+      }
+    })
+    .join("\n");
+}
+
+function mapTrack(
+  row: RawTrack,
+  pathExists: (path: string | null) => boolean = fileExists,
+): TrackSummary {
   const path = nullableString(row.path);
   const artworkPath = nullableString(row.artworkPath);
   const bpmHundredths = nullableNumber(row.bpmHundredths);
@@ -179,8 +202,8 @@ function mapTrack(row: RawTrack): TrackSummary {
     rating: numberValue(row.rating),
     playCount: numberValue(row.playCount),
     analyzed: Boolean(nullableString(row.analysisPath)) && numberValue(row.analysed) > 0,
-    artworkAvailable: fileExists(artworkPath),
-    fileExists: fileExists(path),
+    artworkAvailable: pathExists(artworkPath),
+    fileExists: pathExists(path),
     path,
     ...(membershipId === null ? {} : { playlistMembershipId: membershipId }),
     ...(trackNumber === null ? {} : { trackNumber }),
@@ -189,31 +212,30 @@ function mapTrack(row: RawTrack): TrackSummary {
 
 const trackSortSql: Record<TrackSortField, string> = {
   position: `membership."TrackNo"`,
-  title: `content."Title" COLLATE NOCASE`,
-  album: `album."Name" COLLATE NOCASE`,
-  genre: `genre."Name" COLLATE NOCASE`,
-  bpm: `content."BPM"`,
-  key: `keyRow."ScaleName" COLLATE NOCASE`,
-  plays: `content."DJPlayCount"`,
-  status: `CASE
-    WHEN content."FolderPath" IS NULL OR content."FolderPath" = '' THEN 0
-    WHEN content."AnalysisDataPath" IS NULL OR content."AnalysisDataPath" = ''
-      OR COALESCE(content."Analysed", 0) <= 0 THEN 1
-    ELSE 2 END`,
+  title: `COALESCE(content."Title", 'Untitled') COLLATE NOCASE`,
+  album: `NULLIF(album."Name", '') COLLATE NOCASE`,
+  genre: `NULLIF(genre."Name", '') COLLATE NOCASE`,
+  bpm: `CASE WHEN content."BPM" > 0 THEN content."BPM" END`,
+  key: `NULLIF(keyRow."ScaleName", '') COLLATE NOCASE`,
+  plays: `COALESCE(content."DJPlayCount", 0)`,
+  status: `rekordbox_file_status(
+    content."FolderPath", content."AnalysisDataPath", content."Analysed"
+  )`,
   duration: `content."Length"`,
 };
 
 function trackOrderSql(sort: TrackSort | undefined, inPlaylist: boolean): string {
+  const title = trackSortSql.title;
   if (!sort)
     return inPlaylist
-      ? `membership."TrackNo", content."Title" COLLATE NOCASE, membership."ID"`
-      : `content."Title" COLLATE NOCASE, artist."Name" COLLATE NOCASE, content."ID"`;
+      ? `membership."TrackNo" ASC NULLS LAST, ${title} ASC, membership."ID"`
+      : `${title} ASC, content."ID"`;
   const field = sort.field === "position" && !inPlaylist ? "title" : sort.field;
   const direction = sort.direction === "desc" ? "DESC" : "ASC";
-  return `${trackSortSql[field]} ${direction}, content."Title" COLLATE NOCASE, content."ID"`;
+  return `${trackSortSql[field]} ${direction} NULLS LAST, ${title} ASC, content."ID"`;
 }
 
-function trackComparator(
+export function trackComparator(
   sort: TrackSort | undefined,
 ): (left: TrackSummary, right: TrackSummary) => number {
   if (!sort) return (left, right) => left.title.localeCompare(right.title);
@@ -222,12 +244,9 @@ function trackComparator(
     const compared = compareNullable(
       trackSortValue(left, sort.field),
       trackSortValue(right, sort.field),
+      direction,
     );
-    return (
-      direction * compared ||
-      left.title.localeCompare(right.title) ||
-      left.id.localeCompare(right.id)
-    );
+    return compared || left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
   };
 }
 
@@ -254,14 +273,25 @@ function trackSortValue(track: TrackSummary, field: TrackSortField): string | nu
   }
 }
 
-function compareNullable(left: string | number | null, right: string | number | null): number {
+function compareNullable(
+  left: string | number | null,
+  right: string | number | null,
+  direction: -1 | 1,
+): number {
   if (left === null) return right === null ? 0 : 1;
   if (right === null) return -1;
-  if (typeof left === "number" && typeof right === "number") return left - right;
-  return String(left).localeCompare(String(right), undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
+  const compared =
+    typeof left === "number" && typeof right === "number"
+      ? left - right
+      : String(left).localeCompare(String(right), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+  return direction * compared;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
 }
 
 function waveformColor(value: unknown): [number, number, number] | undefined {
@@ -357,21 +387,21 @@ export class RekordboxLibraryService {
 
   private readonly getProcessState: () => LibraryProcesses;
   private readonly mutationTails = new Map<string, Promise<void>>();
+  private readonly audioPathCache = new Map<string, string>();
+  private readonly waveformCache = new Map<string, WaveformCacheEntry>();
+  private readonly fileExistenceCache = new Map<string, { checkedAt: number; exists: boolean }>();
+  private database: MasterDatabase | undefined;
+  private databaseFilesVersion: string | undefined;
 
   constructor(options: LibraryOptions = {}) {
     this.dbPath = options.dbPath;
     this.key = options.key;
     this.unlock = options.unlock ?? true;
     this.writeEnabled = options.writeEnabled ?? false;
-    this.getProcessState =
-      options.getProcessState ??
-      (() => ({
-        rekordboxPid: getRekordboxPid(),
-        rekordboxAgentPid: getRekordboxAgentPid(),
-      }));
+    this.getProcessState = options.getProcessState ?? (() => getRekordboxProcessState());
   }
 
-  private open(readonly = true): MasterDatabase {
+  private open(readonly = !this.writeEnabled): MasterDatabase {
     return this.configureConnection(
       new MasterDatabase({
         readonly,
@@ -382,21 +412,84 @@ export class RekordboxLibraryService {
     );
   }
 
-  private openAt(dbPath: string, readonly = true): MasterDatabase {
-    return this.configureConnection(
-      new MasterDatabase({
-        path: dbPath,
-        readonly,
-        unlock: this.unlock,
-        ...(this.key === undefined ? {} : { key: this.key }),
-      }),
-    );
+  private getDatabase(): MasterDatabase {
+    if (!this.database?.connection?.open) {
+      this.database = this.open();
+      this.databaseFilesVersion = this.captureDatabaseFilesVersion(this.database);
+    }
+    this.database.expireIdentityMap();
+    return this.database;
+  }
+
+  private captureDatabaseFilesVersion(database: MasterDatabase): string {
+    return fileVersion([
+      database.path,
+      `${database.path}-wal`,
+      resolve(database.dbDirectory, "masterPlaylists6.xml"),
+    ]);
+  }
+
+  private getFreshDatabaseUnderLock(): MasterDatabase {
+    let database = this.getDatabase();
+    const currentVersion = this.captureDatabaseFilesVersion(database);
+    if (this.databaseFilesVersion !== currentVersion) {
+      this.invalidate();
+      database = this.getDatabase();
+    }
+    return database;
   }
 
   private configureConnection(database: MasterDatabase): MasterDatabase {
     // Connection-local wait only: preserve Rekordbox's existing DELETE/WAL journal mode.
     database.connection?.pragma(`busy_timeout = ${sqliteBusyTimeoutMs}`);
+    database.connection?.function(
+      "rekordbox_file_status",
+      (path: unknown, analysisPath: unknown, analysed: unknown) => {
+        if (!this.cachedFileExists(nullableString(path))) return 0;
+        return nullableString(analysisPath) && numberValue(analysed) > 0 ? 2 : 1;
+      },
+    );
     return database;
+  }
+
+  /** Close the shared SQLite session and release cached derived assets. */
+  close(): void {
+    this.database?.close();
+    this.database = undefined;
+    this.databaseFilesVersion = undefined;
+    this.clearDerivedCaches();
+  }
+
+  /** Drop connection-owned state after a database or sidecar change outside this service. */
+  invalidate(): void {
+    this.close();
+  }
+
+  /** Return the canonical database path without recomputing library health statistics. */
+  getDatabasePath(): string {
+    return realpathSync(this.getDatabase().path);
+  }
+
+  private clearDerivedCaches(): void {
+    this.audioPathCache.clear();
+    this.waveformCache.clear();
+    this.fileExistenceCache.clear();
+  }
+
+  private cachedFileExists(path: string | null): boolean {
+    if (!path) return false;
+    const now = Date.now();
+    const cached = this.fileExistenceCache.get(path);
+    if (cached && now - cached.checkedAt < 10_000) return cached.exists;
+    const exists = fileExists(path);
+    this.fileExistenceCache.set(path, { checkedAt: now, exists });
+    if (this.fileExistenceCache.size > 32_768)
+      this.fileExistenceCache.delete(this.fileExistenceCache.keys().next().value!);
+    return exists;
+  }
+
+  private mapTrack(row: RawTrack): TrackSummary {
+    return mapTrack(row, (path) => this.cachedFileExists(path));
   }
 
   private async acquireDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
@@ -404,7 +497,7 @@ export class RekordboxLibraryService {
     let retryDelayMs = 20;
     for (;;) {
       try {
-        return await acquireRekordboxDatabaseLock(dbPath);
+        return await acquireRekordboxDatabaseLock(dbPath, { durability: "session" });
       } catch (error) {
         if (!databaseLockBusy(error) || Date.now() >= deadline) throw error;
         await delay(retryDelayMs);
@@ -442,71 +535,97 @@ export class RekordboxLibraryService {
     return numberValue(row?.count);
   }
 
+  private isActiveRow(db: MasterDatabase, row: DatabaseRow): boolean {
+    return (
+      !db.hasColumn(row.tableName, "rb_local_deleted") ||
+      Number(row.get("rb_local_deleted") ?? 0) === 0
+    );
+  }
+
+  private metadataNamesEqual(left: unknown, right: string): boolean {
+    return (
+      typeof left === "string" &&
+      left.trim().localeCompare(right, undefined, { sensitivity: "accent" }) === 0
+    );
+  }
+
+  private findActiveNamedRow<row extends DatabaseRow>(
+    db: MasterDatabase,
+    model: ModelClass<row>,
+    name: string,
+    filters: Record<string, string | null> = {},
+  ): row | undefined {
+    let query = db
+      .query(model)
+      .where(filters)
+      .whereRaw('"Name" = ? COLLATE NOCASE', [name])
+      .orderBy("ID");
+    if (db.hasColumn(model.tableName, "rb_local_deleted"))
+      query = query.whereRaw('("rb_local_deleted" IS NULL OR "rb_local_deleted" = 0)');
+    return query.first();
+  }
+
   /** Return library identity, process state, safety mode, and health counts. */
   getBootstrap(csrfToken: string): LibraryBootstrap {
-    const db = this.open();
-    try {
-      const activeContent = this.active(db, "djmdContent", "c");
-      const activePlaylist = this.active(db, "djmdPlaylist", "p");
-      const tracks = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count FROM "djmdContent" c WHERE ${activeContent}`,
-      );
-      const analyzed = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count FROM "djmdContent" c
-         WHERE ${activeContent} AND c."AnalysisDataPath" IS NOT NULL
-           AND c."AnalysisDataPath" != '' AND COALESCE(c."Analysed", 0) > 0`,
-      );
-      const missingBpm = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count FROM "djmdContent" c
-         WHERE ${activeContent} AND COALESCE(c."BPM", 0) <= 0`,
-      );
-      const missingKey = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count FROM "djmdContent" c
-         WHERE ${activeContent} AND (c."KeyID" IS NULL OR c."KeyID" = '')`,
-      );
-      const playlistRows = db.selectRawRows<{ attribute: number; count: number }>(
-        `SELECT p."Attribute" AS attribute, COUNT(*) AS count FROM "djmdPlaylist" p
-         WHERE ${activePlaylist} AND p."Attribute" IN (?, ?, ?)
-         GROUP BY p."Attribute"`,
-        [PlaylistType.PLAYLIST, PlaylistType.FOLDER, PlaylistType.SMART_PLAYLIST],
-      );
-      const countByAttribute = new Map(
-        playlistRows.map((row) => [numberValue(row.attribute), numberValue(row.count)]),
-      );
-      return {
-        csrfToken,
-        library: {
-          dbPath: db.path,
-          dbDirectory: db.dbDirectory,
-          writeEnabled: this.writeEnabled,
-          processes: this.getProcessState(),
-          stats: {
-            tracks,
-            playlists:
-              (countByAttribute.get(PlaylistType.PLAYLIST) ?? 0) +
-              (countByAttribute.get(PlaylistType.SMART_PLAYLIST) ?? 0),
-            folders: countByAttribute.get(PlaylistType.FOLDER) ?? 0,
-            analyzed,
-            missingAnalysis: tracks - analyzed,
-            missingBpm,
-            missingKey,
-          },
+    const db = this.getDatabase();
+    const activeContent = this.active(db, "djmdContent", "c");
+    const activePlaylist = this.active(db, "djmdPlaylist", "p");
+    const contentCounts = db.selectRawRows<{
+      analyzed: number;
+      missingBpm: number;
+      missingKey: number;
+      tracks: number;
+    }>(
+      `SELECT COUNT(*) AS tracks,
+              COALESCE(SUM(CASE WHEN c."AnalysisDataPath" IS NOT NULL
+                AND c."AnalysisDataPath" != '' AND COALESCE(c."Analysed", 0) > 0
+                THEN 1 ELSE 0 END), 0) AS analyzed,
+              COALESCE(SUM(CASE WHEN COALESCE(c."BPM", 0) <= 0 THEN 1 ELSE 0 END), 0)
+                AS missingBpm,
+              COALESCE(SUM(CASE WHEN c."KeyID" IS NULL OR c."KeyID" = ''
+                THEN 1 ELSE 0 END), 0) AS missingKey
+       FROM "djmdContent" c WHERE ${activeContent}`,
+    )[0];
+    const tracks = numberValue(contentCounts?.tracks);
+    const analyzed = numberValue(contentCounts?.analyzed);
+    const missingBpm = numberValue(contentCounts?.missingBpm);
+    const missingKey = numberValue(contentCounts?.missingKey);
+    const playlistRows = db.selectRawRows<{ attribute: number; count: number }>(
+      `SELECT p."Attribute" AS attribute, COUNT(*) AS count FROM "djmdPlaylist" p
+       WHERE ${activePlaylist} AND p."Attribute" IN (?, ?, ?)
+       GROUP BY p."Attribute"`,
+      [PlaylistType.PLAYLIST, PlaylistType.FOLDER, PlaylistType.SMART_PLAYLIST],
+    );
+    const countByAttribute = new Map(
+      playlistRows.map((row) => [numberValue(row.attribute), numberValue(row.count)]),
+    );
+    return {
+      csrfToken,
+      library: {
+        dbPath: db.path,
+        dbDirectory: db.dbDirectory,
+        writeEnabled: this.writeEnabled,
+        processes: this.getProcessState(),
+        stats: {
+          tracks,
+          playlists:
+            (countByAttribute.get(PlaylistType.PLAYLIST) ?? 0) +
+            (countByAttribute.get(PlaylistType.SMART_PLAYLIST) ?? 0),
+          folders: countByAttribute.get(PlaylistType.FOLDER) ?? 0,
+          analyzed,
+          missingAnalysis: tracks - analyzed,
+          missingBpm,
+          missingKey,
         },
-      };
-    } finally {
-      db.close();
-    }
+      },
+    };
   }
 
   /** Return the active playlist hierarchy and direct membership counts. */
   getPlaylists(): PlaylistItem[] {
-    const db = this.open();
-    try {
-      return db.listPlaylists().map((playlist) => ({
+    return this.getDatabase()
+      .listPlaylists()
+      .map((playlist) => ({
         id: playlist.id,
         name: playlist.name || "Untitled playlist",
         parentId: playlist.parentId,
@@ -515,87 +634,143 @@ export class RekordboxLibraryService {
         trackCount: playlist.trackCount,
         ...(playlist.countError === undefined ? {} : { countError: playlist.countError }),
       }));
-    } finally {
-      db.close();
-    }
   }
 
   /** Search or page through tracks, preserving normal-playlist membership order. */
   getTracks(options: TrackQuery = {}): TracksResponse {
-    const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+    const limit = Math.min(Math.max(options.limit ?? 100, 1), 10_000);
     const offset = Math.max(options.offset ?? 0, 0);
     const filter = options.filter ?? "all";
     const q = options.q?.trim() ?? "";
-    const db = this.open();
-    try {
-      if (options.playlistId) {
-        const activePlaylist = db.selectRawRows(
-          `SELECT p."ID" FROM "djmdPlaylist" p
+    const db = this.getDatabase();
+    if (options.playlistId) {
+      const activePlaylist = db.selectRawRows<{ attribute: number; id: string }>(
+        `SELECT p."ID" AS id, p."Attribute" AS attribute FROM "djmdPlaylist" p
            WHERE p."ID" = ? AND ${this.active(db, "djmdPlaylist", "p")}`,
-          [options.playlistId],
-        )[0];
-        if (!activePlaylist) throw new RangeError(`Playlist '${options.playlistId}' was not found`);
+        [options.playlistId],
+      )[0];
+      if (!activePlaylist) throw new RangeError(`Playlist '${options.playlistId}' was not found`);
+      if (Number(activePlaylist.attribute) === PlaylistType.FOLDER)
+        throw new TypeError("A playlist folder has no track contents");
+      if (Number(activePlaylist.attribute) === PlaylistType.SMART_PLAYLIST) {
         const playlist = db.query(DjmdPlaylist).where({ ID: options.playlistId }).one();
-        if (Number(playlist.Attribute) === PlaylistType.FOLDER)
-          throw new TypeError("A playlist folder has no track contents");
-        if (Number(playlist.Attribute) === PlaylistType.SMART_PLAYLIST)
-          return this.getSmartPlaylistTracks(db, playlist, { filter, limit, offset, q });
+        return this.getSmartPlaylistTracks(db, playlist, {
+          filter,
+          limit,
+          offset,
+          q,
+          ...(options.sort ? { sort: options.sort } : {}),
+        });
       }
+    }
 
-      const parameters: unknown[] = [];
-      const membershipJoin = options.playlistId
-        ? `JOIN "djmdSongPlaylist" membership
+    const parameters: unknown[] = [];
+    const searchParameters: unknown[] = [];
+    const useSearchCte = Boolean(q && !options.playlistId);
+    const membershipJoin = options.playlistId
+      ? `JOIN "djmdSongPlaylist" membership
              ON membership."ContentID" = content."ID" AND membership."PlaylistID" = ?
             AND ${this.active(db, "djmdSongPlaylist", "membership")}`
-        : "";
-      if (options.playlistId) parameters.push(options.playlistId);
-      const where = [this.active(db, "djmdContent", "content")];
-      if (q) {
-        const pattern = `%${q.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+      : "";
+    if (options.playlistId) parameters.push(options.playlistId);
+    const where = [this.active(db, "djmdContent", "content")];
+    if (q) {
+      const pattern = `%${escapeLikePattern(q)}%`;
+      if (useSearchCte) searchParameters.push(pattern, pattern, pattern, pattern);
+      else {
         where.push(`(content."Title" LIKE ? ESCAPE '\\' OR artist."Name" LIKE ? ESCAPE '\\'
-          OR album."Name" LIKE ? ESCAPE '\\' OR content."FileNameL" LIKE ? ESCAPE '\\')`);
+            OR album."Name" LIKE ? ESCAPE '\\' OR content."FileNameL" LIKE ? ESCAPE '\\')`);
         parameters.push(pattern, pattern, pattern, pattern);
       }
-      if (filter === "analyzed")
-        where.push(
-          `content."AnalysisDataPath" IS NOT NULL AND content."AnalysisDataPath" != ''
+    }
+    if (filter === "analyzed")
+      where.push(
+        `content."AnalysisDataPath" IS NOT NULL AND content."AnalysisDataPath" != ''
            AND COALESCE(content."Analysed", 0) > 0`,
-        );
-      if (filter === "attention")
-        where.push(
-          `(content."AnalysisDataPath" IS NULL OR content."AnalysisDataPath" = ''
+      );
+    if (filter === "attention")
+      where.push(
+        `(content."AnalysisDataPath" IS NULL OR content."AnalysisDataPath" = ''
             OR COALESCE(content."Analysed", 0) <= 0 OR COALESCE(content."BPM", 0) <= 0
             OR content."KeyID" IS NULL OR content."KeyID" = '')`,
-        );
-      const from = `FROM "djmdContent" content
-        ${membershipJoin}
-        LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"
-        LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
-        LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"
-        LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"`;
-      const predicate = where.join(" AND ");
-      const count = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count ${from} WHERE ${predicate}`,
-        parameters,
       );
-      const order = trackOrderSql(options.sort, Boolean(options.playlistId));
-      const rows = db.selectRawRows(
-        `SELECT content."ID" AS id, content."Title" AS title,
-                content."FolderPath" AS path, content."BPM" AS bpmHundredths,
-                content."Length" AS durationSeconds, content."Rating" AS rating,
-                content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
-                content."Analysed" AS analysed, artist."Name" AS artist,
-                album."Name" AS album, album."ImagePath" AS artworkPath,
-                genre."Name" AS genre, keyRow."ScaleName" AS keyName
-                ${options.playlistId ? ', membership."ID" AS playlistMembershipId, membership."TrackNo" AS trackNumber' : ""}
-         ${from} WHERE ${predicate} ORDER BY ${order} LIMIT ? OFFSET ?`,
-        [...parameters, limit, offset],
-      );
-      return { items: rows.map(mapTrack), count, limit, offset };
-    } finally {
-      db.close();
+    const sortField =
+      options.sort?.field === "position" && !options.playlistId ? "title" : options.sort?.field;
+    const searchCte = useSearchCte
+      ? `WITH "matchingContent"("id") AS (
+          SELECT searchContent."ID" FROM "djmdContent" searchContent
+          WHERE ${this.active(db, "djmdContent", "searchContent")}
+            AND (searchContent."Title" LIKE ? ESCAPE '\\'
+              OR searchContent."FileNameL" LIKE ? ESCAPE '\\')
+          UNION
+          SELECT searchContent."ID" FROM "djmdContent" searchContent
+          JOIN "djmdArtist" searchArtist ON searchArtist."ID" = searchContent."ArtistID"
+          WHERE ${this.active(db, "djmdContent", "searchContent")}
+            AND ${this.active(db, "djmdArtist", "searchArtist")}
+            AND searchArtist."Name" LIKE ? ESCAPE '\\'
+          UNION
+          SELECT searchContent."ID" FROM "djmdContent" searchContent
+          JOIN "djmdAlbum" searchAlbum ON searchAlbum."ID" = searchContent."AlbumID"
+          WHERE ${this.active(db, "djmdContent", "searchContent")}
+            AND ${this.active(db, "djmdAlbum", "searchAlbum")}
+            AND searchAlbum."Name" LIKE ? ESCAPE '\\'
+        )`
+      : "";
+    const matchingContentJoin = useSearchCte
+      ? 'JOIN "matchingContent" searchMatch ON searchMatch."id" = content."ID"'
+      : "";
+    const pageJoins = [matchingContentJoin, membershipJoin];
+    if (q && !useSearchCte) {
+      pageJoins.push('LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"');
+      pageJoins.push('LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"');
+    } else if (sortField === "album") {
+      pageJoins.push('LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"');
     }
+    if (sortField === "genre")
+      pageJoins.push('LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"');
+    if (sortField === "key")
+      pageJoins.push('LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"');
+    const pageFrom = `FROM "djmdContent" content ${pageJoins.filter(Boolean).join(" ")}`;
+    const countFrom = `FROM "djmdContent" content
+        ${matchingContentJoin}
+        ${membershipJoin}
+        ${q && !useSearchCte ? 'LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"' : ""}
+        ${q && !useSearchCte ? 'LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"' : ""}`;
+    const predicate = where.join(" AND ");
+    const order = trackOrderSql(options.sort, Boolean(options.playlistId));
+    const pageRows = db.selectRawRows(
+      `${searchCte} SELECT COUNT(*) OVER() AS totalCount,
+                content."ID" AS id
+                ${options.playlistId ? ', membership."ID" AS playlistMembershipId, membership."TrackNo" AS trackNumber' : ""}
+         ${pageFrom} WHERE ${predicate} ORDER BY ${order} LIMIT ? OFFSET ?`,
+      [...searchParameters, ...parameters, limit, offset],
+    );
+    const count = pageRows[0]
+      ? numberValue(pageRows[0].totalCount)
+      : offset === 0
+        ? 0
+        : this.scalar(db, `${searchCte} SELECT COUNT(*) AS count ${countFrom} WHERE ${predicate}`, [
+            ...searchParameters,
+            ...parameters,
+          ]);
+    const summaries = this.getTrackSummariesById(
+      db,
+      pageRows.map((row) => stringValue(row.id)),
+    );
+    const items = pageRows.flatMap((row) => {
+      const track = summaries.get(stringValue(row.id));
+      if (!track) return [];
+      const playlistMembershipId = nullableString(row.playlistMembershipId);
+      const trackNumber = nullableNumber(row.trackNumber);
+      return [
+        {
+          ...track,
+          ...(playlistMembershipId === null ? {} : { playlistMembershipId }),
+          ...(trackNumber === null ? {} : { trackNumber }),
+        },
+      ];
+    });
+    return { items, count, limit, offset };
   }
 
   private getSmartPlaylistTracks(
@@ -607,10 +782,13 @@ export class RekordboxLibraryService {
     },
   ): TracksResponse {
     const normalizedQuery = options.q.toLocaleLowerCase();
-    const rows = db
-      .getPlaylistContents(playlist)
-      .all()
-      .map((content) => this.mapContentModel(content))
+    const orderedContentIds = db.getPlaylistTracks(playlist).map((track) => track.contentId);
+    const summaries = this.getTrackSummariesById(db, orderedContentIds);
+    const rows = orderedContentIds
+      .flatMap((id) => {
+        const track = summaries.get(id);
+        return track ? [track] : [];
+      })
       .filter((track) => {
         if (
           normalizedQuery &&
@@ -632,38 +810,52 @@ export class RekordboxLibraryService {
     };
   }
 
-  private mapContentModel(content: DjmdContent): TrackSummary {
-    return mapTrack({
-      id: content.ID,
-      title: content.Title,
-      path: content.FolderPath,
-      bpmHundredths: content.get("BPM"),
-      durationSeconds: content.get("Length"),
-      rating: content.get("Rating"),
-      playCount: content.get("DJPlayCount"),
-      analysisPath: content.AnalysisDataPath,
-      analysed: content.Analysed,
-      artist: content.ArtistName,
-      album: content.AlbumName,
-      artworkPath: content.Album?.get("ImagePath"),
-      genre: content.GenreName,
-      keyName: content.KeyName,
-    });
+  private getTrackSummariesById(
+    db: MasterDatabase,
+    ids: readonly string[],
+  ): Map<string, TrackSummary> {
+    const tracks = new Map<string, TrackSummary>();
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500);
+      const placeholders = chunk.map(() => "?").join(", ");
+      const rows = db.selectRawRows(
+        `SELECT content."ID" AS id, content."Title" AS title,
+                content."FolderPath" AS path, content."BPM" AS bpmHundredths,
+                content."Length" AS durationSeconds, content."Rating" AS rating,
+                content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
+                content."Analysed" AS analysed, artist."Name" AS artist,
+                album."Name" AS album, album."ImagePath" AS artworkPath,
+                genre."Name" AS genre, keyRow."ScaleName" AS keyName
+         FROM "djmdContent" content
+         LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"
+         LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
+         LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"
+         LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"
+         WHERE content."ID" IN (${placeholders})
+           AND ${this.active(db, "djmdContent", "content")}`,
+        chunk,
+      );
+      for (const row of rows) {
+        const track = this.mapTrack(row);
+        tracks.set(track.id, track);
+      }
+    }
+    return tracks;
   }
 
   /** Return full metadata, analysis state, and playlist memberships for one track. */
   getTrack(id: string): TrackDetail {
-    const db = this.open();
-    try {
-      const rows = db.selectRawRows(
-        `SELECT content."ID" AS id, content."Title" AS title,
+    const db = this.getDatabase();
+    const rows = db.selectRawRows(
+      `SELECT content."ID" AS id, content."Title" AS title,
                 content."FolderPath" AS path, content."BPM" AS bpmHundredths,
                 content."Length" AS durationSeconds, content."Rating" AS rating,
                 content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
                 content."Analysed" AS analysed, content."Commnt" AS comment,
                 content."ISRC" AS isrc, content."ReleaseYear" AS releaseYear,
                 content."BitRate" AS bitRate, content."SampleRate" AS sampleRate,
-                content."FileSize" AS fileSize, artist."Name" AS artist,
+                content."FileSize" AS fileSize,
+                CAST(content."updated_at" AS TEXT) AS revision, artist."Name" AS artist,
                 album."Name" AS album, album."ImagePath" AS artworkPath,
                 genre."Name" AS genre, keyRow."ScaleName" AS keyName
          FROM "djmdContent" content
@@ -672,13 +864,13 @@ export class RekordboxLibraryService {
          LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"
          LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"
          WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
-        [id],
-      );
-      const row = rows[0];
-      if (!row) throw new RangeError(`Track '${id}' was not found`);
-      const summary = mapTrack(row);
-      const memberships = db.selectRawRows(
-        `SELECT playlist."ID" AS id, playlist."Name" AS name,
+      [id],
+    );
+    const row = rows[0];
+    if (!row) throw new RangeError(`Track '${id}' was not found`);
+    const summary = this.mapTrack(row);
+    const memberships = db.selectRawRows(
+      `SELECT playlist."ID" AS id, playlist."Name" AS name,
                 membership."ID" AS membershipId, membership."TrackNo" AS trackNumber
          FROM "djmdSongPlaylist" membership
          JOIN "djmdPlaylist" playlist ON playlist."ID" = membership."PlaylistID"
@@ -686,92 +878,86 @@ export class RekordboxLibraryService {
            AND ${this.active(db, "djmdSongPlaylist", "membership")}
            AND ${this.active(db, "djmdPlaylist", "playlist")}
          ORDER BY playlist."Name" COLLATE NOCASE, membership."TrackNo"`,
-        [id],
-      );
-      return {
-        ...summary,
-        comment: nullableString(row.comment),
-        isrc: nullableString(row.isrc),
-        releaseYear: nullableNumber(row.releaseYear),
-        bitRate: nullableNumber(row.bitRate),
-        sampleRate: nullableNumber(row.sampleRate),
-        fileSize: nullableNumber(row.fileSize),
-        analysisPath: nullableString(row.analysisPath),
-        cues: db.getContentCues(id) as TrackCue[],
-        playlists: memberships.map((membership) => ({
-          id: stringValue(membership.id),
-          name: stringValue(membership.name),
-          membershipId: stringValue(membership.membershipId),
-          trackNumber: numberValue(membership.trackNumber),
-        })),
-      };
-    } finally {
-      db.close();
-    }
+      [id],
+    );
+    return {
+      ...summary,
+      revision: trackRevision(row.revision),
+      comment: nullableString(row.comment),
+      isrc: nullableString(row.isrc),
+      releaseYear: nullableNumber(row.releaseYear),
+      bitRate: nullableNumber(row.bitRate),
+      sampleRate: nullableNumber(row.sampleRate),
+      fileSize: nullableNumber(row.fileSize),
+      analysisPath: nullableString(row.analysisPath),
+      cues: db.getContentCues(id) as TrackCue[],
+      playlists: memberships.map((membership) => ({
+        id: stringValue(membership.id),
+        name: stringValue(membership.name),
+        membershipId: stringValue(membership.membershipId),
+        trackNumber: numberValue(membership.trackNumber),
+      })),
+    };
   }
 
   /** Resolve a trusted database-owned audio path for range streaming. */
   getAudioPath(id: string): string {
-    const db = this.open();
-    let path: string | null;
-    try {
-      const row = db.selectRawRows(
-        `SELECT content."FolderPath" AS path FROM "djmdContent" content
-         WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
-        [id],
-      )[0];
-      if (!row) throw new RangeError(`Track '${id}' was not found`);
-      path = nullableString(row.path);
-    } finally {
-      db.close();
-    }
-    if (!path || !existsSync(path) || !fileExists(path))
-      throw new RangeError(`Audio for track '${id}' is unavailable`);
+    const cached = this.audioPathCache.get(id);
+    if (cached && fileExists(cached)) return cached;
+    this.audioPathCache.delete(id);
+    const db = this.getDatabase();
+    const row = db.selectRawRows(
+      `SELECT content."FolderPath" AS path FROM "djmdContent" content
+       WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
+      [id],
+    )[0];
+    if (!row) throw new RangeError(`Track '${id}' was not found`);
+    const path = nullableString(row.path);
+    if (!path || !fileExists(path)) throw new RangeError(`Audio for track '${id}' is unavailable`);
+    this.audioPathCache.set(id, path);
+    if (this.audioPathCache.size > 512)
+      this.audioPathCache.delete(this.audioPathCache.keys().next().value!);
     return path;
   }
 
   /** Resolve Rekordbox artwork or read the recording's embedded front cover. */
   async getArtwork(id: string): Promise<ArtworkAsset> {
-    const db = this.open();
+    const db = this.getDatabase();
     let audioPath: string | null = null;
     let rawArtwork: string | null = null;
-    try {
-      const row = db.selectRawRows(
-        `SELECT album."ImagePath" AS artworkPath, content."FolderPath" AS audioPath
-         FROM "djmdContent" content
-         LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
-         WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
-        [id],
-      )[0];
-      if (!row) throw new RangeError(`Track '${id}' was not found`);
-      rawArtwork = nullableString(row.artworkPath);
-      audioPath = nullableString(row.audioPath);
-      if (rawArtwork) {
-        let filePath = rawArtwork;
-        if (rawArtwork.startsWith("file:")) {
-          try {
-            filePath = fileURLToPath(rawArtwork);
-          } catch {
-            filePath = "";
-          }
+    const row = db.selectRawRows(
+      `SELECT album."ImagePath" AS artworkPath, content."FolderPath" AS audioPath
+       FROM "djmdContent" content
+       LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
+       WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
+      [id],
+    )[0];
+    if (!row) throw new RangeError(`Track '${id}' was not found`);
+    rawArtwork = nullableString(row.artworkPath);
+    audioPath = nullableString(row.audioPath);
+    if (rawArtwork) {
+      let filePath = rawArtwork;
+      if (rawArtwork.startsWith("file:")) {
+        try {
+          filePath = fileURLToPath(rawArtwork);
+        } catch {
+          filePath = "";
         }
-        const relativePath = filePath.replace(/^[/\\]+/u, "");
-        const candidates = isAbsolute(filePath)
-          ? [resolve(filePath)]
-          : [
-              resolve(db.dbDirectory, filePath),
-              resolve(db.shareDirectory, filePath),
-              resolve(db.dbDirectory, relativePath),
-              resolve(db.shareDirectory, relativePath),
-            ];
-        const artwork = candidates.find((candidate) => fileExists(candidate));
-        if (artwork) return { kind: "file", path: artwork };
       }
-    } finally {
-      db.close();
+      const relativePath = filePath.replace(/^[/\\]+/u, "");
+      const candidates = isAbsolute(filePath)
+        ? [resolve(filePath)]
+        : [
+            resolve(db.dbDirectory, filePath),
+            resolve(db.shareDirectory, filePath),
+            resolve(db.dbDirectory, relativePath),
+            resolve(db.shareDirectory, relativePath),
+          ];
+      const artwork = candidates.find((candidate) => this.cachedFileExists(candidate));
+      if (artwork) return { kind: "file", path: artwork };
     }
 
-    if (!audioPath || !fileExists(audioPath))
+    if (!audioPath || !this.cachedFileExists(audioPath))
       throw new RangeError(`Artwork for track '${id}' is unavailable`);
     try {
       const requested = resolve(audioPath);
@@ -792,40 +978,67 @@ export class RekordboxLibraryService {
 
   /** Return bounded precomputed Rekordbox peaks or a streaming-safe placeholder instruction. */
   getWaveform(id: string): TrackWaveform {
-    const db = this.open();
-    try {
-      const row = db.selectRawRows(
-        `SELECT content."Length" AS durationSeconds
+    const cached = this.waveformCache.get(id);
+    if (
+      cached &&
+      (cached.retryAt === null || Date.now() < cached.retryAt) &&
+      cached.analysisVersion === fileVersion(cached.analysisPaths)
+    )
+      return cached.waveform;
+    const db = this.getDatabase();
+    const row = db.selectRawRows(
+      `SELECT content."Length" AS durationSeconds,
+              content."AnalysisDataPath" AS analysisPath
          FROM "djmdContent" content
          WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
-        [id],
-      )[0];
-      if (!row) throw new RangeError(`Track '${id}' was not found`);
-      let peaks: number[] = [];
-      let colors: Array<[number, number, number]> = [];
-      try {
-        const files = [...db.readContentAnlzFiles(id).values()];
-        for (const key of ["PWV5", "PWV4", "PWV3", "PWV2", "PWAV"]) {
-          for (const file of files) {
-            if (!file.has(key)) continue;
-            peaks = waveformHeights(file.get(key));
-            colors = waveformColors(file.get(key));
-            if (peaks.length) break;
-          }
+      [id],
+    )[0];
+    if (!row) throw new RangeError(`Track '${id}' was not found`);
+    const analysisPath = nullableString(row.analysisPath);
+    const analysisPaths = analysisPath
+      ? [
+          resolve(
+            db.shareDirectory,
+            dirname(analysisPath.replace(/^[/\\]+/u, "").replaceAll("\\", "/")),
+          ),
+        ]
+      : [];
+    let peaks: number[] = [];
+    let colors: Array<[number, number, number]> = [];
+    try {
+      analysisPaths.push(
+        ...Object.values(db.getContentAnlzPaths(id)).filter(
+          (path): path is string => path !== undefined,
+        ),
+      );
+      const files = [...db.readContentAnlzFiles(id).values()];
+      for (const key of ["PWV5", "PWV4", "PWV3", "PWV2", "PWAV"]) {
+        for (const file of files) {
+          if (!file.has(key)) continue;
+          peaks = waveformHeights(file.get(key));
+          colors = waveformColors(file.get(key));
           if (peaks.length) break;
         }
-      } catch {
-        // Missing or malformed analysis is expected for unanalysed tracks; WaveSurfer decodes audio.
+        if (peaks.length) break;
       }
-      const waveform = normalizeWaveform(peaks, colors);
-      return {
-        durationSeconds: nullableNumber(row.durationSeconds),
-        ...waveform,
-        source: peaks.length ? "rekordbox" : "placeholder",
-      };
-    } finally {
-      db.close();
+    } catch {
+      // Missing or malformed analysis is expected for unanalysed tracks; WaveSurfer decodes audio.
     }
+    const waveform = normalizeWaveform(peaks, colors);
+    const result: TrackWaveform = {
+      durationSeconds: nullableNumber(row.durationSeconds),
+      ...waveform,
+      source: peaks.length ? "rekordbox" : "placeholder",
+    };
+    this.waveformCache.set(id, {
+      analysisPaths,
+      analysisVersion: fileVersion(analysisPaths),
+      retryAt: peaks.length ? null : Date.now() + placeholderWaveformRetryMs,
+      waveform: result,
+    });
+    if (this.waveformCache.size > 128)
+      this.waveformCache.delete(this.waveformCache.keys().next().value!);
+    return result;
   }
 
   /** Apply one serialized local mutation using SQLite's transaction boundary. */
@@ -833,13 +1046,7 @@ export class RekordboxLibraryService {
     if (!this.writeEnabled)
       throw new Error("Library write mode is disabled; restart with the explicit --write flag");
 
-    const location = this.open();
-    let dbPath: string;
-    try {
-      dbPath = realpathSync(location.path);
-    } finally {
-      location.close();
-    }
+    const dbPath = realpathSync(this.getDatabase().path);
     return this.serializeMutation(dbPath, () => this.mutateSerialized(dbPath, mutation));
   }
 
@@ -849,16 +1056,33 @@ export class RekordboxLibraryService {
   ): Promise<MutationReceipt> {
     const releaseLock = await this.acquireDatabaseLock(dbPath);
     try {
-      this.assertStopped();
-      const writer = this.openAt(dbPath, false);
+      const writer = this.getFreshDatabaseUnderLock();
       try {
         this.assertMutationPrecondition(writer, mutation);
-        const expectation = this.applyMutation(writer, mutation);
+        const cueMutation = mutation.type === "upsert-cue" || mutation.type === "delete-cue";
+        // Cue mirrors intentionally query their own staged rows, so they require autoflush. Guard
+        // those writes both before staging and at the final commit boundary. Every other helper can
+        // remain purely staged until the single final process check below.
+        if (cueMutation) this.assertStopped();
+        const expectation = cueMutation
+          ? this.applyMutation(writer, mutation)
+          : writer.noAutoflush(() => this.applyMutation(writer, mutation));
+        // Staging is synchronous and does not write SQLite. Take one fresh process snapshot at the
+        // last possible point, immediately before the transaction is flushed and committed.
         this.assertStopped();
-        writer.commit({ allowWhileRunning: false });
+        writer.commit({ allowWhileRunning: true });
+        this.databaseFilesVersion = this.captureDatabaseFilesVersion(writer);
+        const revision =
+          mutation.type === "update-track"
+            ? this.getTrackRevision(writer, mutation.contentId)
+            : undefined;
+        writer.expireIdentityMap();
+        this.clearDerivedCaches();
         return {
           operation: mutation.type,
           changedId: expectation.changedId,
+          ...(expectation.membershipIds ? { membershipIds: expectation.membershipIds } : {}),
+          ...(revision ? { revision } : {}),
           finishedAt: new Date().toISOString(),
         };
       } catch (error) {
@@ -867,9 +1091,10 @@ export class RekordboxLibraryService {
         } catch {
           // Preserve the original SQLite or sidecar error.
         }
+        // A sidecar save can fail after SQLite has committed. Reopen both on the next operation so
+        // no identity-map or masterPlaylists6.xml state survives an uncertain outcome.
+        this.invalidate();
         throw error;
-      } finally {
-        writer.close();
       }
     } finally {
       await releaseLock();
@@ -881,22 +1106,11 @@ export class RekordboxLibraryService {
   }
 
   private assertMutationPrecondition(db: MasterDatabase, mutation: LibraryMutation): void {
-    if (mutation.type === "replace-playlist-tracks") {
-      this.requireNormalPlaylist(db, mutation.playlistId);
-      const currentMembershipIds = db
-        .selectRawRows(
-          `SELECT membership."ID" AS id FROM "djmdSongPlaylist" membership
-           WHERE membership."PlaylistID" = ?
-             AND ${this.active(db, "djmdSongPlaylist", "membership")}
-           ORDER BY membership."TrackNo", membership."ID"`,
-          [mutation.playlistId],
-        )
-        .map((row) => stringValue(row.id));
-      if (JSON.stringify(currentMembershipIds) !== JSON.stringify(mutation.expectedMembershipIds))
+    if (mutation.type === "update-track") {
+      if (this.getTrackRevision(db, mutation.contentId) !== mutation.expectedRevision)
         throw new LibraryMutationConflictError(
-          `Playlist '${mutation.playlistId}' changed after the canvas snapshot; reload it before applying order`,
+          `Track '${mutation.contentId}' changed after metadata was loaded; reload it and try again`,
         );
-      return;
     }
     if (mutation.type === "delete-playlist") {
       const currentPlaylistIds = this.getActivePlaylistSubtree(db, mutation.playlistId)
@@ -914,17 +1128,29 @@ export class RekordboxLibraryService {
     }
   }
 
+  private getTrackRevision(db: MasterDatabase, contentId: string): string {
+    const row = db.selectRawRows(
+      `SELECT CAST(content."updated_at" AS TEXT) AS revision
+         FROM "djmdContent" content
+         WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
+      [contentId],
+    )[0];
+    if (!row) throw new RangeError(`Track '${contentId}' was not found`);
+    return trackRevision(row.revision);
+  }
+
   private applyMutation(db: MasterDatabase, mutation: LibraryMutation): MutationResult {
     switch (mutation.type) {
       case "create-playlist": {
         const name = mutation.name.trim();
         if (!name) throw new TypeError("Playlist name must not be empty");
+        let parent: DjmdPlaylist | undefined;
         if (mutation.parentId) {
-          const parent = this.requireActivePlaylist(db, mutation.parentId);
-          if (parent.attribute !== PlaylistType.FOLDER)
+          parent = this.requireActivePlaylistModel(db, mutation.parentId);
+          if (Number(parent.Attribute) !== PlaylistType.FOLDER)
             throw new TypeError("Playlist parent must be a folder");
         }
-        const options = mutation.parentId ? { parent: mutation.parentId } : {};
+        const options = parent ? { parent } : {};
         const playlist =
           mutation.kind === "folder"
             ? db.createPlaylistFolder(name, options)
@@ -934,190 +1160,225 @@ export class RekordboxLibraryService {
       case "rename-playlist": {
         const name = mutation.name.trim();
         if (!name) throw new TypeError("Playlist name must not be empty");
-        this.requireActivePlaylist(db, mutation.playlistId);
-        db.renamePlaylist(mutation.playlistId, name);
+        const playlist = this.requireActivePlaylistModel(db, mutation.playlistId);
+        db.renamePlaylist(playlist, name);
         return { changedId: mutation.playlistId };
       }
       case "delete-playlist": {
-        db.deletePlaylist(mutation.playlistId);
+        db.deletePlaylist(this.requireActivePlaylistModel(db, mutation.playlistId));
         return { changedId: mutation.playlistId };
       }
       case "update-track": {
-        this.requireActiveContent(db, mutation.contentId);
-        const content = db.query(DjmdContent).where({ ID: mutation.contentId }).one();
-        const metadata = mutation.metadata;
-        const artistName = cleanMetadataValue(metadata.artist);
-        const albumName = cleanMetadataValue(metadata.album);
-        const genreName = cleanMetadataValue(metadata.genre);
-        const keyName = cleanMetadataValue(metadata.key);
+        const content = this.requireActiveContentModel(db, mutation.contentId);
+        const metadata = normalizeTrackMetadataInput(mutation.metadata);
+        const artistName = metadata.artist;
+        const albumName = metadata.album;
+        const genreName = metadata.genre;
+        const keyName = metadata.key;
+        const currentArtist = content.Artist;
+        const artistUnchanged = Boolean(
+          artistName &&
+          currentArtist &&
+          this.isActiveRow(db, currentArtist) &&
+          this.metadataNamesEqual(currentArtist.get("Name"), artistName),
+        );
         const artist = artistName
-          ? (db.query(DjmdArtist).where({ Name: artistName }).first() ??
-            db.addArtist(artistName, artistName))
+          ? artistUnchanged
+            ? currentArtist
+            : (this.findActiveNamedRow(db, DjmdArtist, artistName) ??
+              db.addArtist(artistName, artistName))
           : undefined;
+        const currentGenre = content.Genre;
         const genre = genreName
-          ? (db.query(DjmdGenre).where({ Name: genreName }).first() ?? db.addGenre(genreName))
+          ? currentGenre &&
+            this.isActiveRow(db, currentGenre) &&
+            this.metadataNamesEqual(currentGenre.get("Name"), genreName)
+            ? currentGenre
+            : (this.findActiveNamedRow(db, DjmdGenre, genreName) ?? db.addGenre(genreName))
           : undefined;
+        const currentAlbum = content.Album;
         const album = albumName
-          ? (db
-              .query(DjmdAlbum)
-              .where({ Name: albumName, AlbumArtistID: artist?.ID ?? null })
-              .first() ?? db.addAlbum(albumName, artist ? { artist } : {}))
+          ? currentAlbum &&
+            artistUnchanged &&
+            this.isActiveRow(db, currentAlbum) &&
+            this.metadataNamesEqual(currentAlbum.get("Name"), albumName)
+            ? currentAlbum
+            : (this.findActiveNamedRow(db, DjmdAlbum, albumName, {
+                AlbumArtistID: artist?.ID ?? null,
+              }) ?? db.addAlbum(albumName, artist ? { artist } : {}))
           : undefined;
-        const key = keyName
+        const keys = keyName
           ? db
               .query(DjmdKey)
               .all()
-              .find((candidate) => candidate.ScaleName.toLowerCase() === keyName.toLowerCase())
+              .filter((candidate) => this.isActiveRow(db, candidate))
+          : [];
+        const key = keyName
+          ? (keys.find((candidate) => this.metadataNamesEqual(candidate.ScaleName, keyName)) ??
+            keys.find((candidate) => candidate.ScaleName === normalizeRekordboxKeyName(keyName)))
           : undefined;
         if (keyName && !key) throw new TypeError(`Rekordbox key '${keyName}' was not found`);
 
-        content.Title = metadata.title.trim();
+        content.Title = metadata.title;
         content.set("ArtistID", artist?.ID ?? null);
         content.set("AlbumID", album?.ID ?? null);
         content.set("GenreID", genre?.ID ?? null);
         content.KeyID = key?.ID ?? null;
         content.BPM = metadata.bpm === null ? null : Math.round(metadata.bpm * 100);
         content.set("Rating", metadata.rating);
-        content.set("Commnt", cleanMetadataValue(metadata.comment));
+        content.set("Commnt", metadata.comment);
         content.set("ReleaseYear", metadata.releaseYear);
-        content.set("ISRC", cleanMetadataValue(metadata.isrc));
+        content.set("ISRC", metadata.isrc);
         if (db.hasColumn(content.tableName, "TrackInfoUpdated")) content.TrackInfoUpdated = "2";
-        if (db.hasColumn(content.tableName, "updated_at"))
-          content.set("updated_at", new Date());
+        if (db.hasColumn(content.tableName, "updated_at")) content.set("updated_at", new Date());
         return { changedId: mutation.contentId };
       }
       case "add-track": {
-        this.requireNormalPlaylist(db, mutation.playlistId);
-        this.requireActiveContent(db, mutation.contentId);
-        this.assertSafeMembershipState(db, mutation.playlistId);
-        const membership = db.addToPlaylist(
-          mutation.playlistId,
-          mutation.contentId,
-          mutation.trackNumber,
-        );
+        const playlist = this.requireNormalPlaylistModel(db, mutation.playlistId);
+        const content = this.requireActiveContentModel(db, mutation.contentId);
+        const songs = this.requireSafePlaylistSongs(db, mutation.playlistId);
+        const target = mutation.trackNumber ?? songs.length + 1;
+        if (!Number.isInteger(target) || target < 1 || target > songs.length + 1)
+          throw new RangeError("Track number is out of range");
+        for (const song of songs) if (song.TrackNo >= target) song.TrackNo += 1;
+        const membership = db.create(DjmdSongPlaylist, {
+          ContentID: content.ID,
+          ID: randomUUID(),
+          PlaylistID: playlist.ID,
+          TrackNo: target,
+          UUID: randomUUID(),
+        });
         return { changedId: membership.ID };
       }
       case "remove-track": {
-        this.requireNormalPlaylist(db, mutation.playlistId);
-        this.assertSafeMembershipState(db, mutation.playlistId);
-        const membership = this.requireActiveMembership(db, mutation.membershipId);
-        if (membership.playlistId !== mutation.playlistId)
-          throw new TypeError("Song is not in the supplied playlist");
-        db.removeFromPlaylist(mutation.playlistId, mutation.membershipId);
+        this.requireNormalPlaylistModel(db, mutation.playlistId);
+        const songs = this.requireSafePlaylistSongs(db, mutation.playlistId);
+        const membership = songs.find((song) => song.ID === mutation.membershipId);
+        if (!membership)
+          throw new RangeError(`Playlist membership '${mutation.membershipId}' was not found`);
+        const oldTrackNumber = membership.TrackNo;
+        db.delete(membership);
+        for (const song of songs)
+          if (song.ID !== membership.ID && song.TrackNo > oldTrackNumber) song.TrackNo -= 1;
         return { changedId: mutation.membershipId };
       }
       case "move-track": {
-        this.requireNormalPlaylist(db, mutation.playlistId);
-        this.assertSafeMembershipState(db, mutation.playlistId);
-        const membership = this.requireActiveMembership(db, mutation.membershipId);
-        if (membership.playlistId !== mutation.playlistId)
-          throw new TypeError("Song is not in the supplied playlist");
-        db.moveSongInPlaylist(mutation.playlistId, mutation.membershipId, mutation.trackNumber);
+        this.requireNormalPlaylistModel(db, mutation.playlistId);
+        const songs = this.requireSafePlaylistSongs(db, mutation.playlistId);
+        const membership = songs.find((song) => song.ID === mutation.membershipId);
+        if (!membership)
+          throw new RangeError(`Playlist membership '${mutation.membershipId}' was not found`);
+        if (
+          !Number.isInteger(mutation.trackNumber) ||
+          mutation.trackNumber < 1 ||
+          mutation.trackNumber > songs.length
+        )
+          throw new RangeError("Track number is out of range");
+        const oldTrackNumber = membership.TrackNo;
+        if (mutation.trackNumber > oldTrackNumber)
+          for (const song of songs)
+            if (song.TrackNo > oldTrackNumber && song.TrackNo <= mutation.trackNumber)
+              song.TrackNo -= 1;
+        if (mutation.trackNumber < oldTrackNumber)
+          for (const song of songs)
+            if (song.TrackNo >= mutation.trackNumber && song.TrackNo < oldTrackNumber)
+              song.TrackNo += 1;
+        membership.TrackNo = mutation.trackNumber;
         return { changedId: mutation.membershipId };
       }
       case "replace-playlist-tracks": {
-        this.requireNormalPlaylist(db, mutation.playlistId);
-        this.assertSafeMembershipState(db, mutation.playlistId);
-        for (const contentId of mutation.contentIds) this.requireActiveContent(db, contentId);
-        const existing = db.selectRawRows(
-          `SELECT membership."ID" AS id,
-                  membership."ContentID" AS contentId,
-                  membership."TrackNo" AS trackNumber
-           FROM "djmdSongPlaylist" membership
-           WHERE membership."PlaylistID" = ?
-             AND ${this.active(db, "djmdSongPlaylist", "membership")}
-           ORDER BY membership."TrackNo", membership."ID"`,
-          [mutation.playlistId],
-        );
-        const availableByContent = new Map<string, Array<{ id: string; trackNumber: number }>>();
-        for (const row of existing) {
-          const contentId = stringValue(row.contentId);
+        const playlist = this.requireNormalPlaylistModel(db, mutation.playlistId);
+        const existing = this.requireSafePlaylistSongs(db, mutation.playlistId);
+        const currentMembershipIds = existing.map((membership) => membership.ID);
+        if (JSON.stringify(currentMembershipIds) !== JSON.stringify(mutation.expectedMembershipIds))
+          throw new LibraryMutationConflictError(
+            `Playlist '${mutation.playlistId}' changed after the canvas snapshot; reload it before applying order`,
+          );
+        this.requireActiveContents(db, mutation.contentIds);
+        const availableByContent = new Map<string, DjmdSongPlaylist[]>();
+        for (const membership of existing) {
+          const contentId = membership.ContentID;
           const matches = availableByContent.get(contentId) ?? [];
-          matches.push({ id: stringValue(row.id), trackNumber: Number(row.trackNumber) });
+          matches.push(membership);
           availableByContent.set(contentId, matches);
         }
         const desired = mutation.contentIds.map((contentId) => ({
           contentId,
           existing: availableByContent.get(contentId)?.shift(),
         }));
-        const removed = [...availableByContent.values()].flat();
-        for (const membership of removed.sort(
-          (left, right) => right.trackNumber - left.trackNumber,
-        ))
-          db.removeFromPlaylist(mutation.playlistId, membership.id);
-
-        desired.forEach((entry, index) => {
-          const trackNumber = index + 1;
+        for (const membership of [...availableByContent.values()].flat()) db.delete(membership);
+        const resulting = desired.map((entry, index) => {
           if (entry.existing) {
-            db.moveSongInPlaylist(mutation.playlistId, entry.existing.id, trackNumber);
-            return;
+            entry.existing.TrackNo = index + 1;
+            return entry.existing;
           }
-          db.addToPlaylist(mutation.playlistId, entry.contentId, trackNumber);
+          return db.create(DjmdSongPlaylist, {
+            ContentID: entry.contentId,
+            ID: randomUUID(),
+            PlaylistID: playlist.ID,
+            TrackNo: index + 1,
+            UUID: randomUUID(),
+          });
         });
-        return { changedId: mutation.playlistId };
+        return {
+          changedId: mutation.playlistId,
+          membershipIds: resulting.map((membership) => membership.ID),
+        };
       }
       case "upsert-cue": {
-        this.requireActiveContent(db, mutation.contentId);
-        const cue = db.upsertContentCue(mutation.contentId, mutation.cue as ContentCueInput);
+        const content = this.requireActiveContentModel(db, mutation.contentId);
+        const cue = db.upsertContentCue(content, mutation.cue as ContentCueInput);
         return { changedId: cue.id };
       }
       case "delete-cue": {
-        this.requireActiveContent(db, mutation.contentId);
-        db.deleteContentCue(mutation.contentId, mutation.cueId);
+        const content = this.requireActiveContentModel(db, mutation.contentId);
+        db.deleteContentCue(content, mutation.cueId);
         return { changedId: mutation.cueId };
       }
     }
   }
 
-  private requireActivePlaylist(db: MasterDatabase, id: string): PlaylistExpectation {
-    const row = db.selectRawRows(
-      `SELECT p."ID" AS id, p."Name" AS name, p."ParentID" AS parentId,
-              p."Attribute" AS attribute
-       FROM "djmdPlaylist" p
-       WHERE p."ID" = ? AND ${this.active(db, "djmdPlaylist", "p")}`,
-      [id],
-    )[0];
-    if (!row) throw new RangeError(`Playlist '${id}' was not found`);
-    return {
-      id: stringValue(row.id),
-      name: stringValue(row.name),
-      parentId: stringValue(row.parentId, "root"),
-      attribute: numberValue(row.attribute, Number.NaN),
-    };
+  private requireActivePlaylistModel(db: MasterDatabase, id: string): DjmdPlaylist {
+    const query = db.query(DjmdPlaylist).where({ ID: id });
+    const playlist = db.hasColumn("djmdPlaylist", "rb_local_deleted")
+      ? query.whereRaw('("rb_local_deleted" IS NULL OR "rb_local_deleted" = 0)').oneOrNone()
+      : query.oneOrNone();
+    if (!playlist) throw new RangeError(`Playlist '${id}' was not found`);
+    return playlist;
   }
 
-  private requireNormalPlaylist(db: MasterDatabase, id: string): PlaylistExpectation {
-    const playlist = this.requireActivePlaylist(db, id);
-    if (playlist.attribute !== PlaylistType.PLAYLIST)
+  private requireNormalPlaylistModel(db: MasterDatabase, id: string): DjmdPlaylist {
+    const playlist = this.requireActivePlaylistModel(db, id);
+    if (Number(playlist.Attribute) !== PlaylistType.PLAYLIST)
       throw new TypeError("Playlist must be normal");
     return playlist;
   }
 
-  private requireActiveContent(db: MasterDatabase, id: string): void {
-    const count = this.scalar(
-      db,
-      `SELECT COUNT(*) AS count FROM "djmdContent" content
-       WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
-      [id],
-    );
-    if (count !== 1) throw new RangeError(`Track '${id}' was not found`);
+  private requireActiveContentModel(db: MasterDatabase, id: string): DjmdContent {
+    const query = db.query(DjmdContent).where({ ID: id });
+    const content = db.hasColumn("djmdContent", "rb_local_deleted")
+      ? query.whereRaw('("rb_local_deleted" IS NULL OR "rb_local_deleted" = 0)').oneOrNone()
+      : query.oneOrNone();
+    if (!content) throw new RangeError(`Track '${id}' was not found`);
+    return content;
   }
 
-  private requireActiveMembership(db: MasterDatabase, id: string): MembershipExpectation {
-    const row = db.selectRawRows(
-      `SELECT membership."ID" AS id, membership."PlaylistID" AS playlistId,
-              membership."ContentID" AS contentId, membership."TrackNo" AS trackNumber
-       FROM "djmdSongPlaylist" membership
-       WHERE membership."ID" = ? AND ${this.active(db, "djmdSongPlaylist", "membership")}`,
-      [id],
-    )[0];
-    if (!row) throw new RangeError(`Playlist membership '${id}' was not found`);
-    return {
-      id: stringValue(row.id),
-      playlistId: stringValue(row.playlistId),
-      contentId: stringValue(row.contentId),
-      trackNumber: numberValue(row.trackNumber),
-    };
+  private requireActiveContents(db: MasterDatabase, ids: readonly string[]): void {
+    const uniqueIds = [...new Set(ids)];
+    const found = new Set<string>();
+    for (let offset = 0; offset < uniqueIds.length; offset += 500) {
+      const chunk = uniqueIds.slice(offset, offset + 500);
+      const placeholders = chunk.map(() => "?").join(", ");
+      for (const row of db.selectRawRows(
+        `SELECT content."ID" AS id FROM "djmdContent" content
+         WHERE content."ID" IN (${placeholders})
+           AND ${this.active(db, "djmdContent", "content")}`,
+        chunk,
+      ))
+        found.add(stringValue(row.id));
+    }
+    const missing = uniqueIds.find((id) => !found.has(id));
+    if (missing) throw new RangeError(`Track '${missing}' was not found`);
   }
 
   private getActivePlaylistSubtree(db: MasterDatabase, id: string): PlaylistExpectation[] {
@@ -1143,37 +1404,30 @@ export class RekordboxLibraryService {
     }));
   }
 
-  private assertSafeMembershipState(db: MasterDatabase, playlistId: string): void {
-    if (db.hasColumn("djmdSongPlaylist", "rb_local_deleted")) {
-      const deleted = this.scalar(
-        db,
-        `SELECT COUNT(*) AS count FROM "djmdSongPlaylist" membership
-         WHERE membership."PlaylistID" = ? AND membership."rb_local_deleted" IS NOT NULL
-           AND membership."rb_local_deleted" != 0`,
-        [playlistId],
+  private requireSafePlaylistSongs(db: MasterDatabase, playlistId: string): DjmdSongPlaylist[] {
+    const rows = db
+      .query(DjmdSongPlaylist)
+      .where({ PlaylistID: playlistId })
+      .orderBy("TrackNo")
+      .orderBy("ID")
+      .all();
+    const tracksDeletion = db.hasColumn("djmdSongPlaylist", "rb_local_deleted");
+    const deleted = tracksDeletion
+      ? rows.filter((row) => Number(row.get("rb_local_deleted") ?? 0) !== 0)
+      : [];
+    if (deleted.length)
+      throw new Error(
+        `Playlist '${playlistId}' has ${deleted.length} soft-deleted membership row(s); reconcile it before mutation`,
       );
-      if (deleted)
-        throw new Error(
-          `Playlist '${playlistId}' has ${deleted} soft-deleted membership row(s); reconcile it before mutation`,
-        );
-    }
-    this.assertMembershipSequence(db, playlistId);
-  }
-
-  private assertMembershipSequence(db: MasterDatabase, playlistId: string): void {
-    const rows = db.selectRawRows(
-      `SELECT membership."TrackNo" AS trackNumber
-       FROM "djmdSongPlaylist" membership
-       WHERE membership."PlaylistID" = ?
-         AND ${this.active(db, "djmdSongPlaylist", "membership")}
-       ORDER BY membership."TrackNo", membership."ID"`,
-      [playlistId],
-    );
-    const trackNumbers = rows.map((row) => numberValue(row.trackNumber, Number.NaN));
+    const active = tracksDeletion
+      ? rows.filter((row) => Number(row.get("rb_local_deleted") ?? 0) === 0)
+      : rows;
+    const trackNumbers = active.map((row) => Number(row.TrackNo));
     const expected = trackNumbers.map((_, index) => index + 1);
     if (trackNumbers.some((trackNumber, index) => trackNumber !== expected[index]))
       throw new Error(
         `Playlist '${playlistId}' has a non-contiguous active track order: ${trackNumbers.join(", ")}`,
       );
+    return active;
   }
 }

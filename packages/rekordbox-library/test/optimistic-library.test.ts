@@ -72,6 +72,26 @@ describe("optimistic library cache", () => {
     );
   });
 
+  it("keeps cached track playlist memberships aligned with rename and deletion", () => {
+    const queryClient = seededClient();
+
+    applyOptimisticLibraryMutation(queryClient, {
+      type: "rename-playlist",
+      playlistId: playlist.id,
+      name: "Renamed set",
+    });
+    expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.playlists[0]?.name).toBe(
+      "Renamed set",
+    );
+
+    applyOptimisticLibraryMutation(queryClient, {
+      type: "delete-playlist",
+      playlistId: playlist.id,
+      expectedPlaylistIds: [playlist.id],
+    });
+    expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.playlists).toEqual([]);
+  });
+
   it("adds, reconciles, moves, removes, and replaces memberships without waiting for SQLite", () => {
     const queryClient = seededClient();
     const third = track("3", "Three");
@@ -142,6 +162,99 @@ describe("optimistic library cache", () => {
     expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.cues).toEqual([]);
   });
 
+  it("normalizes track metadata immediately and schedules authoritative revalidation", () => {
+    const queryClient = seededClient();
+    const browserKey = [
+      "tracks",
+      { query: "one", filter: "all", offset: 0, sort: { field: "title", direction: "asc" } },
+    ] as const;
+    queryClient.setQueryData<TracksResponse>(browserKey, editor(queryClient));
+
+    const optimistic = applyOptimisticLibraryMutation(queryClient, {
+      type: "update-track",
+      contentId: "1",
+      expectedRevision: "2026-07-12 12:00:00.000 +00:00",
+      metadata: {
+        title: "  Renamed  ",
+        artist: "  Another artist  ",
+        album: "   ",
+        genre: "  House ",
+        key: "  F minor ",
+        bpm: 124.567,
+        rating: 4,
+        comment: "  Peak-time  ",
+        releaseYear: 2026,
+        isrc: "  US-ABC-26-00001  ",
+      },
+    });
+
+    expect(optimistic.revalidateTrackId).toBe("1");
+    expect(queryClient.getQueryData<TracksResponse>(browserKey)?.items[0]).toMatchObject({
+      title: "Renamed",
+      artist: "Another artist",
+      album: null,
+      genre: "House",
+      key: "F minor",
+      bpm: 124.57,
+      rating: 4,
+    });
+    expect(editor(queryClient).items[0]).toMatchObject({ title: "Renamed", genre: "House" });
+    expect(queryClient.getQueryData<TrackDetail>(["track", "1"])).toMatchObject({
+      title: "Renamed",
+      comment: "Peak-time",
+      releaseYear: 2026,
+      isrc: "US-ABC-26-00001",
+    });
+
+    const committedRevision = "2026-07-12 12:00:01.000 +00:00";
+    reconcileOptimisticLibraryMutation(queryClient, optimistic, {
+      ...receipt("update-track", "1"),
+      revision: committedRevision,
+    });
+    expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.revision).toBe(committedRevision);
+
+    if (optimistic.mutation.type !== "update-track") throw new Error("Expected track update");
+    const next = resolveOptimisticMutationIds(
+      {
+        ...optimistic.mutation,
+        expectedRevision: "2026-07-12 12:00:00.000 +00:00",
+      },
+      {
+        playlists: new Map(),
+        memberships: new Map(),
+        cues: new Map(),
+        trackRevisions: new Map([["1", committedRevision]]),
+      },
+    );
+    expect(next).toMatchObject({ type: "update-track", expectedRevision: committedRevision });
+  });
+
+  it("keeps unknown replacement tracks ordered until the canonical snapshot revalidates", () => {
+    const queryClient = seededClient();
+    const optimistic = applyOptimisticLibraryMutation(queryClient, {
+      type: "replace-playlist-tracks",
+      playlistId: playlist.id,
+      contentIds: ["1", "not-cached"],
+      expectedMembershipIds: ["membership-1", "membership-2"],
+    });
+
+    expect(editor(queryClient).items.map((track) => track.id)).toEqual(["1", "not-cached"]);
+    expect(editor(queryClient).count).toBe(2);
+    expect(optimistic.replacementMembershipIds).toHaveLength(2);
+    expect(optimistic.revalidateCanonicalPlaylistId).toBe(playlist.id);
+
+    const reconciled = reconcileOptimisticLibraryMutation(
+      queryClient,
+      optimistic,
+      receipt("replace-playlist-tracks", playlist.id, ["membership-1", "membership-new"]),
+    );
+    expect(editor(queryClient).items[1]?.playlistMembershipId).toBe("membership-new");
+    expect(reconciled.membershipIds).toContainEqual([
+      optimistic.replacementMembershipIds![1],
+      "membership-new",
+    ]);
+  });
+
   it("resolves optimistic IDs before dependent background commits", () => {
     const resolved = resolveOptimisticMutationIds(
       {
@@ -163,6 +276,47 @@ describe("optimistic library cache", () => {
       trackNumber: 2,
     });
   });
+
+  it("reconciles replacement membership IDs for the next queued playlist write", () => {
+    const queryClient = seededClient();
+    const third = track("3", "Three");
+    queryClient.setQueryData<TrackDetail>(["track", third.id], detail(third));
+    const optimistic = applyOptimisticLibraryMutation(queryClient, {
+      type: "replace-playlist-tracks",
+      playlistId: playlist.id,
+      contentIds: ["1", "3"],
+      expectedMembershipIds: ["membership-1", "membership-2"],
+    });
+    const temporaryId = optimistic.replacementMembershipIds?.[1];
+    expect(temporaryId).toMatch(/^optimistic-membership:/u);
+
+    const reconciled = reconcileOptimisticLibraryMutation(
+      queryClient,
+      optimistic,
+      receipt("replace-playlist-tracks", playlist.id, ["membership-1", "membership-3"]),
+    );
+    expect(editor(queryClient).items.map((item) => item.playlistMembershipId)).toEqual([
+      "membership-1",
+      "membership-3",
+    ]);
+
+    const resolved = resolveOptimisticMutationIds(
+      {
+        type: "replace-playlist-tracks",
+        playlistId: playlist.id,
+        contentIds: ["3", "1"],
+        expectedMembershipIds: [temporaryId!, "membership-1"],
+      },
+      {
+        playlists: new Map(),
+        memberships: new Map(reconciled.membershipIds),
+        cues: new Map(),
+      },
+    );
+    expect(resolved).toMatchObject({
+      expectedMembershipIds: ["membership-3", "membership-1"],
+    });
+  });
 });
 
 function seededClient(): QueryClient {
@@ -172,8 +326,7 @@ function seededClient(): QueryClient {
   const response: TracksResponse = { items: [one, two], count: 2, limit: 2, offset: 0 };
   queryClient.setQueryData(["bootstrap"], bootstrap());
   queryClient.setQueryData(["playlists"], [playlist]);
-  queryClient.setQueryData(["editor-tracks", playlist.id], response);
-  queryClient.setQueryData(["canvas-tracks", playlist.id], response);
+  queryClient.setQueryData(["playlist-tracks", playlist.id], response);
   queryClient.setQueryData(
     ["track", one.id],
     detail(one, [
@@ -211,6 +364,7 @@ function track(id: string, title: string): TrackSummary {
 function detail(summary: TrackSummary, playlists: TrackDetail["playlists"] = []): TrackDetail {
   return {
     ...summary,
+    revision: "2026-07-12 12:00:00.000 +00:00",
     comment: null,
     isrc: null,
     releaseYear: null,
@@ -224,11 +378,20 @@ function detail(summary: TrackSummary, playlists: TrackDetail["playlists"] = [])
 }
 
 function editor(queryClient: QueryClient): TracksResponse {
-  return queryClient.getQueryData<TracksResponse>(["editor-tracks", playlist.id])!;
+  return queryClient.getQueryData<TracksResponse>(["playlist-tracks", playlist.id])!;
 }
 
-function receipt(operation: MutationReceipt["operation"], changedId: string): MutationReceipt {
-  return { operation, changedId, finishedAt: "2026-07-13T00:00:00.000Z" };
+function receipt(
+  operation: MutationReceipt["operation"],
+  changedId: string,
+  membershipIds?: string[],
+): MutationReceipt {
+  return {
+    operation,
+    changedId,
+    finishedAt: "2026-07-13T00:00:00.000Z",
+    ...(membershipIds ? { membershipIds } : {}),
+  };
 }
 
 function bootstrap(): LibraryBootstrap {

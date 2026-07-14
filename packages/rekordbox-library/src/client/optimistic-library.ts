@@ -13,22 +13,23 @@ import type {
   TrackSummary,
   TracksResponse,
 } from "../shared/types.js";
+import { normalizeTrackMetadataInput } from "../shared/track-metadata.js";
 
-const libraryQueryRoots = new Set([
-  "bootstrap",
-  "playlists",
-  "tracks",
-  "canvas-tracks",
-  "editor-tracks",
-  "track",
-]);
+const libraryQueryRoots = new Set(["bootstrap", "playlists", "tracks", "playlist-tracks", "track"]);
 
 export type OptimisticLibraryMutation = {
   mutation: LibraryMutation;
   temporaryMembershipId?: string;
   temporaryPlaylistId?: string;
   optimisticCueId?: string;
-  revalidateTrackQueries?: boolean;
+  replacementMembershipIds?: string[];
+  revalidateCanonicalPlaylistId?: string;
+  revalidatePlaylistId?: string;
+  revalidateTrackId?: string;
+};
+
+export type OptimisticIdReconciliation = {
+  membershipIds: Array<readonly [from: string, to: string]>;
 };
 
 export type LibraryCacheSnapshot = Array<readonly [QueryKey, unknown]>;
@@ -37,6 +38,7 @@ export type OptimisticIdMaps = {
   memberships: ReadonlyMap<string, string>;
   playlists: ReadonlyMap<string, string>;
   cues: ReadonlyMap<string, string>;
+  trackRevisions?: ReadonlyMap<string, string>;
 };
 
 export function isOptimisticPlaylistId(id: string | null | undefined): boolean {
@@ -93,13 +95,18 @@ export function applyOptimisticLibraryMutation(
   }
 
   if (mutation.type === "rename-playlist") {
+    const name = mutation.name.trim();
     queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
       items?.map((playlist) =>
-        playlist.id === mutation.playlistId
-          ? { ...playlist, name: mutation.name.trim() }
-          : playlist,
+        playlist.id === mutation.playlistId ? { ...playlist, name } : playlist,
       ),
     );
+    updateTrackDetails(queryClient, (detail) => ({
+      ...detail,
+      playlists: detail.playlists.map((playlist) =>
+        playlist.id === mutation.playlistId ? { ...playlist, name } : playlist,
+      ),
+    }));
     return { mutation };
   }
 
@@ -112,6 +119,10 @@ export function applyOptimisticLibraryMutation(
     queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
       items?.filter((playlist) => !deletedIds.has(playlist.id)),
     );
+    updateTrackDetails(queryClient, (detail) => ({
+      ...detail,
+      playlists: detail.playlists.filter((playlist) => !deletedIds.has(playlist.id)),
+    }));
     for (const playlist of deleted) updateBootstrapPlaylistStats(queryClient, playlist.type, -1);
     return { mutation };
   }
@@ -119,14 +130,17 @@ export function applyOptimisticLibraryMutation(
   if (mutation.type === "update-track") {
     updateTrackMetadata(queryClient, mutation.contentId, mutation.metadata);
     // Search membership, pagination, and every metadata sort can change. Keep the visible row
-    // instant, then revalidate browser queries after SQLite commits.
-    return { mutation, revalidateTrackQueries: true };
+    // instant, then revalidate browser and authoritative detail queries after SQLite commits.
+    return { mutation, revalidateTrackId: mutation.contentId };
   }
 
   if (mutation.type === "add-track") {
     const temporaryMembershipId = optimisticId("membership");
     const track = findCachedTrack(queryClient, mutation.contentId);
     const playlist = findCachedPlaylist(queryClient, mutation.playlistId);
+    const revalidatePlaylistId = playlistTracksNeedRevalidation(queryClient, mutation.playlistId)
+      ? mutation.playlistId
+      : undefined;
     let assignedTrackNumber = mutation.trackNumber;
     updatePlaylistTrackResponses(queryClient, mutation.playlistId, (response) => {
       const trackNumber = clampTrackNumber(
@@ -147,10 +161,13 @@ export function applyOptimisticLibraryMutation(
         trackNumber: assignedTrackNumber ?? Math.max(1, playlist.trackCount ?? 1),
       });
     }
-    return { mutation, temporaryMembershipId };
+    return { mutation, temporaryMembershipId, revalidatePlaylistId };
   }
 
   if (mutation.type === "remove-track") {
+    const revalidatePlaylistId = playlistTracksNeedRevalidation(queryClient, mutation.playlistId)
+      ? mutation.playlistId
+      : undefined;
     const membership = findCachedMembership(queryClient, mutation.membershipId);
     updatePlaylistTrackResponses(queryClient, mutation.playlistId, (response) =>
       removeTrackFromResponse(response, mutation.membershipId, membership?.trackNumber),
@@ -162,10 +179,13 @@ export function applyOptimisticLibraryMutation(
       mutation.membershipId,
       membership?.trackNumber,
     );
-    return { mutation };
+    return { mutation, revalidatePlaylistId };
   }
 
   if (mutation.type === "move-track") {
+    const revalidatePlaylistId = playlistTracksNeedRevalidation(queryClient, mutation.playlistId)
+      ? mutation.playlistId
+      : undefined;
     const membership = findCachedMembership(queryClient, mutation.membershipId);
     updatePlaylistTrackResponses(queryClient, mutation.playlistId, (response) =>
       moveTrackInResponse(
@@ -184,17 +204,25 @@ export function applyOptimisticLibraryMutation(
         mutation.trackNumber,
       );
     }
-    return { mutation };
+    return { mutation, revalidatePlaylistId };
   }
 
   if (mutation.type === "replace-playlist-tracks") {
+    const revalidatePlaylistId = playlistTracksNeedRevalidation(queryClient, mutation.playlistId)
+      ? mutation.playlistId
+      : undefined;
     const desired = desiredPlaylistTracks(queryClient, mutation.playlistId, mutation.contentIds);
     updatePlaylistTrackResponses(queryClient, mutation.playlistId, (response) =>
-      replaceTracksInResponse(response, desired),
+      replaceTracksInResponse(response, desired.items),
     );
     setPlaylistCount(queryClient, mutation.playlistId, mutation.contentIds.length);
-    replaceDetailMemberships(queryClient, mutation.playlistId, desired);
-    return { mutation };
+    replaceDetailMemberships(queryClient, mutation.playlistId, desired.items);
+    return {
+      mutation,
+      replacementMembershipIds: desired.items.flatMap((track) => track.playlistMembershipId ?? []),
+      revalidateCanonicalPlaylistId: desired.complete ? undefined : mutation.playlistId,
+      revalidatePlaylistId,
+    };
   }
 
   if (mutation.type === "upsert-cue") {
@@ -211,16 +239,35 @@ export function reconcileOptimisticLibraryMutation(
   queryClient: QueryClient,
   optimistic: OptimisticLibraryMutation,
   receipt: MutationReceipt,
-): void {
+): OptimisticIdReconciliation {
+  const membershipIds: Array<readonly [from: string, to: string]> = [];
   if (optimistic.temporaryPlaylistId) {
     replacePlaylistId(queryClient, optimistic.temporaryPlaylistId, receipt.changedId);
   }
   if (optimistic.temporaryMembershipId) {
     replaceMembershipId(queryClient, optimistic.temporaryMembershipId, receipt.changedId);
+    membershipIds.push([optimistic.temporaryMembershipId, receipt.changedId]);
+  }
+  if (
+    optimistic.replacementMembershipIds &&
+    receipt.membershipIds?.length === optimistic.replacementMembershipIds.length
+  ) {
+    optimistic.replacementMembershipIds.forEach((from, index) => {
+      const to = receipt.membershipIds![index]!;
+      if (from === to) return;
+      replaceMembershipId(queryClient, from, to);
+      membershipIds.push([from, to]);
+    });
   }
   if (optimistic.optimisticCueId) {
     replaceCueId(queryClient, optimistic.optimisticCueId, receipt.changedId);
   }
+  if (optimistic.mutation.type === "update-track" && receipt.revision) {
+    queryClient.setQueryData<TrackDetail>(["track", optimistic.mutation.contentId], (track) =>
+      track ? { ...track, revision: receipt.revision! } : track,
+    );
+  }
+  return { membershipIds };
 }
 
 /** Resolve IDs created optimistically by earlier writes in the same serialized batch. */
@@ -244,8 +291,12 @@ export function resolveOptimisticMutationIds(
         playlistId: playlistId(mutation.playlistId),
         expectedPlaylistIds: mutation.expectedPlaylistIds.map(playlistId),
       };
-    case "update-track":
-      return mutation;
+    case "update-track": {
+      const revision = maps.trackRevisions?.get(mutation.contentId);
+      return revision && revision !== mutation.expectedRevision
+        ? { ...mutation, expectedRevision: revision }
+        : mutation;
+    }
     case "add-track":
       return { ...mutation, playlistId: playlistId(mutation.playlistId) };
     case "remove-track":
@@ -261,7 +312,11 @@ export function resolveOptimisticMutationIds(
         membershipId: membershipId(mutation.membershipId),
       };
     case "replace-playlist-tracks":
-      return { ...mutation, playlistId: playlistId(mutation.playlistId) };
+      return {
+        ...mutation,
+        playlistId: playlistId(mutation.playlistId),
+        expectedMembershipIds: mutation.expectedMembershipIds.map(membershipId),
+      };
     case "upsert-cue":
       return mutation.cue.id
         ? { ...mutation, cue: { ...mutation.cue, id: cueId(mutation.cue.id) } }
@@ -276,14 +331,15 @@ function updateTrackMetadata(
   contentId: string,
   metadata: TrackMetadataInput,
 ): void {
+  const normalized = normalizeTrackMetadataInput(metadata);
   const summary = {
-    title: metadata.title.trim(),
-    artist: metadata.artist,
-    album: metadata.album,
-    genre: metadata.genre,
-    key: metadata.key,
-    bpm: metadata.bpm,
-    rating: metadata.rating,
+    title: normalized.title,
+    artist: normalized.artist,
+    album: normalized.album,
+    genre: normalized.genre,
+    key: normalized.key,
+    bpm: normalized.bpm,
+    rating: normalized.rating,
   };
   queryClient.setQueriesData<TracksResponse>(
     {
@@ -305,9 +361,9 @@ function updateTrackMetadata(
       ? {
           ...track,
           ...summary,
-          comment: metadata.comment,
-          releaseYear: metadata.releaseYear,
-          isrc: metadata.isrc,
+          comment: normalized.comment,
+          releaseYear: normalized.releaseYear,
+          isrc: normalized.isrc,
         }
       : track,
   );
@@ -325,8 +381,7 @@ function findCachedTrack(queryClient: QueryClient, id: string): TrackSummary | u
   const detail = queryClient.getQueryData<TrackDetail>(["track", id]);
   if (detail) return detail;
   for (const [, response] of queryClient.getQueriesData<TracksResponse>({
-    predicate: (query) =>
-      ["tracks", "canvas-tracks", "editor-tracks"].includes(String(query.queryKey[0])),
+    predicate: (query) => query.queryKey[0] === "tracks" || query.queryKey[0] === "playlist-tracks",
   })) {
     const track = response?.items.find((item) => item.id === id);
     if (track) return track;
@@ -339,8 +394,7 @@ function findCachedMembership(
   membershipId: string,
 ): Pick<TrackSummary, "id" | "trackNumber"> | undefined {
   for (const [, response] of queryClient.getQueriesData<TracksResponse>({
-    predicate: (query) =>
-      ["tracks", "canvas-tracks", "editor-tracks"].includes(String(query.queryKey[0])),
+    predicate: (query) => query.queryKey[0] === "tracks" || query.queryKey[0] === "playlist-tracks",
   })) {
     const track = response?.items.find((item) => item.playlistMembershipId === membershipId);
     if (track) return track;
@@ -368,11 +422,45 @@ function updatePlaylistTrackResponses(
     },
     (response) => (response ? update(response) : response),
   );
-  for (const root of ["canvas-tracks", "editor-tracks"] as const) {
-    queryClient.setQueryData<TracksResponse>([root, playlistId], (response) =>
-      response ? update(response) : response,
-    );
-  }
+  queryClient.setQueryData<TracksResponse>(["playlist-tracks", playlistId], (response) =>
+    response ? update(response) : response,
+  );
+}
+
+function playlistTracksNeedRevalidation(queryClient: QueryClient, playlistId: string): boolean {
+  return queryClient
+    .getQueriesData<TracksResponse>({
+      predicate: (query) => {
+        if (query.queryKey[0] !== "tracks") return false;
+        const options = query.queryKey[1];
+        return (
+          typeof options === "object" &&
+          options !== null &&
+          "playlistId" in options &&
+          options.playlistId === playlistId
+        );
+      },
+    })
+    .some(([queryKey, response]) => {
+      if (!response || response.offset !== 0 || response.items.length !== response.count)
+        return true;
+      const options = queryKey[1];
+      if (typeof options !== "object" || options === null) return true;
+      const query = "query" in options ? options.query : undefined;
+      const filter = "filter" in options ? options.filter : undefined;
+      const sort = "sort" in options ? options.sort : undefined;
+      return (
+        Boolean(query) ||
+        (filter !== undefined && filter !== "all") ||
+        (sort !== undefined &&
+          (typeof sort !== "object" ||
+            sort === null ||
+            !("field" in sort) ||
+            sort.field !== "position" ||
+            !("direction" in sort) ||
+            sort.direction !== "asc"))
+      );
+    });
 }
 
 function addTrackToResponse(
@@ -452,13 +540,12 @@ function desiredPlaylistTracks(
   queryClient: QueryClient,
   playlistId: string,
   contentIds: readonly string[],
-): TrackSummary[] {
+): { complete: boolean; items: TrackSummary[] } {
   const existingByContent = new Map<string, TrackSummary[]>();
   const seenMemberships = new Set<string>();
   for (const [, response] of queryClient.getQueriesData<TracksResponse>({
     predicate: (query) =>
-      (query.queryKey[0] === "canvas-tracks" || query.queryKey[0] === "editor-tracks") &&
-      query.queryKey[1] === playlistId,
+      query.queryKey[0] === "playlist-tracks" && query.queryKey[1] === playlistId,
   })) {
     for (const track of response?.items ?? []) {
       if (!track.playlistMembershipId || seenMemberships.has(track.playlistMembershipId)) continue;
@@ -468,18 +555,37 @@ function desiredPlaylistTracks(
       existingByContent.set(track.id, matches);
     }
   }
-  return contentIds.flatMap((contentId, index) => {
+  let complete = true;
+  const items = contentIds.map((contentId, index) => {
     const existing = existingByContent.get(contentId)?.shift();
     const source = existing ?? findCachedTrack(queryClient, contentId);
-    if (!source) return [];
-    return [
-      {
-        ...source,
-        playlistMembershipId: existing?.playlistMembershipId ?? optimisticId("membership"),
-        trackNumber: index + 1,
-      },
-    ];
+    if (!source) complete = false;
+    return {
+      ...(source ?? unknownTrack(contentId)),
+      playlistMembershipId: existing?.playlistMembershipId ?? optimisticId("membership"),
+      trackNumber: index + 1,
+    };
   });
+  return { complete, items };
+}
+
+function unknownTrack(id: string): TrackSummary {
+  return {
+    id,
+    title: "Untitled",
+    artist: null,
+    album: null,
+    genre: null,
+    key: null,
+    bpm: null,
+    durationSeconds: null,
+    rating: 0,
+    playCount: 0,
+    analyzed: false,
+    artworkAvailable: false,
+    fileExists: false,
+    path: null,
+  };
 }
 
 function replaceTracksInResponse(
@@ -726,9 +832,7 @@ function replaceMembershipId(queryClient: QueryClient, from: string, to: string)
   queryClient.setQueriesData<TracksResponse>(
     {
       predicate: (query) =>
-        query.queryKey[0] === "tracks" ||
-        query.queryKey[0] === "canvas-tracks" ||
-        query.queryKey[0] === "editor-tracks",
+        query.queryKey[0] === "tracks" || query.queryKey[0] === "playlist-tracks",
     },
     (response) =>
       response
@@ -768,11 +872,8 @@ function aliasPlaylistQueries(queryClient: QueryClient, from: string, to: string
         queryClient.setQueryData(["tracks", { ...options, playlistId: to }], data);
       }
     }
-    if (
-      (queryKey[0] === "canvas-tracks" || queryKey[0] === "editor-tracks") &&
-      queryKey[1] === from
-    ) {
-      queryClient.setQueryData([queryKey[0], to], data);
+    if (queryKey[0] === "playlist-tracks" && queryKey[1] === from) {
+      queryClient.setQueryData(["playlist-tracks", to], data);
     }
   }
 }

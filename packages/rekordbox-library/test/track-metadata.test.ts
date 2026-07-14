@@ -2,10 +2,12 @@ import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import type { TrackDetail, TracksResponse } from "../src/shared/types.js";
+import { shouldHydrateTrackMetadataDraft } from "../src/client/components/TrackMetadataDialog.js";
 import { applyOptimisticLibraryMutation } from "../src/client/optimistic-library.js";
 
 const detail: TrackDetail = {
   id: "track-1",
+  revision: "2026-07-12 12:00:00.000 +00:00",
   title: "Old title",
   artist: "Old artist",
   album: null,
@@ -44,6 +46,7 @@ describe("optimistic track metadata", () => {
     applyOptimisticLibraryMutation(queryClient, {
       type: "update-track",
       contentId: detail.id,
+      expectedRevision: detail.revision,
       metadata: {
         title: "New title",
         artist: "New artist",
@@ -69,9 +72,17 @@ describe("optimistic track metadata", () => {
     });
     expect(queryClient.getQueryData<TrackDetail>(["track", detail.id])).toMatchObject({
       title: "New title",
+      revision: detail.revision,
       comment: "Peak time",
       releaseYear: 2026,
       isrc: "TEST00000001",
     });
+  });
+
+  it("hydrates a draft once per open track without replacing it on same-track refetches", () => {
+    expect(shouldHydrateTrackMetadataDraft(true, "track-1", undefined)).toBe(true);
+    expect(shouldHydrateTrackMetadataDraft(true, "track-1", "track-1")).toBe(false);
+    expect(shouldHydrateTrackMetadataDraft(true, "track-2", "track-1")).toBe(true);
+    expect(shouldHydrateTrackMetadataDraft(false, "track-1", undefined)).toBe(false);
   });
 });

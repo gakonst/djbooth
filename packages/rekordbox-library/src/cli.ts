@@ -71,7 +71,11 @@ libraryCli.command("status", {
   }),
   run(c) {
     const service = new RekordboxLibraryService({ dbPath: c.options.path });
-    return service.getBootstrap("").library;
+    try {
+      return service.getBootstrap("").library;
+    } finally {
+      service.close();
+    }
   },
 });
 

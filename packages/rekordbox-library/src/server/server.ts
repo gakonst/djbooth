@@ -57,6 +57,7 @@ const mutationSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("update-track"),
     contentId: z.string().min(1),
+    expectedRevision: z.string().min(1).max(128),
     metadata: z.object({
       title: z.string().trim().min(1).max(255),
       artist: z.string().trim().max(255).nullable(),
@@ -126,9 +127,11 @@ const promptSchema = z.object({
 });
 
 export type LibraryApi = {
+  close?(): void;
   getAudioPath(id: string): string;
   getArtwork(id: string): Promise<ArtworkAsset>;
   getBootstrap(csrfToken: string): LibraryBootstrap;
+  getDatabasePath?(): string;
   getPlaylists(): PlaylistItem[];
   getTrack(id: string): TrackDetail;
   getWaveform(id: string): TrackWaveform;
@@ -140,6 +143,7 @@ export type LibraryApi = {
     q?: string;
     sort?: TrackSort;
   }): TracksResponse;
+  invalidate?(): void;
   mutate(mutation: LibraryMutation): Promise<MutationReceipt>;
 };
 
@@ -475,6 +479,7 @@ export async function startLibraryServer(
     throw new TypeError("The Rekordbox library server only binds to a loopback address");
   const port = options.port ?? 4179;
   const token = randomBytes(32).toString("base64url");
+  const ownsApi = options.api === undefined;
   const api =
     options.api ??
     new RekordboxLibraryService({
@@ -482,11 +487,38 @@ export async function startLibraryServer(
       key: options.key,
       writeEnabled: options.writeEnabled,
     });
+  let ownedDatabasePath: string | undefined;
+  if (ownsApi) {
+    try {
+      ownedDatabasePath = realpathSync(
+        api.getDatabasePath?.() ?? api.getBootstrap(token).library.dbPath,
+      );
+    } catch (error) {
+      api.close?.();
+      throw error;
+    }
+  }
   const packageRoot = resolve(import.meta.dirname, "../..");
   const staticDirectory = resolve(options.staticDirectory ?? join(packageRoot, "dist/client"));
   const eventClients = new Set<ServerResponse>();
+  const localFileVersions = new Map<string, string>();
+  let watchedPaths: string[] = [];
   let eventId = 0;
   let externalChangeTimer: ReturnType<typeof setTimeout> | undefined;
+  const statsVersion = (stats: Stats): string =>
+    stats.nlink === 0
+      ? "missing"
+      : `${String(stats.dev)}:${String(stats.ino)}:${String(stats.size)}:${String(stats.mtimeMs)}`;
+  const pathVersion = (path: string): string => {
+    try {
+      return statsVersion(statSync(path));
+    } catch {
+      return "missing";
+    }
+  };
+  const rememberLocalFileVersions = () => {
+    for (const path of watchedPaths) localFileVersions.set(path, pathVersion(path));
+  };
   const writeEvent = (client: ServerResponse, message: string): boolean => {
     if (client.destroyed || client.writableEnded) {
       eventClients.delete(client);
@@ -587,7 +619,7 @@ export async function startLibraryServer(
           200,
           api.getTracks({
             filter,
-            limit: queryInteger(url, "limit", 100, 500),
+            limit: queryInteger(url, "limit", 100, 10_000),
             offset: queryInteger(url, "offset", 0, 10_000_000),
             ...(url.searchParams.get("playlistId")
               ? { playlistId: url.searchParams.get("playlistId")! }
@@ -633,6 +665,7 @@ export async function startLibraryServer(
         assertMutationRequest(request, token);
         const mutation = mutationSchema.parse(await readJsonBody(request)) as LibraryMutation;
         const receipt: MutationReceipt = await api.mutate(mutation);
+        rememberLocalFileVersions();
         publish("mutation", { changedId: receipt.changedId, mutation: mutation.type });
         json(request, response, 200, { receipt });
         return;
@@ -683,32 +716,44 @@ export async function startLibraryServer(
     }
   });
 
-  await new Promise<void>((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => {
-      server.off("error", reject);
-      resolveListen();
+  try {
+    await new Promise<void>((resolveListen, reject) => {
+      server.once("error", reject);
+      server.listen(port, host, () => {
+        server.off("error", reject);
+        resolveListen();
+      });
     });
-  });
+  } catch (error) {
+    clearInterval(heartbeat);
+    if (ownsApi) api.close?.();
+    throw error;
+  }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Library server has no TCP address");
   const displayHost = host === "::1" ? "[::1]" : host;
   const watchers: Array<{ path: string; listener: (current: Stats, previous: Stats) => void }> = [];
   try {
-    const dbPath = realpathSync(api.getBootstrap(token).library.dbPath);
-    for (const watchedPath of [
-      dbPath,
-      `${dbPath}-wal`,
-      join(dirname(dbPath), "masterPlaylists6.xml"),
-    ]) {
+    const dbPath =
+      ownedDatabasePath ??
+      realpathSync(api.getDatabasePath?.() ?? api.getBootstrap(token).library.dbPath);
+    watchedPaths = [dbPath, `${dbPath}-wal`, join(dirname(dbPath), "masterPlaylists6.xml")];
+    for (const watchedPath of watchedPaths) {
       const listener = (current: Stats, previous: Stats) => {
-        if (current.mtimeMs === previous.mtimeMs && current.size === previous.size) return;
-        if (externalChangeTimer) clearTimeout(externalChangeTimer);
-        externalChangeTimer = setTimeout(() => {
-          externalChangeTimer = undefined;
-          publish("external-change");
-        }, 200);
-        externalChangeTimer.unref();
+        if (statsVersion(current) === statsVersion(previous)) return;
+        const expectedLocalVersion = localFileVersions.get(watchedPath);
+        if (expectedLocalVersion === statsVersion(current)) {
+          localFileVersions.delete(watchedPath);
+        } else {
+          localFileVersions.delete(watchedPath);
+          if (externalChangeTimer) clearTimeout(externalChangeTimer);
+          else api.invalidate?.();
+          externalChangeTimer = setTimeout(() => {
+            externalChangeTimer = undefined;
+            publish("external-change");
+          }, 200);
+          externalChangeTimer.unref();
+        }
       };
       watchFile(watchedPath, { interval: 750, persistent: false }, listener);
       watchers.push({ path: watchedPath, listener });
@@ -716,20 +761,32 @@ export async function startLibraryServer(
   } catch {
     // The API remains available and reports its own bootstrap error; live refresh is best-effort.
   }
+  let closePromise: Promise<void> | undefined;
   return {
     host,
     port: address.port,
     token,
     url: `http://${displayHost}:${address.port}/`,
     close: () => {
-      clearInterval(heartbeat);
-      if (externalChangeTimer) clearTimeout(externalChangeTimer);
-      for (const watcher of watchers) unwatchFile(watcher.path, watcher.listener);
-      for (const client of eventClients) client.end();
-      eventClients.clear();
-      return new Promise<void>((resolveClose, reject) => {
-        server.close((error) => (error ? reject(error) : resolveClose()));
+      closePromise ??= new Promise<void>((resolveClose, reject) => {
+        clearInterval(heartbeat);
+        if (externalChangeTimer) clearTimeout(externalChangeTimer);
+        for (const watcher of watchers) unwatchFile(watcher.path, watcher.listener);
+        for (const client of eventClients) client.end();
+        eventClients.clear();
+        server.close((serverError) => {
+          let closeError: unknown = serverError;
+          try {
+            if (ownsApi) api.close?.();
+          } catch (error) {
+            closeError ??= error;
+          }
+          if (closeError)
+            reject(closeError instanceof Error ? closeError : new Error(String(closeError)));
+          else resolveClose();
+        });
       });
+      return closePromise;
     },
   };
 }

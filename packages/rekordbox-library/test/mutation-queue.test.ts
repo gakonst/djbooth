@@ -41,7 +41,7 @@ describe("serial mutation queue", () => {
     await expect(second).resolves.toBe("two");
   });
 
-  it("coalesces only adjacent waiting playlist snapshots", async () => {
+  it("coalesces only adjacent waiting moves for the same membership", async () => {
     const gate = deferred<string>();
     const executed: LibraryMutation[] = [];
     const queue = new SerialMutationQueue<LibraryMutation, string>({
@@ -53,33 +53,63 @@ describe("serial mutation queue", () => {
       },
     });
     const first = queue.enqueue({
+      type: "add-track",
+      playlistId: "playlist",
+      contentId: "track",
+    });
+    const stale = queue.enqueue({
       type: "move-track",
       playlistId: "playlist",
       membershipId: "membership",
       trackNumber: 2,
     });
-    const stale = queue.enqueue({
-      type: "replace-playlist-tracks",
-      playlistId: "playlist",
-      contentIds: ["a", "b"],
-      expectedMembershipIds: ["ma", "mb"],
-    });
     const latest = queue.enqueue({
-      type: "replace-playlist-tracks",
+      type: "move-track",
       playlistId: "playlist",
-      contentIds: ["b", "a"],
-      expectedMembershipIds: ["ma", "mb"],
+      membershipId: "membership",
+      trackNumber: 3,
     });
 
     expect(queue.pendingCount).toBe(2);
-    gate.resolve("move-track");
+    gate.resolve("add-track");
     await first;
-    await expect(Promise.all([stale, latest])).resolves.toEqual([
-      "replace-playlist-tracks",
-      "replace-playlist-tracks",
-    ]);
+    await expect(Promise.all([stale, latest])).resolves.toEqual(["move-track", "move-track"]);
     expect(executed).toHaveLength(2);
-    expect(executed[1]).toMatchObject({ contentIds: ["b", "a"] });
+    expect(executed[1]).toMatchObject({ trackNumber: 3 });
+  });
+
+  it("keeps playlist replacements ordered because each snapshot is a precondition", () => {
+    expect(
+      libraryMutationCoalesceKey({
+        type: "replace-playlist-tracks",
+        playlistId: "playlist",
+        contentIds: ["b", "a"],
+        expectedMembershipIds: ["ma", "mb"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("coalesces adjacent waiting metadata snapshots for one track", () => {
+    const metadata = {
+      title: "First",
+      artist: null,
+      album: null,
+      genre: null,
+      key: null,
+      bpm: null,
+      rating: 0,
+      comment: null,
+      releaseYear: null,
+      isrc: null,
+    };
+    expect(
+      libraryMutationCoalesceKey({
+        type: "update-track",
+        contentId: "track",
+        expectedRevision: "2026-07-12 12:00:00.000 +00:00",
+        metadata,
+      }),
+    ).toBe("track-metadata:track");
   });
 
   it("rejects dependent queued writes after a failure", async () => {

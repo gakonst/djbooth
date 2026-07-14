@@ -39,7 +39,7 @@
     "build:server": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "cli": "tsx src/cli.ts",
-    "dev": "tsx scripts/dev.ts",
+    "dev": "tsx watch --clear-screen=false scripts/dev.ts",
     "dev:client": "vite --host 127.0.0.1",
     "format": "oxfmt --write src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",
     "format:check": "oxfmt --check src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",

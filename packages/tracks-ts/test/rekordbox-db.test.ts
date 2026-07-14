@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { SetManifest } from "../src/manifest.js";
 import {
@@ -1012,7 +1012,98 @@ describe("Rekordbox direct database planning", () => {
     }
   });
 
-  test("serializes concurrent recovery of one stale Rekordbox database lock", async () => {
+  test("defaults database locks to durable syncs and skips them in session mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-lock-durability-"));
+    const dbPath = join(root, "master.db");
+    const probePath = join(root, "sync-probe");
+    let sync: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await writeFile(dbPath, "fixture");
+      const probe = await open(probePath, "wx");
+      sync = vi.spyOn(Object.getPrototypeOf(probe), "sync");
+      await probe.close();
+      await rm(probePath);
+      sync.mockClear();
+
+      const releaseDurable = await acquireRekordboxDatabaseLock(dbPath);
+      await releaseDurable();
+      expect(sync).toHaveBeenCalled();
+      sync.mockClear();
+
+      const releaseSession = await acquireRekordboxDatabaseLock(dbPath, {
+        durability: "session",
+      });
+      await expect(acquireRekordboxDatabaseLock(dbPath, { durability: "session" })).rejects.toThrow(
+        "database import lock already exists",
+      );
+      await releaseSession();
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      sync?.mockRestore();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test.each([
+    ["durable", undefined],
+    ["session", { durability: "session" } as const],
+  ])("recovers a crashed stale acquisition guard in %s mode", async (_mode, options) => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-stale-guard-"));
+    const dbPath = join(root, "master.db");
+    const lockPath = `${dbPath}.tracks-ts.lock`;
+    const guardPath = `${lockPath}.acquire`;
+    try {
+      await writeFile(dbPath, "fixture");
+      await writeFile(guardPath, "{}\n");
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+      await utimes(guardPath, stale, stale);
+
+      const release = await acquireRekordboxDatabaseLock(dbPath, options);
+      await release();
+
+      await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("preserves stale recovery and ownership checks in session mode", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-session-lock-"));
+    const dbPath = join(root, "master.db");
+    const aliasPath = join(root, "library-alias.db");
+    const lockPath = `${dbPath}.tracks-ts.lock`;
+    try {
+      await writeFile(dbPath, "fixture");
+      await symlink(dbPath, aliasPath);
+      await writeFile(lockPath, "{}\n");
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+      await utimes(lockPath, stale, stale);
+
+      const release = await acquireRekordboxDatabaseLock(aliasPath, { durability: "session" });
+      await expect(acquireRekordboxDatabaseLock(dbPath, { durability: "session" })).rejects.toThrow(
+        "database import lock already exists",
+      );
+      await rm(lockPath);
+      const replacement = { pid: process.pid, token: "replacement-owner" };
+      await writeFile(lockPath, `${JSON.stringify(replacement)}\n`);
+
+      await release();
+
+      expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(replacement);
+      await expect(readFile(`${lockPath}.acquire`)).rejects.toMatchObject({ code: "ENOENT" });
+      await rm(lockPath);
+      const releaseAgain = await acquireRekordboxDatabaseLock(dbPath, {
+        durability: "session",
+      });
+      await releaseAgain();
+      await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("serializes concurrent recovery of one stale session database lock", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-stale-lock-"));
     const dbPath = join(root, "master.db");
     const lockPath = `${dbPath}.tracks-ts.lock`;
@@ -1023,8 +1114,8 @@ describe("Rekordbox direct database planning", () => {
       await utimes(lockPath, stale, stale);
 
       const results = await Promise.allSettled([
-        acquireRekordboxDatabaseLock(dbPath),
-        acquireRekordboxDatabaseLock(dbPath),
+        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
+        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
       ]);
       const acquired = results.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
@@ -1035,6 +1126,35 @@ describe("Rekordbox direct database planning", () => {
       await acquired[0]!();
       await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(readFile(`${lockPath}.acquire`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  test("serializes concurrent recovery of one stale session acquisition guard", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-stale-guard-"));
+    const dbPath = join(root, "master.db");
+    const lockPath = `${dbPath}.tracks-ts.lock`;
+    const guardPath = `${lockPath}.acquire`;
+    try {
+      await writeFile(dbPath, "fixture");
+      await writeFile(guardPath, "{}\n");
+      const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+      await utimes(guardPath, stale, stale);
+
+      const results = await Promise.allSettled([
+        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
+        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
+      ]);
+      const acquired = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      expect(acquired).toHaveLength(1);
+      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+
+      await acquired[0]!();
+      await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(root, { force: true, recursive: true });
     }

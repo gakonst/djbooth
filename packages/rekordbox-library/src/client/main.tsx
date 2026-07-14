@@ -13,7 +13,9 @@ const queryClient = new QueryClient({
         const status = typeof error === "object" && error && "status" in error ? error.status : 0;
         return Number(status) >= 400 && Number(status) < 500 ? false : failureCount < 2;
       },
-      staleTime: 10_000,
+      // The local event stream and explicit refresh own cache freshness. Avoid repeating SQLite
+      // reads merely because a panel remounted or the browser network state changed.
+      staleTime: Number.POSITIVE_INFINITY,
     },
   },
 });

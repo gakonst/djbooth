@@ -1,11 +1,14 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
+import { MasterDatabase } from "@gakonst/rekordbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   LibraryBootstrap,
+  LibraryEvent,
   LibraryMutation,
   MutationReceipt,
   TrackDetail,
@@ -15,6 +18,7 @@ import {
   type LibraryApi,
   type RunningLibraryServer,
 } from "../src/server/server.js";
+import { LibraryMutationConflictError, RekordboxLibraryService } from "../src/server/library.js";
 
 const roots: string[] = [];
 const servers: RunningLibraryServer[] = [];
@@ -40,6 +44,7 @@ function mockApi(
 ): LibraryApi & { getTracks: ReturnType<typeof vi.fn>; mutate: ReturnType<typeof vi.fn> } {
   const detail: TrackDetail = {
     id: "track-1",
+    revision: "2026-07-12 12:00:00.000 +00:00",
     title: "No Static",
     artist: "Test Artist",
     album: null,
@@ -123,6 +128,27 @@ function mockApi(
 }
 
 describe("library server", () => {
+  it("closes its owned persistent SQLite service idempotently", async () => {
+    const files = fixture();
+    const dbPath = join(files.root, "master.db");
+    writeFileSync(dbPath, "");
+    const setup = new MasterDatabase({ path: dbPath, readonly: false });
+    setup.connection!.exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");
+    setup.close();
+    const close = vi.spyOn(RekordboxLibraryService.prototype, "close");
+    const server = await startLibraryServer({
+      dbPath,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+
+    await Promise.all([server.close(), server.close()]);
+    servers.splice(servers.indexOf(server), 1);
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it("serves the workbench and bounded JSON APIs", async () => {
     const files = fixture();
     const api = mockApi(files.audioPath);
@@ -211,7 +237,7 @@ describe("library server", () => {
       "limit=-1",
       "limit=%2B1",
       "limit=",
-      "limit=501",
+      "limit=10001",
       "limit=1&limit=2",
       "offset=10000001",
     ]) {
@@ -290,6 +316,156 @@ describe("library server", () => {
         actions: [{ type: "mutate", mutation: { type: "create-playlist", name: "No Static" } }],
       },
     });
+  });
+
+  it("requires a metadata revision and reports stale edits as conflicts", async () => {
+    const files = fixture();
+    const api = mockApi(files.audioPath);
+    const server = await startLibraryServer({
+      api,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+    const url = new URL("api/mutations", server.url);
+    const headers = {
+      "content-type": "application/json",
+      origin: server.url.slice(0, -1),
+      "x-music-library-token": server.token,
+    };
+    const mutation = {
+      type: "update-track",
+      contentId: "track-1",
+      metadata: {
+        title: "Updated",
+        artist: "Test Artist",
+        album: null,
+        genre: "House",
+        key: "Am",
+        bpm: 124,
+        rating: 4,
+        comment: null,
+        releaseYear: 2026,
+        isrc: null,
+      },
+    };
+
+    const missingRevision = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify(mutation),
+      headers,
+    });
+    expect(missingRevision.status).toBe(400);
+    expect(api.mutate).not.toHaveBeenCalled();
+
+    api.mutate.mockRejectedValueOnce(
+      new LibraryMutationConflictError(
+        "Track 'track-1' changed after metadata was loaded; reload it and try again",
+      ),
+    );
+    const conflict = await fetch(url, {
+      method: "POST",
+      body: JSON.stringify({
+        ...mutation,
+        expectedRevision: "2026-07-12 12:00:00.000 +00:00",
+      }),
+      headers,
+    });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: {
+        code: "LIBRARY_CONFLICT",
+        message: expect.stringContaining("changed after metadata was loaded"),
+      },
+    });
+  });
+
+  it("suppresses local file notifications and coalesces external changes", async () => {
+    const files = fixture();
+    const dbPath = join(files.root, "master.db");
+    const sidecarPath = join(files.root, "masterPlaylists6.xml");
+    writeFileSync(dbPath, "initial database");
+    writeFileSync(sidecarPath, "initial sidecar");
+    const api = mockApi(files.audioPath);
+    const invalidate = vi.fn();
+    api.getDatabasePath = () => dbPath;
+    api.invalidate = invalidate;
+    api.mutate.mockImplementation(async (mutation: LibraryMutation): Promise<MutationReceipt> => {
+      writeFileSync(dbPath, `local ${mutation.type} database update`);
+      return {
+        operation: mutation.type,
+        changedId: "playlist-1",
+        finishedAt: "2026-07-12T00:00:00.000Z",
+      };
+    });
+    const server = await startLibraryServer({
+      api,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+
+    const events: LibraryEvent[] = [];
+    const streamController = new AbortController();
+    const response = await fetch(new URL("api/events", server.url), {
+      signal: streamController.signal,
+    });
+    const reader = response.body!.getReader();
+    const eventPump = (async () => {
+      let buffer = "";
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          buffer += new TextDecoder().decode(chunk.value, { stream: true });
+          const records = buffer.split("\n\n");
+          buffer = records.pop() ?? "";
+          for (const record of records) {
+            const data = record
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
+              ?.slice(6);
+            if (data) events.push(JSON.parse(data) as LibraryEvent);
+          }
+        }
+      } catch (error) {
+        if (!streamController.signal.aborted) throw error;
+      }
+    })();
+
+    await vi.waitFor(() => expect(events.map((event) => event.type)).toContain("connected"));
+    const mutation = await fetch(new URL("api/mutations", server.url), {
+      method: "POST",
+      body: JSON.stringify({
+        type: "rename-playlist",
+        playlistId: "playlist-1",
+        name: "Locally renamed",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: server.url.slice(0, -1),
+        "x-music-library-token": server.token,
+      },
+    });
+    expect(mutation.status).toBe(200);
+    await vi.waitFor(() => expect(events.map((event) => event.type)).toContain("mutation"));
+
+    await delay(1_100);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type === "external-change")).toHaveLength(0);
+
+    writeFileSync(dbPath, "genuine external database update with a distinct version");
+    writeFileSync(sidecarPath, "genuine external sidecar update with a distinct version");
+    await vi.waitFor(
+      () => expect(events.filter((event) => event.type === "external-change")).toHaveLength(1),
+      { interval: 25, timeout: 2_500 },
+    );
+    await delay(300);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === "external-change")).toHaveLength(1);
+
+    streamController.abort();
+    await eventPump;
   });
 
   it("streams only service-resolved audio with byte ranges", async () => {

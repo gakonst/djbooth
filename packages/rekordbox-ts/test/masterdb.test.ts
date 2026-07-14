@@ -1025,6 +1025,56 @@ describe("MasterDatabase mutations", () => {
     db.close();
   });
 
+  it("expires cached identities after an external database update", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+    const cached = db.query(DjmdContent).where({ ID: "1" }).one();
+
+    const external = new Database(dbPath);
+    external
+      .prepare('UPDATE "djmdContent" SET "Title" = ? WHERE "ID" = ?')
+      .run("Externally renamed", "1");
+    external.close();
+
+    expect(db.query(DjmdContent).where({ ID: "1" }).one()).toBe(cached);
+    expect(cached.Title).toBe("Demo Track 1");
+    db.expireIdentityMap();
+    const refreshed = db.query(DjmdContent).where({ ID: "1" }).one();
+    expect(refreshed).not.toBe(cached);
+    expect(refreshed.Title).toBe("Externally renamed");
+    db.close();
+  });
+
+  it("refuses to expire identities while changes are pending", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      allowWhileRunning: true,
+      path: dbPath,
+      readonly: false,
+      unlock: false,
+    });
+    const content = db.query(DjmdContent).where({ ID: "1" }).one();
+    content.Title = "Pending rename";
+
+    expect(() => db.expireIdentityMap()).toThrow(
+      "Cannot expire the identity map while database changes are pending",
+    );
+    db.flush();
+    expect(() => db.expireIdentityMap()).toThrow(
+      "Cannot expire the identity map while database changes are pending",
+    );
+    db.rollback();
+    expect(() => db.expireIdentityMap()).not.toThrow();
+
+    db.connection!.exec("BEGIN");
+    expect(() => db.expireIdentityMap()).toThrow(
+      "Cannot expire the identity map while database changes are pending",
+    );
+    db.connection!.exec("ROLLBACK");
+    expect(() => db.expireIdentityMap()).not.toThrow();
+    db.close();
+  });
+
   it("persists relationship, proxy, and live collection mutations", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({

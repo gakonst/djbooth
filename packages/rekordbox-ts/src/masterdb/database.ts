@@ -19,7 +19,7 @@ import {
 } from "../anlz/index.js";
 import { readAnalysisResult } from "../analyzer/index.js";
 import { getConfig } from "../config/index.js";
-import { deobfuscate, getRekordboxAgentPid, getRekordboxPid, warnDeprecated } from "../utils.js";
+import { deobfuscate, getRekordboxProcessState, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
 import {
@@ -794,6 +794,23 @@ export class MasterDatabase {
     return this.schemas.get(table)?.names.has(column) ?? false;
   }
 
+  /**
+   * Forget materialized row identities so subsequent queries read fresh external database state.
+   *
+   * Existing row references remain unchanged. Expiry is rejected while any local write is staged or
+   * flushed into an open transaction, because forgetting those rows would make rollback unsafe.
+   */
+  expireIdentityMap(): void {
+    if (
+      this.transactionOpen ||
+      this.connection?.inTransaction ||
+      this.tracked.size ||
+      this.changes.length
+    )
+      throw new Error("Cannot expire the identity map while database changes are pending");
+    this.identity.clear();
+  }
+
   /** Physical column names for one introspected table. */
   columnNames(table: string): Array<string> {
     return this.schema(table).columns.map((column) => column.name);
@@ -1178,8 +1195,7 @@ export class MasterDatabase {
   assertCommitAllowed(allowWhileRunning?: boolean): void {
     this.requireWritable();
     if (allowWhileRunning ?? this.options.allowWhileRunning) return;
-    const rekordboxPid = getRekordboxPid();
-    const rekordboxAgentPid = getRekordboxAgentPid();
+    const { rekordboxAgentPid, rekordboxPid } = getRekordboxProcessState();
     const running = [
       rekordboxPid ? `rekordbox (PID ${rekordboxPid})` : undefined,
       rekordboxAgentPid ? `rekordboxAgent (PID ${rekordboxAgentPid})` : undefined,

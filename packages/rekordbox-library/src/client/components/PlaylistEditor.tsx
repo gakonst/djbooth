@@ -10,8 +10,8 @@ import {
 import { useMemo, useRef, useState } from "react";
 
 import type { PlaylistItem, TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
-import { getAllTracks } from "../api.js";
 import { formatBpm, formatDuration } from "../format.js";
+import { playlistTracksQueryOptions } from "../library-queries.js";
 import { isOptimisticPlaylistId } from "../optimistic-library.js";
 import { playlistDropTrackNumber } from "./playlist-order.js";
 import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
@@ -27,7 +27,7 @@ type Props = {
   onClose(): void;
   onSelectPlaylist(id: string): void;
   onSelectTrack(track: TrackSummary, autoplay?: boolean): void;
-  onAddTrack(contentId: string): void;
+  onAddTracks(contentIds: string[], expectedMembershipIds: string[]): void;
   onRemoveTrack(membershipId: string): void;
   onMoveTrack(membershipId: string, trackNumber: number): void;
 };
@@ -40,7 +40,7 @@ export function PlaylistEditor({
   onClose,
   onSelectPlaylist,
   onSelectTrack,
-  onAddTrack,
+  onAddTracks,
   onRemoveTrack,
   onMoveTrack,
 }: Props) {
@@ -59,8 +59,7 @@ export function PlaylistEditor({
   }>();
   const resizeRef = useRef<{ x: number; width: number } | undefined>(undefined);
   const query = useQuery({
-    queryKey: ["editor-tracks", playlist.id],
-    queryFn: ({ signal }) => getAllTracks({ playlistId: playlist.id, filter: "all" }, signal),
+    ...playlistTracksQueryOptions(playlist.id),
     enabled: !isOptimisticPlaylistId(playlist.id),
   });
   const items = useMemo(() => sortEditorTracks(query.data?.items ?? [], sort), [query.data, sort]);
@@ -85,10 +84,15 @@ export function PlaylistEditor({
         event.dataTransfer.dropEffect = "copy";
       }}
       onDrop={(event) => {
-        if (!canWrite) return;
+        if (!canWrite || !query.data) return;
         if (event.dataTransfer.getData("application/x-rekordbox-playlist-membership-id")) return;
         event.preventDefault();
-        for (const id of droppedTrackIds(event.dataTransfer)) onAddTrack(id);
+        const addedIds = droppedTrackIds(event.dataTransfer);
+        if (!addedIds.length) return;
+        onAddTracks(
+          [...query.data.items.map((track) => track.id), ...addedIds],
+          query.data.items.flatMap((track) => track.playlistMembershipId ?? []),
+        );
       }}
     >
       <div
@@ -367,7 +371,7 @@ function EditorSortHeader({
   );
 }
 
-function sortEditorTracks(items: readonly TrackSummary[], sort: TrackSort): TrackSummary[] {
+export function sortEditorTracks(items: readonly TrackSummary[], sort: TrackSort): TrackSummary[] {
   const value = (track: TrackSummary): string | number | null => {
     if (sort.field === "position") return track.trackNumber ?? null;
     if (sort.field === "title") return track.title;
@@ -380,16 +384,12 @@ function sortEditorTracks(items: readonly TrackSummary[], sort: TrackSort): Trac
   return [...items].sort((left, right) => {
     const a = value(left);
     const b = value(right);
+    if (a === null) return b === null ? left.title.localeCompare(right.title) : 1;
+    if (b === null) return -1;
     const result =
-      a === null
-        ? b === null
-          ? 0
-          : 1
-        : b === null
-          ? -1
-          : typeof a === "number" && typeof b === "number"
-            ? a - b
-            : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+      typeof a === "number" && typeof b === "number"
+        ? a - b
+        : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
     return direction * result || left.title.localeCompare(right.title);
   });
 }

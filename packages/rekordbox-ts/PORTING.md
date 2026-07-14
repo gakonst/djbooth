@@ -25,6 +25,13 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-13 — Long-lived database sessions
+
+- Expose explicit identity-map expiry for services that retain an open SQLite connection. Reject
+  expiry while changes are staged or flushed so transaction rollback never loses its row state.
+- Collect Rekordbox and rekordboxAgent PIDs from one operating-system process snapshot at commit
+  guards, preserving the existing individual process lookup APIs for compatibility.
+
 ### 2026-07-12 — Analyzer distribution boundary
 
 - Do not publish the repository's analyzer helper or any AlphaTheta/Rekordbox binary in the public

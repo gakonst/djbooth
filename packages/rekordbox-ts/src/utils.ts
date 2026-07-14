@@ -58,6 +58,21 @@ function listProcesses(): Array<{ name: string; pid: number }> {
     });
 }
 
+/** Process IDs relevant to safe Rekordbox database writes. */
+export type RekordboxProcessState = {
+  rekordboxAgentPid: number;
+  rekordboxPid: number;
+};
+
+/** Return both Rekordbox process IDs from one operating-system process snapshot. */
+export function getRekordboxProcessState(): RekordboxProcessState {
+  const processes = listProcesses();
+  return {
+    rekordboxAgentPid: processes.find((candidate) => candidate.name === "rekordboxAgent")?.pid ?? 0,
+    rekordboxPid: processes.find((candidate) => candidate.name === "rekordbox")?.pid ?? 0,
+  };
+}
+
 /**
  * Find a process by executable name, ignoring a Windows `.exe` suffix.
  *

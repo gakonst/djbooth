@@ -1856,11 +1856,18 @@ async function writeManifestAtomically(
   }
 }
 
-/** Acquire the cross-process lock shared by direct Rekordbox database writers. */
-export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() => Promise<void>> {
+/**
+ * Acquire the cross-process lock shared by direct Rekordbox database writers.
+ * `session` keeps atomic exclusion and ownership checks but skips crash-persistence flushes.
+ */
+export async function acquireRekordboxDatabaseLock(
+  dbPath: string,
+  options: { durability?: "durable" | "session" } = {},
+): Promise<() => Promise<void>> {
+  const durable = options.durability !== "session";
   const canonicalDbPath = await realpath(resolve(dbPath));
   const path = `${canonicalDbPath}.tracks-ts.lock`;
-  const guard = await acquireRekordboxDatabaseLockGuard(path);
+  const guard = await acquireRekordboxDatabaseLockGuard(path, durable);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   const token = randomUUID();
   try {
@@ -1870,7 +1877,7 @@ export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() =
       if (!isAlreadyExistsError(error)) throw error;
       if (await isStaleRekordboxDatabaseLock(path)) {
         await unlink(path).catch(() => undefined);
-        await syncDirectory(dirname(path));
+        if (durable) await syncDirectory(dirname(path));
         handle = await open(path, "wx", 0o600);
       } else {
         const owner = await readLockOwner(path);
@@ -1886,10 +1893,13 @@ export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() =
       `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), dbPath: canonicalDbPath })}\n`,
       "utf8",
     );
-    await handle.sync();
-    await syncDirectory(dirname(path));
+    if (durable) {
+      await handle.sync();
+      await syncDirectory(dirname(path));
+    }
   } catch (error) {
-    if (handle) await closeAndRemoveOwnedFile(path, handle, undefined).catch(() => undefined);
+    if (handle)
+      await closeAndRemoveOwnedFile(path, handle, undefined, durable).catch(() => undefined);
     throw error;
   } finally {
     await guard.release();
@@ -1898,10 +1908,10 @@ export async function acquireRekordboxDatabaseLock(dbPath: string): Promise<() =
   let released = false;
   return async () => {
     if (released) return;
-    const releaseGuard = await acquireRekordboxDatabaseLockGuard(path);
+    const releaseGuard = await acquireRekordboxDatabaseLockGuard(path, durable);
     try {
       released = true;
-      await closeAndRemoveOwnedFile(path, handle, token);
+      await closeAndRemoveOwnedFile(path, handle, token, durable);
     } finally {
       await releaseGuard.release();
     }
@@ -1914,36 +1924,41 @@ type OwnedLockFile = {
   release(): Promise<void>;
 };
 
-async function acquireRekordboxDatabaseLockGuard(lockPath: string): Promise<OwnedLockFile> {
+async function acquireRekordboxDatabaseLockGuard(
+  lockPath: string,
+  durable: boolean,
+): Promise<OwnedLockFile> {
   const path = `${lockPath}.acquire`;
   const token = randomUUID();
   let handle: Awaited<ReturnType<typeof open>> | undefined;
-  for (let attempt = 0; attempt <= 200; attempt += 1) {
+  let liveAttempts = 0;
+  while (!handle) {
     try {
       handle = await open(path, "wx", 0o600);
-      break;
     } catch (error) {
       if (!isAlreadyExistsError(error)) throw error;
-      if (attempt === 200)
+      if (await removeStaleRekordboxDatabaseLockGuard(path, durable)) continue;
+      if (liveAttempts === 200)
         throw new TracksError(
           "TOOL_FAILED",
           `Rekordbox database lock acquisition guard already exists: ${path}`,
           { details: { path, owner: await readLockOwner(path) } },
         );
+      liveAttempts += 1;
       await delay(10);
     }
   }
-  if (!handle)
-    throw new TracksError("TOOL_FAILED", `Could not acquire database lock guard ${path}`);
   try {
     await handle.writeFile(
       `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), lockPath })}\n`,
       "utf8",
     );
-    await handle.sync();
-    await syncDirectory(dirname(path));
+    if (durable) {
+      await handle.sync();
+      await syncDirectory(dirname(path));
+    }
   } catch (error) {
-    await closeAndRemoveOwnedFile(path, handle, undefined).catch(() => undefined);
+    await closeAndRemoveOwnedFile(path, handle, undefined, durable).catch(() => undefined);
     throw error;
   }
 
@@ -1954,7 +1969,7 @@ async function acquireRekordboxDatabaseLockGuard(lockPath: string): Promise<Owne
     release: async () => {
       if (released) return;
       released = true;
-      const removed = await closeAndRemoveOwnedFile(path, handle, token);
+      const removed = await closeAndRemoveOwnedFile(path, handle, token, durable);
       if (!removed)
         throw new TracksError(
           "TOOL_FAILED",
@@ -1964,10 +1979,32 @@ async function acquireRekordboxDatabaseLockGuard(lockPath: string): Promise<Owne
   };
 }
 
+async function removeStaleRekordboxDatabaseLockGuard(
+  path: string,
+  durable: boolean,
+): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+  } catch (error) {
+    if (isMissingPathError(error)) return true;
+    throw error;
+  }
+  try {
+    if (!(await isStaleRekordboxDatabaseLockHandle(handle))) return false;
+    const removed = await closeAndRemoveOwnedFile(path, handle, undefined, durable);
+    handle = undefined;
+    return removed;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 async function closeAndRemoveOwnedFile(
   path: string,
   handle: Awaited<ReturnType<typeof open>>,
   token: string | undefined,
+  durable: boolean,
 ): Promise<boolean> {
   const owned = await pathReferencesOwnedFile(path, handle, token);
   await handle.close();
@@ -1977,7 +2014,7 @@ async function closeAndRemoveOwnedFile(
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
-  await syncDirectory(dirname(path));
+  if (durable) await syncDirectory(dirname(path));
   return true;
 }
 
@@ -2019,21 +2056,56 @@ async function isStaleRekordboxDatabaseLock(path: string): Promise<boolean> {
   }
 }
 
+async function isStaleRekordboxDatabaseLockHandle(
+  handle: Awaited<ReturnType<typeof open>>,
+): Promise<boolean> {
+  const owner = await readLockOwnerHandle(handle);
+  if (owner?.pid && Number.isSafeInteger(owner.pid) && owner.pid > 0) {
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error) {
+      return isProcessMissingError(error);
+    }
+  }
+  try {
+    return Date.now() - (await handle.stat()).mtimeMs > 24 * 60 * 60 * 1000;
+  } catch {
+    return false;
+  }
+}
+
 async function readLockOwner(
   path: string,
 ): Promise<{ pid?: number; token?: string; createdAt?: string } | undefined> {
   try {
-    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-    if (!value || typeof value !== "object") return undefined;
-    const record = value as Record<string, unknown>;
-    return {
-      ...(typeof record.pid === "number" ? { pid: record.pid } : {}),
-      ...(typeof record.token === "string" ? { token: record.token } : {}),
-      ...(typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}),
-    };
+    return parseLockOwner(await readFile(path, "utf8"));
   } catch {
     return undefined;
   }
+}
+
+async function readLockOwnerHandle(
+  handle: Awaited<ReturnType<typeof open>>,
+): Promise<{ pid?: number; token?: string; createdAt?: string } | undefined> {
+  try {
+    return parseLockOwner(await handle.readFile("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function parseLockOwner(
+  contents: string,
+): { pid?: number; token?: string; createdAt?: string } | undefined {
+  const value = JSON.parse(contents) as unknown;
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    ...(typeof record.pid === "number" ? { pid: record.pid } : {}),
+    ...(typeof record.token === "string" ? { token: record.token } : {}),
+    ...(typeof record.createdAt === "string" ? { createdAt: record.createdAt } : {}),
+  };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

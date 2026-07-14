@@ -109,6 +109,8 @@ export type TrackPlaylistMembership = {
 };
 
 export type TrackDetail = TrackSummary & {
+  /** Exact djmdContent.updated_at value used as the metadata compare-and-swap revision. */
+  revision: string;
   comment: string | null;
   isrc: string | null;
   releaseYear: number | null;
@@ -157,7 +159,12 @@ export type LibraryMutation =
     }
   | { type: "rename-playlist"; playlistId: string; name: string }
   | { type: "delete-playlist"; playlistId: string; expectedPlaylistIds: string[] }
-  | { type: "update-track"; contentId: string; metadata: TrackMetadataInput }
+  | {
+      type: "update-track";
+      contentId: string;
+      expectedRevision: string;
+      metadata: TrackMetadataInput;
+    }
   | { type: "add-track"; playlistId: string; contentId: string; trackNumber?: number }
   | { type: "remove-track"; playlistId: string; membershipId: string }
   | {
@@ -182,6 +189,10 @@ export type LibraryMutation =
 export type MutationReceipt = {
   operation: LibraryMutation["type"];
   changedId: string;
+  /** Authoritative membership order returned by a playlist replacement transaction. */
+  membershipIds?: string[];
+  /** Authoritative metadata revision returned by a track update transaction. */
+  revision?: string;
   /** @deprecated Interactive mutations no longer create per-edit backups. */
   backupDirectory?: string;
   /** @deprecated Integrity checks are reserved for bulk workflows, not each interactive edit. */

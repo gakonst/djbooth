@@ -10,8 +10,16 @@ type Props = {
   loading: boolean;
   error?: string;
   onClose(): void;
-  onSubmit(metadata: TrackMetadataInput): void;
+  onSubmit(metadata: TrackMetadataInput, expectedRevision: string): void;
 };
+
+export function shouldHydrateTrackMetadataDraft(
+  open: boolean,
+  trackId: string | undefined,
+  hydratedTrackId: string | undefined,
+): boolean {
+  return open && trackId !== undefined && trackId !== hydratedTrackId;
+}
 
 export function TrackMetadataDialog({
   open,
@@ -24,6 +32,8 @@ export function TrackMetadataDialog({
 }: Props) {
   const titleId = useId();
   const titleRef = useRef<HTMLInputElement>(null);
+  const hydratedTrackIdRef = useRef<string | undefined>(undefined);
+  const [expectedRevision, setExpectedRevision] = useState<string | undefined>(undefined);
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [album, setAlbum] = useState("");
@@ -36,7 +46,15 @@ export function TrackMetadataDialog({
   const [comment, setComment] = useState("");
 
   useEffect(() => {
-    if (!open || !track) return;
+    if (!open) {
+      hydratedTrackIdRef.current = undefined;
+      setExpectedRevision(undefined);
+      return;
+    }
+    if (!track || !shouldHydrateTrackMetadataDraft(open, track.id, hydratedTrackIdRef.current))
+      return;
+    hydratedTrackIdRef.current = track.id;
+    setExpectedRevision(track.revision);
     setTitle(track.title);
     setArtist(track.artist ?? "");
     setAlbum(track.album ?? "");
@@ -67,7 +85,7 @@ export function TrackMetadataDialog({
   const bpmValue = optionalNumber(bpm);
   const yearValue = optionalNumber(releaseYear);
   const valid =
-    Boolean(track && title.trim()) &&
+    Boolean(track && expectedRevision && title.trim()) &&
     (bpmValue === null || (bpmValue > 0 && bpmValue <= 999)) &&
     (yearValue === null || (Number.isInteger(yearValue) && yearValue >= 0 && yearValue <= 9999));
 
@@ -112,19 +130,22 @@ export function TrackMetadataDialog({
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              if (!valid) return;
-              onSubmit({
-                title: title.trim(),
-                artist: optionalText(artist),
-                album: optionalText(album),
-                genre: optionalText(genre),
-                key: optionalText(key),
-                bpm: bpmValue,
-                rating: Number(rating),
-                comment: optionalText(comment),
-                releaseYear: yearValue,
-                isrc: optionalText(isrc),
-              });
+              if (!valid || !expectedRevision) return;
+              onSubmit(
+                {
+                  title: title.trim(),
+                  artist: optionalText(artist),
+                  album: optionalText(album),
+                  genre: optionalText(genre),
+                  key: optionalText(key),
+                  bpm: bpmValue,
+                  rating: Number(rating),
+                  comment: optionalText(comment),
+                  releaseYear: yearValue,
+                  isrc: optionalText(isrc),
+                },
+                expectedRevision,
+              );
             }}
           >
             <div className="dialog-body track-metadata-grid">

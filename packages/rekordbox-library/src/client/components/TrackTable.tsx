@@ -267,18 +267,12 @@ export function TrackTable({
                     <td className="track-number-column numeric muted-cell">{trackNumber}</td>
                     <td className="title-column">
                       <div className="track-title-cell">
-                        {ordered ? (
-                          <span className="track-waveform-preview-wrap">
-                            <TrackWaveformPreview
-                              trackId={track.id}
-                              className="track-waveform-preview"
-                            />
-                          </span>
-                        ) : (
-                          <span className="track-file-icon" aria-hidden="true">
-                            <Music size={14} />
-                          </span>
-                        )}
+                        <span className="track-waveform-preview-wrap">
+                          <TrackWaveformPreview
+                            trackId={track.id}
+                            className="track-waveform-preview"
+                          />
+                        </span>
                         <span className="track-primary-copy">
                           <strong title={track.title}>{track.title || "Untitled"}</strong>
                           <span title={track.artist ?? undefined}>

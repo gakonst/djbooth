@@ -1,3 +1,4 @@
 packages:
   - packages/*
 
+useNodeVersion: 22.22.3

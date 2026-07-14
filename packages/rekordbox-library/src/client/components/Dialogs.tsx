@@ -224,13 +224,6 @@ export function DeletePlaylistDialog({
               ? "The folder and its playlist subtree will be removed from Rekordbox. Audio files are not deleted."
               : "The playlist and its memberships will be removed from Rekordbox. Audio files stay in your collection."}
           </p>
-          <div className="safety-note">
-            <ShieldCheck size={16} />
-            <span>
-              <strong>Queued write</strong>The playlist disappears immediately; the local writer
-              commits the change in the background.
-            </span>
-          </div>
           {error ? (
             <div className="dialog-error" role="alert">
               <CircleAlert size={15} />

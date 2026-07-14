@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   deobfuscate,
   getProcessId,
+  getRekordboxProcessState,
   obfuscate,
   prettyXml,
   ProcessNotFoundError,
@@ -27,6 +28,12 @@ describe("process discovery", () => {
     const name = `rekordbox-ts-definitely-missing-${process.pid}`;
     expect(getProcessId(name)).toBe(0);
     expect(() => getProcessId(name, { throwIfMissing: true })).toThrow(ProcessNotFoundError);
+  });
+
+  it("returns both Rekordbox process IDs from one snapshot", () => {
+    const state = getRekordboxProcessState();
+    expect(state.rekordboxPid).toBeTypeOf("number");
+    expect(state.rekordboxAgentPid).toBeTypeOf("number");
   });
 });
 

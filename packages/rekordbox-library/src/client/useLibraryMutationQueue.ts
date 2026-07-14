@@ -95,7 +95,6 @@ export class SerialMutationQueue<TInput, TOutput> {
 }
 
 export function libraryMutationCoalesceKey(input: LibraryMutation): string | undefined {
-  if (input.type === "replace-playlist-tracks") return `playlist-order:${input.playlistId}`;
   if (input.type === "move-track") return `playlist-move:${input.playlistId}:${input.membershipId}`;
   if (input.type === "update-track") return `track-metadata:${input.contentId}`;
   return undefined;

@@ -64,8 +64,8 @@ export interface PlayerAdapter {
   loadWaveform?(track: PlayerTrack, signal: AbortSignal): Promise<PlayerWaveform | null>;
 }
 
-/** Same-origin adapter matching the workbench server's media endpoints. */
-export const defaultPlayerAdapter: PlayerAdapter = {
+/** Internal same-origin adapter matching the workbench server's media endpoints. */
+const defaultPlayerAdapter: PlayerAdapter = {
   getAudioUrl: (track) => `/api/audio/${encodeURIComponent(track.id)}`,
   getArtworkUrl: (track) => `/api/artwork/${encodeURIComponent(track.id)}`,
   loadWaveform: (track, signal) => getTrackWaveform(track.id, signal),
@@ -303,22 +303,38 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       }),
     ];
 
+    const waveformRequest = (async () => {
+      try {
+        return (await adapter.loadWaveform?.(track, controller.signal)) ?? null;
+      } catch {
+        return null;
+      }
+    })();
     void (async () => {
       try {
-        waveform = await adapter.loadWaveform?.(track, controller.signal);
-      } catch {
-        // Audio remains playable when optional precomputed peaks are unavailable.
-      }
-      try {
         if (controller.signal.aborted) return;
-        const channels = [
-          waveform?.peaks.length ? Float32Array.from(waveform.peaks) : Float32Array.of(0),
-        ];
+        // Begin streaming immediately. Precomputed RGB peaks are an enhancement, not a gate on
+        // playback readiness, and can be drawn over the placeholder without reloading the media.
         await waveSurfer.load(
           audioUrl,
-          channels,
-          finitePositive(waveform?.durationSeconds) ?? finitePositive(track.durationSeconds),
+          [Float32Array.of(0)],
+          finitePositive(track.durationSeconds),
         );
+        waveform = await waveformRequest;
+        if (controller.signal.aborted || !waveform?.peaks.length) return;
+        const waveformDuration =
+          finitePositive(waveform.durationSeconds) ?? finitePositive(track.durationSeconds);
+        if (!waveformDuration) return;
+        try {
+          waveSurfer.setOptions({
+            peaks: [Float32Array.from(waveform.peaks)],
+            duration: waveformDuration,
+          });
+          const decoded = waveSurfer.getDecodedData();
+          if (decoded) await waveSurfer.getRenderer().render(decoded);
+        } catch {
+          // Audio remains playable if the optional waveform cannot be redrawn.
+        }
       } catch (error) {
         if (!controller.signal.aborted) reportError(error);
       }

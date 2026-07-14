@@ -61,7 +61,9 @@ export async function getAllTracks(
   query: Omit<TrackQuery, "limit" | "offset">,
   signal?: AbortSignal,
 ): Promise<TracksResponse> {
-  const pageSize = 500;
+  // Canvas/editor snapshots are bounded by the same 10k mutation contract as the server. Most
+  // playlists now need one count/select request instead of repeating both for every 500 rows.
+  const pageSize = 10_000;
   const first = await getTracks({ ...query, limit: pageSize, offset: 0 }, signal);
   const items = [...first.items];
   while (items.length < first.count) {

@@ -7,9 +7,15 @@ import { MasterDatabase, MasterPlaylistXml } from "@gakonst/rekordbox";
 import { acquireRekordboxDatabaseLock } from "@gakonst/tracks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LibraryMutationConflictError, RekordboxLibraryService } from "../src/server/library.js";
+import {
+  LibraryMutationConflictError,
+  RekordboxLibraryService,
+  trackComparator,
+} from "../src/server/library.js";
+import type { TrackSortField } from "../src/shared/types.js";
 
 const roots: string[] = [];
+const services: RekordboxLibraryService[] = [];
 const now = "2026-07-12 12:00:00.000 +00:00";
 
 type Fixture = {
@@ -20,6 +26,7 @@ type Fixture = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  for (const service of services.splice(0)) service.close();
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
@@ -42,11 +49,16 @@ function copiedFixture(): Fixture {
       registry_id TEXT PRIMARY KEY, int_1 INTEGER, created_at DATETIME NOT NULL,
       updated_at DATETIME NOT NULL
     );
-    CREATE TABLE djmdArtist (ID TEXT PRIMARY KEY, Name TEXT, rb_local_deleted INTEGER);
-    CREATE TABLE djmdAlbum (
-      ID TEXT PRIMARY KEY, Name TEXT, ImagePath TEXT, rb_local_deleted INTEGER
+    CREATE TABLE djmdArtist (
+      ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, SearchStr TEXT, rb_local_deleted INTEGER
     );
-    CREATE TABLE djmdGenre (ID TEXT PRIMARY KEY, Name TEXT, rb_local_deleted INTEGER);
+    CREATE TABLE djmdAlbum (
+      ID TEXT PRIMARY KEY, Name TEXT, ImagePath TEXT, UUID TEXT, AlbumArtistID TEXT,
+      Compilation INTEGER, SearchStr TEXT, rb_local_deleted INTEGER
+    );
+    CREATE TABLE djmdGenre (
+      ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_deleted INTEGER
+    );
     CREATE TABLE djmdKey (ID TEXT PRIMARY KEY, ScaleName TEXT, rb_local_deleted INTEGER);
     CREATE TABLE djmdContent (
       ID TEXT PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, ArtistID TEXT,
@@ -78,10 +90,13 @@ function copiedFixture(): Fixture {
     );
 
     INSERT INTO agentRegistry VALUES ('localUpdateCount', 10, '${now}', '${now}');
-    INSERT INTO djmdArtist VALUES ('100', 'Test Artist', NULL);
-    INSERT INTO djmdAlbum VALUES ('150', 'Test Album', NULL, NULL);
-    INSERT INTO djmdGenre VALUES ('200', 'House', NULL);
+    INSERT INTO djmdArtist VALUES ('100', 'Test Artist', 'artist-100', 'Test Artist', NULL);
+    INSERT INTO djmdAlbum VALUES (
+      '150', 'Test Album', NULL, 'album-150', '100', NULL, NULL, NULL
+    );
+    INSERT INTO djmdGenre VALUES ('200', 'House', 'genre-200', NULL);
     INSERT INTO djmdKey VALUES ('300', 'Fm', NULL);
+    INSERT INTO djmdKey VALUES ('301', '4A', NULL);
     INSERT INTO djmdContent VALUES (
       '1', '/Music/One.mp3', 'One.mp3', 'One', '100', '150', '200', '300',
       12400, 180, 3, 2, '/PIONEER/USBANLZ/001/ANLZ0000.DAT', 105, 'First',
@@ -132,15 +147,186 @@ function copiedFixture(): Fixture {
 }
 
 function service(fixture: Fixture): RekordboxLibraryService {
-  return new RekordboxLibraryService({
+  const library = new RekordboxLibraryService({
     dbPath: fixture.dbPath,
     getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
     unlock: false,
     writeEnabled: true,
   });
+  services.push(library);
+  return library;
+}
+
+function configureTrackQueryFixture(fixture: Fixture): void {
+  const availablePath = join(fixture.root, "available.mp3");
+  const missingPath = join(fixture.root, "missing.mp3");
+  writeFileSync(availablePath, "");
+  const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+  database.connection!.exec(`
+    INSERT INTO djmdArtist VALUES ('101', 'Needle Artist', 'artist-101', NULL, NULL);
+    INSERT INTO djmdAlbum VALUES (
+      '151', 'Needle Album', NULL, 'album-151', NULL, NULL, NULL, NULL
+    );
+    INSERT INTO djmdGenre VALUES ('201', 'Ambient', 'genre-201', NULL);
+    UPDATE djmdContent
+       SET Title = 'Bravo', FolderPath = '${availablePath.replaceAll("'", "''")}'
+     WHERE ID = '1';
+    UPDATE djmdContent
+       SET Title = 'alpha', FileNameL = 'literal%_mix\\take.mp3', ArtistID = '101', AlbumID = '151',
+           GenreID = '201', KeyID = '301', FolderPath = '${missingPath.replaceAll("'", "''")}'
+     WHERE ID = '2';
+    UPDATE djmdSongPlaylist SET TrackNo = 2 WHERE ID = 'song-1';
+    INSERT INTO djmdSongPlaylist VALUES (
+      'song-2', '500', '2', 1, 'song-2-uuid', 8, NULL, '${now}', '${now}'
+    );
+  `);
+  database.close();
 }
 
 describe("RekordboxLibraryService", () => {
+  it("reuses one SQLite session across reads and closes it idempotently", () => {
+    const fixture = copiedFixture();
+    const open = vi.spyOn(MasterDatabase.prototype, "open");
+    const close = vi.spyOn(MasterDatabase.prototype, "close");
+    const library = service(fixture);
+
+    library.getBootstrap("token");
+    library.getPlaylists();
+    library.getTracks();
+    library.getTracks({ playlistId: "500" });
+    library.getTrack("1");
+    library.getWaveform("1");
+
+    expect(open).toHaveBeenCalledTimes(1);
+    library.close();
+    library.close();
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens a stale session under the lock before a cooperating playlist write", async () => {
+    const fixture = copiedFixture();
+    const open = vi.spyOn(MasterDatabase.prototype, "open");
+    const first = service(fixture);
+    const second = service(fixture);
+
+    // Both services intentionally cache the same pre-mutation database and playlist sidecar.
+    first.getPlaylists();
+    second.getPlaylists();
+    expect(open).toHaveBeenCalledTimes(2);
+
+    const firstReceipt = await first.mutate({ type: "create-playlist", name: "First writer" });
+    const secondReceipt = await second.mutate({ type: "create-playlist", name: "Second writer" });
+
+    // The second service must reopen after acquiring the shared lock, before it stages against its
+    // stale in-memory masterPlaylists6.xml document.
+    expect(open).toHaveBeenCalledTimes(3);
+    await second.mutate({
+      type: "rename-playlist",
+      playlistId: secondReceipt.changedId,
+      name: "Second writer updated",
+    });
+    // Capturing the post-commit version prevents a service from treating its own prior write as
+    // external and reopening again.
+    expect(open).toHaveBeenCalledTimes(3);
+    const sidecar = new MasterPlaylistXml(fixture.xmlPath);
+    expect(sidecar.get(firstReceipt.changedId)).toBeDefined();
+    expect(sidecar.get(secondReceipt.changedId)).toBeDefined();
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
+    expect(
+      database
+        .listPlaylists()
+        .filter((playlist) =>
+          [firstReceipt.changedId, secondReceipt.changedId].includes(playlist.id),
+        )
+        .map((playlist) => playlist.name),
+    ).toEqual(["First writer", "Second writer updated"]);
+    database.close();
+  });
+
+  it("revalidates a cached audio path before serving it", () => {
+    const fixture = copiedFixture();
+    const audioPath = join(fixture.root, "cached-audio.mp3");
+    writeFileSync(audioPath, "audio");
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+    database
+      .connection!.prepare('UPDATE "djmdContent" SET "FolderPath" = ? WHERE "ID" = ?')
+      .run(audioPath, "1");
+    database.close();
+    const library = service(fixture);
+
+    expect(library.getAudioPath("1")).toBe(audioPath);
+    rmSync(audioPath);
+
+    expect(() => library.getAudioPath("1")).toThrow("Audio for track '1' is unavailable");
+  });
+
+  it("retries cached placeholder waveforms", () => {
+    const fixture = copiedFixture();
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
+    mkdirSync(database.getAnlzDirectory("1"), { recursive: true });
+    database.close();
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const read = vi
+      .spyOn(MasterDatabase.prototype, "readContentAnlzFiles")
+      .mockReturnValue(new Map() as never);
+    const library = service(fixture);
+
+    expect(library.getWaveform("1").source).toBe("placeholder");
+    expect(library.getWaveform("1").source).toBe("placeholder");
+    expect(read).toHaveBeenCalledTimes(1);
+
+    now += 5_001;
+    expect(library.getWaveform("1").source).toBe("placeholder");
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads a cached waveform when its analysis file changes", () => {
+    const fixture = copiedFixture();
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
+    const analysisDirectory = database.getAnlzDirectory("1");
+    database.close();
+    mkdirSync(analysisDirectory, { recursive: true });
+    const analysisPath = join(analysisDirectory, "ANLZ0000.DAT");
+    writeFileSync(analysisPath, "initial");
+    let heights = [1, 2];
+    const read = vi
+      .spyOn(MasterDatabase.prototype, "readContentAnlzFiles")
+      .mockImplementation(() => new Map([["DAT", new Map([["PWV5", { heights }]])]]) as never);
+    const library = service(fixture);
+
+    expect(library.getWaveform("1")).toMatchObject({ peaks: [0.5, 1], source: "rekordbox" });
+    heights = [8, 1];
+    expect(library.getWaveform("1")).toMatchObject({ peaks: [0.5, 1], source: "rekordbox" });
+    expect(read).toHaveBeenCalledTimes(1);
+
+    writeFileSync(analysisPath, "changed analysis file");
+    expect(library.getWaveform("1")).toMatchObject({ peaks: [1, 0.125], source: "rekordbox" });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("reopens the session only after explicit external invalidation", () => {
+    const fixture = copiedFixture();
+    const open = vi.spyOn(MasterDatabase.prototype, "open");
+    const library = service(fixture);
+
+    expect(library.getPlaylists()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "500", name: "Playlist" })]),
+    );
+    const external = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+    external
+      .connection!.prepare('UPDATE "djmdPlaylist" SET "Name" = ? WHERE "ID" = ?')
+      .run("External", "500");
+    external.close();
+    expect(open).toHaveBeenCalledTimes(2);
+
+    library.invalidate();
+    expect(library.getPlaylists()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "500", name: "External" })]),
+    );
+    expect(open).toHaveBeenCalledTimes(3);
+  });
+
   it("preserves unsupported smart-playlist count failures as unknown", () => {
     const fixture = copiedFixture();
     const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
@@ -183,8 +369,162 @@ describe("RekordboxLibraryService", () => {
       expect.objectContaining({ id: "600", trackCount: 0 }),
     ]);
     expect(library.getTracks({ playlistId: "600" })).toMatchObject({ count: 0, items: [] });
+    expect(library.getTracks({ limit: 1, offset: 99 })).toMatchObject({ count: 2, items: [] });
+    expect(library.getTracks({ q: "does-not-exist" })).toMatchObject({ count: 0, items: [] });
     expect(library.getTrack("2").playlists).toEqual([]);
     expect(() => library.getTracks({ playlistId: "700" })).toThrow("was not found");
+  });
+
+  it("sorts track pages by every supported field in both directions", () => {
+    const fixture = copiedFixture();
+    configureTrackQueryFixture(fixture);
+    const library = service(fixture);
+    const sortCases: Array<{
+      field: Exclude<TrackSortField, "position">;
+      ascending: string[];
+    }> = [
+      { field: "title", ascending: ["2", "1"] },
+      { field: "album", ascending: ["2", "1"] },
+      { field: "genre", ascending: ["2", "1"] },
+      { field: "bpm", ascending: ["1", "2"] },
+      { field: "key", ascending: ["2", "1"] },
+      { field: "plays", ascending: ["2", "1"] },
+      { field: "status", ascending: ["2", "1"] },
+      { field: "duration", ascending: ["1", "2"] },
+    ];
+
+    for (const { field, ascending } of sortCases) {
+      expect(
+        library.getTracks({ sort: { field, direction: "asc" } }).items.map((track) => track.id),
+        `${field} ascending`,
+      ).toEqual(ascending);
+      expect(
+        library.getTracks({ sort: { field, direction: "desc" } }).items.map((track) => track.id),
+        `${field} descending`,
+      ).toEqual([...ascending].reverse());
+    }
+    expect(
+      library
+        .getTracks({ playlistId: "500", sort: { field: "position", direction: "asc" } })
+        .items.map((track) => track.id),
+    ).toEqual(["2", "1"]);
+    expect(
+      library
+        .getTracks({ playlistId: "500", sort: { field: "position", direction: "desc" } })
+        .items.map((track) => track.id),
+    ).toEqual(["1", "2"]);
+    expect(
+      library
+        .getTracks({ playlistId: "500", sort: { field: "status", direction: "asc" } })
+        .items.map((track) => [track.id, track.fileExists]),
+    ).toEqual([
+      ["2", false],
+      ["1", true],
+    ]);
+    expect(
+      library
+        .getTracks({ playlistId: "500", sort: { field: "status", direction: "desc" } })
+        .items.map((track) => [track.id, track.fileExists]),
+    ).toEqual([
+      ["1", true],
+      ["2", false],
+    ]);
+    expect(
+      library
+        .getTracks({ sort: { field: "position", direction: "asc" } })
+        .items.map((track) => track.id),
+    ).toEqual(["2", "1"]);
+  });
+
+  it("keeps missing sort values last in SQL and the smart comparator", () => {
+    const fixture = copiedFixture();
+    configureTrackQueryFixture(fixture);
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+    database.connection!.exec(`
+      UPDATE djmdContent SET BPM = 0, Length = NULL WHERE ID = '2';
+      INSERT INTO djmdContent (
+        ID, FolderPath, FileNameL, Title, BPM, Length, DJPlayCount, AnalysisDataPath, Analysed,
+        UUID, rb_local_usn, rb_local_deleted, created_at, updated_at
+      )
+      SELECT '3', FolderPath, 'Three.mp3', 'Charlie', 13000, 240, 5, AnalysisDataPath, Analysed,
+             'content-3', 9, NULL, '${now}', '${now}'
+        FROM djmdContent WHERE ID = '1';
+      INSERT INTO djmdSongPlaylist VALUES (
+        'song-3', '500', '3', 3, 'song-3-uuid', 10, NULL, '${now}', '${now}'
+      );
+    `);
+    database.close();
+    const library = service(fixture);
+
+    const summaries = ["2", "1", "3"].map((id) => library.getTrack(id));
+    for (const field of ["bpm", "duration"] satisfies TrackSortField[]) {
+      for (const playlistId of [undefined, "500"]) {
+        expect(
+          library
+            .getTracks({
+              ...(playlistId ? { playlistId } : {}),
+              sort: { field, direction: "asc" },
+            })
+            .items.map((track) => track.id),
+          `${field} ${playlistId ?? "library"} ascending`,
+        ).toEqual(["1", "3", "2"]);
+        expect(
+          library
+            .getTracks({
+              ...(playlistId ? { playlistId } : {}),
+              sort: { field, direction: "desc" },
+            })
+            .items.map((track) => track.id),
+          `${field} ${playlistId ?? "library"} descending`,
+        ).toEqual(["3", "1", "2"]);
+      }
+      expect(
+        [...summaries].sort(trackComparator({ field, direction: "asc" })).map(({ id }) => id),
+        `smart comparator ${field} ascending`,
+      ).toEqual(["1", "3", "2"]);
+      expect(
+        [...summaries].sort(trackComparator({ field, direction: "desc" })).map(({ id }) => id),
+        `smart comparator ${field} descending`,
+      ).toEqual(["3", "1", "2"]);
+    }
+  });
+
+  it("searches title, filename, artist, and album with escaped wildcards", () => {
+    const fixture = copiedFixture();
+    configureTrackQueryFixture(fixture);
+    const library = service(fixture);
+
+    for (const query of ["alpha", "%_", "\\", "Needle Artist", "Needle Album"])
+      expect(library.getTracks({ q: query }).items.map((track) => track.id)).toEqual(["2"]);
+    for (const field of [
+      "position",
+      "title",
+      "album",
+      "genre",
+      "bpm",
+      "key",
+      "plays",
+      "status",
+      "duration",
+    ] satisfies TrackSortField[])
+      expect(
+        library
+          .getTracks({ q: "Needle", sort: { field, direction: "desc" } })
+          .items.map((track) => track.id),
+        `search sorted by ${field}`,
+      ).toEqual(["2"]);
+    expect(
+      library
+        .getTracks({
+          playlistId: "500",
+          q: "Needle Artist",
+          sort: { field: "key", direction: "desc" },
+        })
+        .items.map((track) => track.id),
+    ).toEqual(["2"]);
+    expect(
+      library.getTracks({ playlistId: "500", q: "\\" }).items.map((track) => track.id),
+    ).toEqual(["2"]);
   });
 
   it("directly commits every playlist mutation on a copied fixture", async () => {
@@ -247,52 +587,109 @@ describe("RekordboxLibraryService", () => {
     expect(sidecar.get(child.changedId)).toBeUndefined();
   });
 
-  it("updates track metadata in the Rekordbox database", async () => {
+  it("updates normalized track metadata in the Rekordbox database", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
+    const initialRevision = library.getTrack("1").revision;
 
     await library.mutate({
       type: "update-track",
       contentId: "1",
+      expectedRevision: initialRevision,
       metadata: {
-        title: "Edited title",
+        title: "  Updated title  ",
         artist: "Test Artist",
         album: "Test Album",
         genre: "House",
-        key: "Fm",
+        key: "F minor",
         bpm: 128.25,
         rating: 5,
-        comment: "Edited comment",
-        releaseYear: 2026,
-        isrc: "EDIT00000001",
+        comment: "  Peak time  ",
+        releaseYear: 2024,
+        isrc: "NEW000000001",
       },
     });
 
-    expect(library.getTrack("1")).toMatchObject({
-      title: "Edited title",
+    const updated = library.getTrack("1");
+    expect(updated.revision).not.toBe(initialRevision);
+    expect(updated).toMatchObject({
+      album: "Test Album",
+      artist: "Test Artist",
+      bpm: 128.25,
+      comment: "Peak time",
+      genre: "House",
+      isrc: "NEW000000001",
+      key: "4A",
+      rating: 5,
+      releaseYear: 2024,
+      title: "Updated title",
+    });
+  });
+
+  it("rejects stale track metadata before staging any changes", async () => {
+    const fixture = copiedFixture();
+    const library = service(fixture);
+    const initialRevision = library.getTrack("1").revision;
+    const metadata = {
+      title: "First committed title",
       artist: "Test Artist",
       album: "Test Album",
       genre: "House",
-      key: "Fm",
-      bpm: 128.25,
-      rating: 5,
-      comment: "Edited comment",
-      releaseYear: 2026,
-      isrc: "EDIT00000001",
+      key: "F minor",
+      bpm: 128,
+      rating: 4,
+      comment: "Committed",
+      releaseYear: 2025,
+      isrc: "NEW000000002",
+    };
+
+    const receipt = await library.mutate({
+      type: "update-track",
+      contentId: "1",
+      expectedRevision: initialRevision,
+      metadata,
     });
+    const committedRevision = library.getTrack("1").revision;
+    expect(committedRevision).not.toBe(initialRevision);
+    expect(receipt.revision).toBe(committedRevision);
+
+    await expect(
+      library.mutate({
+        type: "update-track",
+        contentId: "1",
+        expectedRevision: initialRevision,
+        metadata: {
+          ...metadata,
+          title: "Stale title",
+          artist: "Never staged artist",
+        },
+      }),
+    ).rejects.toBeInstanceOf(LibraryMutationConflictError);
+    expect(library.getTrack("1")).toMatchObject({
+      revision: committedRevision,
+      title: "First committed title",
+      artist: "Test Artist",
+    });
+
+    const db = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
+    expect(
+      db.selectRawRows('SELECT "ID" FROM "djmdArtist" WHERE "Name" = ?', ["Never staged artist"]),
+    ).toEqual([]);
+    db.close();
   });
 
   it("atomically replaces playlist order", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
 
-    await library.mutate({
+    const receipt = await library.mutate({
       type: "replace-playlist-tracks",
       playlistId: "500",
       contentIds: ["2", "1"],
       expectedMembershipIds: ["song-1"],
     });
 
+    expect(receipt.membershipIds).toEqual([expect.any(String), "song-1"]);
     expect(library.getTracks({ playlistId: "500" }).items).toMatchObject([
       { id: "2", trackNumber: 1 },
       { id: "1", trackNumber: 2 },
@@ -351,6 +748,115 @@ describe("RekordboxLibraryService", () => {
         expect.objectContaining({ id: folder.changedId, name: "Folder" }),
         expect.objectContaining({ name: "Late child", parentId: folder.changedId }),
       ]),
+    );
+  });
+
+  it("checks the Rekordbox process state once immediately before commit", async () => {
+    const fixture = copiedFixture();
+    const getProcessState = vi.fn(() => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }));
+    const library = new RekordboxLibraryService({
+      dbPath: fixture.dbPath,
+      getProcessState,
+      unlock: false,
+      writeEnabled: true,
+    });
+    services.push(library);
+
+    await library.mutate({ type: "create-playlist", name: "Guarded" });
+
+    expect(getProcessState).toHaveBeenCalledTimes(1);
+    expect(library.getPlaylists()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "Guarded" })]),
+    );
+  });
+
+  it("does not autoflush new metadata relations before the process guard", async () => {
+    const fixture = copiedFixture();
+    let transactionOpenAtGuard: boolean | undefined;
+    let library!: RekordboxLibraryService;
+    library = new RekordboxLibraryService({
+      dbPath: fixture.dbPath,
+      getProcessState: () => {
+        transactionOpenAtGuard = (library as unknown as { database?: MasterDatabase }).database
+          ?.connection?.inTransaction;
+        return { rekordboxPid: 0, rekordboxAgentPid: 0 };
+      },
+      unlock: false,
+      writeEnabled: true,
+    });
+    services.push(library);
+    const initialRevision = library.getTrack("1").revision;
+
+    await library.mutate({
+      type: "update-track",
+      contentId: "1",
+      expectedRevision: initialRevision,
+      metadata: {
+        title: "One",
+        artist: "New Artist",
+        album: "New Album",
+        genre: "New Genre",
+        key: "Fm",
+        bpm: 124,
+        rating: 3,
+        comment: "First",
+        releaseYear: 2024,
+        isrc: "TEST00000001",
+      },
+    });
+
+    expect(transactionOpenAtGuard).toBe(false);
+    expect(library.getTrack("1")).toMatchObject({
+      album: "New Album",
+      artist: "New Artist",
+      genre: "New Genre",
+    });
+  });
+
+  it("does not autoflush playlist deletion before the process guard", async () => {
+    const fixture = copiedFixture();
+    let transactionOpenAtGuard: boolean | undefined;
+    let library!: RekordboxLibraryService;
+    library = new RekordboxLibraryService({
+      dbPath: fixture.dbPath,
+      getProcessState: () => {
+        transactionOpenAtGuard = (library as unknown as { database?: MasterDatabase }).database
+          ?.connection?.inTransaction;
+        return { rekordboxPid: 0, rekordboxAgentPid: 0 };
+      },
+      unlock: false,
+      writeEnabled: true,
+    });
+    services.push(library);
+
+    await library.mutate({
+      type: "delete-playlist",
+      playlistId: "500",
+      expectedPlaylistIds: ["500"],
+    });
+
+    expect(transactionOpenAtGuard).toBe(false);
+    expect(library.getPlaylists()).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "500" })]),
+    );
+  });
+
+  it("rolls back staged changes when Rekordbox starts before commit", async () => {
+    const fixture = copiedFixture();
+    const library = new RekordboxLibraryService({
+      dbPath: fixture.dbPath,
+      getProcessState: () => ({ rekordboxPid: 123, rekordboxAgentPid: 0 }),
+      unlock: false,
+      writeEnabled: true,
+    });
+    services.push(library);
+
+    await expect(
+      library.mutate({ type: "create-playlist", name: "Never committed" }),
+    ).rejects.toThrow("Close Rekordbox");
+
+    expect(library.getPlaylists()).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "Never committed" })]),
     );
   });
 
@@ -451,7 +957,10 @@ describe("RekordboxLibraryService", () => {
 
   it("surfaces a sidecar failure after SQLite commits", async () => {
     const fixture = copiedFixture();
+    const open = vi.spyOn(MasterDatabase.prototype, "open");
+    const close = vi.spyOn(MasterDatabase.prototype, "close");
     const library = service(fixture);
+    library.getPlaylists();
     vi.spyOn(MasterPlaylistXml.prototype, "save").mockImplementation(() => {
       throw new Error("injected sidecar failure");
     });
@@ -459,6 +968,12 @@ describe("RekordboxLibraryService", () => {
     await expect(library.mutate({ type: "create-playlist", name: "Partial" })).rejects.toThrow(
       "injected sidecar failure",
     );
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(library.getPlaylists()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "Partial" })]),
+    );
+    expect(open).toHaveBeenCalledTimes(2);
 
     const db = new MasterDatabase({ path: fixture.dbPath, readonly: true, unlock: false });
     const committed = db.selectRawRows('SELECT "ID" AS id FROM "djmdPlaylist" WHERE "Name" = ?', [

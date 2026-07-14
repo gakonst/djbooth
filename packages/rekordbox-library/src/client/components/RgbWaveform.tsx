@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import type { TrackWaveform } from "../../shared/types.js";
 
@@ -42,14 +42,12 @@ export function renderRgbWaveform(
   context.fillRect(0, Math.floor(midline), width, 1);
 }
 
-export function RgbWaveform({
-  waveform,
-  className,
-}: {
-  waveform?: TrackWaveform | null;
-  className?: string;
-}) {
+export const RgbWaveform = forwardRef<
+  HTMLCanvasElement,
+  { waveform?: TrackWaveform | null; className?: string }
+>(function RgbWaveform({ waveform, className }, forwardedRef) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  useImperativeHandle(forwardedRef, () => canvasRef.current!, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -75,7 +73,7 @@ export function RgbWaveform({
   }, [waveform]);
 
   return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
-}
+});
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
