@@ -280,14 +280,12 @@ export function PlaylistEditor({
                     <td>{String(trackNumber)}</td>
                     <td>
                       <div className="playlist-editor-track-copy">
-                        {track.id === selectedTrackId ? (
-                          <span className="playlist-editor-waveform-wrap">
-                            <TrackWaveformPreview
-                              trackId={track.id}
-                              className="playlist-editor-waveform"
-                            />
-                          </span>
-                        ) : null}
+                        <span className="playlist-editor-waveform-wrap">
+                          <TrackWaveformPreview
+                            trackId={track.id}
+                            className="playlist-editor-waveform"
+                          />
+                        </span>
                         <span>
                           <strong title={track.title}>{track.title}</strong>
                           <span title={track.artist ?? undefined}>

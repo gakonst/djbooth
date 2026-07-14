@@ -267,7 +267,7 @@ export function TrackTable({
                     <td className="track-number-column numeric muted-cell">{trackNumber}</td>
                     <td className="title-column">
                       <div className="track-title-cell">
-                        {selected && ordered ? (
+                        {ordered ? (
                           <span className="track-waveform-preview-wrap">
                             <TrackWaveformPreview
                               trackId={track.id}

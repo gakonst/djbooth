@@ -4476,7 +4476,7 @@ select:focus-visible,
 }
 
 .player-panel {
-  grid-template-columns: minmax(235px, 300px) minmax(260px, 1fr) 94px;
+  grid-template-columns: minmax(180px, 220px) minmax(260px, 1fr) 94px;
   grid-template-rows: 62px 29px;
   gap: 3px 10px;
   padding: 7px 10px;
@@ -4567,7 +4567,7 @@ select:focus-visible,
 
 @media (max-width: 1180px) {
   .player-panel {
-    grid-template-columns: minmax(190px, 240px) minmax(220px, 1fr);
+    grid-template-columns: minmax(170px, 195px) minmax(220px, 1fr);
   }
 
   .player-volume {
@@ -4594,7 +4594,7 @@ select:focus-visible,
   }
 
   .player-panel {
-    grid-template-columns: minmax(150px, 220px) minmax(180px, 1fr);
+    grid-template-columns: minmax(160px, 180px) minmax(180px, 1fr);
     grid-template-rows: 62px 29px;
   }
 }
