@@ -239,6 +239,21 @@ market scope. Never cache tokens or authentication failures.
 
 ## 4. Acquire individual recordings
 
+Use one shared canonical library root for final recordings. The default is `~/.djtools/tracks`,
+overridable with `MUSIC_LIBRARY_ROOT`; final paths are
+`<root>/<artist>/<album>/<title> [recording identity].ext`. Scan that root before acquisition and
+reuse verified matches. Do not create playlist-specific audio copies: playlist identity, order, and
+membership belong in Rekordbox.
+
+For the supported end-to-end set workflow, use one command after explicit database-write approval:
+
+```sh
+music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format json
+```
+
+This resolves, enriches, acquires into the canonical library, analyzes, then creates or updates the
+ordered Rekordbox playlist. Do not ask for a separate add-to-playlist step after it succeeds.
+
 Create one `SoulseekClient`, connect once, and search each unresolved recording with bounded
 concurrency. Prefer plausible lossless results, but inspect metadata and duration instead of trusting
 the extension. Record the selected peer and remote file before download, then the absolute path and

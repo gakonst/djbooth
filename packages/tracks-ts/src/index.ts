@@ -40,6 +40,12 @@ export {
   type BuildAcquisitionPlanOptions,
 } from "./generic-acquisition-plan.js";
 export {
+  MUSIC_LIBRARY_ROOT_ENV,
+  canonicalTrackPath,
+  defaultTrackLibraryRoot,
+  type CanonicalTrackPathOptions,
+} from "./library-paths.js";
+export {
   acquireManifestLock,
   acquirePipelineManifestLock,
   createSourceSetClip,

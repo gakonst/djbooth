@@ -110,7 +110,47 @@ describe("buildAcquisitionPlan", () => {
     });
     expect(plan.recordings[2]!.variants[0]).not.toHaveProperty("spotifyId");
     expect(plan.recordings[0]!.variants[0]!.outputPath).not.toMatch(/[?:*]/u);
+    expect(plan.recordings[0]!.variants[0]!.outputPath).toBe(
+      join(outputDirectory, "Artist One", "Singles", "Track One [spotify-match-1].m4a"),
+    );
+    expect(plan.recordings[0]!.variants[0]!.outputPath).not.toContain("001 -");
     expect(plan.stagingDirectory).toBe(join(outputDirectory, ".staging"));
+  });
+
+  test("finds an existing canonical recording without another local-directory option", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "generic-canonical-resume-"));
+    const outputDirectory = join(directory, "library");
+    const existing = join(
+      outputDirectory,
+      "Artist One",
+      "Singles",
+      "Track One [spotify-match-1].flac",
+    );
+    await mkdir(join(outputDirectory, "Artist One", "Singles"), { recursive: true });
+    await writeFile(existing, "local");
+
+    const plan = await buildAcquisitionPlan(manifest(join(directory, "set.mp3")), {
+      outputDirectory,
+    });
+
+    expect(plan.recordings[0]!.variants[0]).toMatchObject({
+      outputPath: existing,
+      localArtifact: { sourcePath: existing, matchedBy: "spotify-id" },
+    });
+  });
+
+  test("does not adopt interrupted files from the canonical staging directory", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "generic-canonical-staging-"));
+    const outputDirectory = join(directory, "library");
+    const interrupted = join(outputDirectory, ".staging", "Artist One match-1.flac");
+    await mkdir(join(outputDirectory, ".staging"), { recursive: true });
+    await writeFile(interrupted, "partial");
+
+    const plan = await buildAcquisitionPlan(manifest(join(directory, "set.mp3")), {
+      outputDirectory,
+    });
+
+    expect(plan.recordings[0]!.variants[0]!.localArtifact).toBeUndefined();
   });
 
   test("adopts unique explicit local matches before backend acquisition", async () => {

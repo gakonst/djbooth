@@ -55,6 +55,7 @@ Skill.
 
 ```sh
 music tracks resolve "https://youtu.be/example" --format json
+music tracks import-set "https://youtu.be/example" --manifest ./set/manifest.json --write --format json
 music spots auth status --format json
 music spots playlist create "Set IDs" --track "spotify:track:4iV5W9uYEdYUVa79Axb7Rh" --format json
 music spots playlist get spotify:playlist:PLAYLIST_ID --format json
@@ -71,6 +72,10 @@ music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" 
 music library status --format json
 music library serve --open
 ```
+
+`music tracks import-set` is the single local acquisition path: recordings land under
+`~/.djtools/tracks/<artist>/<album>/` (or `MUSIC_LIBRARY_ROOT`) and verified ordered membership is
+written directly to Rekordbox. It does not create per-playlist copies on disk.
 
 `music rekordbox db playlist list` prints the complete active folder and playlist hierarchy as a
 table, including direct track and child counts. Add `--json` for the same tree order with stable

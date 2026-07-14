@@ -263,10 +263,8 @@ one final normal-database transaction:
 ```sh
 tracks import-set "$SET_URL" \
   --manifest ./adam-ten/manifest.json \
-  --output-directory ./adam-ten/tracks \
   --local-directory "$HOME/Music/2026/Adam Ten - MAXA x BiPolar Express Link up - Burning Man 2025" \
   --folder-name 'DJ Sets I Like' \
-  --playlist-name 'Adam Ten — Burning Man 2025 [music-ts]' \
   --write \
   --format json
 ```
@@ -275,7 +273,12 @@ tracks import-set "$SET_URL" \
 requires `--allow-set-clips` and an existing `--source-set-path`; external reference yt-dlp requires
 `--reference-ytdlp`. Individual-track acquisition always registers the TypeScript-native YouTube
 search/extractor/downloader after Soulseek; the external executable is neither constructed nor
-invoked by the default path.
+invoked by the default path. Final recordings default to
+`~/.djtools/tracks/<artist>/<album>/<title> [identity].ext`; set `MUSIC_LIBRARY_ROOT` or pass
+`--output-directory` to change the shared root. The root is scanned automatically, so later set
+imports reuse a matching canonical recording. Playlist order is written directly to the normal
+Rekordbox database under the source-derived playlist name; no playlist-specific audio copies are
+created.
 
 Resume native analysis independently when media is already checkpointed. This command loads no
 Spotify, Soulseek, or downloader credentials and never acquires, retags, or imports media. It writes
@@ -321,7 +324,7 @@ Spotify playlists ── spots ─────────┤
                                     │ unavailable/ID only
                                     ├── bounded annotated source-set clip
                                     ▼
-                         ordered local audio files
+                    canonical artist/album audio files
                                     │
                                     ▼
                    rekordbox-ts encrypted master.db
@@ -338,12 +341,15 @@ Spotify playlists ── spots ─────────┤
 The boundary is deliberate:
 
 - `tracks resolve` only resolves metadata and creates a manifest.
-- `tracks analyze-existing` resumes only the manifest's existing downloaded media; `tracks
-import-set` composes exported TypeScript clients in-process and never shells between package CLIs.
+- `tracks analyze-existing` resumes only the manifest's existing downloaded media; `tracks import-set`
+  composes exported TypeScript clients in-process and never shells between package CLIs.
+  After verified acquisition and analysis it automatically creates or updates the ordered
+  Rekordbox playlist in the same protected run.
 - `buildAcquisitionPlan` preserves Spotify ambiguities and tracklist overlaps as distinct recordings,
-  adopts deterministic local-directory matches, and leaves unresolved IDs visible unless explicit
-  cue clipping was enabled. Artist/title-only local matches do not claim an exact Spotify ISRC or
-  duration.
+  writes every backend to the shared artist/album layout, automatically adopts deterministic
+  matches already under that root or an explicit local directory, and leaves unresolved IDs
+  visible unless explicit cue clipping was enabled. Artist/title-only local matches do not claim an
+  exact Spotify ISRC or duration.
 - `slsk-ts` is preferred. The default `ytdlp-ts` fallback uses bounded native YouTube search, scores
   stable canonical URLs with duration metadata, freshly extracts the exact selection, and downloads
   direct M4A through TypeScript. True recording ambiguities remain distinct alternatives and are all

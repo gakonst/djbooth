@@ -27,6 +27,7 @@ import {
   type BuildAcquisitionPlanOptions,
 } from "./generic-acquisition-plan.js";
 import { identify } from "./identify.js";
+import { defaultTrackLibraryRoot } from "./library-paths.js";
 import { createManifest, type RekordboxAnalysisArtifact, type SetManifest } from "./manifest.js";
 import {
   importManifestToRekordbox,
@@ -97,7 +98,8 @@ export type WorkflowImportOptions = Omit<
 export type RunSetToRekordboxOptions = {
   source: string;
   manifestPath: string;
-  outputDirectory: string;
+  /** Canonical library root. Defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks. */
+  outputDirectory?: string;
   /** Required acknowledgement: the final stage mutates the normal encrypted master.db. */
   approved: true;
   identify?: IdentifyOptions;
@@ -206,7 +208,7 @@ export async function runSetToRekordbox(
   const started = performance.now();
   const stages: WorkflowStage[] = [];
   const manifestPath = resolve(options.manifestPath);
-  const outputDirectory = resolve(options.outputDirectory);
+  const outputDirectory = resolve(options.outputDirectory ?? defaultTrackLibraryRoot());
   const existed = await dependencies.exists(manifestPath);
 
   const runStage = async <T>(

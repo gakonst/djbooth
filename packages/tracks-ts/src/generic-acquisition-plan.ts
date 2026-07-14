@@ -8,11 +8,12 @@ import type {
   AcquisitionRecordingVariant,
 } from "./acquire-manifest.js";
 import type { AudioMetadata } from "./acquisition.js";
+import { canonicalTrackPath, defaultTrackLibraryRoot, latinize } from "./library-paths.js";
 import type { ResolvedTrack, SetManifest, SpotifyCandidate } from "./manifest.js";
 
 export type BuildAcquisitionPlanOptions = {
-  /** Absolute destination for acquired, retagged recordings. */
-  outputDirectory: string;
+  /** Canonical library root. Defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks. */
+  outputDirectory?: string;
   /** Absolute directories searched recursively for explicitly adopted local recordings. */
   localDirectories?: readonly string[];
   /** Explicitly permit cue-bounded recovery of unresolved IDs from a verified local set source. */
@@ -63,14 +64,16 @@ export async function buildAcquisitionPlan(
   manifest: SetManifest,
   options: BuildAcquisitionPlanOptions,
 ): Promise<AcquisitionPlan> {
-  requireAbsolute(options.outputDirectory, "outputDirectory");
-  const stagingDirectory = options.stagingDirectory ?? join(options.outputDirectory, ".staging");
+  const outputDirectory = options.outputDirectory ?? defaultTrackLibraryRoot();
+  requireAbsolute(outputDirectory, "outputDirectory");
+  const stagingDirectory = options.stagingDirectory ?? join(outputDirectory, ".staging");
   requireAbsolute(stagingDirectory, "stagingDirectory");
   for (const directory of options.localDirectories ?? []) {
     requireAbsolute(directory, "localDirectories");
   }
   const sourceSet = sourceSetForClips(manifest, options);
-  const artifacts = await discoverLocalArtifacts(options.localDirectories ?? []);
+  const localDirectories = [...new Set([outputDirectory, ...(options.localDirectories ?? [])])];
+  const artifacts = await discoverLocalArtifacts(localDirectories);
   const adoptedPaths = new Set<string>();
   const recordings = manifest.entries.flatMap((entry) => {
     const identities = recordingIdentities(entry);
@@ -81,14 +84,7 @@ export async function buildAcquisitionPlan(
         variants: identities.map((identity) => {
           const local = selectLocalArtifact(identity, artifacts, adoptedPaths);
           if (local) adoptedPaths.add(local.path);
-          return recordingVariant(
-            manifest,
-            entry,
-            identity,
-            options.outputDirectory,
-            local,
-            sourceSet,
-          );
+          return recordingVariant(manifest, entry, identity, outputDirectory, local, sourceSet);
         }),
       },
     ];
@@ -96,7 +92,7 @@ export async function buildAcquisitionPlan(
   const clips = sourceSet
     ? manifest.entries.flatMap((entry) =>
         entry.identity.status === "unidentified"
-          ? unresolvedClip(manifest, entry, options.outputDirectory, sourceSet)
+          ? unresolvedClip(manifest, entry, outputDirectory, sourceSet)
           : [],
       )
     : [];
@@ -195,9 +191,6 @@ function recordingVariant(
     ? `spotify-${identity.spotifyId}`
     : `${identity.relationship ?? "identity"}-${identityKey}`;
   const extension = local ? adoptedOutputExtension(local.path) : ".m4a";
-  const basename = filesystemSafe(
-    `${String(entry.order).padStart(3, "0")} - ${identity.artists.join(", ")} - ${identity.title} [${suffix}]`,
-  );
   const matchedBy = local
     ? (priorLocalMatchKind(entry, identity) ?? localMatchKind(identity, local))
     : undefined;
@@ -242,7 +235,13 @@ function recordingVariant(
     ...(identity.albumArtists ? { albumArtists: [...identity.albumArtists] } : {}),
     ...(identity.releaseDate ? { releaseDate: identity.releaseDate } : {}),
     ...(identity.durationMs === undefined ? {} : { durationMs: identity.durationMs }),
-    outputPath: join(outputDirectory, `${basename}${extension}`),
+    outputPath: canonicalTrackPath(outputDirectory, {
+      title: identity.title,
+      artists: identity.artists,
+      ...(identity.album ? { album: identity.album } : {}),
+      qualifier: suffix,
+      extension,
+    }),
     metadata,
     searchQuery: identity.searchQuery,
     ...(local
@@ -365,10 +364,18 @@ function unresolvedClip(
       sourcePath: sourceSet.descriptor.path,
       sourceUrl: sourceSet.artifact.url,
       ...(manifest.source.title ? { sourceTitle: manifest.source.title } : {}),
-      outputPath: join(
-        outputDirectory,
-        `${filesystemSafe(`${String(entry.order).padStart(3, "0")} - ${artist} - ${title} [set-extract]`)}${extension}`,
-      ),
+      outputPath: canonicalTrackPath(outputDirectory, {
+        title,
+        artists: [artist],
+        ...(metadata.album ? { album: metadata.album } : {}),
+        qualifier: `set-extract-${createHash("sha256")
+          .update(
+            `${sourceSet.artifact.url}\u0000${String(startSeconds)}\u0000${String(endSeconds)}`,
+          )
+          .digest("hex")
+          .slice(0, 12)}`,
+        extension,
+      }),
       startSeconds,
       endSeconds,
       metadata,
@@ -392,22 +399,26 @@ async function discoverLocalArtifacts(directories: readonly string[]): Promise<L
       {
         path,
         directoryIndex,
-        normalizedStem: normalizeIdentity(
-          path.slice(0, -extname(path).length).split("/").at(-1) ?? path,
-        ),
+        normalizedStem: normalizeIdentity(path.slice(0, -extname(path).length)),
       },
     ];
   });
 }
 
 async function walkAudioFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return [];
+    throw error;
+  }
   const paths = await Promise.all(
     entries
       .toSorted((left, right) => left.name.localeCompare(right.name))
       .map(async (entry): Promise<string[]> => {
         const path = join(directory, entry.name);
-        if (entry.isDirectory()) return walkAudioFiles(path);
+        if (entry.isDirectory()) return entry.name === ".staging" ? [] : walkAudioFiles(path);
         if (!entry.isFile() || !ADOPTABLE_AUDIO_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
           return [];
         }
@@ -482,43 +493,6 @@ function normalizeIdentity(value: string): string {
     .trim();
 }
 
-function filesystemSafe(value: string): string {
-  const withoutControls = [
-    ...latinize(value)
-      .normalize("NFKD")
-      .replaceAll(/[\u0300-\u036f]/gu, "")
-      .replaceAll(/[^\x20-\x7e]/gu, " "),
-  ]
-    .map((character) => {
-      const code = character.codePointAt(0)!;
-      return code < 32 || code === 127 ? " " : character;
-    })
-    .join("");
-  const safe = withoutControls
-    .replaceAll(/[<>:"/\\|?*]+/gu, " ")
-    .replaceAll(/\s+/gu, " ")
-    .replaceAll(/[. ]+$/gu, "")
-    .trim();
-  return (safe || "track").slice(0, 180).replaceAll(/[. ]+$/gu, "");
-}
-
-function latinize(value: string): string {
-  return value
-    .replaceAll(/[ØÖ]/gu, "O")
-    .replaceAll(/[øö]/gu, "o")
-    .replaceAll(/[ĐÐ]/gu, "D")
-    .replaceAll(/[đð]/gu, "d")
-    .replaceAll(/Þ/gu, "Th")
-    .replaceAll(/þ/gu, "th")
-    .replaceAll(/Ł/gu, "L")
-    .replaceAll(/ł/gu, "l")
-    .replaceAll(/Æ/gu, "AE")
-    .replaceAll(/æ/gu, "ae")
-    .replaceAll(/Œ/gu, "OE")
-    .replaceAll(/œ/gu, "oe")
-    .replaceAll(/ß/gu, "ss");
-}
-
 function adoptedOutputExtension(path: string): ".flac" | ".m4a" | ".mp3" {
   const extension = extname(path).toLowerCase();
   if ([".aif", ".aiff", ".flac", ".wav", ".wave"].includes(extension)) return ".flac";
@@ -537,4 +511,8 @@ function displayIdentityTitle(title: string, mix?: string): string {
 
 function requireAbsolute(path: string, name: string): void {
   if (!isAbsolute(path)) throw new Error(`${name} must be an absolute path: ${path}`);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }

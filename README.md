@@ -4,6 +4,11 @@ One TypeScript workspace for resolving DJ sets, enriching their metadata, publis
 Spotify or SoundCloud, acquiring individual recordings, and maintaining Rekordbox playlists. The
 five original repositories retain their full Git histories under `packages/`.
 
+End-to-end set imports keep one shared on-disk library at
+`~/.djtools/tracks/<artist>/<album>/<title> [identity].ext` by default. Playlist order lives in the
+normal Rekordbox database, so importing another set reuses canonical recordings instead of making
+playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
+
 ## Packages
 
 | Package                                                    | CLI                 | Responsibility                                                         |
@@ -41,9 +46,9 @@ YouTube / SoundCloud set
   -> tracks: description or 1001Tracklists resolution
   -> spots: Spotify metadata enrichment
   -> spots / soundcloud: optional ordered playlist publishing on-platform
-  -> slsk-ts, then ytdlp-ts: individual recordings
+  -> slsk-ts, then ytdlp-ts: canonical artist/album recordings
   -> tracks: bounded set extracts only for unavailable IDs
-  -> rekordbox: verified playlist in the normal encrypted database
+  -> rekordbox: automatic verified playlist membership in the normal encrypted database
 ```
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording

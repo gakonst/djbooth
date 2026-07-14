@@ -34,6 +34,7 @@ import {
   YtdlpReferenceAcquirer,
   type YtdlpReferenceClient,
 } from "./integrations/ytdlp-library.js";
+import { defaultTrackLibraryRoot } from "./library-paths.js";
 import { createManifest, parseManifest } from "./manifest.js";
 import { runProcess } from "./process.js";
 import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
@@ -91,6 +92,10 @@ const parseEnv = z.object({
 const importSetEnv = providerEnv.extend({
   SLSK_USERNAME: z.string().optional().describe("Soulseek username"),
   SLSK_PASSWORD: z.string().optional().describe("Soulseek password"),
+  MUSIC_LIBRARY_ROOT: z
+    .string()
+    .optional()
+    .describe("Canonical artist/album recording root; default ~/.djtools/tracks"),
 });
 
 const cacheModeOption = z
@@ -519,7 +524,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use analyze-existing to analyze only media already checkpointed in a manifest, without loading acquisition credentials or mutating media. Use import-existing for one explicitly approved, verified Rekordbox commit from those checkpointed media/analysis artifacts. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, runs Spotify, individual-track acquisition, verification, and native analysis through stage-specific bounded pools, persists each analyzer summary, then performs one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
+      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use analyze-existing to analyze only media already checkpointed in a manifest, without loading acquisition credentials or mutating media. Use import-existing for one explicitly approved, verified Rekordbox commit from those checkpointed media/analysis artifacts. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, stores verified recordings under the shared canonical artist/album root, runs Spotify, acquisition, verification, and native analysis through stage-specific bounded pools, persists each analyzer summary, then automatically creates or updates the ordered playlist in one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -702,12 +707,17 @@ tracksCli.command("analyze-existing", {
 
 tracksCli.command("import-set", {
   description:
-    "Resume an approved set through resolution, bounded Spotify enrichment and acquisition, four-worker native analysis, and one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
+    "Resume an approved set through resolution, bounded Spotify enrichment, canonical artist/album acquisition, four-worker native analysis, and automatic ordered membership in one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
     manifest: z.string().describe("Durable manifest path; reused on every resume"),
-    outputDirectory: z.string().describe("Destination for individual recordings"),
+    outputDirectory: z
+      .string()
+      .optional()
+      .describe(
+        "Canonical artist/album library root; defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks",
+      ),
     localDirectory: z
       .array(z.string())
       .default([])
@@ -825,7 +835,9 @@ tracksCli.command("import-set", {
       const result = await runSetToRekordbox({
         source: context.args.source,
         manifestPath: context.options.manifest,
-        outputDirectory: context.options.outputDirectory,
+        outputDirectory:
+          context.options.outputDirectory ??
+          defaultTrackLibraryRoot({ ...process.env, ...context.env }),
         approved: true,
         identify: {
           provider: context.options.provider,
