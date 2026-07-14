@@ -670,7 +670,11 @@ describe('direct, indirect, and server-requested connections', () => {
       data: { token: 77 },
     })
 
+    const rawSockets = new Set<Socket>()
     const rawServer = net.createServer((socket) => {
+      rawSockets.add(socket)
+      socket.on('error', () => {})
+      socket.once('close', () => rawSockets.delete(socket))
       const decoder = new FrameDecoder('peer-init')
       socket.on('data', (chunk) => {
         if (decoder.push(chunk).length > 0) socket.write(new BinaryWriter().uint32(999).build())
@@ -678,9 +682,12 @@ describe('direct, indirect, and server-requested connections', () => {
     })
     rawServer.listen(0, '127.0.0.1')
     await once(rawServer, 'listening')
-    cleanup.push(
-      () => new Promise<void>((resolve) => rawServer.close(() => resolve())),
-    )
+    cleanup.push(async () => {
+      for (const socket of rawSockets) socket.destroy()
+      if (rawServer.listening) {
+        await new Promise<void>((resolve) => rawServer.close(() => resolve()))
+      }
+    })
     const rawAddress = rawServer.address() as AddressInfo
     fake.broadcast(
       ServerCode.ConnectToPeer,
