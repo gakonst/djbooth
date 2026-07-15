@@ -40,6 +40,25 @@ export function rollbackOptimisticWrite<TKey, TWrite>(
   return true;
 }
 
+/** Drain only the current tail, carrying any earlier failure into one deferred revalidation. */
+export function finishOptimisticWrite<TKey, TWrite>(
+  writeTails: Map<TKey, TWrite>,
+  revalidationKeys: Set<TKey>,
+  key: TKey,
+  finishedWrite: TWrite,
+  alwaysRevalidate: boolean,
+  revalidate: () => void,
+): boolean {
+  if (writeTails.get(key) !== finishedWrite) {
+    if (alwaysRevalidate) revalidationKeys.add(key);
+    return false;
+  }
+  writeTails.delete(key);
+  const deferredRevalidation = revalidationKeys.delete(key);
+  if (alwaysRevalidate || deferredRevalidation) revalidate();
+  return true;
+}
+
 export type OptimisticIdReconciliation = {
   membershipIds: Array<readonly [from: string, to: string]>;
 };

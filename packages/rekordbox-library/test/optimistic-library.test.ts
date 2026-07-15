@@ -12,6 +12,7 @@ import type {
 import {
   applyOptimisticLibraryMutation,
   captureLibraryCache,
+  finishOptimisticWrite,
   reconcileOptimisticLibraryMutation,
   rollbackOptimisticWrite,
   resolveOptimisticMutationIds,
@@ -47,6 +48,65 @@ describe("optimistic library cache", () => {
       }),
     ).toBe(true);
     expect(projection).toBe("latest snapshot");
+  });
+
+  it.each([
+    ["succeeds", "authoritative B"],
+    ["fails", "authoritative S0"],
+  ])(
+    "revalidates after the queued tail drains when an earlier write fails and the tail %s",
+    (tailOutcome, authoritativeProjection) => {
+      const playlistId = "hosted:spotify:playlist";
+      const olderWrite = Promise.resolve();
+      const newerWrite = Promise.resolve();
+      const tails = new Map([[playlistId, newerWrite]]);
+      const revalidationKeys = new Set([playlistId]);
+      let projection = "optimistic A+B";
+      let revalidations = 0;
+      const revalidate = () => {
+        revalidations += 1;
+        projection = authoritativeProjection;
+      };
+
+      expect(
+        finishOptimisticWrite(tails, revalidationKeys, playlistId, olderWrite, false, revalidate),
+      ).toBe(false);
+      expect(projection).toBe("optimistic A+B");
+      expect(revalidations).toBe(0);
+
+      if (tailOutcome === "fails") {
+        rollbackOptimisticWrite(tails, playlistId, newerWrite, () => {
+          projection = "snapshot SA";
+        });
+      }
+      expect(
+        finishOptimisticWrite(tails, revalidationKeys, playlistId, newerWrite, false, revalidate),
+      ).toBe(true);
+      expect(projection).toBe(authoritativeProjection);
+      expect(revalidations).toBe(1);
+      expect(revalidationKeys).not.toContain(playlistId);
+    },
+  );
+
+  it("carries required revalidation from an older write to the current tail", () => {
+    const olderWrite = Promise.resolve();
+    const newerWrite = Promise.resolve();
+    const tails = new Map([["playlist", newerWrite]]);
+    const revalidationKeys = new Set<string>();
+    let revalidations = 0;
+
+    expect(
+      finishOptimisticWrite(tails, revalidationKeys, "playlist", olderWrite, true, () => {
+        revalidations += 1;
+      }),
+    ).toBe(false);
+    expect(revalidationKeys).toContain("playlist");
+    expect(
+      finishOptimisticWrite(tails, revalidationKeys, "playlist", newerWrite, false, () => {
+        revalidations += 1;
+      }),
+    ).toBe(true);
+    expect(revalidations).toBe(1);
   });
 
   it("creates, reconciles, renames, deletes, and rolls back playlists synchronously", () => {

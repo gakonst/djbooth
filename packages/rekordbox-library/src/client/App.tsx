@@ -99,6 +99,7 @@ import {
   applyOptimisticLibraryMutation,
   cancelLibraryQueries,
   captureLibraryCache,
+  finishOptimisticWrite,
   isOptimisticPlaylistId,
   type LibraryCacheSnapshot,
   type OptimisticLibraryMutation,
@@ -247,6 +248,7 @@ export function App() {
   const historyEntryIdRef = useRef(0);
   const historyInFlightRef = useRef(false);
   const hostedWriteTailsRef = useRef(new Map<string, Promise<void>>());
+  const hostedWriteRevalidationsRef = useRef(new Set<string>());
   const hostedRevisionsRef = useRef(new Map<string, string | null>());
   const localWritePendingRef = useRef(false);
   const mutationInFlightRef = useRef(0);
@@ -792,6 +794,7 @@ export function App() {
           );
         })
         .catch((error: unknown) => {
+          hostedWriteRevalidationsRef.current.add(playlistId);
           rollbackOptimisticWrite(hostedWriteTailsRef.current, playlistId, commit, () => {
             if (hostedSnapshot)
               queryClient.setQueryData<HostedPlaylistsResponse>(
@@ -804,10 +807,14 @@ export function App() {
         });
       hostedWriteTailsRef.current.set(playlistId, commit);
       void commit.finally(() => {
-        if (hostedWriteTailsRef.current.get(playlistId) === commit) {
-          hostedWriteTailsRef.current.delete(playlistId);
-          if (refreshAfterCommit) void invalidateHostedPlaylistQueries(queryClient, playlistId);
-        }
+        finishOptimisticWrite(
+          hostedWriteTailsRef.current,
+          hostedWriteRevalidationsRef.current,
+          playlistId,
+          commit,
+          refreshAfterCommit,
+          () => void invalidateHostedPlaylistQueries(queryClient, playlistId),
+        );
       });
     },
     [bootstrapQuery.data?.csrfToken, clearHistory, queryClient],
@@ -989,14 +996,15 @@ export function App() {
       subscribeLibraryEvents((event) => {
         if (event.type === "hosted-mutation" || event.type === "hosted-job") {
           if (event.type === "hosted-mutation") clearHistory();
-          // The POST caller already owns this optimistic snapshot. Its provider-completion event
-          // (`hosted-job`) will perform the authoritative targeted refresh.
-          if (
-            event.type === "hosted-mutation" &&
-            event.changedId &&
-            hostedWriteTailsRef.current.has(event.changedId)
-          )
+          // The POST caller owns this optimistic snapshot. Provider completion performs the
+          // authoritative refresh immediately, or after a newer local tail drains.
+          if (event.changedId && hostedWriteTailsRef.current.has(event.changedId)) {
+            // A provider completion can land while a newer optimistic write is still queued.
+            // Revalidating now would replace that projection with the earlier provider snapshot.
+            if (event.type === "hosted-job")
+              hostedWriteRevalidationsRef.current.add(event.changedId);
             return;
+          }
           if (event.changedId) void invalidateHostedPlaylistQueries(queryClient, event.changedId);
           else
             void Promise.all([
