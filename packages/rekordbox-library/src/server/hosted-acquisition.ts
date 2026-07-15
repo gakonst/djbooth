@@ -348,15 +348,17 @@ export class HostedPlaylistAcquisitionWorker {
       reference.provider,
       reference.remoteId,
     );
-    const manifest = this.#manifest(reference.provider, reference.remoteId, payload, tracks);
+    const manifest = acquisitionPlanningManifest(
+      reference.provider,
+      this.#manifest(reference.provider, reference.remoteId, payload, tracks),
+    );
     manifest.artifacts.root = dirname(manifestPath);
     manifest.artifacts.manifest = manifestPath;
     manifest.artifacts.downloadDirectory = this.#outputDirectory;
     await this.#dependencies.writeManifest(manifestPath, manifest);
     signal.throwIfAborted();
 
-    const planningManifest = acquisitionPlanningManifest(reference.provider, manifest);
-    const plan = await this.#dependencies.buildPlan(planningManifest, {
+    const plan = await this.#dependencies.buildPlan(manifest, {
       outputDirectory: this.#outputDirectory,
       localDirectories: this.#localDirectories,
       stagingDirectory: join(dirname(manifestPath), ".staging"),

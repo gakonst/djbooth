@@ -521,6 +521,48 @@ export async function acquireManifest(
         }
       });
     }
+    const localArtifactRejections = new Map<AcquisitionRecordingVariant, string>();
+    const unverifiedLocalArtifacts = plan.recordings.flatMap((recording) =>
+      recording.variants.filter(
+        (variant) =>
+          variant.localArtifact !== undefined && !verificationReceipts.has(variant.outputPath),
+      ),
+    );
+    if (unverifiedLocalArtifacts.length) {
+      await measure(
+        "local-artifact-verification",
+        () =>
+          mapConcurrent(
+            unverifiedLocalArtifacts,
+            verificationConcurrency,
+            async (variant) => {
+              const localArtifact = variant.localArtifact!;
+              try {
+                await validateAcquiredSource(
+                  {
+                    path: localArtifact.sourcePath,
+                    source: localArtifact.sourcePath,
+                    temporary: false,
+                  },
+                  targetForVariant(variant),
+                );
+              } catch (error) {
+                throwIfAcquisitionCancelled(options.signal, error);
+                localArtifactRejections.set(
+                  variant,
+                  `${variantLabel(variant)} skipped local artifact matched by ${localArtifact.matchedBy} (${localArtifact.sourcePath}): ${errorMessage(error)}`,
+                );
+                delete variant.localArtifact;
+              }
+            },
+            options.signal,
+          ),
+        {
+          operations: unverifiedLocalArtifacts.length,
+          maxConcurrency: Math.min(unverifiedLocalArtifacts.length, verificationConcurrency),
+        },
+      );
+    }
     await checkpoint();
 
     const availableAcquirers: TrackAcquirer[] = [];
@@ -696,6 +738,10 @@ export async function acquireManifest(
               const receipt = verificationReceipts.get(variant.outputPath);
               let completed: CompletedRecording;
               const warnings: string[] = [];
+              const target = targetForVariant(variant);
+              const localArtifact = variant.localArtifact;
+              const localArtifactRejection = localArtifactRejections.get(variant);
+              if (localArtifactRejection) warnings.push(localArtifactRejection);
               if (receipt) {
                 const priorCandidate = candidateFromDownload(
                   prior,
@@ -711,18 +757,17 @@ export async function acquireManifest(
                   ...(priorCandidate ? { candidate: priorCandidate } : {}),
                 };
                 resumed.push(variant.outputPath);
-              } else if (variant.localArtifact) {
+              } else if (localArtifact) {
                 const tagged = await retagAudio({
-                  sourcePath: variant.localArtifact.sourcePath,
+                  sourcePath: localArtifact.sourcePath,
                   outputPath: variant.outputPath,
                   metadata: variant.metadata,
                   audioCodec: retagCodecForSource(
-                    variant.localArtifact.sourcePath,
+                    localArtifact.sourcePath,
                     variant.outputPath,
                     "slsk",
                   ),
-                  ...(variant.durationMs === undefined ||
-                  variant.localArtifact.matchedBy === "artist-title"
+                  ...(variant.durationMs === undefined
                     ? {}
                     : { expectedDurationSeconds: variant.durationMs / 1000 }),
                 });
@@ -736,21 +781,21 @@ export async function acquireManifest(
                     kind: "individual",
                     mediaPath: variant.outputPath,
                     files: [variant.outputPath],
-                    source: variant.localArtifact.sourcePath,
+                    source: localArtifact.sourcePath,
                     sha256: tagged.sha256,
-                    ...(variant.localArtifact.matchedBy !== "artist-title"
+                    ...(localArtifact.matchedBy !== "artist-title"
                       ? { variantKey: variantKey(variant) }
                       : {}),
-                    ...(variant.localArtifact.matchedBy !== "artist-title" && variant.spotifyId
+                    ...(localArtifact.matchedBy !== "artist-title" && variant.spotifyId
                       ? { spotifyId: variant.spotifyId }
                       : {}),
-                    ...(variant.localArtifact.matchedBy !== "artist-title" && variant.isrc
+                    ...(localArtifact.matchedBy !== "artist-title" && variant.isrc
                       ? { isrc: variant.isrc }
                       : {}),
                   },
                 };
                 warnings.push(
-                  `${variantLabel(variant)} adopted local artifact matched by ${variant.localArtifact.matchedBy}`,
+                  `${variantLabel(variant)} adopted local artifact matched by ${localArtifact.matchedBy}`,
                 );
                 downloaded.push(variant.outputPath);
               } else if (variant.sourceClip) {
@@ -792,23 +837,25 @@ export async function acquireManifest(
                 );
                 downloaded.push(variant.outputPath);
               } else {
-                const target: YoutubeTarget = {
-                  title: variant.title,
-                  artists: variant.artists,
-                  ...(variant.durationMs === undefined
-                    ? {}
-                    : { durationSeconds: variant.durationMs / 1000 }),
-                };
-                const acquired = await acquireVariant(
-                  target,
-                  variant,
-                  availableAcquirers,
-                  plan.stagingDirectory,
-                  minimumScore,
-                  variant.preferredCandidate,
-                  variant.preferredCandidatePlacement,
-                  options.signal,
-                );
+                let acquired: Awaited<ReturnType<typeof acquireVariant>>;
+                try {
+                  acquired = await acquireVariant(
+                    target,
+                    variant,
+                    availableAcquirers,
+                    plan.stagingDirectory,
+                    minimumScore,
+                    variant.preferredCandidate,
+                    variant.preferredCandidatePlacement,
+                    options.signal,
+                  );
+                } catch (error) {
+                  if (!localArtifactRejection) throw error;
+                  throw new Error(
+                    `${errorMessage(error)}; local fallback reason: ${localArtifactRejection}`,
+                  );
+                }
+                if (localArtifactRejection) variant.outputPath = m4aOutputPath(variant.outputPath);
                 const adaptedOutputPath = outputPathForSource(
                   variant.outputPath,
                   acquired.source.path,
@@ -1451,6 +1498,19 @@ function outputPathForSource(
   if (LOSSLESS_PCM_EXTENSIONS.has(sourceExtension)) return `${stem}.flac`;
   if (!PRESERVED_REKORDBOX_AUDIO_EXTENSIONS.has(sourceExtension)) return requestedPath;
   return `${stem}${sourceExtension}`;
+}
+
+function m4aOutputPath(path: string): string {
+  const extension = extname(path);
+  return `${extension ? path.slice(0, -extension.length) : path}.m4a`;
+}
+
+function targetForVariant(variant: AcquisitionRecordingVariant): YoutubeTarget {
+  return {
+    title: variant.title,
+    artists: variant.artists,
+    ...(variant.durationMs === undefined ? {} : { durationSeconds: variant.durationMs / 1000 }),
+  };
 }
 
 const PRESERVED_REKORDBOX_AUDIO_EXTENSIONS = new Set([".flac", ".m4a", ".mp3"]);

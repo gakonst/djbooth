@@ -82,9 +82,11 @@ async function installFakeAudioTools(directory: string): Promise<string> {
 const { readFileSync } = require("node:fs");
 const input = process.argv.at(-1);
 let comment = "test";
+let duration = "100";
 try { comment = readFileSync(input + ".comment", "utf8"); } catch {}
+try { duration = readFileSync(input + ".duration", "utf8").trim(); } catch {}
 process.stdout.write(JSON.stringify({
-  format: { duration: "100", bit_rate: "128000", tags: { title: "Track", artist: "Artist", comment } },
+  format: { duration, bit_rate: "128000", tags: { title: "Track", artist: "Artist", comment } },
   streams: [{ codec_type: "audio", codec_name: "aac" }],
 }) + "\\n");
 `,
@@ -327,6 +329,91 @@ describe("acquireManifest", () => {
           mediaPath: outputPath,
           source: outputPath,
         });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "falls through to acquisition when a local artifact has the wrong duration",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-stale-local-"));
+      const manifestPath = join(directory, "manifest.json");
+      const stalePath = join(directory, "track.flac");
+      const replacementPath = join(directory, "track.m4a");
+      const staleContents = "wrong local recording";
+      await Promise.all([
+        writeManifestAtomic(manifestPath, oneTrackManifest()),
+        writeFile(stalePath, staleContents),
+        writeFile(`${stalePath}.duration`, "200"),
+      ]);
+      const plan = recordingPlan(directory);
+      plan.recordings[0]!.variants[0]!.outputPath = stalePath;
+      plan.recordings[0]!.variants[0]!.localArtifact = {
+        sourcePath: stalePath,
+        matchedBy: "spotify-id",
+      };
+      let searches = 0;
+      let downloads = 0;
+      const acquirer: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: () => Promise.resolve({ available: true }),
+        search: async () => {
+          searches += 1;
+          return [
+            {
+              id: "replacement",
+              source: "https://youtube.test/replacement",
+              title: "Artist - Track",
+              artist: "Artist",
+              durationSeconds: 100,
+            },
+          ];
+        },
+        async download(candidate, destination) {
+          downloads += 1;
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "replacement.m4a");
+          await writeFile(path, "correct replacement recording");
+          return { path, source: candidate.source, temporary: true };
+        },
+      };
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          continueOnError: false,
+        });
+
+        expect(searches).toBe(1);
+        expect(downloads).toBe(1);
+        expect(result.failures).toEqual([]);
+        expect(result.downloaded).toEqual([replacementPath]);
+        expect(plan.recordings[0]!.variants[0]).toMatchObject({
+          outputPath: replacementPath,
+        });
+        expect(plan.recordings[0]!.variants[0]!.localArtifact).toBeUndefined();
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: {
+            backend: "ytdlp",
+            mediaPath: replacementPath,
+            source: "https://youtube.test/replacement",
+          },
+        });
+        expect(result.manifest.entries[0]!.warnings).toContainEqual(
+          expect.stringMatching(/skipped local artifact.*Duration mismatch/iu),
+        );
+        expect(await readFile(stalePath, "utf8")).toBe(staleContents);
+        await expect(readFile(replacementPath, "utf8")).resolves.toBe(
+          "correct replacement recording",
+        );
       } finally {
         process.env.PATH = previousPath;
       }

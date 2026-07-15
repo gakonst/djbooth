@@ -73,6 +73,8 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       },
       async acquire(options) {
         acquisitionOptions = options;
+        const persisted = JSON.parse(readFileSync(options.manifestPath, "utf8")) as SetManifest;
+        expect(persisted.entries[0]?.spotify.status).toBe("unmatched");
         const plan = materializedPlan(options);
         expect(options.acquirers.map(({ backend }) => backend)).toEqual(["slsk", "ytdlp"]);
         expect(options.refreshSpotify).toBe(false);
@@ -171,6 +173,7 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       status: "selected",
       selected: { backend: "ytdlp", source: permalink },
     });
+    expect(durable.entries[0]?.spotify.status).toBe("unmatched");
   });
 
   it("keeps Spotify URLs out of direct acquisition and processes recovered jobs serially", async () => {
