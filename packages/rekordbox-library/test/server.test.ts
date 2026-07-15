@@ -469,6 +469,79 @@ describe("library server", () => {
     await eventPump;
   });
 
+  it("ignores the empty WAL lifecycle caused by invalidation and refetch", async () => {
+    const files = fixture();
+    const dbPath = join(files.root, "master.db");
+    const walPath = `${dbPath}-wal`;
+    writeFileSync(dbPath, "initial database");
+    const api = mockApi(files.audioPath);
+    const invalidate = vi.fn(() => rmSync(walPath, { force: true }));
+    api.getDatabasePath = () => dbPath;
+    api.invalidate = invalidate;
+    const server = await startLibraryServer({
+      api,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+
+    const events: LibraryEvent[] = [];
+    const streamController = new AbortController();
+    const response = await fetch(new URL("api/events", server.url), {
+      signal: streamController.signal,
+    });
+    const reader = response.body!.getReader();
+    const eventPump = (async () => {
+      let buffer = "";
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          buffer += new TextDecoder().decode(chunk.value, { stream: true });
+          const records = buffer.split("\n\n");
+          buffer = records.pop() ?? "";
+          for (const record of records) {
+            const data = record
+              .split("\n")
+              .find((line) => line.startsWith("data: "))
+              ?.slice(6);
+            if (data) events.push(JSON.parse(data) as LibraryEvent);
+          }
+        }
+      } catch (error) {
+        if (!streamController.signal.aborted) throw error;
+      }
+    })();
+
+    await vi.waitFor(() => expect(events.map((event) => event.type)).toContain("connected"));
+
+    // A read-only connection can create and remove an empty WAL without changing library data.
+    writeFileSync(walPath, "");
+    await delay(1_100);
+    rmSync(walPath);
+    await delay(1_100);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type === "external-change")).toHaveLength(0);
+
+    // A WAL containing frames is a real change. Invalidation closes it, then the SSE refetch
+    // recreates an empty WAL before the next watcher poll: the exact former feedback loop.
+    writeFileSync(walPath, "external WAL frames");
+    await vi.waitFor(
+      () => expect(events.filter((event) => event.type === "external-change")).toHaveLength(1),
+      { interval: 25, timeout: 2_500 },
+    );
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    writeFileSync(walPath, "");
+    await delay(1_100);
+    rmSync(walPath);
+    await delay(1_100);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === "external-change")).toHaveLength(1);
+
+    streamController.abort();
+    await eventPump;
+  }, 10_000);
+
   it("streams only service-resolved audio with byte ranges", async () => {
     const files = fixture();
     const server = await startLibraryServer({

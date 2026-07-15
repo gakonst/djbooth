@@ -724,17 +724,22 @@ export async function startLibraryServer(
   const eventClients = new Set<ServerResponse>();
   const localFileVersions = new Map<string, string>();
   let watchedPaths: string[] = [];
+  let watchedWalPath: string | undefined;
   let eventId = 0;
   let externalChangeTimer: ReturnType<typeof setTimeout> | undefined;
   const statsVersion = (stats: Stats): string =>
     stats.nlink === 0
       ? "missing"
       : `${String(stats.dev)}:${String(stats.ino)}:${String(stats.size)}:${String(stats.mtimeMs)}`;
+  const isQuiescentWalState = (path: string, stats: Stats): boolean =>
+    path === watchedWalPath && (stats.nlink === 0 || stats.size === 0);
+  const watchedVersion = (path: string, stats: Stats): string =>
+    isQuiescentWalState(path, stats) ? "quiescent-wal" : statsVersion(stats);
   const pathVersion = (path: string): string => {
     try {
-      return statsVersion(statSync(path));
+      return watchedVersion(path, statSync(path));
     } catch {
-      return "missing";
+      return path === watchedWalPath ? "quiescent-wal" : "missing";
     }
   };
   const rememberLocalFileVersions = () => {
@@ -1050,17 +1055,29 @@ export async function startLibraryServer(
     const dbPath =
       ownedDatabasePath ??
       realpathSync(api.getDatabasePath?.() ?? api.getBootstrap(token).library.dbPath);
-    watchedPaths = [dbPath, `${dbPath}-wal`, join(dirname(dbPath), "masterPlaylists6.xml")];
+    watchedWalPath = `${dbPath}-wal`;
+    watchedPaths = [dbPath, watchedWalPath, join(dirname(dbPath), "masterPlaylists6.xml")];
     for (const watchedPath of watchedPaths) {
       const listener = (current: Stats, previous: Stats) => {
         if (statsVersion(current) === statsVersion(previous)) return;
+        // Merely opening or closing our read connection can create/remove an empty WAL. Treat
+        // missing and zero-byte WAL files as one quiescent state so reads cannot invalidate
+        // themselves. A transition to or from a WAL containing frames remains external.
+        if (isQuiescentWalState(watchedPath, current) && isQuiescentWalState(watchedPath, previous))
+          return;
         const expectedLocalVersion = localFileVersions.get(watchedPath);
-        if (expectedLocalVersion === statsVersion(current)) {
+        if (expectedLocalVersion === watchedVersion(watchedPath, current)) {
           localFileVersions.delete(watchedPath);
         } else {
           localFileVersions.delete(watchedPath);
           if (externalChangeTimer) clearTimeout(externalChangeTimer);
-          else api.invalidate?.();
+          else {
+            api.invalidate?.();
+            // Invalidating closes the shared SQLite connection and can remove its WAL. Capture
+            // that post-close state before the watcher observes it, including a refetch that
+            // recreates the empty WAL before the next polling interval.
+            rememberLocalFileVersions();
+          }
           externalChangeTimer = setTimeout(() => {
             externalChangeTimer = undefined;
             publish("external-change");
