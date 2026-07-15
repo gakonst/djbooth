@@ -415,6 +415,10 @@ describe("Rekordbox direct database planning", () => {
       album: "Nen Lambo",
       isrc: "DEEC32000011",
     });
+    expect(plan.items[0]!.metadata.comment).toContain("Media source: https://youtu.be/full");
+    expect(plan.items[0]!.metadata.comment).toContain(
+      "Spotify URL: https://open.spotify.com/track/spotify-full",
+    );
     expect(plan.items[1]!.metadata).toMatchObject({
       title: "Nen Lambo (&ME Edit) [Mixed]",
       artist: "Bill Loko, &ME",

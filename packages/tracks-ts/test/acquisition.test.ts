@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 
 import {
+  audioMetadataWithAcquisitionSource,
   normalizeMatchText,
   readManifest,
   safeFilename,
@@ -14,6 +15,38 @@ import {
 import { createManifest } from "../src/manifest.js";
 
 describe("acquisition primitives", () => {
+  test("appends canonical download provenance to audio comments exactly once", () => {
+    const metadata = { title: "Track", artists: ["Artist"], comment: "Resolved from set" };
+    const youtube = audioMetadataWithAcquisitionSource(metadata, {
+      backend: "ytdlp",
+      source: "https://www.youtube.com/watch?v=abcdefghijk",
+    });
+    const soundcloud = audioMetadataWithAcquisitionSource(metadata, {
+      backend: "ytdlp",
+      source: "https://soundcloud.com/artist/track",
+    });
+    const soulseek = audioMetadataWithAcquisitionSource(metadata, {
+      backend: "slsk",
+      source: "slsk://download?username=peer&filename=Artist%20-%20Track.flac",
+    });
+
+    expect(youtube.comment).toBe(
+      "Resolved from set\nDownloaded from YouTube: https://www.youtube.com/watch?v=abcdefghijk",
+    );
+    expect(soundcloud.comment).toBe(
+      "Resolved from set\nDownloaded from SoundCloud: https://soundcloud.com/artist/track",
+    );
+    expect(soulseek.comment).toBe(
+      "Resolved from set\nDownloaded from Soulseek: slsk://download?username=peer&filename=Artist%20-%20Track.flac",
+    );
+    expect(
+      audioMetadataWithAcquisitionSource(youtube, {
+        backend: "ytdlp",
+        source: "https://www.youtube.com/watch?v=abcdefghijk",
+      }),
+    ).toBe(youtube);
+  });
+
   test("scores an exact recording above wrong live and short versions", () => {
     const results = scoreYoutubeCandidates(
       {

@@ -354,6 +354,9 @@ The boundary is deliberate:
   stable canonical URLs with duration metadata, freshly extracts the exact selection, and downloads
   direct M4A through TypeScript. True recording ambiguities remain distinct alternatives and are all
   acquired.
+- Every remote acquisition retains its canonical source in the durable manifest, appends it to the
+  recording's embedded comment, and writes it into the Rekordbox comment during import. Spotify
+  identity links remain separate references; Soulseek peer/file provenance remains non-HTTP.
 - `--reference-ytdlp` appends the external compatibility client after native acquisition. It may
   search or download only after a centralized typed native capability gap; abort, network,
   output-lock, write, identity, and content-validation failures stop instead of starting a second

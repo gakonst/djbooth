@@ -78,13 +78,36 @@ async function installFakeAudioTools(directory: string): Promise<string> {
     ffprobe,
     windows
       ? `@echo off\necho {"format":{"duration":"100","bit_rate":"128000","tags":{"title":"Track","artist":"Artist","comment":"test"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}\n`
-      : `#!/bin/sh\nprintf '%s\\n' '{"format":{"duration":"100","bit_rate":"128000","tags":{"title":"Track","artist":"Artist","comment":"test"}},"streams":[{"codec_type":"audio","codec_name":"aac"}]}'\n`,
+      : `#!/usr/bin/env node
+const { readFileSync } = require("node:fs");
+const input = process.argv.at(-1);
+let comment = "test";
+try { comment = readFileSync(input + ".comment", "utf8"); } catch {}
+process.stdout.write(JSON.stringify({
+  format: { duration: "100", bit_rate: "128000", tags: { title: "Track", artist: "Artist", comment } },
+  streams: [{ codec_type: "audio", codec_name: "aac" }],
+}) + "\\n");
+`,
   );
   await writeFile(
     ffmpeg,
     windows
       ? '@echo off\nsetlocal EnableDelayedExpansion\nset "previous="\nfor %%A in (%*) do (\n  if "!previous!"=="-i" set "input=%%~A"\n  set "previous=%%~A"\n  set "output=%%~A"\n)\ncopy /Y "!input!" "!output!" >nul\n'
-      : '#!/bin/sh\ninput=\'\'\nprevious=\'\'\nfor argument in "$@"; do\n  if [ "$previous" = \'-i\' ]; then input="$argument"; fi\n  previous="$argument"\n  output="$argument"\ndone\ncp "$input" "$output"\n',
+      : `#!/usr/bin/env node
+const { copyFileSync, writeFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+let input;
+let comment = "test";
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === "-i") input = args[index + 1];
+  if (args[index] === "-metadata" && args[index + 1]?.startsWith("comment=")) {
+    comment = args[index + 1].slice("comment=".length);
+  }
+}
+const output = args.at(-1);
+copyFileSync(input, output);
+writeFileSync(output + ".comment", comment);
+`,
   );
   await Promise.all([chmod(ffprobe, 0o700), chmod(ffmpeg, 0o700)]);
   return bin;

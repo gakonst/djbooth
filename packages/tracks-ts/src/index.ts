@@ -48,6 +48,7 @@ export {
 export {
   acquireManifestLock,
   acquirePipelineManifestLock,
+  audioMetadataWithAcquisitionSource,
   createSourceSetClip,
   normalizeMatchText,
   probeAudio,
@@ -61,6 +62,7 @@ export {
   verifyAudioFile,
   writeManifestAtomic,
   type AudioMetadata,
+  type AudioAcquisitionSource,
   type AudioProbe,
   type ManifestSnapshot,
   type ScoredYoutubeCandidate,
@@ -148,6 +150,14 @@ export {
   type TrackCue,
   type TrackIdentity,
 } from "./manifest.js";
+export {
+  buildProviderPlaylistManifest,
+  type ProviderPlaylistManifestInput,
+  type ProviderPlaylistProvider,
+  type ProviderPlaylistTrack,
+  type SoundCloudProviderPlaylistTrack,
+  type SpotifyProviderPlaylistTrack,
+} from "./provider-playlist-manifest.js";
 export {
   extractClip,
   hasCompleteSampleCoverage,

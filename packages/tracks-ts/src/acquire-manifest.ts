@@ -822,6 +822,10 @@ export async function acquireManifest(
                   sourcePath: acquired.source.path,
                   outputPath: variant.outputPath,
                   metadata: variant.metadata,
+                  acquisitionSource: {
+                    backend: acquired.acquirer.backend,
+                    source: acquired.candidate.source,
+                  },
                   audioCodec: retagCodec,
                   ...(variant.durationMs === undefined
                     ? {}

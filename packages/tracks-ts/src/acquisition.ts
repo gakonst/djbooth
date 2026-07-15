@@ -19,6 +19,11 @@ export type AudioMetadata = {
   grouping?: string;
 };
 
+export type AudioAcquisitionSource = {
+  backend: "slsk" | "ytdlp";
+  source: string;
+};
+
 export type AudioProbe = {
   durationSeconds: number;
   codec: string;
@@ -381,11 +386,16 @@ export async function retagAudio(options: {
   sourcePath: string;
   outputPath: string;
   metadata: AudioMetadata;
+  /** Durable canonical source appended to the embedded comment without replacing user metadata. */
+  acquisitionSource?: AudioAcquisitionSource;
   expectedDurationSeconds?: number;
   ffmpeg?: string;
   audioCodec?: "copy" | "aac" | "flac";
 }): Promise<{ probe: AudioProbe; sha256: string }> {
   const outputPath = resolve(options.outputPath);
+  const outputMetadata = options.acquisitionSource
+    ? audioMetadataWithAcquisitionSource(options.metadata, options.acquisitionSource)
+    : options.metadata;
   await mkdir(dirname(outputPath), { recursive: true });
   const temporary = temporaryMediaPath(outputPath);
   try {
@@ -405,7 +415,7 @@ export async function retagAudio(options: {
       ...(options.audioCodec === "aac" ? ["-b:a", "320k"] : []),
       "-map_metadata",
       "-1",
-      ...metadataArguments(options.metadata, extname(outputPath)),
+      ...metadataArguments(outputMetadata, extname(outputPath)),
       temporary,
     ]);
     const verified = await verifyAudioFile(temporary, {
@@ -413,7 +423,7 @@ export async function retagAudio(options: {
         ? {}
         : { expectedDurationSeconds: options.expectedDurationSeconds }),
       durationToleranceSeconds: Math.max(10, (options.expectedDurationSeconds ?? 0) * 0.035),
-      expectedMetadata: options.metadata,
+      expectedMetadata: outputMetadata,
     });
     await syncAndRename(temporary, outputPath);
     return verified;
@@ -421,6 +431,50 @@ export async function retagAudio(options: {
     await rm(temporary, { force: true });
     throw error;
   }
+}
+
+/** Append a stable, human-readable download source to an audio comment exactly once. */
+export function audioMetadataWithAcquisitionSource(
+  metadata: AudioMetadata,
+  acquisitionSource: AudioAcquisitionSource,
+): AudioMetadata {
+  const source = acquisitionSource.source.trim();
+  if (!source || metadata.comment.split(/\r?\n/u).some((line) => line.includes(source))) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    comment: [
+      metadata.comment.trimEnd(),
+      `Downloaded from ${acquisitionSourceLabel(acquisitionSource)}: ${source}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function acquisitionSourceLabel(acquisitionSource: AudioAcquisitionSource): string {
+  if (acquisitionSource.backend === "slsk") return "Soulseek";
+  try {
+    const hostname = new URL(acquisitionSource.source).hostname.toLocaleLowerCase("en-US");
+    if (
+      hostname === "youtu.be" ||
+      hostname === "youtube.com" ||
+      hostname.endsWith(".youtube.com") ||
+      hostname === "youtube-nocookie.com" ||
+      hostname.endsWith(".youtube-nocookie.com")
+    )
+      return "YouTube";
+    if (
+      hostname === "snd.sc" ||
+      hostname === "soundcloud.com" ||
+      hostname.endsWith(".soundcloud.com")
+    )
+      return "SoundCloud";
+  } catch {
+    // Keep an auditable backend label for non-URL sources.
+  }
+  return "yt-dlp";
 }
 
 function textSimilarity(expected: string, actual: string): number {
@@ -536,7 +590,10 @@ function verifyAudioTags(
   for (const [key, value] of expected) {
     if (value === undefined) continue;
     const actual = tags[key];
-    if (actual !== value) {
+    const matches =
+      actual === value ||
+      (key === "comment" && value.length > 0 && actual?.startsWith(`${value}\n`) === true);
+    if (!matches) {
       throw new Error(
         `Metadata mismatch for ${path}: expected ${key}=${JSON.stringify(value)}, got ${JSON.stringify(actual)}`,
       );

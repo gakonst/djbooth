@@ -257,7 +257,9 @@ ordered Rekordbox playlist. Do not ask for a separate add-to-playlist step after
 Create one `SoulseekClient`, connect once, and search each unresolved recording with bounded
 concurrency. Prefer plausible lossless results, but inspect metadata and duration instead of trusting
 the extension. Record the selected peer and remote file before download, then the absolute path and
-SHA-256 after verification.
+SHA-256 after verification. Append the canonical Soulseek or HTTP acquisition source to the output
+recording's embedded comment and carry the same source into the Rekordbox comment; keep Spotify as a
+separate identity reference rather than describing it as the audio source.
 
 When Soulseek has no acceptable result, use bounded native `searchYoutube`, score its stable
 identity/duration fields, inspect the selected exact URL with `ExtractorRegistry`, and download its
