@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  alignCanvasStateToPlaylist,
   deriveConnectedOrder,
   playlistMembershipSnapshot,
   type SetCanvasNode,
@@ -14,6 +15,7 @@ const track = (id: string, membershipId?: string): TrackSummary =>
     artist: null,
     album: null,
     genre: null,
+    colorId: null,
     bpm: null,
     key: null,
     durationSeconds: null,
@@ -65,5 +67,44 @@ describe("set canvas ordering", () => {
     ).toEqual(["membership-1", "membership-2"]);
     expect(playlistMembershipSnapshot([])).toEqual([]);
     expect(deriveConnectedOrder([], [])).toEqual([]);
+  });
+
+  it("aligns local nodes to a restored playlist without reapplying the stale graph", () => {
+    const one = track("1", "membership-1");
+    const two = track("2", "membership-2");
+    const candidate = track("3", "membership-3");
+    const aligned = alignCanvasStateToPlaylist([candidate, one], {
+      nodes: [
+        {
+          id: "one",
+          track: one,
+          position: { x: 10, y: 20 },
+          kind: "playlist",
+          playlistIndex: 0,
+        },
+        {
+          id: "two",
+          track: two,
+          position: { x: 30, y: 40 },
+          kind: "playlist",
+          playlistIndex: 1,
+        },
+        {
+          id: "candidate",
+          track: candidate,
+          position: { x: 50, y: 60 },
+          kind: "candidate",
+        },
+      ],
+      connections: [{ id: "stale", fromNodeId: "one", toNodeId: "two" }],
+    });
+
+    expect(aligned.nodes.map((node) => [node.id, node.kind, node.playlistIndex])).toEqual([
+      ["candidate", "playlist", 0],
+      ["one", "playlist", 1],
+      ["two", "candidate", undefined],
+    ]);
+    expect(deriveConnectedOrder(aligned.nodes, aligned.connections)).toEqual(["candidate", "one"]);
+    expect(aligned.connections).not.toContainEqual(expect.objectContaining({ id: "stale" }));
   });
 });

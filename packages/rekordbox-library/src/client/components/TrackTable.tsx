@@ -4,14 +4,19 @@ import {
   ArrowUpDown,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   CircleAlert,
+  Cloud,
   GripVertical,
+  LoaderCircle,
   Music,
+  TriangleAlert,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
-import type { TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
+import type { TrackColorId, TrackSort, TrackSortField, TrackSummary } from "../../shared/types.js";
 import { formatBpm, formatDuration } from "../format.js";
+import { rekordboxTrackColor, TRACK_COLOR_PALETTE } from "../track-colors.js";
 import { playlistDropTrackNumber } from "./playlist-order.js";
 import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
 
@@ -25,6 +30,7 @@ type Props = {
   selectedTrackId: string | null;
   ordered: boolean;
   canWrite: boolean;
+  canEdit: boolean;
   sort?: TrackSort;
   onSelect(track: TrackSummary): void;
   onActivate?(track: TrackSummary): void;
@@ -35,6 +41,7 @@ type Props = {
   ): void;
   onPage(offset: number): void;
   onMove?(track: TrackSummary, trackNumber: number): void;
+  onColorChange?(track: TrackSummary, colorId: TrackColorId | null): void;
   onSort(sort: TrackSort): void;
   onRetry(): void;
 };
@@ -49,12 +56,14 @@ export function TrackTable({
   selectedTrackId,
   ordered,
   canWrite,
+  canEdit,
   sort,
   onSelect,
   onActivate,
   onContextMenu,
   onPage,
   onMove,
+  onColorChange,
   onSort,
   onRetry,
 }: Props) {
@@ -90,12 +99,6 @@ export function TrackTable({
               <th className="title-column" scope="col" aria-sort={sortAria(sort, "title")}>
                 <SortButton label="Title" field="title" sort={sort} onSort={onSort} />
               </th>
-              <th className="album-column" scope="col" aria-sort={sortAria(sort, "album")}>
-                <SortButton label="Album" field="album" sort={sort} onSort={onSort} />
-              </th>
-              <th className="genre-column" scope="col" aria-sort={sortAria(sort, "genre")}>
-                <SortButton label="Genre" field="genre" sort={sort} onSort={onSort} />
-              </th>
               <th className="bpm-column numeric" scope="col" aria-sort={sortAria(sort, "bpm")}>
                 <SortButton label="BPM" field="bpm" sort={sort} onSort={onSort} align="end" />
               </th>
@@ -108,6 +111,12 @@ export function TrackTable({
                 aria-sort={sortAria(sort, "duration")}
               >
                 <SortButton label="Time" field="duration" sort={sort} onSort={onSort} align="end" />
+              </th>
+              <th className="album-column" scope="col" aria-sort={sortAria(sort, "album")}>
+                <SortButton label="Album" field="album" sort={sort} onSort={onSort} />
+              </th>
+              <th className="genre-column" scope="col" aria-sort={sortAria(sort, "genre")}>
+                <SortButton label="Genre" field="genre" sort={sort} onSort={onSort} />
               </th>
               {ordered ? (
                 <th className="reorder-column" scope="col">
@@ -267,12 +276,23 @@ export function TrackTable({
                     <td className="track-number-column numeric muted-cell">{trackNumber}</td>
                     <td className="title-column">
                       <div className="track-title-cell">
-                        <span className="track-waveform-preview-wrap">
-                          <TrackWaveformPreview
-                            trackId={track.id}
-                            className="track-waveform-preview"
+                        {track.hosted && !track.hosted.localContentId ? (
+                          <HostedTrackStatus track={track} />
+                        ) : (
+                          <span className="track-waveform-preview-wrap">
+                            <TrackWaveformPreview
+                              trackId={track.hosted?.localContentId ?? track.id}
+                              className="track-waveform-preview"
+                            />
+                          </span>
+                        )}
+                        {!track.hosted ? (
+                          <TrackColorButton
+                            colorId={track.colorId}
+                            disabled={!canEdit || !onColorChange}
+                            onChange={(colorId) => onColorChange?.(track, colorId)}
                           />
-                        </span>
+                        ) : null}
                         <span className="track-primary-copy">
                           <strong title={track.title}>{track.title || "Untitled"}</strong>
                           <span title={track.artist ?? undefined}>
@@ -281,18 +301,18 @@ export function TrackTable({
                         </span>
                       </div>
                     </td>
-                    <td className="album-column truncate-cell" title={track.album ?? undefined}>
-                      {track.album ?? "—"}
-                    </td>
-                    <td className="genre-column truncate-cell" title={track.genre ?? undefined}>
-                      {track.genre ?? "—"}
-                    </td>
                     <td className="bpm-column numeric tabular">{formatBpm(track.bpm)}</td>
                     <td className="key-column">
                       {track.key ? <span className="key-chip">{track.key}</span> : <span>—</span>}
                     </td>
                     <td className="duration-column numeric tabular muted-cell">
                       {formatDuration(track.durationSeconds)}
+                    </td>
+                    <td className="album-column truncate-cell" title={track.album ?? undefined}>
+                      {track.album ?? "—"}
+                    </td>
+                    <td className="genre-column truncate-cell" title={track.genre ?? undefined}>
+                      {track.genre ?? "—"}
                     </td>
                     {ordered ? (
                       <td className="reorder-column">
@@ -343,6 +363,127 @@ export function TrackTable({
         </span>
       </footer>
     </section>
+  );
+}
+
+export function HostedTrackStatus({ track }: { track: TrackSummary }) {
+  const state = track.hosted?.downloadState ?? "remote";
+  const label =
+    state === "downloaded"
+      ? "Downloaded"
+      : state === "downloading"
+        ? "Downloading"
+        : state === "queued"
+          ? "Queued for download"
+          : state === "error"
+            ? (track.hosted?.downloadError ?? "Download failed")
+            : `Stream from ${track.hosted?.provider === "spotify" ? "Spotify" : "SoundCloud"}`;
+  return (
+    <span className={`hosted-track-status is-${state}`} title={label} aria-label={label}>
+      {state === "downloaded" ? (
+        <CheckCircle2 size={14} />
+      ) : state === "downloading" || state === "queued" ? (
+        <LoaderCircle className={state === "downloading" ? "spin" : undefined} size={14} />
+      ) : state === "error" ? (
+        <TriangleAlert size={14} />
+      ) : (
+        <Cloud size={14} />
+      )}
+    </span>
+  );
+}
+
+function TrackColorButton({
+  colorId,
+  disabled,
+  onChange,
+}: {
+  colorId: TrackColorId | null;
+  disabled: boolean;
+  onChange(colorId: TrackColorId | null): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const color = rekordboxTrackColor(colorId);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [open]);
+
+  return (
+    <span
+      ref={rootRef}
+      className="track-color-control"
+      data-open={open ? "true" : undefined}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <button
+        className="track-color-button"
+        type="button"
+        disabled={disabled}
+        aria-label={color ? `Track color: ${color.name}` : "Set track color"}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={disabled ? color?.name : color ? `${color.name} · change color` : "Set track color"}
+        data-empty={color ? undefined : "true"}
+        style={color ? ({ "--track-color": color.value } as CSSProperties) : undefined}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span aria-hidden="true" />
+      </button>
+      {open ? (
+        <span className="track-color-menu" role="menu" aria-label="Choose track color">
+          <button
+            className="track-color-option is-clear"
+            type="button"
+            role="menuitemradio"
+            aria-checked={colorId === null}
+            aria-label="No color"
+            title="No color"
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+          {TRACK_COLOR_PALETTE.map((option) => (
+            <button
+              key={option.id}
+              className="track-color-option"
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.id === colorId}
+              aria-label={option.name}
+              title={option.name}
+              style={{ "--track-color": option.value } as CSSProperties}
+              onClick={() => {
+                onChange(option.id);
+                setOpen(false);
+              }}
+            >
+              <span aria-hidden="true" />
+            </button>
+          ))}
+        </span>
+      ) : null}
+    </span>
   );
 }
 

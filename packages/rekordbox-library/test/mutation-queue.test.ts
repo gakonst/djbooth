@@ -78,6 +78,32 @@ describe("serial mutation queue", () => {
     expect(executed[1]).toMatchObject({ trackNumber: 3 });
   });
 
+  it("lets coalesced inputs retain state captured before the first waiting edit", async () => {
+    const gate = deferred<string>();
+    const executed: Array<{ value: string; before: string }> = [];
+    const queue = new SerialMutationQueue<{ value: string; before: string }, string>({
+      coalesceKey: () => "shared",
+      coalesce: (previous, next) => ({ ...next, before: previous.before }),
+      execute: async (input) => {
+        executed.push(input);
+        if (executed.length === 1) return gate.promise;
+        return input.value;
+      },
+    });
+
+    const active = queue.enqueue({ value: "active", before: "zero" });
+    const stale = queue.enqueue({ value: "middle", before: "one" });
+    const latest = queue.enqueue({ value: "latest", before: "middle" });
+    gate.resolve("active");
+    await active;
+    await Promise.all([stale, latest]);
+
+    expect(executed).toEqual([
+      { value: "active", before: "zero" },
+      { value: "latest", before: "one" },
+    ]);
+  });
+
   it("keeps playlist replacements ordered because each snapshot is a precondition", () => {
     expect(
       libraryMutationCoalesceKey({
@@ -110,6 +136,12 @@ describe("serial mutation queue", () => {
         metadata,
       }),
     ).toBe("track-metadata:track");
+  });
+
+  it("coalesces adjacent color changes for one track", () => {
+    expect(
+      libraryMutationCoalesceKey({ type: "set-track-color", contentId: "track", colorId: "6" }),
+    ).toBe("track-color:track");
   });
 
   it("rejects dependent queued writes after a failure", async () => {

@@ -11,11 +11,15 @@ import {
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
 
 import { z } from "zod";
 
 import type {
   ApiError,
+  HostedMutationReceipt,
+  HostedPlaylistMutation,
+  HostedPlaylistsResponse,
   LibraryBootstrap,
   LibraryEvent,
   LibraryMutation,
@@ -24,11 +28,17 @@ import type {
   PromptContext,
   PromptPlan,
   TrackDetail,
+  TrackSummary,
   TrackWaveform,
   TracksResponse,
   TrackSort,
   TrackSortField,
 } from "../shared/types.js";
+import {
+  HostedPlaylistCapabilityError,
+  HostedPlaylistConflictError,
+  HostedPlaylistVerificationError,
+} from "./hosted/types.js";
 import {
   LibraryMutationConflictError,
   RekordboxLibraryService,
@@ -37,12 +47,43 @@ import {
 } from "./library.js";
 import { planLibraryPrompt } from "./prompt.js";
 
+const hostedMutationSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("set-hosted-playlist-download"),
+    playlistId: z.string().min(1).max(2_048),
+    enabled: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("create-hosted-playlist"),
+    provider: z.enum(["spotify", "soundcloud"]),
+    name: z.string().trim().min(1).max(255),
+  }),
+  z.object({
+    type: z.literal("rename-hosted-playlist"),
+    playlistId: z.string().min(1).max(2_048),
+    name: z.string().trim().min(1).max(255),
+    expectedRevision: z.string().max(256).nullable(),
+  }),
+  z.object({
+    type: z.literal("delete-hosted-playlist"),
+    playlistId: z.string().min(1).max(2_048),
+    expectedRevision: z.string().max(256).nullable(),
+  }),
+  z.object({
+    type: z.literal("replace-hosted-playlist-tracks"),
+    playlistId: z.string().min(1).max(2_048),
+    remoteTrackIds: z.array(z.string().min(1).max(2_048)).max(10_000),
+    expectedRevision: z.string().max(256).nullable(),
+  }),
+]);
+
 const mutationSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("create-playlist"),
     name: z.string().trim().min(1).max(255),
     parentId: z.string().min(1).optional(),
     kind: z.enum(["playlist", "folder"]).optional(),
+    seq: z.number().int().positive().max(1_000_000).optional(),
   }),
   z.object({
     type: z.literal("rename-playlist"),
@@ -53,6 +94,11 @@ const mutationSchema = z.discriminatedUnion("type", [
     type: z.literal("delete-playlist"),
     playlistId: z.string().min(1),
     expectedPlaylistIds: z.array(z.string().min(1)).min(1).max(10_000),
+  }),
+  z.object({
+    type: z.literal("set-track-color"),
+    contentId: z.string().min(1),
+    colorId: z.enum(["1", "2", "3", "4", "5", "6", "7", "8"]).nullable(),
   }),
   z.object({
     type: z.literal("update-track"),
@@ -147,6 +193,15 @@ export type LibraryApi = {
   mutate(mutation: LibraryMutation): Promise<MutationReceipt>;
 };
 
+export type HostedPlaylistApi = {
+  close?(): void | Promise<void>;
+  listPlaylists(): Promise<HostedPlaylistsResponse>;
+  getTracks(playlistId: string): Promise<TrackSummary[]>;
+  onJobChanged?(listener: (event: { playlistId: string }) => void): () => void;
+  streamTrack?(trackId: string): Promise<Response>;
+  mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt>;
+};
+
 export type LibraryServerOptions = {
   api?: LibraryApi;
   dbPath?: string;
@@ -155,6 +210,8 @@ export type LibraryServerOptions = {
   port?: number;
   staticDirectory?: string;
   writeEnabled?: boolean;
+  hosted?: HostedPlaylistApi | false;
+  hostedStatePath?: string;
 };
 
 export type RunningLibraryServer = {
@@ -372,6 +429,43 @@ async function inspectArtwork(
   }
 }
 
+async function streamHostedAudio(
+  request: IncomingMessage,
+  response: ServerResponse,
+  hosted: HostedPlaylistApi,
+  trackId: string,
+): Promise<void> {
+  if (!hosted.streamTrack)
+    throw new HttpError(404, "STREAM_UNAVAILABLE", "Provider streaming is unavailable");
+  const upstream = await hosted.streamTrack(trackId);
+  if (!upstream.ok || !upstream.body) {
+    upstream.body?.cancel().catch(() => undefined);
+    throw new HttpError(
+      upstream.status === 403 ? 403 : 502,
+      "STREAM_UNAVAILABLE",
+      `Provider stream is unavailable (${String(upstream.status)})`,
+    );
+  }
+  const headers: Record<string, string> = {
+    "cache-control": "private, no-store",
+    "content-type": upstream.headers.get("content-type") ?? "audio/mpeg",
+  };
+  for (const name of ["accept-ranges", "content-length", "content-range"]) {
+    const value = upstream.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  response.writeHead(upstream.status, headers);
+  if (request.method === "HEAD") {
+    await upstream.body.cancel();
+    response.end();
+    return;
+  }
+  const stream = Readable.fromWeb(upstream.body as never);
+  stream.once("error", () => response.destroy());
+  response.once("close", () => stream.destroy());
+  stream.pipe(response);
+}
+
 async function streamAudio(
   request: IncomingMessage,
   response: ServerResponse,
@@ -456,7 +550,7 @@ async function serveStatic(
       extname(realCandidate) === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
     "content-length": contentLength,
     "content-security-policy":
-      "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data:; media-src 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+      "default-src 'self'; base-uri 'none'; connect-src 'self' https://*.soundcloud.cloud https://*.sndcdn.com; form-action 'none'; frame-ancestors 'none'; frame-src https://open.spotify.com; img-src 'self' data:; media-src 'self' blob: https://*.soundcloud.cloud https://*.sndcdn.com; object-src 'none'; script-src 'self' https://open.spotify.com; style-src 'self' 'unsafe-inline'",
     "content-type":
       contentTypes[extname(realCandidate).toLocaleLowerCase()] ?? "application/octet-stream",
   });
@@ -468,6 +562,70 @@ function assertMethod(request: IncomingMessage, allowed: readonly string[]): voi
   throw new HttpError(405, "METHOD_NOT_ALLOWED", "Method not allowed", {
     allow: allowed.join(", "),
   });
+}
+
+function hostedTracksResponse(
+  source: readonly TrackSummary[],
+  options: {
+    direction: "asc" | "desc";
+    filter: TrackFilter;
+    limit: number;
+    offset: number;
+    q?: string;
+    sort?: TrackSortField;
+  },
+): TracksResponse {
+  const query = options.q?.trim().toLocaleLowerCase();
+  const filtered = source.filter((track) => {
+    if (options.filter === "analyzed" && !track.analyzed) return false;
+    if (options.filter === "attention" && track.analyzed) return false;
+    if (!query) return true;
+    return [track.title, track.artist, track.album, track.genre]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLocaleLowerCase().includes(query));
+  });
+  const items = options.sort
+    ? [...filtered].sort((left, right) => {
+        const compared = compareHostedTracks(left, right, options.sort!);
+        return options.direction === "asc" ? compared : -compared;
+      })
+    : filtered;
+  return {
+    items: items.slice(options.offset, options.offset + options.limit),
+    count: items.length,
+    limit: options.limit,
+    offset: options.offset,
+  };
+}
+
+function compareHostedTracks(
+  left: TrackSummary,
+  right: TrackSummary,
+  field: TrackSortField,
+): number {
+  if (field === "position") return compareNullable(left.trackNumber, right.trackNumber);
+  if (field === "bpm") return compareNullable(left.bpm, right.bpm);
+  if (field === "plays") return left.playCount - right.playCount;
+  if (field === "duration") return compareNullable(left.durationSeconds, right.durationSeconds);
+  if (field === "status")
+    return (left.hosted?.downloadState ?? "remote").localeCompare(
+      right.hosted?.downloadState ?? "remote",
+    );
+  const leftValue = field === "title" ? left.title : (left[field] ?? "");
+  const rightValue = field === "title" ? right.title : (right[field] ?? "");
+  return String(leftValue).localeCompare(String(rightValue), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+}
+
+function compareNullable(
+  left: number | undefined | null,
+  right: number | undefined | null,
+): number {
+  if (left == null) return right == null ? 0 : 1;
+  if (right == null) return -1;
+  return left - right;
 }
 
 /** Start the loopback-only Rekordbox library HTTP server. */
@@ -487,6 +645,21 @@ export async function startLibraryServer(
       key: options.key,
       writeEnabled: options.writeEnabled,
     });
+  const ownsHosted = options.hosted === undefined && ownsApi;
+  const hosted =
+    options.hosted === false
+      ? undefined
+      : (options.hosted ??
+        (ownsApi
+          ? await (
+              await import("./hosted-runtime.js")
+            ).createDefaultHostedPlaylistRuntime({
+              statePath: options.hostedStatePath,
+              writeEnabled: options.writeEnabled === true,
+              dbPath: options.dbPath,
+              key: options.key,
+            })
+          : undefined));
   let ownedDatabasePath: string | undefined;
   if (ownsApi) {
     try {
@@ -495,6 +668,7 @@ export async function startLibraryServer(
       );
     } catch (error) {
       api.close?.();
+      if (ownsHosted) await hosted?.close?.();
       throw error;
     }
   }
@@ -547,6 +721,9 @@ export async function startLibraryServer(
     for (const client of eventClients) writeEvent(client, message);
     return event;
   };
+  const stopHostedJobEvents = hosted?.onJobChanged?.(({ playlistId }) => {
+    publish("hosted-job", { changedId: playlistId });
+  });
   const heartbeat = setInterval(() => {
     for (const client of eventClients) writeEvent(client, ": keepalive\n\n");
   }, 20_000);
@@ -591,6 +768,20 @@ export async function startLibraryServer(
         json(request, response, 200, { items: api.getPlaylists() });
         return;
       }
+      if (url.pathname === "/api/hosted-playlists") {
+        assertMethod(request, ["GET", "HEAD"]);
+        const result = hosted
+          ? await hosted.listPlaylists()
+          : {
+              items: [],
+              providers: [
+                { provider: "spotify" as const, connected: false },
+                { provider: "soundcloud" as const, connected: false },
+              ],
+            };
+        json(request, response, 200, result);
+        return;
+      }
       if (url.pathname === "/api/tracks") {
         assertMethod(request, ["GET", "HEAD"]);
         const filter = url.searchParams.get("filter") ?? "all";
@@ -613,18 +804,42 @@ export async function startLibraryServer(
           throw new TypeError("Invalid track sort field");
         if (direction !== "asc" && direction !== "desc")
           throw new TypeError("Invalid track sort direction");
+        const limit = queryInteger(url, "limit", 100, 10_000);
+        const offset = queryInteger(url, "offset", 0, 10_000_000);
+        const playlistId = url.searchParams.get("playlistId");
+        const q = url.searchParams.get("q") ?? undefined;
+        if (playlistId?.startsWith("hosted:")) {
+          if (!hosted)
+            throw new HttpError(
+              503,
+              "HOSTED_PLAYLISTS_UNAVAILABLE",
+              "Hosted playlists are not configured",
+            );
+          json(
+            request,
+            response,
+            200,
+            hostedTracksResponse(await hosted.getTracks(playlistId), {
+              filter,
+              limit,
+              offset,
+              direction,
+              ...(q ? { q } : {}),
+              ...(sort ? { sort: sort as TrackSortField } : {}),
+            }),
+          );
+          return;
+        }
         json(
           request,
           response,
           200,
           api.getTracks({
             filter,
-            limit: queryInteger(url, "limit", 100, 10_000),
-            offset: queryInteger(url, "offset", 0, 10_000_000),
-            ...(url.searchParams.get("playlistId")
-              ? { playlistId: url.searchParams.get("playlistId")! }
-              : {}),
-            ...(url.searchParams.get("q") ? { q: url.searchParams.get("q")! } : {}),
+            limit,
+            offset,
+            ...(playlistId ? { playlistId } : {}),
+            ...(q ? { q } : {}),
             ...(sort ? { sort: { field: sort as TrackSortField, direction } } : {}),
           }),
         );
@@ -640,6 +855,23 @@ export async function startLibraryServer(
       if (audioMatch) {
         assertMethod(request, ["GET", "HEAD"]);
         await streamAudio(request, response, api.getAudioPath(decodeURIComponent(audioMatch[1]!)));
+        return;
+      }
+      const hostedAudioMatch = /^\/api\/hosted-audio\/([^/]+)$/u.exec(url.pathname);
+      if (hostedAudioMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        if (!hosted)
+          throw new HttpError(
+            503,
+            "HOSTED_PLAYLISTS_UNAVAILABLE",
+            "Hosted playlists are not configured",
+          );
+        await streamHostedAudio(
+          request,
+          response,
+          hosted,
+          decodeURIComponent(hostedAudioMatch[1]!),
+        );
         return;
       }
       const artworkMatch = /^\/api\/artwork\/([^/]+)$/u.exec(url.pathname);
@@ -667,6 +899,26 @@ export async function startLibraryServer(
         const receipt: MutationReceipt = await api.mutate(mutation);
         rememberLocalFileVersions();
         publish("mutation", { changedId: receipt.changedId, mutation: mutation.type });
+        json(request, response, 200, { receipt });
+        return;
+      }
+      if (url.pathname === "/api/hosted-mutations") {
+        assertMethod(request, ["POST"]);
+        assertMutationRequest(request, token);
+        if (!hosted)
+          throw new HttpError(
+            503,
+            "HOSTED_PLAYLISTS_UNAVAILABLE",
+            "Hosted playlists are not configured",
+          );
+        const mutation = hostedMutationSchema.parse(
+          await readJsonBody(request),
+        ) as HostedPlaylistMutation;
+        const receipt = await hosted.mutate(mutation);
+        publish("hosted-mutation", {
+          changedId: receipt.playlistId,
+          mutation: mutation.type,
+        });
         json(request, response, 200, { receipt });
         return;
       }
@@ -698,18 +950,24 @@ export async function startLibraryServer(
           ? apiError(error.status, error.code, message)
           : error instanceof LibraryMutationConflictError
             ? apiError(409, "LIBRARY_CONFLICT", message)
-            : error instanceof z.ZodError ||
-                error instanceof SyntaxError ||
-                error instanceof TypeError ||
-                error instanceof URIError
-              ? apiError(400, "INVALID_REQUEST", message)
-              : error instanceof RangeError
-                ? apiError(404, "NOT_FOUND", message)
-                : /write mode is disabled|session token|Cross-origin/u.test(message)
-                  ? apiError(403, "FORBIDDEN", message)
-                  : /Untrusted Host/u.test(message)
-                    ? apiError(421, "MISDIRECTED_REQUEST", message)
-                    : apiError(500, "INTERNAL_ERROR", message);
+            : error instanceof HostedPlaylistConflictError
+              ? apiError(409, "HOSTED_PLAYLIST_CONFLICT", message)
+              : error instanceof HostedPlaylistCapabilityError
+                ? apiError(403, "HOSTED_PLAYLIST_FORBIDDEN", message)
+                : error instanceof HostedPlaylistVerificationError
+                  ? apiError(502, "HOSTED_PLAYLIST_VERIFICATION_FAILED", message)
+                  : error instanceof z.ZodError ||
+                      error instanceof SyntaxError ||
+                      error instanceof TypeError ||
+                      error instanceof URIError
+                    ? apiError(400, "INVALID_REQUEST", message)
+                    : error instanceof RangeError
+                      ? apiError(404, "NOT_FOUND", message)
+                      : /write mode is disabled|session token|Cross-origin/u.test(message)
+                        ? apiError(403, "FORBIDDEN", message)
+                        : /Untrusted Host/u.test(message)
+                          ? apiError(421, "MISDIRECTED_REQUEST", message)
+                          : apiError(500, "INTERNAL_ERROR", message);
       if (error instanceof HttpError)
         for (const [name, value] of Object.entries(error.headers)) response.setHeader(name, value);
       json(request, response, responseError.status, responseError.body);
@@ -726,7 +984,9 @@ export async function startLibraryServer(
     });
   } catch (error) {
     clearInterval(heartbeat);
+    stopHostedJobEvents?.();
     if (ownsApi) api.close?.();
+    if (ownsHosted) await hosted?.close?.();
     throw error;
   }
   const address = server.address();
@@ -774,16 +1034,20 @@ export async function startLibraryServer(
         for (const watcher of watchers) unwatchFile(watcher.path, watcher.listener);
         for (const client of eventClients) client.end();
         eventClients.clear();
+        stopHostedJobEvents?.();
         server.close((serverError) => {
-          let closeError: unknown = serverError;
-          try {
-            if (ownsApi) api.close?.();
-          } catch (error) {
-            closeError ??= error;
-          }
-          if (closeError)
-            reject(closeError instanceof Error ? closeError : new Error(String(closeError)));
-          else resolveClose();
+          void (async () => {
+            let closeError: unknown = serverError;
+            try {
+              if (ownsApi) api.close?.();
+              if (ownsHosted) await hosted?.close?.();
+            } catch (error) {
+              closeError ??= error;
+            }
+            if (closeError)
+              reject(closeError instanceof Error ? closeError : new Error(String(closeError)));
+            else resolveClose();
+          })();
         });
       });
       return closePromise;

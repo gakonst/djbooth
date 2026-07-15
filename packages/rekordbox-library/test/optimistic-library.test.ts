@@ -72,6 +72,30 @@ describe("optimistic library cache", () => {
     );
   });
 
+  it("restores sibling sequence positions around optimistic playlist deletion", () => {
+    const queryClient = seededClient();
+    const created = applyOptimisticLibraryMutation(queryClient, {
+      type: "create-playlist",
+      name: "First",
+      seq: 1,
+    });
+    const temporaryId = created.temporaryPlaylistId!;
+
+    expect(
+      queryClient.getQueryData<PlaylistItem[]>(["playlists"])?.map(({ id, seq }) => [id, seq]),
+    ).toEqual([
+      [playlist.id, 2],
+      [temporaryId, 1],
+    ]);
+
+    applyOptimisticLibraryMutation(queryClient, {
+      type: "delete-playlist",
+      playlistId: temporaryId,
+      expectedPlaylistIds: [temporaryId],
+    });
+    expect(queryClient.getQueryData<PlaylistItem[]>(["playlists"])?.[0]?.seq).toBe(1);
+  });
+
   it("keeps cached track playlist memberships aligned with rename and deletion", () => {
     const queryClient = seededClient();
 
@@ -151,8 +175,13 @@ describe("optimistic library cache", () => {
       slot: 1,
       startSeconds: 12.5,
     });
-    reconcileOptimisticLibraryMutation(queryClient, optimistic, receipt("upsert-cue", "cue-real"));
+    const cueRevision = "2026-07-12 12:00:01.000 +00:00";
+    reconcileOptimisticLibraryMutation(queryClient, optimistic, {
+      ...receipt("upsert-cue", "cue-real"),
+      revision: cueRevision,
+    });
     expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.cues[0]?.id).toBe("cue-real");
+    expect(queryClient.getQueryData<TrackDetail>(["track", "1"])?.revision).toBe(cueRevision);
 
     applyOptimisticLibraryMutation(queryClient, {
       type: "delete-cue",
@@ -349,6 +378,7 @@ function track(id: string, title: string): TrackSummary {
     artist: "Artist",
     album: null,
     genre: null,
+    colorId: null,
     key: null,
     bpm: null,
     durationSeconds: 180,

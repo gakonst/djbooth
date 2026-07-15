@@ -8,6 +8,7 @@ import {
   type DatabaseRow,
   DjmdAlbum,
   DjmdArtist,
+  DjmdColor,
   DjmdContent,
   DjmdGenre,
   DjmdKey,
@@ -29,7 +30,9 @@ import type {
   MutationReceipt,
   PlaylistItem,
   TrackDetail,
+  TrackBeatGridEntry,
   TrackCue,
+  TrackColorId,
   TrackSummary,
   TrackSort,
   TrackSortField,
@@ -159,6 +162,10 @@ function nullableNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function trackColorId(value: unknown): TrackColorId | null {
+  return typeof value === "string" && /^[1-8]$/u.test(value) ? (value as TrackColorId) : null;
+}
+
 function fileExists(path: string | null): boolean {
   if (!path) return false;
   try {
@@ -197,6 +204,7 @@ function mapTrack(
     album: nullableString(row.album),
     genre: nullableString(row.genre),
     key: nullableString(row.keyName),
+    colorId: trackColorId(row.colorId),
     bpm: bpmHundredths === null || bpmHundredths <= 0 ? null : bpmHundredths / 100,
     durationSeconds: nullableNumber(row.durationSeconds),
     rating: numberValue(row.rating),
@@ -322,7 +330,7 @@ function waveformColors(value: unknown): Array<[number, number, number]> {
 function normalizeWaveform(
   values: number[],
   colors: Array<[number, number, number]>,
-  maximum = 2_048,
+  maximum = 16_384,
 ): { peaks: number[]; colors?: Array<[number, number, number]> } {
   if (!values.length) return { peaks: [] };
   const finite = values.map((value) => (Number.isFinite(value) ? Math.max(0, value) : 0));
@@ -366,6 +374,17 @@ function waveformHeights(value: unknown): number[] {
       return numbers.length ? [Math.max(...numbers)] : [];
     }
     return [];
+  });
+}
+
+function beatGridEntries(value: unknown, maximum = 20_000): TrackBeatGridEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, maximum).flatMap((entry): TrackBeatGridEntry[] => {
+    if (!entry || typeof entry !== "object") return [];
+    const { beat, time } = entry as { beat?: unknown; time?: unknown };
+    if (![1, 2, 3, 4].includes(beat as number)) return [];
+    if (typeof time !== "number" || !Number.isFinite(time) || time < 0) return [];
+    return [{ beat: beat as TrackBeatGridEntry["beat"], timeSeconds: time }];
   });
 }
 
@@ -821,6 +840,7 @@ export class RekordboxLibraryService {
       const rows = db.selectRawRows(
         `SELECT content."ID" AS id, content."Title" AS title,
                 content."FolderPath" AS path, content."BPM" AS bpmHundredths,
+                content."ColorID" AS colorId,
                 content."Length" AS durationSeconds, content."Rating" AS rating,
                 content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
                 content."Analysed" AS analysed, artist."Name" AS artist,
@@ -849,6 +869,7 @@ export class RekordboxLibraryService {
     const rows = db.selectRawRows(
       `SELECT content."ID" AS id, content."Title" AS title,
                 content."FolderPath" AS path, content."BPM" AS bpmHundredths,
+                content."ColorID" AS colorId,
                 content."Length" AS durationSeconds, content."Rating" AS rating,
                 content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
                 content."Analysed" AS analysed, content."Commnt" AS comment,
@@ -1005,6 +1026,7 @@ export class RekordboxLibraryService {
       : [];
     let peaks: number[] = [];
     let colors: Array<[number, number, number]> = [];
+    let beatGrid: TrackBeatGridEntry[] = [];
     try {
       analysisPaths.push(
         ...Object.values(db.getContentAnlzPaths(id)).filter(
@@ -1012,6 +1034,11 @@ export class RekordboxLibraryService {
         ),
       );
       const files = [...db.readContentAnlzFiles(id).values()];
+      for (const file of files) {
+        if (!file.has("PQTZ")) continue;
+        beatGrid = beatGridEntries(file.get("PQTZ"));
+        if (beatGrid.length) break;
+      }
       for (const key of ["PWV5", "PWV4", "PWV3", "PWV2", "PWAV"]) {
         for (const file of files) {
           if (!file.has(key)) continue;
@@ -1028,6 +1055,7 @@ export class RekordboxLibraryService {
     const result: TrackWaveform = {
       durationSeconds: nullableNumber(row.durationSeconds),
       ...waveform,
+      ...(beatGrid.length ? { beatGrid } : {}),
       source: peaks.length ? "rekordbox" : "placeholder",
     };
     this.waveformCache.set(id, {
@@ -1072,10 +1100,16 @@ export class RekordboxLibraryService {
         this.assertStopped();
         writer.commit({ allowWhileRunning: true });
         this.databaseFilesVersion = this.captureDatabaseFilesVersion(writer);
-        const revision =
-          mutation.type === "update-track"
-            ? this.getTrackRevision(writer, mutation.contentId)
+        const revisionContentId =
+          mutation.type === "update-track" ||
+          mutation.type === "set-track-color" ||
+          mutation.type === "upsert-cue" ||
+          mutation.type === "delete-cue"
+            ? mutation.contentId
             : undefined;
+        const revision = revisionContentId
+          ? this.getTrackRevision(writer, revisionContentId)
+          : undefined;
         writer.expireIdentityMap();
         this.clearDerivedCaches();
         return {
@@ -1150,7 +1184,10 @@ export class RekordboxLibraryService {
           if (Number(parent.Attribute) !== PlaylistType.FOLDER)
             throw new TypeError("Playlist parent must be a folder");
         }
-        const options = parent ? { parent } : {};
+        const options = {
+          ...(parent ? { parent } : {}),
+          ...(mutation.seq === undefined ? {} : { seq: mutation.seq }),
+        };
         const playlist =
           mutation.kind === "folder"
             ? db.createPlaylistFolder(name, options)
@@ -1167,6 +1204,18 @@ export class RekordboxLibraryService {
       case "delete-playlist": {
         db.deletePlaylist(this.requireActivePlaylistModel(db, mutation.playlistId));
         return { changedId: mutation.playlistId };
+      }
+      case "set-track-color": {
+        const content = this.requireActiveContentModel(db, mutation.contentId);
+        if (mutation.colorId) {
+          const color = db.query(DjmdColor).where({ ID: mutation.colorId }).oneOrNone();
+          if (!color || !this.isActiveRow(db, color))
+            throw new RangeError(`Track color '${mutation.colorId}' was not found`);
+        }
+        content.set("ColorID", mutation.colorId);
+        if (db.hasColumn(content.tableName, "TrackInfoUpdated")) content.TrackInfoUpdated = "2";
+        if (db.hasColumn(content.tableName, "updated_at")) content.set("updated_at", new Date());
+        return { changedId: mutation.contentId };
       }
       case "update-track": {
         const content = this.requireActiveContentModel(db, mutation.contentId);

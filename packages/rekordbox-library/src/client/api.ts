@@ -1,5 +1,8 @@
 import type {
   ApiError,
+  HostedMutationReceipt,
+  HostedPlaylistMutation,
+  HostedPlaylistsResponse,
   LibraryBootstrap,
   LibraryEvent,
   LibraryMutation,
@@ -41,6 +44,10 @@ export function getBootstrap(signal?: AbortSignal): Promise<LibraryBootstrap> {
 export async function getPlaylists(signal?: AbortSignal): Promise<PlaylistItem[]> {
   const response = await apiRequest<{ items: PlaylistItem[] }>("/api/playlists", { signal });
   return response.items;
+}
+
+export function getHostedPlaylists(signal?: AbortSignal): Promise<HostedPlaylistsResponse> {
+  return apiRequest<HostedPlaylistsResponse>("/api/hosted-playlists", { signal });
 }
 
 export function getTracks(query: TrackQuery, signal?: AbortSignal): Promise<TracksResponse> {
@@ -109,6 +116,23 @@ export async function mutateLibrary(
   signal?: AbortSignal,
 ): Promise<MutationReceipt> {
   const response = await apiRequest<{ receipt: MutationReceipt }>("/api/mutations", {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      "x-music-library-token": token,
+    },
+    body: JSON.stringify(mutation),
+  });
+  return response.receipt;
+}
+
+export async function mutateHostedPlaylist(
+  token: string,
+  mutation: HostedPlaylistMutation,
+  signal?: AbortSignal,
+): Promise<HostedMutationReceipt> {
+  const response = await apiRequest<{ receipt: HostedMutationReceipt }>("/api/hosted-mutations", {
     method: "POST",
     signal,
     headers: {

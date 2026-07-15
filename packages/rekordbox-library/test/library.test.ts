@@ -59,10 +59,15 @@ function copiedFixture(): Fixture {
     CREATE TABLE djmdGenre (
       ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_deleted INTEGER
     );
+    CREATE TABLE djmdColor (
+      ID TEXT PRIMARY KEY, ColorCode INTEGER, SortKey INTEGER, Commnt TEXT,
+      rb_local_deleted INTEGER
+    );
     CREATE TABLE djmdKey (ID TEXT PRIMARY KEY, ScaleName TEXT, rb_local_deleted INTEGER);
     CREATE TABLE djmdContent (
       ID TEXT PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, ArtistID TEXT,
-      AlbumID TEXT, GenreID TEXT, KeyID TEXT, BPM INTEGER, Length INTEGER, Rating INTEGER,
+      AlbumID TEXT, GenreID TEXT, KeyID TEXT, ColorID TEXT, BPM INTEGER, Length INTEGER,
+      Rating INTEGER,
       DJPlayCount INTEGER, AnalysisDataPath TEXT, Analysed INTEGER, Commnt TEXT, ISRC TEXT,
       ReleaseYear INTEGER, BitRate INTEGER, SampleRate INTEGER, FileSize INTEGER, UUID TEXT,
       rb_local_usn INTEGER, rb_local_deleted INTEGER, created_at DATETIME NOT NULL,
@@ -95,15 +100,23 @@ function copiedFixture(): Fixture {
       '150', 'Test Album', NULL, 'album-150', '100', NULL, NULL, NULL
     );
     INSERT INTO djmdGenre VALUES ('200', 'House', 'genre-200', NULL);
+    INSERT INTO djmdColor VALUES ('1', NULL, 1, 'Pink', NULL);
+    INSERT INTO djmdColor VALUES ('2', NULL, 2, 'Red', NULL);
+    INSERT INTO djmdColor VALUES ('3', NULL, 3, 'Orange', NULL);
+    INSERT INTO djmdColor VALUES ('4', NULL, 4, 'Yellow', NULL);
+    INSERT INTO djmdColor VALUES ('5', NULL, 5, 'Green', NULL);
+    INSERT INTO djmdColor VALUES ('6', NULL, 6, 'Aqua', NULL);
+    INSERT INTO djmdColor VALUES ('7', NULL, 7, 'Blue', NULL);
+    INSERT INTO djmdColor VALUES ('8', NULL, 8, 'Purple', NULL);
     INSERT INTO djmdKey VALUES ('300', 'Fm', NULL);
     INSERT INTO djmdKey VALUES ('301', '4A', NULL);
     INSERT INTO djmdContent VALUES (
-      '1', '/Music/One.mp3', 'One.mp3', 'One', '100', '150', '200', '300',
+      '1', '/Music/One.mp3', 'One.mp3', 'One', '100', '150', '200', '300', '7',
       12400, 180, 3, 2, '/PIONEER/USBANLZ/001/ANLZ0000.DAT', 105, 'First',
       'TEST00000001', 2025, 320, 44100, 1000, 'content-1', 1, NULL, '${now}', '${now}', NULL
     );
     INSERT INTO djmdContent VALUES (
-      '2', '/Music/Two.mp3', 'Two.mp3', 'Two', '100', '150', '200', '300',
+      '2', '/Music/Two.mp3', 'Two.mp3', 'Two', '100', '150', '200', '300', NULL,
       12600, 200, 4, 0, '/PIONEER/USBANLZ/002/ANLZ0000.DAT', 105, 'Second',
       'TEST00000002', 2026, 320, 48000, 2000, 'content-2', 2, NULL, '${now}', '${now}', NULL
     );
@@ -290,12 +303,34 @@ describe("RekordboxLibraryService", () => {
     const analysisPath = join(analysisDirectory, "ANLZ0000.DAT");
     writeFileSync(analysisPath, "initial");
     let heights = [1, 2];
-    const read = vi
-      .spyOn(MasterDatabase.prototype, "readContentAnlzFiles")
-      .mockImplementation(() => new Map([["DAT", new Map([["PWV5", { heights }]])]]) as never);
+    const read = vi.spyOn(MasterDatabase.prototype, "readContentAnlzFiles").mockImplementation(
+      () =>
+        new Map([
+          [
+            "DAT",
+            new Map<string, unknown>([
+              [
+                "PQTZ",
+                [
+                  { beat: 1, bpm: 128, time: 0.025 },
+                  { beat: 2, bpm: 128, time: 0.494 },
+                ],
+              ],
+              ["PWV5", { heights }],
+            ]),
+          ],
+        ]) as never,
+    );
     const library = service(fixture);
 
-    expect(library.getWaveform("1")).toMatchObject({ peaks: [0.5, 1], source: "rekordbox" });
+    expect(library.getWaveform("1")).toMatchObject({
+      beatGrid: [
+        { beat: 1, timeSeconds: 0.025 },
+        { beat: 2, timeSeconds: 0.494 },
+      ],
+      peaks: [0.5, 1],
+      source: "rekordbox",
+    });
     heights = [8, 1];
     expect(library.getWaveform("1")).toMatchObject({ peaks: [0.5, 1], source: "rekordbox" });
     expect(read).toHaveBeenCalledTimes(1);
@@ -587,6 +622,60 @@ describe("RekordboxLibraryService", () => {
     expect(sidecar.get(child.changedId)).toBeUndefined();
   });
 
+  it("restores an empty playlist at its exact sibling sequence", async () => {
+    const fixture = copiedFixture();
+    const library = service(fixture);
+    const before = library
+      .getPlaylists()
+      .filter((playlist) => playlist.parentId === "root")
+      .map(({ id, seq }) => ({ id, seq }));
+
+    const restored = await library.mutate({
+      type: "create-playlist",
+      name: "Restored first",
+      seq: 1,
+    });
+    expect(
+      library
+        .getPlaylists()
+        .filter((playlist) => playlist.parentId === "root")
+        .map(({ id, seq }) => ({ id, seq })),
+    ).toEqual([
+      { id: restored.changedId, seq: 1 },
+      ...before.map((item) => ({ ...item, seq: item.seq + 1 })),
+    ]);
+
+    await library.mutate({
+      type: "delete-playlist",
+      playlistId: restored.changedId,
+      expectedPlaylistIds: [restored.changedId],
+    });
+    expect(
+      library
+        .getPlaylists()
+        .filter((playlist) => playlist.parentId === "root")
+        .map(({ id, seq }) => ({ id, seq })),
+    ).toEqual(before);
+  });
+
+  it("reads, changes, and clears a track color", async () => {
+    const fixture = copiedFixture();
+    const library = service(fixture);
+
+    expect(library.getTrack("1").colorId).toBe("7");
+    const colored = await library.mutate({ type: "set-track-color", contentId: "1", colorId: "2" });
+    expect(library.getTracks().items.find((track) => track.id === "1")?.colorId).toBe("2");
+    expect(colored.revision).toBe(library.getTrack("1").revision);
+
+    const cleared = await library.mutate({
+      type: "set-track-color",
+      contentId: "1",
+      colorId: null,
+    });
+    expect(library.getTrack("1").colorId).toBeNull();
+    expect(cleared.revision).toBe(library.getTrack("1").revision);
+  });
+
   it("updates normalized track metadata in the Rekordbox database", async () => {
     const fixture = copiedFixture();
     const library = service(fixture);
@@ -869,6 +958,7 @@ describe("RekordboxLibraryService", () => {
       contentId: "1",
       cue: { kind: "memory", type: "cue", startSeconds: 12.345 },
     });
+    expect(memory.revision).toBe(library.getTrack("1").revision);
     const hot = await library.mutate({
       type: "upsert-cue",
       contentId: "1",

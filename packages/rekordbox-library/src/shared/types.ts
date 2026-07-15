@@ -26,6 +26,29 @@ export type LibraryBootstrap = {
 
 export type PlaylistKind = "playlist" | "folder" | "smart";
 
+export type HostedPlaylistProvider = "spotify" | "soundcloud";
+
+export type HostedPlaylistCapabilities = {
+  itemsReadable: boolean;
+  detailsEditable: boolean;
+  itemsEditable: boolean;
+};
+
+export type HostedPlaylistSyncState = "idle" | "queued" | "syncing" | "error";
+
+export type HostedPlaylist = {
+  provider: HostedPlaylistProvider;
+  /** Provider-native stable playlist ID or URN. */
+  remoteId: string;
+  revision: string | null;
+  externalUrl: string | null;
+  owned: boolean;
+  capabilities: HostedPlaylistCapabilities;
+  downloadEnabled: boolean;
+  syncState: HostedPlaylistSyncState;
+  syncError?: string;
+};
+
 export type PlaylistItem = {
   countError?: string;
   id: string;
@@ -34,7 +57,27 @@ export type PlaylistItem = {
   seq: number;
   type: PlaylistKind;
   trackCount: number | null;
+  hosted?: HostedPlaylist;
 };
+
+export type HostedTrackDownloadState = "remote" | "queued" | "downloading" | "downloaded" | "error";
+
+export type HostedTrack = {
+  provider: HostedPlaylistProvider;
+  /** Provider-native track URI or URN. */
+  remoteId: string;
+  externalUrl: string | null;
+  localContentId: string | null;
+  downloadState: HostedTrackDownloadState;
+  downloadError?: string;
+  /** Provider identity metadata retained for exact acquisition matching. */
+  isrc?: string;
+  releaseDate?: string;
+  albumArtists?: string[];
+  explicit?: boolean;
+};
+
+export type TrackColorId = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
 
 export type TrackSummary = {
   id: string;
@@ -43,6 +86,7 @@ export type TrackSummary = {
   album: string | null;
   genre: string | null;
   key: string | null;
+  colorId: TrackColorId | null;
   bpm: number | null;
   durationSeconds: number | null;
   rating: number;
@@ -53,6 +97,7 @@ export type TrackSummary = {
   path: string | null;
   playlistMembershipId?: string;
   trackNumber?: number;
+  hosted?: HostedTrack;
 };
 
 export type TrackSortField =
@@ -127,7 +172,14 @@ export type TrackWaveform = {
   peaks: number[];
   /** Rekordbox RGB frequency colours, one entry per peak when colour analysis is available. */
   colors?: Array<[number, number, number]>;
+  /** Native Rekordbox PQTZ beat positions. Beat 1 is the first beat of a bar. */
+  beatGrid?: TrackBeatGridEntry[];
   source: "rekordbox" | "placeholder";
+};
+
+export type TrackBeatGridEntry = {
+  beat: 1 | 2 | 3 | 4;
+  timeSeconds: number;
 };
 
 export type TracksResponse = {
@@ -156,9 +208,12 @@ export type LibraryMutation =
       name: string;
       parentId?: string;
       kind?: Exclude<PlaylistKind, "smart">;
+      /** Exact sibling position used when undo restores an empty playlist or folder. */
+      seq?: number;
     }
   | { type: "rename-playlist"; playlistId: string; name: string }
   | { type: "delete-playlist"; playlistId: string; expectedPlaylistIds: string[] }
+  | { type: "set-track-color"; contentId: string; colorId: TrackColorId | null }
   | {
       type: "update-track";
       contentId: string;
@@ -191,7 +246,7 @@ export type MutationReceipt = {
   changedId: string;
   /** Authoritative membership order returned by a playlist replacement transaction. */
   membershipIds?: string[];
-  /** Authoritative metadata revision returned by a track update transaction. */
+  /** Authoritative track revision returned by a content metadata, color, or cue transaction. */
   revision?: string;
   /** @deprecated Interactive mutations no longer create per-edit backups. */
   backupDirectory?: string;
@@ -202,11 +257,59 @@ export type MutationReceipt = {
   finishedAt: string;
 };
 
+export type HostedPlaylistMutation =
+  | {
+      type: "set-hosted-playlist-download";
+      playlistId: string;
+      enabled: boolean;
+    }
+  | {
+      type: "create-hosted-playlist";
+      provider: HostedPlaylistProvider;
+      name: string;
+    }
+  | {
+      type: "rename-hosted-playlist";
+      playlistId: string;
+      name: string;
+      expectedRevision: string | null;
+    }
+  | {
+      type: "delete-hosted-playlist";
+      playlistId: string;
+      expectedRevision: string | null;
+    }
+  | {
+      type: "replace-hosted-playlist-tracks";
+      playlistId: string;
+      remoteTrackIds: string[];
+      expectedRevision: string | null;
+    };
+
+export type HostedMutationReceipt = {
+  operation: HostedPlaylistMutation["type"];
+  playlistId: string;
+  revision: string | null;
+  queuedAt: string;
+};
+
+export type HostedProviderStatus = {
+  provider: HostedPlaylistProvider;
+  connected: boolean;
+  displayName?: string;
+  error?: string;
+};
+
+export type HostedPlaylistsResponse = {
+  items: PlaylistItem[];
+  providers: HostedProviderStatus[];
+};
+
 export type LibraryEvent = {
   id: number;
-  type: "connected" | "mutation" | "external-change";
+  type: "connected" | "mutation" | "external-change" | "hosted-mutation" | "hosted-job";
   emittedAt: string;
-  mutation?: LibraryMutation["type"];
+  mutation?: LibraryMutation["type"] | HostedPlaylistMutation["type"];
   changedId?: string;
 };
 

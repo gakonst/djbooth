@@ -12,6 +12,7 @@ const detail: TrackDetail = {
   artist: "Old artist",
   album: null,
   genre: null,
+  colorId: null,
   key: "Am",
   bpm: 120,
   durationSeconds: 180,
@@ -33,6 +34,26 @@ const detail: TrackDetail = {
 };
 
 describe("optimistic track metadata", () => {
+  it("updates track colors in list and detail caches immediately", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData<TracksResponse>(["tracks", {}], {
+      items: [detail],
+      count: 1,
+      limit: 100,
+      offset: 0,
+    });
+    queryClient.setQueryData(["track", detail.id], detail);
+
+    applyOptimisticLibraryMutation(queryClient, {
+      type: "set-track-color",
+      contentId: detail.id,
+      colorId: "6",
+    });
+
+    expect(queryClient.getQueryData<TracksResponse>(["tracks", {}])?.items[0]?.colorId).toBe("6");
+    expect(queryClient.getQueryData<TrackDetail>(["track", detail.id])?.colorId).toBe("6");
+  });
+
   it("updates track lists and detail caches immediately", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData<TracksResponse>(["tracks", {}], {

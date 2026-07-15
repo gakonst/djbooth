@@ -82,6 +82,41 @@ export function playlistMembershipSnapshot(tracks: ReadonlyArray<TrackSummary>):
   );
 }
 
+/** Reconcile the browser-local graph after history restores an authoritative playlist order. */
+export function alignCanvasStateToPlaylist(
+  tracks: ReadonlyArray<TrackSummary>,
+  current: { nodes: SetCanvasNode[]; connections: SetCanvasConnection[] },
+): { nodes: SetCanvasNode[]; connections: SetCanvasConnection[] } {
+  const remaining = [...current.nodes];
+  const usedIds = new Set(current.nodes.map((node) => node.id));
+  const playlistNodes = tracks.map((track, index): SetCanvasNode => {
+    const existingIndex = remaining.findIndex((node) => node.track.id === track.id);
+    const existing = existingIndex >= 0 ? remaining.splice(existingIndex, 1)[0] : undefined;
+    const id = existing?.id ?? unusedHistoryNodeId(track.id, index, usedIds);
+    usedIds.add(id);
+    return {
+      id,
+      track,
+      position: existing?.position ?? { x: 56 + index * 244, y: 72 + (index % 2) * 124 },
+      kind: "playlist",
+      playlistIndex: index,
+      artworkUrl: existing?.artworkUrl ?? `/api/artwork/${encodeURIComponent(track.id)}`,
+    };
+  });
+  const candidates = remaining.map((node): SetCanvasNode => {
+    const { playlistIndex: _playlistIndex, ...candidate } = node;
+    return { ...candidate, kind: "candidate" };
+  });
+  return {
+    nodes: [...playlistNodes, ...candidates],
+    connections: playlistNodes.slice(0, -1).map((node, index) => ({
+      id: `history:${node.id}:${playlistNodes[index + 1]!.id}`,
+      fromNodeId: node.id,
+      toNodeId: playlistNodes[index + 1]!.id,
+    })),
+  };
+}
+
 type Viewport = CanvasPoint & { zoom: number };
 
 type NodeDrag = {
@@ -833,6 +868,14 @@ function uniqueStrings(values: unknown[]): string[] {
       values.filter((value): value is string => typeof value === "string" && value.length > 0),
     ),
   ];
+}
+
+function unusedHistoryNodeId(trackId: string, index: number, usedIds: Set<string>): string {
+  const base = `playlist:${trackId}:history:${String(index)}`;
+  let id = base;
+  let suffix = 1;
+  while (usedIds.has(id)) id = `${base}:${String(suffix++)}`;
+  return id;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

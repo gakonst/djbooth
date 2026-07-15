@@ -15,8 +15,18 @@ import {
   X,
 } from "lucide-react";
 
-import type { LibraryBootstrap, PlaylistItem } from "../../shared/types.js";
+import type {
+  HostedPlaylistsResponse,
+  LibraryBootstrap,
+  PlaylistItem,
+} from "../../shared/types.js";
 import { compactCount } from "../format.js";
+import {
+  hostedPlaylistProviders,
+  hostedPlaylistsForProvider,
+  hostedProviderStatus,
+} from "../hosted-playlists.js";
+import { HostedPlaylistSection } from "./HostedPlaylistSection.js";
 
 type Props = {
   bootstrap?: LibraryBootstrap;
@@ -26,11 +36,17 @@ type Props = {
   loading: boolean;
   open: boolean;
   canWrite: boolean;
+  hosted?: HostedPlaylistsResponse;
+  hostedLoading?: boolean;
+  selectedHostedPlaylistId?: string | null;
   onClose(): void;
   onSelectPlaylist(id: string | null): void;
   onSelectFilter(filter: string): void;
   onCreatePlaylist(parentId?: string): void;
   onEditPlaylist?(playlist: PlaylistItem): void;
+  onSelectHostedPlaylist?(playlist: PlaylistItem): void;
+  onEditHostedPlaylist?(playlist: PlaylistItem): void;
+  onToggleHostedDownload?(playlist: PlaylistItem, enabled: boolean): void;
   onPlaylistContextMenu?(
     point: { x: number; y: number },
     playlist: PlaylistItem,
@@ -51,16 +67,22 @@ export function LibrarySidebar({
   loading,
   open,
   canWrite,
+  hosted,
+  hostedLoading = false,
+  selectedHostedPlaylistId = null,
   onClose,
   onSelectPlaylist,
   onSelectFilter,
   onCreatePlaylist,
   onEditPlaylist,
+  onSelectHostedPlaylist,
+  onEditHostedPlaylist,
+  onToggleHostedDownload,
   onPlaylistContextMenu,
 }: Props) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const tree = useMemo(() => buildPlaylistTree(items), [items]);
+  const tree = useMemo(() => buildPlaylistTree(items.filter((item) => !item.hosted)), [items]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
   useEffect(() => {
@@ -139,9 +161,27 @@ export function LibrarySidebar({
           </div>
         </div>
 
-        <div className="sidebar-section playlists-section">
+        {hostedPlaylistProviders.map((provider) => (
+          <HostedPlaylistSection
+            key={provider}
+            provider={provider}
+            status={hostedProviderStatus(hosted?.providers ?? [], provider)}
+            items={hostedPlaylistsForProvider(hosted?.items ?? [], provider, normalizedQuery)}
+            loading={hostedLoading}
+            selectedPlaylistId={selectedHostedPlaylistId}
+            onSelectPlaylist={(playlist) => {
+              onSelectHostedPlaylist?.(playlist);
+              onClose();
+            }}
+            onEditPlaylist={onEditHostedPlaylist}
+            onToggleDownload={onToggleHostedDownload}
+            onPlaylistContextMenu={onPlaylistContextMenu}
+          />
+        ))}
+
+        <div className="sidebar-section playlists-section local-playlists-section">
           <div className="sidebar-section-heading">
-            <span className="sidebar-section-label">Playlists</span>
+            <span className="sidebar-section-label">Local / Rekordbox</span>
             <button
               className="small-icon-button"
               type="button"

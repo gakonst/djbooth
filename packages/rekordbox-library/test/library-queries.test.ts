@@ -151,6 +151,7 @@ function track(id: string): TrackSummary {
     artist: null,
     album: null,
     genre: null,
+    colorId: null,
     key: null,
     bpm: null,
     durationSeconds: null,

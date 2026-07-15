@@ -642,6 +642,21 @@ select:focus-visible,
   gap: 7px;
 }
 
+.history-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.history-actions .icon-button {
+  width: 27px;
+  height: 25px;
+}
+
 .topbar-health {
   display: inline-flex;
   height: 24px;
@@ -980,6 +995,105 @@ select:focus-visible,
 .track-waveform-preview {
   width: 100%;
   height: 23px;
+}
+
+.track-color-control {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.track-color-control[data-open="true"] {
+  z-index: 6;
+}
+
+.track-color-button {
+  display: inline-flex;
+  width: 14px;
+  height: 27px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+}
+
+.track-color-button > span {
+  width: 8px;
+  height: 19px;
+  border: 1px solid color-mix(in srgb, var(--track-color) 68%, white 14%);
+  border-radius: 3px;
+  background: var(--track-color);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--track-color) 32%, transparent);
+}
+
+.track-color-button[data-empty="true"] > span {
+  border-color: rgb(255 255 255 / 18%);
+  background: rgb(255 255 255 / 4%);
+  box-shadow: none;
+}
+
+.track-color-button:not(:disabled):hover > span,
+.track-color-button[aria-expanded="true"] > span {
+  border-color: color-mix(in srgb, var(--track-color, white) 75%, white 25%);
+  transform: scaleX(1.25);
+}
+
+.track-color-button:disabled {
+  cursor: default;
+}
+
+.track-color-menu {
+  position: absolute;
+  z-index: 7;
+  top: calc(100% + 5px);
+  left: -8px;
+  display: grid;
+  width: 116px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: #111319;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 52%);
+}
+
+.track-color-option {
+  display: inline-flex;
+  width: 30px;
+  height: 25px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+}
+
+.track-color-option > span {
+  width: 18px;
+  height: 13px;
+  border-radius: 3px;
+  background: var(--track-color);
+}
+
+.track-color-option:hover,
+.track-color-option[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--track-color, white) 55%, transparent);
+  background: rgb(255 255 255 / 6%);
+}
+
+.track-color-option.is-clear > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgb(255 255 255 / 22%);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .is-selected .track-file-icon {
@@ -2261,6 +2375,10 @@ select:focus-visible,
   height: 52px;
 }
 
+.player-waveform ::part(progress) {
+  opacity: 0;
+}
+
 .player-time-row {
   right: 6px;
   bottom: 2px;
@@ -2293,6 +2411,7 @@ select:focus-visible,
 }
 
 .player-cues {
+  position: relative;
   grid-column: 2 / 5;
   grid-row: 2;
   align-items: center;
@@ -2801,6 +2920,196 @@ select:focus-visible,
   .split-editor-button span {
     display: none;
   }
+}
+
+/* Hosted Spotify / SoundCloud library */
+.hosted-provider-heading .sidebar-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.hosted-provider-status {
+  display: inline-flex;
+  max-width: 110px;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.hosted-provider-status .status-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.hosted-provider-status.is-online .status-dot {
+  background: var(--success);
+}
+
+.hosted-provider-status.is-error {
+  color: var(--danger);
+}
+
+.sidebar-provider-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.sidebar-provider-message.is-error {
+  color: var(--danger);
+}
+
+.hosted-playlist-row {
+  padding-left: 2px;
+}
+
+.hosted-playlist-select {
+  min-width: 0;
+}
+
+.hosted-read-only {
+  display: inline-flex;
+  color: var(--faint);
+}
+
+.hosted-download-toggle {
+  display: inline-grid;
+  width: 25px;
+  height: 25px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+}
+
+.hosted-download-toggle:hover {
+  background: var(--surface-active);
+  color: var(--text-soft);
+}
+
+.hosted-download-toggle.is-enabled {
+  color: var(--success);
+}
+
+.hosted-download-toggle.is-error {
+  color: var(--danger);
+}
+
+.hosted-track-status {
+  display: inline-grid;
+  width: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  color: var(--muted);
+}
+
+.hosted-track-status.is-downloaded {
+  color: var(--success);
+}
+
+.hosted-track-status.is-error {
+  color: var(--danger);
+}
+
+.hosted-track-status.is-downloading,
+.hosted-track-status.is-queued {
+  color: var(--accent-bright);
+}
+
+.spotify-embed-player {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player-track-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.player-track-title-row > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-source-links {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+}
+
+.player-source-badge {
+  --source-cutout: #0a0b0e;
+  display: inline-flex;
+  width: 19px;
+  height: 19px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 11%, #111217);
+  color: var(--text-soft);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    transform 120ms ease;
+}
+
+.player-source-badge:hover {
+  border-color: color-mix(in srgb, currentColor 75%, transparent);
+  background: color-mix(in srgb, currentColor 18%, #111217);
+  transform: translateY(-1px);
+}
+
+.player-source-badge.is-static {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.player-source-badge.is-static:hover {
+  transform: none;
+}
+
+.player-source-badge[data-provider="spotify"] {
+  color: #1ed760;
+}
+
+.player-source-badge[data-provider="soundcloud"] {
+  color: #ff6a22;
+}
+
+.player-source-badge[data-provider="youtube"] {
+  color: #ff3040;
+}
+
+.player-source-badge[data-provider="soulseek"] {
+  color: #b9b5c7;
+}
+
+.player-source-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
 }
 
 @media (max-width: 520px) {
@@ -4456,7 +4765,7 @@ select:focus-visible,
 .player-dock {
   position: relative;
   z-index: 12;
-  height: 112px;
+  height: 239px;
   min-width: 0;
   flex: none;
   grid-column: auto;
@@ -4468,10 +4777,22 @@ select:focus-visible,
 }
 
 .player-panel {
-  grid-template-columns: minmax(235px, 300px) minmax(260px, 1fr) 94px;
-  grid-template-rows: 62px 29px;
-  gap: 3px 10px;
+  grid-template-columns: minmax(330px, 420px) minmax(500px, 1fr) 150px;
+  grid-template-rows: 126px 96px;
+  gap: 5px 8px;
+  padding: 7px 8px;
+}
+
+.player-identity {
+  height: 100%;
+  grid-column: 1;
+  grid-row: 2;
+  justify-content: center;
+  gap: 5px;
   padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: linear-gradient(135deg, rgb(255 255 255 / 3%), transparent 65%), #0d0e12;
 }
 
 .player-track-copy {
@@ -4481,76 +4802,166 @@ select:focus-visible,
   gap: 3px;
 }
 
+.player-track-copy strong {
+  font-size: 12px;
+}
+
+.player-track-copy > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.player-track-metadata {
+  gap: 3px 8px;
+  font-size: 8px;
+}
+
 .player-waveform-wrap {
-  height: 60px;
-  grid-column: 2;
+  height: 126px;
+  grid-column: 1 / 4;
   grid-row: 1;
-  padding: 2px 6px 13px;
-  border-radius: 6px;
+  padding: 5px 9px 17px;
+  border-radius: 8px;
   background-size:
-    28px 13px,
-    28px 100%,
+    36px 24px,
+    36px 100%,
     auto;
 }
 
 .player-waveform {
-  height: 52px;
+  position: relative;
+  height: 110px;
+}
+
+.player-waveform-engine {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player-waveform-canvas-wrap,
+.player-waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.player-waveform-canvas {
+  cursor: grab;
+  touch-action: none;
+}
+
+.player-waveform-canvas.is-dragging {
+  cursor: grabbing;
 }
 
 .player-transport {
   grid-column: auto;
   grid-row: auto;
   justify-content: flex-start;
+  gap: 4px;
 }
 
 .player-control-button {
-  width: 27px;
-  height: 27px;
+  width: 29px;
+  height: 29px;
 }
 
 .player-play-button {
-  width: 36px;
-  height: 36px;
+  width: 39px;
+  height: 39px;
+  margin-inline: 3px;
 }
 
 .player-volume {
   display: flex;
+  height: 100%;
   grid-column: 3;
-  grid-row: 1;
+  grid-row: 2;
+  align-content: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: linear-gradient(135deg, rgb(255 255 255 / 3%), transparent 65%), #0d0e12;
 }
 
 .player-volume input {
-  width: 58px;
+  width: 84px;
+}
+
+.player-volume-label {
+  width: 100%;
+  color: var(--faint);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-align: left;
+  text-transform: uppercase;
 }
 
 .player-cues {
-  grid-column: 2 / 4;
+  height: 100%;
+  grid-column: 2;
   grid-row: 2;
-  align-items: center;
+  align-content: center;
+  align-items: flex-end;
   flex-wrap: nowrap;
-  gap: 5px;
-  overflow: hidden;
+  gap: 7px;
+  padding: 27px 10px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: linear-gradient(135deg, rgb(255 255 255 / 3%), transparent 65%), #0d0e12;
+}
+
+.player-cues-label {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  color: var(--text-soft);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  line-height: 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.player-cues-label small {
+  color: var(--faint);
+  font-size: 6px;
+  font-weight: 600;
 }
 
 .player-hot-cues {
-  grid-template-columns: repeat(16, 19px);
-  gap: 2px;
+  grid-template-columns: repeat(16, 25px);
+  gap: 3px;
 }
 
 .player-hot-cue,
 .player-hot-cue > button:first-child {
-  width: 19px;
+  width: 25px;
 }
 
 .player-hot-cue > button:first-child {
-  height: 18px;
-  font-size: 6px;
+  height: 25px;
+  border-radius: 5px;
+  font-size: 7px;
 }
 
 .player-memory-cue-button {
-  height: 20px;
-  padding-inline: 5px;
-  font-size: 7px;
+  height: 25px;
+  padding-inline: 8px;
+  font-size: 8px;
 }
 
 .toast {
@@ -4559,7 +4970,11 @@ select:focus-visible,
 
 @media (max-width: 1180px) {
   .player-panel {
-    grid-template-columns: minmax(190px, 240px) minmax(220px, 1fr);
+    grid-template-columns: minmax(300px, 380px) minmax(460px, 1fr);
+  }
+
+  .player-waveform-wrap {
+    grid-column: 1 / 3;
   }
 
   .player-volume {
@@ -4586,38 +5001,38 @@ select:focus-visible,
   }
 
   .player-panel {
-    grid-template-columns: minmax(150px, 220px) minmax(180px, 1fr);
-    grid-template-rows: 62px 29px;
+    grid-template-columns: minmax(250px, 320px) minmax(420px, 1fr);
+    grid-template-rows: 126px 96px;
   }
 }
 
 @media (max-width: 680px) {
   .player-dock {
-    height: 175px;
+    height: 321px;
     grid-column: auto;
     grid-row: auto;
   }
 
   .player-panel {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 76px 54px 28px;
+    grid-template-rows: 126px 96px 80px;
     gap: 3px 10px;
     padding: 5px 7px;
   }
 
   .player-identity {
     grid-column: 1;
-    grid-row: 1;
-  }
-
-  .player-waveform-wrap {
-    height: 54px;
-    grid-column: 1;
     grid-row: 2;
   }
 
+  .player-waveform-wrap {
+    height: 126px;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
   .player-waveform {
-    height: 46px;
+    height: 110px;
   }
 
   .player-cues {

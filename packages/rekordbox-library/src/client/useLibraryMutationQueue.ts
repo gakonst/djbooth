@@ -16,6 +16,8 @@ type QueueEntry<TInput, TOutput> = {
 export type SerialMutationQueueOptions<TInput, TOutput> = {
   execute(input: TInput): Promise<TOutput>;
   coalesceKey?(input: TInput): string | undefined;
+  /** Merge adjacent waiting inputs while preserving state captured before the first one. */
+  coalesce?(previous: TInput, next: TInput): TInput;
   onError?(error: unknown, input: TInput): void;
   onIdle?(): void;
   onPendingChange?(count: number): void;
@@ -49,7 +51,7 @@ export class SerialMutationQueue<TInput, TOutput> {
       const coalesceKey = this.options.coalesceKey?.(input);
       const tail = this.waiting.at(-1);
       if (coalesceKey && tail?.coalesceKey === coalesceKey) {
-        tail.input = input;
+        tail.input = this.options.coalesce?.(tail.input, input) ?? input;
         tail.waiters.push({ resolve, reject });
       } else {
         this.waiting.push({
@@ -96,6 +98,7 @@ export class SerialMutationQueue<TInput, TOutput> {
 
 export function libraryMutationCoalesceKey(input: LibraryMutation): string | undefined {
   if (input.type === "move-track") return `playlist-move:${input.playlistId}:${input.membershipId}`;
+  if (input.type === "set-track-color") return `track-color:${input.contentId}`;
   if (input.type === "update-track") return `track-metadata:${input.contentId}`;
   return undefined;
 }
@@ -120,6 +123,7 @@ export function useLibraryMutationQueue<TInput, TOutput>(
       ...options,
       execute: (input) => optionsRef.current.execute(input),
       coalesceKey: (input) => optionsRef.current.coalesceKey?.(input),
+      coalesce: (previous, next) => optionsRef.current.coalesce?.(previous, next) ?? next,
       onPendingChange: (count) => {
         setPendingCount(count);
         optionsRef.current.onPendingChange?.(count);

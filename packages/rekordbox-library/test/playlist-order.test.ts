@@ -15,6 +15,7 @@ function track(
     artist: null,
     album: null,
     genre: null,
+    colorId: null,
     key: values.key ?? null,
     bpm: values.bpm ?? null,
     durationSeconds: values.durationSeconds ?? null,

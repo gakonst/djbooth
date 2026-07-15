@@ -12,10 +12,12 @@ import {
   Pencil,
   Play,
   Plus,
+  Redo2,
   RefreshCw,
   Search,
   Sparkles,
   Trash2,
+  Undo2,
   Workflow,
   X,
 } from "lucide-react";
@@ -23,6 +25,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   HotCueSlot,
+  HostedPlaylistMutation,
+  HostedPlaylistsResponse,
   LibraryEvent,
   LibraryMutation,
   MutationReceipt,
@@ -31,14 +35,17 @@ import type {
   TrackCueInput,
   TrackSort,
   TrackSummary,
+  TracksResponse,
 } from "../shared/types.js";
 import {
   getBootstrap,
+  getHostedPlaylists,
   getPlaylists,
   getTrackDetail,
   getTracks,
   LibraryApiError,
   mutateLibrary,
+  mutateHostedPlaylist,
   subscribeLibraryEvents,
 } from "./api.js";
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from "./components/ContextMenu.js";
@@ -51,6 +58,7 @@ import {
 } from "./components/PlayerPanel.js";
 import { PlaylistEditor } from "./components/PlaylistEditor.js";
 import {
+  alignCanvasStateToPlaylist,
   deriveConnectedOrder,
   playlistMembershipSnapshot,
   SetCanvas,
@@ -61,12 +69,29 @@ import {
 import { TrackTable } from "./components/TrackTable.js";
 import { TrackMetadataDialog } from "./components/TrackMetadataDialog.js";
 import {
+  activeTrackIndex,
+  hostedRemoteTrackIds,
+  localTrackContentId,
+  moveHostedPlaylistTrack,
+  removeHostedPlaylistTrack,
+  resolveHostedPlaylistTracks,
+} from "./hosted-playlist-edits.js";
+import {
   DeferredLibraryEventRefresh,
   invalidateAuthoritativeTrackQueries,
   invalidateCanonicalPlaylistQueries,
   playlistTracksQueryOptions,
   trackWaveformQueryOptions,
 } from "./library-queries.js";
+import {
+  libraryHistoryIdentityRemaps,
+  libraryMutationHistoryLabel,
+  prepareLibraryMutationHistory,
+  remapLibraryHistoryMutation,
+  remapLibraryHistoryTrackRevision,
+  type LibraryHistoryEntry,
+  type LibraryHistoryPreparation,
+} from "./library-history.js";
 import { libraryMutationCoalesceKey, useLibraryMutationQueue } from "./useLibraryMutationQueue.js";
 import { buildHotkeyPalette, type HotkeyBinding, useHotkeys } from "./useHotkeys.js";
 import {
@@ -83,6 +108,7 @@ import {
 import { useLibraryUrlState } from "./url-state.js";
 
 const PAGE_SIZE = 100;
+const HISTORY_LIMIT = 50;
 
 const filterLabels: Record<string, string> = {
   all: "All tracks",
@@ -125,9 +151,34 @@ type CanvasState = {
   connections: SetCanvasConnection[];
 };
 
-type LibraryMutationCommit = {
+type UndoableLibraryHistoryPreparation = Extract<LibraryHistoryPreparation, { kind: "undoable" }>;
+
+type PendingLibraryHistory =
+  | {
+      mode: "record";
+      label: string;
+      preparation: LibraryHistoryPreparation;
+    }
+  | {
+      mode: "redo" | "undo";
+      entry: LibraryHistoryEntry;
+      label: string;
+      preparation: UndoableLibraryHistoryPreparation;
+    };
+
+type QueuedLibraryMutation = {
+  history: PendingLibraryHistory;
   optimistic: OptimisticLibraryMutation;
+};
+
+type LibraryMutationCommit = {
+  queued: QueuedLibraryMutation;
   receipt: MutationReceipt;
+};
+
+type LibraryHistoryState = {
+  undo: LibraryHistoryEntry[];
+  redo: LibraryHistoryEntry[];
 };
 
 type OptimisticWriteSession = {
@@ -139,9 +190,18 @@ export function App() {
   const queryClient = useQueryClient();
   const playerAdapter = useMemo<PlayerAdapter>(
     () => ({
-      getAudioUrl: (track) => `/api/audio/${encodeURIComponent(track.id)}`,
-      getArtworkUrl: (track) => `/api/artwork/${encodeURIComponent(track.id)}`,
-      loadWaveform: (track) => queryClient.ensureQueryData(trackWaveformQueryOptions(track.id)),
+      getAudioUrl: (track) =>
+        track.hosted?.provider === "soundcloud"
+          ? `/api/hosted-audio/${encodeURIComponent(track.id)}`
+          : track.hosted
+            ? undefined
+            : `/api/audio/${encodeURIComponent(track.id)}`,
+      getArtworkUrl: (track) =>
+        track.hosted ? undefined : `/api/artwork/${encodeURIComponent(track.id)}`,
+      loadWaveform: (track) =>
+        track.hosted
+          ? Promise.resolve(null)
+          : queryClient.ensureQueryData(trackWaveformQueryOptions(track.id)),
     }),
     [queryClient],
   );
@@ -165,7 +225,6 @@ export function App() {
   const [toast, setToast] = useState<ToastState>(null);
   const [viewMode, setViewMode] = useState<"table" | "canvas">("table");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [autoPlayTrackId, setAutoPlayTrackId] = useState<string>();
   const [playerTrackId, setPlayerTrackId] = useState<string | null>(urlState.trackId);
   const [playerSummary, setPlayerSummary] = useState<TrackSummary>();
   const [canvasPlaylistId, setCanvasPlaylistId] = useState<string>();
@@ -174,14 +233,21 @@ export function App() {
   const [canvasFailedFingerprint, setCanvasFailedFingerprint] = useState<string>();
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState<string>();
   const [pendingCanvasTrack, setPendingCanvasTrack] = useState<TrackSummary>();
+  const [history, setHistory] = useState<LibraryHistoryState>({ undo: [], redo: [] });
   const searchRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<PlayerPanelHandle>(null);
+  const autoPlayTrackIdRef = useRef<string | undefined>(undefined);
   const playheadSecondsRef = useRef<number | null>(null);
   const selectedTrackIdRef = useRef<string | null>(urlState.trackId);
   const canvasHydratedKeyRef = useRef<string | undefined>(undefined);
   const canvasFingerprintRef = useRef("");
   const canvasQueuedFingerprintRef = useRef<string | undefined>(undefined);
+  const historyEntryIdRef = useRef(0);
+  const historyInFlightRef = useRef(false);
+  const hostedWriteTailsRef = useRef(new Map<string, Promise<void>>());
+  const hostedRevisionsRef = useRef(new Map<string, string | null>());
   const localWritePendingRef = useRef(false);
+  const mutationInFlightRef = useRef(0);
   const optimisticWriteSessionRef = useRef<OptimisticWriteSession | undefined>(undefined);
   const optimisticPlaylistIdsRef = useRef(new Map<string, string>());
   const optimisticMembershipIdsRef = useRef(new Map<string, string>());
@@ -204,10 +270,23 @@ export function App() {
     queryKey: ["playlists"],
     queryFn: ({ signal }) => getPlaylists(signal),
   });
+  const hostedPlaylistsQuery = useQuery({
+    queryKey: ["hosted-playlists"],
+    queryFn: ({ signal }) => getHostedPlaylists(signal),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+  });
   const playlists = playlistsQuery.data ?? [];
-  const selectedPlaylist = playlists.find((playlist) => playlist.id === urlState.playlistId);
-  const normalPlaylist = selectedPlaylist?.type === "playlist" ? selectedPlaylist : undefined;
-  const editingPlaylist = playlists.find(
+  const hostedPlaylists = hostedPlaylistsQuery.data?.items ?? [];
+  const allPlaylists = [...playlists, ...hostedPlaylists];
+  const selectedPlaylist = allPlaylists.find((playlist) => playlist.id === urlState.playlistId);
+  const selectedHostedPlaylist = selectedPlaylist?.hosted ? selectedPlaylist : undefined;
+  const normalPlaylist =
+    selectedPlaylist?.type === "playlist" && !selectedPlaylist.hosted
+      ? selectedPlaylist
+      : undefined;
+  const editingPlaylist = allPlaylists.find(
     (playlist) => playlist.id === editingPlaylistId && playlist.type === "playlist",
   );
   const canvasPlaylist = playlists.find(
@@ -257,7 +336,7 @@ export function App() {
   const playerDetailQuery = useQuery({
     queryKey: ["track", playerTrackId],
     queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
-    enabled: Boolean(playerTrackId),
+    enabled: Boolean(playerTrackId && !playerTrackId.startsWith("hosted-track:")),
   });
   const metadataDetailQuery = useQuery({
     queryKey: ["track", metadataTarget?.id],
@@ -272,10 +351,23 @@ export function App() {
   const writeEnabled = bootstrapQuery.data?.library.writeEnabled === true;
   const writeReady = writeEnabled && !rekordboxRunning;
   const canWrite = writeReady;
+  const editingPlaylistCanWrite = Boolean(
+    editingPlaylist?.hosted
+      ? editingPlaylist.hosted.capabilities.itemsEditable
+      : editingPlaylist && canWrite,
+  );
+  const selectedPlaylistCanWrite = Boolean(
+    selectedHostedPlaylist
+      ? selectedHostedPlaylist.hosted?.capabilities.itemsEditable
+      : normalPlaylist && canWrite,
+  );
+
+  const clearHistory = useCallback(() => setHistory({ undo: [], redo: [] }), []);
 
   const refreshAll = useCallback(() => {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
+      queryClient.invalidateQueries({ queryKey: ["hosted-playlists"] }),
       queryClient.invalidateQueries({ queryKey: ["playlists"] }),
       queryClient.invalidateQueries({ queryKey: ["tracks"] }),
       queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] }),
@@ -320,6 +412,7 @@ export function App() {
   );
 
   flushDeferredRemoteEventsRef.current = (events) => {
+    if (events.some((event) => event.type === "external-change")) clearHistory();
     const event = events.length === 1 ? events[0] : undefined;
     if (event?.type === "mutation") refreshRemoteMutation(event);
     else refreshAll();
@@ -334,11 +427,21 @@ export function App() {
   }
   const deferredRemoteRefresh = deferredRemoteRefreshRef.current;
 
-  const writes = useLibraryMutationQueue<OptimisticLibraryMutation, LibraryMutationCommit>({
-    coalesceKey: (queued) => libraryMutationCoalesceKey(queued.mutation),
-    execute: async (optimistic) => {
+  const writes = useLibraryMutationQueue<QueuedLibraryMutation, LibraryMutationCommit>({
+    coalesceKey: (queued) => libraryMutationCoalesceKey(queued.optimistic.mutation),
+    coalesce: (previous, next) => ({
+      ...next,
+      history:
+        previous.history.mode === "record" && next.history.mode === "record"
+          ? previous.history.preparation.kind === "ignore"
+            ? next.history
+            : previous.history
+          : next.history,
+    }),
+    execute: async (queued) => {
       const token = bootstrapQuery.data?.csrfToken;
       if (!token) throw new Error("The local write token is unavailable. Refresh the workbench.");
+      const { optimistic } = queued;
       const input = resolveOptimisticMutationIds(optimistic.mutation, {
         playlists: optimisticPlaylistIdsRef.current,
         memberships: optimisticMembershipIdsRef.current,
@@ -346,13 +449,14 @@ export function App() {
         trackRevisions: optimisticTrackRevisionsRef.current,
       });
       const receipt = await mutateLibrary(token, input);
-      return { optimistic, receipt };
+      return { queued, receipt };
     },
     onPendingChange: (count) => {
       localWritePendingRef.current = count > 0;
       deferredRemoteRefresh.stateChanged();
     },
-    onSuccess: ({ optimistic, receipt }) => {
+    onSuccess: ({ queued, receipt }) => {
+      const { history: pendingHistory, optimistic } = queued;
       suppressExternalUntilRef.current = Date.now() + 1_500;
       const reconciled = reconcileOptimisticLibraryMutation(queryClient, optimistic, receipt);
       if (optimistic.temporaryPlaylistId) {
@@ -364,8 +468,9 @@ export function App() {
       }
       for (const [from, to] of reconciled.membershipIds)
         optimisticMembershipIdsRef.current.set(from, to);
-      if (optimistic.mutation.type === "update-track" && receipt.revision)
-        optimisticTrackRevisionsRef.current.set(optimistic.mutation.contentId, receipt.revision);
+      const revisionContentId = mutationRevisionContentId(optimistic.mutation);
+      if (revisionContentId && receipt.revision)
+        optimisticTrackRevisionsRef.current.set(revisionContentId, receipt.revision);
       if (optimistic.revalidatePlaylistId)
         playlistRevalidationsRef.current.add(
           optimisticPlaylistIdsRef.current.get(optimistic.revalidatePlaylistId) ??
@@ -380,6 +485,70 @@ export function App() {
         trackRevalidationsRef.current.add(optimistic.revalidateTrackId);
       if (optimistic.optimisticCueId)
         optimisticCueIdsRef.current.set(optimistic.optimisticCueId, receipt.changedId);
+
+      if (
+        pendingHistory.mode !== "record" &&
+        optimistic.mutation.type === "replace-playlist-tracks" &&
+        optimistic.mutation.playlistId === canvasPlaylistId
+      ) {
+        const response = queryClient.getQueryData<TracksResponse>([
+          "playlist-tracks",
+          optimistic.mutation.playlistId,
+        ]);
+        if (response) {
+          setCanvasState((current) => alignCanvasStateToPlaylist(response.items, current));
+          setCanvasExpectedMembershipIds(playlistMembershipSnapshot(response.items));
+          setCanvasFailedFingerprint(undefined);
+          canvasQueuedFingerprintRef.current = undefined;
+        }
+      }
+
+      const inverse =
+        pendingHistory.preparation.kind === "undoable"
+          ? pendingHistory.preparation.complete(receipt)
+          : undefined;
+      const inverseEntry = inverse
+        ? {
+            ...inverse,
+            id: ++historyEntryIdRef.current,
+            label: pendingHistory.label,
+          }
+        : undefined;
+      if (pendingHistory.mode === "record") {
+        setHistory((current) => {
+          const revised = remapLibraryHistoryRevisionState(current, optimistic.mutation, receipt);
+          if (pendingHistory.preparation.kind === "ignore") return revised;
+          if (!inverseEntry || pendingHistory.preparation.kind === "barrier")
+            return { undo: [], redo: [] };
+          return {
+            undo: [...revised.undo, inverseEntry].slice(-HISTORY_LIMIT),
+            redo: [],
+          };
+        });
+      } else {
+        const remaps = libraryHistoryIdentityRemaps(pendingHistory.entry, receipt);
+        setHistory((current) => {
+          if (!inverseEntry || !remaps) return { undo: [], redo: [] };
+          const revised = remapLibraryHistoryRevisionState(current, optimistic.mutation, receipt);
+          const remapped = remapLibraryHistoryState(revised, remaps);
+          if (pendingHistory.mode === "undo") {
+            if (remapped.undo.at(-1)?.id !== pendingHistory.entry.id) return { undo: [], redo: [] };
+            return {
+              undo: remapped.undo.slice(0, -1),
+              redo: [...remapped.redo, inverseEntry].slice(-HISTORY_LIMIT),
+            };
+          }
+          if (remapped.redo.at(-1)?.id !== pendingHistory.entry.id) return { undo: [], redo: [] };
+          return {
+            undo: [...remapped.undo, inverseEntry].slice(-HISTORY_LIMIT),
+            redo: remapped.redo.slice(0, -1),
+          };
+        });
+        setToast({
+          tone: "success",
+          message: `${pendingHistory.mode === "undo" ? "Undid" : "Redid"} ${pendingHistory.label}`,
+        });
+      }
     },
     onError: (error) => {
       const session = optimisticWriteSessionRef.current;
@@ -461,7 +630,10 @@ export function App() {
   }, [rekordboxRunning, writeReady]);
 
   const applyMutationAsync = useCallback(
-    async (input: LibraryMutation) => {
+    async (
+      input: LibraryMutation,
+      historyAction?: { mode: "redo" | "undo"; entry: LibraryHistoryEntry },
+    ) => {
       assertWritable();
       let session = optimisticWriteSessionRef.current;
       if (!session) {
@@ -472,6 +644,25 @@ export function App() {
         optimisticWriteSessionRef.current = session;
       }
       await session.ready;
+      const preparation = prepareLibraryMutationHistory(queryClient, input);
+      let pendingHistory: PendingLibraryHistory;
+      if (historyAction) {
+        if (preparation.kind !== "undoable")
+          throw new Error(
+            "This history entry can no longer be applied safely. Refresh the library.",
+          );
+        pendingHistory = {
+          ...historyAction,
+          label: historyAction.entry.label,
+          preparation,
+        };
+      } else {
+        pendingHistory = {
+          mode: "record",
+          label: libraryMutationHistoryLabel(input),
+          preparation,
+        };
+      }
       const optimistic = applyOptimisticLibraryMutation(queryClient, input);
       if (input.type === "create-playlist" || input.type === "rename-playlist")
         setPlaylistDialog(null);
@@ -491,7 +682,7 @@ export function App() {
         setEditorOpen(false);
         setEditingPlaylistId(undefined);
       }
-      const commit = await writes.enqueue(optimistic);
+      const commit = await writes.enqueue({ history: pendingHistory, optimistic });
       return commit.receipt;
     },
     [
@@ -507,9 +698,199 @@ export function App() {
 
   const applyMutation = useCallback(
     (input: LibraryMutation) => {
-      void applyMutationAsync(input).catch(() => undefined);
+      mutationInFlightRef.current += 1;
+      void applyMutationAsync(input)
+        .catch(() => undefined)
+        .finally(() => {
+          mutationInFlightRef.current = Math.max(0, mutationInFlightRef.current - 1);
+        });
     },
     [applyMutationAsync],
+  );
+
+  const applyHostedMutation = useCallback(
+    (input: HostedPlaylistMutation, options: { optimisticTracks?: TrackSummary[] } = {}) => {
+      const token = bootstrapQuery.data?.csrfToken;
+      if (!token) {
+        setToast({ tone: "error", message: "The hosted write token is unavailable. Refresh." });
+        return;
+      }
+      const playlistId = "playlistId" in input ? input.playlistId : `provider:${input.provider}`;
+      const hostedSnapshot = queryClient.getQueryData<HostedPlaylistsResponse>([
+        "hosted-playlists",
+      ]);
+      const matchesPlaylistTracks = (query: { queryKey: readonly unknown[] }) => {
+        if (query.queryKey[0] === "playlist-tracks") return query.queryKey[1] === playlistId;
+        if (query.queryKey[0] !== "tracks") return false;
+        const queryOptions = query.queryKey[1];
+        return (
+          typeof queryOptions === "object" &&
+          queryOptions !== null &&
+          "playlistId" in queryOptions &&
+          queryOptions.playlistId === playlistId
+        );
+      };
+      const trackSnapshots = queryClient.getQueriesData<TracksResponse>({
+        predicate: matchesPlaylistTracks,
+      });
+
+      queryClient.setQueryData<HostedPlaylistsResponse>(["hosted-playlists"], (current) =>
+        current ? optimisticHostedPlaylists(current, input) : current,
+      );
+      if (options.optimisticTracks) {
+        const items = options.optimisticTracks.map((track, index) => ({
+          ...track,
+          trackNumber: index + 1,
+        }));
+        for (const [key, current] of trackSnapshots) {
+          if (!current) continue;
+          if (key[0] === "playlist-tracks") {
+            queryClient.setQueryData<TracksResponse>(key, {
+              ...current,
+              items,
+              count: items.length,
+              limit: items.length,
+              offset: 0,
+            });
+            continue;
+          }
+          if (!isPositionTracksQuery(key)) continue;
+          queryClient.setQueryData<TracksResponse>(key, {
+            ...current,
+            items: items.slice(current.offset, current.offset + current.limit),
+            count: items.length,
+          });
+        }
+      }
+
+      const previous = hostedWriteTailsRef.current.get(playlistId) ?? Promise.resolve();
+      const commit = previous
+        .catch(() => undefined)
+        .then(async () => {
+          const revision = hostedRevisionsRef.current.get(playlistId);
+          const mutation =
+            revision !== undefined && "expectedRevision" in input
+              ? { ...input, expectedRevision: revision }
+              : input;
+          const receipt = await mutateHostedPlaylist(token, mutation);
+          hostedRevisionsRef.current.set(playlistId, receipt.revision);
+          clearHistory();
+          queryClient.setQueryData<HostedPlaylistsResponse>(["hosted-playlists"], (current) =>
+            current ? settleHostedPlaylist(current, receipt.playlistId, receipt.revision) : current,
+          );
+        })
+        .catch((error: unknown) => {
+          if (hostedSnapshot)
+            queryClient.setQueryData<HostedPlaylistsResponse>(["hosted-playlists"], hostedSnapshot);
+          for (const [key, snapshot] of trackSnapshots) queryClient.setQueryData(key, snapshot);
+          setToast({ tone: "error", message: errorMessage(error) });
+        });
+      hostedWriteTailsRef.current.set(playlistId, commit);
+      void commit.finally(() => {
+        if (hostedWriteTailsRef.current.get(playlistId) === commit) {
+          hostedWriteTailsRef.current.delete(playlistId);
+          void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["hosted-playlists"] }),
+            queryClient.invalidateQueries({ queryKey: ["playlist-tracks", playlistId] }),
+            queryClient.invalidateQueries({
+              predicate: (query) => matchesPlaylistTracks(query),
+            }),
+          ]);
+        }
+      });
+    },
+    [bootstrapQuery.data?.csrfToken, clearHistory, queryClient],
+  );
+
+  const commitHostedPlaylistTracks = useCallback(
+    (playlist: PlaylistItem, items: readonly TrackSummary[]) => {
+      const hosted = playlist.hosted;
+      if (!hosted?.capabilities.itemsEditable) {
+        setToast({
+          tone: "error",
+          message: `${playlist.name} is read-only on ${hosted?.provider === "spotify" ? "Spotify" : "SoundCloud"}.`,
+        });
+        return;
+      }
+      const remoteTrackIds = hostedRemoteTrackIds(items, hosted.provider);
+      if (!remoteTrackIds) {
+        setToast({
+          tone: "error",
+          message: `Only ${hosted.provider === "spotify" ? "Spotify" : "SoundCloud"} tracks can be added to this hosted playlist.`,
+        });
+        return;
+      }
+      applyHostedMutation(
+        {
+          type: "replace-hosted-playlist-tracks",
+          playlistId: playlist.id,
+          remoteTrackIds,
+          expectedRevision: hosted.revision,
+        },
+        { optimisticTracks: [...items] },
+      );
+    },
+    [applyHostedMutation],
+  );
+
+  const addTrackToEditingPlaylist = useCallback(
+    (track: TrackSummary) => {
+      if (!editingPlaylist) return;
+      if (editingPlaylist.hosted) {
+        const current = editingTracksQuery.data?.items;
+        if (!current) {
+          setToast({ tone: "error", message: "The edit playlist is still loading." });
+          return;
+        }
+        const result = resolveHostedPlaylistTracks(
+          [...current.map((item) => item.id), track.id],
+          [...current, track],
+          editingPlaylist.hosted.provider,
+          editingPlaylist.id,
+        );
+        if (result.rejectedTrackIds.length > 0) {
+          setToast({
+            tone: "error",
+            message: `This playlist only accepts ${editingPlaylist.hosted.provider === "spotify" ? "Spotify" : "SoundCloud"} tracks.`,
+          });
+          return;
+        }
+        commitHostedPlaylistTracks(editingPlaylist, result.items);
+        return;
+      }
+      const contentId = localTrackContentId(track);
+      if (!contentId) {
+        setToast({
+          tone: "error",
+          message: "Download this provider track before adding it to a Rekordbox playlist.",
+        });
+        return;
+      }
+      applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId });
+    },
+    [applyMutation, commitHostedPlaylistTracks, editingPlaylist, editingTracksQuery.data?.items],
+  );
+
+  const applyHistory = useCallback(
+    (mode: "redo" | "undo") => {
+      if (
+        writes.isPending ||
+        historyInFlightRef.current ||
+        mutationInFlightRef.current > 0 ||
+        hostedWriteTailsRef.current.size > 0
+      )
+        return;
+      const entry = (mode === "undo" ? history.undo : history.redo).at(-1);
+      if (!entry) return;
+      historyInFlightRef.current = true;
+      writes.reset();
+      void applyMutationAsync(entry.mutation, { mode, entry })
+        .catch((error) => setToast({ tone: "error", message: errorMessage(error) }))
+        .finally(() => {
+          historyInFlightRef.current = false;
+        });
+    },
+    [applyMutationAsync, history.redo, history.undo, writes],
   );
 
   const openCueDialog = useCallback(
@@ -527,15 +908,26 @@ export function App() {
       selectedTrackIdRef.current = track.id;
       updateUrl({ trackId: track.id });
       if (!activate) return;
-      const sameTrack = playerTrackId === track.id;
-      setPlayerTrackId(track.id);
-      setPlayerSummary(track);
+      const playableId = track.hosted?.localContentId ?? track.id;
+      const playableTrack =
+        playableId === track.id
+          ? {
+              ...track,
+              fileExists:
+                track.fileExists ||
+                (track.hosted?.provider === "soundcloud" && !track.hosted.localContentId),
+            }
+          : { ...track, id: playableId, hosted: undefined };
+      const sameTrack = playerTrackId === playableId;
+      setPlayerTrackId(playableId);
+      setPlayerSummary(playableTrack);
       if (!sameTrack) playheadSecondsRef.current = 0;
       if (sameTrack) {
-        setAutoPlayTrackId(undefined);
+        autoPlayTrackIdRef.current = undefined;
         void playerRef.current?.play();
       } else {
-        setAutoPlayTrackId(track.id);
+        // A ref makes the handoff one-shot even when a provider emits duplicate ready events.
+        autoPlayTrackIdRef.current = playableId;
       }
     },
     [playerTrackId, updateUrl],
@@ -543,7 +935,7 @@ export function App() {
 
   const quickCue = useCallback(
     (kind: "memory" | "hot", startSeconds: number, slot?: HotCueSlot) => {
-      if (!playerTrackId) {
+      if (!playerTrackId || playerTrackId.startsWith("hosted-track:")) {
         setToast({ tone: "error", message: "Select a track before setting a cue." });
         return;
       }
@@ -584,18 +976,39 @@ export function App() {
   useEffect(
     () =>
       subscribeLibraryEvents((event) => {
+        if (event.type === "hosted-mutation" || event.type === "hosted-job") {
+          if (event.type === "hosted-mutation") clearHistory();
+          void Promise.all([
+            queryClient.invalidateQueries({
+              queryKey: ["hosted-playlists"],
+              refetchType: "active",
+            }),
+            queryClient.invalidateQueries({ queryKey: ["tracks"], refetchType: "active" }),
+            queryClient.invalidateQueries({
+              queryKey: ["playlist-tracks"],
+              refetchType: "active",
+            }),
+          ]);
+          return;
+        }
         if (event.type === "mutation") {
           if (localWritePendingRef.current || Date.now() < suppressExternalUntilRef.current)
             deferredRemoteRefresh.defer(event);
-          else refreshRemoteMutation(event);
+          else {
+            clearHistory();
+            refreshRemoteMutation(event);
+          }
           return;
         }
         if (event.type !== "external-change") return;
         if (localWritePendingRef.current || Date.now() < suppressExternalUntilRef.current)
           deferredRemoteRefresh.defer(event);
-        else refreshAll();
+        else {
+          clearHistory();
+          refreshAll();
+        }
       }),
-    [deferredRemoteRefresh, refreshAll, refreshRemoteMutation],
+    [clearHistory, deferredRemoteRefresh, queryClient, refreshAll, refreshRemoteMutation],
   );
 
   useEffect(() => () => deferredRemoteRefresh.dispose(), [deferredRemoteRefresh]);
@@ -625,6 +1038,8 @@ export function App() {
     canvasFingerprint !== JSON.stringify(persistedCanvasContentIds),
   );
   canvasFingerprintRef.current = canvasFingerprint;
+  const canUndo = canWrite && !writes.isPending && !canvasDirty && history.undo.length > 0;
+  const canRedo = canWrite && !writes.isPending && !canvasDirty && history.redo.length > 0;
 
   useEffect(() => {
     const playlistTracks = canvasTracksQuery.data?.items;
@@ -658,7 +1073,7 @@ export function App() {
   }, [canvasTracksQuery.data, pendingCanvasTrack, viewMode]);
 
   const playerTrack = playerDetailQuery.data ?? playerSummary;
-  const playerIndex = tracks.findIndex((track) => track.id === playerTrack?.id);
+  const playerIndex = activeTrackIndex(tracks, playerTrackId ?? playerTrack?.id);
   const previousTrack = playerIndex > 0 ? tracks[playerIndex - 1] : undefined;
   const nextTrack = playerIndex >= 0 ? tracks[playerIndex + 1] : undefined;
 
@@ -670,7 +1085,8 @@ export function App() {
     shortcutsOpen ||
     contextMenu.open,
   );
-  const managedPlaylist = editorOpen && editingPlaylist ? editingPlaylist : normalPlaylist;
+  const managedPlaylistCandidate = editorOpen && editingPlaylist ? editingPlaylist : normalPlaylist;
+  const managedPlaylist = managedPlaylistCandidate?.hosted ? undefined : managedPlaylistCandidate;
   const selectedTrack = [
     ...tracks,
     ...(editingTracksQuery.data?.items ?? []),
@@ -679,6 +1095,14 @@ export function App() {
     ...(playerDetailQuery.data ? [playerDetailQuery.data] : []),
     ...(playerSummary ? [playerSummary] : []),
   ].find((track) => track.id === selectedTrackIdRef.current);
+  const selectedTrackCanAddToEditingPlaylist = Boolean(
+    selectedTrack &&
+    editingPlaylist &&
+    (editingPlaylist.hosted
+      ? editingPlaylist.hosted.capabilities.itemsEditable &&
+        selectedTrack.hosted?.provider === editingPlaylist.hosted.provider
+      : canWrite && localTrackContentId(selectedTrack)),
+  );
   const selectedMembershipTrack = managedPlaylist
     ? [
         ...(managedPlaylist.id === normalPlaylist?.id ? tracks : []),
@@ -787,7 +1211,7 @@ export function App() {
       label: "Set memory cue",
       category: "Cues",
       shortcut: "m",
-      enabled: Boolean(playerTrack) && canWrite,
+      enabled: Boolean(playerTrack && !playerTrack.hosted) && canWrite,
       handler: () => quickCue("memory", playerRef.current?.getCurrentTime() ?? 0),
       when: () => !modalOpen,
     },
@@ -804,6 +1228,24 @@ export function App() {
       when: () => !modalOpen,
     },
     {
+      id: "undo",
+      label: history.undo.at(-1) ? `Undo ${history.undo.at(-1)!.label}` : "Undo",
+      category: "Edit",
+      shortcut: "mod+z",
+      enabled: canUndo,
+      handler: () => applyHistory("undo"),
+      when: () => !modalOpen,
+    },
+    {
+      id: "redo",
+      label: history.redo.at(-1) ? `Redo ${history.redo.at(-1)!.label}` : "Redo",
+      category: "Edit",
+      shortcut: ["mod+shift+z", "ctrl+y"],
+      enabled: canRedo,
+      handler: () => applyHistory("redo"),
+      when: () => !modalOpen,
+    },
+    {
       id: "new-playlist",
       label: "New playlist",
       category: "Playlist",
@@ -817,11 +1259,11 @@ export function App() {
       label: editorOpen ? "Close playlist editor" : "Edit current playlist",
       category: "Playlist",
       shortcut: "shift+e",
-      enabled: editorOpen || Boolean(normalPlaylist),
+      enabled: editorOpen || selectedPlaylist?.type === "playlist",
       handler: () => {
         if (editorOpen) setEditorOpen(false);
-        else if (normalPlaylist) {
-          setEditingPlaylistId(normalPlaylist.id);
+        else if (selectedPlaylist?.type === "playlist") {
+          setEditingPlaylistId(selectedPlaylist.id);
           setEditorOpen(true);
         }
       },
@@ -832,7 +1274,7 @@ export function App() {
       label: "Edit selected track metadata",
       category: "Library",
       shortcut: "e",
-      enabled: Boolean(canWrite && selectedTrack),
+      enabled: Boolean(canWrite && selectedTrack && !selectedTrack.hosted),
       handler: () => {
         if (selectedTrack) setMetadataTarget(selectedTrack);
       },
@@ -844,15 +1286,10 @@ export function App() {
       category: "Playlist",
       shortcut: "mod+enter",
       enabled: Boolean(
-        canWrite && editorOpen && editingPlaylist && selectedTrack && !selectedMembership,
+        editorOpen && editingPlaylistCanWrite && selectedTrackCanAddToEditingPlaylist,
       ),
       handler: () => {
-        if (!editingPlaylist || !selectedTrack) return;
-        applyMutation({
-          type: "add-track",
-          playlistId: editingPlaylist.id,
-          contentId: selectedTrack.id,
-        });
+        if (selectedTrack) addTrackToEditingPlaylist(selectedTrack);
       },
       when: () => !modalOpen,
     },
@@ -1026,6 +1463,8 @@ export function App() {
     if (!target) return [];
     if (target.kind === "playlist") {
       const playlist = target.playlist;
+      const hosted = playlist.hosted;
+      const canEditHostedDetails = Boolean(hosted?.capabilities.detailsEditable);
       return [
         { kind: "heading", label: playlist.name },
         {
@@ -1044,11 +1483,13 @@ export function App() {
                 id: "edit-playlist",
                 label: "Edit in split view",
                 icon: <PanelRightOpen size={14} />,
+                disabled: hosted ? !hosted.capabilities.itemsReadable : false,
               } satisfies ContextMenuEntry,
               {
                 id: "open-canvas",
                 label: "Build on set canvas",
                 icon: <Workflow size={14} />,
+                disabled: Boolean(hosted),
               } satisfies ContextMenuEntry,
             ]
           : []),
@@ -1057,20 +1498,20 @@ export function App() {
           id: "create-child",
           label: playlist.type === "folder" ? "New playlist inside" : "New playlist",
           icon: <Plus size={14} />,
-          disabled: !canWrite,
+          disabled: Boolean(hosted) || !canWrite,
         },
         {
           id: "rename-playlist",
           label: "Rename",
           icon: <Pencil size={14} />,
-          disabled: !canWrite || playlist.type === "smart",
+          disabled: hosted ? !canEditHostedDetails : !canWrite || playlist.type === "smart",
         },
         {
           id: "delete-playlist",
           label: "Delete",
           icon: <Trash2 size={14} />,
           dangerous: true,
-          disabled: !canWrite || playlist.type === "smart",
+          disabled: hosted ? !canEditHostedDetails : !canWrite || playlist.type === "smart",
         },
       ];
     }
@@ -1080,8 +1521,22 @@ export function App() {
         : undefined;
     const track = target.kind === "track" ? target.track : node?.track;
     if (!track) return [];
+    const localContentId = localTrackContentId(track);
+    const editingHosted = editingPlaylist?.hosted;
+    const canAddToEditingPlaylist = Boolean(
+      editingPlaylist &&
+      (editingHosted
+        ? editingHosted.capabilities.itemsEditable &&
+          track.hosted?.provider === editingHosted.provider
+        : canWrite && localContentId),
+    );
     const inSelectedPlaylist = Boolean(
       normalPlaylist && track.playlistMembershipId && urlState.playlistId === normalPlaylist.id,
+    );
+    const inSelectedHostedPlaylist = Boolean(
+      selectedHostedPlaylist &&
+      track.playlistMembershipId &&
+      urlState.playlistId === selectedHostedPlaylist.id,
     );
     return [
       { kind: "heading", label: track.title },
@@ -1091,7 +1546,7 @@ export function App() {
         label: "Edit metadata…",
         icon: <Pencil size={14} />,
         shortcut: "E",
-        disabled: !canWrite,
+        disabled: !canWrite || Boolean(track.hosted),
       },
       {
         id: "add-canvas",
@@ -1104,7 +1559,10 @@ export function App() {
                 ? `Add to ${normalPlaylist.name} canvas`
                 : "Add to set canvas",
         icon: <Workflow size={14} />,
-        disabled: target.kind === "canvas-node" || (!canvasPlaylist && !normalPlaylist),
+        disabled:
+          Boolean(track.hosted) ||
+          target.kind === "canvas-node" ||
+          (!canvasPlaylist && !normalPlaylist),
       },
       ...(editingPlaylist
         ? [
@@ -1112,7 +1570,7 @@ export function App() {
               id: "add-editing-playlist",
               label: `Add to ${editingPlaylist.name}`,
               icon: <Plus size={14} />,
-              disabled: !canWrite,
+              disabled: !canAddToEditingPlaylist,
             } satisfies ContextMenuEntry,
           ]
         : []),
@@ -1134,18 +1592,29 @@ export function App() {
                 } satisfies ContextMenuEntry),
           ]
         : []),
+      ...(selectedHostedPlaylist && inSelectedHostedPlaylist
+        ? [
+            {
+              id: "remove-selected-hosted-playlist",
+              label: `Remove from ${selectedHostedPlaylist.name}`,
+              icon: <Trash2 size={14} />,
+              dangerous: true,
+              disabled: !selectedHostedPlaylist.hosted?.capabilities.itemsEditable,
+            } satisfies ContextMenuEntry,
+          ]
+        : []),
       { kind: "separator" },
       {
         id: "memory-cue",
         label: "Set memory cue at playhead",
         icon: <Flag size={14} />,
-        disabled: !canWrite,
+        disabled: !canWrite || Boolean(track.hosted),
       },
       {
         id: "hot-cue",
         label: "Configure Hot Cue…",
         icon: <Sparkles size={14} />,
-        disabled: !canWrite,
+        disabled: !canWrite || Boolean(track.hosted),
       },
       ...(target.kind === "canvas-node"
         ? [
@@ -1176,6 +1645,7 @@ export function App() {
     contextMenu.value,
     editingPlaylist,
     normalPlaylist,
+    selectedHostedPlaylist,
     urlState.playlistId,
   ]);
 
@@ -1190,12 +1660,12 @@ export function App() {
           updateUrl({ playlistId: playlist.id, filter: "all", trackId: null });
           setViewMode("table");
         }
-      } else if (id === "open-canvas" && playlist.type === "playlist") {
+      } else if (id === "open-canvas" && playlist.type === "playlist" && !playlist.hosted) {
         updateUrl({ playlistId: playlist.id, filter: "all", trackId: null });
         openCanvas(playlist);
       } else if (id === "edit-playlist" && playlist.type === "playlist") {
         openPlaylistEditor(playlist);
-      } else if (id === "create-child") {
+      } else if (id === "create-child" && !playlist.hosted) {
         setPlaylistDialog({
           mode: "create",
           ...(playlist.type === "folder" ? { defaultParentId: playlist.id } : {}),
@@ -1205,7 +1675,9 @@ export function App() {
       } else if (id === "delete-playlist") {
         setDeleteDialogPlaylist({
           ...playlist,
-          expectedPlaylistIds: playlistSubtreeIds(playlists, playlist.id),
+          expectedPlaylistIds: playlist.hosted
+            ? [playlist.id]
+            : playlistSubtreeIds(playlists, playlist.id),
         });
       }
       return;
@@ -1217,13 +1689,12 @@ export function App() {
     const track = target.kind === "track" ? target.track : node?.track;
     if (!track) return;
     if (id === "play-track") selectTrack(track, true);
-    if (id === "edit-track") {
+    if (id === "edit-track" && !track.hosted) {
       selectTrack(track);
       setMetadataTarget(track);
     }
-    if (id === "add-canvas") addTrackToCanvas(track);
-    if (id === "add-editing-playlist" && editingPlaylist)
-      applyMutation({ type: "add-track", playlistId: editingPlaylist.id, contentId: track.id });
+    if (id === "add-canvas" && !track.hosted) addTrackToCanvas(track);
+    if (id === "add-editing-playlist" && editingPlaylist) addTrackToEditingPlaylist(track);
     if (id === "add-selected-playlist" && normalPlaylist)
       applyMutation({ type: "add-track", playlistId: normalPlaylist.id, contentId: track.id });
     if (id === "remove-selected-playlist" && normalPlaylist && track.playlistMembershipId)
@@ -1232,7 +1703,26 @@ export function App() {
         playlistId: normalPlaylist.id,
         membershipId: track.playlistMembershipId,
       });
-    if (id === "memory-cue") {
+    if (
+      id === "remove-selected-hosted-playlist" &&
+      selectedHostedPlaylist &&
+      track.playlistMembershipId
+    ) {
+      try {
+        const response = await queryClient.ensureQueryData(
+          playlistTracksQueryOptions(selectedHostedPlaylist.id),
+        );
+        const next = removeHostedPlaylistTrack(
+          response.items,
+          track.playlistMembershipId,
+          selectedHostedPlaylist.id,
+        );
+        if (next) commitHostedPlaylistTracks(selectedHostedPlaylist, next);
+      } catch (error) {
+        setToast({ tone: "error", message: errorMessage(error) });
+      }
+    }
+    if (id === "memory-cue" && !track.hosted) {
       selectTrack(track);
       const startSeconds =
         playerTrack?.id === track.id ? (playerRef.current?.getCurrentTime() ?? 0) : 0;
@@ -1243,7 +1733,7 @@ export function App() {
         initial: { kind: "memory", startSeconds },
       });
     }
-    if (id === "hot-cue") {
+    if (id === "hot-cue" && !track.hosted) {
       selectTrack(track);
       const startSeconds =
         playerTrack?.id === track.id ? (playerRef.current?.getCurrentTime() ?? 0) : 0;
@@ -1286,6 +1776,9 @@ export function App() {
       <LibrarySidebar
         bootstrap={bootstrapQuery.data}
         items={playlists}
+        hosted={hostedPlaylistsQuery.data}
+        hostedLoading={hostedPlaylistsQuery.isLoading}
+        selectedHostedPlaylistId={selectedHostedPlaylist?.id ?? null}
         selectedPlaylistId={urlState.playlistId}
         activeFilter={urlState.filter}
         loading={playlistsQuery.isLoading}
@@ -1304,6 +1797,18 @@ export function App() {
           setPlaylistDialog({ mode: "create", defaultParentId })
         }
         onEditPlaylist={openPlaylistEditor}
+        onSelectHostedPlaylist={(playlist) => {
+          updateUrl({ playlistId: playlist.id, trackId: null, filter: "all" });
+          setViewMode("table");
+        }}
+        onEditHostedPlaylist={openPlaylistEditor}
+        onToggleHostedDownload={(playlist, enabled) =>
+          applyHostedMutation({
+            type: "set-hosted-playlist-download",
+            playlistId: playlist.id,
+            enabled,
+          })
+        }
         onPlaylistContextMenu={(point, playlist, returnFocus, folder) =>
           contextMenu.openAt(
             point,
@@ -1374,6 +1879,40 @@ export function App() {
               <PanelRightOpen size={14} />
               <span>{editorOpen && editingPlaylist ? editingPlaylist.name : "Edit playlist"}</span>
             </button>
+            <div className="history-actions" role="group" aria-label="Edit history">
+              <button
+                className="icon-button"
+                type="button"
+                disabled={!canUndo}
+                onClick={() => applyHistory("undo")}
+                aria-label={
+                  history.undo.at(-1) ? `Undo ${history.undo.at(-1)!.label}` : "Nothing to undo"
+                }
+                title={
+                  history.undo.at(-1)
+                    ? `Undo ${history.undo.at(-1)!.label} (⌘Z / Ctrl+Z)`
+                    : "Nothing to undo"
+                }
+              >
+                <Undo2 size={15} />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                disabled={!canRedo}
+                onClick={() => applyHistory("redo")}
+                aria-label={
+                  history.redo.at(-1) ? `Redo ${history.redo.at(-1)!.label}` : "Nothing to redo"
+                }
+                title={
+                  history.redo.at(-1)
+                    ? `Redo ${history.redo.at(-1)!.label} (⌘⇧Z / Ctrl+Y)`
+                    : "Nothing to redo"
+                }
+              >
+                <Redo2 size={15} />
+              </button>
+            </div>
             <button
               className="icon-button"
               type="button"
@@ -1386,7 +1925,10 @@ export function App() {
             <button
               className="icon-button"
               type="button"
-              onClick={refreshAll}
+              onClick={() => {
+                clearHistory();
+                refreshAll();
+              }}
               title="Refresh library"
             >
               <RefreshCw size={15} />
@@ -1401,15 +1943,16 @@ export function App() {
             adapter={playerAdapter}
             track={playerTrack}
             cues={playerDetailQuery.data?.cues ?? []}
-            canEditCues={canWrite}
+            canEditCues={canWrite && !playerTrack?.hosted}
             cueMutationPending={false}
             previousDisabled={!previousTrack}
             nextDisabled={!nextTrack}
             onPrevious={() => previousTrack && selectTrack(previousTrack, true)}
             onNext={() => nextTrack && selectTrack(nextTrack, true)}
+            onEnded={() => nextTrack && selectTrack(nextTrack, true)}
             onReady={() => {
-              if (autoPlayTrackId && autoPlayTrackId === playerTrack?.id) {
-                setAutoPlayTrackId(undefined);
+              if (autoPlayTrackIdRef.current && autoPlayTrackIdRef.current === playerTrack?.id) {
+                autoPlayTrackIdRef.current = undefined;
                 void playerRef.current?.play();
               }
             }}
@@ -1487,9 +2030,13 @@ export function App() {
                   loading={tracksQuery.isLoading}
                   error={tracksQuery.isError ? errorMessage(tracksQuery.error) : undefined}
                   selectedTrackId={urlState.trackId}
-                  ordered={Boolean(normalPlaylist)}
+                  ordered={Boolean(normalPlaylist || selectedHostedPlaylist)}
+                  canEdit={canWrite && !selectedHostedPlaylist}
                   canWrite={
-                    canWrite && (!sort || (sort.field === "position" && sort.direction === "asc"))
+                    selectedPlaylistCanWrite &&
+                    !urlState.query.trim() &&
+                    urlState.filter === "all" &&
+                    (!sort || (sort.field === "position" && sort.direction === "asc"))
                   }
                   sort={sort}
                   onSort={(nextSort) => {
@@ -1503,14 +2050,36 @@ export function App() {
                   }
                   onPage={setOffset}
                   onRetry={() => void tracksQuery.refetch()}
+                  onColorChange={(track, colorId) =>
+                    applyMutation({ type: "set-track-color", contentId: track.id, colorId })
+                  }
                   onMove={(track, trackNumber) => {
-                    if (!normalPlaylist || !track.playlistMembershipId) return;
-                    applyMutation({
-                      type: "move-track",
-                      playlistId: normalPlaylist.id,
-                      membershipId: track.playlistMembershipId,
-                      trackNumber,
-                    });
+                    if (!track.playlistMembershipId) return;
+                    if (selectedHostedPlaylist) {
+                      void queryClient
+                        .ensureQueryData(playlistTracksQueryOptions(selectedHostedPlaylist.id))
+                        .then((response) => {
+                          const next = moveHostedPlaylistTrack(
+                            response.items,
+                            track.playlistMembershipId!,
+                            trackNumber,
+                            selectedHostedPlaylist.id,
+                          );
+                          if (next) commitHostedPlaylistTracks(selectedHostedPlaylist, next);
+                        })
+                        .catch((error: unknown) =>
+                          setToast({ tone: "error", message: errorMessage(error) }),
+                        );
+                      return;
+                    }
+                    if (normalPlaylist) {
+                      applyMutation({
+                        type: "move-track",
+                        playlistId: normalPlaylist.id,
+                        membershipId: track.playlistMembershipId,
+                        trackNumber,
+                      });
+                    }
                   }}
                 />
               </>
@@ -1605,35 +2174,78 @@ export function App() {
           {editorOpen && editingPlaylist ? (
             <PlaylistEditor
               playlist={editingPlaylist}
-              playlists={playlists}
-              canWrite={canWrite}
+              playlists={allPlaylists}
+              canWrite={editingPlaylistCanWrite}
               selectedTrackId={urlState.trackId}
               onClose={() => setEditorOpen(false)}
               onSelectPlaylist={(id) => setEditingPlaylistId(id)}
               onSelectTrack={selectTrack}
-              onAddTracks={(contentIds, expectedMembershipIds) =>
+              onAddTracks={(contentIds, expectedMembershipIds) => {
+                if (editingPlaylist.hosted) {
+                  const sources = [
+                    ...(editingTracksQuery.data?.items ?? []),
+                    ...tracks,
+                    ...(canvasTracksQuery.data?.items ?? []),
+                    ...(playerDetailQuery.data ? [playerDetailQuery.data] : []),
+                    ...(playerSummary ? [playerSummary] : []),
+                  ];
+                  const result = resolveHostedPlaylistTracks(
+                    contentIds,
+                    sources,
+                    editingPlaylist.hosted.provider,
+                    editingPlaylist.id,
+                  );
+                  if (result.rejectedTrackIds.length > 0) {
+                    setToast({
+                      tone: "error",
+                      message: `Only ${editingPlaylist.hosted.provider === "spotify" ? "Spotify" : "SoundCloud"} tracks can be added to this playlist.`,
+                    });
+                    return;
+                  }
+                  commitHostedPlaylistTracks(editingPlaylist, result.items);
+                  return;
+                }
                 applyMutation({
                   type: "replace-playlist-tracks",
                   playlistId: editingPlaylist.id,
                   contentIds,
                   expectedMembershipIds,
-                })
-              }
-              onRemoveTrack={(membershipId) =>
+                });
+              }}
+              onRemoveTrack={(membershipId) => {
+                if (editingPlaylist.hosted) {
+                  const next = removeHostedPlaylistTrack(
+                    editingTracksQuery.data?.items ?? [],
+                    membershipId,
+                    editingPlaylist.id,
+                  );
+                  if (next) commitHostedPlaylistTracks(editingPlaylist, next);
+                  return;
+                }
                 applyMutation({
                   type: "remove-track",
                   playlistId: editingPlaylist.id,
                   membershipId,
-                })
-              }
-              onMoveTrack={(membershipId, trackNumber) =>
+                });
+              }}
+              onMoveTrack={(membershipId, trackNumber) => {
+                if (editingPlaylist.hosted) {
+                  const next = moveHostedPlaylistTrack(
+                    editingTracksQuery.data?.items ?? [],
+                    membershipId,
+                    trackNumber,
+                    editingPlaylist.id,
+                  );
+                  if (next) commitHostedPlaylistTracks(editingPlaylist, next);
+                  return;
+                }
                 applyMutation({
                   type: "move-track",
                   playlistId: editingPlaylist.id,
                   membershipId,
                   trackNumber,
-                })
-              }
+                });
+              }}
             />
           ) : null}
         </div>
@@ -1655,11 +2267,21 @@ export function App() {
         }}
         onSubmit={({ name, parentId, kind }) => {
           if (playlistDialog?.mode === "rename") {
-            applyMutation({
-              type: "rename-playlist",
-              playlistId: playlistDialog.playlist.id,
-              name,
-            });
+            if (playlistDialog.playlist.hosted) {
+              applyHostedMutation({
+                type: "rename-hosted-playlist",
+                playlistId: playlistDialog.playlist.id,
+                name,
+                expectedRevision: playlistDialog.playlist.hosted.revision,
+              });
+              setPlaylistDialog(null);
+            } else {
+              applyMutation({
+                type: "rename-playlist",
+                playlistId: playlistDialog.playlist.id,
+                name,
+              });
+            }
           } else {
             applyMutation({ type: "create-playlist", name, parentId, kind });
           }
@@ -1676,12 +2298,27 @@ export function App() {
           setDeleteDialogPlaylist(undefined);
         }}
         onConfirm={() => {
-          if (deleteDialogPlaylist)
+          if (!deleteDialogPlaylist) return;
+          if (deleteDialogPlaylist.hosted) {
+            applyHostedMutation({
+              type: "delete-hosted-playlist",
+              playlistId: deleteDialogPlaylist.id,
+              expectedRevision: deleteDialogPlaylist.hosted.revision,
+            });
+            if (urlState.playlistId === deleteDialogPlaylist.id)
+              updateUrl({ playlistId: null, filter: "all", trackId: null });
+            if (editingPlaylistId === deleteDialogPlaylist.id) {
+              setEditorOpen(false);
+              setEditingPlaylistId(undefined);
+            }
+            setDeleteDialogPlaylist(undefined);
+          } else {
             applyMutation({
               type: "delete-playlist",
               playlistId: deleteDialogPlaylist.id,
               expectedPlaylistIds: deleteDialogPlaylist.expectedPlaylistIds,
             });
+          }
         }}
       />
 
@@ -1783,6 +2420,125 @@ export function App() {
       {toast ? <Toast message={toast.message} tone={toast.tone} onDismiss={dismissToast} /> : null}
     </div>
   );
+}
+
+function optimisticHostedPlaylists(
+  response: HostedPlaylistsResponse,
+  mutation: HostedPlaylistMutation,
+): HostedPlaylistsResponse {
+  if (mutation.type === "create-hosted-playlist") return response;
+  if (mutation.type === "delete-hosted-playlist") {
+    return {
+      ...response,
+      items: response.items.filter((playlist) => playlist.id !== mutation.playlistId),
+    };
+  }
+  return {
+    ...response,
+    items: response.items.map((playlist) => {
+      if (playlist.id !== mutation.playlistId || !playlist.hosted) return playlist;
+      if (mutation.type === "set-hosted-playlist-download") {
+        return {
+          ...playlist,
+          hosted: {
+            ...playlist.hosted,
+            downloadEnabled: mutation.enabled,
+            syncState: "queued",
+            syncError: undefined,
+          },
+        };
+      }
+      if (mutation.type === "rename-hosted-playlist") {
+        return {
+          ...playlist,
+          name: mutation.name.trim(),
+          hosted: { ...playlist.hosted, syncState: "queued", syncError: undefined },
+        };
+      }
+      return {
+        ...playlist,
+        trackCount: mutation.remoteTrackIds.length,
+        hosted: { ...playlist.hosted, syncState: "queued", syncError: undefined },
+      };
+    }),
+  };
+}
+
+function settleHostedPlaylist(
+  response: HostedPlaylistsResponse,
+  playlistId: string,
+  revision: string | null,
+): HostedPlaylistsResponse {
+  return {
+    ...response,
+    items: response.items.map((playlist) =>
+      playlist.id === playlistId && playlist.hosted
+        ? {
+            ...playlist,
+            hosted: {
+              ...playlist.hosted,
+              revision,
+              syncState: "idle",
+              syncError: undefined,
+            },
+          }
+        : playlist,
+    ),
+  };
+}
+
+function isPositionTracksQuery(queryKey: readonly unknown[]): boolean {
+  if (queryKey[0] !== "tracks") return false;
+  const value = queryKey[1];
+  if (!value || typeof value !== "object") return false;
+  const options = value as {
+    filter?: unknown;
+    query?: unknown;
+    sort?: { field?: unknown; direction?: unknown };
+  };
+  if (typeof options.query === "string" && options.query.trim()) return false;
+  if (typeof options.filter === "string" && options.filter !== "all") return false;
+  return !options.sort || (options.sort.field === "position" && options.sort.direction === "asc");
+}
+
+function remapLibraryHistoryState(
+  history: LibraryHistoryState,
+  remaps: Parameters<typeof remapLibraryHistoryMutation>[1],
+): LibraryHistoryState {
+  const remap = (entry: LibraryHistoryEntry): LibraryHistoryEntry => ({
+    ...entry,
+    ...remapLibraryHistoryMutation(entry, remaps),
+  });
+  return {
+    undo: history.undo.map(remap),
+    redo: history.redo.map(remap),
+  };
+}
+
+function remapLibraryHistoryRevisionState(
+  history: LibraryHistoryState,
+  mutation: LibraryMutation,
+  receipt: MutationReceipt,
+): LibraryHistoryState {
+  const contentId = mutationRevisionContentId(mutation);
+  if (!contentId || !receipt.revision) return history;
+  const remap = (entry: LibraryHistoryEntry): LibraryHistoryEntry => ({
+    ...entry,
+    ...remapLibraryHistoryTrackRevision(entry, contentId, receipt.revision!),
+  });
+  return {
+    undo: history.undo.map(remap),
+    redo: history.redo.map(remap),
+  };
+}
+
+function mutationRevisionContentId(mutation: LibraryMutation): string | undefined {
+  return mutation.type === "update-track" ||
+    mutation.type === "set-track-color" ||
+    mutation.type === "upsert-cue" ||
+    mutation.type === "delete-cue"
+    ? mutation.contentId
+    : undefined;
 }
 
 function playlistSubtreeIds(playlists: readonly PlaylistItem[], rootId: string): string[] {

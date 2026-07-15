@@ -12,6 +12,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import Hls, { ErrorTypes, Events as HlsEvents } from "hls.js";
 import {
   forwardRef,
   useCallback,
@@ -22,13 +23,18 @@ import {
   useState,
 } from "react";
 import WaveSurfer from "wavesurfer.js";
-import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 
-import type { HotCueSlot, TrackCue, TrackWaveform } from "../../shared/types.js";
+import type { HostedTrack, HotCueSlot, TrackCue, TrackWaveform } from "../../shared/types.js";
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
 import { formatBpm } from "../format.js";
-import { renderRgbWaveform } from "./RgbWaveform.js";
+import {
+  trackSourcesFromComment,
+  type TrackSource,
+  type TrackSourceProvider,
+} from "../track-sources.js";
+import { PlayerWaveformCanvas } from "./PlayerWaveformCanvas.js";
+import { SpotifyEmbedPlayer, type SpotifyEmbedPlayerHandle } from "./SpotifyEmbedPlayer.js";
 
 export type PlayerTrack = {
   id: string;
@@ -45,6 +51,8 @@ export type PlayerTrack = {
   path?: string | null;
   playCount?: number;
   rating?: number;
+  comment?: string | null;
+  hosted?: HostedTrack;
 };
 
 export type PlayerCue = TrackCue;
@@ -59,7 +67,7 @@ export type PlayerWaveform = TrackWaveform;
  * recording in browser memory.
  */
 export interface PlayerAdapter {
-  getAudioUrl(track: PlayerTrack): string;
+  getAudioUrl(track: PlayerTrack): string | undefined;
   getArtworkUrl(track: PlayerTrack): string | undefined;
   loadWaveform?(track: PlayerTrack, signal: AbortSignal): Promise<PlayerWaveform | null>;
 }
@@ -149,7 +157,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 ) {
   const waveformElementRef = useRef<HTMLDivElement>(null);
   const waveSurferRef = useRef<WaveSurfer | undefined>(undefined);
-  const regionsRef = useRef<ReturnType<typeof RegionsPlugin.create> | undefined>(undefined);
+  const spotifyPlayerRef = useRef<SpotifyEmbedPlayerHandle>(null);
+  const hlsRef = useRef<Hls | undefined>(undefined);
   const callbacksRef = useRef({ onEnded, onReady, onTimeChange, onPlayStateChange, onError });
   const [playing, setPlaying] = useState(false);
   const [loadingPercent, setLoadingPercent] = useState(0);
@@ -161,6 +170,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const [mediaError, setMediaError] = useState<string>();
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selectedHotCueSlot, setSelectedHotCueSlot] = useState<HotCueSlot>();
+  const [waveformData, setWaveformData] = useState<PlayerWaveform | null>(null);
 
   callbacksRef.current = { onEnded, onReady, onTimeChange, onPlayStateChange, onError };
 
@@ -172,6 +182,24 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     () => (track ? adapter.getArtworkUrl(track) : undefined),
     [adapter, track],
   );
+  const trackSources = useMemo(() => {
+    const sources = trackSourcesFromComment(track?.comment);
+    if (
+      track?.hosted?.externalUrl &&
+      !sources.some((source) => source.provider === track.hosted?.provider)
+    ) {
+      sources.unshift({
+        provider: track.hosted.provider,
+        kind: "reference",
+        url: track.hosted.externalUrl,
+      });
+    }
+    return sources;
+  }, [track?.comment, track?.hosted]);
+  const spotifyStreaming =
+    track?.hosted?.provider === "spotify" && track.hosted.localContentId === null;
+  const soundCloudStreaming =
+    track?.hosted?.provider === "soundcloud" && track.hosted.localContentId === null;
   const effectiveDuration = finitePositive(duration) ?? finitePositive(track?.durationSeconds) ?? 0;
 
   const reportError = useCallback((cause: unknown) => {
@@ -182,6 +210,13 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 
   const seekTo = useCallback(
     (seconds: number) => {
+      if (spotifyStreaming) {
+        const nextTime = clamp(seconds, 0, effectiveDuration);
+        spotifyPlayerRef.current?.seek(nextTime);
+        setCurrentTime(nextTime);
+        callbacksRef.current.onTimeChange?.(nextTime);
+        return;
+      }
       const waveSurfer = waveSurferRef.current;
       if (!waveSurfer) return;
       const nextTime = clamp(seconds, 0, waveSurfer.getDuration() || effectiveDuration);
@@ -189,7 +224,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       setCurrentTime(nextTime);
       callbacksRef.current.onTimeChange?.(nextTime);
     },
-    [effectiveDuration],
+    [effectiveDuration, spotifyStreaming],
   );
 
   const setVolume = useCallback((nextVolume: number) => {
@@ -202,19 +237,30 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   }, []);
 
   const play = useCallback(async () => {
+    if (spotifyStreaming) {
+      spotifyPlayerRef.current?.play();
+      return;
+    }
     if (!track?.fileExists || !waveSurferRef.current) return;
     try {
       await waveSurferRef.current?.play();
     } catch (error) {
       reportError(error);
     }
-  }, [reportError, track?.fileExists]);
+  }, [reportError, spotifyStreaming, track?.fileExists]);
 
-  const pause = useCallback(() => waveSurferRef.current?.pause(), []);
+  const pause = useCallback(() => {
+    if (spotifyStreaming) spotifyPlayerRef.current?.pause();
+    else waveSurferRef.current?.pause();
+  }, [spotifyStreaming]);
   const toggle = useCallback(async () => {
+    if (spotifyStreaming) {
+      spotifyPlayerRef.current?.toggle();
+      return;
+    }
     if (waveSurferRef.current?.isPlaying()) pause();
     else await play();
-  }, [pause, play]);
+  }, [pause, play, spotifyStreaming]);
 
   useImperativeHandle(
     forwardedRef,
@@ -224,17 +270,22 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       toggle,
       seekTo,
       seekBy(seconds) {
-        seekTo((waveSurferRef.current?.getCurrentTime() ?? 0) + seconds);
+        seekTo(
+          (spotifyStreaming ? currentTime : (waveSurferRef.current?.getCurrentTime() ?? 0)) +
+            seconds,
+        );
       },
       setVolume,
       getCurrentTime() {
-        return waveSurferRef.current?.getCurrentTime() ?? 0;
+        return spotifyStreaming ? currentTime : (waveSurferRef.current?.getCurrentTime() ?? 0);
       },
       isPlaying() {
-        return waveSurferRef.current?.isPlaying() ?? false;
+        return spotifyStreaming
+          ? (spotifyPlayerRef.current?.isPlaying() ?? false)
+          : (waveSurferRef.current?.isPlaying() ?? false);
       },
     }),
-    [pause, play, seekTo, setVolume, toggle],
+    [currentTime, pause, play, seekTo, setVolume, spotifyStreaming, toggle],
   );
 
   useEffect(() => {
@@ -245,61 +296,62 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setCurrentTime(0);
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
-    if (!container || !track || !audioUrl || track.fileExists === false) return;
+    setWaveformData(null);
+    if (!container || !track || !audioUrl || track.fileExists === false || spotifyStreaming) return;
     const controller = new AbortController();
-    const regions = RegionsPlugin.create();
-    let waveform: PlayerWaveform | null | undefined;
+    const media = soundCloudStreaming ? document.createElement("audio") : undefined;
+    if (media) {
+      media.preload = "metadata";
+    }
     const waveSurfer = WaveSurfer.create({
       container,
       backend: "MediaElement",
-      height: 52,
-      waveColor: "#3c3d47",
-      progressColor: "#a78bfa",
-      cursorColor: "#f8fafc",
-      cursorWidth: 1,
-      barWidth: 2,
-      barGap: 1,
-      barRadius: 2,
-      dragToSeek: { debounceTime: 40 },
-      normalize: true,
+      height: 1,
+      waveColor: "transparent",
+      progressColor: "transparent",
+      cursorWidth: 0,
+      interact: false,
+      ...(media ? { media } : {}),
       mediaControls: false,
-      renderFunction: (peaks, context) => renderRgbWaveform(peaks, waveform?.colors, context),
-      plugins: [regions],
     });
     waveSurferRef.current = waveSurfer;
-    regionsRef.current = regions;
     waveSurfer.setVolume(volume);
     waveSurfer.setMuted(muted);
 
     const unsubscribers = [
-      waveSurfer.on("loading", (percent) => setLoadingPercent(percent)),
+      waveSurfer.on("loading", (percent) => {
+        if (!controller.signal.aborted) setLoadingPercent(percent);
+      }),
       waveSurfer.on("ready", (loadedDuration) => {
+        if (controller.signal.aborted) return;
         setDuration(loadedDuration);
         setLoadingPercent(100);
         setReady(true);
         callbacksRef.current.onReady?.();
       }),
       waveSurfer.on("timeupdate", (seconds) => {
+        if (controller.signal.aborted) return;
         setCurrentTime(seconds);
         callbacksRef.current.onTimeChange?.(seconds);
       }),
       waveSurfer.on("play", () => {
+        if (controller.signal.aborted) return;
         setPlaying(true);
         callbacksRef.current.onPlayStateChange?.(true);
       }),
       waveSurfer.on("pause", () => {
+        if (controller.signal.aborted) return;
         setPlaying(false);
         callbacksRef.current.onPlayStateChange?.(false);
       }),
       waveSurfer.on("finish", () => {
+        if (controller.signal.aborted) return;
         setPlaying(false);
         callbacksRef.current.onPlayStateChange?.(false);
         callbacksRef.current.onEnded?.();
       }),
-      waveSurfer.on("error", (error) => reportError(error)),
-      regions.on("region-clicked", (region, event) => {
-        event.stopPropagation();
-        waveSurfer.setTime(region.start);
+      waveSurfer.on("error", (error) => {
+        if (!controller.signal.aborted) reportError(error);
       }),
     ];
 
@@ -315,26 +367,35 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         if (controller.signal.aborted) return;
         // Begin streaming immediately. Precomputed RGB peaks are an enhancement, not a gate on
         // playback readiness, and can be drawn over the placeholder without reloading the media.
-        await waveSurfer.load(
-          audioUrl,
-          [Float32Array.of(0)],
-          finitePositive(track.durationSeconds),
-        );
-        waveform = await waveformRequest;
-        if (controller.signal.aborted || !waveform?.peaks.length) return;
-        const waveformDuration =
-          finitePositive(waveform.durationSeconds) ?? finitePositive(track.durationSeconds);
-        if (!waveformDuration) return;
-        try {
-          waveSurfer.setOptions({
-            peaks: [Float32Array.from(waveform.peaks)],
-            duration: waveformDuration,
-          });
-          const decoded = waveSurfer.getDecodedData();
-          if (decoded) await waveSurfer.getRenderer().render(decoded);
-        } catch {
-          // Audio remains playable if the optional waveform cannot be redrawn.
+        if (soundCloudStreaming && media) {
+          if (Hls.isSupported()) {
+            const hls = new Hls({
+              autoStartLoad: true,
+              enableWorker: true,
+              startFragPrefetch: false,
+            });
+            hlsRef.current = hls;
+            hls.on(HlsEvents.ERROR, (_event, data) => {
+              if (controller.signal.aborted) return;
+              if (data.fatal || data.type === ErrorTypes.MEDIA_ERROR) reportError(data.error);
+            });
+            hls.attachMedia(media);
+            hls.loadSource(audioUrl);
+          } else if (media.canPlayType("application/vnd.apple.mpegurl")) {
+            media.src = audioUrl;
+            media.load();
+          } else {
+            throw new Error("This browser cannot play SoundCloud AAC HLS streams");
+          }
+        } else {
+          await waveSurfer.load(
+            audioUrl,
+            [Float32Array.of(0)],
+            finitePositive(track.durationSeconds),
+          );
         }
+        const waveform = await waveformRequest;
+        if (!controller.signal.aborted) setWaveformData(waveform);
       } catch (error) {
         if (!controller.signal.aborted) reportError(error);
       }
@@ -343,36 +404,25 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     return () => {
       controller.abort();
       for (const unsubscribe of unsubscribers) unsubscribe();
+      hlsRef.current?.destroy();
+      hlsRef.current = undefined;
       waveSurfer.destroy();
       if (waveSurferRef.current === waveSurfer) waveSurferRef.current = undefined;
-      if (regionsRef.current === regions) regionsRef.current = undefined;
     };
     // Media is keyed by URL/track. Callback updates are routed through callbacksRef.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adapter, audioUrl, loadAttempt, track?.fileExists, track?.id]);
+  }, [
+    adapter,
+    audioUrl,
+    loadAttempt,
+    soundCloudStreaming,
+    spotifyStreaming,
+    track?.fileExists,
+    track?.id,
+  ]);
 
   useEffect(() => setLoadAttempt(0), [track?.id]);
   useEffect(() => setSelectedHotCueSlot(undefined), [track?.id]);
-
-  useEffect(() => {
-    const regions = regionsRef.current;
-    if (!regions || !ready) return;
-    regions.clearRegions();
-    for (const cue of cues) {
-      const color = cueColor(cue, cue.kind === "hot" ? "#f59e0b" : "#f8fafc");
-      regions.addRegion({
-        id: cue.id,
-        start: clamp(cue.startSeconds, 0, effectiveDuration),
-        ...(cue.endSeconds && cue.endSeconds > cue.startSeconds
-          ? { end: clamp(cue.endSeconds, cue.startSeconds, effectiveDuration) }
-          : {}),
-        content: cueLabel(cue),
-        color: colorWithAlpha(color, cue.endSeconds ? 0.16 : 0.72),
-        drag: false,
-        resize: false,
-      });
-    }
-  }, [cues, effectiveDuration, ready]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !track) return;
@@ -428,13 +478,67 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const selectedHotCue =
     (selectedHotCueSlot ? hotCues.get(selectedHotCueSlot) : undefined) ??
     HOT_CUE_SLOTS.flatMap((slot) => hotCues.get(slot) ?? []).at(0);
-  const unavailable = !track || track.fileExists === false;
+  const unavailable = !track || (track.fileExists === false && !spotifyStreaming);
 
   return (
     <section className="player-panel" aria-label="Track player">
+      {spotifyStreaming && track?.hosted ? (
+        <SpotifyEmbedPlayer
+          ref={spotifyPlayerRef}
+          uri={track.hosted.remoteId}
+          onReady={() => {
+            setReady(true);
+            setLoadingPercent(100);
+            callbacksRef.current.onReady?.();
+          }}
+          onPlaybackUpdate={(update) => {
+            const seconds = update.position / 1_000;
+            setCurrentTime(seconds);
+            setDuration(update.duration / 1_000);
+            setPlaying(!update.isPaused);
+            setReady(!update.isBuffering);
+            callbacksRef.current.onTimeChange?.(seconds);
+            callbacksRef.current.onPlayStateChange?.(!update.isPaused);
+          }}
+          onError={reportError}
+        />
+      ) : null}
       <div className="player-identity">
         <div className="player-track-copy">
-          <strong title={track?.title}>{track?.title || "No track selected"}</strong>
+          <div className="player-track-title-row">
+            <strong title={track?.title}>{track?.title || "No track selected"}</strong>
+            {trackSources.length ? (
+              <div className="player-source-links" aria-label="Track sources">
+                {trackSources.map((source) => {
+                  const label = sourceLabel(source);
+                  return source.url ? (
+                    <a
+                      key={source.provider}
+                      className="player-source-badge"
+                      data-provider={source.provider}
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={label}
+                      title={label}
+                    >
+                      <TrackSourceIcon provider={source.provider} />
+                    </a>
+                  ) : (
+                    <span
+                      key={source.provider}
+                      className="player-source-badge is-static"
+                      data-provider={source.provider}
+                      aria-label={label}
+                      title={label}
+                    >
+                      <TrackSourceIcon provider={source.provider} />
+                    </span>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
           <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
             {track
               ? [track.artist ?? "Unknown artist", track.album].filter(Boolean).join(" · ")
@@ -446,7 +550,6 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
               <b>{track.key ?? "—"}</b>
               {track.genre ? <span>{track.genre}</span> : null}
               {track.rating ? <span>{"★".repeat(Math.min(5, track.rating))}</span> : null}
-              <span>{String(track.playCount ?? 0)} plays</span>
             </div>
           ) : null}
         </div>
@@ -513,28 +616,17 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       </div>
 
       <div className="player-waveform-wrap">
-        <div
-          ref={waveformElementRef}
-          className="player-waveform"
-          role="slider"
-          tabIndex={unavailable || !ready ? -1 : 0}
-          aria-label="Interactive track waveform"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(effectiveDuration)}
-          aria-valuenow={Math.round(currentTime)}
-          aria-valuetext={`${formatTime(currentTime)} of ${formatTime(effectiveDuration)}`}
-          aria-disabled={unavailable || !ready}
-          onKeyDown={(event) => {
-            if (unavailable || !ready) return;
-            const step = event.shiftKey ? 1 : 5;
-            if (event.key === "ArrowLeft") seekTo(currentTime - step);
-            else if (event.key === "ArrowRight") seekTo(currentTime + step);
-            else if (event.key === "Home") seekTo(0);
-            else if (event.key === "End") seekTo(effectiveDuration);
-            else return;
-            event.preventDefault();
-          }}
-        />
+        <div className="player-waveform">
+          <div ref={waveformElementRef} className="player-waveform-engine" aria-hidden="true" />
+          <PlayerWaveformCanvas
+            currentTime={currentTime}
+            cues={cues}
+            disabled={unavailable || !ready}
+            duration={effectiveDuration}
+            onSeek={seekTo}
+            waveform={waveformData}
+          />
+        </div>
         {!track ? <span className="player-waveform-empty">Select a track</span> : null}
         <div className="player-time-row" aria-live="off">
           <span>{formatTime(currentTime)}</span>
@@ -548,6 +640,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       </div>
 
       <div className="player-volume">
+        <span className="player-volume-label">Level</span>
         <button
           className="player-control-button"
           type="button"
@@ -581,6 +674,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       </div>
 
       <div className="player-cues" aria-label="Cue points">
+        <span className="player-cues-label">
+          Hot cues <small>A–P</small>
+        </span>
         <div className="player-hot-cues">
           {HOT_CUE_SLOTS.map((slot) => {
             const cue = hotCues.get(slot);
@@ -720,6 +816,64 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   );
 });
 
+function sourceLabel(source: TrackSource): string {
+  const provider = {
+    spotify: "Spotify",
+    soundcloud: "SoundCloud",
+    youtube: "YouTube",
+    soulseek: "Soulseek",
+  }[source.provider];
+  if (!source.url) return `Downloaded from ${provider}${source.peer ? ` · ${source.peer}` : ""}`;
+  return source.kind === "download" ? `Open original on ${provider}` : `Open track on ${provider}`;
+}
+
+function TrackSourceIcon({ provider }: { provider: TrackSourceProvider }) {
+  if (provider === "youtube") {
+    return (
+      <svg className="player-source-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="1.5" y="5" width="21" height="14" rx="5" fill="currentColor" />
+        <path d="m10 8.6 5.8 3.4-5.8 3.4Z" fill="var(--source-cutout)" />
+      </svg>
+    );
+  }
+  if (provider === "spotify") {
+    return (
+      <svg className="player-source-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="10.5" fill="currentColor" />
+        <path
+          d="M6.7 9.2c3.9-1.1 8.1-.7 11.3 1M7.4 12.2c3.3-.8 7-.5 9.8.8M8.1 15c2.8-.6 5.8-.3 8.2.7"
+          fill="none"
+          stroke="var(--source-cutout)"
+          strokeWidth="1.65"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (provider === "soundcloud") {
+    return (
+      <svg className="player-source-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M2.5 13.1v2.5M4.5 11.8v5.1M6.5 10.3v7.1M8.5 9.2v8.5M10.5 8.5v9.2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.35"
+          strokeLinecap="round"
+        />
+        <path d="M11.8 17.7h7.5a3.1 3.1 0 0 0 .2-6.2 5 5 0 0 0-7.7-3.2Z" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="player-source-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <text x="12" y="14.2" textAnchor="middle" fill="currentColor" fontSize="6" fontWeight="700">
+        slsk
+      </text>
+    </svg>
+  );
+}
+
 function compareCues(left: PlayerCue, right: PlayerCue): number {
   return (
     left.startSeconds - right.startSeconds ||
@@ -727,19 +881,8 @@ function compareCues(left: PlayerCue, right: PlayerCue): number {
   );
 }
 
-function cueLabel(cue: PlayerCue): string {
-  if (cue.kind === "hot" && cue.slot) return String.fromCharCode(64 + cue.slot);
-  return cue.comment.trim() || "M";
-}
-
 function cueColor(cue: PlayerCue, fallback: string): string {
   return cue.kind === "hot" ? (rekordboxHotCueColor(cue.colorTableIndex) ?? fallback) : fallback;
-}
-
-function colorWithAlpha(color: string, alpha: number): string {
-  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/iu.exec(color);
-  if (!match) return color;
-  return `rgb(${String(Number.parseInt(match[1]!, 16))} ${String(Number.parseInt(match[2]!, 16))} ${String(Number.parseInt(match[3]!, 16))} / ${String(alpha)})`;
 }
 
 function finitePositive(value: number | null | undefined): number | undefined {

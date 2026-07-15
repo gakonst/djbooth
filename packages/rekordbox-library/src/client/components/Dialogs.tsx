@@ -220,9 +220,11 @@ export function DeletePlaylistDialog({
         </header>
         <div className="dialog-body">
           <p className="confirm-copy">
-            {isFolder
-              ? "The folder and its playlist subtree will be removed from Rekordbox. Audio files are not deleted."
-              : "The playlist and its memberships will be removed from Rekordbox. Audio files stay in your collection."}
+            {playlist.hosted
+              ? `The playlist will be deleted from ${playlist.hosted.provider === "spotify" ? "Spotify" : "SoundCloud"}. Downloaded audio files stay in your local collection.`
+              : isFolder
+                ? "The folder and its playlist subtree will be removed from Rekordbox. Audio files are not deleted."
+                : "The playlist and its memberships will be removed from Rekordbox. Audio files stay in your collection."}
           </p>
           {error ? (
             <div className="dialog-error" role="alert">

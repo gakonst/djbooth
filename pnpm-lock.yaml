@@ -78,12 +78,24 @@ importers:
       '@gakonst/rekordbox':
         specifier: workspace:*
         version: link:../rekordbox-ts
+      '@gakonst/soundcloud':
+        specifier: workspace:*
+        version: link:../soundcloud
+      '@gakonst/spots':
+        specifier: workspace:*
+        version: link:../spots
       '@gakonst/tracks':
         specifier: workspace:*
         version: link:../tracks-ts
       '@tanstack/react-query':
         specifier: ^5.101.2
         version: 5.101.2(react@19.2.7)
+      better-sqlite3-multiple-ciphers:
+        specifier: ^12.11.1
+        version: 12.11.1
+      hls.js:
+        specifier: ^1.6.16
+        version: 1.6.16
       incur:
         specifier: 0.4.13
         version: 0.4.13
@@ -99,6 +111,9 @@ importers:
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
+      slsk-ts:
+        specifier: workspace:*
+        version: link:../slsk-ts
       wavesurfer.js:
         specifier: 7.12.10
         version: 7.12.10
@@ -106,6 +121,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/node':
         specifier: ^22.19.7
         version: 22.20.1
@@ -2285,6 +2303,9 @@ packages:
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
+
+  hls.js@1.6.16:
+    resolution: {integrity: sha512-VSIRpLfRwlAAdGL4wiTucx2ScRipo0ed1FBatWkyt832jC4CReKstga6yIhYVwGu9LOBjuX9wzmRMeQdBJtzEA==}
 
   hono@4.12.29:
     resolution: {integrity: sha512-1hNiRjawYrLq/4m3DQQjPGFg0VZkk4RjQJDff/excI6Dm9BiL75qxGrd7/c6YOxPdq6AscP3LiXhQ6fKFC1Waw==}
@@ -5320,6 +5341,8 @@ snapshots:
   hasown@2.0.4:
     dependencies:
       function-bind: 1.1.2
+
+  hls.js@1.6.16: {}
 
   hono@4.12.29: {}
 

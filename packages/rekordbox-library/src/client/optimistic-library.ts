@@ -75,11 +75,12 @@ export function applyOptimisticLibraryMutation(
     queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) => {
       if (!items) return items;
       const parentId = mutation.parentId ?? "root";
-      const seq =
-        Math.max(0, ...items.filter((item) => item.parentId === parentId).map((item) => item.seq)) +
-        1;
+      const siblings = items.filter((item) => item.parentId === parentId);
+      const seq = mutation.seq ?? Math.max(0, ...siblings.map((item) => item.seq)) + 1;
       return [
-        ...items,
+        ...items.map((item) =>
+          item.parentId === parentId && item.seq >= seq ? { ...item, seq: item.seq + 1 } : item,
+        ),
         {
           id: temporaryPlaylistId,
           name: mutation.name.trim(),
@@ -116,8 +117,21 @@ export function applyOptimisticLibraryMutation(
       queryClient
         .getQueryData<PlaylistItem[]>(["playlists"])
         ?.filter((playlist) => deletedIds.has(playlist.id)) ?? [];
+    const deletedSeqsByParent = new Map<string, number[]>();
+    for (const playlist of deleted) {
+      const seqs = deletedSeqsByParent.get(playlist.parentId) ?? [];
+      seqs.push(playlist.seq);
+      deletedSeqsByParent.set(playlist.parentId, seqs);
+    }
     queryClient.setQueryData<PlaylistItem[]>(["playlists"], (items) =>
-      items?.filter((playlist) => !deletedIds.has(playlist.id)),
+      items
+        ?.filter((playlist) => !deletedIds.has(playlist.id))
+        .map((playlist) => {
+          const deletedSeqs = deletedSeqsByParent.get(playlist.parentId);
+          if (!deletedSeqs) return playlist;
+          const shift = deletedSeqs.filter((seq) => seq < playlist.seq).length;
+          return shift ? { ...playlist, seq: playlist.seq - shift } : playlist;
+        }),
     );
     updateTrackDetails(queryClient, (detail) => ({
       ...detail,
@@ -125,6 +139,11 @@ export function applyOptimisticLibraryMutation(
     }));
     for (const playlist of deleted) updateBootstrapPlaylistStats(queryClient, playlist.type, -1);
     return { mutation };
+  }
+
+  if (mutation.type === "set-track-color") {
+    updateTrackColor(queryClient, mutation.contentId, mutation.colorId);
+    return { mutation, revalidateTrackId: mutation.contentId };
   }
 
   if (mutation.type === "update-track") {
@@ -262,8 +281,9 @@ export function reconcileOptimisticLibraryMutation(
   if (optimistic.optimisticCueId) {
     replaceCueId(queryClient, optimistic.optimisticCueId, receipt.changedId);
   }
-  if (optimistic.mutation.type === "update-track" && receipt.revision) {
-    queryClient.setQueryData<TrackDetail>(["track", optimistic.mutation.contentId], (track) =>
+  const revisionContentId = mutationRevisionContentId(optimistic.mutation);
+  if (revisionContentId && receipt.revision) {
+    queryClient.setQueryData<TrackDetail>(["track", revisionContentId], (track) =>
       track ? { ...track, revision: receipt.revision! } : track,
     );
   }
@@ -291,6 +311,8 @@ export function resolveOptimisticMutationIds(
         playlistId: playlistId(mutation.playlistId),
         expectedPlaylistIds: mutation.expectedPlaylistIds.map(playlistId),
       };
+    case "set-track-color":
+      return mutation;
     case "update-track": {
       const revision = maps.trackRevisions?.get(mutation.contentId);
       return revision && revision !== mutation.expectedRevision
@@ -324,6 +346,31 @@ export function resolveOptimisticMutationIds(
     case "delete-cue":
       return { ...mutation, cueId: cueId(mutation.cueId) };
   }
+}
+
+function updateTrackColor(
+  queryClient: QueryClient,
+  contentId: string,
+  colorId: TrackSummary["colorId"],
+): void {
+  queryClient.setQueriesData<TracksResponse>(
+    {
+      predicate: (query) =>
+        query.queryKey[0] === "tracks" || query.queryKey[0] === "playlist-tracks",
+    },
+    (response) =>
+      response
+        ? {
+            ...response,
+            items: response.items.map((track) =>
+              track.id === contentId ? { ...track, colorId } : track,
+            ),
+          }
+        : response,
+  );
+  queryClient.setQueryData<TrackDetail>(["track", contentId], (track) =>
+    track ? { ...track, colorId } : track,
+  );
 }
 
 function updateTrackMetadata(
@@ -577,6 +624,7 @@ function unknownTrack(id: string): TrackSummary {
     album: null,
     genre: null,
     key: null,
+    colorId: null,
     bpm: null,
     durationSeconds: null,
     rating: 0,
@@ -876,6 +924,15 @@ function aliasPlaylistQueries(queryClient: QueryClient, from: string, to: string
       queryClient.setQueryData(["playlist-tracks", to], data);
     }
   }
+}
+
+function mutationRevisionContentId(mutation: LibraryMutation): string | undefined {
+  return mutation.type === "update-track" ||
+    mutation.type === "set-track-color" ||
+    mutation.type === "upsert-cue" ||
+    mutation.type === "delete-cue"
+    ? mutation.contentId
+    : undefined;
 }
 
 function resolveMappedId(map: ReadonlyMap<string, string>, initial: string): string {

@@ -14,6 +14,7 @@ import { formatBpm, formatDuration } from "../format.js";
 import { playlistTracksQueryOptions } from "../library-queries.js";
 import { isOptimisticPlaylistId } from "../optimistic-library.js";
 import { playlistDropTrackNumber } from "./playlist-order.js";
+import { HostedTrackStatus } from "./TrackTable.js";
 import { TrackWaveformPreview } from "./TrackWaveformPreview.js";
 
 const MIN_WIDTH = 300;
@@ -85,7 +86,7 @@ export function PlaylistEditor({
       }}
       onDrop={(event) => {
         if (!canWrite || !query.data) return;
-        if (event.dataTransfer.getData("application/x-rekordbox-playlist-membership-id")) return;
+        if (event.dataTransfer.getData("application/x-rekordbox-editor-membership-id")) return;
         event.preventDefault();
         const addedIds = droppedTrackIds(event.dataTransfer);
         if (!addedIds.length) return;
@@ -135,7 +136,9 @@ export function PlaylistEditor({
               .filter((item) => item.type === "playlist")
               .map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name}
+                  {item.hosted
+                    ? `${item.name} · ${item.hosted.provider === "spotify" ? "Spotify" : "SoundCloud"}`
+                    : item.name}
                 </option>
               ))}
           </select>
@@ -155,7 +158,15 @@ export function PlaylistEditor({
       </header>
 
       <div className="playlist-editor-drop-hint">
-        <GripVertical size={12} /> Drop tracks from the library · drag rows to reorder
+        {canWrite ? (
+          <>
+            <GripVertical size={12} /> Drop tracks from the library · drag rows to reorder
+          </>
+        ) : (
+          <>
+            <ListMusic size={12} /> Read-only provider playlist
+          </>
+        )}
       </div>
 
       <div className="playlist-editor-scroll">
@@ -169,7 +180,7 @@ export function PlaylistEditor({
           </div>
         ) : items.length === 0 ? (
           <div className="playlist-editor-message">
-            <ListMusic size={20} /> Drop tracks here
+            <ListMusic size={20} /> {canWrite ? "Drop tracks here" : "No tracks"}
           </div>
         ) : (
           <table className="playlist-editor-table">
@@ -208,6 +219,10 @@ export function PlaylistEditor({
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData(
                         "application/x-rekordbox-playlist-membership-id",
+                        track.playlistMembershipId,
+                      );
+                      event.dataTransfer.setData(
+                        "application/x-rekordbox-editor-membership-id",
                         track.playlistMembershipId,
                       );
                       event.dataTransfer.setData(
@@ -285,10 +300,14 @@ export function PlaylistEditor({
                     <td>
                       <div className="playlist-editor-track-copy">
                         <span className="playlist-editor-waveform-wrap">
-                          <TrackWaveformPreview
-                            trackId={track.id}
-                            className="playlist-editor-waveform"
-                          />
+                          {track.hosted && !track.hosted.localContentId ? (
+                            <HostedTrackStatus track={track} />
+                          ) : (
+                            <TrackWaveformPreview
+                              trackId={track.hosted?.localContentId ?? track.id}
+                              className="playlist-editor-waveform"
+                            />
+                          )}
                         </span>
                         <span>
                           <strong title={track.title}>{track.title}</strong>

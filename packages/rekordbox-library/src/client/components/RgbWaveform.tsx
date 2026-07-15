@@ -18,24 +18,27 @@ export function renderRgbWaveform(
   if (!width || !height) return;
 
   context.clearRect(0, 0, width, height);
-  const columnWidth = Math.max(1, Math.round(width / 260));
-  const gap = Math.max(1, Math.floor(columnWidth / 2));
-  const columns = Math.max(1, Math.floor(width / (columnWidth + gap)));
   const midline = height / 2;
 
-  for (let column = 0; column < columns; column++) {
-    const index = Math.min(peaks.length - 1, Math.floor((column * peaks.length) / columns));
-    const amplitude = clamp(Number(peaks[index] ?? 0), 0, 1);
+  for (let x = 0; x < width; x++) {
+    const exactIndex = (x / Math.max(1, width - 1)) * (peaks.length - 1);
+    const firstIndex = Math.floor(exactIndex);
+    const secondIndex = Math.min(peaks.length - 1, firstIndex + 1);
+    const mix = exactIndex - firstIndex;
+    const amplitude = clamp(
+      lerp(Number(peaks[firstIndex] ?? 0), Number(peaks[secondIndex] ?? 0), mix),
+      0,
+      1,
+    );
     if (!amplitude) continue;
-    const [red, green, blue] = colors?.[index] ?? [68, 104, 255];
+    const firstColor = colors?.[firstIndex] ?? [68, 104, 255];
+    const secondColor = colors?.[secondIndex] ?? firstColor;
+    const red = Math.round(lerp(firstColor[0], secondColor[0], mix));
+    const green = Math.round(lerp(firstColor[1], secondColor[1], mix));
+    const blue = Math.round(lerp(firstColor[2], secondColor[2], mix));
     const waveformHeight = Math.max(1, amplitude * (height / 2 - 1));
-    const x = column * (columnWidth + gap);
-    const gradient = context.createLinearGradient(0, midline - waveformHeight, 0, midline);
-    gradient.addColorStop(0, `rgb(${String(red)} ${String(green)} ${String(blue)} / 0.55)`);
-    gradient.addColorStop(0.55, `rgb(${String(red)} ${String(green)} ${String(blue)} / 1)`);
-    gradient.addColorStop(1, `rgb(${String(red)} ${String(green)} ${String(blue)})`);
-    context.fillStyle = gradient;
-    context.fillRect(x, midline - waveformHeight, columnWidth, waveformHeight * 2);
+    context.fillStyle = `rgb(${String(red)} ${String(green)} ${String(blue)})`;
+    context.fillRect(x, Math.round(midline - waveformHeight), 1, Math.ceil(waveformHeight * 2));
   }
 
   context.fillStyle = "rgb(255 255 255 / 14%)";
@@ -77,4 +80,8 @@ export const RgbWaveform = forwardRef<
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * amount;
 }

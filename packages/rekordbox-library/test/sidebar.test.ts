@@ -38,4 +38,86 @@ describe("LibrarySidebar", () => {
     expect(markup).toContain(">!</span>");
     expect(markup).not.toContain(">0</span>");
   });
+
+  it("separates hosted providers and only offers split editing for writable playlists", () => {
+    const markup = renderToStaticMarkup(
+      createElement(LibrarySidebar, {
+        activeFilter: "all",
+        canWrite: true,
+        items: [],
+        hosted: {
+          providers: [
+            { provider: "spotify", connected: true, displayName: "georgegak" },
+            { provider: "soundcloud", connected: true, displayName: "GAK" },
+          ],
+          items: [
+            {
+              id: "spotify:editable",
+              name: "Editable mix",
+              parentId: "spotify",
+              seq: 0,
+              trackCount: 20,
+              type: "playlist",
+              hosted: {
+                provider: "spotify",
+                remoteId: "editable",
+                revision: "snapshot",
+                externalUrl: "https://open.spotify.com/playlist/editable",
+                owned: true,
+                capabilities: {
+                  itemsReadable: true,
+                  detailsEditable: true,
+                  itemsEditable: true,
+                },
+                downloadEnabled: true,
+                syncState: "idle",
+              },
+            },
+            {
+              id: "spotify:locked",
+              name: "Followed mix",
+              parentId: "spotify",
+              seq: 1,
+              trackCount: null,
+              type: "playlist",
+              hosted: {
+                provider: "spotify",
+                remoteId: "locked",
+                revision: null,
+                externalUrl: null,
+                owned: false,
+                capabilities: {
+                  itemsReadable: false,
+                  detailsEditable: false,
+                  itemsEditable: false,
+                },
+                downloadEnabled: false,
+                syncState: "idle",
+              },
+            },
+          ],
+        },
+        loading: false,
+        onClose() {},
+        onCreatePlaylist() {},
+        onEditHostedPlaylist() {},
+        onSelectFilter() {},
+        onSelectHostedPlaylist() {},
+        onSelectPlaylist() {},
+        onToggleHostedDownload() {},
+        open: true,
+        selectedHostedPlaylistId: "spotify:editable",
+        selectedPlaylistId: null,
+      }),
+    );
+
+    expect(markup).toContain("Local / Rekordbox");
+    expect(markup).toContain("Spotify");
+    expect(markup).toContain("SoundCloud");
+    expect(markup).toContain("Spotify connected as georgegak");
+    expect(markup).toContain('aria-label="Stop keeping Editable mix downloaded"');
+    expect(markup).toContain('aria-label="Edit Editable mix in split view"');
+    expect(markup).toContain('aria-label="Playlist tracks unavailable"');
+    expect(markup).not.toContain('aria-label="Edit Followed mix in split view"');
+  });
 });

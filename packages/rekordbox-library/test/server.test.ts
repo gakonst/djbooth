@@ -49,6 +49,7 @@ function mockApi(
     artist: "Test Artist",
     album: null,
     genre: "House",
+    colorId: null,
     key: "Am",
     bpm: 124,
     durationSeconds: 300,
