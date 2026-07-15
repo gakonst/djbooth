@@ -224,6 +224,59 @@ describe("RekordboxLibraryService", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("caches an immutable playlist projection until a local mutation commits", async () => {
+    const fixture = copiedFixture();
+    const listPlaylists = vi.spyOn(MasterDatabase.prototype, "listPlaylists");
+    const library = service(fixture);
+
+    const first = library.getPlaylists();
+    const second = library.getPlaylists();
+    expect(second).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(first.every((playlist) => Object.isFrozen(playlist))).toBe(true);
+    expect(listPlaylists).toHaveBeenCalledTimes(1);
+
+    await library.mutate({
+      type: "rename-playlist",
+      playlistId: "500",
+      name: "Renamed",
+    });
+
+    const refreshed = library.getPlaylists();
+    expect(refreshed).not.toBe(first);
+    expect(refreshed).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "500", name: "Renamed" })]),
+    );
+    expect(listPlaylists).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches bootstrap database aggregates but keeps process state live", async () => {
+    const fixture = copiedFixture();
+    const getProcessState = vi.fn(() => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }));
+    const selectRawRows = vi.spyOn(MasterDatabase.prototype, "selectRawRows");
+    const library = new RekordboxLibraryService({
+      dbPath: fixture.dbPath,
+      getProcessState,
+      unlock: false,
+      writeEnabled: true,
+    });
+    services.push(library);
+
+    const first = library.getBootstrap("first-token");
+    const aggregateReadCount = selectRawRows.mock.calls.length;
+    const second = library.getBootstrap("second-token");
+    expect(selectRawRows).toHaveBeenCalledTimes(aggregateReadCount);
+    expect(getProcessState).toHaveBeenCalledTimes(2);
+    expect(second.csrfToken).toBe("second-token");
+    expect(second.library.stats).toBe(first.library.stats);
+    expect(Object.isFrozen(first.library.stats)).toBe(true);
+
+    await library.mutate({ type: "create-playlist", name: "Fresh stats" });
+    const refreshed = library.getBootstrap("third-token");
+    expect(refreshed.library.stats).not.toBe(first.library.stats);
+    expect(refreshed.library.stats.playlists).toBe(first.library.stats.playlists + 1);
+  });
+
   it("reopens a stale session under the lock before a cooperating playlist write", async () => {
     const fixture = copiedFixture();
     const open = vi.spyOn(MasterDatabase.prototype, "open");

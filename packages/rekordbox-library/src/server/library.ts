@@ -84,6 +84,8 @@ type WaveformCacheEntry = {
   waveform: TrackWaveform;
 };
 
+type BootstrapProjection = Omit<LibraryBootstrap["library"], "processes">;
+
 const sqliteBusyTimeoutMs = 5_000;
 const databaseLockTimeoutMs = 10_000;
 const placeholderWaveformRetryMs = 5_000;
@@ -409,6 +411,8 @@ export class RekordboxLibraryService {
   private readonly audioPathCache = new Map<string, string>();
   private readonly waveformCache = new Map<string, WaveformCacheEntry>();
   private readonly fileExistenceCache = new Map<string, { checkedAt: number; exists: boolean }>();
+  private bootstrapProjection: BootstrapProjection | undefined;
+  private playlistProjection: PlaylistItem[] | undefined;
   private database: MasterDatabase | undefined;
   private databaseFilesVersion: string | undefined;
 
@@ -493,6 +497,8 @@ export class RekordboxLibraryService {
     this.audioPathCache.clear();
     this.waveformCache.clear();
     this.fileExistenceCache.clear();
+    this.bootstrapProjection = undefined;
+    this.playlistProjection = undefined;
   }
 
   private cachedFileExists(path: string | null): boolean {
@@ -586,46 +592,45 @@ export class RekordboxLibraryService {
 
   /** Return library identity, process state, safety mode, and health counts. */
   getBootstrap(csrfToken: string): LibraryBootstrap {
-    const db = this.getDatabase();
-    const activeContent = this.active(db, "djmdContent", "c");
-    const activePlaylist = this.active(db, "djmdPlaylist", "p");
-    const contentCounts = db.selectRawRows<{
-      analyzed: number;
-      missingBpm: number;
-      missingKey: number;
-      tracks: number;
-    }>(
-      `SELECT COUNT(*) AS tracks,
-              COALESCE(SUM(CASE WHEN c."AnalysisDataPath" IS NOT NULL
-                AND c."AnalysisDataPath" != '' AND COALESCE(c."Analysed", 0) > 0
-                THEN 1 ELSE 0 END), 0) AS analyzed,
-              COALESCE(SUM(CASE WHEN COALESCE(c."BPM", 0) <= 0 THEN 1 ELSE 0 END), 0)
-                AS missingBpm,
-              COALESCE(SUM(CASE WHEN c."KeyID" IS NULL OR c."KeyID" = ''
-                THEN 1 ELSE 0 END), 0) AS missingKey
-       FROM "djmdContent" c WHERE ${activeContent}`,
-    )[0];
-    const tracks = numberValue(contentCounts?.tracks);
-    const analyzed = numberValue(contentCounts?.analyzed);
-    const missingBpm = numberValue(contentCounts?.missingBpm);
-    const missingKey = numberValue(contentCounts?.missingKey);
-    const playlistRows = db.selectRawRows<{ attribute: number; count: number }>(
-      `SELECT p."Attribute" AS attribute, COUNT(*) AS count FROM "djmdPlaylist" p
-       WHERE ${activePlaylist} AND p."Attribute" IN (?, ?, ?)
-       GROUP BY p."Attribute"`,
-      [PlaylistType.PLAYLIST, PlaylistType.FOLDER, PlaylistType.SMART_PLAYLIST],
-    );
-    const countByAttribute = new Map(
-      playlistRows.map((row) => [numberValue(row.attribute), numberValue(row.count)]),
-    );
-    return {
-      csrfToken,
-      library: {
+    let projection = this.bootstrapProjection;
+    if (!projection) {
+      const db = this.getDatabase();
+      const activeContent = this.active(db, "djmdContent", "c");
+      const activePlaylist = this.active(db, "djmdPlaylist", "p");
+      const contentCounts = db.selectRawRows<{
+        analyzed: number;
+        missingBpm: number;
+        missingKey: number;
+        tracks: number;
+      }>(
+        `SELECT COUNT(*) AS tracks,
+                COALESCE(SUM(CASE WHEN c."AnalysisDataPath" IS NOT NULL
+                  AND c."AnalysisDataPath" != '' AND COALESCE(c."Analysed", 0) > 0
+                  THEN 1 ELSE 0 END), 0) AS analyzed,
+                COALESCE(SUM(CASE WHEN COALESCE(c."BPM", 0) <= 0 THEN 1 ELSE 0 END), 0)
+                  AS missingBpm,
+                COALESCE(SUM(CASE WHEN c."KeyID" IS NULL OR c."KeyID" = ''
+                  THEN 1 ELSE 0 END), 0) AS missingKey
+         FROM "djmdContent" c WHERE ${activeContent}`,
+      )[0];
+      const tracks = numberValue(contentCounts?.tracks);
+      const analyzed = numberValue(contentCounts?.analyzed);
+      const missingBpm = numberValue(contentCounts?.missingBpm);
+      const missingKey = numberValue(contentCounts?.missingKey);
+      const playlistRows = db.selectRawRows<{ attribute: number; count: number }>(
+        `SELECT p."Attribute" AS attribute, COUNT(*) AS count FROM "djmdPlaylist" p
+         WHERE ${activePlaylist} AND p."Attribute" IN (?, ?, ?)
+         GROUP BY p."Attribute"`,
+        [PlaylistType.PLAYLIST, PlaylistType.FOLDER, PlaylistType.SMART_PLAYLIST],
+      );
+      const countByAttribute = new Map(
+        playlistRows.map((row) => [numberValue(row.attribute), numberValue(row.count)]),
+      );
+      projection = Object.freeze({
         dbPath: db.path,
         dbDirectory: db.dbDirectory,
         writeEnabled: this.writeEnabled,
-        processes: this.getProcessState(),
-        stats: {
+        stats: Object.freeze({
           tracks,
           playlists:
             (countByAttribute.get(PlaylistType.PLAYLIST) ?? 0) +
@@ -635,24 +640,39 @@ export class RekordboxLibraryService {
           missingAnalysis: tracks - analyzed,
           missingBpm,
           missingKey,
-        },
+        }),
+      });
+      this.bootstrapProjection = projection;
+    }
+    return {
+      csrfToken,
+      library: {
+        ...projection,
+        processes: this.getProcessState(),
       },
     };
   }
 
   /** Return the active playlist hierarchy and direct membership counts. */
   getPlaylists(): PlaylistItem[] {
-    return this.getDatabase()
-      .listPlaylists()
-      .map((playlist) => ({
-        id: playlist.id,
-        name: playlist.name || "Untitled playlist",
-        parentId: playlist.parentId,
-        seq: playlist.sequence,
-        type: playlist.type,
-        trackCount: playlist.trackCount,
-        ...(playlist.countError === undefined ? {} : { countError: playlist.countError }),
-      }));
+    if (!this.playlistProjection) {
+      const items = this.getDatabase()
+        .listPlaylists()
+        .map((playlist) =>
+          Object.freeze({
+            id: playlist.id,
+            name: playlist.name || "Untitled playlist",
+            parentId: playlist.parentId,
+            seq: playlist.sequence,
+            type: playlist.type,
+            trackCount: playlist.trackCount,
+            ...(playlist.countError === undefined ? {} : { countError: playlist.countError }),
+          }),
+        );
+      Object.freeze(items);
+      this.playlistProjection = items;
+    }
+    return this.playlistProjection;
   }
 
   /** Search or page through tracks, preserving normal-playlist membership order. */
