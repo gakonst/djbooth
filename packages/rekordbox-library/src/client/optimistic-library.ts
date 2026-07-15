@@ -28,6 +28,18 @@ export type OptimisticLibraryMutation = {
   revalidateTrackId?: string;
 };
 
+/** Keep an older failed write from replacing a newer optimistic projection. */
+export function rollbackOptimisticWrite<TKey, TWrite>(
+  writeTails: ReadonlyMap<TKey, TWrite>,
+  key: TKey,
+  failedWrite: TWrite,
+  rollback: () => void,
+): boolean {
+  if (writeTails.get(key) !== failedWrite) return false;
+  rollback();
+  return true;
+}
+
 export type OptimisticIdReconciliation = {
   membershipIds: Array<readonly [from: string, to: string]>;
 };

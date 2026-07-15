@@ -103,6 +103,7 @@ import {
   type LibraryCacheSnapshot,
   type OptimisticLibraryMutation,
   reconcileOptimisticLibraryMutation,
+  rollbackOptimisticWrite,
   resolveOptimisticMutationIds,
   restoreLibraryCache,
 } from "./optimistic-library.js";
@@ -791,9 +792,14 @@ export function App() {
           );
         })
         .catch((error: unknown) => {
-          if (hostedSnapshot)
-            queryClient.setQueryData<HostedPlaylistsResponse>(["hosted-playlists"], hostedSnapshot);
-          for (const [key, snapshot] of trackSnapshots) queryClient.setQueryData(key, snapshot);
+          rollbackOptimisticWrite(hostedWriteTailsRef.current, playlistId, commit, () => {
+            if (hostedSnapshot)
+              queryClient.setQueryData<HostedPlaylistsResponse>(
+                ["hosted-playlists"],
+                hostedSnapshot,
+              );
+            for (const [key, snapshot] of trackSnapshots) queryClient.setQueryData(key, snapshot);
+          });
           setToast({ tone: "error", message: errorMessage(error) });
         });
       hostedWriteTailsRef.current.set(playlistId, commit);

@@ -187,6 +187,23 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       createdAt: "2026-07-14T00:00:00.000Z",
       updatedAt: "2026-07-14T00:00:01.000Z",
     });
+    emitJob?.({
+      id: "job",
+      kind: "download-playlist",
+      provider: "spotify",
+      playlistId: "playlist-one",
+      status: "running",
+      current: 2,
+      total: 2,
+      error: null,
+      payload: { hostedPlaylistId: id },
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:02.000Z",
+    });
+
+    await Promise.resolve();
+    expect(refreshPlaylistState).not.toHaveBeenCalled();
+    expect(refreshTrackState).not.toHaveBeenCalled();
 
     await expect(runtime.listPlaylists()).resolves.toMatchObject({
       items: [{ hosted: { syncState: "syncing" } }],

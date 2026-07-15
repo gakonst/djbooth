@@ -121,6 +121,8 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   readonly #jobListeners = new Set<(event: { playlistId: string }) => void>();
   #playlistCache: { expiresAt: number; promise: Promise<HostedPlaylistsResponse> } | undefined;
   readonly #trackCache = new Map<string, { expiresAt: number; promise: Promise<TrackSummary[]> }>();
+  #playlistStateDirty = false;
+  readonly #trackStateDirty = new Set<string>();
   #outboxDrain: Promise<void> | undefined;
   #outboxRetryAt = 0;
   #outboxRetryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -151,8 +153,20 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
 
   listPlaylists(): Promise<HostedPlaylistsResponse> {
     const now = Date.now();
-    if (this.#playlistCache && this.#playlistCache.expiresAt > now)
-      return this.#playlistCache.promise;
+    const cached = this.#playlistCache;
+    if (cached && cached.expiresAt > now) {
+      if (!this.#playlistStateDirty || !this.#catalog.refreshPlaylistState) return cached.promise;
+      this.#playlistStateDirty = false;
+      const promise = cached.promise
+        .then((response) => this.#catalog.refreshPlaylistState!(response))
+        .catch((error: unknown) => {
+          if (this.#playlistCache?.promise === promise) this.#playlistCache = undefined;
+          throw error;
+        });
+      this.#playlistCache = { ...cached, promise };
+      return promise;
+    }
+    this.#playlistStateDirty = false;
     const promise = this.#catalog
       .listPlaylists()
       .then((response) => this.#scheduleChangedDownloads(response))
@@ -167,7 +181,21 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   getTracks(playlistId: string): Promise<TrackSummary[]> {
     const now = Date.now();
     const cached = this.#trackCache.get(playlistId);
-    if (cached && cached.expiresAt > now) return cached.promise;
+    if (cached && cached.expiresAt > now) {
+      if (!this.#trackStateDirty.has(playlistId) || !this.#catalog.refreshTrackState)
+        return cached.promise;
+      this.#trackStateDirty.delete(playlistId);
+      const promise = cached.promise
+        .then((tracks) => this.#catalog.refreshTrackState!(playlistId, tracks))
+        .catch((error: unknown) => {
+          if (this.#trackCache.get(playlistId)?.promise === promise)
+            this.#trackCache.delete(playlistId);
+          throw error;
+        });
+      this.#trackCache.set(playlistId, { ...cached, promise });
+      return promise;
+    }
+    this.#trackStateDirty.delete(playlistId);
     const promise = this.#catalog.getTracks(playlistId).catch((error: unknown) => {
       if (this.#trackCache.get(playlistId)?.promise === promise)
         this.#trackCache.delete(playlistId);
@@ -264,7 +292,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     const priorPlaylists = this.#playlistCache?.promise;
     const receipt = await this.#catalog.mutate(mutation);
     this.#playlistCache = undefined;
+    this.#playlistStateDirty = false;
     if ("playlistId" in mutation) this.#trackCache.delete(mutation.playlistId);
+    if ("playlistId" in mutation) this.#trackStateDirty.delete(mutation.playlistId);
     if (mutation.type === "set-hosted-playlist-download") {
       const { provider, remoteId } = parseHostedPlaylistId(mutation.playlistId);
       if (mutation.enabled) {
@@ -312,7 +342,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#outboxRetryTimer = undefined;
     this.#jobListeners.clear();
     this.#trackCache.clear();
+    this.#trackStateDirty.clear();
     this.#playlistCache = undefined;
+    this.#playlistStateDirty = false;
     try {
       await this.#outboxDrain;
       await this.#worker.close();
@@ -561,7 +593,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
 
   #invalidateHostedPlaylist(playlistId: string): void {
     this.#playlistCache = undefined;
+    this.#playlistStateDirty = false;
     this.#trackCache.delete(playlistId);
+    this.#trackStateDirty.delete(playlistId);
   }
 
   #emitPlaylistChanged(playlistId: string): void {
@@ -620,21 +654,17 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
         : hostedPlaylistId(job.provider, job.playlistId);
     const playlistCache = this.#playlistCache;
     if (playlistCache && this.#catalog.refreshPlaylistState) {
-      const promise = playlistCache.promise.then((response) =>
-        this.#catalog.refreshPlaylistState!(response),
-      );
-      this.#playlistCache = { ...playlistCache, promise };
+      this.#playlistStateDirty = true;
     } else {
       this.#playlistCache = undefined;
+      this.#playlistStateDirty = false;
     }
     const trackCache = this.#trackCache.get(playlistId);
     if (trackCache && this.#catalog.refreshTrackState) {
-      const promise = trackCache.promise.then((tracks) =>
-        this.#catalog.refreshTrackState!(playlistId, tracks),
-      );
-      this.#trackCache.set(playlistId, { ...trackCache, promise });
+      this.#trackStateDirty.add(playlistId);
     } else {
       this.#trackCache.delete(playlistId);
+      this.#trackStateDirty.delete(playlistId);
     }
     this.#emitPlaylistChanged(playlistId);
   }

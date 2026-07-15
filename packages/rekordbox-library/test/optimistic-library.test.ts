@@ -13,6 +13,7 @@ import {
   applyOptimisticLibraryMutation,
   captureLibraryCache,
   reconcileOptimisticLibraryMutation,
+  rollbackOptimisticWrite,
   resolveOptimisticMutationIds,
   restoreLibraryCache,
 } from "../src/client/optimistic-library.js";
@@ -27,6 +28,27 @@ const playlist: PlaylistItem = {
 };
 
 describe("optimistic library cache", () => {
+  it("does not let an older failed write roll back a newer optimistic projection", () => {
+    const olderWrite = Promise.resolve();
+    const newerWrite = Promise.resolve();
+    const tails = new Map([["hosted:spotify:playlist", newerWrite]]);
+    let projection = "newer optimistic edit";
+
+    expect(
+      rollbackOptimisticWrite(tails, "hosted:spotify:playlist", olderWrite, () => {
+        projection = "stale snapshot";
+      }),
+    ).toBe(false);
+    expect(projection).toBe("newer optimistic edit");
+
+    expect(
+      rollbackOptimisticWrite(tails, "hosted:spotify:playlist", newerWrite, () => {
+        projection = "latest snapshot";
+      }),
+    ).toBe(true);
+    expect(projection).toBe("latest snapshot");
+  });
+
   it("creates, reconciles, renames, deletes, and rolls back playlists synchronously", () => {
     const queryClient = seededClient();
     const snapshot = captureLibraryCache(queryClient);
