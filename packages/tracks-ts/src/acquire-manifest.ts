@@ -98,6 +98,8 @@ export type AcquisitionRecordingVariant = {
   metadata: AudioMetadata;
   searchQuery?: string;
   preferredCandidate?: YoutubeSearchCandidate & { backend: AcquisitionBackend };
+  /** Try an audited provider source after earlier backends (for example Soulseek) have failed. */
+  preferredCandidatePlacement?: "first" | "backend-fallback";
   /** Explicit local source selected by the generic plan builder; retagged into outputPath. */
   localArtifact?: {
     sourcePath: string;
@@ -804,6 +806,7 @@ export async function acquireManifest(
                   plan.stagingDirectory,
                   minimumScore,
                   variant.preferredCandidate,
+                  variant.preferredCandidatePlacement,
                   options.signal,
                 );
                 const adaptedOutputPath = outputPathForSource(
@@ -1159,6 +1162,7 @@ async function acquireVariant(
   stagingDirectory: string,
   minimumScore: number,
   preferredCandidate?: YoutubeSearchCandidate & { backend: AcquisitionBackend },
+  preferredCandidatePlacement: "first" | "backend-fallback" = "first",
   signal?: AbortSignal,
 ): Promise<{
   acquirer: TrackAcquirer;
@@ -1168,38 +1172,53 @@ async function acquireVariant(
   signal?.throwIfAborted();
   const failures: string[] = [];
   let capabilityFallback: AcquirerFallback | undefined;
-  if (preferredCandidate) {
-    const preferredAcquirer = acquirers.find(
-      (acquirer) => acquirer.backend === preferredCandidate.backend,
-    );
-    if (preferredAcquirer) {
-      const selected: ScoredYoutubeCandidate = { ...preferredCandidate, score: 1 };
-      let source: IndividualDownload | undefined;
-      let validating = false;
-      try {
-        source = await preferredAcquirer.download(
-          selected,
-          candidateStagingDirectory(stagingDirectory, variant, preferredAcquirer.backend, selected),
-          variantKey(variant),
-        );
-        signal?.throwIfAborted();
-        validating = true;
-        await validateAcquiredSource(source, target);
-        signal?.throwIfAborted();
-        return { acquirer: preferredAcquirer, candidate: selected, source };
-      } catch (error) {
-        if (source && source.temporary !== false) await rm(source.path, { force: true });
-        throwIfAcquisitionCancelled(signal, error);
-        failures.push(`${preferredAcquirer.backend} audited source: ${errorMessage(error)}`);
-        if (!validating) {
-          const shouldContinue = preferredAcquirer.shouldContinueAfterError?.(error, "download");
-          if (shouldContinue === false) throw error;
-          if (shouldContinue) capabilityFallback = shouldContinue;
-        }
+  const preferredAcquirer = preferredCandidate
+    ? acquirers.find((acquirer) => acquirer.backend === preferredCandidate.backend)
+    : undefined;
+  let preferredAttempted = false;
+  const acquirePreferred = async (
+    acquirer: TrackAcquirer,
+  ): Promise<
+    | {
+        acquirer: TrackAcquirer;
+        candidate: ScoredYoutubeCandidate;
+        source: IndividualDownload;
       }
-    } else {
-      failures.push(`${preferredCandidate.backend}: audited source backend unavailable`);
+    | undefined
+  > => {
+    if (!preferredCandidate || preferredAttempted) return undefined;
+    preferredAttempted = true;
+    const selected: ScoredYoutubeCandidate = { ...preferredCandidate, score: 1 };
+    let source: IndividualDownload | undefined;
+    let validating = false;
+    try {
+      source = await acquirer.download(
+        selected,
+        candidateStagingDirectory(stagingDirectory, variant, acquirer.backend, selected),
+        variantKey(variant),
+      );
+      signal?.throwIfAborted();
+      validating = true;
+      await validateAcquiredSource(source, target);
+      signal?.throwIfAborted();
+      return { acquirer, candidate: selected, source };
+    } catch (error) {
+      if (source && source.temporary !== false) await rm(source.path, { force: true });
+      throwIfAcquisitionCancelled(signal, error);
+      failures.push(`${acquirer.backend} audited source: ${errorMessage(error)}`);
+      if (!validating) {
+        const shouldContinue = acquirer.shouldContinueAfterError?.(error, "download");
+        if (shouldContinue === false) throw error;
+        if (shouldContinue) capabilityFallback = shouldContinue;
+      }
+      return undefined;
     }
+  };
+  if (preferredCandidate && !preferredAcquirer) {
+    failures.push(`${preferredCandidate.backend}: audited source backend unavailable`);
+  } else if (preferredAcquirer && preferredCandidatePlacement === "first") {
+    const acquired = await acquirePreferred(preferredAcquirer);
+    if (acquired) return acquired;
   }
   const searchAcquirer = async (acquirer: TrackAcquirer) => {
     try {
@@ -1212,12 +1231,23 @@ async function acquireVariant(
     }
   };
   const searches = acquirers.map((acquirer) =>
-    acquirer.requiresPriorCapabilityFailure ? undefined : searchAcquirer(acquirer),
+    acquirer.requiresPriorCapabilityFailure ||
+    (preferredCandidatePlacement === "backend-fallback" && preferredAcquirer === acquirer)
+      ? undefined
+      : searchAcquirer(acquirer),
   );
   for (const [index, acquirer] of acquirers.entries()) {
     if (acquirer.requiresPriorCapabilityFailure && !capabilityFallback) {
       failures.push(`${acquirer.backend}: no typed native capability gap permitted reference use`);
       continue;
+    }
+    if (
+      preferredCandidatePlacement === "backend-fallback" &&
+      preferredAcquirer === acquirer &&
+      !preferredAttempted
+    ) {
+      const acquired = await acquirePreferred(acquirer);
+      if (acquired) return acquired;
     }
     const search = await (searches[index] ?? searchAcquirer(acquirer));
     signal?.throwIfAborted();

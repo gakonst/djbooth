@@ -48,6 +48,9 @@ describe("HostedPlaylistAcquisitionWorker", () => {
     const remoteTrackId = "soundcloud:tracks:99";
     const permalink = "https://soundcloud.com/gak/exact-track";
     fixture.store.setDownloadEnabled("soundcloud", remotePlaylistId, true);
+    fixture.store.updatePlaylistSync("soundcloud", remotePlaylistId, {
+      localPlaylistId: "local-playlist-77",
+    });
     const job = fixture.store.enqueueDownload("soundcloud", remotePlaylistId, {
       playlistName: "Exact playlist",
       externalUrl: "https://soundcloud.com/gak/sets/exact-playlist",
@@ -134,6 +137,7 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       approved: true,
       folderName: "SoundCloud - GAK",
       playlistName: "Exact playlist",
+      playlistId: "local-playlist-77",
     });
     expect(fixture.store.getJob(job.id)).toMatchObject({
       status: "completed",
@@ -236,6 +240,119 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       "completed",
       "completed",
     ]);
+  });
+
+  it("acquires and analyzes a repeated provider track once while importing every membership", async () => {
+    const fixture = state();
+    const playlistId = "spotify-with-repeat";
+    const firstTrackId = "spotify:track:first";
+    const secondTrackId = "spotify:track:second";
+    fixture.store.setDownloadEnabled("spotify", playlistId, true);
+    const job = fixture.store.enqueueDownload("spotify", playlistId, {
+      playlistName: "Repeated recording",
+    });
+
+    let created: SetManifest | undefined;
+    let physicalRecordingOrders: number[] = [];
+    let analysisCalls = 0;
+    let importedEntryIds: string[] = [];
+    const dependencies = {
+      createManifest(input) {
+        created = buildProviderPlaylistManifest(input);
+        return created;
+      },
+      writeManifest: writeManifestAtomic,
+      buildPlan: buildAcquisitionPlan,
+      async acquire(options) {
+        const plan = materializedPlan(options);
+        physicalRecordingOrders = plan.recordings.map(({ entryOrder }) => entryOrder);
+        const manifest = structuredClone(created!);
+        for (const recording of plan.recordings) {
+          const variant = recording.variants[0]!;
+          const entry = manifest.entries.find(({ order }) => order === recording.entryOrder)!;
+          entry.acquisition = {
+            status: "downloaded",
+            download: {
+              backend: "slsk",
+              kind: "individual",
+              mediaPath: variant.outputPath,
+              files: [variant.outputPath],
+              source: `slsk://test/${variant.spotifyId!}`,
+              sha256: variant.spotifyId === "first" ? "a".repeat(64) : "b".repeat(64),
+              spotifyId: variant.spotifyId,
+            },
+          };
+          await options.onArtifactVerified?.({
+            entryOrder: recording.entryOrder,
+            variantIndex: 0,
+            path: variant.outputPath,
+            sha256: entry.acquisition.download.sha256!,
+            kind: "individual",
+            status: "downloaded",
+          });
+        }
+        return { manifest, failures: [] };
+      },
+      async analyze(options) {
+        analysisCalls += 1;
+        const manifest = JSON.parse(readFileSync(options.manifestPath, "utf8")) as SetManifest;
+        const mediaPaths = manifest.entries.map((entry) => {
+          if (entry.acquisition.status !== "downloaded")
+            throw new Error("entry was not fanned out");
+          return entry.acquisition.download.mediaPath;
+        });
+        expect(new Set(mediaPaths).size).toBe(2);
+        expect(mediaPaths[2]).toBe(mediaPaths[0]);
+        return {
+          manifest,
+          analysisDirectories: Object.fromEntries(
+            [...new Set(mediaPaths)].map((path) => [path, `${path}.analysis`]),
+          ),
+        };
+      },
+      async importRekordbox(options) {
+        importedEntryIds = options.manifest.entries.map(({ id }) => id);
+        const contentIds = ["content-first", "content-second", "content-first"];
+        return {
+          playlistId: "local-repeat-playlist",
+          imported: options.manifest.entries.map((entry, index) => ({
+            entryId: entry.id,
+            contentId: contentIds[index]!,
+          })),
+        };
+      },
+    } satisfies Partial<HostedAcquisitionDependencies>;
+    const worker = createWorker(fixture, {
+      catalog: {
+        getTracks: async () => [
+          hostedTrack("spotify", firstTrackId),
+          hostedTrack("spotify", secondTrackId),
+          hostedTrack("spotify", firstTrackId),
+        ],
+      },
+      dependencies,
+      rekordbox: { enabled: true },
+    });
+
+    worker.start();
+    await worker.kick();
+
+    expect(physicalRecordingOrders).toEqual([1, 2]);
+    expect(analysisCalls).toBe(1);
+    expect(importedEntryIds).toEqual(["track-001", "track-002", "track-003"]);
+    expect(fixture.store.getJob(job.id)).toMatchObject({
+      status: "completed",
+      current: 3,
+      total: 3,
+    });
+    expect(fixture.store.getTrack("spotify", firstTrackId)).toMatchObject({
+      downloadState: "downloaded",
+      localContentId: "content-first",
+    });
+    expect(fixture.store.getTrack("spotify", secondTrackId)).toMatchObject({
+      downloadState: "downloaded",
+      localContentId: "content-second",
+    });
   });
 
   it("cancels active work cooperatively and resets unfinished track state", async () => {

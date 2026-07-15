@@ -92,6 +92,8 @@ export type RekordboxMasterDatabase = {
   addContent(path: string, values?: Record<string, DatabaseValue>): DjmdContent;
   createPlaylist(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
   createPlaylistFolder(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
+  renamePlaylist(playlist: DjmdPlaylist, name: string): void;
+  movePlaylist(playlist: DjmdPlaylist, options: { parent: DjmdPlaylist }): void;
   addToPlaylist(
     playlist: DjmdPlaylist,
     content: DjmdContent,
@@ -102,6 +104,7 @@ export type RekordboxMasterDatabase = {
     membership: DjmdSongPlaylist,
     trackNumber: number,
   ): void;
+  delete(row: DatabaseRow): void;
   installContentAnalysis(
     content: DjmdContent | string | number,
     analysisDirectory: string,
@@ -178,6 +181,8 @@ export type RekordboxImportItem = {
 export type RekordboxImportPlan = {
   folderName: string;
   playlistName: string;
+  /** Stable existing playlist target. Name matching is used only when this is absent. */
+  playlistId?: string;
   items: RekordboxImportItem[];
 };
 
@@ -304,6 +309,8 @@ export type ImportManifestToRekordboxOptions = {
   key?: string;
   folderName?: string;
   playlistName?: string;
+  /** Reuse this exact Rekordbox playlist across provider renames and duplicate display names. */
+  playlistId?: string;
   backupRoot?: string;
   /** Native analyzer output directories keyed by absolute media path. */
   analysisDirectories?: Readonly<Record<string, string>>;
@@ -418,6 +425,7 @@ export function planRekordboxImport(
     mediaBaseDirectory?: string;
     folderName?: string;
     playlistName?: string;
+    playlistId?: string;
     analysisDirectories?: Readonly<Record<string, string>>;
   } = {},
 ): RekordboxImportPlan {
@@ -459,14 +467,9 @@ export function planRekordboxImport(
     });
   }
 
+  assertReusableMediaItems(items);
   const paths = items.map((item) => item.mediaPath);
-  if (new Set(paths).size !== paths.length)
-    throw new TracksError(
-      "INVALID_SOURCE",
-      "Downloaded manifest variants must have globally distinct media paths",
-      { exitCode: 2 },
-    );
-  const analysisDirectories = items.flatMap((item) =>
+  const analysisDirectories = uniqueMediaItems(items).flatMap((item) =>
     item.analysisDirectory ? [item.analysisDirectory] : [],
   );
   if (new Set(analysisDirectories).size !== analysisDirectories.length)
@@ -491,8 +494,40 @@ export function planRekordboxImport(
   return {
     folderName: options.folderName?.trim() || DEFAULT_FOLDER_NAME,
     playlistName: options.playlistName?.trim() || defaultRekordboxPlaylistName(manifest),
+    ...(options.playlistId?.trim() ? { playlistId: options.playlistId.trim() } : {}),
     items,
   };
+}
+
+function uniqueMediaItems(items: readonly RekordboxImportItem[]): RekordboxImportItem[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.mediaPath)) return false;
+    seen.add(item.mediaPath);
+    return true;
+  });
+}
+
+function assertReusableMediaItems(items: readonly RekordboxImportItem[]): void {
+  const firstByPath = new Map<string, RekordboxImportItem>();
+  for (const item of items) {
+    const first = firstByPath.get(item.mediaPath);
+    if (!first) {
+      firstByPath.set(item.mediaPath, item);
+      continue;
+    }
+    if (
+      !isDeepStrictEqual(first.download, item.download) ||
+      !isDeepStrictEqual(first.metadata, item.metadata) ||
+      first.analysisDirectory !== item.analysisDirectory
+    ) {
+      throw new TracksError(
+        "INVALID_SOURCE",
+        `Repeated media path must describe one identical recording: ${item.mediaPath}`,
+        { exitCode: 2 },
+      );
+    }
+  }
 }
 
 /** Build the persisted manifest handoff after a verified database import. */
@@ -690,6 +725,7 @@ async function importManifestToRekordboxLocked(
     mediaBaseDirectory: dirname(manifestPath),
     ...(options.folderName === undefined ? {} : { folderName: options.folderName }),
     ...(options.playlistName === undefined ? {} : { playlistName: options.playlistName }),
+    ...(options.playlistId === undefined ? {} : { playlistId: options.playlistId }),
     ...(options.analysisDirectories === undefined
       ? {}
       : { analysisDirectories: options.analysisDirectories }),
@@ -1016,59 +1052,71 @@ export async function preflightRekordboxMedia(
   previous?: ReadonlyMap<string, RekordboxMediaReceipt>,
   probe: RekordboxMediaProbe = defaultRekordboxMediaProbe,
 ): Promise<Map<string, RekordboxMediaReceipt>> {
+  assertReusableMediaItems(plan.items);
   const receipts = new Map<string, RekordboxMediaReceipt>();
-  await mapConcurrent(plan.items, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (item) => {
-    let mediaStat;
-    try {
-      mediaStat = await stat(item.mediaPath);
-    } catch (error) {
-      throw new TracksError("INVALID_SOURCE", `Downloaded media is missing: ${item.mediaPath}`, {
-        cause: error,
-        exitCode: 2,
+  await mapConcurrent(
+    uniqueMediaItems(plan.items),
+    DEFAULT_REKORDBOX_IO_CONCURRENCY,
+    async (item) => {
+      let mediaStat;
+      try {
+        mediaStat = await stat(item.mediaPath);
+      } catch (error) {
+        throw new TracksError("INVALID_SOURCE", `Downloaded media is missing: ${item.mediaPath}`, {
+          cause: error,
+          exitCode: 2,
+        });
+      }
+      if (!mediaStat.isFile())
+        throw new TracksError(
+          "INVALID_SOURCE",
+          `Downloaded media is not a file: ${item.mediaPath}`,
+          {
+            exitCode: 2,
+          },
+        );
+      if (!item.download.sha256)
+        throw new TracksError(
+          "INVALID_SOURCE",
+          `Downloaded media has no recorded SHA-256: ${item.mediaPath}`,
+          { exitCode: 2 },
+        );
+      const prior = previous?.get(item.mediaPath);
+      const unchanged =
+        prior !== undefined &&
+        prior.size === mediaStat.size &&
+        prior.mtimeMs === mediaStat.mtimeMs &&
+        prior.ctimeMs === mediaStat.ctimeMs &&
+        prior.ino === mediaStat.ino;
+      const [actualSha256, durationSeconds] = unchanged
+        ? [prior.sha256, measuredDurationSeconds(prior.durationSeconds, item.mediaPath)]
+        : await Promise.all([
+            sha256File(item.mediaPath),
+            probe(item.mediaPath).then((result) =>
+              measuredDurationSeconds(result.durationSeconds, item.mediaPath),
+            ),
+          ]);
+      if (actualSha256 !== item.download.sha256)
+        throw new TracksError(
+          "INVALID_SOURCE",
+          `Downloaded media SHA-256 changed: ${item.mediaPath}`,
+          { exitCode: 2 },
+        );
+      item.measuredDurationSeconds = durationSeconds;
+      receipts.set(item.mediaPath, {
+        path: item.mediaPath,
+        size: mediaStat.size,
+        mtimeMs: mediaStat.mtimeMs,
+        ctimeMs: mediaStat.ctimeMs,
+        ino: mediaStat.ino,
+        sha256: actualSha256,
+        durationSeconds,
       });
-    }
-    if (!mediaStat.isFile())
-      throw new TracksError("INVALID_SOURCE", `Downloaded media is not a file: ${item.mediaPath}`, {
-        exitCode: 2,
-      });
-    if (!item.download.sha256)
-      throw new TracksError(
-        "INVALID_SOURCE",
-        `Downloaded media has no recorded SHA-256: ${item.mediaPath}`,
-        { exitCode: 2 },
-      );
-    const prior = previous?.get(item.mediaPath);
-    const unchanged =
-      prior !== undefined &&
-      prior.size === mediaStat.size &&
-      prior.mtimeMs === mediaStat.mtimeMs &&
-      prior.ctimeMs === mediaStat.ctimeMs &&
-      prior.ino === mediaStat.ino;
-    const [actualSha256, durationSeconds] = unchanged
-      ? [prior.sha256, measuredDurationSeconds(prior.durationSeconds, item.mediaPath)]
-      : await Promise.all([
-          sha256File(item.mediaPath),
-          probe(item.mediaPath).then((result) =>
-            measuredDurationSeconds(result.durationSeconds, item.mediaPath),
-          ),
-        ]);
-    if (actualSha256 !== item.download.sha256)
-      throw new TracksError(
-        "INVALID_SOURCE",
-        `Downloaded media SHA-256 changed: ${item.mediaPath}`,
-        { exitCode: 2 },
-      );
-    item.measuredDurationSeconds = durationSeconds;
-    receipts.set(item.mediaPath, {
-      path: item.mediaPath,
-      size: mediaStat.size,
-      mtimeMs: mediaStat.mtimeMs,
-      ctimeMs: mediaStat.ctimeMs,
-      ino: mediaStat.ino,
-      sha256: actualSha256,
-      durationSeconds,
-    });
-  });
+    },
+  );
+  for (const item of plan.items) {
+    item.measuredDurationSeconds = receipts.get(item.mediaPath)!.durationSeconds;
+  }
   return receipts;
 }
 
@@ -1082,7 +1130,7 @@ function measuredDurationSeconds(value: number, path: string): number {
 }
 
 async function assertAnalysisDirectoriesExist(plan: RekordboxImportPlan): Promise<void> {
-  const analyzed = plan.items.filter(
+  const analyzed = uniqueMediaItems(plan.items).filter(
     (item): item is RekordboxImportItem & { analysisDirectory: string } =>
       item.analysisDirectory !== undefined,
   );
@@ -1128,7 +1176,8 @@ function checkpointedRekordboxImport(
     !artifact ||
     resolve(artifact.dbPath) !== resolve(dbPath) ||
     artifact.folderName !== plan.folderName ||
-    artifact.playlistName !== plan.playlistName
+    artifact.playlistName !== plan.playlistName ||
+    (plan.playlistId !== undefined && artifact.playlistId !== plan.playlistId)
   ) {
     return undefined;
   }
@@ -1325,6 +1374,7 @@ export function writeRekordboxPlan(
   imported: RekordboxImportedItem[];
   installedAnalysis: RekordboxInstalledAnalysis[];
 } {
+  assertReusableMediaItems(plan.items);
   const folders = db
     .query(rekordbox.DjmdPlaylist)
     .where({ Name: plan.folderName, Attribute: rekordbox.PlaylistType.FOLDER })
@@ -1332,21 +1382,36 @@ export function writeRekordboxPlan(
   if (folders.length > 1)
     throw new Error(`Multiple Rekordbox folders named '${plan.folderName}' exist`);
   const folder = folders[0] ?? db.createPlaylistFolder(plan.folderName);
-  const playlists = db
-    .query(rekordbox.DjmdPlaylist)
-    .where({
-      Name: plan.playlistName,
-      ParentID: folder.ID,
-      Attribute: rekordbox.PlaylistType.PLAYLIST,
-    })
-    .all();
-  if (playlists.length > 1)
+  const playlists = plan.playlistId
+    ? db.query(rekordbox.DjmdPlaylist).where({ ID: plan.playlistId }).all()
+    : db
+        .query(rekordbox.DjmdPlaylist)
+        .where({
+          Name: plan.playlistName,
+          ParentID: folder.ID,
+          Attribute: rekordbox.PlaylistType.PLAYLIST,
+        })
+        .all();
+  if (playlists.length > 1) {
     throw new Error(
-      `Multiple Rekordbox playlists named '${plan.playlistName}' exist in the folder`,
+      plan.playlistId
+        ? `Multiple Rekordbox playlists use ID '${plan.playlistId}'`
+        : `Multiple Rekordbox playlists named '${plan.playlistName}' exist in the folder`,
     );
-  const playlist = playlists[0] ?? db.createPlaylist(plan.playlistName, { parent: folder });
-  if (playlists[0] && db.hasColumn(playlist.tableName, "updated_at"))
-    playlist.set("updated_at", new Date());
+  }
+  const existingPlaylist = playlists[0];
+  if (existingPlaylist && Number(existingPlaylist.Attribute) !== rekordbox.PlaylistType.PLAYLIST) {
+    throw new Error(`Rekordbox playlist target '${existingPlaylist.ID}' is not a normal playlist`);
+  }
+  const playlist = existingPlaylist ?? db.createPlaylist(plan.playlistName, { parent: folder });
+  if (existingPlaylist) {
+    const renamed = playlist.Name !== plan.playlistName;
+    const moved = playlist.ParentID !== folder.ID;
+    if (renamed) db.renamePlaylist(playlist, plan.playlistName);
+    if (moved) db.movePlaylist(playlist, { parent: folder });
+    if (!renamed && !moved && db.hasColumn(playlist.tableName, "updated_at"))
+      playlist.set("updated_at", new Date());
+  }
   const artists = new Map<string, DjmdArtist>();
   const albums = new Map<string, DjmdAlbum>();
   const labels = new Map<string, DjmdLabel>();
@@ -1354,24 +1419,54 @@ export function writeRekordboxPlan(
     .query(rekordbox.DjmdSongPlaylist)
     .where({ PlaylistID: playlist.ID })
     .all();
-  const membershipByContentId = new Map<string, DjmdSongPlaylist>();
+  const membershipsByContentId = new Map<string, DjmdSongPlaylist[]>();
   const contentByPath = new Map<string, DjmdContent>();
+  const contentPathById = new Map<string, string>();
   const expectedPaths = new Set(plan.items.map((item) => item.mediaPath));
   for (const item of plan.items) requireMeasuredDuration(item);
-  for (const membership of existingMemberships) {
-    if (membershipByContentId.has(membership.ContentID))
-      throw new Error(`Duplicate playlist memberships exist for content '${membership.ContentID}'`);
+  for (const membership of existingMemberships.toSorted(
+    (left, right) => left.TrackNo - right.TrackNo,
+  )) {
     const content = db.query(rekordbox.DjmdContent).where({ ID: membership.ContentID }).one();
-    if (!content.FolderPath || !expectedPaths.has(content.FolderPath))
+    if (!content.FolderPath || !expectedPaths.has(content.FolderPath)) {
+      if (plan.playlistId) {
+        db.delete(membership);
+        continue;
+      }
       throw new Error(
         `Existing playlist '${plan.playlistName}' contains a track outside this manifest`,
       );
-    if (contentByPath.has(content.FolderPath))
+    }
+    const cached = contentByPath.get(content.FolderPath);
+    if (cached && cached.ID !== content.ID)
       throw new Error(`Multiple Rekordbox content rows use '${content.FolderPath}'`);
-    membershipByContentId.set(membership.ContentID, membership);
     contentByPath.set(content.FolderPath, content);
+    contentPathById.set(content.ID, content.FolderPath);
+    const memberships = membershipsByContentId.get(membership.ContentID) ?? [];
+    memberships.push(membership);
+    membershipsByContentId.set(membership.ContentID, memberships);
   }
+  const plannedMembershipsByPath = new Map<string, number>();
   for (const item of plan.items) {
+    plannedMembershipsByPath.set(
+      item.mediaPath,
+      (plannedMembershipsByPath.get(item.mediaPath) ?? 0) + 1,
+    );
+  }
+  for (const [contentId, memberships] of membershipsByContentId) {
+    const contentPath = contentPathById.get(contentId);
+    const planned = contentPath ? (plannedMembershipsByPath.get(contentPath) ?? 0) : 0;
+    if (memberships.length > planned) {
+      if (plan.playlistId) {
+        for (const membership of memberships.splice(planned)) db.delete(membership);
+        continue;
+      }
+      throw new Error(
+        `Existing playlist '${plan.playlistName}' has too many memberships for '${contentPath ?? contentId}'`,
+      );
+    }
+  }
+  for (const item of uniqueMediaItems(plan.items)) {
     const artist = findOrCreateNamed(db, rekordbox.DjmdArtist, item.metadata.artist, artists, () =>
       db.addArtist(item.metadata.artist),
     );
@@ -1413,7 +1508,7 @@ export function writeRekordboxPlan(
 
   const installedAnalysis: RekordboxInstalledAnalysis[] = [];
   try {
-    for (const item of plan.items) {
+    for (const item of uniqueMediaItems(plan.items)) {
       if (!item.analysisDirectory) continue;
       const content = contentByPath.get(item.mediaPath)!;
       const currentAnalysisPath = content.get("AnalysisDataPath");
@@ -1448,7 +1543,7 @@ export function writeRekordboxPlan(
     for (const [index, item] of plan.items.entries()) {
       const content = contentByPath.get(item.mediaPath)!;
       const target = index + 1;
-      const existingMembership = membershipByContentId.get(content.ID);
+      const existingMembership = membershipsByContentId.get(content.ID)?.shift();
       const membership = existingMembership ?? db.addToPlaylist(playlist, content, target);
       if (existingMembership && membership.TrackNo !== target)
         db.moveSongInPlaylist(playlist, membership, target);
@@ -1584,6 +1679,8 @@ function verifyCommittedImport(
       );
     const verifiedPaths: string[] = [];
     const verifiedAnalysisPaths: string[] = [];
+    const verifiedContentPaths = new Set<string>();
+    let verifiedMetadataCount = 0;
     const relationCache = new Map<string, DatabaseRow>();
     for (const [index, expected] of imported.entries()) {
       const planned = plan.items[index];
@@ -1598,8 +1695,12 @@ function verifyCommittedImport(
         content.FolderPath !== expected.mediaPath
       )
         throw new Error(`Rekordbox membership verification failed at track ${index + 1}`);
-      verifyContentMetadata(db, rekordbox, content, planned, relationCache);
-      verifiedAnalysisPaths.push(...verifyContentAnalysis(db, rekordbox, content, planned));
+      if (!verifiedContentPaths.has(content.FolderPath)) {
+        verifyContentMetadata(db, rekordbox, content, planned, relationCache);
+        verifiedAnalysisPaths.push(...verifyContentAnalysis(db, rekordbox, content, planned));
+        verifiedContentPaths.add(content.FolderPath);
+        verifiedMetadataCount += 1;
+      }
       verifiedPaths.push(content.FolderPath);
     }
     return {
@@ -1608,9 +1709,10 @@ function verifyCommittedImport(
       playlistSidecarVerified: true,
       expectedMembershipCount: imported.length,
       playlistMembershipCount: memberships.length,
-      verifiedMetadataCount: imported.length,
-      expectedAnalysisCount: plan.items.filter((item) => item.analysisDirectory !== undefined)
-        .length,
+      verifiedMetadataCount,
+      expectedAnalysisCount: uniqueMediaItems(plan.items).filter(
+        (item) => item.analysisDirectory !== undefined,
+      ).length,
       verifiedAnalysisCount: verifiedAnalysisPaths.length / 3,
       verifiedAnalysisPaths,
       verifiedPaths,

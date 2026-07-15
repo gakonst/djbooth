@@ -82,7 +82,40 @@ export class HostedPlaylistCatalog {
   async getTracks(playlistId: string): Promise<TrackSummary[]> {
     const { provider, remoteId } = parseHostedPlaylistId(playlistId);
     const tracks = await this.#adapter(provider).getTracks(remoteId);
-    if (!this.#state) return tracks;
+    return this.#decorateTracks(provider, tracks);
+  }
+
+  /** Reapply local sync/download state without making another provider request. */
+  async refreshPlaylistState(response: HostedPlaylistsResponse): Promise<HostedPlaylistsResponse> {
+    if (!this.#state?.listPlaylists) return response;
+    const storedStates = new Map(
+      (await this.#state.listPlaylists()).map((state) => [
+        playlistStateKey(state.provider, state.remoteId),
+        state,
+      ]),
+    );
+    return {
+      ...response,
+      items: await Promise.all(
+        response.items.map((item) => this.#decoratePlaylist(item, storedStates)),
+      ),
+    };
+  }
+
+  /** Reapply local track mappings without refetching the provider playlist contents. */
+  async refreshTrackState(
+    playlistId: string,
+    tracks: readonly TrackSummary[],
+  ): Promise<TrackSummary[]> {
+    const { provider } = parseHostedPlaylistId(playlistId);
+    return this.#decorateTracks(provider, tracks);
+  }
+
+  async #decorateTracks(
+    provider: HostedPlaylistProvider,
+    tracks: readonly TrackSummary[],
+  ): Promise<TrackSummary[]> {
+    if (!this.#state) return [...tracks];
     const storedTracks = this.#state.listTracks
       ? new Map(
           (await this.#state.listTracks(provider)).map((state) => [state.remoteTrackId, state]),
@@ -96,10 +129,16 @@ export class HostedPlaylistCatalog {
           storedTracks?.get(remoteTrackId) ??
           (storedTracks ? undefined : await this.#state!.getTrack(provider, remoteTrackId));
         if (!state) return track;
+        const {
+          downloadError: _downloadError,
+          downloadState: _downloadState,
+          localContentId: _localContentId,
+          ...providerTrack
+        } = track.hosted;
         return {
           ...track,
           hosted: {
-            ...track.hosted,
+            ...providerTrack,
             localContentId: state.localContentId,
             downloadState: state.downloadState,
             ...(state.downloadError ? { downloadError: state.downloadError } : {}),
@@ -139,10 +178,16 @@ export class HostedPlaylistCatalog {
       ? storedStates.get(playlistStateKey(item.hosted.provider, item.hosted.remoteId))
       : await this.#state.getPlaylist(item.hosted.provider, item.hosted.remoteId);
     if (!state) return item;
+    const {
+      downloadEnabled: _downloadEnabled,
+      syncError: _syncError,
+      syncState: _syncState,
+      ...providerPlaylist
+    } = item.hosted;
     return {
       ...item,
       hosted: {
-        ...item.hosted,
+        ...providerPlaylist,
         downloadEnabled: state.downloadEnabled,
         syncState: state.syncState,
         ...(state.syncError ? { syncError: state.syncError } : {}),

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HostedPlaylistConflictError } from "../src/server/hosted/types.js";
 import {
+  absolutizeHlsManifest,
   startLibraryServer,
   type HostedPlaylistApi,
   type LibraryApi,
@@ -139,6 +140,17 @@ function hostedApi(): HostedPlaylistApi & { mutate: ReturnType<typeof vi.fn> } {
 }
 
 describe("hosted playlist HTTP routes", () => {
+  it("resolves relative SoundCloud HLS resources against the signed upstream manifest", () => {
+    expect(
+      absolutizeHlsManifest(
+        '#EXTM3U\n#EXT-X-MAP:URI="init.mp4?token=x"\nsegment.m4s?token=x\n',
+        "https://playback.media-streaming.soundcloud.cloud/track/playlist.m3u8?token=x",
+      ),
+    ).toBe(
+      '#EXTM3U\n#EXT-X-MAP:URI="https://playback.media-streaming.soundcloud.cloud/track/init.mp4?token=x"\nhttps://playback.media-streaming.soundcloud.cloud/track/segment.m4s?token=x\n',
+    );
+  });
+
   it("lists provider playlists and pages sorted hosted tracks", async () => {
     const hosted = hostedApi();
     const server = await startLibraryServer({
@@ -198,6 +210,70 @@ describe("hosted playlist HTTP routes", () => {
     });
     expect(committed.status).toBe(200);
     expect(hosted.mutate).toHaveBeenCalledWith(mutation);
+  });
+
+  it("hands committed local playlist edits to the hosted background mirror", async () => {
+    const local = localApi();
+    const hosted = hostedApi();
+    hosted.mirrorLocalMutation = vi.fn();
+    const server = await startLibraryServer({
+      api: local,
+      hosted,
+      staticDirectory: staticDirectory(),
+      port: 0,
+    });
+    servers.push(server);
+    const mutation = {
+      type: "rename-playlist" as const,
+      playlistId: "local-playlist",
+      name: "Renamed locally",
+    };
+
+    const response = await fetch(`${server.url}api/mutations`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-music-library-token": server.token,
+      },
+      body: JSON.stringify(mutation),
+    });
+
+    expect(response.status).toBe(200);
+    expect(hosted.mirrorLocalMutation).toHaveBeenCalledWith(mutation, local);
+    expect(hosted.mutate).not.toHaveBeenCalled();
+  });
+
+  it("proxies only local-page hosted manifests and rewrites relative HLS URLs", async () => {
+    const hosted = hostedApi();
+    hosted.streamTrack = vi.fn(async () => {
+      const manifest = new Response('#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\npart.m4s\n', {
+        headers: { "content-type": "application/vnd.apple.mpegurl" },
+      });
+      Object.defineProperty(manifest, "url", {
+        value: "https://playback.media-streaming.soundcloud.cloud/audio/playlist.m3u8",
+      });
+      return manifest;
+    });
+    const server = await startLibraryServer({
+      api: localApi(),
+      hosted,
+      staticDirectory: staticDirectory(),
+      port: 0,
+    });
+    servers.push(server);
+    const id = encodeURIComponent("hosted-track:soundcloud:soundcloud%3Atracks%3A1");
+
+    const rejected = await fetch(`${server.url}api/hosted-audio/${id}`, {
+      headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+    });
+    expect(rejected.status).toBe(403);
+    expect(hosted.streamTrack).not.toHaveBeenCalled();
+
+    const response = await fetch(`${server.url}api/hosted-audio/${id}`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(
+      "https://playback.media-streaming.soundcloud.cloud/audio/part.m4s",
+    );
   });
 
   it("publishes hosted acquisition changes and releases the runtime subscription", async () => {

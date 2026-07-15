@@ -120,3 +120,30 @@ export function invalidateCanonicalPlaylistQueries(
     refetchType: "active",
   });
 }
+
+/** Refresh one hosted playlist without reloading every active provider/local table. */
+export function invalidateHostedPlaylistQueries(
+  queryClient: QueryClient,
+  playlistId: string,
+): Promise<void> {
+  return Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: ["hosted-playlists"],
+      refetchType: "active",
+    }),
+    queryClient.invalidateQueries({
+      predicate: (query) => {
+        if (query.queryKey[0] === "playlist-tracks") return query.queryKey[1] === playlistId;
+        if (query.queryKey[0] !== "tracks") return false;
+        const options = query.queryKey[1];
+        return (
+          typeof options === "object" &&
+          options !== null &&
+          "playlistId" in options &&
+          options.playlistId === playlistId
+        );
+      },
+      refetchType: "active",
+    }),
+  ]).then(() => undefined);
+}

@@ -59,6 +59,7 @@ export class SoundCloudHostedPlaylistAdapter implements HostedPlaylistProviderAd
   readonly #client: SoundCloudHostedClient;
   readonly #includeLikedPlaylists: boolean;
   readonly #fetchMedia: typeof globalThis.fetch;
+  readonly #incompletePlaylists = new Set<string>();
   readonly #streamSecrets = new Map<string, string>();
   #identityPromise: Promise<SoundCloudIdentity> | undefined;
 
@@ -120,6 +121,15 @@ export class SoundCloudHostedPlaylistAdapter implements HostedPlaylistProviderAd
       if (remoteTrackId && secretToken) this.#streamSecrets.set(remoteTrackId, secretToken);
       const track = soundCloudTrackSummary(rawTrack, playlistId, position);
       if (track) tracks.push(track);
+    }
+    const expectedCount = finiteInteger(playlist.track_count);
+    if (
+      tracks.length !== rawTracks.length ||
+      (expectedCount !== null && tracks.length !== expectedCount)
+    ) {
+      this.#incompletePlaylists.add(remotePlaylistId);
+    } else {
+      this.#incompletePlaylists.delete(remotePlaylistId);
     }
     return tracks;
   }
@@ -202,6 +212,17 @@ export class SoundCloudHostedPlaylistAdapter implements HostedPlaylistProviderAd
       hostedPlaylistId(this.provider, remotePlaylistId),
       expectedRevision,
       soundCloudPlaylistRevision(before),
+    );
+    await this.getTracks(remotePlaylistId);
+    if (this.#incompletePlaylists.has(remotePlaylistId)) {
+      throw new HostedPlaylistCapabilityError(
+        `SoundCloud playlist ${remotePlaylistId} contains unavailable items; refusing a full replacement that could delete them`,
+      );
+    }
+    assertExpectedRevision(
+      hostedPlaylistId(this.provider, remotePlaylistId),
+      expectedRevision,
+      soundCloudPlaylistRevision(await this.#getOwnedPlaylist(remotePlaylistId)),
     );
 
     await this.#client.updatePlaylist(remotePlaylistId, { tracks: trackUrns });

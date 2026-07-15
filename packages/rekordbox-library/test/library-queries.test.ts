@@ -5,6 +5,7 @@ import {
   DeferredLibraryEventRefresh,
   invalidateAuthoritativeTrackQueries,
   invalidateCanonicalPlaylistQueries,
+  invalidateHostedPlaylistQueries,
   playlistTracksKey,
   playlistTracksQueryOptions,
   trackWaveformQueryOptions,
@@ -85,6 +86,37 @@ describe("library query cache", () => {
 
     await invalidateCanonicalPlaylistQueries(queryClient, new Set(["two"]));
     expect(queryClient.getQueryState(["playlist-tracks", "two"])?.isInvalidated).toBe(true);
+  });
+
+  it("invalidates only the hosted playlist affected by job progress", async () => {
+    const queryClient = new QueryClient();
+    const one = response([track("one")]);
+    const two = response([track("two")]);
+    queryClient.setQueryData(["hosted-playlists"], { items: [], providers: [] });
+    queryClient.setQueryData(["playlist-tracks", "hosted:spotify:one"], one);
+    queryClient.setQueryData(["playlist-tracks", "hosted:spotify:two"], two);
+    queryClient.setQueryData(["tracks", { playlistId: "hosted:spotify:one" }], one);
+    queryClient.setQueryData(["tracks", { playlistId: "hosted:spotify:two" }], two);
+    queryClient.setQueryData(["tracks", { playlistId: "local-playlist" }], two);
+
+    await invalidateHostedPlaylistQueries(queryClient, "hosted:spotify:one");
+
+    expect(queryClient.getQueryState(["hosted-playlists"])?.isInvalidated).toBe(true);
+    expect(
+      queryClient.getQueryState(["playlist-tracks", "hosted:spotify:one"])?.isInvalidated,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryState(["tracks", { playlistId: "hosted:spotify:one" }])?.isInvalidated,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryState(["playlist-tracks", "hosted:spotify:two"])?.isInvalidated,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryState(["tracks", { playlistId: "hosted:spotify:two" }])?.isInvalidated,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryState(["tracks", { playlistId: "local-playlist" }])?.isInvalidated,
+    ).toBe(false);
   });
 
   it("flushes a suppressed mutation once after the local-write window", async () => {

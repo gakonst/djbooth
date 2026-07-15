@@ -147,6 +147,24 @@ export class HostedPlaylistStateStore {
     return row ? playlistState(row) : undefined;
   }
 
+  getPlaylistByLocalId(localPlaylistId: string): HostedPlaylistState | undefined {
+    const rows = this.#database
+      .prepare(
+        `SELECT provider, remote_id, download_enabled, local_playlist_id, revision,
+                sync_state, sync_error, updated_at
+           FROM playlist_state
+          WHERE local_playlist_id = ?
+          LIMIT 2`,
+      )
+      .all(localPlaylistId) as PlaylistStateRow[];
+    if (rows.length > 1) {
+      throw new Error(
+        `Local playlist '${localPlaylistId}' is mapped to multiple hosted playlists; refusing sync`,
+      );
+    }
+    return rows[0] ? playlistState(rows[0]) : undefined;
+  }
+
   listPlaylists(): HostedPlaylistState[] {
     const rows = this.#database
       .prepare(
@@ -250,6 +268,26 @@ export class HostedPlaylistStateStore {
     return rows.map(trackMapping);
   }
 
+  listTracksByLocalContentIds(
+    provider: HostedPlaylistProvider,
+    localContentIds: readonly string[],
+  ): HostedTrackMapping[] {
+    if (!localContentIds.length) return [];
+    const rows = this.#database
+      .prepare(
+        `WITH requested(local_content_id) AS (
+           SELECT DISTINCT CAST(value AS TEXT) FROM json_each(?)
+         )
+         SELECT mapping.provider, mapping.remote_track_id, mapping.local_content_id,
+                mapping.download_state, mapping.download_error, mapping.updated_at
+           FROM track_mapping mapping
+           JOIN requested ON requested.local_content_id = mapping.local_content_id
+          WHERE mapping.provider = ?`,
+      )
+      .all(JSON.stringify(localContentIds), provider) as TrackMappingRow[];
+    return rows.map(trackMapping);
+  }
+
   setTrack(
     provider: HostedPlaylistProvider,
     remoteTrackId: string,
@@ -292,26 +330,22 @@ export class HostedPlaylistStateStore {
     playlistId: string,
     payload: Record<string, unknown> = {},
   ): HostedPlaylistJob {
-    const existing = this.#database
-      .prepare(
-        `SELECT * FROM hosted_job
-          WHERE provider = ? AND playlist_id = ? AND kind = 'download-playlist'
-            AND status IN ('queued', 'running')
-          ORDER BY created_at LIMIT 1`,
-      )
-      .get(provider, playlistId) as JobRow | undefined;
-    if (existing) return hostedJob(existing);
     const id = randomUUID();
     const now = new Date().toISOString();
-    this.#database
+    const inserted = this.#database
       .prepare(
         `INSERT INTO hosted_job (
            id, kind, provider, playlist_id, status, current, total, payload_json,
            created_at, updated_at
-         ) VALUES (?, 'download-playlist', ?, ?, 'queued', 0, 0, ?, ?, ?)`,
+         ) VALUES (?, 'download-playlist', ?, ?, 'queued', 0, 0, ?, ?, ?)
+         ON CONFLICT DO NOTHING
+         RETURNING *`,
       )
-      .run(id, provider, playlistId, JSON.stringify(payload), now, now);
-    return this.getJob(id)!;
+      .get(id, provider, playlistId, JSON.stringify(payload), now, now) as JobRow | undefined;
+    if (inserted) return hostedJob(inserted);
+    const active = this.getActiveDownload(provider, playlistId);
+    if (active) return active;
+    throw new Error(`Unable to enqueue hosted download for '${playlistId}'`);
   }
 
   getJob(id: string): HostedPlaylistJob | undefined {
@@ -363,27 +397,39 @@ export class HostedPlaylistStateStore {
     id: string,
     input: { status?: HostedJobStatus; current?: number; total?: number; error?: string | null },
   ): HostedPlaylistJob {
-    const prior = this.getJob(id);
-    if (!prior) throw new RangeError(`Unknown hosted job ${id}`);
-    const current = input.current ?? prior.current;
-    const total = input.total ?? prior.total;
-    if (!Number.isSafeInteger(current) || current < 0) throw new RangeError("Invalid job progress");
-    if (!Number.isSafeInteger(total) || total < current) throw new RangeError("Invalid job total");
+    if (input.current !== undefined && (!Number.isSafeInteger(input.current) || input.current < 0))
+      throw new RangeError("Invalid job progress");
+    if (input.total !== undefined && (!Number.isSafeInteger(input.total) || input.total < 0))
+      throw new RangeError("Invalid job total");
+    if (input.current !== undefined && input.total !== undefined && input.total < input.current)
+      throw new RangeError("Invalid job total");
     const row = this.#database
       .prepare(
         `UPDATE hosted_job
-            SET status = ?, current = ?, total = ?, error = ?, updated_at = ?
+            SET status = COALESCE(?, status),
+                current = COALESCE(?, current),
+                total = COALESCE(?, total),
+                error = CASE WHEN ? THEN ? ELSE error END,
+                updated_at = ?
           WHERE id = ?
+            AND COALESCE(?, current) <= COALESCE(?, total)
         RETURNING *`,
       )
       .get(
-        input.status ?? prior.status,
-        current,
-        total,
-        input.error === undefined ? prior.error : input.error,
+        input.status ?? null,
+        input.current ?? null,
+        input.total ?? null,
+        input.error === undefined ? 0 : 1,
+        input.error ?? null,
         new Date().toISOString(),
         id,
-      ) as JobRow;
+        input.current ?? null,
+        input.total ?? null,
+      ) as JobRow | undefined;
+    if (!row) {
+      if (!this.getJob(id)) throw new RangeError(`Unknown hosted job ${id}`);
+      throw new RangeError("Invalid job total");
+    }
     return hostedJob(row);
   }
 
@@ -394,7 +440,7 @@ export class HostedPlaylistStateStore {
     const id = randomUUID();
     const now = new Date().toISOString();
     const playlistId = "playlistId" in mutation ? mutation.playlistId : "";
-    this.#database
+    const row = this.#database
       .prepare(
         `INSERT INTO hosted_outbox (
            id, dedupe_key, playlist_id, mutation_json, status, attempts, created_at, updated_at
@@ -404,10 +450,11 @@ export class HostedPlaylistStateStore {
            mutation_json = excluded.mutation_json,
            status = 'queued',
            error = NULL,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         RETURNING *`,
       )
-      .run(id, dedupeKey, playlistId, JSON.stringify(mutation), now, now);
-    return this.getOutboxByKey(dedupeKey)!;
+      .get(id, dedupeKey, playlistId, JSON.stringify(mutation), now, now) as OutboxRow;
+    return outboxEntry(row);
   }
 
   claimNextMutation(): HostedOutboxEntry | undefined {
@@ -416,7 +463,10 @@ export class HostedPlaylistStateStore {
         `UPDATE hosted_outbox
             SET status = 'running', attempts = attempts + 1, updated_at = ?
           WHERE id = (
-            SELECT id FROM hosted_outbox WHERE status = 'queued' ORDER BY created_at LIMIT 1
+            SELECT id FROM hosted_outbox
+             WHERE status = 'queued'
+             ORDER BY created_at, rowid
+             LIMIT 1
           ) AND status = 'queued'
         RETURNING *`,
       )
@@ -429,12 +479,16 @@ export class HostedPlaylistStateStore {
   }
 
   failMutation(id: string, error: string, retry: boolean): HostedOutboxEntry {
-    this.#database
-      .prepare("UPDATE hosted_outbox SET status = ?, error = ?, updated_at = ? WHERE id = ?")
-      .run(retry ? "queued" : "failed", error, new Date().toISOString(), id);
-    const entry = this.getOutbox(id);
-    if (!entry) throw new RangeError(`Unknown hosted outbox entry ${id}`);
-    return entry;
+    const row = this.#database
+      .prepare(
+        `UPDATE hosted_outbox SET status = ?, error = ?, updated_at = ? WHERE id = ?
+         RETURNING *`,
+      )
+      .get(retry ? "queued" : "failed", error, new Date().toISOString(), id) as
+      | OutboxRow
+      | undefined;
+    if (!row) throw new RangeError(`Unknown hosted outbox entry ${id}`);
+    return outboxEntry(row);
   }
 
   getOutbox(id: string): HostedOutboxEntry | undefined {
@@ -448,6 +502,18 @@ export class HostedPlaylistStateStore {
     const row = this.#database
       .prepare("SELECT * FROM hosted_outbox WHERE dedupe_key = ?")
       .get(dedupeKey) as OutboxRow | undefined;
+    return row ? outboxEntry(row) : undefined;
+  }
+
+  getLatestPendingMutation(playlistId: string): HostedOutboxEntry | undefined {
+    const row = this.#database
+      .prepare(
+        `SELECT * FROM hosted_outbox
+          WHERE playlist_id = ? AND status IN ('queued', 'running')
+          ORDER BY created_at DESC, rowid DESC
+          LIMIT 1`,
+      )
+      .get(playlistId) as OutboxRow | undefined;
     return row ? outboxEntry(row) : undefined;
   }
 
@@ -477,6 +543,9 @@ export class HostedPlaylistStateStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (provider, remote_id)
       );
+      CREATE INDEX IF NOT EXISTS playlist_state_local_playlist
+        ON playlist_state(local_playlist_id)
+        WHERE local_playlist_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS track_mapping (
         provider TEXT NOT NULL CHECK (provider IN ('spotify', 'soundcloud')),
         remote_track_id TEXT NOT NULL,
@@ -487,6 +556,9 @@ export class HostedPlaylistStateStore {
         updated_at TEXT NOT NULL,
         PRIMARY KEY (provider, remote_track_id)
       );
+      CREATE INDEX IF NOT EXISTS track_mapping_provider_local_content
+        ON track_mapping(provider, local_content_id)
+        WHERE local_content_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS hosted_job (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL CHECK (kind = 'download-playlist'),

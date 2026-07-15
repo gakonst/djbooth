@@ -73,6 +73,11 @@ describe("SoundCloudHostedPlaylistAdapter", () => {
     );
     expect(trackCalls).toHaveLength(2);
     expect(trackCalls[0]?.path).toContain("secret_token=secret");
+    const revision = (await adapter.listPlaylists()).items[0]!.hosted!.revision;
+    await expect(
+      adapter.replacePlaylistTracks(playlist.urn as string, ["soundcloud:tracks:8"], revision),
+    ).rejects.toThrow(/unavailable items/u);
+    expect(client.updatePlaylist).not.toHaveBeenCalled();
   });
 
   it("resolves the current authenticated AAC HLS stream without requesting media in tests", async () => {

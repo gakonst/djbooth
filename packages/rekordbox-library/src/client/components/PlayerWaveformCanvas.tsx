@@ -9,6 +9,7 @@ type PlayerWaveformCanvasProps = {
   disabled: boolean;
   duration: number;
   onSeek(seconds: number): void;
+  playing: boolean;
   waveform: TrackWaveform | null;
 };
 
@@ -21,6 +22,7 @@ export function PlayerWaveformCanvas({
   disabled,
   duration,
   onSeek,
+  playing,
   waveform,
 }: PlayerWaveformCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -70,11 +72,11 @@ export function PlayerWaveformCanvas({
     let animationFrame = 0;
     const draw = () => {
       drawWaveform(context, size, waveform, duration, timeRef.current, cues);
-      animationFrame = requestAnimationFrame(draw);
+      if (playing) animationFrame = requestAnimationFrame(draw);
     };
     draw();
     return () => cancelAnimationFrame(animationFrame);
-  }, [cues, duration, size, waveform]);
+  }, [cues, currentTime, duration, playing, size, waveform]);
 
   const seekFromPointer = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;

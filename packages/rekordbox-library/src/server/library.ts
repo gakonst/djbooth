@@ -801,7 +801,13 @@ export class RekordboxLibraryService {
     },
   ): TracksResponse {
     const normalizedQuery = options.q.toLocaleLowerCase();
-    const orderedContentIds = db.getPlaylistTracks(playlist).map((track) => track.contentId);
+    // The playlist selector already resolves smart criteria. Project only IDs here; asking for
+    // getPlaylistTracks would materialize joined artist/key metadata that the summary query below
+    // immediately loads again with the rest of the table columns.
+    const orderedContentIds = db
+      .getPlaylistContents(playlist)
+      .select("ID")
+      .map((row) => stringValue(row.ID));
     const summaries = this.getTrackSummariesById(db, orderedContentIds);
     const rows = orderedContentIds
       .flatMap((id) => {

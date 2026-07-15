@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HostedPlaylistStateStore } from "../src/server/hosted-state.js";
 
@@ -41,6 +41,10 @@ describe("HostedPlaylistStateStore", () => {
       revision: "snapshot-2",
       localPlaylistId: "local-9",
     });
+    expect(store.getPlaylistByLocalId("local-9")).toMatchObject({
+      provider: "spotify",
+      remoteId: "playlist-a",
+    });
 
     store.setTrack("spotify", "spotify:track:1", {
       state: "downloaded",
@@ -61,7 +65,9 @@ describe("HostedPlaylistStateStore", () => {
 
   it("coalesces active download jobs and atomically claims one", () => {
     const store = state();
+    const getJob = vi.spyOn(store, "getJob");
     const first = store.enqueueDownload("soundcloud", "soundcloud:playlists:1");
+    expect(getJob).not.toHaveBeenCalled();
     const duplicate = store.enqueueDownload("soundcloud", "soundcloud:playlists:1");
     expect(duplicate.id).toBe(first.id);
 
@@ -72,14 +78,17 @@ describe("HostedPlaylistStateStore", () => {
       status: "running",
     });
     expect(store.claimNextJob()).toBeUndefined();
+    getJob.mockClear();
     expect(store.updateJob(first.id, { current: 1, total: 2 })).toMatchObject({
       current: 1,
       total: 2,
     });
+    expect(getJob).not.toHaveBeenCalled();
   });
 
   it("coalesces rapid optimistic writes and resumes interrupted work", () => {
     const store = state();
+    const getOutboxByKey = vi.spyOn(store, "getOutboxByKey");
     const first = store.enqueueMutation(
       {
         type: "rename-hosted-playlist",
@@ -89,6 +98,7 @@ describe("HostedPlaylistStateStore", () => {
       },
       "rename:spotify:playlist:one",
     );
+    expect(getOutboxByKey).not.toHaveBeenCalled();
     const latest = store.enqueueMutation(
       {
         type: "rename-hosted-playlist",
@@ -103,11 +113,23 @@ describe("HostedPlaylistStateStore", () => {
 
     const running = store.claimNextMutation();
     expect(running).toMatchObject({ status: "running", attempts: 1 });
+    const getOutbox = vi.spyOn(store, "getOutbox");
+    expect(store.failMutation(first.id, "temporary", true)).toMatchObject({
+      id: first.id,
+      status: "queued",
+      error: "temporary",
+    });
+    expect(getOutbox).not.toHaveBeenCalled();
+    expect(store.claimNextMutation()).toMatchObject({ status: "running", attempts: 2 });
+    expect(store.getLatestPendingMutation("spotify:playlist:one")).toMatchObject({
+      id: first.id,
+      status: "running",
+    });
     store.close();
     stores.splice(stores.indexOf(store), 1);
 
     const reopened = new HostedPlaylistStateStore(store.path);
     stores.push(reopened);
-    expect(reopened.claimNextMutation()).toMatchObject({ status: "running", attempts: 2 });
+    expect(reopened.claimNextMutation()).toMatchObject({ status: "running", attempts: 3 });
   });
 });

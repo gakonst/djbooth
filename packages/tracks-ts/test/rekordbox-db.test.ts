@@ -142,6 +142,18 @@ function completedManifest(): SetManifest {
   };
 }
 
+function repeatedRecordingManifest(): SetManifest {
+  const manifest = completedManifest();
+  const first = structuredClone(manifest.entries[0]!);
+  if (first.acquisition.status !== "downloaded") throw new Error("invalid repeated fixture");
+  delete first.acquisition.alternatives;
+  const repeated = structuredClone(first);
+  repeated.id = "track-002";
+  repeated.order = 2;
+  manifest.entries = [first, repeated];
+  return manifest;
+}
+
 function captureContentValues(plan: RekordboxImportPlan): Array<Record<string, unknown>> {
   let id = 0;
   const values: Array<Record<string, unknown>> = [];
@@ -442,6 +454,259 @@ describe("Rekordbox direct database planning", () => {
     );
   });
 
+  test("reuses an exact playlist ID across provider renames and duplicate display names", () => {
+    const plan = planRekordboxImport(completedManifest(), {
+      folderName: "Spotify",
+      playlistName: "Renamed remotely",
+      playlistId: "stable-local-playlist",
+    });
+    plan.items.forEach((item) => {
+      item.measuredDurationSeconds = 180;
+    });
+    let id = 0;
+    const row = (tableName: string, values: Record<string, unknown>) => ({
+      ID: `${tableName}-${++id}`,
+      tableName,
+      ...values,
+      get(key: string) {
+        return (this as Record<string, unknown>)[key];
+      },
+      set(key: string, value: unknown) {
+        (this as Record<string, unknown>)[key] = value;
+        return this;
+      },
+    });
+    const models = {
+      DjmdArtist: { tableName: "artist" },
+      DjmdAlbum: { tableName: "album" },
+      DjmdLabel: { tableName: "label" },
+      DjmdContent: { tableName: "content" },
+      DjmdPlaylist: { tableName: "playlist" },
+      DjmdSongPlaylist: { tableName: "membership" },
+    };
+    const folder = row("playlist", { Name: "Spotify", Attribute: 0, ParentID: "root" });
+    const stable = row("playlist", {
+      ID: "stable-local-playlist",
+      Name: "Old provider name",
+      Attribute: 1,
+      ParentID: "old-folder",
+    });
+    const duplicateName = row("playlist", {
+      Name: "Renamed remotely",
+      Attribute: 1,
+      ParentID: folder.ID,
+    });
+    const staleContent = row("content", { FolderPath: "/music/removed-remotely.flac" });
+    const staleMembership = row("membership", {
+      PlaylistID: stable.ID,
+      ContentID: staleContent.ID,
+      TrackNo: 1,
+    });
+    const createPlaylist = vi.fn();
+    const deleteRow = vi.fn();
+    const db = {
+      query(model: { tableName: string }) {
+        let filters: Record<string, unknown> = {};
+        const query = {
+          where(next: Record<string, unknown>) {
+            filters = next;
+            return query;
+          },
+          orderBy() {
+            return query;
+          },
+          all() {
+            if (model.tableName === "playlist" && filters.Attribute === 0) return [folder];
+            if (model.tableName === "playlist" && filters.ID === stable.ID) return [stable];
+            if (
+              model.tableName === "playlist" &&
+              filters.Name === "Renamed remotely" &&
+              filters.ParentID === folder.ID
+            )
+              return [duplicateName];
+            if (model.tableName === "membership" && filters.PlaylistID === stable.ID)
+              return [staleMembership];
+            return [];
+          },
+          one() {
+            if (model.tableName === "content" && filters.ID === staleContent.ID)
+              return staleContent;
+            throw new Error("unexpected one()");
+          },
+          first() {
+            return undefined;
+          },
+        };
+        return query;
+      },
+      addArtist(name: string) {
+        return row("artist", { Name: name });
+      },
+      addAlbum(name: string, options: { artist?: { ID: string } }) {
+        return row("album", { Name: name, AlbumArtistID: options.artist?.ID });
+      },
+      addLabel(name: string) {
+        return row("label", { Name: name });
+      },
+      addContent(path: string, values: Record<string, unknown>) {
+        return row("content", { FolderPath: path, ...values });
+      },
+      createPlaylist,
+      renamePlaylist(playlist: { set(key: string, value: unknown): unknown }, name: string) {
+        playlist.set("Name", name);
+      },
+      movePlaylist(
+        playlist: { set(key: string, value: unknown): unknown },
+        options: { parent: { ID: string } },
+      ) {
+        playlist.set("ParentID", options.parent.ID);
+      },
+      delete: deleteRow,
+      addToPlaylist(target: { ID: string }, content: { ID: string }, trackNumber: number) {
+        return row("membership", {
+          PlaylistID: target.ID,
+          ContentID: content.ID,
+          TrackNo: trackNumber,
+        });
+      },
+      moveSongInPlaylist() {},
+      hasColumn() {
+        return false;
+      },
+    } as unknown as RekordboxMasterDatabase;
+
+    const result = writeRekordboxPlan(
+      db,
+      { ...models, PlaylistType: { FOLDER: 0, PLAYLIST: 1 } } as unknown as RekordboxLibrary,
+      plan,
+    );
+
+    expect(plan.playlistId).toBe("stable-local-playlist");
+    expect(result.playlistId).toBe("stable-local-playlist");
+    expect(stable).toMatchObject({ Name: "Renamed remotely", ParentID: folder.ID });
+    expect(createPlaylist).not.toHaveBeenCalled();
+    expect(deleteRow).toHaveBeenCalledWith(staleMembership);
+  });
+
+  test("reuses one content row while importing repeated recording memberships in order", () => {
+    const plan = planRekordboxImport(repeatedRecordingManifest());
+    plan.items.forEach((item) => {
+      item.measuredDurationSeconds = 240;
+    });
+    expect(plan.items.map(({ entryId, mediaPath }) => ({ entryId, mediaPath }))).toEqual([
+      { entryId: "track-001", mediaPath: plan.items[0]!.mediaPath },
+      { entryId: "track-002", mediaPath: plan.items[0]!.mediaPath },
+    ]);
+
+    let id = 0;
+    const contents: Array<{ ID: string; FolderPath: string }> = [];
+    const memberships: Array<{ ID: string; ContentID: string; TrackNo: number }> = [];
+    const row = (tableName: string, values: Record<string, unknown>) => ({
+      ID: `${tableName}-${++id}`,
+      tableName,
+      ...values,
+      get(key: string) {
+        return (this as Record<string, unknown>)[key];
+      },
+      set(key: string, value: unknown) {
+        (this as Record<string, unknown>)[key] = value;
+        return this;
+      },
+    });
+    const models = {
+      DjmdArtist: { tableName: "artist" },
+      DjmdAlbum: { tableName: "album" },
+      DjmdLabel: { tableName: "label" },
+      DjmdContent: { tableName: "content" },
+      DjmdPlaylist: { tableName: "playlist" },
+      DjmdSongPlaylist: { tableName: "membership" },
+    };
+    const folder = row("playlist", { Name: plan.folderName, Attribute: 0, ParentID: "root" });
+    const playlist = row("playlist", {
+      Name: plan.playlistName,
+      Attribute: 1,
+      ParentID: folder.ID,
+    });
+    const db = {
+      query(model: { tableName: string }) {
+        let filters: Record<string, unknown> = {};
+        const query = {
+          where(next: Record<string, unknown>) {
+            filters = next;
+            return query;
+          },
+          orderBy() {
+            return query;
+          },
+          all() {
+            if (model.tableName === "playlist" && filters.Attribute === 0) return [folder];
+            if (model.tableName === "playlist" && filters.Attribute === 1) return [playlist];
+            return [];
+          },
+          one() {
+            throw new Error("unexpected one()");
+          },
+          first() {
+            return undefined;
+          },
+        };
+        return query;
+      },
+      addArtist(name: string) {
+        return row("artist", { Name: name });
+      },
+      addAlbum(name: string, options: { artist?: { ID: string } }) {
+        return row("album", { Name: name, AlbumArtistID: options.artist?.ID });
+      },
+      addLabel(name: string) {
+        return row("label", { Name: name });
+      },
+      addContent(path: string, values: Record<string, unknown>) {
+        const content = row("content", { FolderPath: path, ...values });
+        contents.push(content as unknown as { ID: string; FolderPath: string });
+        return content;
+      },
+      addToPlaylist(_target: { ID: string }, content: { ID: string }, trackNumber: number) {
+        const membership = row("membership", {
+          PlaylistID: playlist.ID,
+          ContentID: content.ID,
+          TrackNo: trackNumber,
+        });
+        memberships.push(
+          membership as unknown as { ID: string; ContentID: string; TrackNo: number },
+        );
+        return membership;
+      },
+      moveSongInPlaylist() {},
+      hasColumn() {
+        return false;
+      },
+    } as unknown as RekordboxMasterDatabase;
+
+    const result = writeRekordboxPlan(
+      db,
+      { ...models, PlaylistType: { FOLDER: 0, PLAYLIST: 1 } } as unknown as RekordboxLibrary,
+      plan,
+    );
+
+    expect(contents).toHaveLength(1);
+    expect(memberships.map(({ ContentID, TrackNo }) => ({ ContentID, TrackNo }))).toEqual([
+      { ContentID: contents[0]!.ID, TrackNo: 1 },
+      { ContentID: contents[0]!.ID, TrackNo: 2 },
+    ]);
+    expect(new Set(memberships.map(({ ID }) => ID)).size).toBe(2);
+    expect(
+      result.imported.map(({ entryId, contentId, trackNumber }) => ({
+        entryId,
+        contentId,
+        trackNumber,
+      })),
+    ).toEqual([
+      { entryId: "track-001", contentId: contents[0]!.ID, trackNumber: 1 },
+      { entryId: "track-002", contentId: contents[0]!.ID, trackNumber: 2 },
+    ]);
+  });
+
   test("writes actual media duration for mismatched and missing Spotify durations", async () => {
     const fixture = await durationPlanFixture();
     try {
@@ -484,6 +749,38 @@ describe("Rekordbox direct database planning", () => {
       expect(fixture.plan.items.map((item) => item.measuredDurationSeconds)).toEqual([101, 202]);
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("hashes and probes a repeated recording once", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-ts-repeated-recording-"));
+    try {
+      const mediaPath = join(root, "shared.flac");
+      const contents = "one verified physical recording";
+      await writeFile(mediaPath, contents);
+      const manifest = repeatedRecordingManifest();
+      const sha256 = createHash("sha256").update(contents).digest("hex");
+      for (const entry of manifest.entries) {
+        if (entry.acquisition.status !== "downloaded") throw new Error("invalid repeated fixture");
+        entry.acquisition.download.mediaPath = mediaPath;
+        entry.acquisition.download.files = [mediaPath];
+        entry.acquisition.download.sha256 = sha256;
+      }
+      const plan = planRekordboxImport(manifest);
+      let probes = 0;
+
+      const receipts = await preflightRekordboxMedia(plan, undefined, async () => {
+        probes += 1;
+        return { durationSeconds: 239.6 };
+      });
+
+      expect(probes).toBe(1);
+      expect(receipts.size).toBe(1);
+      expect(plan.items.map(({ measuredDurationSeconds }) => measuredDurationSeconds)).toEqual([
+        240, 240,
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
     }
   });
 
@@ -849,14 +1146,16 @@ describe("Rekordbox direct database planning", () => {
     expect(alternative).not.toHaveProperty("isrc");
   });
 
-  test("rejects a media path reused across entries", () => {
+  test("rejects a media path reused by different recording metadata", () => {
     const manifest = completedManifest();
     const first = manifest.entries[0]!.acquisition;
     const second = manifest.entries[1]!.acquisition;
     if (first.status !== "downloaded" || second.status !== "downloaded") throw new Error();
     second.download.mediaPath = first.download.mediaPath;
     second.download.files = [first.download.mediaPath];
-    expect(() => planRekordboxImport(manifest)).toThrow("globally distinct media paths");
+    expect(() => planRekordboxImport(manifest)).toThrow(
+      "Repeated media path must describe one identical recording",
+    );
   });
 
   test("writes scalar compatibility IDs and all variant IDs into a cloned manifest", () => {

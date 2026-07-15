@@ -80,6 +80,7 @@ import {
   DeferredLibraryEventRefresh,
   invalidateAuthoritativeTrackQueries,
   invalidateCanonicalPlaylistQueries,
+  invalidateHostedPlaylistQueries,
   playlistTracksQueryOptions,
   trackWaveformQueryOptions,
 } from "./library-queries.js";
@@ -730,6 +731,8 @@ export function App() {
           queryOptions.playlistId === playlistId
         );
       };
+      const refreshAfterCommit =
+        input.type === "create-hosted-playlist" || input.type === "set-hosted-playlist-download";
       const trackSnapshots = queryClient.getQueriesData<TracksResponse>({
         predicate: matchesPlaylistTracks,
       });
@@ -776,7 +779,15 @@ export function App() {
           hostedRevisionsRef.current.set(playlistId, receipt.revision);
           clearHistory();
           queryClient.setQueryData<HostedPlaylistsResponse>(["hosted-playlists"], (current) =>
-            current ? settleHostedPlaylist(current, receipt.playlistId, receipt.revision) : current,
+            current
+              ? settleHostedPlaylist(
+                  current,
+                  receipt.playlistId,
+                  receipt.revision,
+                  input.type === "set-hosted-playlist-download" ||
+                    Boolean(receipt.revision?.startsWith("local-outbox:")),
+                )
+              : current,
           );
         })
         .catch((error: unknown) => {
@@ -789,13 +800,7 @@ export function App() {
       void commit.finally(() => {
         if (hostedWriteTailsRef.current.get(playlistId) === commit) {
           hostedWriteTailsRef.current.delete(playlistId);
-          void Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["hosted-playlists"] }),
-            queryClient.invalidateQueries({ queryKey: ["playlist-tracks", playlistId] }),
-            queryClient.invalidateQueries({
-              predicate: (query) => matchesPlaylistTracks(query),
-            }),
-          ]);
+          if (refreshAfterCommit) void invalidateHostedPlaylistQueries(queryClient, playlistId);
         }
       });
     },
@@ -978,17 +983,27 @@ export function App() {
       subscribeLibraryEvents((event) => {
         if (event.type === "hosted-mutation" || event.type === "hosted-job") {
           if (event.type === "hosted-mutation") clearHistory();
-          void Promise.all([
-            queryClient.invalidateQueries({
-              queryKey: ["hosted-playlists"],
-              refetchType: "active",
-            }),
-            queryClient.invalidateQueries({ queryKey: ["tracks"], refetchType: "active" }),
-            queryClient.invalidateQueries({
-              queryKey: ["playlist-tracks"],
-              refetchType: "active",
-            }),
-          ]);
+          // The POST caller already owns this optimistic snapshot. Its provider-completion event
+          // (`hosted-job`) will perform the authoritative targeted refresh.
+          if (
+            event.type === "hosted-mutation" &&
+            event.changedId &&
+            hostedWriteTailsRef.current.has(event.changedId)
+          )
+            return;
+          if (event.changedId) void invalidateHostedPlaylistQueries(queryClient, event.changedId);
+          else
+            void Promise.all([
+              queryClient.invalidateQueries({
+                queryKey: ["hosted-playlists"],
+                refetchType: "active",
+              }),
+              queryClient.invalidateQueries({ queryKey: ["tracks"], refetchType: "active" }),
+              queryClient.invalidateQueries({
+                queryKey: ["playlist-tracks"],
+                refetchType: "active",
+              }),
+            ]);
           return;
         }
         if (event.type === "mutation") {
@@ -2468,6 +2483,7 @@ function settleHostedPlaylist(
   response: HostedPlaylistsResponse,
   playlistId: string,
   revision: string | null,
+  pending: boolean,
 ): HostedPlaylistsResponse {
   return {
     ...response,
@@ -2478,7 +2494,7 @@ function settleHostedPlaylist(
             hosted: {
               ...playlist.hosted,
               revision,
-              syncState: "idle",
+              syncState: pending ? "queued" : "idle",
               syncError: undefined,
             },
           }

@@ -8,11 +8,16 @@ import {
   CachedHostedPlaylistRuntime,
   type HostedAcquisitionWorkerLifecycle,
 } from "../src/server/hosted-runtime.js";
-import { HostedPlaylistStateStore } from "../src/server/hosted-state.js";
+import { type HostedPlaylistJob, HostedPlaylistStateStore } from "../src/server/hosted-state.js";
 import { HostedPlaylistCatalog } from "../src/server/hosted/catalog.js";
 import { hostedPlaylistId } from "../src/server/hosted/ids.js";
 import type { HostedPlaylistProviderAdapter } from "../src/server/hosted/types.js";
-import type { PlaylistItem, TrackSummary } from "../src/shared/types.js";
+import type {
+  HostedPlaylistMutation,
+  HostedPlaylistsResponse,
+  PlaylistItem,
+  TrackSummary,
+} from "../src/shared/types.js";
 
 const roots: string[] = [];
 const runtimes: CachedHostedPlaylistRuntime[] = [];
@@ -109,6 +114,92 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
     expect(() => state.listJobs()).toThrow();
   });
 
+  it("redecorates cached provider rows for acquisition progress without provider reads", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-state-refresh-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const id = hostedPlaylistId("spotify", "playlist-one");
+    const remotePlaylist = hostedPlaylist(id);
+    const remoteTrack: TrackSummary = {
+      ...localTrack("hosted-track:spotify:track:one", 1),
+      path: null,
+      fileExists: false,
+      hosted: {
+        provider: "spotify",
+        remoteId: "spotify:track:one",
+        externalUrl: null,
+        localContentId: null,
+        downloadState: "remote",
+      },
+    };
+    const listPlaylists = vi.fn(async () => ({ items: [remotePlaylist], providers: [] }));
+    const getTracks = vi.fn(async () => [remoteTrack]);
+    const refreshPlaylistState = vi.fn(async (response: HostedPlaylistsResponse) => ({
+      ...response,
+      items: response.items.map((playlist) => ({
+        ...playlist,
+        hosted: playlist.hosted ? { ...playlist.hosted, syncState: "syncing" as const } : undefined,
+      })),
+    }));
+    const refreshTrackState = vi.fn(async (_playlistId, tracks: readonly TrackSummary[]) =>
+      tracks.map((track) => ({
+        ...track,
+        hosted: track.hosted
+          ? { ...track.hosted, downloadState: "downloaded" as const }
+          : undefined,
+      })),
+    );
+    let emitJob: ((job: HostedPlaylistJob) => void) | undefined;
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists,
+        getTracks,
+        refreshPlaylistState,
+        refreshTrackState,
+        streamTrack: async () => new Response(),
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId: "playlistId" in mutation ? mutation.playlistId : id,
+          revision: null,
+          queuedAt: "2026-07-14T00:00:00.000Z",
+        }),
+      },
+      state,
+      createAcquisitionWorker(options) {
+        emitJob = options.onJobChanged;
+        return idleAcquisitionWorker();
+      },
+    });
+    runtimes.push(runtime);
+
+    await runtime.listPlaylists();
+    await runtime.getTracks(id);
+    emitJob?.({
+      id: "job",
+      kind: "download-playlist",
+      provider: "spotify",
+      playlistId: "playlist-one",
+      status: "running",
+      current: 1,
+      total: 2,
+      error: null,
+      payload: { hostedPlaylistId: id },
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:01.000Z",
+    });
+
+    await expect(runtime.listPlaylists()).resolves.toMatchObject({
+      items: [{ hosted: { syncState: "syncing" } }],
+    });
+    await expect(runtime.getTracks(id)).resolves.toMatchObject([
+      { hosted: { downloadState: "downloaded" } },
+    ]);
+    expect(listPlaylists).toHaveBeenCalledOnce();
+    expect(getTracks).toHaveBeenCalledOnce();
+    expect(refreshPlaylistState).toHaveBeenCalledOnce();
+    expect(refreshTrackState).toHaveBeenCalledOnce();
+  });
+
   it("queues configured playlists after provider revisions or hosted item edits", async () => {
     const root = mkdtempSync(join(tmpdir(), "hosted-runtime-sync-"));
     roots.push(root);
@@ -160,14 +251,320 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       expectedRevision: "revision-provider",
     });
 
-    expect(state.listJobs()).toHaveLength(2);
+    await vi.waitFor(() => expect(state.listJobs()).toHaveLength(2));
     expect(state.getPlaylist("spotify", "playlist-one")).toMatchObject({
       revision: "revision-edit",
       syncState: "queued",
     });
     expect(kick).toHaveBeenCalledTimes(2);
   });
+
+  it("durably queues provider writes immediately and resolves optimistic revisions in order", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-outbox-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const id = hostedPlaylistId("spotify", "playlist-one");
+    state.updatePlaylistSync("spotify", "playlist-one", {
+      revision: "revision-1",
+      state: "idle",
+    });
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let call = 0;
+    const mutate = vi.fn(async (mutation: HostedPlaylistMutation) => {
+      const current = ++call;
+      if (current === 1) await firstGate;
+      return {
+        operation: mutation.type,
+        playlistId: "playlistId" in mutation ? mutation.playlistId : id,
+        revision: `revision-${String(current + 1)}`,
+        queuedAt: "2026-07-14T00:00:00.000Z",
+      };
+    });
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks: async (): Promise<TrackSummary[]> => [],
+        streamTrack: async () => new Response(),
+        mutate,
+      },
+      state,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+    const listener = vi.fn();
+    runtime.onJobChanged(listener);
+
+    const first = await runtime.mutate({
+      type: "rename-hosted-playlist",
+      playlistId: id,
+      name: "First rename",
+      expectedRevision: "revision-1",
+    });
+    expect(first.revision).toMatch(/^local-outbox:/);
+    const firstEntryId = first.revision!.slice("local-outbox:".length);
+    await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    expect(state.getOutbox(firstEntryId)).toMatchObject({ status: "running", attempts: 1 });
+
+    let second: Awaited<ReturnType<CachedHostedPlaylistRuntime["mutate"]>>;
+    try {
+      second = await runtime.mutate({
+        type: "replace-hosted-playlist-tracks",
+        playlistId: id,
+        remoteTrackIds: ["spotify:track:one"],
+        expectedRevision: first.revision,
+      });
+      expect(second.revision).toMatch(/^local-outbox:/);
+      expect(mutate).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirst();
+    }
+
+    await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
+    expect(mutate.mock.calls[1]?.[0]).toMatchObject({
+      type: "replace-hosted-playlist-tracks",
+      expectedRevision: "revision-2",
+    });
+    await vi.waitFor(() => {
+      expect(state.getOutbox(firstEntryId)).toBeUndefined();
+      expect(state.getOutbox(second.revision!.slice("local-outbox:".length))).toBeUndefined();
+    });
+    expect(state.getPlaylist("spotify", "playlist-one")).toMatchObject({
+      revision: "revision-3",
+      syncState: "idle",
+      syncError: null,
+    });
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("mirrors committed local rename and order edits through the durable outbox", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-local-mirror-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const id = hostedPlaylistId("spotify", "playlist-one");
+    state.setDownloadEnabled("spotify", "playlist-one", true);
+    state.updatePlaylistSync("spotify", "playlist-one", {
+      localPlaylistId: "local-playlist",
+      revision: "revision-1",
+      state: "idle",
+    });
+    state.setTrack("spotify", "spotify:track:one", {
+      localContentId: "local-one",
+      state: "downloaded",
+    });
+    state.setTrack("spotify", "spotify:track:two", {
+      localContentId: "local-two",
+      state: "downloaded",
+    });
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let call = 0;
+    const mutate = vi.fn(async (mutation: HostedPlaylistMutation) => {
+      const current = ++call;
+      if (current === 1) await firstGate;
+      return {
+        operation: mutation.type,
+        playlistId: id,
+        revision: `revision-${String(current + 1)}`,
+        queuedAt: "2026-07-14T00:00:00.000Z",
+      };
+    });
+    const kick = vi.fn(async () => undefined);
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks: async (): Promise<TrackSummary[]> => [],
+        streamTrack: async () => new Response(),
+        mutate,
+      },
+      state,
+      createAcquisitionWorker: () => ({
+        start: vi.fn(),
+        kick,
+        cancel: vi.fn(() => true),
+        close: vi.fn(async () => undefined),
+      }),
+    });
+    runtimes.push(runtime);
+    const library = {
+      getTracks: vi.fn(() => ({
+        items: [localTrack("local-two", 1), localTrack("local-one", 2)],
+        count: 2,
+        limit: 10_000,
+        offset: 0,
+      })),
+    };
+
+    const renamed = runtime.mirrorLocalMutation(
+      { type: "rename-playlist", playlistId: "local-playlist", name: "Local rename" },
+      library,
+    );
+    expect(renamed?.revision).toMatch(/^local-outbox:/);
+    await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(1));
+    const reordered = runtime.mirrorLocalMutation(
+      {
+        type: "move-track",
+        playlistId: "local-playlist",
+        membershipId: "membership-two",
+        trackNumber: 1,
+      },
+      library,
+    );
+    expect(reordered?.revision).toMatch(/^local-outbox:/);
+    releaseFirst();
+
+    await vi.waitFor(() => expect(mutate).toHaveBeenCalledTimes(2));
+    expect(mutate.mock.calls[0]?.[0]).toMatchObject({
+      type: "rename-hosted-playlist",
+      name: "Local rename",
+      expectedRevision: "revision-1",
+    });
+    expect(mutate.mock.calls[1]?.[0]).toMatchObject({
+      type: "replace-hosted-playlist-tracks",
+      remoteTrackIds: ["spotify:track:two", "spotify:track:one"],
+      expectedRevision: "revision-2",
+    });
+    await vi.waitFor(() =>
+      expect(state.getPlaylist("spotify", "playlist-one")).toMatchObject({
+        revision: "revision-3",
+        syncState: "idle",
+      }),
+    );
+    expect(state.listJobs()).toHaveLength(0);
+    expect(kick).not.toHaveBeenCalled();
+  });
+
+  it("refuses incomplete cross-provider local mappings and never deletes the hosted playlist", () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-local-mirror-safe-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    state.setDownloadEnabled("spotify", "playlist-one", true);
+    state.updatePlaylistSync("spotify", "playlist-one", {
+      localPlaylistId: "local-playlist",
+      revision: "revision-1",
+      state: "idle",
+    });
+    state.setTrack("soundcloud", "soundcloud:tracks:one", {
+      localContentId: "local-one",
+      state: "downloaded",
+    });
+    const mutate = vi.fn(async () => {
+      throw new Error("provider must not be called");
+    });
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks: async (): Promise<TrackSummary[]> => [],
+        streamTrack: async () => new Response(),
+        mutate,
+      },
+      state,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+    const library = {
+      getTracks: () => ({
+        items: [localTrack("local-one", 1)],
+        count: 1,
+        limit: 10_000,
+        offset: 0,
+      }),
+    };
+
+    expect(
+      runtime.mirrorLocalMutation(
+        {
+          type: "add-track",
+          playlistId: "local-playlist",
+          contentId: "local-one",
+        },
+        library,
+      ),
+    ).toBeUndefined();
+    expect(mutate).not.toHaveBeenCalled();
+    expect(state.getPlaylist("spotify", "playlist-one")).toMatchObject({
+      localPlaylistId: "local-playlist",
+      syncState: "error",
+      syncError: expect.stringContaining("no spotify identity mapping"),
+    });
+
+    runtime.mirrorLocalMutation(
+      {
+        type: "delete-playlist",
+        playlistId: "local-folder",
+        expectedPlaylistIds: ["local-folder", "local-playlist"],
+      },
+      library,
+    );
+    expect(state.getPlaylist("spotify", "playlist-one")).toMatchObject({
+      downloadEnabled: true,
+      localPlaylistId: null,
+      revision: "revision-1",
+    });
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("retries transient provider failures with a bound and leaves durable failure state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-outbox-retry-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const id = hostedPlaylistId("soundcloud", "playlist-one");
+    state.updatePlaylistSync("soundcloud", "playlist-one", {
+      revision: "revision-1",
+      state: "idle",
+    });
+    const mutate = vi.fn(async () => {
+      throw new Error("temporary provider outage");
+    });
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks: async (): Promise<TrackSummary[]> => [],
+        streamTrack: async () => new Response(),
+        mutate,
+      },
+      state,
+      outboxMaxAttempts: 3,
+      outboxRetryBaseMs: 1,
+      outboxRetryMaxMs: 2,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+
+    const receipt = await runtime.mutate({
+      type: "rename-hosted-playlist",
+      playlistId: id,
+      name: "Queued rename",
+      expectedRevision: "revision-1",
+    });
+    const entryId = receipt.revision!.slice("local-outbox:".length);
+    await vi.waitFor(() =>
+      expect(state.getOutbox(entryId)).toMatchObject({
+        status: "failed",
+        attempts: 3,
+        error: "temporary provider outage",
+      }),
+    );
+    expect(mutate).toHaveBeenCalledTimes(3);
+    expect(state.getPlaylist("soundcloud", "playlist-one")).toMatchObject({
+      syncState: "error",
+      syncError: "temporary provider outage",
+    });
+  });
 });
+
+function idleAcquisitionWorker(): HostedAcquisitionWorkerLifecycle {
+  return {
+    start: vi.fn(),
+    kick: vi.fn(async () => undefined),
+    cancel: vi.fn(() => true),
+    close: vi.fn(async () => undefined),
+  };
+}
 
 function hostedPlaylist(id: string): PlaylistItem {
   return {
@@ -187,6 +584,27 @@ function hostedPlaylist(id: string): PlaylistItem {
       downloadEnabled: false,
       syncState: "idle",
     },
+  };
+}
+
+function localTrack(id: string, position: number): TrackSummary {
+  return {
+    id,
+    title: id,
+    artist: null,
+    album: null,
+    genre: null,
+    key: null,
+    colorId: null,
+    bpm: null,
+    durationSeconds: null,
+    rating: 0,
+    playCount: 0,
+    analyzed: true,
+    artworkAvailable: false,
+    fileExists: true,
+    path: `/music/${id}.flac`,
+    trackNumber: position,
   };
 }
 

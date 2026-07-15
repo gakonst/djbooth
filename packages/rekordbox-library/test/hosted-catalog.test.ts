@@ -58,6 +58,55 @@ describe("HostedPlaylistCatalog", () => {
     });
     expect(state.listTracks).toHaveBeenCalledOnce();
     expect(state.getTrack).not.toHaveBeenCalled();
+
+    state.listPlaylists.mockReturnValue([
+      {
+        provider: "spotify",
+        remoteId: "list1",
+        downloadEnabled: false,
+        revision: "stored",
+        syncState: "idle",
+        syncError: null,
+      },
+    ]);
+    state.listTracks.mockReturnValue([
+      {
+        provider: "spotify",
+        remoteTrackId: "spotify:track:one",
+        localContentId: null,
+        downloadState: "remote",
+        downloadError: null,
+      },
+    ]);
+    const locallyStaleList = {
+      ...listed,
+      items: listed.items.map((item) => ({
+        ...item,
+        hosted: item.hosted ? { ...item.hosted, syncError: "stale" } : undefined,
+      })),
+    };
+    const locallyStaleTracks = tracks.map((track) => ({
+      ...track,
+      hosted: track.hosted ? { ...track.hosted, downloadError: "stale" } : undefined,
+    }));
+
+    const refreshedList = await catalog.refreshPlaylistState(locallyStaleList);
+    const refreshedTracks = await catalog.refreshTrackState(
+      hostedPlaylistId("spotify", "list1"),
+      locallyStaleTracks,
+    );
+    expect(refreshedList.items[0]?.hosted).toMatchObject({
+      downloadEnabled: false,
+      syncState: "idle",
+    });
+    expect(refreshedList.items[0]?.hosted?.syncError).toBeUndefined();
+    expect(refreshedTracks[0]?.hosted).toMatchObject({
+      localContentId: null,
+      downloadState: "remote",
+    });
+    expect(refreshedTracks[0]?.hosted?.downloadError).toBeUndefined();
+    expect(spotify.listPlaylists).toHaveBeenCalledOnce();
+    expect(spotify.getTracks).toHaveBeenCalledOnce();
   });
 
   it("serializes mutations per playlist while allowing other playlists to proceed", async () => {

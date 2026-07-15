@@ -197,6 +197,10 @@ export type HostedPlaylistApi = {
   close?(): void | Promise<void>;
   listPlaylists(): Promise<HostedPlaylistsResponse>;
   getTracks(playlistId: string): Promise<TrackSummary[]>;
+  mirrorLocalMutation?(
+    mutation: LibraryMutation,
+    library: Pick<LibraryApi, "getTracks">,
+  ): HostedMutationReceipt | undefined;
   onJobChanged?(listener: (event: { playlistId: string }) => void): () => void;
   streamTrack?(trackId: string): Promise<Response>;
   mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt>;
@@ -329,6 +333,16 @@ function assertMutationRequest(request: IncomingMessage, token: string): void {
     throw new Error("Cross-origin library mutation rejected");
 }
 
+function assertLocalMediaRequest(request: IncomingMessage): void {
+  const origin = request.headers.origin;
+  if (origin && origin !== `http://${request.headers.host}`) {
+    throw new Error("Cross-origin hosted media request rejected");
+  }
+  if (request.headers["sec-fetch-site"] === "cross-site") {
+    throw new Error("Cross-origin hosted media request rejected");
+  }
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -454,16 +468,49 @@ async function streamHostedAudio(
     const value = upstream.headers.get(name);
     if (value) headers[name] = value;
   }
-  response.writeHead(upstream.status, headers);
   if (request.method === "HEAD") {
+    response.writeHead(upstream.status, headers);
     await upstream.body.cancel();
     response.end();
     return;
   }
+  if (isHlsManifest(headers["content-type"])) {
+    const body = absolutizeHlsManifest(await upstream.text(), upstream.url);
+    const bytes = Buffer.from(body);
+    headers["content-length"] = String(bytes.length);
+    response.writeHead(upstream.status, headers);
+    response.end(bytes);
+    return;
+  }
+  response.writeHead(upstream.status, headers);
   const stream = Readable.fromWeb(upstream.body as never);
   stream.once("error", () => response.destroy());
   response.once("close", () => stream.destroy());
   stream.pipe(response);
+}
+
+function isHlsManifest(contentType: string | undefined): boolean {
+  return /(?:mpegurl|vnd\.apple\.mpegurl)/iu.test(contentType ?? "");
+}
+
+export function absolutizeHlsManifest(manifest: string, sourceUrl: string): string {
+  if (!sourceUrl) return manifest;
+  const absolute = (value: string): string => {
+    try {
+      return new URL(value, sourceUrl).href;
+    } catch {
+      return value;
+    }
+  };
+  return manifest
+    .split("\n")
+    .map((line) => {
+      if (!line.trim() || line.startsWith("#")) {
+        return line.replace(/URI="([^"]+)"/gu, (_match, uri: string) => `URI="${absolute(uri)}"`);
+      }
+      return absolute(line.trim());
+    })
+    .join("\n");
 }
 
 async function streamAudio(
@@ -550,7 +597,7 @@ async function serveStatic(
       extname(realCandidate) === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
     "content-length": contentLength,
     "content-security-policy":
-      "default-src 'self'; base-uri 'none'; connect-src 'self' https://*.soundcloud.cloud https://*.sndcdn.com; form-action 'none'; frame-ancestors 'none'; frame-src https://open.spotify.com; img-src 'self' data:; media-src 'self' blob: https://*.soundcloud.cloud https://*.sndcdn.com; object-src 'none'; script-src 'self' https://open.spotify.com; style-src 'self' 'unsafe-inline'",
+      "default-src 'self'; base-uri 'none'; connect-src 'self' https://*.soundcloud.cloud https://*.sndcdn.com; form-action 'none'; frame-ancestors 'none'; frame-src https://open.spotify.com; img-src 'self' data:; media-src 'self' blob: https://*.soundcloud.cloud https://*.sndcdn.com; object-src 'none'; script-src 'self' https://open.spotify.com; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:",
     "content-type":
       contentTypes[extname(realCandidate).toLocaleLowerCase()] ?? "application/octet-stream",
   });
@@ -860,6 +907,7 @@ export async function startLibraryServer(
       const hostedAudioMatch = /^\/api\/hosted-audio\/([^/]+)$/u.exec(url.pathname);
       if (hostedAudioMatch) {
         assertMethod(request, ["GET", "HEAD"]);
+        assertLocalMediaRequest(request);
         if (!hosted)
           throw new HttpError(
             503,
@@ -897,6 +945,11 @@ export async function startLibraryServer(
         assertMutationRequest(request, token);
         const mutation = mutationSchema.parse(await readJsonBody(request)) as LibraryMutation;
         const receipt: MutationReceipt = await api.mutate(mutation);
+        try {
+          hosted?.mirrorLocalMutation?.(mutation, api);
+        } catch {
+          // The local SQLite commit is authoritative; provider mirror failures stay background-only.
+        }
         rememberLocalFileVersions();
         publish("mutation", { changedId: receipt.changedId, mutation: mutation.type });
         json(request, response, 200, { receipt });

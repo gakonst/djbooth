@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { MasterDatabase, MasterPlaylistXml } from "@gakonst/rekordbox";
+import {
+  LogicalOperator,
+  MasterDatabase,
+  MasterPlaylistXml,
+  Operator,
+  PlaylistType,
+  Property,
+  SmartList,
+} from "@gakonst/rekordbox";
 import { acquireRekordboxDatabaseLock } from "@gakonst/tracks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -393,6 +401,41 @@ describe("RekordboxLibraryService", () => {
       trackCount: null,
       type: "smart",
     });
+  });
+
+  it("projects smart-playlist IDs without materializing duplicate joined track metadata", () => {
+    const fixture = copiedFixture();
+    const smartList = new SmartList(LogicalOperator.ALL);
+    smartList.playlistId = "800";
+    smartList.addCondition(Property.NAME, Operator.CONTAINS, "o");
+    const database = new MasterDatabase({ path: fixture.dbPath, readonly: false, unlock: false });
+    database
+      .connection!.prepare(
+        `INSERT INTO djmdPlaylist
+        (ID, Seq, Name, ImagePath, Attribute, ParentID, SmartList, UUID, rb_local_usn,
+         rb_local_deleted, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, 'root', ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(
+        "800",
+        4,
+        "Supported smart",
+        PlaylistType.SMART_PLAYLIST,
+        smartList.toXml(),
+        "playlist-800",
+        8,
+        now,
+        now,
+      );
+    database.close();
+    const materializeTracks = vi.spyOn(MasterDatabase.prototype, "getPlaylistTracks");
+
+    expect(
+      service(fixture)
+        .getTracks({ playlistId: "800" })
+        .items.map((track) => track.id),
+    ).toEqual(["1", "2"]);
+    expect(materializeTracks).not.toHaveBeenCalled();
   });
 
   it("excludes soft-deleted memberships and playlists from copied-fixture reads", () => {

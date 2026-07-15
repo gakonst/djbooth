@@ -38,6 +38,29 @@ describe("SpotifyHostedPlaylistAdapter", () => {
     expect(client.rawCalls.filter((call) => call.path.includes("/me/playlists"))).toHaveLength(2);
   });
 
+  it("deduplicates overlapping Spotify playlist page boundaries", async () => {
+    const client = new FakeSpotifyClient([
+      spotifyPlaylist("one", "One", "me", false, 1),
+      spotifyPlaylist("boundary", "Boundary", "me", false, 2),
+      spotifyPlaylist("three", "Three", "me", false, 3),
+    ]);
+    client.playlistPageSize = 2;
+    client.playlistPageOverrides.set(2, [
+      client.playlists.get("boundary")!,
+      client.playlists.get("three")!,
+    ]);
+    const adapter = new SpotifyHostedPlaylistAdapter(client);
+
+    const result = await adapter.listPlaylists();
+
+    expect(result.items.map((item) => item.id)).toEqual([
+      hostedPlaylistId("spotify", "one"),
+      hostedPlaylistId("spotify", "boundary"),
+      hostedPlaylistId("spotify", "three"),
+    ]);
+    expect(result.items.map((item) => item.seq)).toEqual([1, 2, 3]);
+  });
+
   it("paginates items, preserves duplicates, and skips null tracks and episodes", async () => {
     const client = new FakeSpotifyClient([spotifyPlaylist("owned", "Owned", "me", false, 4)]);
     client.trackPages.set("owned", [
@@ -66,6 +89,11 @@ describe("SpotifyHostedPlaylistAdapter", () => {
       explicit: false,
     });
     expect(client.rawCalls.filter((call) => call.path.includes("/items"))).toHaveLength(2);
+    const revision = (await adapter.listPlaylists()).items[0]!.hosted!.revision;
+    await expect(
+      adapter.replacePlaylistTracks("owned", ["spotify:track:same"], revision),
+    ).rejects.toThrow(/unavailable or unsupported items/u);
+    expect(client.updatePlaylist).not.toHaveBeenCalled();
   });
 
   it("preflights revisions and verifies rename, ordered replacement, creation, and removal", async () => {
@@ -140,6 +168,7 @@ describe("SpotifyHostedPlaylistAdapter", () => {
 
 class FakeSpotifyClient {
   readonly playlists = new Map<string, Record<string, unknown>>();
+  readonly playlistPageOverrides = new Map<number, Record<string, unknown>[]>();
   readonly trackPages = new Map<string, unknown[][]>();
   readonly rawCalls: Array<{ method: string; path: string; options: unknown }> = [];
   playlistPageSize = 50;
@@ -184,7 +213,9 @@ class FakeSpotifyClient {
       const url = new URL(path, "https://api.spotify.test");
       const offset = Number(url.searchParams.get("offset") ?? 0);
       const all = [...this.playlists.values()].map((playlist) => structuredClone(playlist));
-      const items = all.slice(offset, offset + this.playlistPageSize);
+      const items = (
+        this.playlistPageOverrides.get(offset) ?? all.slice(offset, offset + this.playlistPageSize)
+      ).map((playlist) => structuredClone(playlist));
       const nextOffset = offset + items.length;
       return {
         items,

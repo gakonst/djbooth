@@ -361,7 +361,8 @@ export class HostedPlaylistAcquisitionWorker {
       localDirectories: this.#localDirectories,
       stagingDirectory: join(dirname(manifestPath), ".staging"),
     });
-    installProviderPreferredCandidates(reference.provider, manifest, plan);
+    const physicalPlan = deduplicateProviderRecordings(reference.provider, tracks, plan);
+    installProviderPreferredCandidates(reference.provider, manifest, physicalPlan.plan);
     signal.throwIfAborted();
 
     this.#current!.phase = "acquisition";
@@ -373,10 +374,12 @@ export class HostedPlaylistAcquisitionWorker {
     try {
       acquisition = await this.#dependencies.acquire({
         manifestPath,
-        plan,
+        plan: physicalPlan.plan,
         refreshSpotify: false,
         acquirers: bundle.acquirers,
-        requireCompletePlan: true,
+        // The durable manifest retains every playlist membership. Exact repeated provider tracks
+        // intentionally share one physical acquisition plan entry and are fanned out below.
+        requireCompletePlan: false,
         continueOnError: true,
         concurrency: this.#acquisitionConcurrency,
         signal,
@@ -390,13 +393,15 @@ export class HostedPlaylistAcquisitionWorker {
           });
         },
         onArtifactVerified: (artifact) => {
-          const track = tracks[artifact.entryOrder - 1];
-          if (!track?.hosted) return;
-          this.#state.setTrack(reference.provider, track.hosted.remoteId, {
-            state: "downloaded",
-            error: null,
-          });
-          completedOrders.add(artifact.entryOrder);
+          for (const order of physicalPlan.memberOrders(artifact.entryOrder)) {
+            const track = tracks[order - 1];
+            if (!track?.hosted) continue;
+            this.#state.setTrack(reference.provider, track.hosted.remoteId, {
+              state: "downloaded",
+              error: null,
+            });
+            completedOrders.add(order);
+          }
           this.#emit(
             this.#state.updateJob(job.id, {
               current: Math.min(completedOrders.size, tracks.length),
@@ -413,6 +418,12 @@ export class HostedPlaylistAcquisitionWorker {
       }
     }
     signal.throwIfAborted();
+
+    if (physicalPlan.hasDuplicates) {
+      acquisition = fanOutProviderRecordingResults(acquisition, physicalPlan);
+      await this.#dependencies.writeManifest(manifestPath, acquisition.manifest);
+      signal.throwIfAborted();
+    }
 
     const failedOrders = new Map(
       acquisition.failures.map((failure) => [failure.entryOrder, failure]),
@@ -472,6 +483,7 @@ export class HostedPlaylistAcquisitionWorker {
           this.#rekordbox.folderNames?.[reference.provider] ??
           providerLabel(reference.provider),
         playlistName: payload.playlistName ?? reference.remoteId,
+        ...(configured?.localPlaylistId ? { playlistId: configured.localPlaylistId } : {}),
         analysisDirectories,
         ...(this.#rekordbox.dbPath ? { dbPath: this.#rekordbox.dbPath } : {}),
         ...(this.#rekordbox.dbDirectory ? { dbDirectory: this.#rekordbox.dbDirectory } : {}),
@@ -705,8 +717,108 @@ function installProviderPreferredCandidates(
           : { durationSeconds: candidate.durationSeconds }),
         backend: "ytdlp",
       };
+      variant.preferredCandidatePlacement = "backend-fallback";
     }
   }
+}
+
+type ProviderPhysicalPlan = {
+  plan: AcquisitionPlan;
+  groups: ReadonlyMap<number, readonly number[]>;
+  hasDuplicates: boolean;
+  memberOrders(canonicalOrder: number): readonly number[];
+};
+
+/**
+ * Collapse exact repeated provider track IDs to one physical recording operation.
+ *
+ * The full manifest remains untouched: its entries are playlist memberships, not physical files.
+ * Only the acquisition plan is collapsed, using the first planned occurrence as the canonical
+ * recording. Different provider IDs are never collapsed, even when their text metadata matches.
+ */
+function deduplicateProviderRecordings(
+  provider: HostedPlaylistProvider,
+  tracks: readonly TrackSummary[],
+  plan: AcquisitionPlan,
+): ProviderPhysicalPlan {
+  const plannedOrders = new Set<number>();
+  for (const item of [...plan.clips, ...plan.recordings]) {
+    if (plannedOrders.has(item.entryOrder)) {
+      throw new Error(`Hosted acquisition plan repeats entry order ${String(item.entryOrder)}`);
+    }
+    plannedOrders.add(item.entryOrder);
+  }
+
+  const trackOrdersByRemoteId = new Map<string, number[]>();
+  tracks.forEach((track, index) => {
+    const remoteId = requireRemoteTrack(track, provider);
+    const orders = trackOrdersByRemoteId.get(remoteId) ?? [];
+    orders.push(index + 1);
+    trackOrdersByRemoteId.set(remoteId, orders);
+  });
+  for (const order of plannedOrders) {
+    if (order < 1 || order > tracks.length) {
+      throw new Error(`Hosted acquisition plan references absent entry order ${String(order)}`);
+    }
+  }
+
+  const groups = new Map<number, readonly number[]>();
+  const retainedOrders = new Set<number>();
+  for (const [remoteId, orders] of trackOrdersByRemoteId) {
+    const canonicalOrder = orders.find((order) => plannedOrders.has(order));
+    if (canonicalOrder === undefined) {
+      throw new Error(`Hosted ${provider} track ${remoteId} has no acquisition plan entry`);
+    }
+    retainedOrders.add(canonicalOrder);
+    groups.set(canonicalOrder, orders);
+  }
+
+  const physicalPlan: AcquisitionPlan = {
+    ...plan,
+    clips: plan.clips.filter((clip) => retainedOrders.has(clip.entryOrder)),
+    recordings: plan.recordings.filter((recording) => retainedOrders.has(recording.entryOrder)),
+  };
+  return {
+    plan: physicalPlan,
+    groups,
+    hasDuplicates: [...groups.values()].some((orders) => orders.length > 1),
+    memberOrders(canonicalOrder) {
+      return groups.get(canonicalOrder) ?? [canonicalOrder];
+    },
+  };
+}
+
+function fanOutProviderRecordingResults(
+  acquisition: HostedAcquireResult,
+  physicalPlan: ProviderPhysicalPlan,
+): HostedAcquireResult {
+  const entriesByOrder = new Map(acquisition.manifest.entries.map((entry) => [entry.order, entry]));
+  for (const [canonicalOrder, memberOrders] of physicalPlan.groups) {
+    const canonical = entriesByOrder.get(canonicalOrder);
+    if (!canonical) {
+      throw new Error(`Acquisition result has no canonical entry order ${String(canonicalOrder)}`);
+    }
+    const acquisitionErrors = canonical.errors.filter((error) => error.stage === "acquisition");
+    for (const order of memberOrders) {
+      if (order === canonicalOrder) continue;
+      const member = entriesByOrder.get(order);
+      if (!member)
+        throw new Error(`Acquisition result has no duplicate entry order ${String(order)}`);
+      member.acquisition = structuredClone(canonical.acquisition);
+      member.errors = [
+        ...member.errors.filter((error) => error.stage !== "acquisition"),
+        ...structuredClone(acquisitionErrors),
+      ];
+      for (const warning of canonical.warnings) {
+        if (!member.warnings.includes(warning)) member.warnings.push(warning);
+      }
+    }
+  }
+
+  const failures = acquisition.failures.flatMap((failure) =>
+    physicalPlan.memberOrders(failure.entryOrder).map((entryOrder) => ({ ...failure, entryOrder })),
+  );
+  return { manifest: acquisition.manifest, failures };
 }
 
 function downloadedEntryOrders(manifest: SetManifest): Set<number> {

@@ -667,6 +667,28 @@ describe("MasterDatabase mutations", () => {
     db.close();
   });
 
+  it("reuses prepared statements for identical writes in one flush", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({ path: dbPath, readonly: false, unlock: false });
+    const first = db.query(DjmdContent).where({ ID: "1" }).one();
+    const second = db.query(DjmdContent).where({ ID: "2" }).one();
+    db.withTrackingDisabled(() => {
+      first.Title = "First revised";
+      second.Title = "Second revised";
+    });
+    const prepare = vi.spyOn(db.connection!, "prepare");
+
+    db.commit({ allowWhileRunning: true, autoincrement: false });
+
+    const contentUpdates = prepare.mock.calls.filter(
+      ([sql]) => typeof sql === "string" && sql.startsWith('UPDATE "djmdContent" SET'),
+    );
+    expect(contentUpdates).toHaveLength(1);
+    expect(db.query(DjmdContent).where({ ID: "1" }).one().Title).toBe("First revised");
+    expect(db.query(DjmdContent).where({ ID: "2" }).one().Title).toBe("Second revised");
+    db.close();
+  });
+
   it("normalizes analyzer key names to canonical Camelot names", () => {
     expect(normalizeRekordboxKeyName("Bm")).toBe("10A");
     expect(normalizeRekordboxKeyName("Bmin")).toBe("10A");

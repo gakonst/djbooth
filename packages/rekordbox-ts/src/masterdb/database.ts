@@ -1069,6 +1069,16 @@ export class MasterDatabase {
       connection.exec("BEGIN");
       this.transactionOpen = true;
     }
+    // Playlist moves/replacements commonly stage thousands of rows with the same physical shape.
+    // Compile each INSERT/UPDATE/DELETE once for this flush and only rebind row values thereafter.
+    const statements = new Map<string, Database.Statement>();
+    const prepare = (sql: string): Database.Statement => {
+      const cached = statements.get(sql);
+      if (cached) return cached;
+      const statement = connection.prepare(sql);
+      statements.set(sql, statement);
+      return statement;
+    };
 
     for (const row of this.tracked) {
       if (row.state === "new" && row.flushed === undefined) {
@@ -1078,9 +1088,7 @@ export class MasterDatabase {
               .map(([key]) => quoteIdentifier(key))
               .join(", ")}) VALUES (${entries.map(() => "?").join(", ")})`
           : `INSERT INTO ${quoteIdentifier(row.tableName)} DEFAULT VALUES`;
-        const result = connection
-          .prepare(sql)
-          .run(...entries.map(([, value]) => this.serializeValue(value)));
+        const result = prepare(sql).run(...entries.map(([, value]) => this.serializeValue(value)));
         const schema = this.schema(row.tableName);
         if (schema.primaryKeys.length === 1) {
           const primaryKey = schema.primaryKeys[0]!;
@@ -1097,9 +1105,9 @@ export class MasterDatabase {
 
       if (row.state === "deleted") {
         const where = this.primaryPredicate(row);
-        connection
-          .prepare(`DELETE FROM ${quoteIdentifier(row.tableName)} WHERE ${where.sql}`)
-          .run(...where.parameters);
+        prepare(`DELETE FROM ${quoteIdentifier(row.tableName)} WHERE ${where.sql}`).run(
+          ...where.parameters,
+        );
         row.flushed = { ...row.data };
         continue;
       }
@@ -1113,9 +1121,10 @@ export class MasterDatabase {
       const sql = `UPDATE ${quoteIdentifier(row.tableName)} SET ${changed
         .map((key) => `${quoteIdentifier(key)} = ?`)
         .join(", ")} WHERE ${where.sql}`;
-      connection
-        .prepare(sql)
-        .run(...changed.map((key) => this.serializeValue(row.data[key]!)), ...where.parameters);
+      prepare(sql).run(
+        ...changed.map((key) => this.serializeValue(row.data[key]!)),
+        ...where.parameters,
+      );
       row.flushed = { ...row.data };
       const previousKey = this.identityKey(row.tableName, row.original);
       const currentKey = this.identityKey(row.tableName, row.data);

@@ -46,6 +46,7 @@ type SpotifyPage = {
 export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapter {
   readonly provider = "spotify" as const;
   readonly #client: SpotifyHostedClient;
+  readonly #incompletePlaylists = new Set<string>();
   #identityPromise: Promise<SpotifyIdentity> | undefined;
 
   constructor(client: SpotifyHostedClient) {
@@ -74,6 +75,7 @@ export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapt
     let next: string | null = `/playlists/${encodeURIComponent(remotePlaylistId)}/items`;
     let first = true;
     let position = 0;
+    let incomplete = false;
     const seen = new Set<string>();
     while (next) {
       if (seen.has(next)) throw new Error(`Spotify pagination cycle detected at ${safePath(next)}`);
@@ -88,10 +90,13 @@ export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapt
         const track = spotifyTrackSummary(rawItem, playlistId, position);
         position += 1;
         if (track) tracks.push(track);
+        else incomplete = true;
       }
       next = typeof page.next === "string" && page.next.length > 0 ? page.next : null;
       first = false;
     }
+    if (incomplete) this.#incompletePlaylists.add(remotePlaylistId);
+    else this.#incompletePlaylists.delete(remotePlaylistId);
     return tracks;
   }
 
@@ -146,6 +151,17 @@ export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapt
       expectedRevision,
       spotifyPlaylistRevision(before),
     );
+    await this.getTracks(remotePlaylistId);
+    if (this.#incompletePlaylists.has(remotePlaylistId)) {
+      throw new HostedPlaylistCapabilityError(
+        `Spotify playlist ${remotePlaylistId} contains unavailable or unsupported items; refusing a full replacement that could delete them`,
+      );
+    }
+    assertExpectedRevision(
+      hostedPlaylistId(this.provider, remotePlaylistId),
+      expectedRevision,
+      spotifyPlaylistRevision(await this.#getPlaylist(remotePlaylistId)),
+    );
 
     await this.#client.updatePlaylist(remotePlaylistId, { tracks: trackUris });
     const verifiedTracks = await this.getTracks(remotePlaylistId);
@@ -199,6 +215,7 @@ export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapt
 
   async #allPlaylistObjects(): Promise<Record<string, unknown>[]> {
     const playlists: Record<string, unknown>[] = [];
+    const seenPlaylistIds = new Set<string>();
     let next: string | null = "/me/playlists";
     let first = true;
     const seen = new Set<string>();
@@ -213,7 +230,10 @@ export class SpotifyHostedPlaylistAdapter implements HostedPlaylistProviderAdapt
       if (!page) break;
       for (const item of page.items ?? []) {
         const playlist = asRecord(item);
-        if (playlist) playlists.push(playlist);
+        const remoteId = stringField(playlist, "id");
+        if (!playlist || !remoteId || seenPlaylistIds.has(remoteId)) continue;
+        seenPlaylistIds.add(remoteId);
+        playlists.push(playlist);
       }
       next = typeof page.next === "string" && page.next.length > 0 ? page.next : null;
       first = false;

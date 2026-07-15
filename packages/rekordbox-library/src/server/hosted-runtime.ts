@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -10,9 +11,11 @@ import { createSoundCloudUserClient } from "@gakonst/soundcloud";
 
 import type {
   HostedMutationReceipt,
+  LibraryMutation,
   HostedPlaylistMutation,
   HostedPlaylistProvider,
   HostedPlaylistsResponse,
+  PlaylistItem,
   TrackSummary,
 } from "../shared/types.js";
 import {
@@ -24,8 +27,15 @@ import { HostedPlaylistCatalog } from "./hosted/catalog.js";
 import { hostedPlaylistId, parseHostedPlaylistId } from "./hosted/ids.js";
 import { SoundCloudHostedPlaylistAdapter } from "./hosted/soundcloud.js";
 import { SpotifyHostedPlaylistAdapter } from "./hosted/spotify.js";
-import type { HostedAdapterListResult, HostedPlaylistProviderAdapter } from "./hosted/types.js";
-import type { HostedPlaylistApi } from "./server.js";
+import {
+  HostedPlaylistCapabilityError,
+  HostedPlaylistConflictError,
+  HostedPlaylistVerificationError,
+  type HostedAdapterListResult,
+  type HostedPlaylistProviderAdapter,
+  errorMessage as hostedErrorMessage,
+} from "./hosted/types.js";
+import type { HostedPlaylistApi, LibraryApi } from "./server.js";
 
 export type DefaultHostedPlaylistRuntimeOptions = {
   statePath?: string;
@@ -39,7 +49,8 @@ export type DefaultHostedPlaylistRuntimeOptions = {
 export type HostedPlaylistRuntimeCatalog = Pick<
   HostedPlaylistCatalog,
   "getTracks" | "listPlaylists" | "mutate" | "streamTrack"
->;
+> &
+  Partial<Pick<HostedPlaylistCatalog, "refreshPlaylistState" | "refreshTrackState">>;
 
 export type HostedAcquisitionWorkerLifecycle = Pick<
   HostedPlaylistAcquisitionWorker,
@@ -57,7 +68,17 @@ export type HostedPlaylistRuntimeOptions = {
   trackCacheMs?: number;
   acquisition?: Omit<HostedPlaylistAcquisitionWorkerOptions, "catalog" | "onJobChanged" | "state">;
   createAcquisitionWorker?: HostedAcquisitionWorkerFactory;
+  outboxMaxAttempts?: number;
+  outboxRetryBaseMs?: number;
+  outboxRetryMaxMs?: number;
 };
+
+const OUTBOX_REVISION_PREFIX = "local-outbox:";
+const LOCAL_MIRROR_OUTBOX_PREFIX = "local-mirror:";
+type QueuedHostedPlaylistMutation = Exclude<
+  HostedPlaylistMutation,
+  { type: "create-hosted-playlist" | "set-hosted-playlist-download" }
+>;
 
 export async function createDefaultHostedPlaylistRuntime(
   options: DefaultHostedPlaylistRuntimeOptions = {},
@@ -94,9 +115,16 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   readonly #worker: HostedAcquisitionWorkerLifecycle;
   readonly #playlistCacheMs: number;
   readonly #trackCacheMs: number;
+  readonly #outboxMaxAttempts: number;
+  readonly #outboxRetryBaseMs: number;
+  readonly #outboxRetryMaxMs: number;
   readonly #jobListeners = new Set<(event: { playlistId: string }) => void>();
   #playlistCache: { expiresAt: number; promise: Promise<HostedPlaylistsResponse> } | undefined;
   readonly #trackCache = new Map<string, { expiresAt: number; promise: Promise<TrackSummary[]> }>();
+  #outboxDrain: Promise<void> | undefined;
+  #outboxRetryAt = 0;
+  #outboxRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  #closing = false;
   #closePromise: Promise<void> | undefined;
 
   constructor(options: HostedPlaylistRuntimeOptions) {
@@ -104,6 +132,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#state = options.state;
     this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 60_000);
     this.#trackCacheMs = positiveDuration(options.trackCacheMs, 30_000);
+    this.#outboxMaxAttempts = positiveInteger(options.outboxMaxAttempts, 4, "Outbox attempts");
+    this.#outboxRetryBaseMs = positiveDuration(options.outboxRetryBaseMs, 250);
+    this.#outboxRetryMaxMs = positiveDuration(options.outboxRetryMaxMs, 5_000);
     const createWorker =
       options.createAcquisitionWorker ??
       ((workerOptions: HostedPlaylistAcquisitionWorkerOptions) =>
@@ -115,6 +146,7 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
       onJobChanged: (job) => this.#handleJobChanged(job),
     });
     this.#worker.start();
+    void this.#kickOutbox().catch(() => undefined);
   }
 
   listPlaylists(): Promise<HostedPlaylistsResponse> {
@@ -149,12 +181,86 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     return this.#catalog.streamTrack(trackId);
   }
 
+  /** Mirror an already-committed local playlist edit through the durable provider outbox. */
+  mirrorLocalMutation(
+    mutation: LibraryMutation,
+    library: Pick<LibraryApi, "getTracks">,
+  ): HostedMutationReceipt | undefined {
+    if (mutation.type === "delete-playlist") {
+      this.#detachDeletedLocalPlaylists(new Set(mutation.expectedPlaylistIds));
+      return undefined;
+    }
+    const localPlaylistId = localPlaylistMutationId(mutation);
+    if (!localPlaylistId) return undefined;
+
+    let configured;
+    try {
+      configured = this.#state.getPlaylistByLocalId(localPlaylistId);
+    } catch (error) {
+      // Ambiguous legacy mappings have no safe provider target. Mark every candidate, change none.
+      for (const candidate of this.#state.listPlaylists()) {
+        if (candidate.localPlaylistId !== localPlaylistId) continue;
+        this.#state.updatePlaylistSync(candidate.provider, candidate.remoteId, {
+          state: "error",
+          error: hostedErrorMessage(error),
+        });
+        this.#emitPlaylistChanged(hostedPlaylistId(candidate.provider, candidate.remoteId));
+      }
+      return undefined;
+    }
+    if (!configured) return undefined;
+
+    const playlistId = hostedPlaylistId(configured.provider, configured.remoteId);
+    try {
+      const pending = this.#state.getLatestPendingMutation(playlistId);
+      const expectedRevision = pending ? outboxRevision(pending.id) : configured.revision;
+      const hostedMutation: QueuedHostedPlaylistMutation =
+        mutation.type === "rename-playlist"
+          ? {
+              type: "rename-hosted-playlist",
+              playlistId,
+              name: mutation.name,
+              expectedRevision,
+            }
+          : {
+              type: "replace-hosted-playlist-tracks",
+              playlistId,
+              remoteTrackIds: this.#remoteTrackIdsForLocalPlaylist(
+                configured.provider,
+                localPlaylistId,
+                library,
+              ),
+              expectedRevision,
+            };
+      const receipt = this.#enqueueProviderMutation(
+        hostedMutation,
+        `${LOCAL_MIRROR_OUTBOX_PREFIX}${randomUUID()}`,
+      );
+      this.#emitPlaylistChanged(playlistId);
+      return receipt;
+    } catch (error) {
+      this.#state.updatePlaylistSync(configured.provider, configured.remoteId, {
+        state: "error",
+        error: hostedErrorMessage(error),
+      });
+      this.#invalidateHostedPlaylist(playlistId);
+      this.#emitPlaylistChanged(playlistId);
+      return undefined;
+    }
+  }
+
   onJobChanged(listener: (event: { playlistId: string }) => void): () => void {
     this.#jobListeners.add(listener);
     return () => this.#jobListeners.delete(listener);
   }
 
   async mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt> {
+    if (
+      mutation.type !== "set-hosted-playlist-download" &&
+      mutation.type !== "create-hosted-playlist"
+    ) {
+      return this.#enqueueProviderMutation(mutation);
+    }
     const priorPlaylists = this.#playlistCache?.promise;
     const receipt = await this.#catalog.mutate(mutation);
     this.#playlistCache = undefined;
@@ -191,26 +297,6 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
           this.#state.getActiveDownload(provider, mutation.playlistId);
         if (active) this.#worker.cancel(active.id);
       }
-    } else if (mutation.type === "replace-hosted-playlist-tracks") {
-      const { provider, remoteId } = parseHostedPlaylistId(mutation.playlistId);
-      const configured = this.#state.getPlaylist(provider, remoteId);
-      if (configured?.downloadEnabled) {
-        const playlist = (await priorPlaylists?.catch(() => undefined))?.items.find(
-          (candidate) => candidate.id === mutation.playlistId,
-        );
-        this.#state.updatePlaylistSync(provider, remoteId, {
-          revision: receipt.revision,
-          state: "queued",
-          error: null,
-        });
-        this.#state.enqueueDownload(provider, remoteId, {
-          hostedPlaylistId: mutation.playlistId,
-          ...(playlist ? { playlistName: playlist.name } : {}),
-          ...(playlist?.hosted?.externalUrl ? { externalUrl: playlist.hosted.externalUrl } : {}),
-          ...(receipt.revision ? { revision: receipt.revision } : {}),
-        });
-        void this.#worker.kick().catch(() => undefined);
-      }
     }
     return receipt;
   }
@@ -221,13 +307,270 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   }
 
   async #close(): Promise<void> {
+    this.#closing = true;
+    if (this.#outboxRetryTimer) clearTimeout(this.#outboxRetryTimer);
+    this.#outboxRetryTimer = undefined;
     this.#jobListeners.clear();
     this.#trackCache.clear();
     this.#playlistCache = undefined;
     try {
+      await this.#outboxDrain;
       await this.#worker.close();
     } finally {
       this.#state.close();
+    }
+  }
+
+  #enqueueProviderMutation(
+    mutation: Exclude<
+      HostedPlaylistMutation,
+      { type: "create-hosted-playlist" | "set-hosted-playlist-download" }
+    >,
+    dedupeKey = `provider-write:${randomUUID()}`,
+  ): HostedMutationReceipt {
+    const reference = parseHostedPlaylistId(mutation.playlistId);
+    const entry = this.#state.enqueueMutation(mutation, dedupeKey);
+    const stored = this.#state.getPlaylist(reference.provider, reference.remoteId);
+    this.#state.updatePlaylistSync(reference.provider, reference.remoteId, {
+      ...(!stored && mutation.expectedRevision !== null
+        ? { revision: mutation.expectedRevision }
+        : {}),
+      state: "queued",
+      error: null,
+    });
+    this.#invalidateHostedPlaylist(mutation.playlistId);
+    this.#requestOutboxKick();
+    return {
+      operation: mutation.type,
+      playlistId: mutation.playlistId,
+      revision: outboxRevision(entry.id),
+      queuedAt: entry.createdAt,
+    };
+  }
+
+  #requestOutboxKick(): void {
+    void this.#kickOutbox()
+      .catch(() => undefined)
+      .finally(() => {
+        // Covers enqueueing in the tiny window after an empty drain resolves but before cleanup.
+        if (!this.#closing) void this.#kickOutbox().catch(() => undefined);
+      });
+  }
+
+  #kickOutbox(): Promise<void> {
+    if (this.#closing) return Promise.resolve();
+    const remainingDelay = this.#outboxRetryAt - Date.now();
+    if (remainingDelay > 0) {
+      this.#scheduleOutboxRetry(remainingDelay);
+      return this.#outboxDrain ?? Promise.resolve();
+    }
+    if (!this.#outboxDrain) {
+      const running = this.#drainOutbox();
+      let wrapped: Promise<void>;
+      wrapped = running.finally(() => {
+        if (this.#outboxDrain === wrapped) this.#outboxDrain = undefined;
+      });
+      this.#outboxDrain = wrapped;
+    }
+    return this.#outboxDrain;
+  }
+
+  async #drainOutbox(): Promise<void> {
+    while (!this.#closing) {
+      const entry = this.#state.claimNextMutation();
+      if (!entry) return;
+      const playlistId = entry.playlistId;
+      try {
+        const mutation = this.#resolveOutboxRevision(
+          requireQueuedHostedMutation(entry.mutation),
+          entry.id,
+        );
+        const receipt = await this.#catalog.mutate(mutation);
+        await this.#finishProviderMutation(
+          mutation,
+          receipt,
+          entry.dedupeKey.startsWith(LOCAL_MIRROR_OUTBOX_PREFIX),
+        );
+        this.#state.completeMutation(entry.id);
+      } catch (error) {
+        const retry = shouldRetryOutboxMutation(error, entry.attempts, this.#outboxMaxAttempts);
+        this.#state.failMutation(entry.id, hostedErrorMessage(error), retry);
+        if (playlistId) {
+          const { provider, remoteId } = parseHostedPlaylistId(playlistId);
+          this.#state.updatePlaylistSync(provider, remoteId, {
+            state: retry ? "queued" : "error",
+            error: hostedErrorMessage(error),
+          });
+          this.#invalidateHostedPlaylist(playlistId);
+          this.#emitPlaylistChanged(playlistId);
+        }
+        if (retry) {
+          const delay = Math.min(
+            this.#outboxRetryMaxMs,
+            this.#outboxRetryBaseMs * 2 ** Math.max(0, entry.attempts - 1),
+          );
+          this.#outboxRetryAt = Date.now() + delay;
+          this.#scheduleOutboxRetry(delay);
+          return;
+        }
+      }
+    }
+  }
+
+  #resolveOutboxRevision(
+    mutation: QueuedHostedPlaylistMutation,
+    entryId: string,
+  ): QueuedHostedPlaylistMutation {
+    const dependencyId = parseOutboxRevision(mutation.expectedRevision);
+    if (!dependencyId) return mutation;
+    if (dependencyId !== entryId) {
+      const dependency = this.#state.getOutbox(dependencyId);
+      if (dependency?.status === "failed") {
+        throw new HostedMutationDependencyError(dependencyId, dependency.error);
+      }
+      if (dependency) {
+        throw new Error(`Hosted mutation dependency ${dependencyId} has not completed`);
+      }
+    }
+    const { provider, remoteId } = parseHostedPlaylistId(mutation.playlistId);
+    return {
+      ...mutation,
+      expectedRevision: this.#state.getPlaylist(provider, remoteId)?.revision ?? null,
+    };
+  }
+
+  async #finishProviderMutation(
+    mutation: QueuedHostedPlaylistMutation,
+    receipt: HostedMutationReceipt,
+    skipConfiguredDownload = false,
+  ): Promise<void> {
+    const playlistId = receipt.playlistId;
+    const { provider, remoteId } = parseHostedPlaylistId(playlistId);
+    if (mutation.type === "delete-hosted-playlist") {
+      this.#state.setDownloadEnabled(provider, remoteId, false);
+      this.#state.updatePlaylistSync(provider, remoteId, {
+        revision: null,
+        state: "idle",
+        error: null,
+      });
+      const active = this.#state.getActiveDownload(provider, remoteId);
+      if (active) this.#worker.cancel(active.id);
+    } else {
+      this.#state.updatePlaylistSync(provider, remoteId, {
+        revision: receipt.revision,
+        state: "idle",
+        error: null,
+      });
+    }
+    this.#invalidateHostedPlaylist(playlistId);
+    this.#emitPlaylistChanged(playlistId);
+    if (mutation.type === "replace-hosted-playlist-tracks" && !skipConfiguredDownload) {
+      await this.#queueConfiguredDownload(playlistId, receipt.revision);
+    }
+  }
+
+  #remoteTrackIdsForLocalPlaylist(
+    provider: HostedPlaylistProvider,
+    playlistId: string,
+    library: Pick<LibraryApi, "getTracks">,
+  ): string[] {
+    const response = library.getTracks({
+      playlistId,
+      limit: 10_000,
+      offset: 0,
+      sort: { field: "position", direction: "asc" },
+    });
+    if (response.items.length !== response.count) {
+      throw new Error(
+        `Local playlist '${playlistId}' has ${String(response.count)} tracks; refusing a partial hosted replacement`,
+      );
+    }
+    const mappings = new Map<string, Set<string>>();
+    for (const mapping of this.#state.listTracksByLocalContentIds(
+      provider,
+      response.items.map((track) => track.id),
+    )) {
+      if (!mapping.localContentId) continue;
+      const remoteIds = mappings.get(mapping.localContentId) ?? new Set<string>();
+      remoteIds.add(mapping.remoteTrackId);
+      mappings.set(mapping.localContentId, remoteIds);
+    }
+    return response.items.map((track) => {
+      const remoteIds = mappings.get(track.id);
+      if (!remoteIds?.size) {
+        throw new Error(
+          `Local track '${track.id}' has no ${provider} identity mapping; hosted playlist was not changed`,
+        );
+      }
+      if (remoteIds.size !== 1) {
+        throw new Error(
+          `Local track '${track.id}' has multiple ${provider} identity mappings; hosted playlist was not changed`,
+        );
+      }
+      return remoteIds.values().next().value!;
+    });
+  }
+
+  #detachDeletedLocalPlaylists(localPlaylistIds: ReadonlySet<string>): void {
+    for (const configured of this.#state.listPlaylists()) {
+      if (!configured.localPlaylistId || !localPlaylistIds.has(configured.localPlaylistId))
+        continue;
+      this.#state.updatePlaylistSync(configured.provider, configured.remoteId, {
+        localPlaylistId: null,
+      });
+      const playlistId = hostedPlaylistId(configured.provider, configured.remoteId);
+      this.#invalidateHostedPlaylist(playlistId);
+      this.#emitPlaylistChanged(playlistId);
+    }
+  }
+
+  async #queueConfiguredDownload(playlistId: string, revision: string | null): Promise<void> {
+    const { provider, remoteId } = parseHostedPlaylistId(playlistId);
+    if (!this.#state.getPlaylist(provider, remoteId)?.downloadEnabled) return;
+    let playlist: PlaylistItem | undefined;
+    try {
+      playlist = (await this.#catalog.listPlaylists()).items.find(
+        (candidate) => candidate.id === playlistId,
+      );
+    } catch {
+      // Metadata is optional; acquisition re-fetches the authoritative track list.
+    }
+    this.#state.updatePlaylistSync(provider, remoteId, {
+      revision,
+      state: "queued",
+      error: null,
+    });
+    this.#state.enqueueDownload(provider, remoteId, {
+      hostedPlaylistId: playlistId,
+      ...(playlist ? { playlistName: playlist.name } : {}),
+      ...(playlist?.hosted?.externalUrl ? { externalUrl: playlist.hosted.externalUrl } : {}),
+      ...(revision ? { revision } : {}),
+    });
+    void this.#worker.kick().catch(() => undefined);
+  }
+
+  #scheduleOutboxRetry(delay: number): void {
+    if (this.#closing || this.#outboxRetryTimer) return;
+    this.#outboxRetryTimer = setTimeout(() => {
+      this.#outboxRetryTimer = undefined;
+      this.#outboxRetryAt = 0;
+      void this.#kickOutbox();
+    }, delay);
+    this.#outboxRetryTimer.unref?.();
+  }
+
+  #invalidateHostedPlaylist(playlistId: string): void {
+    this.#playlistCache = undefined;
+    this.#trackCache.delete(playlistId);
+  }
+
+  #emitPlaylistChanged(playlistId: string): void {
+    for (const listener of this.#jobListeners) {
+      try {
+        listener({ playlistId });
+      } catch {
+        // One observer must not interrupt durable queue progress or other observers.
+      }
     }
   }
 
@@ -275,15 +618,34 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
       : typeof payloadPlaylistId === "string" && payloadPlaylistId.startsWith("hosted:")
         ? payloadPlaylistId
         : hostedPlaylistId(job.provider, job.playlistId);
-    this.#playlistCache = undefined;
-    this.#trackCache.delete(playlistId);
-    for (const listener of this.#jobListeners) {
-      try {
-        listener({ playlistId });
-      } catch {
-        // One observer must not interrupt durable queue progress or other observers.
-      }
+    const playlistCache = this.#playlistCache;
+    if (playlistCache && this.#catalog.refreshPlaylistState) {
+      const promise = playlistCache.promise.then((response) =>
+        this.#catalog.refreshPlaylistState!(response),
+      );
+      this.#playlistCache = { ...playlistCache, promise };
+    } else {
+      this.#playlistCache = undefined;
     }
+    const trackCache = this.#trackCache.get(playlistId);
+    if (trackCache && this.#catalog.refreshTrackState) {
+      const promise = trackCache.promise.then((tracks) =>
+        this.#catalog.refreshTrackState!(playlistId, tracks),
+      );
+      this.#trackCache.set(playlistId, { ...trackCache, promise });
+    } else {
+      this.#trackCache.delete(playlistId);
+    }
+    this.#emitPlaylistChanged(playlistId);
+  }
+}
+
+class HostedMutationDependencyError extends Error {
+  constructor(dependencyId: string, reason: string | null) {
+    super(
+      `Hosted mutation depends on failed mutation ${dependencyId}${reason ? `: ${reason}` : ""}`,
+    );
+    this.name = "HostedMutationDependencyError";
   }
 }
 
@@ -359,6 +721,73 @@ function positiveDuration(value: number | undefined, fallback: number): number {
   if (!Number.isSafeInteger(value) || value < 0)
     throw new RangeError("Cache duration must be a non-negative integer");
   return value;
+}
+
+function positiveInteger(value: number | undefined, fallback: number, label: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 1)
+    throw new RangeError(`${label} must be a positive integer`);
+  return value;
+}
+
+function outboxRevision(entryId: string): string {
+  return `${OUTBOX_REVISION_PREFIX}${entryId}`;
+}
+
+function parseOutboxRevision(revision: string | null): string | undefined {
+  if (!revision?.startsWith(OUTBOX_REVISION_PREFIX)) return undefined;
+  const entryId = revision.slice(OUTBOX_REVISION_PREFIX.length);
+  return entryId || undefined;
+}
+
+function requireQueuedHostedMutation(
+  mutation: HostedPlaylistMutation,
+): QueuedHostedPlaylistMutation {
+  if (
+    mutation.type === "create-hosted-playlist" ||
+    mutation.type === "set-hosted-playlist-download"
+  ) {
+    throw new HostedMutationDependencyError(
+      "invalid-outbox-entry",
+      `${mutation.type} cannot run through the provider-write outbox`,
+    );
+  }
+  return mutation;
+}
+
+function localPlaylistMutationId(mutation: LibraryMutation): string | undefined {
+  switch (mutation.type) {
+    case "rename-playlist":
+    case "add-track":
+    case "remove-track":
+    case "move-track":
+    case "replace-playlist-tracks":
+      return mutation.playlistId;
+    default:
+      return undefined;
+  }
+}
+
+function shouldRetryOutboxMutation(error: unknown, attempts: number, maxAttempts: number): boolean {
+  if (attempts >= maxAttempts) return false;
+  if (
+    error instanceof HostedMutationDependencyError ||
+    error instanceof HostedPlaylistCapabilityError ||
+    error instanceof HostedPlaylistConflictError ||
+    error instanceof HostedPlaylistVerificationError
+  ) {
+    return false;
+  }
+  const status = httpStatus(error);
+  return (
+    status === undefined || status === 408 || status === 425 || status === 429 || status >= 500
+  );
+}
+
+function httpStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("status" in error)) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" && Number.isInteger(status) ? status : undefined;
 }
 
 function errorMessage(error: unknown): string {

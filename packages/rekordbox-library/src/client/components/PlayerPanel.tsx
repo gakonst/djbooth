@@ -34,6 +34,7 @@ import {
   type TrackSourceProvider,
 } from "../track-sources.js";
 import { PlayerWaveformCanvas } from "./PlayerWaveformCanvas.js";
+import { RgbWaveform } from "./RgbWaveform.js";
 import { SpotifyEmbedPlayer, type SpotifyEmbedPlayerHandle } from "./SpotifyEmbedPlayer.js";
 
 export type PlayerTrack = {
@@ -158,7 +159,10 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const waveformElementRef = useRef<HTMLDivElement>(null);
   const waveSurferRef = useRef<WaveSurfer | undefined>(undefined);
   const spotifyPlayerRef = useRef<SpotifyEmbedPlayerHandle>(null);
+  const spotifyWasPlayingRef = useRef(false);
   const hlsRef = useRef<Hls | undefined>(undefined);
+  const soundCloudReadyRef = useRef(false);
+  const soundCloudPlayPendingRef = useRef(false);
   const callbacksRef = useRef({ onEnded, onReady, onTimeChange, onPlayStateChange, onError });
   const [playing, setPlaying] = useState(false);
   const [loadingPercent, setLoadingPercent] = useState(0);
@@ -241,17 +245,24 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       spotifyPlayerRef.current?.play();
       return;
     }
+    if (soundCloudStreaming && !soundCloudReadyRef.current) {
+      soundCloudPlayPendingRef.current = true;
+      return;
+    }
     if (!track?.fileExists || !waveSurferRef.current) return;
     try {
       await waveSurferRef.current?.play();
     } catch (error) {
       reportError(error);
     }
-  }, [reportError, spotifyStreaming, track?.fileExists]);
+  }, [reportError, soundCloudStreaming, spotifyStreaming, track?.fileExists]);
 
   const pause = useCallback(() => {
     if (spotifyStreaming) spotifyPlayerRef.current?.pause();
-    else waveSurferRef.current?.pause();
+    else {
+      soundCloudPlayPendingRef.current = false;
+      waveSurferRef.current?.pause();
+    }
   }, [spotifyStreaming]);
   const toggle = useCallback(async () => {
     if (spotifyStreaming) {
@@ -297,6 +308,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
     setWaveformData(null);
+    soundCloudReadyRef.current = false;
+    soundCloudPlayPendingRef.current = false;
     if (!container || !track || !audioUrl || track.fileExists === false || spotifyStreaming) return;
     const controller = new AbortController();
     const media = soundCloudStreaming ? document.createElement("audio") : undefined;
@@ -318,6 +331,12 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     waveSurfer.setVolume(volume);
     waveSurfer.setMuted(muted);
 
+    const reportWaveSurferError = (error: Error) => {
+      // Hls.js owns MSE recovery for SoundCloud. Chromium can emit a transient MEDIA_ERR_SRC_NOT_SUPPORTED
+      // while a MediaSource is being replaced; surfacing that generic element error races Hls.js recovery
+      // and produces the misleading "no supported source" toast.
+      if (!soundCloudStreaming || !Hls.isSupported()) reportError(error);
+    };
     const unsubscribers = [
       waveSurfer.on("loading", (percent) => {
         if (!controller.signal.aborted) setLoadingPercent(percent);
@@ -351,9 +370,32 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         callbacksRef.current.onEnded?.();
       }),
       waveSurfer.on("error", (error) => {
-        if (!controller.signal.aborted) reportError(error);
+        if (!controller.signal.aborted) reportWaveSurferError(error);
       }),
     ];
+
+    let mediaReady = false;
+    const markSoundCloudReady = () => {
+      if (!media || mediaReady || controller.signal.aborted) return;
+      mediaReady = true;
+      soundCloudReadyRef.current = true;
+      const loadedDuration =
+        finitePositive(media.duration) ?? finitePositive(track.durationSeconds);
+      if (loadedDuration) setDuration(loadedDuration);
+      setLoadingPercent(100);
+      setReady(true);
+      callbacksRef.current.onReady?.();
+      if (soundCloudPlayPendingRef.current) {
+        soundCloudPlayPendingRef.current = false;
+        void waveSurfer.play().catch(reportError);
+      }
+    };
+    const updateSoundCloudDuration = () => {
+      const loadedDuration = media ? finitePositive(media.duration) : undefined;
+      if (loadedDuration) setDuration(loadedDuration);
+    };
+    media?.addEventListener("loadedmetadata", updateSoundCloudDuration);
+    media?.addEventListener("canplay", markSoundCloudReady, { once: true });
 
     const waveformRequest = (async () => {
       try {
@@ -369,6 +411,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         // playback readiness, and can be drawn over the placeholder without reloading the media.
         if (soundCloudStreaming && media) {
           if (Hls.isSupported()) {
+            let recoveredMediaError = false;
             const hls = new Hls({
               autoStartLoad: true,
               enableWorker: true,
@@ -377,10 +420,18 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
             hlsRef.current = hls;
             hls.on(HlsEvents.ERROR, (_event, data) => {
               if (controller.signal.aborted) return;
-              if (data.fatal || data.type === ErrorTypes.MEDIA_ERROR) reportError(data.error);
+              if (!data.fatal) return;
+              if (data.type === ErrorTypes.MEDIA_ERROR && !recoveredMediaError) {
+                recoveredMediaError = true;
+                hls.recoverMediaError();
+                return;
+              }
+              reportError(data.error);
+            });
+            hls.on(HlsEvents.MEDIA_ATTACHED, () => {
+              if (!controller.signal.aborted) hls.loadSource(audioUrl);
             });
             hls.attachMedia(media);
-            hls.loadSource(audioUrl);
           } else if (media.canPlayType("application/vnd.apple.mpegurl")) {
             media.src = audioUrl;
             media.load();
@@ -404,6 +455,10 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     return () => {
       controller.abort();
       for (const unsubscribe of unsubscribers) unsubscribe();
+      media?.removeEventListener("loadedmetadata", updateSoundCloudDuration);
+      media?.removeEventListener("canplay", markSoundCloudReady);
+      soundCloudReadyRef.current = false;
+      soundCloudPlayPendingRef.current = false;
       hlsRef.current?.destroy();
       hlsRef.current = undefined;
       waveSurfer.destroy();
@@ -423,6 +478,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 
   useEffect(() => setLoadAttempt(0), [track?.id]);
   useEffect(() => setSelectedHotCueSlot(undefined), [track?.id]);
+  useEffect(() => {
+    spotifyWasPlayingRef.current = false;
+  }, [track?.id]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !track) return;
@@ -493,66 +551,108 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
           }}
           onPlaybackUpdate={(update) => {
             const seconds = update.position / 1_000;
+            const durationSeconds = update.duration / 1_000;
+            const ended =
+              spotifyWasPlayingRef.current &&
+              update.isPaused &&
+              durationSeconds > 0 &&
+              seconds >= durationSeconds - 0.75;
+            spotifyWasPlayingRef.current = !update.isPaused;
             setCurrentTime(seconds);
-            setDuration(update.duration / 1_000);
+            setDuration(durationSeconds);
             setPlaying(!update.isPaused);
             setReady(!update.isBuffering);
             callbacksRef.current.onTimeChange?.(seconds);
             callbacksRef.current.onPlayStateChange?.(!update.isPaused);
+            if (ended) callbacksRef.current.onEnded?.();
           }}
           onError={reportError}
         />
       ) : null}
-      <div className="player-identity">
-        <div className="player-track-copy">
-          <div className="player-track-title-row">
-            <strong title={track?.title}>{track?.title || "No track selected"}</strong>
-            {trackSources.length ? (
-              <div className="player-source-links" aria-label="Track sources">
-                {trackSources.map((source) => {
-                  const label = sourceLabel(source);
-                  return source.url ? (
-                    <a
-                      key={source.provider}
-                      className="player-source-badge"
-                      data-provider={source.provider}
-                      href={source.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={label}
-                      title={label}
-                    >
-                      <TrackSourceIcon provider={source.provider} />
-                    </a>
-                  ) : (
-                    <span
-                      key={source.provider}
-                      className="player-source-badge is-static"
-                      data-provider={source.provider}
-                      aria-label={label}
-                      title={label}
-                    >
-                      <TrackSourceIcon provider={source.provider} />
-                    </span>
-                  );
-                })}
+      <div className="player-overview">
+        <div className="player-overview-header">
+          <div className="player-track-copy">
+            <div className="player-track-title-row">
+              <strong title={track?.title}>{track?.title || "No track selected"}</strong>
+              {trackSources.length ? (
+                <div className="player-source-links" aria-label="Track sources">
+                  {trackSources.map((source) => {
+                    const label = sourceLabel(source);
+                    return source.url ? (
+                      <a
+                        key={source.provider}
+                        className="player-source-badge"
+                        data-provider={source.provider}
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={label}
+                        title={label}
+                      >
+                        <TrackSourceIcon provider={source.provider} />
+                      </a>
+                    ) : (
+                      <span
+                        key={source.provider}
+                        className="player-source-badge is-static"
+                        data-provider={source.provider}
+                        aria-label={label}
+                        title={label}
+                      >
+                        <TrackSourceIcon provider={source.provider} />
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+            <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
+              {track
+                ? [track.artist ?? "Unknown artist", track.album].filter(Boolean).join(" · ")
+                : "Double-click a track to load it"}
+            </span>
+            {track ? (
+              <div className="player-track-metadata" aria-label="Track metadata">
+                <b>{formatBpm(track.bpm)} BPM</b>
+                <b>{track.key ?? "—"}</b>
+                {track.genre ? <span>{track.genre}</span> : null}
+                {track.rating ? <span>{"★".repeat(Math.min(5, track.rating))}</span> : null}
               </div>
             ) : null}
           </div>
-          <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
-            {track
-              ? [track.artist ?? "Unknown artist", track.album].filter(Boolean).join(" · ")
-              : "Double-click a track to load it"}
-          </span>
-          {track ? (
-            <div className="player-track-metadata" aria-label="Track metadata">
-              <b>{formatBpm(track.bpm)} BPM</b>
-              <b>{track.key ?? "—"}</b>
-              {track.genre ? <span>{track.genre}</span> : null}
-              {track.rating ? <span>{"★".repeat(Math.min(5, track.rating))}</span> : null}
-            </div>
-          ) : null}
+          <div className="player-overview-stats" aria-label="Playback and track statistics">
+            <span>−{formatTime(Math.max(0, effectiveDuration - currentTime))}</span>
+            <span>{formatTime(currentTime)}</span>
+            <span>{track?.key ?? "—"}</span>
+            <span>{formatBpm(track?.bpm)}</span>
+          </div>
         </div>
+        <button
+          className="player-overview-waveform"
+          type="button"
+          disabled={unavailable || !ready || effectiveDuration <= 0}
+          onClick={(event) => {
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const ratio = clamp((event.clientX - bounds.left) / Math.max(1, bounds.width), 0, 1);
+            seekTo(ratio * effectiveDuration);
+          }}
+          aria-label="Track overview waveform"
+          title="Click to seek"
+        >
+          <RgbWaveform waveform={waveformData} className="player-overview-waveform-canvas" />
+          <span
+            className="player-overview-playhead"
+            style={{
+              left: `${String(
+                effectiveDuration > 0 ? clamp(currentTime / effectiveDuration, 0, 1) * 100 : 0,
+              )}%`,
+            }}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+
+      <div className="player-identity">
         <div className="player-transport" aria-label="Playback controls">
           <button
             className="player-control-button"
@@ -624,6 +724,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
             disabled={unavailable || !ready}
             duration={effectiveDuration}
             onSeek={seekTo}
+            playing={playing}
             waveform={waveformData}
           />
         </div>
