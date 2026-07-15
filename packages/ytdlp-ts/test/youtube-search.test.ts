@@ -103,6 +103,79 @@ describe('native YouTube search', () => {
     expect(pages).toBe(5)
   })
 
+  it('keeps earlier results when a continuation fails or is empty', async () => {
+    const firstResult = searchVideo('abcdefghijk', 'Artist - Track', 300)
+    const continuationError = new Error('No contents found in search response')
+    const failedContinuation: YoutubeNativeSearchClientFactory = async () => ({
+      async search() {
+        return {
+          videos: [firstResult],
+          has_continuation: true,
+          async getContinuation() {
+            throw continuationError
+          },
+        }
+      },
+    })
+    const emptyContinuation: YoutubeNativeSearchClientFactory = async () => ({
+      async search() {
+        return {
+          videos: [firstResult],
+          has_continuation: true,
+          async getContinuation() {
+            return { videos: [] }
+          },
+        }
+      },
+    })
+
+    await expect(searchYoutube('track', { limit: 2 }, failedContinuation)).resolves.toEqual([
+      expect.objectContaining({ id: 'abcdefghijk' }),
+    ])
+    await expect(searchYoutube('track', { limit: 2 }, emptyContinuation)).resolves.toEqual([
+      expect.objectContaining({ id: 'abcdefghijk' }),
+    ])
+  })
+
+  it('preserves continuation errors when no valid results exist', async () => {
+    const continuationError = new Error('No contents found in search response')
+    const createClient: YoutubeNativeSearchClientFactory = async () => ({
+      async search() {
+        return {
+          videos: [{ video_id: 'invalid', title: text('Invalid') }],
+          has_continuation: true,
+          async getContinuation() {
+            throw continuationError
+          },
+        }
+      },
+    })
+
+    await expect(searchYoutube('track', { limit: 2 }, createClient)).rejects.toBe(
+      continuationError,
+    )
+  })
+
+  it('preserves aborts while loading a continuation with earlier results', async () => {
+    const controller = new AbortController()
+    const createClient: YoutubeNativeSearchClientFactory = async () => ({
+      async search() {
+        return {
+          videos: [searchVideo('abcdefghijk', 'Artist - Track', 300)],
+          has_continuation: true,
+          getContinuation: () =>
+            new Promise(() => {
+              controller.abort()
+            }),
+        }
+      },
+    })
+
+    await expect(
+      searchYoutube('track', { limit: 2, signal: controller.signal }, createClient),
+    ).rejects.toMatchObject({ code: 'ABORTED' })
+  })
+
   it('honors an already-aborted signal before creating a client', async () => {
     const controller = new AbortController()
     controller.abort()

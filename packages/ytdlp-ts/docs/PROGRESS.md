@@ -2,6 +2,14 @@
 
 This is the append-only engineering journal for the port. Dates use Pacific Time.
 
+## 2026-07-14 — Resilient native YouTube search pagination
+
+- Kept valid earlier-page search candidates when a later YouTube.js continuation is empty or
+  fails, including its `No contents found in search response` parser failure.
+- Preserved fail-closed behavior when no valid candidate has been collected and preserved aborts
+  at every pagination boundary.
+- Added isolated failed, empty, and aborted-continuation coverage without media downloads.
+
 ## 2026-07-13 — Fail-closed delegation and bounded defaults
 
 - Changed total music workers and native YouTube tracks to a network-bound default of three;

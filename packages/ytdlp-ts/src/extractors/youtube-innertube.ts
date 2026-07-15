@@ -145,7 +145,15 @@ export async function searchYoutube(
     ) {
       break
     }
-    page = await abortable(page.getContinuation(), options.signal)
+    try {
+      page = await abortable(page.getContinuation(), options.signal)
+    } catch (error: unknown) {
+      throwIfAborted(options.signal)
+      if (results.length === 0 || (error instanceof YtdlpError && error.code === 'ABORTED')) {
+        throw error
+      }
+      break
+    }
   }
   return results
 }
