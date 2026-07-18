@@ -62,6 +62,8 @@ export type PlaylistItem = {
 
 export type HostedTrackDownloadState = "remote" | "queued" | "downloading" | "downloaded" | "error";
 
+export type HostedTrackStreamKind = "hls" | "progressive";
+
 export type HostedTrack = {
   provider: HostedPlaylistProvider;
   /** Provider-native track URI or URN. */
@@ -70,6 +72,8 @@ export type HostedTrack = {
   localContentId: string | null;
   downloadState: HostedTrackDownloadState;
   downloadError?: string;
+  /** Provider playback transport, when it can be determined from catalog metadata. */
+  streamKind?: HostedTrackStreamKind;
   /** Provider identity metadata retained for exact acquisition matching. */
   isrc?: string;
   releaseDate?: string;

@@ -80,6 +80,37 @@ describe("SoundCloudHostedPlaylistAdapter", () => {
     expect(client.updatePlaylist).not.toHaveBeenCalled();
   });
 
+  it("exposes the playback transport for playable and preview tracks", async () => {
+    const urn = "soundcloud:playlists:1";
+    const playlist = soundCloudPlaylist(urn, "Owned", "soundcloud:users:me", 3);
+    const playable = {
+      ...soundCloudTrack("soundcloud:tracks:1"),
+      access: "playable",
+      streamable: true,
+    };
+    const preview = {
+      ...soundCloudTrack("soundcloud:tracks:2"),
+      access: "preview",
+      streamable: true,
+    };
+    const unavailable = {
+      ...soundCloudTrack("soundcloud:tracks:3"),
+      access: "playable",
+      streamable: false,
+    };
+    const client = new FakeSoundCloudClient([playlist]);
+    client.trackPages.set(urn, [[playable, preview, unavailable]]);
+    const adapter = new SoundCloudHostedPlaylistAdapter(client);
+
+    const tracks = await adapter.getTracks(urn);
+
+    expect(tracks.map((track) => track.hosted?.streamKind)).toEqual([
+      "hls",
+      "progressive",
+      undefined,
+    ]);
+  });
+
   it("resolves the current authenticated AAC HLS stream without requesting media in tests", async () => {
     const urn = "soundcloud:playlists:1";
     const playlist = soundCloudPlaylist(urn, "Owned", "soundcloud:users:me", 1);

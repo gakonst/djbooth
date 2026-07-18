@@ -3,6 +3,7 @@ import type {
   HostedPlaylistProvider,
   HostedPlaylistSyncState,
   HostedTrackDownloadState,
+  HostedTrackStreamKind,
   PlaylistItem,
   TrackSummary,
 } from "../../shared/types.js";
@@ -19,7 +20,7 @@ export type HostedTrackStreamRequest = {
 };
 
 export type HostedTrackStream = {
-  kind: "hls" | "progressive";
+  kind: HostedTrackStreamKind;
   response: Response;
 };
 

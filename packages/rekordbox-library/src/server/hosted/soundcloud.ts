@@ -1,4 +1,4 @@
-import type { PlaylistItem, TrackSummary } from "../../shared/types.js";
+import type { HostedTrackStreamKind, PlaylistItem, TrackSummary } from "../../shared/types.js";
 import {
   hostedPlaylistId,
   hostedPlaylistMembershipId,
@@ -453,9 +453,20 @@ function soundCloudTrackSummary(
       externalUrl: stringField(track, "permalink_url"),
       localContentId: null,
       downloadState: "remote",
+      ...soundCloudStreamKind(track),
       ...(stringField(track, "isrc") ? { isrc: stringField(track, "isrc")! } : {}),
     },
   };
+}
+
+function soundCloudStreamKind(track: Record<string, unknown>): {
+  streamKind?: HostedTrackStreamKind;
+} {
+  if (track.streamable === false) return {};
+  const access = stringField(track, "access");
+  if (access === "preview") return { streamKind: "progressive" };
+  if (access === "playable") return { streamKind: "hls" };
+  return {};
 }
 
 function soundCloudPlaylistUrn(playlist: Record<string, unknown> | undefined): string | undefined {

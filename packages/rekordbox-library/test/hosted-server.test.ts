@@ -341,6 +341,33 @@ describe("hosted playlist HTTP routes", () => {
     });
   });
 
+  it("reports provider fetch failures as retryable gateway errors", async () => {
+    const hosted = hostedApi();
+    hosted.streamTrack = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+      });
+    });
+    const server = await startLibraryServer({
+      api: localApi(),
+      hosted,
+      staticDirectory: staticDirectory(),
+      port: 0,
+    });
+    servers.push(server);
+    const id = encodeURIComponent("hosted-track:soundcloud:soundcloud%3Atracks%3A1");
+
+    const response = await fetch(`${server.url}api/hosted-audio/${id}`);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "STREAM_UNAVAILABLE",
+        message: "Provider stream is temporarily unavailable",
+      },
+    });
+  });
+
   it("reports providers without direct streams as explicitly unavailable", async () => {
     const hosted = hostedApi();
     hosted.streamTrack = vi.fn(async () => {

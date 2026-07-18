@@ -454,10 +454,16 @@ async function streamHostedAudio(
 ): Promise<void> {
   if (!hosted.streamTrack)
     throw new HttpError(404, "STREAM_UNAVAILABLE", "Provider streaming is unavailable");
-  const stream = await hosted.streamTrack(
-    trackId,
-    request.method === "GET" && request.headers.range ? { range: request.headers.range } : {},
-  );
+  let stream: HostedTrackStream;
+  try {
+    stream = await hosted.streamTrack(
+      trackId,
+      request.method === "GET" && request.headers.range ? { range: request.headers.range } : {},
+    );
+  } catch (error) {
+    if (!isFetchNetworkFailure(error)) throw error;
+    throw new HttpError(502, "STREAM_UNAVAILABLE", "Provider stream is temporarily unavailable");
+  }
   const upstream = stream.response;
   const headers: Record<string, string> = {
     "cache-control": "private, no-store",
@@ -505,6 +511,10 @@ async function streamHostedAudio(
   bodyStream.once("error", () => response.destroy());
   response.once("close", () => bodyStream.destroy());
   bodyStream.pipe(response);
+}
+
+function isFetchNetworkFailure(error: unknown): boolean {
+  return error instanceof TypeError && error.message.toLowerCase() === "fetch failed";
 }
 
 export function absolutizeHlsManifest(manifest: string, sourceUrl: string): string {
