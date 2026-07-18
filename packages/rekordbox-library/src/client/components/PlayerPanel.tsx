@@ -115,6 +115,8 @@ export type PlayerPanelProps = {
 };
 
 const HOT_CUE_SLOTS = Array.from({ length: 16 }, (_, index) => (index + 1) as HotCueSlot);
+const MAX_REMOTE_LOAD_RETRIES = 2;
+const REMOTE_RETRY_BASE_MS = 400;
 const DEFAULT_HOT_CUE_COLORS = [
   "#ef4444",
   "#f59e0b",
@@ -207,13 +209,18 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     track?.hosted?.provider === "spotify" && track.hosted.localContentId === null;
   const soundCloudStreaming =
     track?.hosted?.provider === "soundcloud" && track.hosted.localContentId === null;
+  const soundCloudProgressive = soundCloudStreaming && track.hosted?.streamKind === "progressive";
+  const remoteStreaming = spotifyStreaming || soundCloudStreaming;
   const effectiveDuration = finitePositive(duration) ?? finitePositive(track?.durationSeconds) ?? 0;
 
-  const reportError = useCallback((cause: unknown) => {
-    const error = cause instanceof Error ? cause : new Error(String(cause));
-    setMediaError(error.message);
-    callbacksRef.current.onError?.(error);
-  }, []);
+  const reportError = useCallback(
+    (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      setMediaError(error.message);
+      if (!remoteStreaming) callbacksRef.current.onError?.(error);
+    },
+    [remoteStreaming],
+  );
 
   const seekTo = useCallback(
     (seconds: number) => {
@@ -345,12 +352,13 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       // Hls.js owns MSE recovery for SoundCloud. Chromium can emit a transient MEDIA_ERR_SRC_NOT_SUPPORTED
       // while a MediaSource is being replaced; surfacing that generic element error races Hls.js recovery
       // and produces the misleading "no supported source" toast.
-      if (!soundCloudStreaming || !Hls.isSupported()) reportError(error);
+      if (!soundCloudStreaming || soundCloudProgressive || !Hls.isSupported()) reportError(error);
     };
     let readyNotified = false;
     const notifyReady = () => {
       if (readyNotified || controller.signal.aborted) return;
       readyNotified = true;
+      setMediaError(undefined);
       setReady(true);
       callbacksRef.current.onReady?.();
     };
@@ -427,7 +435,13 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         if (controller.signal.aborted) return;
         // Begin streaming immediately. Precomputed RGB peaks are an enhancement, not a gate on
         // playback readiness, and can be drawn over the placeholder without reloading the media.
-        if (soundCloudStreaming && media) {
+        if (soundCloudStreaming && soundCloudProgressive) {
+          await waveSurfer.load(
+            audioUrl,
+            [Float32Array.of(0)],
+            finitePositive(track.durationSeconds),
+          );
+        } else if (soundCloudStreaming && media) {
           if (Hls.isSupported()) {
             let recoveredMediaError = false;
             const hls = new Hls({
@@ -489,6 +503,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     adapter,
     audioUrl,
     loadAttempt,
+    soundCloudProgressive,
     soundCloudStreaming,
     spotifyStreaming,
     track?.fileExists,
@@ -496,6 +511,21 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   ]);
 
   useEffect(() => setLoadAttempt(0), [track?.id]);
+  useEffect(() => {
+    if (!mediaError || !remoteStreaming) return;
+    if (loadAttempt >= MAX_REMOTE_LOAD_RETRIES) {
+      callbacksRef.current.onError?.(new Error(mediaError));
+      return;
+    }
+    const timeout = window.setTimeout(
+      () => {
+        setMediaError(undefined);
+        setLoadAttempt((current) => current + 1);
+      },
+      REMOTE_RETRY_BASE_MS * 2 ** loadAttempt,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [loadAttempt, mediaError, remoteStreaming]);
   useEffect(() => setSelectedHotCueSlot(undefined), [track?.id]);
   useEffect(() => {
     spotifyWasPlayingRef.current = false;
@@ -570,14 +600,17 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     <section className="player-panel" aria-label="Track player">
       {spotifyStreaming && track?.hosted ? (
         <SpotifyEmbedPlayer
+          key={`${track.id}:${String(loadAttempt)}`}
           ref={spotifyPlayerRef}
           uri={track.hosted.remoteId}
           onReady={() => {
+            setMediaError(undefined);
             setReady(true);
             setLoadingPercent(100);
             callbacksRef.current.onReady?.();
           }}
           onPlaybackUpdate={(update) => {
+            setMediaError(undefined);
             const seconds = update.position / 1_000;
             const durationSeconds = update.duration / 1_000;
             const ended =
@@ -722,7 +755,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
             aria-label={playing ? "Pause" : "Play"}
             title={playing ? "Pause (Space)" : "Play (Space)"}
           >
-            {!ready && track?.fileExists ? (
+            {!ready && track && !mediaError ? (
               <LoaderCircle size={21} className="spin" />
             ) : playing ? (
               <Pause size={21} fill="currentColor" />
@@ -770,7 +803,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         {!track ? <span className="player-waveform-empty">Select a track</span> : null}
         <div className="player-time-row" aria-live="off">
           <span>{formatTime(currentTime)}</span>
-          {!ready && track?.fileExists ? (
+          {!ready && track && !mediaError ? (
             <span className="player-loading-label">
               <LoaderCircle size={11} className="spin" /> {String(Math.round(loadingPercent))}%
             </span>
@@ -938,13 +971,16 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         ) : null}
       </div>
 
-      {mediaError ? (
+      {mediaError && (!remoteStreaming || loadAttempt >= MAX_REMOTE_LOAD_RETRIES) ? (
         <div className="player-error" role="alert">
           <span>{mediaError}</span>
-          {track?.fileExists !== false || soundCloudStreaming ? (
+          {track?.fileExists !== false || remoteStreaming ? (
             <button
               type="button"
-              onClick={() => setLoadAttempt((current) => current + 1)}
+              onClick={() => {
+                setMediaError(undefined);
+                setLoadAttempt((current) => current + 1);
+              }}
               aria-label="Retry loading audio"
             >
               <RotateCcw size={11} /> Retry

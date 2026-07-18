@@ -278,7 +278,10 @@ export function App() {
     queryKey: ["hosted-playlists"],
     queryFn: ({ signal }) => getHostedPlaylists(signal),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: (query) =>
+      query.state.data?.providers.some((provider) => !provider.connected || provider.error)
+        ? 5_000
+        : 60_000,
     refetchIntervalInBackground: true,
   });
   const playlists = playlistsQuery.data ?? [];

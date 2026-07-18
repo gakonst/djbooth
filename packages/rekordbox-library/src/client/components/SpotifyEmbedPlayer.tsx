@@ -42,6 +42,7 @@ type Props = {
 };
 
 let iframeApiPromise: Promise<SpotifyIframeApi> | undefined;
+const SPOTIFY_IFRAME_API_TIMEOUT_MS = 12_000;
 
 export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
   function SpotifyEmbedPlayer({ uri, onError, onPlaybackUpdate, onReady }, forwardedRef) {
@@ -128,9 +129,10 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
             },
           );
         })
-        .catch((error: unknown) =>
-          callbacksRef.current.onError(error instanceof Error ? error : new Error(String(error))),
-        );
+        .catch((error: unknown) => {
+          if (!cancelled)
+            callbacksRef.current.onError(error instanceof Error ? error : new Error(String(error)));
+        });
       return () => {
         cancelled = true;
         controllerRef.current?.destroy();
@@ -164,27 +166,50 @@ function loadSpotifyIframeApi(): Promise<SpotifyIframeApi> {
   };
   if (windowWithApi.__musicLibrarySpotifyIframeApi)
     return Promise.resolve(windowWithApi.__musicLibrarySpotifyIframeApi);
-  iframeApiPromise ??= new Promise((resolve, reject) => {
+  if (iframeApiPromise) return iframeApiPromise;
+
+  // A script without an in-flight promise is left over from a failed or interrupted load. A new
+  // element is required: browsers do not retry a script node whose request already failed.
+  document
+    .querySelector<HTMLScriptElement>('script[data-music-library-spotify-iframe="true"]')
+    ?.remove();
+  const script = document.createElement("script");
+  script.src = "https://open.spotify.com/embed/iframe-api/v1";
+  script.async = true;
+  script.dataset.musicLibrarySpotifyIframe = "true";
+
+  const promise = new Promise<SpotifyIframeApi>((resolve, reject) => {
     const prior = windowWithApi.onSpotifyIframeApiReady;
-    windowWithApi.onSpotifyIframeApiReady = (api) => {
+    let settled = false;
+    const restoreCallback = () => {
+      if (windowWithApi.onSpotifyIframeApiReady === handleReady)
+        windowWithApi.onSpotifyIframeApiReady = prior;
+    };
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      restoreCallback();
+      script.remove();
+      if (iframeApiPromise === promise) iframeApiPromise = undefined;
+      reject(new Error("Spotify player failed to load"));
+    };
+    const handleReady = (api: SpotifyIframeApi) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      restoreCallback();
       windowWithApi.__musicLibrarySpotifyIframeApi = api;
       prior?.(api);
       resolve(api);
     };
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-music-library-spotify-iframe="true"]',
-    );
-    if (existing) return;
-    const script = document.createElement("script");
-    script.src = "https://open.spotify.com/embed/iframe-api/v1";
-    script.async = true;
-    script.dataset.musicLibrarySpotifyIframe = "true";
-    script.addEventListener("error", () => reject(new Error("Spotify player failed to load")), {
-      once: true,
-    });
+    windowWithApi.onSpotifyIframeApiReady = handleReady;
+    const timeout = window.setTimeout(fail, SPOTIFY_IFRAME_API_TIMEOUT_MS);
+    script.addEventListener("error", fail, { once: true });
     document.head.append(script);
   });
-  return iframeApiPromise;
+  iframeApiPromise = promise;
+  return promise;
 }
 
 export function spotifyEmbedTrackUri(value: string): string {
