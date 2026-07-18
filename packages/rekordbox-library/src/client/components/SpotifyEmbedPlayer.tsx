@@ -51,6 +51,7 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
     const readyEntityRef = useRef<string | undefined>(undefined);
     const playingRef = useRef(false);
     const playRequestedRef = useRef(false);
+    const pendingSeekRef = useRef<number | undefined>(undefined);
     const callbacksRef = useRef({ onError, onPlaybackUpdate, onReady });
     callbacksRef.current = { onError, onPlaybackUpdate, onReady };
     entityUriRef.current = spotifyEmbedTrackUri(uri);
@@ -71,7 +72,10 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
           controllerRef.current?.togglePlay();
         },
         seek(seconds) {
+          pendingSeekRef.current = seconds;
+          if (readyEntityRef.current !== entityUriRef.current) return;
           controllerRef.current?.seek(seconds);
+          pendingSeekRef.current = undefined;
         },
         isPlaying() {
           return playingRef.current;
@@ -106,6 +110,11 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
               controller.addListener("playback_update", (event) => {
                 if (!sameSpotifyEntity(event.data.playingURI, entityUriRef.current)) return;
                 notifyReady();
+                const pendingSeek = pendingSeekRef.current;
+                if (pendingSeek !== undefined) {
+                  pendingSeekRef.current = undefined;
+                  controller.seek(pendingSeek);
+                }
                 // A newly loaded embed reports its initial paused state before the explicit play
                 // takes effect. Suppress that stale edge so the compact transport does not flash.
                 if (event.data.isPaused && playRequestedRef.current) return;
@@ -127,6 +136,7 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
         controllerRef.current?.destroy();
         controllerRef.current = undefined;
         readyEntityRef.current = undefined;
+        pendingSeekRef.current = undefined;
         host.replaceChildren();
       };
     }, []);
@@ -139,9 +149,8 @@ export const SpotifyEmbedPlayer = forwardRef<SpotifyEmbedPlayerHandle, Props>(
       readyEntityRef.current = undefined;
       playingRef.current = false;
       playRequestedRef.current = false;
+      pendingSeekRef.current = undefined;
       controller.loadEntity(entityUri);
-      readyEntityRef.current = entityUri;
-      callbacksRef.current.onReady();
     }, [uri]);
 
     return <div className="spotify-embed-player" ref={hostRef} aria-hidden="true" />;

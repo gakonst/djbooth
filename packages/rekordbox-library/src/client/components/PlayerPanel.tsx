@@ -33,6 +33,7 @@ import {
   type TrackSource,
   type TrackSourceProvider,
 } from "../track-sources.js";
+import { waveformWithFallback } from "../waveform-fallback.js";
 import { PlayerWaveformCanvas } from "./PlayerWaveformCanvas.js";
 import { RgbWaveform } from "./RgbWaveform.js";
 import { SpotifyEmbedPlayer, type SpotifyEmbedPlayerHandle } from "./SpotifyEmbedPlayer.js";
@@ -160,6 +161,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const waveSurferRef = useRef<WaveSurfer | undefined>(undefined);
   const spotifyPlayerRef = useRef<SpotifyEmbedPlayerHandle>(null);
   const spotifyWasPlayingRef = useRef(false);
+  const currentTimeRef = useRef(0);
   const hlsRef = useRef<Hls | undefined>(undefined);
   const soundCloudReadyRef = useRef(false);
   const soundCloudPlayPendingRef = useRef(false);
@@ -177,6 +179,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const [waveformData, setWaveformData] = useState<PlayerWaveform | null>(null);
 
   callbacksRef.current = { onEnded, onReady, onTimeChange, onPlayStateChange, onError };
+  currentTimeRef.current = currentTime;
 
   const audioUrl = useMemo(
     () => (track ? adapter.getAudioUrl(track) : undefined),
@@ -249,7 +252,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       soundCloudPlayPendingRef.current = true;
       return;
     }
-    if (!track?.fileExists || !waveSurferRef.current) return;
+    if ((!track?.fileExists && !soundCloudStreaming) || !waveSurferRef.current) return;
     try {
       await waveSurferRef.current?.play();
     } catch (error) {
@@ -307,10 +310,17 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setCurrentTime(0);
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
-    setWaveformData(null);
+    setWaveformData(track ? waveformWithFallback(null, track.id, track.durationSeconds) : null);
     soundCloudReadyRef.current = false;
     soundCloudPlayPendingRef.current = false;
-    if (!container || !track || !audioUrl || track.fileExists === false || spotifyStreaming) return;
+    if (
+      !container ||
+      !track ||
+      !audioUrl ||
+      (track.fileExists === false && !soundCloudStreaming) ||
+      spotifyStreaming
+    )
+      return;
     const controller = new AbortController();
     const media = soundCloudStreaming ? document.createElement("audio") : undefined;
     if (media) {
@@ -337,6 +347,13 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       // and produces the misleading "no supported source" toast.
       if (!soundCloudStreaming || !Hls.isSupported()) reportError(error);
     };
+    let readyNotified = false;
+    const notifyReady = () => {
+      if (readyNotified || controller.signal.aborted) return;
+      readyNotified = true;
+      setReady(true);
+      callbacksRef.current.onReady?.();
+    };
     const unsubscribers = [
       waveSurfer.on("loading", (percent) => {
         if (!controller.signal.aborted) setLoadingPercent(percent);
@@ -345,8 +362,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         if (controller.signal.aborted) return;
         setDuration(loadedDuration);
         setLoadingPercent(100);
-        setReady(true);
-        callbacksRef.current.onReady?.();
+        notifyReady();
       }),
       waveSurfer.on("timeupdate", (seconds) => {
         if (controller.signal.aborted) return;
@@ -383,8 +399,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         finitePositive(media.duration) ?? finitePositive(track.durationSeconds);
       if (loadedDuration) setDuration(loadedDuration);
       setLoadingPercent(100);
-      setReady(true);
-      callbacksRef.current.onReady?.();
+      notifyReady();
       if (soundCloudPlayPendingRef.current) {
         soundCloudPlayPendingRef.current = false;
         void waveSurfer.play().catch(reportError);
@@ -393,6 +408,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     const updateSoundCloudDuration = () => {
       const loadedDuration = media ? finitePositive(media.duration) : undefined;
       if (loadedDuration) setDuration(loadedDuration);
+      // Metadata is enough to expose a stable timeline and accept seeks. Playback itself remains
+      // queued until canplay so a slow remote stream never makes the transport lie.
+      notifyReady();
     };
     media?.addEventListener("loadedmetadata", updateSoundCloudDuration);
     media?.addEventListener("canplay", markSoundCloudReady, { once: true });
@@ -446,7 +464,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
           );
         }
         const waveform = await waveformRequest;
-        if (!controller.signal.aborted) setWaveformData(waveform);
+        if (!controller.signal.aborted)
+          setWaveformData(waveformWithFallback(waveform, track.id, track.durationSeconds));
       } catch (error) {
         if (!controller.signal.aborted) reportError(error);
       }
@@ -496,12 +515,20 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       [
         "seekbackward",
         (details) =>
-          seekTo((waveSurferRef.current?.getCurrentTime() ?? 0) - (details.seekOffset ?? 10)),
+          seekTo(
+            (spotifyStreaming
+              ? currentTimeRef.current
+              : (waveSurferRef.current?.getCurrentTime() ?? 0)) - (details.seekOffset ?? 10),
+          ),
       ],
       [
         "seekforward",
         (details) =>
-          seekTo((waveSurferRef.current?.getCurrentTime() ?? 0) + (details.seekOffset ?? 10)),
+          seekTo(
+            (spotifyStreaming
+              ? currentTimeRef.current
+              : (waveSurferRef.current?.getCurrentTime() ?? 0)) + (details.seekOffset ?? 10),
+          ),
       ],
       ["previoustrack", () => onPrevious?.()],
       ["nexttrack", () => onNext?.()],
@@ -536,7 +563,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const selectedHotCue =
     (selectedHotCueSlot ? hotCues.get(selectedHotCueSlot) : undefined) ??
     HOT_CUE_SLOTS.flatMap((slot) => hotCues.get(slot) ?? []).at(0);
-  const unavailable = !track || (track.fileExists === false && !spotifyStreaming);
+  const unavailable =
+    !track || (track.fileExists === false && !spotifyStreaming && !soundCloudStreaming);
 
   return (
     <section className="player-panel" aria-label="Track player">
@@ -559,9 +587,11 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
               seconds >= durationSeconds - 0.75;
             spotifyWasPlayingRef.current = !update.isPaused;
             setCurrentTime(seconds);
-            setDuration(durationSeconds);
+            if (durationSeconds > 0) setDuration(durationSeconds);
             setPlaying(!update.isPaused);
-            setReady(!update.isBuffering);
+            // Buffering is transient media state, not loss of timeline readiness. Keeping the
+            // scrub surfaces enabled prevents the transport from flickering during a seek.
+            setReady(true);
             callbacksRef.current.onTimeChange?.(seconds);
             callbacksRef.current.onPlayStateChange?.(!update.isPaused);
             if (ended) callbacksRef.current.onEnded?.();
@@ -640,6 +670,15 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
           title="Click to seek"
         >
           <RgbWaveform waveform={waveformData} className="player-overview-waveform-canvas" />
+          <span
+            className="player-overview-progress"
+            style={{
+              width: `${String(
+                effectiveDuration > 0 ? clamp(currentTime / effectiveDuration, 0, 1) * 100 : 0,
+              )}%`,
+            }}
+            aria-hidden="true"
+          />
           <span
             className="player-overview-playhead"
             style={{
@@ -902,7 +941,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       {mediaError ? (
         <div className="player-error" role="alert">
           <span>{mediaError}</span>
-          {track?.fileExists !== false ? (
+          {track?.fileExists !== false || soundCloudStreaming ? (
             <button
               type="button"
               onClick={() => setLoadAttempt((current) => current + 1)}

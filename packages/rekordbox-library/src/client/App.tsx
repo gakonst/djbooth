@@ -928,14 +928,7 @@ export function App() {
       if (!activate) return;
       const playableId = track.hosted?.localContentId ?? track.id;
       const playableTrack =
-        playableId === track.id
-          ? {
-              ...track,
-              fileExists:
-                track.fileExists ||
-                (track.hosted?.provider === "soundcloud" && !track.hosted.localContentId),
-            }
-          : { ...track, id: playableId, hosted: undefined };
+        playableId === track.id ? track : { ...track, id: playableId, hosted: undefined };
       const sameTrack = playerTrackId === playableId;
       setPlayerTrackId(playableId);
       setPlayerSummary(playableTrack);

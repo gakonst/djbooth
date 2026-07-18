@@ -4877,6 +4877,16 @@ select:focus-visible,
   pointer-events: none;
 }
 
+.player-overview-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: rgb(167 139 250 / 88%);
+  box-shadow: 0 0 5px rgb(139 92 246 / 55%);
+  pointer-events: none;
+}
+
 .player-identity {
   height: 100%;
   grid-column: 1;
