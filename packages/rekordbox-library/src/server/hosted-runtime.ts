@@ -42,6 +42,7 @@ import type { HostedPlaylistApi, LibraryApi } from "./server.js";
 export type DefaultHostedPlaylistRuntimeOptions = {
   statePath?: string;
   playlistCacheMs?: number;
+  playlistRetryCacheMs?: number;
   trackCacheMs?: number;
   writeEnabled?: boolean;
   dbPath?: string;
@@ -67,6 +68,7 @@ export type HostedPlaylistRuntimeOptions = {
   catalog: HostedPlaylistRuntimeCatalog;
   state: HostedPlaylistStateStore;
   playlistCacheMs?: number;
+  playlistRetryCacheMs?: number;
   trackCacheMs?: number;
   acquisition?: Omit<HostedPlaylistAcquisitionWorkerOptions, "catalog" | "onJobChanged" | "state">;
   createAcquisitionWorker?: HostedAcquisitionWorkerFactory;
@@ -100,6 +102,7 @@ export async function createDefaultHostedPlaylistRuntime(
     catalog,
     state,
     playlistCacheMs: options.playlistCacheMs,
+    playlistRetryCacheMs: options.playlistRetryCacheMs,
     trackCacheMs: options.trackCacheMs,
     acquisition: {
       rekordbox: {
@@ -116,12 +119,14 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   readonly #state: HostedPlaylistStateStore;
   readonly #worker: HostedAcquisitionWorkerLifecycle;
   readonly #playlistCacheMs: number;
+  readonly #playlistRetryCacheMs: number;
   readonly #trackCacheMs: number;
   readonly #outboxMaxAttempts: number;
   readonly #outboxRetryBaseMs: number;
   readonly #outboxRetryMaxMs: number;
   readonly #jobListeners = new Set<(event: { playlistId: string }) => void>();
   #playlistCache: { expiresAt: number; promise: Promise<HostedPlaylistsResponse> } | undefined;
+  #playlistSuccess: HostedPlaylistsResponse | undefined;
   readonly #trackCache = new Map<string, { expiresAt: number; promise: Promise<TrackSummary[]> }>();
   #playlistStateDirty = false;
   readonly #trackStateDirty = new Set<string>();
@@ -135,6 +140,7 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#catalog = options.catalog;
     this.#state = options.state;
     this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 60_000);
+    this.#playlistRetryCacheMs = positiveDuration(options.playlistRetryCacheMs, 5_000);
     this.#trackCacheMs = positiveDuration(options.trackCacheMs, 30_000);
     this.#outboxMaxAttempts = positiveInteger(options.outboxMaxAttempts, 4, "Outbox attempts");
     this.#outboxRetryBaseMs = positiveDuration(options.outboxRetryBaseMs, 250);
@@ -171,7 +177,21 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#playlistStateDirty = false;
     const promise = this.#catalog
       .listPlaylists()
-      .then((response) => this.#scheduleChangedDownloads(response))
+      .then((fresh) => {
+        const degraded = fresh.providers.some((provider) => !provider.connected);
+        const merged = mergeHostedProviderFallbacks(fresh, this.#playlistSuccess);
+        const response = this.#scheduleChangedDownloads(merged);
+        this.#playlistSuccess = successfulHostedProviderSnapshot(
+          response,
+          fresh,
+          this.#playlistSuccess,
+        );
+        if (this.#playlistCache?.promise === promise) {
+          this.#playlistCache.expiresAt =
+            Date.now() + (degraded ? this.#playlistRetryCacheMs : this.#playlistCacheMs);
+        }
+        return response;
+      })
       .catch((error: unknown) => {
         if (this.#playlistCache?.promise === promise) this.#playlistCache = undefined;
         throw error;
@@ -346,6 +366,7 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#trackCache.clear();
     this.#trackStateDirty.clear();
     this.#playlistCache = undefined;
+    this.#playlistSuccess = undefined;
     this.#playlistStateDirty = false;
     try {
       await this.#outboxDrain;
@@ -746,6 +767,86 @@ function loadWorkspaceEnvironment(): void {
   ];
   const path = candidates.find((candidate) => existsSync(candidate));
   if (path) process.loadEnvFile(path);
+}
+
+function mergeHostedProviderFallbacks(
+  fresh: HostedPlaylistsResponse,
+  successful: HostedPlaylistsResponse | undefined,
+): HostedPlaylistsResponse {
+  if (!successful) return fresh;
+  const successfulStatuses = new Map(
+    successful.providers
+      .filter((status) => status.connected)
+      .map((status) => [status.provider, status] as const),
+  );
+  const fallbackProviders = new Set(
+    fresh.providers
+      .filter((status) => !status.connected && successfulStatuses.has(status.provider))
+      .map((status) => status.provider),
+  );
+  if (!fallbackProviders.size) return fresh;
+
+  const items = fresh.providers.flatMap((status) =>
+    hostedProviderItems(
+      fallbackProviders.has(status.provider) ? successful : fresh,
+      status.provider,
+    ),
+  );
+  const knownProviders = new Set(fresh.providers.map((status) => status.provider));
+  items.push(
+    ...fresh.items.filter((item) => !item.hosted || !knownProviders.has(item.hosted.provider)),
+  );
+  return {
+    items,
+    providers: fresh.providers.map((status) => {
+      if (!fallbackProviders.has(status.provider)) return status;
+      return {
+        ...successfulStatuses.get(status.provider)!,
+        error: status.error ?? "Provider temporarily unavailable; showing cached playlists",
+      };
+    }),
+  };
+}
+
+function successfulHostedProviderSnapshot(
+  response: HostedPlaylistsResponse,
+  fresh: HostedPlaylistsResponse,
+  previous: HostedPlaylistsResponse | undefined,
+): HostedPlaylistsResponse {
+  const freshStatuses = new Map(fresh.providers.map((status) => [status.provider, status]));
+  const previousStatuses = new Map(
+    (previous?.providers ?? [])
+      .filter((status) => status.connected)
+      .map((status) => [status.provider, status] as const),
+  );
+  const responseStatuses = new Map(response.providers.map((status) => [status.provider, status]));
+  const providers: HostedPlaylistsResponse["providers"] = [];
+  const items: PlaylistItem[] = [];
+  const order = [
+    ...fresh.providers.map((status) => status.provider),
+    ...(previous?.providers.map((status) => status.provider) ?? []),
+  ].filter((provider, index, values) => values.indexOf(provider) === index);
+
+  for (const provider of order) {
+    const freshStatus = freshStatuses.get(provider);
+    if (freshStatus?.connected) {
+      providers.push(responseStatuses.get(provider) ?? freshStatus);
+      items.push(...hostedProviderItems(response, provider));
+      continue;
+    }
+    const previousStatus = previousStatuses.get(provider);
+    if (!previousStatus) continue;
+    providers.push(previousStatus);
+    items.push(...hostedProviderItems(response, provider));
+  }
+  return { items, providers };
+}
+
+function hostedProviderItems(
+  response: HostedPlaylistsResponse,
+  provider: HostedPlaylistProvider,
+): PlaylistItem[] {
+  return response.items.filter((item) => item.hosted?.provider === provider);
 }
 
 function positiveDuration(value: number | undefined, fallback: number): number {

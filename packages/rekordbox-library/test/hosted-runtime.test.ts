@@ -25,6 +25,7 @@ const runtimes: CachedHostedPlaylistRuntime[] = [];
 afterEach(async () => {
   for (const runtime of runtimes.splice(0)) await runtime.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
@@ -251,6 +252,105 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
     expect(getTracks).toHaveBeenCalledOnce();
     expect(refreshPlaylistState).toHaveBeenCalledOnce();
     expect(refreshTrackState).toHaveBeenCalledOnce();
+  });
+
+  it("serves stale successful provider rows and retries disconnected catalogs quickly", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-provider-fallback-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const spotifyCached = { ...hostedPlaylist(hostedPlaylistId("spotify", "playlist-one")) };
+    spotifyCached.name = "Spotify cached";
+    const soundcloudCached = soundcloudPlaylist("playlist-two", "SoundCloud cached");
+    const soundcloudFresh = soundcloudPlaylist("playlist-two", "SoundCloud fresh");
+    const spotifyRecovered = {
+      ...hostedPlaylist(hostedPlaylistId("spotify", "playlist-one")),
+      name: "Spotify recovered",
+    };
+    const responses: HostedPlaylistsResponse[] = [
+      {
+        items: [spotifyCached, soundcloudCached],
+        providers: [
+          { provider: "spotify", connected: true, displayName: "spotify-user" },
+          { provider: "soundcloud", connected: true, displayName: "soundcloud-user" },
+        ],
+      },
+      {
+        items: [soundcloudFresh],
+        providers: [
+          { provider: "spotify", connected: false, error: "fetch failed" },
+          { provider: "soundcloud", connected: true, displayName: "soundcloud-user" },
+        ],
+      },
+      {
+        items: [spotifyRecovered, soundcloudFresh],
+        providers: [
+          { provider: "spotify", connected: true, displayName: "spotify-user" },
+          { provider: "soundcloud", connected: true, displayName: "soundcloud-user" },
+        ],
+      },
+    ];
+    let responseIndex = 0;
+    const listPlaylists = vi.fn(async () =>
+      structuredClone(responses[Math.min(responseIndex++, responses.length - 1)]!),
+    );
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists,
+        getTracks: async () => [],
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId:
+            "playlistId" in mutation ? mutation.playlistId : hostedPlaylistId("spotify", "new"),
+          revision: null,
+          queuedAt: "2026-07-18T00:00:00.000Z",
+        }),
+      },
+      state,
+      playlistCacheMs: 60_000,
+      playlistRetryCacheMs: 5_000,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+
+    await expect(runtime.listPlaylists()).resolves.toMatchObject({
+      items: [{ name: "Spotify cached" }, { name: "SoundCloud cached" }],
+    });
+    now += 60_000;
+    const degraded = await runtime.listPlaylists();
+    expect(degraded.items.map((item) => item.name)).toEqual(["Spotify cached", "SoundCloud fresh"]);
+    expect(degraded.providers).toEqual([
+      {
+        provider: "spotify",
+        connected: true,
+        displayName: "spotify-user",
+        error: "fetch failed",
+      },
+      { provider: "soundcloud", connected: true, displayName: "soundcloud-user" },
+    ]);
+    expect(listPlaylists).toHaveBeenCalledTimes(2);
+
+    now += 4_999;
+    await runtime.listPlaylists();
+    expect(listPlaylists).toHaveBeenCalledTimes(2);
+    now += 1;
+    const recovered = await runtime.listPlaylists();
+    expect(recovered.items.map((item) => item.name)).toEqual([
+      "Spotify recovered",
+      "SoundCloud fresh",
+    ]);
+    expect(recovered.providers[0]).toEqual({
+      provider: "spotify",
+      connected: true,
+      displayName: "spotify-user",
+    });
+    expect(listPlaylists).toHaveBeenCalledTimes(3);
+
+    now += 5_000;
+    await runtime.listPlaylists();
+    expect(listPlaylists).toHaveBeenCalledTimes(3);
   });
 
   it("queues configured playlists after provider revisions or hosted item edits", async () => {
@@ -632,6 +732,27 @@ function hostedPlaylist(id: string): PlaylistItem {
       remoteId: "playlist-one",
       revision: "revision-one",
       externalUrl: "https://open.spotify.com/playlist/playlist-one",
+      owned: true,
+      capabilities: { itemsReadable: true, detailsEditable: true, itemsEditable: true },
+      downloadEnabled: false,
+      syncState: "idle",
+    },
+  };
+}
+
+function soundcloudPlaylist(remoteId: string, name: string): PlaylistItem {
+  return {
+    id: hostedPlaylistId("soundcloud", remoteId),
+    name,
+    parentId: "hosted:soundcloud",
+    seq: 1,
+    type: "playlist",
+    trackCount: 0,
+    hosted: {
+      provider: "soundcloud",
+      remoteId,
+      revision: "soundcloud-revision",
+      externalUrl: `https://soundcloud.com/user/sets/${remoteId}`,
       owned: true,
       capabilities: { itemsReadable: true, detailsEditable: true, itemsEditable: true },
       downloadEnabled: false,
