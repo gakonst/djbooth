@@ -38,6 +38,9 @@ import {
   HostedPlaylistCapabilityError,
   HostedPlaylistConflictError,
   HostedPlaylistVerificationError,
+  HostedTrackStreamUnavailableError,
+  type HostedTrackStream,
+  type HostedTrackStreamRequest,
 } from "./hosted/types.js";
 import {
   LibraryMutationConflictError,
@@ -202,7 +205,7 @@ export type HostedPlaylistApi = {
     library: Pick<LibraryApi, "getTracks">,
   ): HostedMutationReceipt | undefined;
   onJobChanged?(listener: (event: { playlistId: string }) => void): () => void;
-  streamTrack?(trackId: string): Promise<Response>;
+  streamTrack?(trackId: string, request?: HostedTrackStreamRequest): Promise<HostedTrackStream>;
   mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt>;
 };
 
@@ -451,7 +454,30 @@ async function streamHostedAudio(
 ): Promise<void> {
   if (!hosted.streamTrack)
     throw new HttpError(404, "STREAM_UNAVAILABLE", "Provider streaming is unavailable");
-  const upstream = await hosted.streamTrack(trackId);
+  const stream = await hosted.streamTrack(
+    trackId,
+    request.method === "GET" && request.headers.range ? { range: request.headers.range } : {},
+  );
+  const upstream = stream.response;
+  const headers: Record<string, string> = {
+    "cache-control": "private, no-store",
+    "content-type": upstream.headers.get("content-type") ?? "audio/mpeg",
+  };
+  const forwardedHeaders =
+    stream.kind === "progressive"
+      ? ["accept-ranges", "content-length", "content-range"]
+      : ["content-length"];
+  for (const name of forwardedHeaders) {
+    const value = upstream.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  if (stream.kind === "progressive" && upstream.status === 416) {
+    upstream.body?.cancel().catch(() => undefined);
+    delete headers["content-length"];
+    response.writeHead(416, headers);
+    response.end();
+    return;
+  }
   if (!upstream.ok || !upstream.body) {
     upstream.body?.cancel().catch(() => undefined);
     throw new HttpError(
@@ -460,21 +486,13 @@ async function streamHostedAudio(
       `Provider stream is unavailable (${String(upstream.status)})`,
     );
   }
-  const headers: Record<string, string> = {
-    "cache-control": "private, no-store",
-    "content-type": upstream.headers.get("content-type") ?? "audio/mpeg",
-  };
-  for (const name of ["accept-ranges", "content-length", "content-range"]) {
-    const value = upstream.headers.get(name);
-    if (value) headers[name] = value;
-  }
   if (request.method === "HEAD") {
     response.writeHead(upstream.status, headers);
     await upstream.body.cancel();
     response.end();
     return;
   }
-  if (isHlsManifest(headers["content-type"])) {
+  if (stream.kind === "hls") {
     const body = absolutizeHlsManifest(await upstream.text(), upstream.url);
     const bytes = Buffer.from(body);
     headers["content-length"] = String(bytes.length);
@@ -483,14 +501,10 @@ async function streamHostedAudio(
     return;
   }
   response.writeHead(upstream.status, headers);
-  const stream = Readable.fromWeb(upstream.body as never);
-  stream.once("error", () => response.destroy());
-  response.once("close", () => stream.destroy());
-  stream.pipe(response);
-}
-
-function isHlsManifest(contentType: string | undefined): boolean {
-  return /(?:mpegurl|vnd\.apple\.mpegurl)/iu.test(contentType ?? "");
+  const bodyStream = Readable.fromWeb(upstream.body as never);
+  bodyStream.once("error", () => response.destroy());
+  response.once("close", () => bodyStream.destroy());
+  bodyStream.pipe(response);
 }
 
 export function absolutizeHlsManifest(manifest: string, sourceUrl: string): string {
@@ -1010,22 +1024,24 @@ export async function startLibraryServer(
             ? apiError(409, "LIBRARY_CONFLICT", message)
             : error instanceof HostedPlaylistConflictError
               ? apiError(409, "HOSTED_PLAYLIST_CONFLICT", message)
-              : error instanceof HostedPlaylistCapabilityError
-                ? apiError(403, "HOSTED_PLAYLIST_FORBIDDEN", message)
-                : error instanceof HostedPlaylistVerificationError
-                  ? apiError(502, "HOSTED_PLAYLIST_VERIFICATION_FAILED", message)
-                  : error instanceof z.ZodError ||
-                      error instanceof SyntaxError ||
-                      error instanceof TypeError ||
-                      error instanceof URIError
-                    ? apiError(400, "INVALID_REQUEST", message)
-                    : error instanceof RangeError
-                      ? apiError(404, "NOT_FOUND", message)
-                      : /write mode is disabled|session token|Cross-origin/u.test(message)
-                        ? apiError(403, "FORBIDDEN", message)
-                        : /Untrusted Host/u.test(message)
-                          ? apiError(421, "MISDIRECTED_REQUEST", message)
-                          : apiError(500, "INTERNAL_ERROR", message);
+              : error instanceof HostedTrackStreamUnavailableError
+                ? apiError(404, "STREAM_UNAVAILABLE", message)
+                : error instanceof HostedPlaylistCapabilityError
+                  ? apiError(403, "HOSTED_PLAYLIST_FORBIDDEN", message)
+                  : error instanceof HostedPlaylistVerificationError
+                    ? apiError(502, "HOSTED_PLAYLIST_VERIFICATION_FAILED", message)
+                    : error instanceof z.ZodError ||
+                        error instanceof SyntaxError ||
+                        error instanceof TypeError ||
+                        error instanceof URIError
+                      ? apiError(400, "INVALID_REQUEST", message)
+                      : error instanceof RangeError
+                        ? apiError(404, "NOT_FOUND", message)
+                        : /write mode is disabled|session token|Cross-origin/u.test(message)
+                          ? apiError(403, "FORBIDDEN", message)
+                          : /Untrusted Host/u.test(message)
+                            ? apiError(421, "MISDIRECTED_REQUEST", message)
+                            : apiError(500, "INTERNAL_ERROR", message);
       if (error instanceof HttpError)
         for (const [name, value] of Object.entries(error.headers)) response.setHeader(name, value);
       json(request, response, responseError.status, responseError.body);

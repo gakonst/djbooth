@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { HostedPlaylistCatalog } from "../src/server/hosted/catalog.js";
-import { hostedPlaylistId, parseHostedPlaylistId } from "../src/server/hosted/ids.js";
+import {
+  hostedPlaylistId,
+  hostedTrackId,
+  parseHostedPlaylistId,
+} from "../src/server/hosted/ids.js";
 import type {
   HostedPlaylistProviderAdapter,
   HostedPlaylistStateReaderWriter,
 } from "../src/server/hosted/types.js";
+import { HostedTrackStreamUnavailableError } from "../src/server/hosted/types.js";
 import type { HostedPlaylistProvider, PlaylistItem, TrackSummary } from "../src/shared/types.js";
 
 describe("HostedPlaylistCatalog", () => {
@@ -185,6 +190,14 @@ describe("HostedPlaylistCatalog", () => {
       revision: "stored",
       queuedAt: "2026-07-14T12:00:00.000Z",
     });
+  });
+
+  it("reports adapters without direct audio as explicitly unavailable", async () => {
+    const catalog = new HostedPlaylistCatalog({ adapters: [adapter("spotify")] });
+
+    expect(() => catalog.streamTrack(hostedTrackId("spotify", "spotify:track:one"))).toThrow(
+      HostedTrackStreamUnavailableError,
+    );
   });
 });
 

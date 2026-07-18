@@ -91,9 +91,12 @@ describe("SoundCloudHostedPlaylistAdapter", () => {
     const adapter = new SoundCloudHostedPlaylistAdapter(client, { fetchMedia });
 
     await adapter.getTracks(urn);
-    const response = await adapter.streamTrack("soundcloud:tracks:8");
+    const stream = await adapter.streamTrack("soundcloud:tracks:8", {
+      range: "bytes=10-19",
+    });
 
-    expect(response.headers.get("content-type")).toBe("application/vnd.apple.mpegurl");
+    expect(stream.kind).toBe("hls");
+    expect(stream.response.headers.get("content-type")).toBe("application/vnd.apple.mpegurl");
     expect(client.rawCalls.at(-1)).toMatchObject({
       method: "GET",
       path: "/tracks/soundcloud:tracks:8/streams",
@@ -104,6 +107,39 @@ describe("SoundCloudHostedPlaylistAdapter", () => {
     expect(client.fetch.mock.calls[0]![0].url).toMatch(
       /^https:\/\/api\.soundcloud\.com\/tracks\/soundcloud:tracks:8\/streams\//u,
     );
+    expect(client.fetch.mock.calls[0]![0].headers.get("range")).toBeNull();
+  });
+
+  it("forwards byte ranges to full and preview progressive streams", async () => {
+    const candidates = [
+      ["http_mp3_128_url", "https://cf-media.sndcdn.com/full.mp3"],
+      ["preview_mp3_128_url", "https://cf-preview-media.sndcdn.com/preview.mp3"],
+    ] as const;
+
+    for (const [field, url] of candidates) {
+      const client = new FakeSoundCloudClient([]);
+      client.streams = { [field]: url };
+      const fetchMedia = vi.fn<typeof globalThis.fetch>();
+      fetchMedia.mockResolvedValue(
+        new Response("test", {
+          status: 206,
+          headers: {
+            "accept-ranges": "bytes",
+            "content-range": "bytes 10-13/100",
+          },
+        }),
+      );
+      const adapter = new SoundCloudHostedPlaylistAdapter(client, { fetchMedia });
+
+      const stream = await adapter.streamTrack("soundcloud:tracks:8", {
+        range: "bytes=10-13",
+      });
+
+      expect(stream.kind).toBe("progressive");
+      expect(stream.response.status).toBe(206);
+      expect(fetchMedia).toHaveBeenCalledOnce();
+      expect(new Request(fetchMedia.mock.calls[0]![0]).headers.get("range")).toBe("bytes=10-13");
+    }
   });
 
   it("preflights revisions and verifies rename, ordered replacement, creation, and deletion", async () => {
@@ -172,6 +208,10 @@ class FakeSoundCloudClient {
   ownedPlaylistUrns: string[] = [];
   likedPlaylistUrns: string[] = [];
   pageSize = 200;
+  streams: Record<string, unknown> = {
+    hls_aac_160_url:
+      "https://api.soundcloud.com/tracks/soundcloud:tracks:8/streams/stream-id/hls-aac-160.m3u8",
+  };
   #created = 20;
   #modified = 0;
 
@@ -217,10 +257,7 @@ class FakeSoundCloudClient {
       return { urn: "soundcloud:users:me", username: "GAK" } as T;
     }
     if (method === "GET" && /^\/tracks\/soundcloud:tracks:[^/]+\/streams$/u.test(path)) {
-      return {
-        hls_aac_160_url:
-          "https://api.soundcloud.com/tracks/soundcloud:tracks:8/streams/stream-id/hls-aac-160.m3u8",
-      } as T;
+      return structuredClone(this.streams) as T;
     }
     const url = new URL(path, "https://api.soundcloud.test");
     if (method === "GET" && url.pathname.endsWith("/me/playlists")) {

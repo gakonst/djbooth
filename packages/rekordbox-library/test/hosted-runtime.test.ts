@@ -28,6 +28,42 @@ afterEach(async () => {
 });
 
 describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
+  it("forwards hosted stream byte-range requests without caching them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-stream-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const streamTrack = vi.fn(async () => ({
+      kind: "progressive" as const,
+      response: new Response("test", { status: 206 }),
+    }));
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks: async () => [],
+        streamTrack,
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId: "playlistId" in mutation ? mutation.playlistId : "hosted:spotify:new",
+          revision: null,
+          queuedAt: "2026-07-14T00:00:00.000Z",
+        }),
+      },
+      state,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+
+    const stream = await runtime.streamTrack("hosted-track:soundcloud:track", {
+      range: "bytes=10-13",
+    });
+
+    expect(stream.kind).toBe("progressive");
+    expect(stream.response.status).toBe(206);
+    expect(streamTrack).toHaveBeenCalledWith("hosted-track:soundcloud:track", {
+      range: "bytes=10-13",
+    });
+  });
+
   it("queues enabled playlists, kicks the worker, emits cache invalidation, and closes in order", async () => {
     const root = mkdtempSync(join(tmpdir(), "hosted-runtime-"));
     roots.push(root);
@@ -156,7 +192,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
         getTracks,
         refreshPlaylistState,
         refreshTrackState,
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate: async (mutation) => ({
           operation: mutation.type,
           playlistId: "playlistId" in mutation ? mutation.playlistId : id,
@@ -234,7 +270,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       catalog: {
         listPlaylists: async () => ({ items: [item], providers: [] }),
         getTracks: async (): Promise<TrackSummary[]> => [],
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate: async (mutation) => ({
           operation: mutation.type,
           playlistId: "playlistId" in mutation ? mutation.playlistId : id,
@@ -304,7 +340,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       catalog: {
         listPlaylists: async () => ({ items: [], providers: [] }),
         getTracks: async (): Promise<TrackSummary[]> => [],
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate,
       },
       state,
@@ -395,7 +431,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       catalog: {
         listPlaylists: async () => ({ items: [], providers: [] }),
         getTracks: async (): Promise<TrackSummary[]> => [],
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate,
       },
       state,
@@ -476,7 +512,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       catalog: {
         listPlaylists: async () => ({ items: [], providers: [] }),
         getTracks: async (): Promise<TrackSummary[]> => [],
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate,
       },
       state,
@@ -541,7 +577,7 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       catalog: {
         listPlaylists: async () => ({ items: [], providers: [] }),
         getTracks: async (): Promise<TrackSummary[]> => [],
-        streamTrack: async () => new Response(),
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
         mutate,
       },
       state,

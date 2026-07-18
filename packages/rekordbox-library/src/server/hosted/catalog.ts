@@ -11,8 +11,10 @@ import type {
   HostedPlaylistProviderAdapter,
   HostedPlaylistStateReaderWriter,
   HostedPlaylistStoredState,
+  HostedTrackStream,
+  HostedTrackStreamRequest,
 } from "./types.js";
-import { errorMessage } from "./types.js";
+import { errorMessage, HostedTrackStreamUnavailableError } from "./types.js";
 
 export type HostedPlaylistCatalogOptions = {
   adapters: readonly HostedPlaylistProviderAdapter[];
@@ -148,11 +150,15 @@ export class HostedPlaylistCatalog {
     );
   }
 
-  streamTrack(trackId: string): Promise<Response> {
+  streamTrack(trackId: string, request: HostedTrackStreamRequest = {}): Promise<HostedTrackStream> {
     const { provider, remoteId } = parseHostedTrackId(trackId);
     const adapter = this.#adapter(provider);
-    if (!adapter.streamTrack) throw new Error(`${provider} does not expose a direct audio stream`);
-    return adapter.streamTrack(remoteId);
+    if (!adapter.streamTrack) {
+      throw new HostedTrackStreamUnavailableError(
+        `${provider} does not expose a direct audio stream`,
+      );
+    }
+    return adapter.streamTrack(remoteId, request);
   }
 
   mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt> {

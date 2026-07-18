@@ -14,6 +14,15 @@ export type HostedAdapterListResult = {
   items: PlaylistItem[];
 };
 
+export type HostedTrackStreamRequest = {
+  range?: string;
+};
+
+export type HostedTrackStream = {
+  kind: "hls" | "progressive";
+  response: Response;
+};
+
 export interface HostedPlaylistProviderAdapter {
   readonly provider: HostedPlaylistProvider;
   listPlaylists(): Promise<HostedAdapterListResult>;
@@ -30,7 +39,10 @@ export interface HostedPlaylistProviderAdapter {
     expectedRevision: string | null,
   ): Promise<PlaylistItem>;
   deletePlaylist(remotePlaylistId: string, expectedRevision: string | null): Promise<void>;
-  streamTrack?(remoteTrackId: string): Promise<Response>;
+  streamTrack?(
+    remoteTrackId: string,
+    request?: HostedTrackStreamRequest,
+  ): Promise<HostedTrackStream>;
 }
 
 export type HostedPlaylistStoredState = {
@@ -114,6 +126,13 @@ export class HostedPlaylistVerificationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "HostedPlaylistVerificationError";
+  }
+}
+
+export class HostedTrackStreamUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedTrackStreamUnavailableError";
   }
 }
 

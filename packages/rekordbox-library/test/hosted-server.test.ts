@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { HostedPlaylistConflictError } from "../src/server/hosted/types.js";
+import {
+  HostedPlaylistConflictError,
+  HostedTrackStreamUnavailableError,
+} from "../src/server/hosted/types.js";
 import {
   absolutizeHlsManifest,
   startLibraryServer,
@@ -252,7 +255,7 @@ describe("hosted playlist HTTP routes", () => {
       Object.defineProperty(manifest, "url", {
         value: "https://playback.media-streaming.soundcloud.cloud/audio/playlist.m3u8",
       });
-      return manifest;
+      return { kind: "hls" as const, response: manifest };
     });
     const server = await startLibraryServer({
       api: localApi(),
@@ -274,6 +277,93 @@ describe("hosted playlist HTTP routes", () => {
     expect(await response.text()).toContain(
       "https://playback.media-streaming.soundcloud.cloud/audio/part.m4s",
     );
+  });
+
+  it("forwards progressive ranges and preserves partial and unsatisfiable responses", async () => {
+    const hosted = hostedApi();
+    hosted.streamTrack = vi.fn(async (_trackId, request) => {
+      if (request?.range === "bytes=10-13") {
+        return {
+          kind: "progressive" as const,
+          response: new Response("test", {
+            status: 206,
+            headers: {
+              "accept-ranges": "bytes",
+              "content-length": "4",
+              "content-range": "bytes 10-13/100",
+              "content-type": "audio/mpeg",
+            },
+          }),
+        };
+      }
+      return {
+        kind: "progressive" as const,
+        response: new Response(null, {
+          status: 416,
+          headers: {
+            "accept-ranges": "bytes",
+            "content-length": "5",
+            "content-range": "bytes */100",
+            "content-type": "audio/mpeg",
+          },
+        }),
+      };
+    });
+    const server = await startLibraryServer({
+      api: localApi(),
+      hosted,
+      staticDirectory: staticDirectory(),
+      port: 0,
+    });
+    servers.push(server);
+    const id = encodeURIComponent("hosted-track:soundcloud:soundcloud%3Atracks%3A1");
+
+    const partial = await fetch(`${server.url}api/hosted-audio/${id}`, {
+      headers: { range: "bytes=10-13" },
+    });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("accept-ranges")).toBe("bytes");
+    expect(partial.headers.get("content-range")).toBe("bytes 10-13/100");
+    expect(await partial.text()).toBe("test");
+
+    const unsatisfiable = await fetch(`${server.url}api/hosted-audio/${id}`, {
+      headers: { range: "bytes=100-109" },
+    });
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers.get("content-length")).toBeNull();
+    expect(unsatisfiable.headers.get("content-range")).toBe("bytes */100");
+    expect(await unsatisfiable.text()).toBe("");
+    expect(hosted.streamTrack).toHaveBeenNthCalledWith(1, expect.any(String), {
+      range: "bytes=10-13",
+    });
+    expect(hosted.streamTrack).toHaveBeenNthCalledWith(2, expect.any(String), {
+      range: "bytes=100-109",
+    });
+  });
+
+  it("reports providers without direct streams as explicitly unavailable", async () => {
+    const hosted = hostedApi();
+    hosted.streamTrack = vi.fn(async () => {
+      throw new HostedTrackStreamUnavailableError("spotify does not expose a direct audio stream");
+    });
+    const server = await startLibraryServer({
+      api: localApi(),
+      hosted,
+      staticDirectory: staticDirectory(),
+      port: 0,
+    });
+    servers.push(server);
+    const id = encodeURIComponent("hosted-track:spotify:spotify%3Atrack%3Aone");
+
+    const response = await fetch(`${server.url}api/hosted-audio/${id}`);
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "STREAM_UNAVAILABLE",
+        message: "spotify does not expose a direct audio stream",
+      },
+    });
   });
 
   it("publishes hosted acquisition changes and releases the runtime subscription", async () => {

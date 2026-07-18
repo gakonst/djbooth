@@ -9,10 +9,16 @@ import { hostedRevision } from "./revision.js";
 import {
   HostedPlaylistCapabilityError,
   HostedPlaylistVerificationError,
+  HostedTrackStreamUnavailableError,
   assertExpectedRevision,
   isNotFoundError,
 } from "./types.js";
-import type { HostedAdapterListResult, HostedPlaylistProviderAdapter } from "./types.js";
+import type {
+  HostedAdapterListResult,
+  HostedPlaylistProviderAdapter,
+  HostedTrackStream,
+  HostedTrackStreamRequest,
+} from "./types.js";
 
 type RawQueryValue = string | number | boolean | readonly (string | number | boolean)[] | undefined;
 
@@ -134,7 +140,10 @@ export class SoundCloudHostedPlaylistAdapter implements HostedPlaylistProviderAd
     return tracks;
   }
 
-  async streamTrack(remoteTrackId: string): Promise<Response> {
+  async streamTrack(
+    remoteTrackId: string,
+    request: HostedTrackStreamRequest = {},
+  ): Promise<HostedTrackStream> {
     requireSoundCloudTrackUrn(remoteTrackId);
     const secretToken = this.#streamSecrets.get(remoteTrackId);
     const streams = asRecord(
@@ -144,18 +153,27 @@ export class SoundCloudHostedPlaylistAdapter implements HostedPlaylistProviderAd
         secretToken ? { query: { secret_token: secretToken } } : {},
       ),
     );
-    const streamUrl = soundCloudStreamUrl(streams);
-    if (!streamUrl) throw new Error(`SoundCloud track ${remoteTrackId} is not streamable`);
-    assertSoundCloudMediaUrl(streamUrl);
-    const request = new Request(streamUrl, {
-      headers: { accept: "*/*" },
+    const stream = soundCloudStream(streams);
+    if (!stream) {
+      throw new HostedTrackStreamUnavailableError(
+        `SoundCloud track ${remoteTrackId} is not streamable`,
+      );
+    }
+    assertSoundCloudMediaUrl(stream.url);
+    const headers = new Headers({ accept: "*/*" });
+    if (stream.kind === "progressive" && request.range) headers.set("range", request.range);
+    const mediaRequest = new Request(stream.url, {
+      headers,
       redirect: "follow",
     });
-    if (new URL(streamUrl).hostname === "api.soundcloud.com") {
+    let response: Response;
+    if (new URL(stream.url).hostname === "api.soundcloud.com") {
       if (!this.#client.fetch) throw new Error("Authenticated SoundCloud streaming is unavailable");
-      return this.#client.fetch(request);
+      response = await this.#client.fetch(mediaRequest);
+    } else {
+      response = await this.#fetchMedia(mediaRequest);
     }
-    return this.#fetchMedia(request);
+    return { kind: stream.kind, response };
   }
 
   async createPlaylist(name: string): Promise<PlaylistItem> {
@@ -482,15 +500,18 @@ function soundCloudTrackSecretToken(track: Record<string, unknown>): string | un
   return undefined;
 }
 
-function soundCloudStreamUrl(streams: Record<string, unknown> | undefined): string | undefined {
-  return (
-    stringField(streams, "hls_aac_160_url") ??
-    stringField(streams, "hls_aac_96_url") ??
-    stringField(streams, "hls_mp3_128_url") ??
-    stringField(streams, "http_mp3_128_url") ??
-    stringField(streams, "preview_mp3_128_url") ??
-    undefined
-  );
+function soundCloudStream(
+  streams: Record<string, unknown> | undefined,
+): { kind: HostedTrackStream["kind"]; url: string } | undefined {
+  for (const field of ["hls_aac_160_url", "hls_aac_96_url", "hls_mp3_128_url"] as const) {
+    const url = stringField(streams, field);
+    if (url) return { kind: "hls", url };
+  }
+  for (const field of ["http_mp3_128_url", "preview_mp3_128_url"] as const) {
+    const url = stringField(streams, field);
+    if (url) return { kind: "progressive", url };
+  }
+  return undefined;
 }
 
 function assertSoundCloudMediaUrl(value: string): void {

@@ -33,6 +33,8 @@ import {
   HostedPlaylistVerificationError,
   type HostedAdapterListResult,
   type HostedPlaylistProviderAdapter,
+  type HostedTrackStream,
+  type HostedTrackStreamRequest,
   errorMessage as hostedErrorMessage,
 } from "./hosted/types.js";
 import type { HostedPlaylistApi, LibraryApi } from "./server.js";
@@ -205,8 +207,8 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     return promise;
   }
 
-  streamTrack(trackId: string): Promise<Response> {
-    return this.#catalog.streamTrack(trackId);
+  streamTrack(trackId: string, request: HostedTrackStreamRequest = {}): Promise<HostedTrackStream> {
+    return this.#catalog.streamTrack(trackId, request);
   }
 
   /** Mirror an already-committed local playlist edit through the durable provider outbox. */
