@@ -423,3 +423,10 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 - Two bounded player-3 captures contained status traffic but no TCP/1051 data, Search status menu,
   or `SEARCH(0x1300)` request because no physical Search submission occurred during their windows.
   Final physical Search UI activation/result/load proof remains open.
+- A subsequent trace captured the missing CDJ-3000 path: keyboard edits emitted `0x1500` requests
+  (`R`, `RA`, `RAF`, `RAFA`) with packed context, sort, UTF-16 byte length, and string, but the
+  server returned `INVALID_REQUEST(0x4003)`. The deck closed and rediscovered RemoteDB after each
+  rejected keystroke. Added `0x1500` as incremental Search using the same prewarmed matcher,
+  connection-local pending menu, and loadable row builder as legacy `0x1300`; pinned the captured
+  `RAFA` request as a golden fixture and extended the no-Back same-socket Search/Render regression.
+  Nightly format and all 112 `djtools-link` tests pass. Physical result/render/load proof is pending.
