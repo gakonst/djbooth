@@ -92,6 +92,9 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
   CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
+- When CDJ Search appears broken, run `music djlink search <query>` first. It exercises the exact
+  prewarmed matcher and RemoteDB row builder without touching the deck; a passing preflight plus no
+  `SEARCH(0x1300)` wire request isolates the failure to deck UI/source activation.
 - Treat Spotify and SoundCloud playlist creation as external account writes. Require an explicit
   request, validate every reference before creation, default to private, and preserve order and
   duplicates. Never retry a playlist-creation POST automatically.
@@ -428,6 +431,7 @@ music djlink start "$MANIFEST" --format json
 music djlink devices --wait-ms 5000 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink load 4 --player 3 --format json
+music djlink search "Science Fiction" --mode track --format json
 music djlink monitor --player 3 --format json
 music djlink stop --format json
 ```
@@ -438,7 +442,8 @@ An empty device list after the wait means the CDJ/network path is not visible. R
 bind address; if a prior deck IP is known, run one ARP `probe` before blaming the protocol. Do not
 attempt a load until the player is discovered. `load` addresses a track by manifest order, native
 ID, Spotify ID, or title and cues it on the selected player. It does not press PLAY and exposes no
-unsafe/private packet-replay surface.
+unsafe/private packet-replay surface. `search` is read-only and bounded; use it before packet
+changes to distinguish matcher/row failures from a CDJ that never emits `SEARCH(0x1300)`.
 
 For protocol implementation work only, iterate on the provenance-tracked Rust source in
 `packages/djlink/native`:

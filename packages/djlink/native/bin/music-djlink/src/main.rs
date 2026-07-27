@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use djtools_link::{
-    DEFAULT_MOUNT_PORT, DjLinkConfig, DjLinkServer, LibrarySnapshot, LogLevel, PlaylistRecord,
-    REKORDBOX_PLAYER_NUMBER, RekordboxLibraryLoadReport, RemoteDbCursorAudit, SLOT_REKORDBOX,
-    TRACK_TYPE_REKORDBOX, TrackRecord, audit_remote_db_cursors,
+    DEFAULT_MOUNT_PORT, DjLinkConfig, DjLinkSearchMode, DjLinkServer, LibrarySnapshot, LogLevel,
+    PlaylistRecord, REKORDBOX_PLAYER_NUMBER, RekordboxLibraryLoadReport, RemoteDbCursorAudit,
+    SLOT_REKORDBOX, TRACK_TYPE_REKORDBOX, TrackRecord, audit_remote_db_cursors,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -196,6 +196,15 @@ struct PlayerParams {
 #[derive(Debug, Deserialize)]
 struct ResolveTrackParams {
     selector: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchParams {
+    query: String,
+    #[serde(default = "default_search_mode")]
+    mode: String,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1110,6 +1119,42 @@ async fn dispatch_control(
                 "canonicalName": track.canonical_name,
             }))
         }
+        "search" => {
+            let params = serde_json::from_value::<SearchParams>(request.params.clone())
+                .context("invalid search params")?;
+            if params.query.trim().is_empty() {
+                bail!("search query must not be empty");
+            }
+            let mode = match params.mode.as_str() {
+                "track" => DjLinkSearchMode::Track,
+                "artist" => DjLinkSearchMode::Artist,
+                "album" => DjLinkSearchMode::Album,
+                mode => bail!("unknown search mode '{mode}'; expected track, artist, or album"),
+            };
+            let limit = params.limit.clamp(1, 100);
+            let profile = server.profile_search(&params.query, mode);
+            let items = profile
+                .items
+                .iter()
+                .take(limit)
+                .map(|item| {
+                    json!({
+                        "entryId": item.entry_id,
+                        "entryType": item.entry_type,
+                        "label": item.label,
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "query": profile.query,
+                "mode": profile.mode.label(),
+                "normalizedQuery": profile.normalized_query,
+                "resultCount": profile.result_count,
+                "elapsedUs": profile.elapsed_us,
+                "items": items,
+                "truncated": profile.result_count > limit,
+            }))
+        }
         "load" => {
             let params = serde_json::from_value::<LoadParams>(request.params.clone())
                 .context("invalid load params")?;
@@ -1136,6 +1181,14 @@ async fn dispatch_control(
         "stop" => Ok(json!({ "stopping": true })),
         method => bail!("unknown control method '{method}'"),
     }
+}
+
+fn default_search_mode() -> String {
+    "track".to_string()
+}
+
+fn default_search_limit() -> usize {
+    20
 }
 
 async fn load_snapshot(path: &Path) -> Result<LibrarySnapshot> {

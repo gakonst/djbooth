@@ -400,3 +400,25 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   paused/cued after 536 ms. The final capture contains 13 matching RemoteDB render/header exchanges,
   zero mismatches, zero missing headers, and no TCP sequence gaps. The earlier physical Track
   Search capture remains the cursor gate: 78 matching exchanges including offset 1.
+
+## Pro DJ Link search checkpoint (2026-07-27)
+
+- Added an end-to-end loopback regression for the native CDJ Search flow. It fragments the
+  separate `r,m,s,t,sort,len,query` request across TCP writes, requires a bounded success response,
+  then renders through the packed `r:m:s:t` context and asserts the exact loadable
+  title-and-artist row plus menu header/footer.
+- Precomputed normalized title, artist, album, canonical-name, and metadata search documents when
+  the server loads the Rekordbox snapshot. The 14,929-track live library's `SCIENCE` query dropped
+  from 232.7 ms to 9–18 ms with identical results; an intentionally broad one-character query
+  dropped from 81.9 ms to 31.4 ms after removing per-comparison title allocations.
+- Added bounded, read-only `music djlink search <query> --mode track|artist|album` diagnostics over
+  the protected control socket. It uses the exact prewarmed matcher and RemoteDB row builder served
+  to CDJs, separating local index/result failures from a deck that never sends `SEARCH(0x1300)`.
+  Updated CLI hints, README, canonical Music skill, and bundled plugin guidance.
+- Removed the stale unsolicited `LINK_REPLY(0x06)` broadcaster. The native Rekordbox capture has
+  one unicast `0x05 -> 0x06` exchange; the live corrected source likewise answered one startup
+  query per deck and emitted no periodic media reply. The existing request handler remains
+  byte-exact against the captured Rekordbox packet.
+- Two bounded player-3 captures contained status traffic but no TCP/1051 data, Search status menu,
+  or `SEARCH(0x1300)` request because no physical Search submission occurred during their windows.
+  Final physical Search UI activation/result/load proof remains open.

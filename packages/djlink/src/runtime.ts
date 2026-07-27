@@ -18,6 +18,8 @@ import type {
   DjLinkLoadResult,
   DjLinkMonitorResult,
   DjLinkRunResult,
+  DjLinkSearchMode,
+  DjLinkSearchResult,
   DjLinkRekordboxReport,
   DjLinkServerStatus,
   DjLinkSnapshot,
@@ -96,6 +98,13 @@ export type ListDjLinkDevicesOptions = {
 export type ProbeDjLinkDeviceOptions = {
   ip: string;
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type SearchDjLinkOptions = {
+  query: string;
+  mode?: DjLinkSearchMode;
+  limit?: number;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -395,6 +404,16 @@ export async function monitorDjLink(
 ): Promise<DjLinkMonitorResult> {
   const state = await requireRunningState(options.env ?? process.env);
   return requestControl<DjLinkMonitorResult>(state.socketPath, "monitor", { player });
+}
+
+/** Search the running source's prewarmed RemoteDB library without changing deck state. */
+export async function searchDjLink(options: SearchDjLinkOptions): Promise<DjLinkSearchResult> {
+  const state = await requireRunningState(options.env ?? process.env);
+  return requestControl<DjLinkSearchResult>(state.socketPath, "search", {
+    query: options.query,
+    mode: options.mode ?? "track",
+    limit: options.limit ?? 20,
+  });
 }
 
 /** Resolve and load one local recording onto a discovered player. */

@@ -149,6 +149,27 @@ export type DjLinkMonitorResult = {
   position: string | null;
 };
 
+/** Search category exposed by the CDJ RemoteDB protocol. */
+export type DjLinkSearchMode = "track" | "artist" | "album";
+
+/** One bounded RemoteDB search result. */
+export type DjLinkSearchItem = {
+  entryId: number;
+  entryType: number;
+  label: string;
+};
+
+/** Read-only search profile from the running source's in-memory index. */
+export type DjLinkSearchResult = {
+  query: string;
+  mode: DjLinkSearchMode;
+  normalizedQuery: string;
+  resultCount: number;
+  elapsedUs: number;
+  items: DjLinkSearchItem[];
+  truncated: boolean;
+};
+
 /** Result of a safe remote track-load request. */
 export type DjLinkLoadResult = {
   player: number;

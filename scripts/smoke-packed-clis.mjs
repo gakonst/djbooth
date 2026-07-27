@@ -194,7 +194,8 @@ try {
   if (
     !djlinkHelp.stdout.includes("music djlink") ||
     !djlinkHelp.stdout.includes("devices") ||
-    !djlinkHelp.stdout.includes("load")
+    !djlinkHelp.stdout.includes("load") ||
+    !djlinkHelp.stdout.includes("search")
   ) {
     throw new Error("Packed music CLI did not compose the DJ Link workflow");
   }
@@ -229,12 +230,13 @@ try {
     "packages do not redistribute the proprietary helper",
     "## 8. Serve and load connected CDJs",
     "Spotify streaming tracks cannot be LINK EXPORTed",
+    "music djlink search <query>",
   ];
   if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {
     throw new Error("Installed Music workflow skill is missing a safety contract");
   }
   const generatedSkills = [
-    ["music-djlink", ["# music djlink doctor", "# music djlink load"]],
+    ["music-djlink", ["# music djlink doctor", "# music djlink load", "# music djlink search"]],
     ["music-library", ["# music library serve"]],
     ["music-tracks", ["# music tracks resolve"]],
     ["music-spots", ["# music spots api search"]],
@@ -417,6 +419,7 @@ try {
     "djlink_doctor",
     "djlink_load",
     "djlink_monitor",
+    "djlink_search",
     "djlink_start",
     "djlink_status",
     "djlink_stop",

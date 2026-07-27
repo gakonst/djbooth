@@ -40,6 +40,7 @@ music djlink status --format json
 music djlink devices --wait-ms 5000 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink load 4 --player 3 --format json
+music djlink search "Science Fiction" --mode track --format json
 music djlink monitor --player 3 --format json
 music djlink stop --format json
 ```
@@ -49,7 +50,9 @@ Link network. `start` auto-selects a link-local interface when available. `devic
 for announcements. If discovery is empty, `probe` sends one bounded ARP request to a known deck IP
 on the selected interface; it does not send a DJ Link control command. `load` accepts manifest
 order, native ID, Spotify ID, title, or artist-title; it cues the local recording and returns
-`playing: false`. Press PLAY on the physical deck.
+`playing: false`. `search` exercises the same prewarmed matcher and RemoteDB row builder used by
+the CDJ, without changing deck or library state, so index failures can be separated from deck UI
+activation failures. Press PLAY on the physical deck.
 
 `MUSIC_DJLINK_STATE_DIR` changes the daemon state directory. `MUSIC_DJLINK_BINARY` selects an
 explicit native helper. `--bind-ip` and `--broadcast-ip` are diagnostic overrides.

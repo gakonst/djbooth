@@ -76,6 +76,7 @@ music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" 
 music library status --format json
 music library serve --open
 music djlink rekordbox --format json
+music djlink search "Science Fiction" --mode track --format json
 music djlink run ./set/manifest.json 1 --player 3 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink stop --format json
@@ -105,6 +106,10 @@ commands remain available for diagnosis.
 ingestion, start or resume the source, wait for deck discovery, then expose folders, playlists,
 artists, albums, and tracks. Add an optional track selector to cue it in the same command.
 Manifest-backed `run` remains available before a new import is visible in master.db.
+If deck Search appears broken, run `music djlink search <query>` first. It exercises the running
+daemon's prewarmed matcher and the same RemoteDB row builder used by the deck, without changing
+deck or library state. A successful CLI result isolates a missing deck Search request from an
+index or result-construction failure.
 
 DJ Link serves only verified local recordings and native ANLZ files. Spotify identities remain
 metadata. Licensed Spotify playback belongs to

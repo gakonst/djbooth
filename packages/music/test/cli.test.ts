@@ -45,6 +45,7 @@ describe("music CLI", () => {
       expect.arrayContaining([
         "djlink devices",
         "djlink load",
+        "djlink search",
         "djlink start",
         "rekordbox analyze track",
         "rekordbox db playlist create",
@@ -111,6 +112,14 @@ describe("music CLI", () => {
     expect(output).toContain("music djlink rekordbox [track]");
     expect(output).toContain("validate → start/resume → discover");
     expect(output).toContain("network CTA");
+  });
+
+  test("preserves the read-only DJ Link Search preflight", async () => {
+    const { output } = await serve(["djlink", "search", "--help"]);
+
+    expect(output).toContain("music djlink search <query>");
+    expect(output).toContain("without changing deck or library state");
+    expect(output).toContain("CDJ Search UI activation");
   });
 
   test("lists the workflow skill alongside typed command-group skills", async () => {

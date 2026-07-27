@@ -18,6 +18,77 @@ pub(crate) enum SearchScope {
     Album,
 }
 
+#[derive(Debug)]
+pub(crate) struct SearchIndex {
+    documents: Vec<SearchDocument>,
+}
+
+#[derive(Debug)]
+struct SearchDocument {
+    title: String,
+    sort_title: String,
+    artist: String,
+    canonical: String,
+    album: String,
+    haystack: String,
+}
+
+impl SearchIndex {
+    pub(crate) fn new(library: &LibrarySnapshot) -> Self {
+        Self {
+            documents: library
+                .all_tracks
+                .iter()
+                .map(SearchDocument::from_track)
+                .collect(),
+        }
+    }
+}
+
+impl SearchDocument {
+    fn from_track(track: &TrackRecord) -> Self {
+        let title = normalize_search_text(&track.title);
+        let artist = normalize_search_text(&track.artist);
+        let canonical = normalize_search_text(&track.canonical_name);
+        let album = normalize_search_text(&track.album);
+        let mut haystack = String::new();
+        let mut push_field = |field: &str| {
+            if field.is_empty() {
+                return;
+            }
+            if !haystack.is_empty() {
+                haystack.push(' ');
+            }
+            haystack.push_str(field);
+        };
+        for field in [
+            title.as_str(),
+            artist.as_str(),
+            canonical.as_str(),
+            album.as_str(),
+        ] {
+            push_field(field);
+        }
+        for field in [
+            &track.key,
+            &track.camelot,
+            &track.genre,
+            &track.label,
+            &track.comment,
+        ] {
+            push_field(&normalize_search_text(field));
+        }
+        Self {
+            title,
+            sort_title: track.title.to_ascii_lowercase(),
+            artist,
+            canonical,
+            album,
+            haystack,
+        }
+    }
+}
+
 pub(crate) fn search_scope_from_args(args: &[DbValue]) -> SearchScope {
     match rmst_menu_from_args(args) {
         Some(0x12) => SearchScope::Track,
@@ -99,47 +170,40 @@ fn search_decode_score(value: &str) -> (usize, usize) {
     (usize::MAX - control_chars, useful_chars)
 }
 
-pub(crate) fn track_search_score(
-    track: &TrackRecord,
-    query: &str,
-    query_terms: &[&str],
-) -> Option<u8> {
-    let title = normalize_search_text(&track.title);
-    let artist = normalize_search_text(&track.artist);
-    let canonical = normalize_search_text(&track.canonical_name);
-    let album = normalize_search_text(&track.album);
-    let haystack = normalize_search_text(&format!(
-        "{} {} {} {} {} {} {} {} {}",
-        track.title,
-        track.artist,
-        track.canonical_name,
-        track.album,
-        track.key,
-        track.camelot,
-        track.genre,
-        track.label,
-        track.comment
-    ));
-
-    if title == query || canonical == query {
+fn track_search_score(document: &SearchDocument, query: &str, query_terms: &[&str]) -> Option<u8> {
+    if document.title == query || document.canonical == query {
         return Some(0);
     }
-    if artist == query || album == query {
+    if document.artist == query || document.album == query {
         return Some(1);
     }
-    if title.starts_with(query) || canonical.starts_with(query) {
+    if document.title.starts_with(query) || document.canonical.starts_with(query) {
         return Some(2);
     }
-    if haystack.contains(query) {
+    if document.haystack.contains(query) {
         return Some(3);
     }
-    if !query_terms.is_empty() && query_terms.iter().all(|term| haystack.contains(term)) {
+    if !query_terms.is_empty()
+        && query_terms
+            .iter()
+            .all(|term| document.haystack.contains(term))
+    {
         return Some(4);
     }
     None
 }
 
+#[cfg(test)]
 pub(crate) fn search_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntry> {
+    let index = SearchIndex::new(library);
+    search_entries_indexed(library, &index, args)
+}
+
+pub(crate) fn search_entries_indexed(
+    library: &LibrarySnapshot,
+    index: &SearchIndex,
+    args: &[DbValue],
+) -> Vec<MenuEntry> {
     let Some(query) = search_query_from_args(args) else {
         return Vec::new();
     };
@@ -150,35 +214,40 @@ pub(crate) fn search_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec
     let scope = search_scope_from_args(args);
     let query_terms = query.split_whitespace().collect::<Vec<_>>();
     match scope {
-        SearchScope::Track => search_track_entries(library, &query, &query_terms),
-        SearchScope::Artist => search_artist_entries(library, &query, &query_terms),
-        SearchScope::Album => search_album_entries(library, &query, &query_terms),
-        SearchScope::Mixed => mixed_search_entries(library, &query, &query_terms),
+        SearchScope::Track => search_track_entries(library, index, &query, &query_terms),
+        SearchScope::Artist => search_artist_entries(library, index, &query, &query_terms),
+        SearchScope::Album => search_album_entries(library, index, &query, &query_terms),
+        SearchScope::Mixed => mixed_search_entries(library, index, &query, &query_terms),
     }
 }
 
 fn search_track_entries(
     library: &LibrarySnapshot,
+    index: &SearchIndex,
     query: &str,
     query_terms: &[&str],
 ) -> Vec<MenuEntry> {
     let mut tracks = library
         .all_tracks
         .iter()
-        .filter_map(|track| {
-            let score = track_search_score(track, query, query_terms)?;
-            Some((score, track.clone()))
+        .zip(&index.documents)
+        .filter_map(|(track, document)| {
+            let score = track_search_score(document, query, query_terms)?;
+            Some((score, track, document))
         })
         .collect::<Vec<_>>();
-    tracks.sort_by(|(left_score, left), (right_score, right)| {
-        left_score
-            .cmp(right_score)
-            .then_with(|| track_title_cmp(left, right))
-    });
+    tracks.sort_by(
+        |(left_score, left, left_document), (right_score, right, right_document)| {
+            left_score
+                .cmp(right_score)
+                .then_with(|| left_document.sort_title.cmp(&right_document.sort_title))
+                .then_with(|| left.track_id.cmp(&right.track_id))
+        },
+    );
     tracks
         .into_iter()
         .enumerate()
-        .map(|(idx, (_, track))| search_track_entry(&track, idx + 1))
+        .map(|(idx, (_, track, _))| search_track_entry(track, idx + 1))
         .collect()
 }
 
@@ -203,12 +272,13 @@ fn search_track_entry(track: &TrackRecord, position: usize) -> MenuEntry {
 
 fn mixed_search_entries(
     library: &LibrarySnapshot,
+    index: &SearchIndex,
     query: &str,
     query_terms: &[&str],
 ) -> Vec<MenuEntry> {
-    let mut entries = search_track_entries(library, query, query_terms);
-    entries.extend(search_artist_entries(library, query, query_terms));
-    entries.extend(search_album_entries(library, query, query_terms));
+    let mut entries = search_track_entries(library, index, query, query_terms);
+    entries.extend(search_artist_entries(library, index, query, query_terms));
+    entries.extend(search_album_entries(library, index, query, query_terms));
     entries
 }
 
@@ -261,14 +331,17 @@ fn is_known_search_sort(sort: u32) -> bool {
 
 fn search_artist_entries(
     library: &LibrarySnapshot,
+    index: &SearchIndex,
     query: &str,
     query_terms: &[&str],
 ) -> Vec<MenuEntry> {
     let mut artists = BTreeMap::<String, u32>::new();
-    for track in &library.all_tracks {
-        let artist = normalize_search_text(&track.artist);
-        if artist.contains(query)
-            || (!query_terms.is_empty() && query_terms.iter().all(|term| artist.contains(term)))
+    for (track, document) in library.all_tracks.iter().zip(&index.documents) {
+        if document.artist.contains(query)
+            || (!query_terms.is_empty()
+                && query_terms
+                    .iter()
+                    .all(|term| document.artist.contains(term)))
         {
             artists
                 .entry(track.artist.clone())
@@ -283,14 +356,15 @@ fn search_artist_entries(
 
 fn search_album_entries(
     library: &LibrarySnapshot,
+    index: &SearchIndex,
     query: &str,
     query_terms: &[&str],
 ) -> Vec<MenuEntry> {
     let mut albums = BTreeMap::<String, (u32, String, u32)>::new();
-    for track in &library.all_tracks {
-        let album = normalize_search_text(&track.album);
-        if album.contains(query)
-            || (!query_terms.is_empty() && query_terms.iter().all(|term| album.contains(term)))
+    for (track, document) in library.all_tracks.iter().zip(&index.documents) {
+        if document.album.contains(query)
+            || (!query_terms.is_empty()
+                && query_terms.iter().all(|term| document.album.contains(term)))
         {
             albums.entry(track.album.clone()).or_insert((
                 track.album_id,
@@ -305,13 +379,6 @@ fn search_album_entries(
             MenuEntry::plain(artist_id, album_id, &album, &artist, META_ALBUM)
         })
         .collect()
-}
-
-fn track_title_cmp(a: &TrackRecord, b: &TrackRecord) -> std::cmp::Ordering {
-    a.title
-        .to_ascii_lowercase()
-        .cmp(&b.title.to_ascii_lowercase())
-        .then_with(|| a.track_id.cmp(&b.track_id))
 }
 
 pub(crate) fn normalize_search_text(value: &str) -> String {

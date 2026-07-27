@@ -6,6 +6,8 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
 
 - The server advertises one rekordbox source: player 17, slot 4, track type 1.
 - CDJs discover the source through status keepalive/link-init packets on UDP 50002.
+- Media details `0x06` and source extension `0x47` are emitted only in response to deck queries;
+  unsolicited replies are not discovery heartbeats.
 - Portmap advertises mountd on the configured UDP mount port and NFS on UDP 2049.
 - Mount/NFS replies must work over UDP. TCP-only NFS is not sufficient for the CDJ path.
 

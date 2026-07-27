@@ -34,6 +34,7 @@ describe("DJ Link CLI", () => {
         "devices",
         "probe",
         "load",
+        "search",
         "monitor",
         "stop",
       ]),
@@ -87,5 +88,15 @@ describe("DJ Link CLI", () => {
     expect(output).toContain("djlink probe <ip>");
     expect(output).toContain("safe ARP request");
     expect(output).toContain("--timeout-ms <number>");
+  });
+
+  it("documents the read-only RemoteDB search preflight", async () => {
+    const { output, exitCode } = await serve(djlinkCli, ["search", "--help"]);
+
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("djlink search <query>");
+    expect(output).toContain("without changing deck or library state");
+    expect(output).toContain("--mode <track|artist|album>");
+    expect(output).toContain("CDJ Search UI activation");
   });
 });

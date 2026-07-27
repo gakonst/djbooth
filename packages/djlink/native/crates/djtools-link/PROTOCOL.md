@@ -83,12 +83,11 @@ and/or target NFS audio progress; ACK alone is insufficient.
 
 The real Rekordbox capture sends `0x06` after a deck `0x05` link query and
 `0x47` only after a deck `0x46` query. `0x47` remains strictly response-gated.
-The compatibility source also broadcasts its current `0x06` media details once
-per second: local CDJ-3000 cold-start and USB-replug captures show that this
-breaks the pre-query discovery deadlock and is the hardware-proven behavior of
-the original `djtools` source. Periodic source packets are therefore keepalive
-`0x06`, link init `0x16`, mixer status `0x29`, and compatibility media details
-`0x06`.
+The server mirrors that request/response behavior and does not broadcast
+unsolicited media replies. A 2026-07-27 three-deck cold start completed
+`0x46`/`0x47`, RemoteDB port discovery, and TCP/1051 connection without periodic
+`0x06`. Periodic source packets are keepalive `0x06`, link init `0x16`, and
+mixer status `0x29`.
 
 ## RemoteDB and audio
 

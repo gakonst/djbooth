@@ -53,11 +53,12 @@ use crate::protocol::decode_nfs_name;
 use crate::protocol::keepalive::{self, KeepaliveBody, KeepaliveKind};
 use crate::protocol::status;
 use crate::protocol::{be_u24, be_u32, decode_hex, rpc_parse_call, rpc_reply_header};
-#[cfg(test)]
-use crate::search::decode_search_binary;
 use crate::search::{
-    normalize_search_text, search_entries, search_query_from_args, search_sort_from_args,
+    SearchIndex, normalize_search_text, search_entries_indexed, search_query_from_args,
+    search_sort_from_args,
 };
+#[cfg(test)]
+use crate::search::{decode_search_binary, search_entries};
 use crate::telemetry::{LogLevel, init_djlink_tracing};
 use crate::{LinkError, LinkResult};
 
@@ -114,7 +115,6 @@ const TRACK_FILE_TCP_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const TRACK_FILE_TCP_CHUNK_SIZE: usize = 1024 * 1024;
 const FAST_ANNOUNCE_INTERVAL: Duration = Duration::from_millis(500);
 const FAST_LINK_INIT_INTERVAL: Duration = Duration::from_millis(300);
-const MEDIA_STATUS_INTERVAL: Duration = Duration::from_secs(1);
 
 const LOAD_TRACK_PAYLOAD_TEMPLATE: [u8; 57] = [
     0x01, 0x00, 0x0d, 0x00, 0x34, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -397,6 +397,7 @@ impl DjLinkServer {
         let log_path = config.log_path.clone();
         let raw_udp = RawUdpTx::spawn(interface_name.clone(), config.wire_capture_path.clone())
             .context("failed to initialize raw wire capture")?;
+        let search_index = SearchIndex::new(&library);
         let (actor_tx, actor_rx) = ServerActor::channel();
         let state = Arc::new(ServerState {
             config,
@@ -406,6 +407,7 @@ impl DjLinkServer {
             raw_udp,
             interface_name,
             library: Arc::new(library),
+            search_index,
             actor_tx,
             log_path,
         });
@@ -652,7 +654,7 @@ impl DjLinkServer {
             DbValue::Binary(query_bytes),
             DbValue::Int32(0),
         ];
-        let entries = search_entries(&self.state.library, &args);
+        let entries = search_entries_indexed(&self.state.library, &self.state.search_index, &args);
         let items = entries.iter().map(search_profile_item).collect::<Vec<_>>();
         DjLinkSearchProfile {
             query: query.to_string(),
@@ -834,8 +836,6 @@ impl DjLinkServer {
             .push(spawn_status(self.state.clone(), status_sock.clone()));
         self.tasks
             .push(spawn_mixer_status(self.state.clone(), status_sock.clone()));
-        self.tasks
-            .push(spawn_media_status(self.state.clone(), status_sock.clone()));
         if self.state.config.emit_beat_clock {
             self.tasks
                 .push(spawn_beat_status(self.state.clone(), beat_tx_sock.clone()));
@@ -2130,6 +2130,7 @@ struct ServerState {
     interface_name: Option<String>,
     raw_udp: RawUdpTx,
     library: Arc<LibrarySnapshot>,
+    search_index: SearchIndex,
     actor_tx: ServerActorSender,
     log_path: Option<PathBuf>,
 }
@@ -4441,29 +4442,6 @@ fn spawn_mixer_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoi
     })
 }
 
-fn spawn_media_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(MEDIA_STATUS_INTERVAL);
-        loop {
-            interval.tick().await;
-            let packet = build_status_link_reply(
-                &state.config.model_name,
-                state.config.player_number,
-                SLOT_REKORDBOX,
-                &state.config.source_name,
-                state.library.track_count(),
-                state.library.playlist_count(),
-            );
-            let target = SocketAddrV4::new(state.broadcast_ip, STATUS_PORT);
-            if let Err(err) =
-                send_udp_packet(&state, &sock, &packet, target, "media status announce").await
-            {
-                debug!(target: "djtools_link::udp", %target, %err, "media_status_send_failed");
-            }
-        }
-    })
-}
-
 async fn load_settings_target_for_db_peer(
     state: &ServerState,
     addr: SocketAddr,
@@ -6025,7 +6003,8 @@ async fn handle_db_client(
                 .await;
             }
             DB_REQ_SEARCH => {
-                let entries = search_entries(&state.library, &msg.args);
+                let entries =
+                    search_entries_indexed(&state.library, &state.search_index, &msg.args);
                 let search_query = search_query_from_args(&msg.args).unwrap_or_default();
                 let normalized_query = normalize_search_text(&search_query);
                 let search_sort = search_sort_from_args(&msg.args);
@@ -10702,6 +10681,118 @@ mod tests {
         assert_eq!(rmst_album_tab_query[0].entry_id2, science.album_id);
     }
 
+    #[tokio::test]
+    async fn db_handler_roundtrips_split_context_search_to_packed_render() {
+        let state = Arc::new(test_state_with_sample_library(0x5293_8822));
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("listener");
+        let listener_addr = listener.local_addr().expect("listener addr");
+        let (client, accepted) = tokio::join!(TcpStream::connect(listener_addr), listener.accept());
+        let mut client = client.expect("client");
+        let (server, peer_addr) = accepted.expect("server");
+        let handle = tokio::spawn(handle_db_client(state, server, peer_addr, None));
+
+        client
+            .write_all(&encode_db_field(&DbValue::Int32(DB_MAGIC)))
+            .await
+            .expect("handshake write");
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(100), recv_db_field(&mut client))
+                .await
+                .expect("handshake deadline")
+                .expect("handshake response"),
+            DbValue::Int32(1)
+        );
+
+        let tx = 0xbeef_0001;
+        let search = encode_db_message(
+            tx,
+            DB_REQ_SEARCH,
+            &[
+                DbValue::Int32(3),
+                DbValue::Int32(0x12),
+                DbValue::Int32(SLOT_REKORDBOX as u32),
+                DbValue::Int32(TRACK_TYPE_REKORDBOX as u32),
+                DbValue::Int32(SORT_DEFAULT),
+                DbValue::Int32(("SCIENCE".encode_utf16().count() * 2 + 2) as u32),
+                DbValue::String("SCIENCE".to_string()),
+                DbValue::Int32(0),
+            ],
+        );
+        for chunk in search.chunks(3) {
+            client.write_all(chunk).await.expect("search request write");
+            tokio::task::yield_now().await;
+        }
+        let success =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("search response deadline")
+                .expect("search response");
+        assert_eq!(success.tx_id, tx);
+        assert_eq!(success.msg_type, DB_RES_SUCCESS);
+        assert_eq!(db_int(success.args.first()), Some(DB_REQ_SEARCH as u32));
+        assert_eq!(db_int(success.args.get(1)), Some(1));
+
+        let render_tx = tx + 1;
+        let render = encode_db_message(
+            render_tx,
+            DB_REQ_RENDER,
+            &[
+                DbValue::Int32(0x0312_0401),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+                DbValue::Int32(12),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+            ],
+        );
+        for chunk in render.chunks(2) {
+            client.write_all(chunk).await.expect("render request write");
+            tokio::task::yield_now().await;
+        }
+        let header = tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+            .await
+            .expect("render header deadline")
+            .expect("render header");
+        assert_eq!(header.tx_id, render_tx);
+        assert_eq!(header.msg_type, DB_RES_MENU_HEADER);
+        assert_eq!(db_int(header.args.first()), Some(1));
+        assert_eq!(db_int(header.args.get(1)), Some(0));
+
+        let row = tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+            .await
+            .expect("render row deadline")
+            .expect("render row");
+        assert_eq!(row.msg_type, DB_RES_MENU_ITEM);
+        assert_eq!(db_int(row.args.get(1)), Some(42));
+        assert_eq!(
+            row.args.get(3),
+            Some(&DbValue::String("Science Fiction".to_string()))
+        );
+        assert_eq!(
+            row.args.get(5),
+            Some(&DbValue::String("Brunello".to_string()))
+        );
+        assert_eq!(db_int(row.args.get(6)), Some(META_TRACK_TITLE_AND_ARTIST));
+        assert_eq!(db_int(row.args.get(8)), Some(42));
+        assert_eq!(db_int(row.args.get(9)), Some(1));
+
+        let footer = tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+            .await
+            .expect("render footer deadline")
+            .expect("render footer");
+        assert_eq!(footer.msg_type, DB_RES_MENU_FOOTER);
+
+        client.shutdown().await.expect("client shutdown");
+        tokio::time::timeout(Duration::from_millis(100), handle)
+            .await
+            .expect("server shutdown deadline")
+            .expect("server task");
+    }
+
     #[test]
     fn db_metadata_backed_category_menus_filter_tracks() {
         let track = sample_track_record();
@@ -11833,6 +11924,7 @@ notes: []
             all_tracks: vec![track],
             playlists: vec![playlist],
         });
+        state.search_index = SearchIndex::new(&state.library);
         state
     }
 
@@ -11976,6 +12068,13 @@ notes: []
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(ServerActor::default().run(actor_rx));
         }
+        let library = Arc::new(LibrarySnapshot {
+            master_db_id: 0x0102_0304,
+            tracks_by_id: BTreeMap::new(),
+            all_tracks: Vec::new(),
+            playlists: Vec::new(),
+        });
+        let search_index = SearchIndex::new(&library);
         ServerState {
             config: DjLinkConfig::default(),
             bind_ip: Ipv4Addr::LOCALHOST,
@@ -11983,12 +12082,8 @@ notes: []
             mac_addr: "02:00:00:00:00:01".to_string(),
             interface_name: None,
             raw_udp: RawUdpTx::disabled(),
-            library: Arc::new(LibrarySnapshot {
-                master_db_id: 0x0102_0304,
-                tracks_by_id: BTreeMap::new(),
-                all_tracks: Vec::new(),
-                playlists: Vec::new(),
-            }),
+            library,
+            search_index,
             actor_tx,
             log_path: None,
         }
