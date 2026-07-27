@@ -120,6 +120,8 @@ describe("music CLI", () => {
     expect(output).toContain("music djlink search <query>");
     expect(output).toContain("without changing deck or library state");
     expect(output).toContain("CDJ Search UI activation");
+    expect(output).toContain("0x1500");
+    expect(output).toContain("Per-keystroke reconnects mean rejection");
   });
 
   test("lists the workflow skill alongside typed command-group skills", async () => {

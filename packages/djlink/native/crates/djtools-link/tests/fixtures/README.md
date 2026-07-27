@@ -63,3 +63,18 @@ SHA-256:
 
 The later checked-out `djtools/rb-tracks.pcap` is a different capture. Use the
 immutable git object and hash above for RemoteDB cursor comparisons.
+
+## Live CDJ-3000 incremental Search
+
+Source:
+`/tmp/music-djlink-search-final-hardware-20260727T0637Z.pcapng`
+
+SHA-256:
+`44c8e136cb540ac7d9c2cad5040f053dc58509f316c15a0e39e2b230a75c84a7`
+
+- `remotedb-cdj3000-incremental-search-rafa.hex`: frame 145387, player 3
+  request `0x1500`, transaction `0x09aa`, query `RAFA`.
+
+The four arguments are packed `r:m:s:t`, sort, UTF-16 byte length, and UTF-16
+string. The CDJ emitted one request after each keyboard edit and reconnected
+after every invalid response from the then-unpatched server.

@@ -105,6 +105,14 @@ git object `123e84e:rb-tracks.pcap` proves offset 2 → header `[1,2]`.
 Cross-connection menu recovery and a constant header offset are not protocol
 features.
 
+CDJ-3000 keyboard edits emit incremental search request `0x1500` with arguments
+`r:m:s:t, sort, UTF-16 byte size, uppercase UTF-16 string`. Unlike the documented
+legacy `SEARCH(0x1300)`, no trailing zero argument is present. Each successful
+request returns `SUCCESS(0x4000)` carrying the original request type and result
+count, then prepares those rows for `RENDER(0x3000)` on the same connection.
+Rejecting `0x1500` caused the observed deck to close and rediscover RemoteDB after
+each keystroke. Both request types use the same prewarmed matcher and row builder.
+
 NFS must remain UDP and must support observed 64,512-byte reads. On macOS,
 oversized UDP and broken link-local unicast routing require the proven raw BPF
 Ethernet/IPv4/UDP fallback with IPv4 fragmentation.

@@ -6002,7 +6002,7 @@ async fn handle_db_client(
                 )
                 .await;
             }
-            DB_REQ_SEARCH => {
+            DB_REQ_SEARCH | DB_REQ_INCREMENTAL_SEARCH => {
                 let entries =
                     search_entries_indexed(&state.library, &state.search_index, &msg.args);
                 let search_query = search_query_from_args(&msg.args).unwrap_or_default();
@@ -6013,6 +6013,7 @@ async fn handle_db_client(
                     target: "djtools_link::db",
                     %addr,
                     tx,
+                    request = db_request_name(msg.msg_type),
                     query = %search_query,
                     normalized = %normalized_query,
                     sort = %sort_label(search_sort),
@@ -10872,6 +10873,86 @@ mod tests {
         assert_eq!(scoped_footer.tx_id, scoped_render_tx);
         assert_eq!(scoped_footer.msg_type, DB_RES_MENU_FOOTER);
 
+        let incremental_tx = scoped_render_tx + 1;
+        let incremental_search = encode_db_message(
+            incremental_tx,
+            DB_REQ_INCREMENTAL_SEARCH,
+            &[
+                DbValue::Int32(0x0301_0401),
+                DbValue::Int32(SORT_DEFAULT),
+                DbValue::Int32(("SCIENCE".encode_utf16().count() * 2 + 2) as u32),
+                DbValue::String("SCIENCE".to_string()),
+            ],
+        );
+        for chunk in incremental_search.chunks(2) {
+            client
+                .write_all(chunk)
+                .await
+                .expect("incremental search request write");
+            tokio::task::yield_now().await;
+        }
+        let incremental_success =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("incremental search response deadline")
+                .expect("incremental search response");
+        assert_eq!(incremental_success.tx_id, incremental_tx);
+        assert_eq!(incremental_success.msg_type, DB_RES_SUCCESS);
+        assert_eq!(
+            db_int(incremental_success.args.first()),
+            Some(DB_REQ_INCREMENTAL_SEARCH as u32)
+        );
+        assert_eq!(db_int(incremental_success.args.get(1)), Some(2));
+
+        let incremental_render_tx = incremental_tx + 1;
+        let incremental_render = encode_db_message(
+            incremental_render_tx,
+            DB_REQ_RENDER,
+            &[
+                DbValue::Int32(0x0301_0401),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+                DbValue::Int32(2),
+                DbValue::Int32(12),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+            ],
+        );
+        client
+            .write_all(&incremental_render)
+            .await
+            .expect("incremental render request write");
+        let incremental_header =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("incremental render header deadline")
+                .expect("incremental render header");
+        assert_eq!(incremental_header.tx_id, incremental_render_tx);
+        assert_eq!(incremental_header.msg_type, DB_RES_MENU_HEADER);
+        assert_eq!(db_int(incremental_header.args.first()), Some(1));
+        assert_eq!(db_int(incremental_header.args.get(1)), Some(0));
+
+        let incremental_row =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("incremental render row deadline")
+                .expect("incremental render row");
+        assert_eq!(incremental_row.msg_type, DB_RES_MENU_ITEM);
+        assert_eq!(db_int(incremental_row.args.get(1)), Some(42));
+        assert_eq!(
+            incremental_row.args.get(3),
+            Some(&DbValue::String("Science Fiction".to_string()))
+        );
+
+        let incremental_footer =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("incremental render footer deadline")
+                .expect("incremental render footer");
+        assert_eq!(incremental_footer.tx_id, incremental_render_tx);
+        assert_eq!(incremental_footer.msg_type, DB_RES_MENU_FOOTER);
+
         client.shutdown().await.expect("client shutdown");
         tokio::time::timeout(Duration::from_millis(100), handle)
             .await
@@ -11076,6 +11157,8 @@ mod tests {
             DB_REQ_ALBUMS_FOR_LABEL_ARTIST,
             DB_REQ_KEY_NEIGHBOR,
             DB_REQ_TRACKS_FOR_KEY_DISTANCE,
+            DB_REQ_SEARCH,
+            DB_REQ_INCREMENTAL_SEARCH,
             DB_REQ_TRACKS_FOR_GENRE_ARTIST_ALBUM,
             DB_REQ_ORIGINAL_ARTIST_MENU,
             DB_REQ_TRACKS_FOR_LABEL_ARTIST_ALBUM,

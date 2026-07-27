@@ -133,7 +133,7 @@ export const djlinkCli = Cli.create("djlink", {
   hint: "Start the full browsable library: music djlink rekordbox. Add a track selector to validate, start, discover, and cue it in one shot. PLAY stays physical.",
   mcp: {
     instructions:
-      "Use rekordbox with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use rekordbox <track> for a one-shot database-to-deck cue. Use run <manifest> <track> for newly acquired ad-hoc recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code. Loading does not start transport because CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.",
+      "Use rekordbox with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use rekordbox <track> for a one-shot database-to-deck cue. Use run <manifest> <track> for newly acquired ad-hoc recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code. Loading does not start transport because CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.",
   },
   sync: {
     suggestions: [
@@ -489,7 +489,7 @@ djlinkCli.command("load", {
 djlinkCli.command("search", {
   description:
     "Search the running source's prewarmed RemoteDB library without changing deck or library state.",
-  hint: "Use this to separate local index/result problems from CDJ Search UI activation. Results use the same matching and row builder served to the deck.",
+  hint: "Preflight first, then inspect TCP/1051: CDJ-3000 keyboard edits use 0x1500; legacy Search uses 0x1300. Per-keystroke reconnects mean rejection; neither request means CDJ Search UI activation failed.",
   args: z.object({
     query: z.string().min(1).describe("Track, artist, or album text"),
   }),

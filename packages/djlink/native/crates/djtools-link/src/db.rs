@@ -57,6 +57,8 @@ pub(crate) const DB_REQ_ORIGINAL_ARTIST_MENU: u16 = 0x1302;
 pub(crate) const DB_REQ_TRACKS_FOR_LABEL_ARTIST_ALBUM: u16 = 0x130a;
 pub(crate) const DB_REQ_SORT_MENU: u16 = 0x1400;
 pub(crate) const DB_REQ_ALBUMS_FOR_ORIGINAL_ARTIST: u16 = 0x1402;
+/// Incremental search emitted by CDJ-3000 keyboard edits.
+pub(crate) const DB_REQ_INCREMENTAL_SEARCH: u16 = 0x1500;
 pub(crate) const DB_REQ_TRACKS_FOR_ORIGINAL_ARTIST_ALBUM: u16 = 0x1502;
 pub(crate) const DB_REQ_REMIXER_MENU: u16 = 0x1602;
 pub(crate) const DB_REQ_ALBUMS_FOR_REMIXER: u16 = 0x1702;
@@ -243,6 +245,7 @@ pub(crate) fn db_request_name(msg_type: u16) -> String {
         DB_REQ_ALBUMS_FOR_LABEL_ARTIST => "ALBUMS_FOR_LABEL_ARTIST",
         DB_REQ_TRACKS_FOR_KEY_DISTANCE => "TRACKS_FOR_KEY_DISTANCE",
         DB_REQ_SEARCH => "SEARCH",
+        DB_REQ_INCREMENTAL_SEARCH => "INCREMENTAL_SEARCH",
         DB_REQ_TRACKS_FOR_GENRE_ARTIST_ALBUM => "TRACKS_FOR_GENRE_ARTIST_ALBUM",
         DB_REQ_ORIGINAL_ARTIST_MENU => "ORIGINAL_ARTIST_MENU",
         DB_REQ_TRACKS_FOR_LABEL_ARTIST_ALBUM => "TRACKS_FOR_LABEL_ARTIST_ALBUM",
@@ -892,5 +895,38 @@ mod tests {
         assert_eq!(message.msg_type, DB_REQ_WAVEFORM_PREVIEW);
         assert_eq!(message.args.len(), 5);
         assert_eq!(message.args.last(), Some(&DbValue::Binary(Vec::new())));
+    }
+
+    #[tokio::test]
+    async fn parses_captured_cdj3000_incremental_search() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("listener");
+        let addr = listener.local_addr().expect("listener address");
+        let (client, accepted) = tokio::join!(TcpStream::connect(addr), listener.accept());
+        let mut client = client.expect("client");
+        let (mut server, _) = accepted.expect("server");
+        let request = decode_hex(
+            include_str!("../tests/fixtures/remotedb-cdj3000-incremental-search-rafa.hex").trim(),
+        );
+        client.write_all(&request).await.expect("request");
+
+        let message =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut server))
+                .await
+                .expect("incremental search parser deadline")
+                .expect("incremental search request");
+
+        assert_eq!(message.tx_id, 0x09aa);
+        assert_eq!(message.msg_type, DB_REQ_INCREMENTAL_SEARCH);
+        assert_eq!(
+            message.args,
+            vec![
+                DbValue::Int32(0x0301_0401),
+                DbValue::Int32(SORT_DEFAULT),
+                DbValue::Int32(10),
+                DbValue::String("RAFA".to_string()),
+            ]
+        );
     }
 }

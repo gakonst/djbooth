@@ -98,5 +98,7 @@ describe("DJ Link CLI", () => {
     expect(output).toContain("without changing deck or library state");
     expect(output).toContain("--mode <track|artist|album>");
     expect(output).toContain("CDJ Search UI activation");
+    expect(output).toContain("0x1500");
+    expect(output).toContain("Per-keystroke reconnects mean rejection");
   });
 });

@@ -25,8 +25,9 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
   failure has three exact nonzero-offset mismatches.
 - Reconnects do not inherit or recover render state. A new connection must prepare its own menu
   before rendering.
-- Search requests receive the deck's context plus UTF-16 query and must render matching rows
-  with loadable track IDs.
+- Legacy `SEARCH(0x1300)` and CDJ-3000 incremental `0x1500` requests receive the deck's context
+  plus UTF-16 query and must render matching rows with loadable track IDs. Incremental keyboard
+  edits must stay on one connection; a rejection/reconnect per keystroke is a protocol failure.
 - `MOUNT_INFO` is a load-sensitive metadata request. Repeated `MOUNT_INFO` for the same
   target track is idempotent while a confirm session is active.
 

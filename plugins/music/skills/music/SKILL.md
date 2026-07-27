@@ -93,8 +93,10 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
 - When CDJ Search appears broken, run `music djlink search <query>` first. It exercises the exact
-  prewarmed matcher and RemoteDB row builder without touching the deck; a passing preflight plus no
-  `SEARCH(0x1300)` wire request isolates the failure to deck UI/source activation.
+  prewarmed matcher and RemoteDB row builder without touching the deck. After a passing preflight,
+  inspect TCP/1051: CDJ-3000 keyboard edits emit incremental `0x1500`; legacy Search may emit
+  `0x1300`. A RemoteDB reconnect after each keystroke means the server rejected Search. No request
+  of either type means the deck never activated Search.
 - Treat Spotify and SoundCloud playlist creation as external account writes. Require an explicit
   request, validate every reference before creation, default to private, and preserve order and
   duplicates. Never retry a playlist-creation POST automatically.
@@ -443,7 +445,9 @@ bind address; if a prior deck IP is known, run one ARP `probe` before blaming th
 attempt a load until the player is discovered. `load` addresses a track by manifest order, native
 ID, Spotify ID, or title and cues it on the selected player. It does not press PLAY and exposes no
 unsafe/private packet-replay surface. `search` is read-only and bounded; use it before packet
-changes to distinguish matcher/row failures from a CDJ that never emits `SEARCH(0x1300)`.
+changes. Then trace TCP/1051 for CDJ-3000 incremental `0x1500` or legacy `SEARCH(0x1300)`;
+per-keystroke reconnects identify server rejection, while no request identifies UI/source
+activation.
 
 For protocol implementation work only, iterate on the provenance-tracked Rust source in
 `packages/djlink/native`:
