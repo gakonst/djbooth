@@ -43,6 +43,9 @@ describe("music CLI", () => {
 
     expect(names).toEqual(
       expect.arrayContaining([
+        "djlink devices",
+        "djlink load",
+        "djlink start",
         "rekordbox analyze track",
         "rekordbox db playlist create",
         "rekordbox db playlist list",
@@ -90,6 +93,7 @@ describe("music CLI", () => {
 
     for (const command of [
       "library",
+      "djlink",
       "rekordbox",
       "slsk",
       "soundcloud",
@@ -101,12 +105,21 @@ describe("music CLI", () => {
     }
   });
 
+  test("preserves the full-library DJ Link one-shot guidance", async () => {
+    const { output } = await serve(["djlink", "rekordbox", "--help"]);
+
+    expect(output).toContain("music djlink rekordbox [track]");
+    expect(output).toContain("validate → start/resume → discover");
+    expect(output).toContain("network CTA");
+  });
+
   test("lists the workflow skill alongside typed command-group skills", async () => {
     const { output } = await serve(["skills", "list"]);
     expect(output).toContain("music ");
+    expect(output).toContain("music-djlink");
     expect(output).toContain("music-library");
     expect(output).toContain("music-rekordbox");
     expect(output).toContain("music-ytdlp-ts");
-    expect(output).toContain("8 skills");
+    expect(output).toContain("9 skills");
   });
 });

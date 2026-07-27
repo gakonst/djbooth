@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
+import djlinkCli from "@gakonst/djlink/cli";
 import rekordboxCli from "@gakonst/rekordbox/cli";
 import libraryCli from "@gakonst/rekordbox-library/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
@@ -23,6 +24,7 @@ export const MUSIC_VERSION = (
 
 export const MUSIC_MCP_TOOL_FILTER = {
   include: [
+    "djlink_*",
     "tracks_*",
     "spots_auth_status",
     "spots_me",
@@ -67,11 +69,11 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
   const cli = Cli.create("music", {
     version: MUSIC_VERSION,
     description:
-      "One CLI for DJ-set resolution, one-shot acquisition/analysis/Rekordbox imports, platform playlists, and library tools.",
-    hint: "Full approved set flow: music tracks import-set <url> --manifest <path> --write. Local CodeMode MCP: music --codemode-mcp",
+      "One CLI for DJ-set resolution, acquisition/analysis/Rekordbox imports, Pro DJ Link deck serving, platform playlists, and library tools.",
+    hint: "Full set flow: music tracks import-set <url> --manifest <path> --write; then use music djlink rekordbox <track> --player 3 for the imported master.db, without asking for another handoff.",
     mcp: {
       instructions:
-        "For a request to find a DJ set's tracks, acquire them, analyze them, and create its Rekordbox playlist, use tracks_import-set once after the user explicitly approves the database write and any local source-set clipping. Do not manually sequence resolve/acquire/analyze/import when that command covers the request. It resumes durable state, preserves candidate and source provenance, auto-selects only safe deterministic Spotify acquisition primaries, and performs at most two acquisition passes: individual sources first, then approved cue-bounded local-set recovery. Use the focused commands for metadata-only resolution, platform playlist writes, individual-track work, or library maintenance. Inspect before standalone downloads; require explicit acknowledgement for every database or account mutation.",
+        "For a request to find a DJ set's tracks, acquire them, analyze them, and create its Rekordbox playlist, use tracks_import-set once after the user explicitly approves the database write and any local source-set clipping. Do not manually sequence resolve/acquire/analyze/import when that command covers the request. It resumes durable state, preserves candidate and source provenance, auto-selects only safe deterministic Spotify acquisition primaries, and performs at most two acquisition passes: individual sources first, then approved cue-bounded local-set recovery. When the same request includes connected-CDJ loading after import, continue with one djlink_rekordbox call; do not wait for the user to restate doctor/start/devices/load. Use djlink_run only for an ad-hoc completed manifest not yet imported into master.db. DJ Link serves verified local recordings and ANLZ data; it never streams Spotify audio, and load does not claim remote PLAY. If discovery is empty, use djlink_probe for a known deck IP. Use official rekordbox Performance mode for licensed Spotify playback. Inspect before standalone downloads; require explicit acknowledgement for every database or account mutation.",
       tools: MUSIC_MCP_TOOL_FILTER,
     },
     sync: {
@@ -82,6 +84,10 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
         "resolve a DJ set into tracks",
         "resolve, download, analyze, and create the Rekordbox playlist for a DJ set in one run",
         "recover unavailable tracks from an approved local DJ-set recording in the same run",
+        "serve a completed set manifest to my connected CDJs",
+        "validate, serve, discover, and cue a completed manifest track in one run",
+        "load a local analyzed track onto player 3",
+        "show live DJ Link deck telemetry",
         "create a playlist on Spotify",
         "create a playlist on SoundCloud",
         "search Soulseek for a track",
@@ -93,6 +99,7 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
     },
   });
 
+  cli.command(djlinkCli);
   cli.command(rekordboxCli);
   cli.command(libraryCli);
   cli.command(slskCli);

@@ -23,6 +23,11 @@ const packDirectory = suppliedPackDirectory
 const packages = [
   { name: "@gakonst/music", prefix: "gakonst-music-", bins: ["music"] },
   {
+    name: "@gakonst/djlink",
+    prefix: "gakonst-djlink-",
+    bins: ["djlink", "music-djlink-native"],
+  },
+  {
     name: "@gakonst/rekordbox-library",
     prefix: "gakonst-rekordbox-library-",
     bins: ["rekordbox-library"],
@@ -182,12 +187,26 @@ try {
   }
   process.stdout.write("✓ music library composed CLI\n");
 
+  const djlinkHelp = run(music, ["djlink", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    !djlinkHelp.stdout.includes("music djlink") ||
+    !djlinkHelp.stdout.includes("devices") ||
+    !djlinkHelp.stdout.includes("load")
+  ) {
+    throw new Error("Packed music CLI did not compose the DJ Link workflow");
+  }
+  process.stdout.write("✓ music djlink composed CLI\n");
+
   const skills = run(music, ["skills", "list"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !skills.stdout.includes("8 skills") ||
+    !skills.stdout.includes("9 skills") ||
+    !skills.stdout.includes("music-djlink") ||
     !skills.stdout.includes("music-library") ||
     !skills.stdout.includes("music-rekordbox")
   ) {
@@ -208,11 +227,14 @@ try {
     "shared cross-process database lock",
     "offline bulk workflows",
     "packages do not redistribute the proprietary helper",
+    "## 8. Serve and load connected CDJs",
+    "Spotify streaming tracks cannot be LINK EXPORTed",
   ];
   if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {
     throw new Error("Installed Music workflow skill is missing a safety contract");
   }
   const generatedSkills = [
+    ["music-djlink", ["# music djlink doctor", "# music djlink load"]],
     ["music-library", ["# music library serve"]],
     ["music-tracks", ["# music tracks resolve"]],
     ["music-spots", ["# music spots api search"]],
@@ -243,7 +265,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/djlink", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/djlink", "@gakonst/djlink/cli", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
@@ -391,6 +413,13 @@ try {
   const initialize = responses.find((response) => response.id === 1);
   const tools = responses.find((response) => response.id === 2)?.result?.tools;
   const requiredTools = [
+    "djlink_devices",
+    "djlink_doctor",
+    "djlink_load",
+    "djlink_monitor",
+    "djlink_start",
+    "djlink_status",
+    "djlink_stop",
     "library_status",
     "soundcloud_playlist_create",
     "soundcloud_playlist_delete",

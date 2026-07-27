@@ -31,6 +31,10 @@
       "types": "./dist/tracks.d.ts",
       "import": "./dist/tracks.js"
     },
+    "./djlink": {
+      "types": "./dist/djlink.d.ts",
+      "import": "./dist/djlink.js"
+    },
     "./spots": {
       "types": "./dist/spots.d.ts",
       "import": "./dist/spots.js"
@@ -79,6 +83,7 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "0.4.2",
+    "@gakonst/djlink": "workspace:*",
     "@gakonst/rekordbox": "workspace:*",
     "@gakonst/rekordbox-library": "workspace:*",
     "@gakonst/soundcloud": "workspace:*",
@@ -86,7 +91,7 @@
     "@gakonst/tracks": "workspace:*",
     "@gakonst/ytdlp-ts": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "incur": "^0.4.13",
+    "incur": "0.4.13",
     "secure-exec": "0.3.3",
     "slsk-ts": "workspace:*",
     "zod": "^4.4.3"

@@ -1,4 +1,4 @@
 interface:
   display_name: "Music"
-  short_description: "One-shot DJ set and library workflows"
-  default_prompt: "Use $music to resolve this DJ set, acquire and analyze its tracks, and create or update the ordered Rekordbox playlist in one resumable run."
+  short_description: "One-shot DJ sets, libraries, and connected CDJs"
+  default_prompt: "Use $music to resolve and prepare this music workflow, then serve and load verified local tracks on my connected CDJs when requested."

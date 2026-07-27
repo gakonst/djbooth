@@ -12,11 +12,51 @@ importers:
         specifier: latest
         version: 2.31.0(@types/node@24.13.3)
 
+  packages/djlink:
+    dependencies:
+      '@gakonst/rekordbox':
+        specifier: workspace:*
+        version: link:../rekordbox-ts
+      '@gakonst/tracks':
+        specifier: workspace:*
+        version: link:../tracks-ts
+      incur:
+        specifier: 0.4.13
+        version: 0.4.13
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^4.1.10
+        version: 4.1.10(vitest@4.1.10)
+      oxfmt:
+        specifier: ^0.35.0
+        version: 0.35.0
+      oxlint:
+        specifier: ^1.50.0
+        version: 1.73.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.23.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+
   packages/music:
     dependencies:
       '@cloudflare/codemode':
         specifier: 0.4.2
         version: 0.4.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(zod@4.4.3)
+      '@gakonst/djlink':
+        specifier: workspace:*
+        version: link:../djlink
       '@gakonst/rekordbox':
         specifier: workspace:*
         version: link:../rekordbox-ts
@@ -39,7 +79,7 @@ importers:
         specifier: ^1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
       secure-exec:
         specifier: 0.3.3
@@ -164,7 +204,7 @@ importers:
         specifier: ^5.9.3
         version: 5.10.0
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
       zod:
         specifier: ^4.4.3
@@ -198,7 +238,7 @@ importers:
   packages/slsk-ts:
     dependencies:
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
     devDependencies:
       '@types/node':
@@ -223,7 +263,7 @@ importers:
   packages/soundcloud:
     dependencies:
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
       open:
         specifier: ^10.2.0
@@ -272,7 +312,7 @@ importers:
   packages/spots:
     dependencies:
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
       open:
         specifier: ^10.2.0
@@ -364,7 +404,7 @@ importers:
   packages/ytdlp-ts:
     dependencies:
       incur:
-        specifier: ^0.4.13
+        specifier: 0.4.13
         version: 0.4.13
       youtubei.js:
         specifier: ^17.2.0

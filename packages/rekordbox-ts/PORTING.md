@@ -25,6 +25,16 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-26 — Composed CLI runtime
+
+- Pin Incur `0.4.13` across every package mounted by `@gakonst/music`. Clean consumers must not
+  resolve structurally incompatible Incur copies for parent and child CLI definitions.
+- Restore the hardware-proven periodic UDP/50002 `LINK_REPLY(0x06)` media
+  announcement in the vendored DJ Link server. A live USB replug changed the
+  Mac link-local address; after rebinding, all three CDJ-3000 keepalives arrived
+  but no status/query/ACK traffic returned until the compatibility beacon was
+  restored.
+
 ### 2026-07-13 — Long-lived database sessions
 
 - Expose explicit identity-map expiry for services that retain an open SQLite connection. Reject
@@ -289,3 +299,104 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   malformed input, cross-content ownership, guarded backup/journal receipts, process refusal, and
   canonical-lock contention, mirror-field corruption, and exact CueUpdated verification. The
   package suite passes 98 tests.
+
+## Pro DJ Link protocol/network checkpoint (2026-07-26)
+
+- Imported the provenance-tracked `djskills` Rust server into `@gakonst/djlink`; the TypeScript
+  bridge projects completed Tracks manifests into bounded RemoteDB/NFS libraries and exposes
+  managed `music djlink doctor|start|status|devices|load|monitor|stop` commands.
+- Wrote a versioned protocol map with pinned Beat Link, Dysentery, and prolink-connect references.
+  Added golden keepalive, CDJ status, load-command, and load-ack packets from the proven CDJ-3000
+  capture set. Replaced keepalive byte-offset parsing with typed frame/header/body codecs.
+- Restored macOS interface fidelity lost during the async actor port. Every DJ Link UDP socket now
+  uses `IP_BOUND_IF`; outbound TCP side channels bind the same interface and source address. A
+  dedicated blocking actor exclusively owns the BPF descriptor for MAC-directed packets and
+  1,500-byte IPv4 fragmentation, without holding a mutex across an async suspension point.
+- Kept the kernel socket as the primary path. Link-local route failures and oversized NFS replies
+  fall back to raw Ethernet/IPv4/UDP; broadcast failures use the interface broadcast MAC. Strict MAC
+  parsing and reassembly tests cover the observed 64,512-byte NFS response ceiling.
+- The focused Rust suite passes 88 tests. Live verification remains gated on renewed CDJ
+  announcements; no unverified transport command or automatic PLAY action is enabled.
+
+## Pro DJ Link source/pcap lab checkpoint (2026-07-26)
+
+- Kept the provenance-tracked Rust implementation in `packages/djlink/native` and made direct
+  `cargo run -p music-djlink` the protocol iteration path. Added `audit-pcap` for bounded JSON
+  packet-shape reports, mandatory source-discovery gates, reference diffs, and exact static-payload
+  checks against `/Users/gakonst/github/gakonst/djtools/rb-tracks.pcap`
+  (`519c84fe225d5b310e7ab73c84bc2333c0ee7c048b32a5d3f11f9d519baf1845`).
+- Added a source-owned `--wire-pcap` sink at the raw-BPF writer. It records only Ethernet frames
+  successfully injected by the server, closing macOS's observability gap where a second BPF
+  consumer does not see injected frames. External interface capture remains authoritative for
+  deck replies.
+- Promoted the real Rekordbox `0x16`, `0x29`, `0x06`, and `0x47` payloads plus the CDJ-3000
+  `0x46` trigger into typed golden codecs. The real and formerly working captures prove
+  `0x05→0x06` and `0x46→0x47` are unicast, response-gated exchanges; removed the rewrite's
+  non-faithful periodic `0x06` broadcast.
+- A live source capture passes the keepalive/link-init/mixer-status gates and matches the real
+  Rekordbox `0x16` and `0x29` bytes exactly. The wired interface remains frozen at 480 inbound
+  packets and the daemon sees zero decks, so hardware load verification is still gated below the
+  parser by absent switch/deck ingress. The current Rust suite passes all 95 tests; the complete
+  `@gakonst/djlink` validation also passes.
+
+## Pro DJ Link RemoteDB cursor checkpoint (2026-07-26)
+
+- Recovered the original native Rekordbox `rb-tracks.pcap` from git object
+  `123e84e` and decoded it independently from the stale checked-in report. Native next-track
+  renders at offsets 1 and 2 return `MENU_HEADER [1,1]` and `[1,2]`; the failing live server trace
+  returned the correct track rows and file data but wrapped both in `MENU_HEADER [1,0]`.
+- Changed render responses to echo the requested offset in the menu header. This is the concrete
+  wire delta associated with the physical CDJ-3000 `NOW LOADING`/Back-button failure.
+- Removed the per-deck-IP actor cache that guessed render menus by key and row count across TCP
+  connections. Each spawned RemoteDB connection now owns only its last prepared menu, matching the
+  protocol's request-then-render transaction model and isolating concurrent browse/metadata
+  sessions without mutexes or reconnect recovery.
+- Added regression coverage for nonzero native header offsets, last-request replacement, exact
+  `r:m:s:t` matching, total-count rejection, parallel connection isolation, and stale-device
+  expiry. Focused tests pass; the full Rust workspace passes 110 tests.
+- Extended `audit-pcap` to reassemble every TCP direction, decode typed RemoteDB messages, correlate
+  RENDER/MENU_HEADER pairs by transaction, and gate on at least one nonzero cursor. The immutable
+  native capture passes all 25 renders; the prior broken live capture fails exactly three nonzero
+  renders with header offset zero. Exact transaction `0x1883` request/response bytes are golden
+  fixtures.
+- Changed `music djlink rekordbox` with no track into one validate → start/resume → discover flow;
+  refreshed Incur hints, retry metadata, CTAs, the canonical/plugin/global Music skill, and the
+  generated global `music-djlink` skill. The complete root `pnpm validate` passes. Live repeated
+  physical TRACK SEARCH verification remains the final hardware gate.
+- Fixed actor-owned discovery expiry to enforce Beat Link's 10-second maximum announcement age and
+  clear stale link/status/load state. A fresh restart now reports no devices instead of three
+  14-minute-old false positives; player 3 still answers ARP but is not currently emitting DJ Link
+  keep-alives, so the final gate awaits a physical wake.
+
+## Pro DJ Link live load parser checkpoint (2026-07-26)
+
+- Reconnected three physical CDJ-3000s and restarted the server on the adapter's renewed
+  `169.254.147.145` link-local address. Added raw unicast fallback for macOS
+  `EADDRNOTAVAIL` (`os error 49`) during link-local address churn.
+- Verified the cursor change on player 3: a real Track Search render at offset 1 returned
+  `MENU_HEADER [1,1]`, and the typed capture auditor reported 78 matching render/header pairs with
+  no mismatch or missing header.
+- Re-derived the remaining Back-button stall from the raw TCP capture. A `WAVEFORM_PREVIEW`
+  request advertises five argument types but deliberately omits its final zero-length blob. The
+  parser's blocking `peek()` waited for the first byte of the next request, so Back or the deck's
+  15-second retry accidentally released the previous load.
+- Replaced that heuristic with the RemoteDB length invariant: when a blob's immediately preceding
+  length is zero, synthesize an empty blob without reading another byte. A regression test replays
+  the exact 45-byte CDJ request while keeping the connection open and proves parsing completes
+  without a follow-up request. The live server replay now returns the 948-byte waveform response in
+  1.49 ms.
+- Matched native Rekordbox artwork behavior by decoding, center-cropping, and caching 240×240 JPEG
+  thumbnails instead of serving 500–800 px originals. The native capture contains only 240×240
+  JPEGs (maximum 20,966 bytes); the old server sent images up to 105,957 bytes. RemoteDB sockets now
+  enable `TCP_NODELAY`, check every load-path response write, and log response byte counts or exact
+  errors rather than discarding `write_all` results.
+- Verified the complete fixed path against physical CDJ-3000 player 3 with track `79496558`. The
+  deck requested mount data after 4.8 ms, received its waveform-preview reply in 197 µs, began NFS
+  FLAC reads after 293 ms, and reported the track paused/cued after 433 ms. Its artwork was a
+  native-sized 15,639-byte JPEG and no response write failed. Nightly formatting and all 113 Rust
+  workspace tests pass; the complete root `pnpm validate` also passes on Node.js 22.
+- Verified a second consecutive hardware load without Back: player 3 acknowledged track `24490981`
+  (`Glue`), completed metadata, analysis, artwork, waveform, and NFS requests, then reported it
+  paused/cued after 536 ms. The final capture contains 13 matching RemoteDB render/header exchanges,
+  zero mismatches, zero missing headers, and no TCP sequence gaps. The earlier physical Track
+  Search capture remains the cursor gate: 78 matching exchanges including offset 1.

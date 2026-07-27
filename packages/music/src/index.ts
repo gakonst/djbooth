@@ -1,3 +1,4 @@
+export * as djlink from "@gakonst/djlink";
 export * as rekordbox from "@gakonst/rekordbox";
 export * as library from "@gakonst/rekordbox-library";
 export * as soundcloud from "@gakonst/soundcloud";

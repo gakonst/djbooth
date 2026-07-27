@@ -54,7 +54,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "incur": "^0.4.13",
+    "incur": "0.4.13",
     "open": "^10.2.0",
     "openapi-fetch": "^0.17.0"
   },

@@ -21,8 +21,9 @@ playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
 | [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)                   | `ytdlp-ts`          | YouTube/SoundCloud inspection and resilient media acquisition          |
 | [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
 | [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
+| [`@gakonst/djlink`](packages/djlink)                       | `djlink`            | Manifest-backed Pro DJ Link RemoteDB/NFS source and CDJ load control   |
 
-Package licenses remain package-local; `ytdlp-ts` uses the Unlicense and the other packages use MIT.
+Package licenses remain package-local; see each package manifest for its terms.
 
 Install one package and use only the subpaths needed by a process:
 
@@ -37,6 +38,7 @@ import { SoulseekClient } from "@gakonst/music/slsk";
 import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
 import { RekordboxLibraryService } from "@gakonst/music/library";
+import { loadDjLinkTrack, startDjLink } from "@gakonst/music/djlink";
 ```
 
 ## Pipeline
@@ -49,6 +51,7 @@ YouTube / SoundCloud set
   -> slsk-ts, then ytdlp-ts: canonical artist/album recordings
   -> tracks: bounded set extracts only for unavailable IDs
   -> rekordbox: automatic verified playlist membership in the normal encrypted database
+  -> djlink: serve verified local audio/ANLZ and load/cue it on a connected CDJ
 ```
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording
@@ -60,10 +63,23 @@ After explicit Rekordbox-write approval, the complete local set flow is one resu
 
 ```sh
 music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format json
+music djlink rekordbox "$TRACK" --player 3 --format json
+```
+
+For normal day-to-day access to everything already in Rekordbox, one command validates direct
+read-only master.db ingestion, starts or resumes the source, verifies deck discovery, and exposes
+the complete browse hierarchy:
+
+```sh
+music djlink rekordbox --format json
 ```
 
 Add `--allow-set-clips --source-set-path "$LOCAL_SET"` to permit one bounded same-invocation cue
 recovery pass after individual acquisition failures. The command never downloads the remote set.
+When connected-deck loading was part of the same request, continue without asking the user to
+restate the handoff. Prefer `djlink rekordbox` after import; reserve `djlink run` for an ad-hoc
+completed manifest not yet present in master.db. DJ Link serves the resulting local recording and
+Rekordbox analysis; it never streams Spotify audio, and loading/cueing does not remotely press PLAY.
 
 ## Development
 

@@ -1,17 +1,20 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; and import verified playlists into the normal Rekordbox database. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, or one-shot resolve-download-analyze-playlist music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; and serve analyzed local recordings to connected CDJs over Pro DJ Link. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
 
-Build an auditable `source -> identities -> platform playlist and/or recordings -> Rekordbox playlist` pipeline with
-`@gakonst/music`. Prefer its TypeScript subpath APIs for automation; use the `music` CLI for
-interactive work, diagnostics, Skills, and MCP registration.
+Build an auditable
+`source -> identities -> platform playlist and/or recordings -> Rekordbox playlist -> connected CDJ`
+pipeline with `@gakonst/music`. Prefer its TypeScript subpath APIs for automation; use the `music`
+CLI for interactive work, diagnostics, Skills, and MCP registration.
 
 When one request asks to find a set's tracks, acquire and analyze them, and create its Rekordbox
 playlist, run `music tracks import-set` once after the required approvals. Do not decompose that
 request into separate CLI commands unless the user asks for a stage-only workflow.
+When the same request includes a connected deck, continue after import with one
+`music djlink rekordbox <track>`; use `djlink run` only before the recording is in master.db.
 
 ## Install and discover
 
@@ -35,6 +38,7 @@ import * as spots from "@gakonst/music/spots";
 import * as slsk from "@gakonst/music/slsk";
 import * as ytdlp from "@gakonst/music/ytdlp";
 import * as rekordbox from "@gakonst/music/rekordbox";
+import * as djlink from "@gakonst/music/djlink";
 ```
 
 Do not shell between package CLIs from TypeScript. Construct the exported clients once and pass
@@ -81,6 +85,13 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
 - Keep Spotify audio metadata-only. Creating a Spotify playlist writes references, never audio.
   Prefer Soulseek for audio, then a reviewed YouTube or SoundCloud
   single-track fallback.
+- DJ Link serves only verified local recordings plus native Rekordbox ANLZ artifacts. Spotify IDs
+  may identify a recording but never supply its bytes. Do not build a Spotify SDK-to-deck bridge or
+  use Spotify APIs for DJ mixing, segueing, or overlapping playback.
+- Treat `music djlink load` as remote load/cue, not transport control. Keep deck PLAY physical;
+  CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
+- When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
+  check. Do not send speculative DJ Link control packets to undiscovered devices.
 - Treat Spotify and SoundCloud playlist creation as external account writes. Require an explicit
   request, validate every reference before creation, default to private, and preserve order and
   duplicates. Never retry a playlist-creation POST automatically.
@@ -155,6 +166,7 @@ soundcloud auth status --format json
 music ytdlp-ts engines --format json
 music rekordbox status --format json
 rekordbox analyze doctor --format json
+music djlink status --format json
 ```
 
 Require provider credentials only for the stage that needs them. Resolution can begin from a
@@ -397,12 +409,72 @@ shared lock serializes the brief write and the database watcher refreshes the UI
 
 Retain an M3U8 only as a recovery artifact, not as the primary Rekordbox integration.
 
-## 8. Handoff and resume
+## 8. Serve and load connected CDJs
+
+For everything already imported, serve the complete Rekordbox library directly:
+
+```sh
+music djlink rekordbox --format json
+music djlink rekordbox "$TRACK" --player 3 --format json
+```
+
+This validates, starts/resumes, verifies discovery, and exposes all folders, playlists, artists,
+albums, and tracks; a selector also cues it. Use `run "$MANIFEST" <track>` only for an ad-hoc
+manifest before import. Use stage commands only for diagnosis:
+
+```sh
+music djlink doctor "$MANIFEST" --format json
+music djlink start "$MANIFEST" --format json
+music djlink devices --wait-ms 5000 --format json
+music djlink probe 169.254.7.4 --format json
+music djlink load 4 --player 3 --format json
+music djlink monitor --player 3 --format json
+music djlink stop --format json
+```
+
+`doctor` and `start` require complete local ANLZ data by default. One detached daemon serves one
+manifest; starting the same manifest resumes it, while switching manifests requires `stop`.
+An empty device list after the wait means the CDJ/network path is not visible. Report the selected
+bind address; if a prior deck IP is known, run one ARP `probe` before blaming the protocol. Do not
+attempt a load until the player is discovered. `load` addresses a track by manifest order, native
+ID, Spotify ID, or title and cues it on the selected player. It does not press PLAY and exposes no
+unsafe/private packet-replay surface.
+
+For protocol implementation work only, iterate on the provenance-tracked Rust source in
+`packages/djlink/native`:
+
+```sh
+pnpm djlink:lab serve --help
+pnpm djlink:lab audit-pcap --pcap /tmp/source.pcap --reference /tmp/native.pcap --require-core
+pnpm djlink:lab audit-pcap --pcap /tmp/live.pcap --require-remote-db-cursors
+```
+
+Start `serve` with `--wire-pcap`: raw-BPF injections are not visible to a separate macOS
+`tcpdump`. Capture the wired interface separately for deck replies. Treat the real Rekordbox pcap
+from git object `123e84e` (SHA-256 `a2238f…35ad`) and hashed golden fixtures as authoritative; do
+not trust a same-named later capture or a derived analyzer report. Require the RemoteDB cursor gate
+after repeated physical TRACK SEARCH: every same-transaction MENU_HEADER must echo the requested
+nonzero RENDER offset. Keep packet builders typed and byte-exact. Source
+`0x06` and `0x47` are response-gated by deck `0x05` and `0x46`, not periodic broadcasts. If the
+interface counters and ARP probe show zero ingress, repair the Ethernet/switch path before changing
+parsers or control packets.
+
+For a request to play Spotify on a deck, choose the legitimate path explicitly:
+
+- Licensed streaming: use Spotify Premium through rekordbox Performance mode with internet access.
+  Spotify streaming tracks cannot be LINK EXPORTed, exported to USB, or served by this CLI.
+- DJ Link: acquire an independently available local recording through the approved workflow,
+  analyze it, then serve that verified file. Spotify metadata may help identity matching but must
+  not be described as the audio source.
+
+## 9. Handoff and resume
 
 Return source/title, provider, resolution counts, Spotify match counts, acquisition counts by
 backend, output directory, manifest path, Rekordbox identifiers, backup path, cache statistics,
-stage timings, automation pass/selection counters, warnings, and unresolved decisions. Never claim
-completion while identified entries remain pending unless the user accepted a partial playlist.
+stage timings, automation pass/selection counters, warnings, and unresolved decisions. When DJ Link
+was requested, also return daemon status, bind address, discovered players, selected track/player,
+and whether the physical PLAY handoff remains. Never claim completion while identified entries
+remain pending unless the user accepted a partial playlist.
 
 Preserve these manifest states on resume:
 

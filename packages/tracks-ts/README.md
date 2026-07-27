@@ -337,6 +337,9 @@ Spotify playlists ── spots ─────────┤
                                     │
                                     ▼
                    rekordbox-ts encrypted master.db
+                                    │
+                                    ▼
+                   djlink RemoteDB/NFS → connected CDJ
 ```
 
 | Workspace package                                                                           | Responsibility                                                                      |
@@ -346,6 +349,7 @@ Spotify playlists ── spots ─────────┤
 | [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts)                 | Preferred search and resumable download of each individual track                    |
 | [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
 | [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
+| [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink)          | Serve completed local media/ANLZ and load or cue it on a connected CDJ              |
 
 The boundary is deliberate:
 
@@ -410,6 +414,16 @@ ytdlp-ts download "$SELECTED_TRACK_URL" \
 ```
 
 Use acquisition backends only for media you are authorized to download.
+
+After `import-set` commits the verified files and playlist, serve the complete master.db and cue an
+imported track in the same command:
+
+```sh
+music djlink rekordbox "Adam Ten & Rhye - 3 Days Later" --player 3 --format json
+```
+
+Use `music djlink run ./adam-ten/manifest.json 1` only before import. Both are local-file handoffs,
+not Spotify streaming. The load command cues the deck; physical PLAY remains on the CDJ.
 
 ## Performance and persistent caches
 

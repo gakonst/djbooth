@@ -56,7 +56,7 @@
     "typecheck": "pnpm check:types"
   },
   "dependencies": {
-    "incur": "^0.4.13"
+    "incur": "0.4.13"
   },
   "devDependencies": {
     "@types/node": "^22.19.7",

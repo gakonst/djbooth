@@ -1,6 +1,8 @@
 # @gakonst/music
 
-Unified ESM entrypoint for the `music-ts` workspace. It keeps the seven focused libraries intact while offering collision-free namespace imports, direct subpath imports, and one agent-friendly `music` CLI.
+Unified ESM entrypoint for the `music-ts` workspace. It keeps the focused libraries intact while
+offering collision-free namespace imports, direct subpath imports, and one agent-friendly `music`
+CLI.
 
 ## Install
 
@@ -11,14 +13,14 @@ pnpm add --allow-build=better-sqlite3-multiple-ciphers @gakonst/music
 Node.js 22 or newer is required. The explicit build allowance compiles the native encrypted-SQLite
 dependency used by Rekordbox; pnpm otherwise blocks dependency install scripts by default. Prefer
 the focused subpaths below when one process does not need every integration; the root namespace
-entrypoint eagerly loads all seven libraries, including the Rekordbox library workbench.
+entrypoint eagerly loads all libraries, including the Rekordbox library workbench.
 
 ## Library
 
 Use root namespaces when composing several packages:
 
 ```ts
-import { library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "@gakonst/music";
+import { djlink, library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "@gakonst/music";
 
 const tracklist = await tracks.identify("https://youtu.be/example");
 const spotify = new spots.SpotifyClient({
@@ -33,6 +35,7 @@ const soulseek = new slsk.SoulseekClient();
 const reference = new ytdlp.ReferenceClient();
 const database = new rekordbox.MasterDatabase({ unlock: false });
 const workbench = new library.RekordboxLibraryService({ writeEnabled: false });
+await djlink.doctorDjLink({ manifestPath: "./set/manifest.json" });
 ```
 
 Use subpaths for focused imports and smaller API surfaces:
@@ -45,6 +48,7 @@ import { SoulseekClient } from "@gakonst/music/slsk";
 import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
 import { LibraryMutationConflictError, RekordboxLibraryService } from "@gakonst/music/library";
+import { loadDjLinkTrack, startDjLink } from "@gakonst/music/djlink";
 ```
 
 ## CLI
@@ -71,6 +75,10 @@ music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 music library status --format json
 music library serve --open
+music djlink rekordbox --format json
+music djlink run ./set/manifest.json 1 --player 3 --format json
+music djlink probe 169.254.7.4 --format json
+music djlink stop --format json
 ```
 
 `music tracks import-set` is the single local acquisition path: recordings land under
@@ -85,10 +93,24 @@ table, including direct track and child counts. Add `--json` for the same tree o
 IDs, parent links, path segments, pagination metadata, and explicit smart-playlist count errors.
 
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
-`rekordbox`, and `library` Incur CLIs. Its MCP surface filters those commands to the composable calls used for
-set resolution, metadata lookup, individual acquisition, analysis, and normal Rekordbox database
-maintenance. Agents should prefer the mounted `tracks import-set` pipeline command for an approved
-resolve-download-analyze-playlist request instead of sequencing those stages themselves.
+`rekordbox`, `library`, and `djlink` Incur CLIs. Its MCP surface filters those commands to the
+composable calls used for set resolution, metadata lookup, individual acquisition, analysis,
+normal Rekordbox database maintenance, and safe CDJ loading. Agents should prefer the mounted
+`tracks import-set` pipeline command for an approved resolve-download-analyze-playlist request,
+then continue without another prompt with one `djlink rekordbox <track>` when a connected-deck
+handoff was requested. Use `djlink run` only for a completed manifest not yet imported. Stage
+commands remain available for diagnosis.
+
+`music djlink rekordbox` is the default full-library path: validate direct read-only master.db
+ingestion, start or resume the source, wait for deck discovery, then expose folders, playlists,
+artists, albums, and tracks. Add an optional track selector to cue it in the same command.
+Manifest-backed `run` remains available before a new import is visible in master.db.
+
+DJ Link serves only verified local recordings and native ANLZ files. Spotify identities remain
+metadata. Licensed Spotify playback belongs to
+rekordbox's official Performance-mode integration; streaming tracks cannot be LINK EXPORTed or
+served by `music djlink`. A successful `load` cues the selected deck and intentionally reports
+`playing: false`; press PLAY on the deck.
 
 The platform playlist commands preserve track order and duplicate entries, default to private, and
 require a user OAuth login. They create playlists on the remote account and are marked destructive
@@ -148,6 +170,7 @@ const codeMode = await createMusicCodeMcpServer({
 - [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts): YouTube/SoundCloud extraction and selected downloads.
 - [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox database and file formats.
 - [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
+- [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink): Manifest-backed native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
 
 ## Development
 
