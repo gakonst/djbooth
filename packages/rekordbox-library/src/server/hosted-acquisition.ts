@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
+import { analyzeTracks } from "@gakonst/rekordbox";
 import {
   SoulseekLibraryAcquirer,
   YtdlpNativeAcquirer,
@@ -93,6 +94,11 @@ type HostedAnalyzeResult = {
   analysisDirectories: Record<string, string>;
 };
 
+export type HostedAnalyzeTrackOptions = {
+  audioPath: string;
+  signal: AbortSignal;
+};
+
 type HostedImportResult = {
   playlistId: string;
   imported: Array<{ entryId: string; contentId: string }>;
@@ -103,6 +109,7 @@ export type HostedAcquisitionDependencies = {
   writeManifest(path: string, manifest: SetManifest): Promise<void>;
   buildPlan(manifest: SetManifest, options: BuildAcquisitionPlanOptions): Promise<AcquisitionPlan>;
   acquire(options: AcquireManifestOptions): Promise<HostedAcquireResult>;
+  analyzeTrack(options: HostedAnalyzeTrackOptions): Promise<void>;
   analyze(options: AnalyzeExistingManifestOptions): Promise<HostedAnalyzeResult>;
   importRekordbox(options: ImportManifestToRekordboxOptions): Promise<HostedImportResult>;
 };
@@ -129,6 +136,9 @@ const defaultDependencies: HostedAcquisitionDependencies = {
   writeManifest: writeManifestAtomic,
   buildPlan: buildAcquisitionPlan,
   acquire: acquireManifest,
+  async analyzeTrack({ audioPath, signal }) {
+    await analyzeTracks([audioPath], { concurrency: 1, signal });
+  },
   analyze: analyzeExistingManifest,
   importRekordbox: importManifestToRekordbox,
 };
@@ -372,6 +382,7 @@ export class HostedPlaylistAcquisitionWorker {
       ? { acquirers: [...this.#acquirers] }
       : await this.#createAcquirers(signal);
     const completedOrders = new Set<number>();
+    const analyzeTrack = createTaskLimiter(this.#analysisConcurrency);
     let acquisition: HostedAcquireResult;
     try {
       acquisition = await this.#dependencies.acquire({
@@ -394,7 +405,7 @@ export class HostedPlaylistAcquisitionWorker {
             error: null,
           });
         },
-        onArtifactVerified: (artifact) => {
+        onArtifactVerified: async (artifact) => {
           for (const order of physicalPlan.memberOrders(artifact.entryOrder)) {
             const track = tracks[order - 1];
             if (!track?.hosted) continue;
@@ -402,6 +413,14 @@ export class HostedPlaylistAcquisitionWorker {
               state: "downloaded",
               error: null,
             });
+          }
+          // Start native Rekordbox analysis as soon as this verified recording is durable. The
+          // manifest-level pass below reuses these cache artifacts to checkpoint the analysis
+          // ledger and produce the path-to-analysis-directory map used by import.
+          await analyzeTrack(() =>
+            this.#dependencies.analyzeTrack({ audioPath: artifact.path, signal }),
+          );
+          for (const order of physicalPlan.memberOrders(artifact.entryOrder)) {
             completedOrders.add(order);
           }
           this.#emit(
@@ -931,6 +950,25 @@ function positiveInteger(value: number | undefined, fallback: number, label: str
     throw new RangeError(`${label} must be a positive safe integer`);
   }
   return resolved;
+}
+
+function createTaskLimiter(concurrency: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const release = (): void => {
+    const next = queue.shift();
+    if (next) next();
+    else active -= 1;
+  };
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active < concurrency) active += 1;
+    else await new Promise<void>((resolve) => queue.push(resolve));
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
 }
 
 function isMissingSlskModule(error: unknown): boolean {

@@ -36,6 +36,8 @@ The workstation provides:
 - Rekordbox artwork with embedded audio-tag cover fallback;
 - memory-cue and Hot Cue A–P creation, editing, deletion, comments, colors, and loop ranges;
 - guarded playlist create, rename, delete, membership, reorder, and atomic visual-order replacement;
+- hosted Spotify/SoundCloud download subscriptions that start bounded native Rekordbox analysis for
+  each verified recording immediately, then checkpoint and import the completed playlist;
 - session-scoped undo/redo for reversible library edits, with toolbar controls and standard
   `Cmd/Ctrl+Z`, `Cmd+Shift+Z`, and `Ctrl+Y` shortcuts;
 - a persistent infinite set canvas whose connected track chain becomes playlist order;

@@ -245,7 +245,7 @@ describe("HostedPlaylistAcquisitionWorker", () => {
     ]);
   });
 
-  it("acquires and analyzes a repeated provider track once while importing every membership", async () => {
+  it("starts per-recording analysis and deduplicates repeated provider tracks", async () => {
     const fixture = state();
     const playlistId = "spotify-with-repeat";
     const firstTrackId = "spotify:track:first";
@@ -257,7 +257,9 @@ describe("HostedPlaylistAcquisitionWorker", () => {
 
     let created: SetManifest | undefined;
     let physicalRecordingOrders: number[] = [];
+    let physicalRecordingPaths: string[] = [];
     let analysisCalls = 0;
+    const trackAnalysisPaths: string[] = [];
     let importedEntryIds: string[] = [];
     const dependencies = {
       createManifest(input) {
@@ -269,6 +271,9 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       async acquire(options) {
         const plan = materializedPlan(options);
         physicalRecordingOrders = plan.recordings.map(({ entryOrder }) => entryOrder);
+        physicalRecordingPaths = plan.recordings.map(
+          (recording) => recording.variants[0]!.outputPath,
+        );
         const manifest = structuredClone(created!);
         for (const recording of plan.recordings) {
           const variant = recording.variants[0]!;
@@ -295,6 +300,10 @@ describe("HostedPlaylistAcquisitionWorker", () => {
           });
         }
         return { manifest, failures: [] };
+      },
+      async analyzeTrack(options) {
+        expect(options.signal.aborted).toBe(false);
+        trackAnalysisPaths.push(options.audioPath);
       },
       async analyze(options) {
         analysisCalls += 1;
@@ -341,6 +350,7 @@ describe("HostedPlaylistAcquisitionWorker", () => {
     await worker.kick();
 
     expect(physicalRecordingOrders).toEqual([1, 2]);
+    expect(trackAnalysisPaths).toEqual(physicalRecordingPaths);
     expect(analysisCalls).toBe(1);
     expect(importedEntryIds).toEqual(["track-001", "track-002", "track-003"]);
     expect(fixture.store.getJob(job.id)).toMatchObject({
@@ -355,6 +365,48 @@ describe("HostedPlaylistAcquisitionWorker", () => {
     expect(fixture.store.getTrack("spotify", secondTrackId)).toMatchObject({
       downloadState: "downloaded",
       localContentId: "content-second",
+    });
+  });
+
+  it("fails the download job when analysis of a verified track fails", async () => {
+    const fixture = state();
+    const playlistId = "spotify-analysis-failure";
+    const trackId = "spotify:track:analysis-failure";
+    fixture.store.setDownloadEnabled("spotify", playlistId, true);
+    const job = fixture.store.enqueueDownload("spotify", playlistId, {
+      playlistName: "Analysis failure",
+    });
+    let manifestAnalysisCalls = 0;
+    const dependencies = successfulDependencies(fixture.root, {
+      async analyzeTrack({ audioPath }) {
+        expect(audioPath).toBe(join(fixture.root, "track.m4a"));
+        throw new Error("native analyzer failed");
+      },
+      async analyze() {
+        manifestAnalysisCalls += 1;
+        throw new Error("manifest analysis must not run after track analysis fails");
+      },
+    });
+    const worker = createWorker(fixture, {
+      catalog: { getTracks: async () => [hostedTrack("spotify", trackId)] },
+      dependencies,
+    });
+
+    worker.start();
+    await worker.kick();
+
+    expect(manifestAnalysisCalls).toBe(0);
+    expect(fixture.store.getJob(job.id)).toMatchObject({
+      status: "failed",
+      error: "native analyzer failed",
+    });
+    expect(fixture.store.getTrack("spotify", trackId)).toMatchObject({
+      downloadState: "downloaded",
+      downloadError: null,
+    });
+    expect(fixture.store.getPlaylist("spotify", playlistId)).toMatchObject({
+      syncState: "error",
+      syncError: "native analyzer failed",
     });
   });
 
@@ -476,7 +528,10 @@ function createWorker(
       unavailableTrackAcquirer("slsk", "test double"),
       unavailableTrackAcquirer("ytdlp", "test double"),
     ],
-    dependencies: options.dependencies,
+    dependencies: {
+      analyzeTrack: async () => undefined,
+      ...options.dependencies,
+    },
     rekordbox: options.rekordbox,
   });
   workers.push(worker);
