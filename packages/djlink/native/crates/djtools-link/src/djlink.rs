@@ -10682,8 +10682,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn db_handler_roundtrips_split_context_search_to_packed_render() {
+    async fn db_handler_roundtrips_consecutive_searches_without_back() {
         let state = Arc::new(test_state_with_sample_library(0x5293_8822));
+        let artist_id = state.library.all_tracks[0].artist_id;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("listener");
@@ -10710,10 +10711,7 @@ mod tests {
             tx,
             DB_REQ_SEARCH,
             &[
-                DbValue::Int32(3),
-                DbValue::Int32(0x12),
-                DbValue::Int32(SLOT_REKORDBOX as u32),
-                DbValue::Int32(TRACK_TYPE_REKORDBOX as u32),
+                DbValue::Int32(0x0301_0401),
                 DbValue::Int32(SORT_DEFAULT),
                 DbValue::Int32(("SCIENCE".encode_utf16().count() * 2 + 2) as u32),
                 DbValue::String("SCIENCE".to_string()),
@@ -10732,18 +10730,18 @@ mod tests {
         assert_eq!(success.tx_id, tx);
         assert_eq!(success.msg_type, DB_RES_SUCCESS);
         assert_eq!(db_int(success.args.first()), Some(DB_REQ_SEARCH as u32));
-        assert_eq!(db_int(success.args.get(1)), Some(1));
+        assert_eq!(db_int(success.args.get(1)), Some(2));
 
         let render_tx = tx + 1;
         let render = encode_db_message(
             render_tx,
             DB_REQ_RENDER,
             &[
-                DbValue::Int32(0x0312_0401),
+                DbValue::Int32(0x0301_0401),
                 DbValue::Int32(0),
                 DbValue::Int32(1),
                 DbValue::Int32(0),
-                DbValue::Int32(1),
+                DbValue::Int32(2),
                 DbValue::Int32(12),
                 DbValue::Int32(1),
                 DbValue::Int32(0),
@@ -10785,6 +10783,94 @@ mod tests {
             .expect("render footer deadline")
             .expect("render footer");
         assert_eq!(footer.msg_type, DB_RES_MENU_FOOTER);
+
+        let scoped_tx = render_tx + 1;
+        let scoped_search = encode_db_message(
+            scoped_tx,
+            DB_REQ_SEARCH,
+            &[
+                DbValue::Int32(3),
+                DbValue::Int32(0x1f),
+                DbValue::Int32(SLOT_REKORDBOX as u32),
+                DbValue::Int32(TRACK_TYPE_REKORDBOX as u32),
+                DbValue::Int32(SORT_ARTIST),
+                DbValue::Int32(("BRUNELLO".encode_utf16().count() * 2 + 2) as u32),
+                DbValue::String("BRUNELLO".to_string()),
+                DbValue::Int32(0),
+            ],
+        );
+        for chunk in scoped_search.chunks(3) {
+            client
+                .write_all(chunk)
+                .await
+                .expect("scoped search request write");
+            tokio::task::yield_now().await;
+        }
+        let scoped_success =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("scoped search response deadline")
+                .expect("scoped search response");
+        assert_eq!(scoped_success.tx_id, scoped_tx);
+        assert_eq!(scoped_success.msg_type, DB_RES_SUCCESS);
+        assert_eq!(
+            db_int(scoped_success.args.first()),
+            Some(DB_REQ_SEARCH as u32)
+        );
+        assert_eq!(db_int(scoped_success.args.get(1)), Some(1));
+
+        let scoped_render_tx = scoped_tx + 1;
+        let scoped_render = encode_db_message(
+            scoped_render_tx,
+            DB_REQ_RENDER,
+            &[
+                DbValue::Int32(0x031f_0401),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+                DbValue::Int32(12),
+                DbValue::Int32(1),
+                DbValue::Int32(0),
+            ],
+        );
+        for chunk in scoped_render.chunks(2) {
+            client
+                .write_all(chunk)
+                .await
+                .expect("scoped render request write");
+            tokio::task::yield_now().await;
+        }
+        let scoped_header =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("scoped render header deadline")
+                .expect("scoped render header");
+        assert_eq!(scoped_header.tx_id, scoped_render_tx);
+        assert_eq!(scoped_header.msg_type, DB_RES_MENU_HEADER);
+        assert_eq!(db_int(scoped_header.args.first()), Some(1));
+        assert_eq!(db_int(scoped_header.args.get(1)), Some(0));
+
+        let scoped_row =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("scoped render row deadline")
+                .expect("scoped render row");
+        assert_eq!(scoped_row.msg_type, DB_RES_MENU_ITEM);
+        assert_eq!(db_int(scoped_row.args.get(1)), Some(artist_id));
+        assert_eq!(
+            scoped_row.args.get(3),
+            Some(&DbValue::String("Brunello".to_string()))
+        );
+        assert_eq!(db_int(scoped_row.args.get(6)), Some(META_ARTIST));
+
+        let scoped_footer =
+            tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                .await
+                .expect("scoped render footer deadline")
+                .expect("scoped render footer");
+        assert_eq!(scoped_footer.tx_id, scoped_render_tx);
+        assert_eq!(scoped_footer.msg_type, DB_RES_MENU_FOOTER);
 
         client.shutdown().await.expect("client shutdown");
         tokio::time::timeout(Duration::from_millis(100), handle)

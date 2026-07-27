@@ -404,9 +404,10 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 ## Pro DJ Link search checkpoint (2026-07-27)
 
 - Added an end-to-end loopback regression for the native CDJ Search flow. It fragments the
-  separate `r,m,s,t,sort,len,query` request across TCP writes, requires a bounded success response,
-  then renders through the packed `r:m:s:t` context and asserts the exact loadable
-  title-and-artist row plus menu header/footer.
+  documented packed `r:m:s:t,sort,len,query,zero` request across TCP writes, requires a bounded
+  success response, and asserts the exact loadable title-and-artist row plus menu header/footer.
+  It then issues a second split-context artist Search and packed render on the same connection,
+  proving the prepared menu advances without Back or reconnect.
 - Precomputed normalized title, artist, album, canonical-name, and metadata search documents when
   the server loads the Rekordbox snapshot. The 14,929-track live library's `SCIENCE` query dropped
   from 232.7 ms to 9–18 ms with identical results; an intentionally broad one-character query
