@@ -56,12 +56,23 @@ jobs run concurrently; manifest checkpoints and Rekordbox mutations stay seriali
 The umbrella CLI mounts each package's exported Incur CLI definition; it neither shells out nor
 maintains a second set of command schemas.
 
+After explicit Rekordbox-write approval, the complete local set flow is one resumable command:
+
+```sh
+music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format json
+```
+
+Add `--allow-set-clips --source-set-path "$LOCAL_SET"` to permit one bounded same-invocation cue
+recovery pass after individual acquisition failures. The command never downloads the remote set.
+
 ## Development
 
 Requirements: Node.js 22 or 24, pnpm 10.30.2, plus ffmpeg/ffprobe for media integration tests.
 
-Copy `.env.example` to the ignored workspace-root `.env`. The `music`, `tracks`, `spots`,
-`soundcloud`, and `slsk` CLIs load this one file; do not keep credentials inside package folders.
+Copy `.env.example` to the ignored workspace-root `.env`. `music` and `tracks` discover the nearest
+ancestor `.env` when invoked from a nested package; `MUSIC_ENV_FILE` and
+`~/.config/music-ts/.env` are supported for installed/global use. Do not keep credentials inside
+package folders.
 
 ```sh
 pnpm install

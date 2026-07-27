@@ -1,6 +1,6 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; and import verified playlists into the normal Rekordbox database. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, or end-to-end music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; and import verified playlists into the normal Rekordbox database. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
@@ -8,6 +8,10 @@ description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spot
 Build an auditable `source -> identities -> platform playlist and/or recordings -> Rekordbox playlist` pipeline with
 `@gakonst/music`. Prefer its TypeScript subpath APIs for automation; use the `music` CLI for
 interactive work, diagnostics, Skills, and MCP registration.
+
+When one request asks to find a set's tracks, acquire and analyze them, and create its Rekordbox
+playlist, run `music tracks import-set` once after the required approvals. Do not decompose that
+request into separate CLI commands unless the user asks for a stage-only workflow.
 
 ## Install and discover
 
@@ -80,8 +84,9 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
 - Treat Spotify and SoundCloud playlist creation as external account writes. Require an explicit
   request, validate every reference before creation, default to private, and preserve order and
   duplicates. Never retry a playlist-creation POST automatically.
-- Preserve every credible recording when an ambiguity remains. Collapse only confirmed duplicates
-  sharing release identity, ISRC, and plausible duration.
+- Preserve every credible recording when an ambiguity remains. An approved end-to-end import may
+  choose one deterministic safe acquisition primary, but must retain all candidates and record its
+  policy. Collapse only confirmed duplicates sharing release identity, ISRC, and plausible duration.
 - Persist the manifest atomically after each match, selection, download, extraction, and export.
 - Write the normal Rekordbox database only with explicit approval, Rekordbox processes stopped, an
   exclusive lock, complete backups, and post-write integrity checks. Do not substitute collection
@@ -156,6 +161,9 @@ Require provider credentials only for the stage that needs them. Resolution can 
 timestamped YouTube or SoundCloud description without credentials. Set `PARSE_API_KEY` for
 1001Tracklists, Spotify credentials for enrichment, and `SLSK_USERNAME` plus `SLSK_PASSWORD` for
 Soulseek acquisition. Require ffmpeg and ffprobe only for media verification or cue extraction.
+The CLI loads `MUSIC_ENV_FILE` first, then a nearest ancestor `.env`, then
+`~/.config/music-ts/.env`; do not ask the user to export a root-workspace credential again when one
+of those files already contains it.
 
 ## 2. Resolve the source
 
@@ -169,6 +177,8 @@ Parse and validate the returned manifest through `@gakonst/music/tracks` before 
 durable state. Resolution order: timestamped description, configured 1001Tracklists lookup, then
 configured recognition. Report identified, unresolved, overlap-only, and ambiguous counts before
 acquisition. Stop and repair implausible ordering or cue boundaries.
+The maintained Parse wrapper uses `POST /scraper/{scraper_id}/{endpoint}` with endpoint parameters
+in a JSON body and `X-API-Key`; do not reconstruct the obsolete query-string request.
 
 For a Spotify playlist, page through playlist items with one authenticated `SpotifyClient`. Preserve
 playlist order, duplicates, unavailable rows, Spotify IDs/URIs/URLs, ISRC, artists, title, mix,
@@ -180,6 +190,10 @@ Create one `SpotifyOAuth`/`SpotifyClient` backed by `FileSessionStore`, wrap it 
 persistent cache, and reuse it. Search exact ISRC first; otherwise score normalized artist, title,
 mix/version tokens, and duration. Keep weak or close top-two results ambiguous. Record the query,
 candidates, score, Spotify identity, duration, and ISRC.
+For an approved `import-set`, select a primary only from candidates with safe title/version and
+artist agreement. Prefer the earliest plausible release on or before the set date, retain the
+complete candidate list, and persist an auto-selection warning. Leave unsafe collaborator,
+version, identity, or duration conflicts unresolved.
 
 ## Publish a playlist on Spotify or SoundCloud
 
@@ -252,7 +266,24 @@ music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format 
 ```
 
 This resolves, enriches, acquires into the canonical library, analyzes, then creates or updates the
-ordered Rekordbox playlist. Do not ask for a separate add-to-playlist step after it succeeds.
+ordered Rekordbox playlist. Call it once; do not ask for separate resolution, download, analysis,
+or add-to-playlist steps after it succeeds.
+
+When the user also approves cue recovery from an existing local set recording, include the approval
+in the same invocation:
+
+```sh
+music tracks import-set "$SET_URL" \
+  --manifest "$MANIFEST_PATH" \
+  --allow-set-clips \
+  --source-set-path "$LOCAL_SET" \
+  --write --format json
+```
+
+The workflow attempts individual recordings first. It checkpoints every failure, then performs at
+most one internal recovery pass for failed identified entries with complete cues. The same command
+continues into analysis and one Rekordbox commit after every recording verifies. Report
+`acquisitionPasses`, `sourceSetFallbacks`, and `spotifyCanonicalSelections` from its output.
 
 Create one `SoulseekClient`, connect once, and search each unresolved recording with bounded
 concurrency. Prefer plausible lossless results, but inspect metadata and duration instead of trusting
@@ -280,11 +311,12 @@ manifest states; do not redownload them.
 
 ## 5. Recover unavailable tracks
 
-Only after explicit approval, download one canonical set source into a temporary cache. For each
-otherwise unavailable entry with complete cues, extract exactly `[startSeconds, endSeconds)` using
-ffmpeg stream copy where possible. Mark the title/comment with `[Set Extract]`, the source set, cue
-range, checksum, codec, and a warning about transitions and lossy ancestry. Keep the full cache until
-every requested clip verifies, then ask before deleting it.
+Only after explicit approval, use one existing verified local set source. `import-set` never
+downloads the remote set. For each otherwise unavailable entry with complete cues, extract exactly
+`[startSeconds, endSeconds)` using ffmpeg stream copy where possible. Mark the title/comment with
+`[Set Extract]`, source set, cue range, checksum, codec, and a warning about transitions and lossy
+ancestry. Preserve the exact individual-acquisition failure as a manifest warning. Keep the local
+source untouched.
 
 ## 6. Analyze for Rekordbox
 
@@ -369,8 +401,8 @@ Retain an M3U8 only as a recovery artifact, not as the primary Rekordbox integra
 
 Return source/title, provider, resolution counts, Spotify match counts, acquisition counts by
 backend, output directory, manifest path, Rekordbox identifiers, backup path, cache statistics,
-stage timings, warnings, and unresolved decisions. Never claim completion while identified entries
-remain pending unless the user accepted a partial playlist.
+stage timings, automation pass/selection counters, warnings, and unresolved decisions. Never claim
+completion while identified entries remain pending unless the user accepted a partial playlist.
 
 Preserve these manifest states on resume:
 

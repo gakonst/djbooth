@@ -2,7 +2,7 @@
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
@@ -66,11 +66,12 @@ export const MUSIC_MCP_TOOL_FILTER = {
 export function createMusicCli(): ReturnType<typeof Cli.create> {
   const cli = Cli.create("music", {
     version: MUSIC_VERSION,
-    description: "Unified metadata, acquisition, platform, and DJ-library tools.",
-    hint: "Local CodeMode MCP: music --codemode-mcp",
+    description:
+      "One CLI for DJ-set resolution, one-shot acquisition/analysis/Rekordbox imports, platform playlists, and library tools.",
+    hint: "Full approved set flow: music tracks import-set <url> --manifest <path> --write. Local CodeMode MCP: music --codemode-mcp",
     mcp: {
       instructions:
-        "Compose metadata resolution, provider lookup, platform playlist management, individual-track acquisition, analysis, and normal Rekordbox database operations. Inspect before downloading; require explicit write acknowledgement for database mutations.",
+        "For a request to find a DJ set's tracks, acquire them, analyze them, and create its Rekordbox playlist, use tracks_import-set once after the user explicitly approves the database write and any local source-set clipping. Do not manually sequence resolve/acquire/analyze/import when that command covers the request. It resumes durable state, preserves candidate and source provenance, auto-selects only safe deterministic Spotify acquisition primaries, and performs at most two acquisition passes: individual sources first, then approved cue-bounded local-set recovery. Use the focused commands for metadata-only resolution, platform playlist writes, individual-track work, or library maintenance. Inspect before standalone downloads; require explicit acknowledgement for every database or account mutation.",
       tools: MUSIC_MCP_TOOL_FILTER,
     },
     sync: {
@@ -79,6 +80,8 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
       suggestions: [
         "open my Rekordbox library workbench",
         "resolve a DJ set into tracks",
+        "resolve, download, analyze, and create the Rekordbox playlist for a DJ set in one run",
+        "recover unavailable tracks from an approved local DJ-set recording in the same run",
         "create a playlist on Spotify",
         "create a playlist on SoundCloud",
         "search Soulseek for a track",
@@ -114,14 +117,25 @@ export async function runMusicCli(argv = process.argv.slice(2)): Promise<void> {
 function loadWorkspaceEnvironment(): void {
   const candidates = [
     process.env.MUSIC_ENV_FILE,
+    ...ancestorEnvironmentFiles(process.cwd()),
     resolve(homedir(), ".config/music-ts/.env"),
     resolve(import.meta.dirname, "../../../.env"),
-    resolve(process.cwd(), ".env"),
   ].filter(
     (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
   );
   const path = candidates.find((candidate) => existsSync(candidate));
   if (path) loadEnvFile(path);
+}
+
+function ancestorEnvironmentFiles(start: string): string[] {
+  const files: string[] = [];
+  let directory = resolve(start);
+  while (true) {
+    files.push(resolve(directory, ".env"));
+    const parent = dirname(directory);
+    if (parent === directory) return files;
+    directory = parent;
+  }
 }
 
 function isMainModule(): boolean {

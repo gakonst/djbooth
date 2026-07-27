@@ -75,7 +75,10 @@ music library serve --open
 
 `music tracks import-set` is the single local acquisition path: recordings land under
 `~/.djtools/tracks/<artist>/<album>/` (or `MUSIC_LIBRARY_ROOT`) and verified ordered membership is
-written directly to Rekordbox. It does not create per-playlist copies on disk.
+written directly to Rekordbox. It deterministically selects safe Spotify release ties while
+retaining every candidate. With `--allow-set-clips --source-set-path <local-set>`, it performs one
+bounded internal recovery pass after individual failures. It does not download the remote set or
+create per-playlist copies on disk.
 
 `music rekordbox db playlist list` prints the complete active folder and playlist hierarchy as a
 table, including direct track and child counts. Add `--json` for the same tree order with stable
@@ -84,7 +87,8 @@ IDs, parent links, path segments, pagination metadata, and explicit smart-playli
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
 `rekordbox`, and `library` Incur CLIs. Its MCP surface filters those commands to the composable calls used for
 set resolution, metadata lookup, individual acquisition, analysis, and normal Rekordbox database
-maintenance; it does not impose a pipeline command.
+maintenance. Agents should prefer the mounted `tracks import-set` pipeline command for an approved
+resolve-download-analyze-playlist request instead of sequencing those stages themselves.
 
 The platform playlist commands preserve track order and duplicate entries, default to private, and
 require a user OAuth login. They create playlists on the remote account and are marked destructive
