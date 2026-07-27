@@ -227,6 +227,12 @@ and `.2EX` files without mutating the library. The public package does not inclu
 Rekordbox runtime; analysis discovers an explicit, PATH-installed, user-local, or repository-built
 helper:
 
+Release artifacts must never contain `packages/rekordbox-ts/vendor`, the reference helper, or any
+Rekordbox application/runtime bytes. The independently packageable clean-room Rust core now rebuilds
+the known DAT/EXT/2EX binary shapes byte-for-byte, but audio DSP parity is not complete; until it is,
+track analysis still requires a separately supplied helper and a compatible user-installed
+Rekordbox application.
+
 ```sh
 rekordbox analyze doctor --format json
 rekordbox analyze track /Music/track.flac --output-directory /Music/track.rekordbox --format json

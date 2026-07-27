@@ -421,11 +421,22 @@ dependencies = [
  "dirs",
  "libc",
  "plist",
+ "rekordbox-analyzer-core",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
  "walkdir",
+]
+
+[[package]]
+name = "rekordbox-analyzer-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -430,3 +430,27 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   connection-local pending menu, and loadable row builder as legacy `0x1300`; pinned the captured
   `RAFA` request as a golden fixture and extended the no-Back same-socket Search/Render regression.
   Nightly format and all 112 `djtools-link` tests pass. Physical result/render/load proof is pending.
+
+## Clean-room analyzer checkpoint (2026-07-27)
+
+- Split a releasable `native/rekordbox-analyzer-core` crate from the private Rekordbox rehost. The
+  core has no Rekordbox/JUCE bytes, loader offsets, patched application cache, or native framework
+  dependency.
+- Added a strict PMAI/tag parser and writer that preserves unknown headers, repeated/unknown tags,
+  and opaque payload bytes. Added semantic builders for the complete Rekordbox 6.8.2 DAT, EXT, and
+  2EX shapes: paths, VBR index, beat grids, all waveform families, and PWVC. Non-empty cues and the
+  obfuscated song-structure payload remain losslessly opaque.
+- Re-ran the same local audio through the 6.8.2 reference rehost. All three outputs matched the
+  retained analysis byte-for-byte, establishing that the proprietary implementation is a stable
+  exact oracle. The Rust semantic writer then rebuilt its 9,054-byte DAT, 188,324-byte EXT, and
+  182,358-byte 2EX byte-for-byte.
+- Added a structured `diff` gate with SHA-256, ordered-tag, length, and first-different-byte reports,
+  plus `rebuild-anlz` for serializer parity. Unit tests cover malformed lengths, unknown-byte
+  retention, DAT/2EX semantic round trips, checked-in sanitized DAT/EXT templates, and differential
+  localization.
+- Static symbols show that JUCE supplies orchestration, strings, threads, and audio I/O, while
+  `BA_*` and `peakss::*` implement proprietary beat, waveform, and key analysis. Release-ready DSP
+  parity remains open: audio framing/resampling, waveform quantization, VBR indexing, beat
+  detection/post-adjustment, key detection, and phrase analysis must be re-derived against
+  synthetic oracle probes. The vendor helper and Rekordbox runtime remain local-only references and
+  must never enter release artifacts.
