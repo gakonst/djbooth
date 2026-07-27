@@ -39,14 +39,22 @@ describe("1001Tracklists client", () => {
   });
 
   test("parses the detailed documented shape", async () => {
-    const fetch = jsonFetch({
-      status: "success",
-      data: {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toMatch(/\/get_tracklist$/u);
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("X-API-Key")).toBe("key");
+      expect(JSON.parse(String(init?.body))).toEqual({
         url: "https://www.1001tracklists.com/tracklist/test.html",
-        event: { name: "DJ at Club", date: "2026-01-01", lineup: ["DJ"] },
-        tracks: [{ order: 1, artist: "A", title: "B", label: "Label", links: {} }],
-      },
-    });
+      });
+      return Response.json({
+        status: "success",
+        data: {
+          url: "https://www.1001tracklists.com/tracklist/test.html",
+          event: { name: "DJ at Club", date: "2026-01-01", lineup: ["DJ"] },
+          tracks: [{ order: 1, artist: "A", title: "B", label: "Label", links: {} }],
+        },
+      });
+    }) as typeof globalThis.fetch;
     const client = new Tracklists1001Client({ apiKey: "key", fetch, cache: false });
     await expect(client.get("https://www.1001tracklists.com/tracklist/test.html")).resolves.toEqual(
       {
@@ -104,9 +112,14 @@ describe("1001Tracklists client", () => {
   });
 
   test("parses media lookup entries with cue seconds", async () => {
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
-      expect(url.searchParams.get("url")).toBe("https://www.youtube.com/watch?v=abc");
+      expect(url.search).toBe("");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("Content-Type")).toBe("application/json");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        url: "https://www.youtube.com/watch?v=abc",
+      });
       return Response.json({
         data: {
           found: true,
@@ -254,7 +267,8 @@ describe("1001Tracklists client", () => {
           },
         });
       }
-      expect(new URL(String(input)).searchParams.get("type")).toBe("trending");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({ type: "trending" });
       return Response.json({
         data: {
           chart: "trending",

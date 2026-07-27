@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
@@ -208,6 +208,7 @@ describe("buildAcquisitionPlan", () => {
 
   test("uses ASCII-safe paths and resumes a failed individual as an approved cue clip", async () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-fallback-"));
+    const outputDirectory = join(directory, "output");
     const sourcePath = join(directory, "set.m4a");
     const value = manifest(sourcePath);
     if (value.entries[2]!.identity.status !== "identified") throw new Error("test identity");
@@ -219,7 +220,7 @@ describe("buildAcquisitionPlan", () => {
     });
 
     const plan = await buildAcquisitionPlan(value, {
-      outputDirectory: join(directory, "output"),
+      outputDirectory,
       allowSourceSetClips: true,
       sourceSetPath: sourcePath,
     });
@@ -236,6 +237,8 @@ describe("buildAcquisitionPlan", () => {
     });
     expect(variant.metadata.title).toContain("[Set Extract]");
     expect(variant.metadata).not.toHaveProperty("isrc");
+    await mkdir(dirname(variant.outputPath), { recursive: true });
+    await writeFile(variant.outputPath, "set extract");
 
     value.entries[2]!.errors = [];
     value.entries[2]!.acquisition = {
@@ -255,11 +258,34 @@ describe("buildAcquisitionPlan", () => {
       },
     };
     const resumed = await buildAcquisitionPlan(value, {
-      outputDirectory: join(directory, "output"),
+      outputDirectory,
       allowSourceSetClips: true,
       sourceSetPath: sourcePath,
     });
+    expect(resumed.recordings[2]!.variants[0]!.localArtifact).toBeUndefined();
     expect(resumed.recordings[2]!.variants[0]!.sourceClip).toBeDefined();
+
+    value.entries[2]!.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "local",
+        kind: "individual",
+        mediaPath: variant.outputPath,
+        files: [variant.outputPath],
+        source: variant.outputPath,
+      },
+    };
+    value.entries[2]!.warnings.push(
+      "Artist Three — Track Three is a cue-based source-set extract, not a verified release master",
+    );
+    const repaired = await buildAcquisitionPlan(value, {
+      outputDirectory,
+      localDirectories: [directory],
+      allowSourceSetClips: true,
+      sourceSetPath: sourcePath,
+    });
+    expect(repaired.recordings[2]!.variants[0]!.localArtifact).toBeUndefined();
+    expect(repaired.recordings[2]!.variants[0]!.sourceClip).toBeDefined();
   });
 
   test("requires explicit verified source opt-in and validates the complete dry-run plan", async () => {

@@ -3,6 +3,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
@@ -58,11 +59,26 @@ const { version: VERSION } = createRequire(import.meta.url)("../package.json") a
 
 function loadWorkspaceEnvironment(): void {
   const candidates = [
+    process.env.MUSIC_ENV_FILE,
+    ...ancestorEnvironmentFiles(process.cwd()),
+    resolve(homedir(), ".config/music-ts/.env"),
     resolve(import.meta.dirname, "../../../.env"),
-    resolve(process.cwd(), ".env"),
-  ];
+  ].filter(
+    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
+  );
   const path = candidates.find((candidate) => existsSync(candidate));
   if (path) loadEnvFile(path);
+}
+
+function ancestorEnvironmentFiles(start: string): string[] {
+  const files: string[] = [];
+  let directory = resolve(start);
+  while (true) {
+    files.push(resolve(directory, ".env"));
+    const parent = dirname(directory);
+    if (parent === directory) return files;
+    directory = parent;
+  }
 }
 
 const provider = z
@@ -500,6 +516,11 @@ const workflowPerformanceOutput = z.object({
   totalMs: z.number().nonnegative(),
   warmResume: z.boolean(),
   peakConcurrency: z.number().int().positive(),
+  automation: z.object({
+    spotifyCanonicalSelections: z.number().int().nonnegative(),
+    acquisitionPasses: z.number().int().positive(),
+    sourceSetFallbacks: z.number().int().nonnegative(),
+  }),
   stages: z.array(
     z.object({
       stage: z.enum(["resolve", "source-set", "spotify", "acquisition", "analysis", "rekordbox"]),
@@ -516,7 +537,9 @@ const workflowPerformanceOutput = z.object({
 
 export const tracksCli = Cli.create("tracks", {
   version: VERSION,
-  description: "Resolve DJ sets into resumable track manifests without downloading remote sets.",
+  description:
+    "Resolve DJ sets or run one approved, resumable resolve→enrich→acquire→analyze→Rekordbox playlist import.",
+  hint: "One-shot: tracks import-set <set-url> --manifest <path> --write; add --allow-set-clips --source-set-path <local-set> for same-run cue recovery.",
   config: {
     flag: "config",
     files: ["tracks.json", "~/.config/tracks/config.json"],
@@ -524,7 +547,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for a DJ set URL. It inspects media metadata once and reads timestamped descriptions first. When description rows remain unresolved, it aligns 1001Tracklists identities while retaining the description cue boundaries; otherwise it checks an exact media association, then title/uploader search before recognition. Use analyze-existing to analyze only media already checkpointed in a manifest, without loading acquisition credentials or mutating media. Use import-existing for one explicitly approved, verified Rekordbox commit from those checkpointed media/analysis artifacts. Use import-set only for an explicitly approved local end-to-end run: it resumes the durable manifest, stores verified recordings under the shared canonical artist/album root, runs Spotify, acquisition, verification, and native analysis through stage-specific bounded pools, persists each analyzer summary, then automatically creates or updates the ordered playlist in one verified normal Rekordbox database commit including analyzer BPM and musical key. A warm resume repairs missing BPM/key through the same backed-up transaction instead of accepting analysis-file flags alone. It never downloads a remote source set; cue clips require both --allow-set-clips and an existing --source-set-path. After a reviewed individual acquisition failure, the next resume may recover that exact cue from the verified source set.",
+      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts native analysis as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. It never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -535,7 +558,8 @@ export const tracksCli = Cli.create("tracks", {
       "search 1001Tracklists for a DJ set",
       "analyze only the downloaded recordings in a durable manifest",
       "import a fully acquired and analyzed manifest into Rekordbox",
-      "import an approved resolved set into Rekordbox with bounded stage concurrency",
+      "resolve, download, analyze, and create the Rekordbox playlist for this approved DJ set in one invocation",
+      "retry unavailable tracks from an approved local set source in the same import",
       "render a tracklist as YouTube chapters",
     ],
   },
@@ -707,7 +731,8 @@ tracksCli.command("analyze-existing", {
 
 tracksCli.command("import-set", {
   description:
-    "Resume an approved set through resolution, bounded Spotify enrichment, canonical artist/album acquisition, four-worker native analysis, and automatic ordered membership in one verified normal Rekordbox database commit with analyzer BPM/key metadata.",
+    "One-shot an approved set through resolution, deterministic Spotify primary selection, canonical acquisition, same-run cue fallback, native analysis, and one verified ordered Rekordbox playlist commit.",
+  hint: "This is the full set workflow. Pass --allow-set-clips with --source-set-path to recover failed individual tracks automatically in pass 2/2.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
@@ -733,11 +758,15 @@ tracksCli.command("import-set", {
     allowSetClips: z
       .boolean()
       .default(false)
-      .describe("Explicitly permit cue-bounded clips from an existing local set recording"),
+      .describe(
+        "Explicitly permit a bounded same-invocation second pass using cues from an existing local set",
+      ),
     sourceSetPath: z
       .string()
       .optional()
-      .describe("Existing local set recording; never downloaded by this command"),
+      .describe(
+        "Existing local set recording used only after individual failure; never downloaded by this command",
+      ),
     sourceSetUrl: z
       .string()
       .optional()
@@ -788,6 +817,9 @@ tracksCli.command("import-set", {
     entries: z.number().int().nonnegative(),
     downloaded: z.number().int().nonnegative(),
     resumed: z.number().int().nonnegative(),
+    spotifyCanonicalSelections: z.number().int().nonnegative(),
+    acquisitionPasses: z.number().int().positive(),
+    sourceSetFallbacks: z.number().int().nonnegative(),
     analyzed: z.number().int().nonnegative(),
     analysisCacheHits: z.number().int().nonnegative(),
     dbPath: z.string(),
@@ -886,6 +918,9 @@ tracksCli.command("import-set", {
         entries: result.manifest.entries.length,
         downloaded: result.acquisition.downloaded.length,
         resumed: result.acquisition.resumed.length,
+        spotifyCanonicalSelections: result.performance.automation.spotifyCanonicalSelections,
+        acquisitionPasses: result.performance.automation.acquisitionPasses,
+        sourceSetFallbacks: result.performance.automation.sourceSetFallbacks,
         analyzed: result.analysis.analyzed,
         analysisCacheHits: result.analysis.cacheHits,
         dbPath: result.rekordbox.dbPath,
@@ -1328,23 +1363,28 @@ function stageCounts(statuses: readonly string[]): { status: string; count: numb
 
 function fail(
   context: {
+    displayName: string;
     error(options: {
       code: string;
       exitCode?: number;
       message: string;
       retryable?: boolean;
-      cta?: { commands: string[] };
+      cta?: {
+        description?: string;
+        commands: Array<string | { command: string; description?: string }>;
+      };
     }): never;
   },
   error: unknown,
 ): never {
   if (error instanceof TracksError) {
+    const cta = tracksErrorCta(error, context.displayName);
     return context.error({
       code: error.code,
       message: error.message,
       retryable: error.retryable,
       exitCode: error.exitCode,
-      ...(error.code === "AUTH_REQUIRED" ? { cta: { commands: ["doctor"] } } : {}),
+      ...(cta ? { cta } : {}),
     });
   }
   return context.error({
@@ -1353,6 +1393,55 @@ function fail(
     retryable: false,
     exitCode: 1,
   });
+}
+
+function tracksErrorCta(
+  error: TracksError,
+  displayName: string,
+):
+  | {
+      description: string;
+      commands: Array<string | { command: string; description?: string }>;
+    }
+  | undefined {
+  if (error.code === "AUTH_REQUIRED") {
+    return {
+      description: "Configure the missing provider, then retry the same manifest:",
+      commands: [
+        {
+          command: tracksCtaCommand(displayName, "doctor"),
+          description: "check credentials plus acquisition and analyzer dependencies",
+        },
+      ],
+    };
+  }
+  if (error.code === "API_ERROR") {
+    return {
+      description: "Inspect provider configuration or choose an explicit resolution path:",
+      commands: [
+        {
+          command: tracksCtaCommand(displayName, "doctor"),
+          description: "check Parse and recognition configuration",
+        },
+        tracksCtaCommand(displayName, "resolve --help"),
+      ],
+    };
+  }
+  if (
+    error.code === "TOOL_FAILED" ||
+    (error.code === "INVALID_SOURCE" && /(?:cue|source-set|--write)/iu.test(error.message))
+  ) {
+    return {
+      description: "Review the one-shot import requirements, then retry the same manifest:",
+      commands: [tracksCtaCommand(displayName, "import-set --help")],
+    };
+  }
+  return undefined;
+}
+
+function tracksCtaCommand(displayName: string, command: string): string {
+  const binary = displayName.trim().split(/[/\\]/u).at(-1);
+  return binary === "tracks" || binary === "tracks-ts" ? command : `tracks ${command}`;
 }
 
 export async function runTracksCli(argv = process.argv.slice(2)): Promise<void> {

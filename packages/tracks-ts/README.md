@@ -160,6 +160,8 @@ tracks 1001 charts --type trending
 
 Exact tracklists are cached for seven days by default, avoiding repeated Parse credits. Use
 `--cache-mode refresh` after a tracklist edit or `--cache-mode off` for a diagnostic network call.
+The wrapper follows Parse's generated-endpoint contract: `POST` with endpoint parameters in a JSON
+body and `X-API-Key` authentication.
 
 Optional endpoint pinning:
 
@@ -256,7 +258,8 @@ tracks completions zsh
 ## Pipeline
 
 The narrow workspace libraries can be composed directly, or driven by one Incur-native local
-command. `import-set` resumes the same manifest at every boundary, starts native analysis as each
+command. `import-set` resumes the same manifest at every boundary, deterministically selects a safe
+Spotify acquisition primary while retaining all alternatives, starts native analysis as each
 verified recording lands, persists the analyzer summary path/BPM/key per recording, and performs
 one final normal-database transaction:
 
@@ -279,6 +282,12 @@ invoked by the default path. Final recordings default to
 imports reuse a matching canonical recording. Playlist order is written directly to the normal
 Rekordbox database under the source-derived playlist name; no playlist-specific audio copies are
 created.
+
+With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
+individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
+tracks with complete cues from the verified local set, then the same invocation continues through
+analysis and Rekordbox commit. Structured output reports `acquisitionPasses`,
+`sourceSetFallbacks`, and `spotifyCanonicalSelections`.
 
 Resume native analysis independently when media is already checkpointed. This command loads no
 Spotify, Soulseek, or downloader credentials and never acquires, retags, or imports media. It writes
@@ -352,8 +361,9 @@ The boundary is deliberate:
   exact Spotify ISRC or duration.
 - `slsk-ts` is preferred. The default `ytdlp-ts` fallback uses bounded native YouTube search, scores
   stable canonical URLs with duration metadata, freshly extracts the exact selection, and downloads
-  direct M4A through TypeScript. True recording ambiguities remain distinct alternatives and are all
-  acquired.
+  direct M4A through TypeScript. Unsafe recording ambiguities remain distinct alternatives and are
+  all acquired. Safe catalog re-release ties may select one earliest plausible primary for
+  `import-set`; every candidate and the selection policy remain in the manifest.
 - Every remote acquisition retains its canonical source in the durable manifest, appends it to the
   recording's embedded comment, and writes it into the Rekordbox comment during import. Spotify
   identity links remain separate references; Soulseek peer/file provenance remains non-HTTP.
@@ -362,10 +372,12 @@ The boundary is deliberate:
   output-lock, write, identity, and content-validation failures stop instead of starting a second
   engine.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
-- If no individual release exists, a cue-bounded extract may come from one cached source-set download. It is marked lossy and transition-bearing; the cache is retained until every extract verifies.
+- If no individual release exists, a cue-bounded extract may come from one explicitly supplied
+  local set recording. It is marked lossy and transition-bearing; `import-set` never downloads the
+  remote set.
 - Identified tracks still try individual acquisition first. With explicit set-clip approval, a
-  checkpointed reviewed failure becomes a cue-bounded source extract on the next resume and stays on
-  that recovery path on later warm runs.
+  checkpointed failure becomes a cue-bounded source extract in a bounded second pass during the same
+  invocation and stays on that recovery path on later warm runs.
 - Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
   native analysis uses four. Soulseek and native ytdlp candidate searches overlap while download
   priority remains deterministic. Explicit reference search stays deferred until native reports a

@@ -139,15 +139,17 @@ describe("identify", () => {
 
   test("searches 1001Tracklists by inspected title after media URL lookup misses", async () => {
     const requests: string[] = [];
-    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       requests.push(url.href);
       if (url.pathname.endsWith("/find_by_media_url")) {
         return Response.json({ data: { found: false } });
       }
       if (url.pathname.endsWith("/search_tracklists")) {
-        expect(url.searchParams.get("title")).toBe("Brunello @ Lightning in a Bottle 2026");
-        expect(url.searchParams.get("uploader")).toBe("Brunello");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          title: "Brunello @ Lightning in a Bottle 2026",
+          uploader: "Brunello",
+        });
         return Response.json({
           data: {
             items: [
@@ -232,7 +234,9 @@ describe("identify", () => {
           },
         });
       }
-      expect(url.searchParams.get("url")).toContain("right.html");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        url: "https://www.1001tracklists.com/tracklist/right.html",
+      });
       return Response.json({
         data: {
           url: "https://www.1001tracklists.com/tracklist/right.html",

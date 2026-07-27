@@ -1452,6 +1452,16 @@ function priorDownloadForVariant(
   downloads: readonly AcquisitionDownload[],
   variant: AcquisitionRecordingVariant,
 ): AcquisitionDownload | undefined {
+  if (variant.sourceClip) {
+    const sourceClips = downloads.filter((download) => download.kind === "source-set-clip");
+    const byCue = sourceClips.find(
+      (download) =>
+        download.clip !== undefined &&
+        nearlyEqual(download.clip.startSeconds, variant.sourceClip!.startSeconds) &&
+        nearlyEqual(download.clip.endSeconds, variant.sourceClip!.endSeconds),
+    );
+    return byCue ?? (sourceClips.length === 1 ? sourceClips[0] : undefined);
+  }
   if (variant.spotifyId) {
     return downloads.find((download) => download.spotifyId === variant.spotifyId);
   }
@@ -1462,15 +1472,6 @@ function priorDownloadForVariant(
         download.spotifyId === undefined && download.isrc?.toLocaleUpperCase("en-US") === isrc,
     );
     if (byIsrc) return byIsrc;
-  }
-  if (variant.sourceClip) {
-    const byCue = downloads.find(
-      (download) =>
-        download.clip !== undefined &&
-        nearlyEqual(download.clip.startSeconds, variant.sourceClip!.startSeconds) &&
-        nearlyEqual(download.clip.endSeconds, variant.sourceClip!.endSeconds),
-    );
-    if (byCue) return byCue;
   }
   const key = variantKey(variant);
   const keyed = downloads.find((download) => download.variantKey === key);

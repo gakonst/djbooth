@@ -487,6 +487,133 @@ describe("runSetToRekordbox", () => {
     );
   });
 
+  test("recovers failed individual recordings from approved cues in the same invocation", async () => {
+    const sourceSetPath = resolve("/tmp/music-ts-workflow/source-set.m4a");
+    const sourceSet = {
+      url: source,
+      path: sourceSetPath,
+      sha256: "b".repeat(64),
+      durationSeconds: 3_600,
+      codec: "aac",
+      bitrate: 256_000,
+    };
+    const failed = enrichedManifest();
+    failed.artifacts.sourceSet = sourceSet;
+    failed.entries[0]!.acquisition = {
+      status: "failed",
+      query: "Artist Track",
+      error: {
+        stage: "acquisition",
+        message: "No individual recording candidate passed validation",
+        retryable: true,
+      },
+    };
+    failed.entries[0]!.errors.push({
+      stage: "acquisition",
+      message: "No individual recording candidate passed validation",
+      retryable: true,
+    });
+    const recovered = structuredClone(failed);
+    recovered.entries[0]!.acquisition = {
+      status: "downloaded",
+      query: "Artist Track",
+      download: {
+        backend: "ytdlp",
+        kind: "source-set-clip",
+        mediaPath,
+        files: [mediaPath],
+        source,
+        engine: "reference",
+        sha256: "c".repeat(64),
+        spotifyId: "spotify-track",
+        clip: {
+          sourceSetUrl: source,
+          startSeconds: 0,
+          endSeconds: 180,
+          containsTransitions: true,
+          qualityNote: "Cue-bounded set recovery",
+        },
+      },
+    };
+    recovered.entries[0]!.errors = [];
+    const acquire = vi.fn(
+      async (options: Parameters<RunSetToRekordboxDependencies["acquire"]>[0]) => {
+        const pass = acquire.mock.calls.length;
+        if (pass === 1) {
+          expect(options.continueOnError).toBe(true);
+          await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
+          return {
+            manifest: failed,
+            downloaded: [],
+            resumed: [],
+            failures: [
+              {
+                entryOrder: 1,
+                spotifyId: "spotify-track",
+                message: "No individual recording candidate passed validation",
+              },
+            ],
+            unavailableBackends: [],
+            performance: acquisitionPerformance(),
+          };
+        }
+        expect(options.continueOnError).toBe(false);
+        await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
+        recovered.entries[0]!.warnings = [...failed.entries[0]!.warnings];
+        return {
+          manifest: recovered,
+          downloaded: [mediaPath],
+          resumed: [],
+          failures: [],
+          unavailableBackends: [],
+          performance: acquisitionPerformance(),
+        };
+      },
+    );
+    const buildPlan = vi.fn(async () => ({
+      clips: [],
+      recordings: [],
+      stagingDirectory: "/tmp/staging",
+    }));
+    const dependencies: RunSetToRekordboxDependencies = {
+      exists: async () => false,
+      readManifest: vi.fn(),
+      writeManifest: vi.fn(),
+      identify: async () => tracklist(),
+      createManifest: () => enrichedManifest(),
+      enrichSpotify: vi.fn(),
+      describeSourceSet: async () => sourceSet,
+      buildPlan,
+      acquire,
+      analyze: async () => analysisResult(false),
+      importRekordbox: async (options) => importResult(options.manifest, true),
+    };
+
+    const result = await runSetToRekordbox({
+      source,
+      manifestPath,
+      outputDirectory,
+      approved: true,
+      allowSourceSetClips: true,
+      sourceSet: { path: sourceSetPath },
+      acquirers: [],
+      dependencies,
+    });
+
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(buildPlan).toHaveBeenCalledTimes(2);
+    expect(result.acquisition.downloaded).toEqual([mediaPath]);
+    expect(result.acquisition.failures).toEqual([]);
+    expect(result.performance.automation).toEqual({
+      spotifyCanonicalSelections: 0,
+      acquisitionPasses: 2,
+      sourceSetFallbacks: 1,
+    });
+    expect(result.manifest.entries[0]!.warnings).toContain(
+      "Automatic source-set fallback after individual acquisition failure: No individual recording candidate passed validation",
+    );
+  });
+
   test("rejects a local set source unless cue clipping was explicitly allowed", async () => {
     await expect(
       runSetToRekordbox({

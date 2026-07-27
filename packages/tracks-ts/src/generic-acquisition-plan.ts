@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
-import { extname, isAbsolute, join, resolve } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type {
   AcquisitionClipPlan,
@@ -78,11 +78,15 @@ export async function buildAcquisitionPlan(
   const recordings = manifest.entries.flatMap((entry) => {
     const identities = recordingIdentities(entry);
     if (!identities.length) return [];
+    const availableArtifacts =
+      sourceSet && hasSourceSetRecoveryHistory(entry)
+        ? artifacts.filter((artifact) => !isWithin(outputDirectory, artifact.path))
+        : artifacts;
     return [
       {
         entryOrder: entry.order,
         variants: identities.map((identity) => {
-          const local = selectLocalArtifact(identity, artifacts, adoptedPaths);
+          const local = selectLocalArtifact(identity, availableArtifacts, adoptedPaths);
           if (local) adoptedPaths.add(local.path);
           return recordingVariant(manifest, entry, identity, outputDirectory, local, sourceSet);
         }),
@@ -194,15 +198,8 @@ function recordingVariant(
   const matchedBy = local
     ? (priorLocalMatchKind(entry, identity) ?? localMatchKind(identity, local))
     : undefined;
-  const priorSourceClip =
-    entry.acquisition.status === "downloaded" &&
-    [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])].some(
-      (download) => download.kind === "source-set-clip",
-    );
   const fallbackClip =
-    !local &&
-    (priorSourceClip || entry.errors.some((error) => error.stage === "acquisition")) &&
-    sourceSet
+    !local && hasSourceSetRecoveryHistory(entry) && sourceSet
       ? identifiedFailureClip(entry, sourceSet)
       : undefined;
   const metadata: AudioMetadata = {
@@ -267,6 +264,18 @@ function priorLocalMatchKind(
   return matchedBy === "spotify-id" || matchedBy === "isrc" || matchedBy === "artist-title"
     ? matchedBy
     : undefined;
+}
+
+function hasSourceSetRecoveryHistory(entry: ResolvedTrack): boolean {
+  const downloads =
+    entry.acquisition.status === "downloaded"
+      ? [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])]
+      : [];
+  return (
+    downloads.some((download) => download.kind === "source-set-clip") ||
+    entry.errors.some((error) => error.stage === "acquisition") ||
+    entry.warnings.some((warning) => warning.includes("cue-based source-set extract"))
+  );
 }
 
 function identifiedFailureClip(
@@ -491,6 +500,11 @@ function normalizeIdentity(value: string): string {
     .toLocaleLowerCase("en-US")
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+function isWithin(directory: string, path: string): boolean {
+  const value = relative(directory, path);
+  return value !== "" && value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value);
 }
 
 function adoptedOutputExtension(path: string): ".flac" | ".m4a" | ".mp3" {

@@ -46,6 +46,42 @@ describe("CLI version", () => {
     expect(JSON.parse(output)).toMatchObject({ description: { configured: true } });
   });
 
+  it("keeps error CTAs scoped to tracks when mounted under music", async () => {
+    let output = "";
+    let exitCode: number | undefined;
+    const parent = Cli.create("music");
+    parent.command(tracksCli);
+
+    await parent.serve(
+      [
+        "tracks",
+        "import-set",
+        "https://youtu.be/example",
+        "--manifest",
+        "/tmp/music-ts-cta-never-created.json",
+        "--format",
+        "json",
+      ],
+      {
+        env: {},
+        stdout(value) {
+          output += value;
+        },
+        exit(code) {
+          exitCode = code;
+        },
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    const result = JSON.parse(output) as {
+      cta?: { commands?: Array<{ command?: string }> };
+    };
+    expect(
+      result.cta?.commands?.some(({ command }) => command === "music tracks import-set --help"),
+    ).toBe(true);
+  });
+
   it("always registers native acquisition and constructs reference acquisition only on opt-in", () => {
     let referenceFactories = 0;
     const soulseek = fakeAcquirer("slsk");

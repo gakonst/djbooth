@@ -204,6 +204,7 @@ export {
   type SampleRecognitionResult,
 } from "./recognize-samples.js";
 export {
+  canonicalizeSpotifyAmbiguities,
   DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY,
   enrichSpotifyManifest,
   MAX_SPOTIFY_ENRICHMENT_CONCURRENCY,
@@ -213,6 +214,8 @@ export {
   type SpotifyEnrichmentOptions,
   type SpotifyEnrichmentProgress,
   type SpotifyEnrichmentResult,
+  type SpotifyCanonicalSelection,
+  type SpotifyCanonicalizationResult,
   type SpotifyScoringTarget,
   type SpotifySearchClient,
   type SpotifyTrackCandidate,

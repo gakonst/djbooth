@@ -115,7 +115,6 @@ export class Tracklists1001Client {
     options: { cacheKey?: unknown } = {},
   ): Promise<T> {
     const url = new URL(`${this.#baseUrl}/${endpoint}`);
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
     if (this.#cache) {
       return this.#cache.getOrLoad(
@@ -124,18 +123,20 @@ export class Tracklists1001Client {
           endpoint,
           params: options.cacheKey ?? params,
         },
-        async () => parse(await this.#requestUncached(url)),
+        async () => parse(await this.#requestUncached(url, params)),
         { ttlMs: (value) => cacheTtl(endpoint, value), mode: this.#cacheMode },
       );
     }
-    return parse(await this.#requestUncached(url));
+    return parse(await this.#requestUncached(url, params));
   }
 
-  async #requestUncached(url: URL): Promise<unknown> {
+  async #requestUncached(url: URL, params: Record<string, string>): Promise<unknown> {
     let response: Response;
     try {
       response = await this.#fetch(url, {
-        headers: { "X-API-Key": this.#apiKey },
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": this.#apiKey },
+        body: JSON.stringify(params),
         ...(this.#signal ? { signal: this.#signal } : {}),
       });
     } catch (error) {
@@ -349,6 +350,7 @@ function isLinks(value: unknown): value is Record<string, string> | string[] | n
 
 function apiMessage(record: Record<string, unknown>): string | undefined {
   if (typeof record.message === "string") return record.message;
+  if (typeof record.detail === "string") return record.detail;
   if (typeof record.error === "string") return record.error;
   const error = asRecord(record.error);
   return typeof error.message === "string" ? error.message : undefined;

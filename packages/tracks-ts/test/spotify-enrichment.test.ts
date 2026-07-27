@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { createManifest, parseManifest, type SetManifest } from "../src/manifest.js";
 import {
+  canonicalizeSpotifyAmbiguities,
   enrichSpotifyManifest,
   scoreSpotifyCandidates,
   type SpotifySearchClient,
@@ -36,6 +37,7 @@ function apiTrack(options: {
   durationMs?: number;
   isrc?: string;
   albumArtists?: string[];
+  releaseDate?: string;
 }) {
   return {
     id: options.id,
@@ -45,7 +47,7 @@ function apiTrack(options: {
     artists: options.artists.map((name) => ({ name })),
     album: {
       name: "Release",
-      release_date: "2026-06-19",
+      release_date: options.releaseDate ?? "2026-06-19",
       artists: (options.albumArtists ?? options.artists).map((name) => ({ name })),
     },
     duration_ms: options.durationMs ?? 300_000,
@@ -167,6 +169,91 @@ describe("Spotify manifest enrichment", () => {
     const second = await enrichSpotifyManifest(value, spotify);
     expect(second).toMatchObject({ attempted: 0, requests: 0, untouched: 2 });
     expect(value.entries[0]!.spotify).toEqual(checkpoint);
+  });
+
+  test("selects an auditable earliest safe release while retaining every candidate", async () => {
+    const value = manifest([{ artist: "Brunello", title: "Melted" }]);
+    value.source.date = "2024-08-25";
+    value.entries[0]!.spotify = {
+      status: "ambiguous",
+      query: 'track:"Melted" artist:"Brunello"',
+      candidates: [
+        {
+          score: 1,
+          id: "reissue",
+          uri: "spotify:track:reissue",
+          name: "Melted",
+          artists: ["Brunello"],
+          releaseDate: "2025-01-10",
+          durationMs: 300_000,
+          isrc: "USAAA2500001",
+        },
+        {
+          score: 0.99,
+          id: "original",
+          uri: "spotify:track:original",
+          name: "Melted",
+          artists: ["Brunello"],
+          releaseDate: "2010-04-02",
+          durationMs: 300_000,
+          isrc: "USAAA1000001",
+        },
+        {
+          score: 0.95,
+          id: "remix",
+          uri: "spotify:track:remix",
+          name: "Melted - Club Remix",
+          artists: ["Brunello"],
+          releaseDate: "2009-01-01",
+          durationMs: 300_000,
+          isrc: "USAAA0900001",
+        },
+      ],
+    };
+
+    const result = canonicalizeSpotifyAmbiguities(value);
+
+    expect(result).toMatchObject({
+      selected: 1,
+      decisions: [
+        {
+          entryId: value.entries[0]!.id,
+          spotifyId: "original",
+          candidateCount: 3,
+          policy: "earliest-safe-release",
+        },
+      ],
+    });
+    expect(value.entries[0]!.spotify).toMatchObject({
+      status: "matched",
+      id: "original",
+      candidates: [{ id: "reissue" }, { id: "original" }, { id: "remix" }],
+    });
+    expect(value.entries[0]!.warnings).toContain(
+      "Spotify canonical primary auto-selected original from 3 retained candidates (earliest-safe-release)",
+    );
+    expect(parseManifest(value)).toEqual(value);
+  });
+
+  test("keeps unsafe collaborator ambiguity unresolved", () => {
+    const value = manifest([{ artist: "Brunello & Vargas", title: "Ghost Dance" }]);
+    value.entries[0]!.spotify = {
+      status: "ambiguous",
+      query: 'track:"Ghost Dance" artist:"Brunello & Vargas"',
+      candidates: [
+        {
+          score: 0.95,
+          id: "solo",
+          uri: "spotify:track:solo",
+          name: "Ghost Dance",
+          artists: ["Brunello"],
+          releaseDate: "2010",
+        },
+      ],
+    };
+
+    expect(canonicalizeSpotifyAmbiguities(value)).toMatchObject({ selected: 0, decisions: [] });
+    expect(value.entries[0]!.spotify.status).toBe("ambiguous");
   });
 
   test("uses an exact ISRC and will not silently choose a conflicting result", async () => {

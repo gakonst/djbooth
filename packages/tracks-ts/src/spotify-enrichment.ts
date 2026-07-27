@@ -72,6 +72,20 @@ export type SpotifyEnrichmentResult = {
   cache?: CacheStats;
 };
 
+export type SpotifyCanonicalSelection = {
+  entryId: string;
+  order: number;
+  spotifyId: string;
+  candidateCount: number;
+  policy: "only-safe-candidate" | "earliest-safe-release";
+};
+
+export type SpotifyCanonicalizationResult = {
+  manifest: SetManifest;
+  selected: number;
+  decisions: SpotifyCanonicalSelection[];
+};
+
 /** Keep Spotify requests bounded while allowing explicit larger pools. */
 export const DEFAULT_SPOTIFY_ENRICHMENT_CONCURRENCY = 8;
 export const MAX_SPOTIFY_ENRICHMENT_CONCURRENCY = 32;
@@ -251,6 +265,54 @@ export async function enrichSpotifyManifest(
     durationMs: Math.round((performance.now() - started) * 100) / 100,
     ...(cache ? { cache } : {}),
   };
+}
+
+/**
+ * Select one deterministic acquisition primary from safe Spotify alternatives.
+ *
+ * The complete candidate list remains attached to the matched checkpoint. This is intentionally
+ * separate from enrichment: metadata-only resolution keeps close results ambiguous, while the
+ * approved end-to-end import can proceed without downloading every catalog re-release.
+ */
+export function canonicalizeSpotifyAmbiguities(
+  manifest: SetManifest,
+): SpotifyCanonicalizationResult {
+  const decisions: SpotifyCanonicalSelection[] = [];
+  for (const entry of manifest.entries) {
+    if (entry.spotify.status !== "ambiguous" || entry.identity.status !== "identified") continue;
+    const target: SpotifyScoringTarget = {
+      artist: entry.identity.artist,
+      title: entry.identity.title,
+      ...(entry.identity.mix ? { mix: entry.identity.mix } : {}),
+      ...(entry.identity.isrc ? { isrc: entry.identity.isrc } : {}),
+    };
+    const safe = entry.spotify.candidates.filter(
+      (candidate) => candidate.score >= 0.84 && isSafeAutomaticMatch(target, candidate),
+    );
+    if (!safe.length) continue;
+    const selected = safe.toSorted((left, right) =>
+      compareCanonicalCandidates(left, right, target, manifest.source.date),
+    )[0]!;
+    const candidates = entry.spotify.candidates.map((candidate) => ({ ...candidate }));
+    const policy = safe.length === 1 ? "only-safe-candidate" : "earliest-safe-release";
+    entry.spotify = {
+      status: "matched",
+      query: entry.spotify.query,
+      ...selected,
+      candidates,
+    };
+    enrichIdentity(entry.identity, selected);
+    const warning = `Spotify canonical primary auto-selected ${selected.id} from ${String(candidates.length)} retained candidates (${policy})`;
+    if (!entry.warnings.includes(warning)) entry.warnings.push(warning);
+    decisions.push({
+      entryId: entry.id,
+      order: entry.order,
+      spotifyId: selected.id,
+      candidateCount: candidates.length,
+      policy,
+    });
+  }
+  return { manifest, selected: decisions.length, decisions };
 }
 
 function subtractCacheStats(after: CacheStats, before?: CacheStats): CacheStats {
@@ -473,6 +535,38 @@ function isSafeAutomaticMatch(
     if (ratio > 0.12) return false;
   }
   return true;
+}
+
+function compareCanonicalCandidates(
+  left: SpotifyCandidate,
+  right: SpotifyCandidate,
+  target: SpotifyScoringTarget,
+  sourceDate: string | undefined,
+): number {
+  const expected = normalizeMatchText(expectedTitle(target));
+  const sourceYear = releaseYear(sourceDate);
+  const leftYear = releaseYear(left.releaseDate);
+  const rightYear = releaseYear(right.releaseDate);
+  const leftAfterSource =
+    sourceYear !== undefined && leftYear !== undefined && leftYear > sourceYear ? 1 : 0;
+  const rightAfterSource =
+    sourceYear !== undefined && rightYear !== undefined && rightYear > sourceYear ? 1 : 0;
+  return (
+    Number(normalizeMatchText(right.name) === expected) -
+      Number(normalizeMatchText(left.name) === expected) ||
+    artistRecall(target.artist, right.artists) - artistRecall(target.artist, left.artists) ||
+    leftAfterSource - rightAfterSource ||
+    (leftYear ?? Number.MAX_SAFE_INTEGER) - (rightYear ?? Number.MAX_SAFE_INTEGER) ||
+    right.score - left.score ||
+    left.id.localeCompare(right.id)
+  );
+}
+
+function releaseYear(value: string | undefined): number | undefined {
+  const match = /^(\d{4})(?:-|$)/u.exec(value?.trim() ?? "");
+  if (!match) return undefined;
+  const year = Number(match[1]);
+  return year >= 1_000 && year <= 9_999 ? year : undefined;
 }
 
 function durationSimilarity(

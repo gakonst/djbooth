@@ -35,6 +35,7 @@ import {
   type ImportManifestToRekordboxResult,
 } from "./rekordbox-db.js";
 import {
+  canonicalizeSpotifyAmbiguities,
   enrichSpotifyManifest,
   type SpotifyEnrichmentOptions,
   type SpotifyEnrichmentResult,
@@ -86,6 +87,11 @@ export type WorkflowPerformance = {
   totalMs: number;
   warmResume: boolean;
   peakConcurrency: number;
+  automation: {
+    spotifyCanonicalSelections: number;
+    acquisitionPasses: number;
+    sourceSetFallbacks: number;
+  };
   stages: WorkflowStage[];
   caches: Record<string, CacheStats>;
 };
@@ -319,6 +325,18 @@ export async function runSetToRekordbox(
     stages.push({ stage: "spotify", status: "skipped", durationMs: 0 });
   }
 
+  const spotifyCanonicalization = canonicalizeSpotifyAmbiguities(manifest);
+  const spotifyCanonicalSelections = spotifyCanonicalization.selected;
+  if (spotifyCanonicalSelections) {
+    manifest = spotifyCanonicalization.manifest;
+    await dependencies.writeManifest(manifestPath, manifest);
+    options.onProgress?.({
+      stage: "spotify",
+      status: "completed",
+      message: `spotify selected ${String(spotifyCanonicalSelections)} deterministic acquisition primar${spotifyCanonicalSelections === 1 ? "y" : "ies"}; retained every candidate`,
+    });
+  }
+
   const pendingSpotify = manifest.entries.filter(
     (entry) => entry.identity.status === "identified" && entry.spotify.status === "pending",
   );
@@ -340,6 +358,8 @@ export async function runSetToRekordbox(
   let analysisStarted: number | undefined;
   let analysisPeakConcurrency = 0;
   let activeAnalysis = 0;
+  let acquisitionPasses = 0;
+  let sourceSetFallbacks = 0;
   const analyzerOptions = (concurrency: number): AnalyzeTracksOptions => ({
     ...options.analysis,
     concurrency,
@@ -387,42 +407,78 @@ export async function runSetToRekordbox(
   let acquisition: AcquireManifestResult;
   try {
     acquisition = await runStage("acquisition", async () => {
-      const result = await dependencies.acquire({
-        manifestPath,
-        plan: (current) =>
-          dependencies.buildPlan(current, {
-            outputDirectory,
-            ...(options.stagingDirectory
-              ? { stagingDirectory: resolve(options.stagingDirectory) }
-              : {}),
-            localDirectories: (options.localArtifactDirectories ?? []).map((path) => resolve(path)),
-            ...(sourceSet
-              ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
-              : {}),
+      let currentPass = 1;
+      const acquirePass = (continueOnError: boolean) =>
+        dependencies.acquire({
+          manifestPath,
+          plan: (current) =>
+            dependencies.buildPlan(current, {
+              outputDirectory,
+              ...(options.stagingDirectory
+                ? { stagingDirectory: resolve(options.stagingDirectory) }
+                : {}),
+              localDirectories: (options.localArtifactDirectories ?? []).map((path) =>
+                resolve(path),
+              ),
+              ...(sourceSet
+                ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
+                : {}),
+            }),
+          acquirers: options.acquirers,
+          ...(options.spotify ? { spotify: options.spotify } : {}),
+          refreshSpotify: false,
+          requireCompletePlan: true,
+          continueOnError,
+          concurrency: options.acquisitionConcurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
+          verificationConcurrency:
+            options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
+          verificationCache: new JsonDiskCache({
+            namespace: "audio-verification-v1",
+            ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }),
-        acquirers: options.acquirers,
-        ...(options.spotify ? { spotify: options.spotify } : {}),
-        refreshSpotify: false,
-        requireCompletePlan: true,
-        continueOnError: false,
-        concurrency: options.acquisitionConcurrency ?? DEFAULT_ACQUISITION_CONCURRENCY,
-        verificationConcurrency:
-          options.verificationConcurrency ?? DEFAULT_VERIFICATION_CONCURRENCY,
-        verificationCache: new JsonDiskCache({
-          namespace: "audio-verification-v1",
-          ...(options.cacheMode ? { mode: options.cacheMode } : {}),
-        }),
-        spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
-        ...(options.signal ? { signal: options.signal } : {}),
-        onProgress(progress) {
-          options.onProgress?.({
-            stage: "acquisition",
-            status: "started",
-            message: `${progress.phase}: ${progress.message}`,
-          });
-        },
-        onArtifactVerified: analyzeVerifiedArtifact,
-      });
+          spotifyConcurrency: options.spotifyConcurrency ?? DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
+          ...(options.signal ? { signal: options.signal } : {}),
+          onProgress(progress) {
+            options.onProgress?.({
+              stage: "acquisition",
+              status: "started",
+              message: `${sourceSet ? `pass ${String(currentPass)}/2 ` : ""}${progress.phase}: ${progress.message}`,
+            });
+          },
+          onArtifactVerified: analyzeVerifiedArtifact,
+        });
+      const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [
+        await acquirePass(sourceSet !== undefined),
+      ];
+      acquisitionPasses = 1;
+      const recoverableOrders = sourceSet
+        ? sourceSetFallbackOrders(passes[0]!.manifest, passes[0]!.failures)
+        : [];
+      if (
+        sourceSet &&
+        passes[0]!.failures.length > 0 &&
+        recoverableOrders.length ===
+          new Set(passes[0]!.failures.map((failure) => failure.entryOrder)).size
+      ) {
+        const warningChanged = recordSourceSetFallbackWarnings(
+          passes[0]!.manifest,
+          passes[0]!.failures,
+        );
+        if (warningChanged) await dependencies.writeManifest(manifestPath, passes[0]!.manifest);
+        currentPass = 2;
+        options.onProgress?.({
+          stage: "acquisition",
+          status: "started",
+          message: `pass 2/2: recovering ${String(recoverableOrders.length)} failed individual recording${recoverableOrders.length === 1 ? "" : "s"} from approved set cues`,
+        });
+        passes.push(await acquirePass(false));
+        acquisitionPasses = 2;
+        sourceSetFallbacks = recoveredSourceSetFallbacks(
+          passes.at(-1)!.manifest,
+          recoverableOrders,
+        );
+      }
+      const result = combineAcquisitionPasses(passes);
       return {
         value: result,
         details: {
@@ -562,6 +618,11 @@ export async function runSetToRekordbox(
         existed &&
         stages.every((stage) => stage.status === "resumed" || stage.status === "skipped"),
       peakConcurrency,
+      automation: {
+        spotifyCanonicalSelections,
+        acquisitionPasses,
+        sourceSetFallbacks,
+      },
       stages,
       caches,
     },
@@ -638,6 +699,146 @@ function assertAcquisitionComplete(
       },
     },
   );
+}
+
+function sourceSetFallbackOrders(
+  manifest: SetManifest,
+  failures: readonly AcquireManifestResult["failures"][number][],
+): number[] {
+  const entries = new Map(manifest.entries.map((entry) => [entry.order, entry]));
+  return [
+    ...new Set(
+      failures.flatMap((failure) => {
+        const entry = entries.get(failure.entryOrder);
+        if (
+          !entry ||
+          entry.identity.status !== "identified" ||
+          entry.cue.startSeconds === undefined ||
+          entry.cue.endSeconds === undefined ||
+          entry.cue.endSeconds <= entry.cue.startSeconds
+        ) {
+          return [];
+        }
+        return [failure.entryOrder];
+      }),
+    ),
+  ].toSorted((left, right) => left - right);
+}
+
+function recordSourceSetFallbackWarnings(
+  manifest: SetManifest,
+  failures: readonly AcquireManifestResult["failures"][number][],
+): boolean {
+  let changed = false;
+  for (const failure of failures) {
+    const entry = manifest.entries.find((candidate) => candidate.order === failure.entryOrder);
+    if (!entry) continue;
+    const warning = `Automatic source-set fallback after individual acquisition failure: ${failure.message}`;
+    if (entry.warnings.includes(warning)) continue;
+    entry.warnings.push(warning);
+    changed = true;
+  }
+  return changed;
+}
+
+function recoveredSourceSetFallbacks(manifest: SetManifest, orders: readonly number[]): number {
+  const expected = new Set(orders);
+  return manifest.entries.filter(
+    (entry) =>
+      expected.has(entry.order) &&
+      entry.acquisition.status === "downloaded" &&
+      [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])].some(
+        (download) => download.kind === "source-set-clip",
+      ),
+  ).length;
+}
+
+function combineAcquisitionPasses(
+  passes: readonly [AcquireManifestResult, ...AcquireManifestResult[]],
+): AcquireManifestResult {
+  if (passes.length === 1) return passes[0];
+  const first = passes[0];
+  const final = passes.at(-1)!;
+  const downloaded = new Set(passes.flatMap((pass) => pass.downloaded));
+  const resumed = new Set(passes.flatMap((pass) => pass.resumed));
+  for (const path of downloaded) resumed.delete(path);
+  const unavailableBackends = new Map<string, { backend: "slsk" | "ytdlp"; reason: string }>();
+  for (const item of passes.flatMap((pass) => pass.unavailableBackends)) {
+    unavailableBackends.set(`${item.backend}\u0000${item.reason}`, item);
+  }
+  const caches = mergeCacheRecords(passes.map((pass) => pass.performance.caches));
+  return {
+    manifest: final.manifest,
+    downloaded: [...downloaded].toSorted(),
+    resumed: [...resumed].toSorted(),
+    failures: final.failures,
+    unavailableBackends: [...unavailableBackends.values()],
+    ...(final.verification ? { verification: final.verification } : {}),
+    performance: {
+      startedAt: first.performance.startedAt,
+      finishedAt: final.performance.finishedAt,
+      totalMs: roundMilliseconds(
+        passes.reduce((total, pass) => total + pass.performance.totalMs, 0),
+      ),
+      concurrency: Math.max(...passes.map((pass) => pass.performance.concurrency)),
+      verificationConcurrency: Math.max(
+        ...passes.map((pass) => pass.performance.verificationConcurrency),
+      ),
+      spotifyConcurrency: Math.max(...passes.map((pass) => pass.performance.spotifyConcurrency)),
+      stages: passes.flatMap((pass, index) =>
+        pass.performance.stages.map((stage) => ({
+          ...stage,
+          stage: `pass-${String(index + 1)}:${stage.stage}`,
+        })),
+      ),
+      checkpoints: {
+        calls: passes.reduce((total, pass) => total + pass.performance.checkpoints.calls, 0),
+        flushes: passes.reduce((total, pass) => total + pass.performance.checkpoints.flushes, 0),
+        writes: passes.reduce((total, pass) => total + pass.performance.checkpoints.writes, 0),
+        skipped: passes.reduce((total, pass) => total + pass.performance.checkpoints.skipped, 0),
+        coalesced: passes.reduce(
+          (total, pass) => total + pass.performance.checkpoints.coalesced,
+          0,
+        ),
+        durationMs: roundMilliseconds(
+          passes.reduce((total, pass) => total + pass.performance.checkpoints.durationMs, 0),
+        ),
+      },
+      ...(caches ? { caches } : {}),
+    },
+  };
+}
+
+function mergeCacheRecords(
+  records: readonly (Record<string, CacheStats> | undefined)[],
+): Record<string, CacheStats> | undefined {
+  const merged: Record<string, CacheStats> = {};
+  for (const record of records) {
+    for (const [namespace, stats] of Object.entries(record ?? {})) {
+      const prior = merged[namespace] ?? emptyCacheStats();
+      merged[namespace] = Object.fromEntries(
+        Object.keys(prior).map((key) => [
+          key,
+          roundMilliseconds(prior[key as keyof CacheStats] + stats[key as keyof CacheStats]),
+        ]),
+      ) as CacheStats;
+    }
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+function emptyCacheStats(): CacheStats {
+  return {
+    hits: 0,
+    misses: 0,
+    writes: 0,
+    bypasses: 0,
+    coalesced: 0,
+    errors: 0,
+    readMs: 0,
+    loadMs: 0,
+    writeMs: 0,
+  };
 }
 
 function maximumObservedAcquisitionConcurrency(result: AcquireManifestResult): number {
