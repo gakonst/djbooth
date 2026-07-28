@@ -141,6 +141,8 @@ UDP/50002 `0x06` and `0x47` are reported as response-gated: they appear only aft
 `0x46` requests. The audit reports exact static-payload matches for `0x16`, `0x29`, and `0x47`.
 `--require-remote-db-cursors` requires a captured nonzero RENDER and verifies that every
 same-transaction MENU_HEADER echoes its requested offset; it rejects the proven `[1,0]`
-TRACK SEARCH/Back-button failure.
+TRACK SEARCH/Back-button failure. The patched physical CDJ-3000 capture passes with 173 matching
+renders, six nonzero cursors, zero missing/mismatched headers, and no TCP sequence gaps; its paired
+trace contains accepted `0x1500` edits interleaved with artwork, metadata, and ANLZ requests.
 Golden payloads, capture hashes, and the wire contract live in
 `native/crates/djtools-link/tests/fixtures/` and `native/crates/djtools-link/PROTOCOL.md`.

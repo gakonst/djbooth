@@ -10953,6 +10953,146 @@ mod tests {
         assert_eq!(incremental_footer.tx_id, incremental_render_tx);
         assert_eq!(incremental_footer.msg_type, DB_RES_MENU_FOOTER);
 
+        // A CDJ-3000 emits one 0x1500 request for every keyboard edit.  It can
+        // also finish artwork/ANLZ requests for the previous highlight before
+        // rendering the new result set.  Keep replacing the pending menu on
+        // the same TCP connection: no Back request or reconnect is involved.
+        let mut stress_tx = incremental_render_tx;
+        for (index, query) in [
+            "S", "SC", "SCI", "SCIE", "SCIEN", "SCIENC", "SCIENCE", "F", "FI", "FIC", "FICT",
+            "FICTI", "FICTIO", "FICTION", "B", "BR", "BRU", "BRUN", "BRUNE", "BRUNELLO",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            stress_tx += 1;
+            let search = encode_db_message(
+                stress_tx,
+                DB_REQ_INCREMENTAL_SEARCH,
+                &[
+                    DbValue::Int32(0x0301_0401),
+                    DbValue::Int32(SORT_DEFAULT),
+                    DbValue::Int32((query.encode_utf16().count() * 2 + 2) as u32),
+                    DbValue::String(query.to_string()),
+                ],
+            );
+            let chunk_size = index % 7 + 1;
+            for chunk in search.chunks(chunk_size) {
+                client.write_all(chunk).await.expect("stress search write");
+                tokio::task::yield_now().await;
+            }
+            let success =
+                tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                    .await
+                    .expect("stress search response deadline")
+                    .expect("stress search response");
+            assert_eq!(success.tx_id, stress_tx);
+            assert_eq!(success.msg_type, DB_RES_SUCCESS);
+            assert_eq!(
+                db_int(success.args.first()),
+                Some(DB_REQ_INCREMENTAL_SEARCH as u32)
+            );
+            let result_count = db_int(success.args.get(1)).unwrap_or_default();
+            assert!(
+                result_count > 0,
+                "{query} should retain at least one result"
+            );
+
+            if index.is_multiple_of(2) {
+                stress_tx += 1;
+                client
+                    .write_all(&encode_db_message(
+                        stress_tx,
+                        DB_REQ_ARTWORK,
+                        &[
+                            DbValue::Int32(0x0308_0401),
+                            DbValue::Int32(0),
+                            DbValue::Int32(1),
+                        ],
+                    ))
+                    .await
+                    .expect("interleaved artwork write");
+                let artwork =
+                    tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                        .await
+                        .expect("interleaved artwork deadline")
+                        .expect("interleaved artwork response");
+                assert_eq!(artwork.tx_id, stress_tx);
+                assert_eq!(artwork.msg_type, DB_RES_ARTWORK);
+            }
+
+            if index.is_multiple_of(3) {
+                stress_tx += 1;
+                client
+                    .write_all(&encode_db_message(
+                        stress_tx,
+                        DB_REQ_ANLZ_TAG,
+                        &[
+                            DbValue::Int32(0x0308_0401),
+                            DbValue::Int32(42),
+                            DbValue::Int32(0x3456_5750),
+                            DbValue::Int32(0x0054_5845),
+                        ],
+                    ))
+                    .await
+                    .expect("interleaved ANLZ write");
+                let anlz =
+                    tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                        .await
+                        .expect("interleaved ANLZ deadline")
+                        .expect("interleaved ANLZ response");
+                assert_eq!(anlz.tx_id, stress_tx);
+                assert_eq!(anlz.msg_type, DB_RES_ANLZ_TAG);
+            }
+
+            stress_tx += 1;
+            client
+                .write_all(&encode_db_message(
+                    stress_tx,
+                    DB_REQ_RENDER,
+                    &[
+                        DbValue::Int32(0x0301_0401),
+                        DbValue::Int32(0),
+                        DbValue::Int32(1),
+                        DbValue::Int32(0),
+                        DbValue::Int32(result_count),
+                        DbValue::Int32(12),
+                        DbValue::Int32(1),
+                        DbValue::Int32(0),
+                    ],
+                ))
+                .await
+                .expect("stress render write");
+            let header =
+                tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                    .await
+                    .expect("stress render header deadline")
+                    .expect("stress render header");
+            let row =
+                tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                    .await
+                    .expect("stress render row deadline")
+                    .expect("stress render row");
+            let footer =
+                tokio::time::timeout(Duration::from_millis(100), recv_db_message(&mut client))
+                    .await
+                    .expect("stress render footer deadline")
+                    .expect("stress render footer");
+            assert_eq!(header.tx_id, stress_tx);
+            assert_eq!(header.msg_type, DB_RES_MENU_HEADER);
+            assert_eq!(db_int(header.args.first()), Some(1));
+            assert_eq!(db_int(header.args.get(1)), Some(0));
+            assert_eq!(row.tx_id, stress_tx);
+            assert_eq!(row.msg_type, DB_RES_MENU_ITEM);
+            assert!(matches!(row.args.get(3), Some(DbValue::String(value)) if !value.is_empty()));
+            assert!(matches!(row.args.get(5), Some(DbValue::String(value)) if !value.is_empty()));
+            assert_eq!(db_int(row.args.get(6)), Some(META_TRACK_TITLE_AND_ARTIST));
+            assert_eq!(db_int(row.args.get(8)), db_int(row.args.get(1)));
+            assert_eq!(db_int(row.args.get(9)), Some(1));
+            assert_eq!(footer.tx_id, stress_tx);
+            assert_eq!(footer.msg_type, DB_RES_MENU_FOOTER);
+        }
+
         client.shutdown().await.expect("client shutdown");
         tokio::time::timeout(Duration::from_millis(100), handle)
             .await

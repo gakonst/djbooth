@@ -64,7 +64,7 @@ SHA-256:
 The later checked-out `djtools/rb-tracks.pcap` is a different capture. Use the
 immutable git object and hash above for RemoteDB cursor comparisons.
 
-## Live CDJ-3000 incremental Search
+## Pre-patch CDJ-3000 incremental Search
 
 Source:
 `/tmp/music-djlink-search-final-hardware-20260727T0637Z.pcapng`
@@ -78,3 +78,26 @@ SHA-256:
 The four arguments are packed `r:m:s:t`, sort, UTF-16 byte length, and UTF-16
 string. The CDJ emitted one request after each keyboard edit and reconnected
 after every invalid response from the then-unpatched server.
+
+## Patched CDJ-3000 Search and browse session
+
+Source:
+`/tmp/music-djlink-search-retry-20260727T144222Z.pcapng`
+
+Bytes: `91,703,928`
+
+SHA-256:
+`7d15687d8741cc4137a1752816678c2d9c369c2bcc02e80f29cac814024fac12`
+
+The physical player-3 trace contains 173 correlated RemoteDB renders across
+multiple deck-owned TCP sessions: 173 matching menu headers, zero mismatches,
+zero missing headers, six nonzero cursors, and no TCP sequence gaps. The paired
+server trace records 16 accepted `INCREMENTAL_SEARCH(0x1500)` edits and no
+`INVALID_REQUEST(0x4003)`.
+
+One connection (`169.254.7.4:59154`) handled `DA`, a 25-row render, interleaved
+artwork/metadata/PWV4 requests, then `DAF` and another 25-row render without a
+Back request. Another session rendered the 92-result `RAFAEL` search while
+continuing metadata, artwork, and browse requests on the same socket. The deck
+can close or replace browse sockets as part of normal navigation; unlike the
+pre-patch trace, closure is not coupled to a rejected keyboard edit.

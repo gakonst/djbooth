@@ -20,6 +20,8 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
   it.
 - `RENDER` must use the prepared menu's exact `r:m:s:t` context. Its `MENU_HEADER` second argument
   echoes the requested offset; hard-coding zero leaves the CDJ cursor transaction stale.
+- `RENDER` must repeat the complete prepared-menu result count in its total field even when it asks
+  for one row. Confusing page count with total count invalidates the cursor transaction.
 - A hardware capture gate must exercise at least one nonzero RENDER and correlate every
   MENU_HEADER by transaction ID. The original native capture passes; the known Back-button
   failure has three exact nonzero-offset mismatches.
@@ -28,6 +30,9 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
 - Legacy `SEARCH(0x1300)` and CDJ-3000 incremental `0x1500` requests receive the deck's context
   plus UTF-16 query and must render matching rows with loadable track IDs. Incremental keyboard
   edits must stay on one connection; a rejection/reconnect per keystroke is a protocol failure.
+- Artwork, metadata, and ANLZ requests may interleave between an incremental edit and its render;
+  they must not replace the connection-owned search menu. A deck-owned close after completed
+  renders is normal and must not be confused with an immediate `INVALID_REQUEST` rejection.
 - `MOUNT_INFO` is a load-sensitive metadata request. Repeated `MOUNT_INFO` for the same
   target track is idempotent while a confirm session is active.
 
