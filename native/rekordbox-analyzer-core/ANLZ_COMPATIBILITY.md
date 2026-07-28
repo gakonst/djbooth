@@ -126,6 +126,36 @@ DAT/EXT/2EX persistence, PQT2 first/last anchors, optional `PVB2` preservation,
 byte-identical artifact comparison, and clean ANLZ parsing. No user library or
 proprietary fixture is mutated or packaged.
 
+## Deterministic parallel analysis
+
+`analyze AUDIO OUTPUT_DIR [LOG] --threads N` runs waveform, rhythm, and key
+analysis in one bounded Rayon pool. Rhythm and key FFT frames are partitioned
+into ordered contiguous ranges; global reductions remain in their original
+order. The default is the host's available parallelism, bounded to `1..=64`.
+`REKORDBOX_ANALYZER_THREADS` supplies the same budget when the TypeScript
+wrapper launches the helper.
+
+Thread counts 1, 2, 3, 4, 8, and 12 produced the same summary semantics and
+byte-identical DAT/EXT/2EX SHA-256 hashes for three real recordings plus one
+502-second recording. Five repeated 12-thread runs also retained those hashes.
+Release-mode wall-clock medians on an Apple M2 Max with 12 available CPUs were:
+
+| Recording | Duration | Scalar baseline | Automatic (12) | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Science Fiction | 397 s | 1.11 s | 0.54 s | 2.06x |
+| Crystalised | 201 s | 0.80 s | 0.46 s | 1.74x |
+| Pleasure from the Bass | 233 s | 0.62 s | 0.26 s | 2.38x |
+| Back Together (Main Classic Mix) | 502 s | 1.29 s | 0.55 s | 2.35x |
+
+For all four files together, one process at a time with the same total
+12-thread budget took 1.86 seconds. Four analyzer processes receiving three
+threads each took 0.81 seconds, a 2.30x batch speedup, with peak RSS remaining
+about 188–190 MiB. The TypeScript multi-track and Tracks workflow commands
+treat `--threads` as one total CPU budget, divide it deterministically across
+active processes or stream slots, and cap process concurrency to that budget.
+This prevents process-level concurrency from multiplying the native worker
+count.
+
 ## Three-track differential
 
 Release builds were run against three existing recordings and compared
@@ -182,6 +212,10 @@ connected-player testing, not a representation of proprietary Rekordbox DSP.
 The release gate remains strict: only the clean-room crate/binary may be
 packaged. The reference helper, Rekordbox application bytes, generated cache,
 captures, and local goldens stay outside release artifacts.
+
+The npm package's explicit `files` allowlist excludes `vendor/`, and the helper
+build script compiles only `native/rekordbox-analyzer-core`. A release therefore
+does not require or copy the local reference rehost.
 
 Universal helper builds place `LICENSE` and `THIRD_PARTY_LICENSES.md` beside
 the executable. Symphonia 0.6.0 is MPL-2.0; the latter notice identifies the

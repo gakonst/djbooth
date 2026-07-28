@@ -142,6 +142,7 @@ function analysisResult(cacheHit: boolean) {
     concurrency: 1,
     elapsedMs: 1,
     requested: 1,
+    threadBudget: 4,
     throughputTracksPerSecond: cacheHit ? 0 : 1_000,
     timings: { analyzeMs: 1, preflightMs: 0, totalMs: 1 },
     results: [
@@ -158,6 +159,7 @@ function analysisResult(cacheHit: boolean) {
         summaryPath: resolve(analysisDirectory, "analysis.json"),
       },
     ],
+    workerThreadBudgets: [4],
   } as unknown as Awaited<ReturnType<RunSetToRekordboxDependencies["analyze"]>>;
 }
 
@@ -273,6 +275,7 @@ describe("runSetToRekordbox", () => {
         expect(options).toMatchObject({
           analyzerBinary: "/tmp/rekordbox-analyzer",
           engine: "clean",
+          threads: 7,
         });
         return analysisResult(false);
       },
@@ -294,6 +297,7 @@ describe("runSetToRekordbox", () => {
       analysis: {
         analyzerBinary: "/tmp/rekordbox-analyzer",
         engine: "clean",
+        threads: 7,
       },
       localArtifactDirectories: [resolve("/tmp/local-tracks")],
       dependencies,
@@ -323,6 +327,8 @@ describe("runSetToRekordbox", () => {
       }),
     ]);
     expect(result.performance.peakConcurrency).toBe(1);
+    expect(result.analysis.threadBudget).toBe(7);
+    expect(result.analysis.workerThreadBudgets).toEqual([7]);
     expect(result.performance.warmResume).toBe(false);
     expect(result.performance.stages.map(({ stage, status }) => [stage, status])).toEqual([
       ["resolve", "completed"],

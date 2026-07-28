@@ -59,7 +59,8 @@ Skill.
 
 ```sh
 music tracks resolve "https://youtu.be/example" --format json
-music tracks import-set "https://youtu.be/example" --manifest ./set/manifest.json --write --format json
+music tracks import-set "https://youtu.be/example" --manifest ./set/manifest.json \
+  --analysis-threads 12 --write --format json
 music spots auth status --format json
 music spots playlist create "Set IDs" --track "spotify:track:4iV5W9uYEdYUVa79Axb7Rh" --format json
 music spots playlist get spotify:playlist:PLAYLIST_ID --format json
@@ -87,7 +88,9 @@ music djlink stop --format json
 written directly to Rekordbox. It deterministically selects safe Spotify release ties while
 retaining every candidate. With `--allow-set-clips --source-set-path <local-set>`, it performs one
 bounded internal recovery pass after individual failures. It does not download the remote set or
-create per-playlist copies on disk.
+create per-playlist copies on disk. `--analysis-threads` is one total CPU budget shared across its
+overlapping clean-room analyzer slots, so releases need only the redistributable Rust helper and
+never the local vendored Rekordbox/JUCE reference implementation.
 
 `music rekordbox db playlist list` prints the complete active folder and playlist hierarchy as a
 table, including direct track and child counts. Add `--json` for the same tree order with stable

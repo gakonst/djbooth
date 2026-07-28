@@ -501,3 +501,26 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   one-row renders over one TCP connection. Every render uses the full result count and succeeds
   without Back or reconnect. The physical deck independently exercised repeated incremental
   searches and result renders on the running server, confirming the patched path is working.
+
+## Bounded analyzer parallelism checkpoint (2026-07-27)
+
+- Added one explicit Rayon pool per clean analysis. Waveform, rhythm, and key
+  branches run concurrently; rhythm and key FFT frames use deterministic
+  ordered partitions without changing the original global reduction order.
+  The public Rust API and raw helper accept a validated `1..=64` thread budget,
+  including `REKORDBOX_ANALYZER_THREADS`.
+- Thread counts 1, 2, 3, 4, 8, and 12 retained exact DAT/EXT/2EX hashes and
+  summary semantics across three real recordings and one 502-second recording.
+  On the 12-core test host, automatic 12-thread medians improved by 1.74–2.38x
+  over the pre-parallel scalar baseline while RSS remained stable.
+- Added `rekordbox analyze track(s) --threads`, `tracks analyze-existing
+--threads`, and `tracks import-set --analysis-threads`. Multi-track and
+  streaming workflows interpret this as a total CPU budget and divide it
+  deterministically across active analyzer processes/slots. A 12-thread,
+  four-track batch improved from 1.86 seconds sequential to 0.81 seconds with
+  worker budgets `[3, 3, 3, 3]`, without nested oversubscription.
+- Kept the release boundary clean: Rayon and its permissive transitive
+  dependencies are listed in `THIRD_PARTY_LICENSES.md`; the npm package
+  allowlist excludes `vendor/`; and the native build compiles only the
+  clean-room crate. No reference rehost or Rekordbox/JUCE bytes are needed in a
+  release.

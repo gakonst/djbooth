@@ -12,6 +12,7 @@ import {
   analyzeTracks,
   BeatGridTag,
   DEFAULT_ANALYZER_CONCURRENCY,
+  DEFAULT_ANALYZER_THREAD_BUDGET,
   ExtendedBeatGridTag,
   createMySettingFile,
   diagnoseAnalyzer,
@@ -108,6 +109,15 @@ analyzeCli.command("track", {
       .min(1)
       .default(300_000)
       .describe("Analyzer timeout in milliseconds"),
+    threads: z
+      .number()
+      .int()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        `Native CPU workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
+      ),
   }),
   async run(c) {
     const controller = new AbortController();
@@ -154,6 +164,15 @@ analyzeCli.command("tracks", {
       .min(1)
       .default(300_000)
       .describe("Per-track analyzer timeout in milliseconds"),
+    threads: z
+      .number()
+      .int()
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        `Total native CPU budget shared across analyzer workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
+      ),
   }),
   async run(c) {
     const controller = new AbortController();
@@ -172,6 +191,7 @@ analyzeCli.command("tracks", {
         rekordboxApp: c.options.rekordboxApp,
         rekordboxCache: c.options.rekordboxCache,
         signal: controller.signal,
+        threads: c.options.threads,
         timeoutMs: c.options.timeoutMs,
         ...(showProgress
           ? {

@@ -49,7 +49,9 @@ import { requireTimestamp } from "./time.js";
 import type { Environment } from "./types.js";
 import {
   DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
+  DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET,
   MAX_NATIVE_ANALYSIS_CONCURRENCY,
+  MAX_NATIVE_ANALYSIS_THREAD_BUDGET,
   runSetToRekordbox,
 } from "./workflow.js";
 
@@ -674,6 +676,13 @@ tracksCli.command("analyze-existing", {
       .positive()
       .default(300_000)
       .describe("Per-track analyzer timeout in milliseconds"),
+    threads: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
+      .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
+      .describe("Total native CPU budget shared across analyzer workers"),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
   }),
   output: z.object({
@@ -682,6 +691,8 @@ tracksCli.command("analyze-existing", {
     analyzed: z.number().int().nonnegative(),
     cacheHits: z.number().int().nonnegative(),
     concurrency: z.number().int().nonnegative(),
+    threadBudget: z.number().int().positive(),
+    workerThreadBudgets: z.array(z.number().int().positive()),
     engine: z.enum(["clean", "reference"]),
     analysisDirectories: z.record(z.string(), z.string()),
     startedAt: z.string(),
@@ -704,6 +715,7 @@ tracksCli.command("analyze-existing", {
         force: context.options.force,
         timeoutMs: context.options.timeoutMs,
         signal: controller.signal,
+        threads: context.options.threads,
         ...(context.options.analyzerBinary
           ? { analyzerBinary: context.options.analyzerBinary }
           : {}),
@@ -727,6 +739,8 @@ tracksCli.command("analyze-existing", {
         analyzed: result.analysis.analyzed,
         cacheHits: result.analysis.cacheHits,
         concurrency: result.analysis.concurrency,
+        threadBudget: result.analysis.threadBudget,
+        workerThreadBudgets: result.analysis.workerThreadBudgets,
         engine: context.options.engine,
         analysisDirectories: result.analysisDirectories,
         startedAt: result.startedAt,
@@ -812,6 +826,13 @@ tracksCli.command("import-set", {
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
       .describe("Parallel clean-room Rekordbox analyzer workers; defaults to 4"),
+    analysisThreads: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
+      .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
+      .describe("Total native CPU budget shared across all analyzer workers"),
     analysisEngine: z
       .enum(["clean", "reference"])
       .default("clean")
@@ -857,6 +878,7 @@ tracksCli.command("import-set", {
     analyzed: z.number().int().nonnegative(),
     analysisCacheHits: z.number().int().nonnegative(),
     analysisEngine: z.enum(["clean", "reference"]),
+    analysisThreads: z.number().int().positive(),
     dbPath: z.string(),
     folderId: z.string(),
     playlistId: z.string(),
@@ -930,6 +952,7 @@ tracksCli.command("import-set", {
         analysisConcurrency: context.options.analysisConcurrency,
         analysis: {
           engine: context.options.analysisEngine,
+          threads: context.options.analysisThreads,
           timeoutMs: context.options.analysisTimeoutMs,
           ...(context.options.analyzerBinary
             ? { analyzerBinary: context.options.analyzerBinary }
@@ -970,6 +993,7 @@ tracksCli.command("import-set", {
         analyzed: result.analysis.analyzed,
         analysisCacheHits: result.analysis.cacheHits,
         analysisEngine: context.options.analysisEngine,
+        analysisThreads: result.analysis.threadBudget,
         dbPath: result.rekordbox.dbPath,
         folderId: result.rekordbox.folderId,
         playlistId: result.rekordbox.playlistId,

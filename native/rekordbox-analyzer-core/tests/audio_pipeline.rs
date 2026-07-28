@@ -2,8 +2,9 @@ use std::path::Path;
 use std::process::Command;
 
 use rekordbox_analyzer_core::{
-    ANALYSIS_SAMPLE_RATE, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS, DETAIL_FRAME_SAMPLES,
-    ExtAnalysis, WaveformData, analyze_to_directory, decode_audio_file,
+    ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
+    DETAIL_FRAME_SAMPLES, ExtAnalysis, WaveformData, analyze_to_directory_with_options,
+    decode_audio_file,
 };
 use tempfile::tempdir;
 
@@ -59,10 +60,20 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
     let first_directory = fixture_dir.path().join("first");
     let second_directory = fixture_dir.path().join("second");
 
-    let first =
-        analyze_to_directory(&fixture, &first_directory, None).expect("first full analysis");
-    let second =
-        analyze_to_directory(&fixture, &second_directory, None).expect("second full analysis");
+    let first = analyze_to_directory_with_options(
+        &fixture,
+        &first_directory,
+        None,
+        AnalysisOptions::new(1).expect("scalar options"),
+    )
+    .expect("first full analysis");
+    let second = analyze_to_directory_with_options(
+        &fixture,
+        &second_directory,
+        None,
+        AnalysisOptions::new(3).expect("parallel options"),
+    )
+    .expect("second full analysis");
 
     assert!(
         (first.summary.tempo_bpm - 120.0).abs() < 1.0,
@@ -120,6 +131,40 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
             );
         }
     }
+
+    let explicit_directory = fixture_dir.path().join("explicit-threads");
+    let explicit = Command::new(env!("CARGO_BIN_EXE_rekordbox-analyzer"))
+        .args(["analyze"])
+        .arg(&fixture)
+        .arg(&explicit_directory)
+        .args(["--threads", "2"])
+        .output()
+        .expect("run analyzer CLI with explicit threads");
+    assert!(
+        explicit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit.stderr)
+    );
+    for name in ["ANLZ0000.DAT", "ANLZ0000.EXT", "ANLZ0000.2EX"] {
+        assert_eq!(
+            std::fs::read(first_directory.join(name)).expect("scalar artifact"),
+            std::fs::read(explicit_directory.join(name)).expect("explicit-thread artifact"),
+            "{name} must not depend on the worker count"
+        );
+    }
+
+    let invalid_threads = Command::new(env!("CARGO_BIN_EXE_rekordbox-analyzer"))
+        .args(["analyze"])
+        .arg(&fixture)
+        .arg(fixture_dir.path().join("invalid-threads"))
+        .args(["--threads", "0"])
+        .output()
+        .expect("run analyzer CLI with invalid threads");
+    assert!(!invalid_threads.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid_threads.stderr)
+            .contains("analyzer threads must be between")
+    );
 
     let dat = first_directory.join("ANLZ0000.DAT");
     let dat_before = std::fs::read(&dat).expect("DAT before in-place rejection");

@@ -84,6 +84,7 @@ export async function analyzeExistingManifest(
         ...(options.rekordboxApp ? { rekordboxApp: options.rekordboxApp } : {}),
         ...(options.rekordboxCache ? { rekordboxCache: options.rekordboxCache } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.threads === undefined ? {} : { threads: options.threads }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         ...(options.onProgress ? { onProgress: options.onProgress } : {}),
       });

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use rayon::ThreadPoolBuilder;
 use serde::Serialize;
 
 use crate::anlz::{
@@ -21,7 +22,48 @@ const OUTPUT_NAMES: [(&str, &str); 3] = [
     ("2EX", "ANLZ0000.2EX"),
 ];
 const VBR_ENTRY_COUNT: usize = 400;
+/// Hard ceiling for one analyzer process.
+pub const MAX_ANALYZER_THREADS: usize = 64;
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Bounded native CPU budget for one track analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysisOptions {
+    threads: usize,
+}
+
+impl AnalysisOptions {
+    /// Validate an explicit native worker count.
+    pub fn new(threads: usize) -> Result<Self> {
+        if !(1..=MAX_ANALYZER_THREADS).contains(&threads) {
+            bail!(
+                "analyzer threads must be between 1 and {MAX_ANALYZER_THREADS}, received {threads}"
+            );
+        }
+        Ok(Self { threads })
+    }
+
+    /// Use the host's available parallelism, within the analyzer ceiling.
+    pub fn automatic() -> Self {
+        Self {
+            threads: std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(1)
+                .clamp(1, MAX_ANALYZER_THREADS),
+        }
+    }
+
+    /// Native workers available to this analysis.
+    pub fn threads(self) -> usize {
+        self.threads
+    }
+}
+
+impl Default for AnalysisOptions {
+    fn default() -> Self {
+        Self::automatic()
+    }
+}
 
 /// Complete clean-room DAT, EXT, and 2EX result before persistence.
 #[derive(Debug, Clone)]
@@ -106,6 +148,14 @@ pub struct AnalyzerTimings {
 
 /// Decode one local recording and produce clean-room DSP analysis in memory.
 pub fn analyze_audio_file(path: impl AsRef<Path>) -> Result<GeneratedAnalysis> {
+    analyze_audio_file_with_options(path, AnalysisOptions::default())
+}
+
+/// Decode one local recording with an explicit bounded native CPU budget.
+pub fn analyze_audio_file_with_options(
+    path: impl AsRef<Path>,
+    options: AnalysisOptions,
+) -> Result<GeneratedAnalysis> {
     let path = path.as_ref();
     let decoded = decode_audio_file(path)?;
     let source = decoded.source();
@@ -114,9 +164,25 @@ pub fn analyze_audio_file(path: impl AsRef<Path>) -> Result<GeneratedAnalysis> {
         bail!("decoded audio contains no PCM frames");
     }
 
-    let waveforms = WaveformData::generate(&pcm)?;
-    let beat = analyze_beats(pcm.samples(), pcm.sample_rate())?;
-    let key = analyze_key(pcm.samples(), pcm.sample_rate())?;
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(options.threads())
+        .thread_name(|index| format!("rekordbox-analyzer-{index}"))
+        .build()
+        .context("failed to create analyzer worker pool")?;
+    let (waveforms, (beat, key)) = pool.install(|| {
+        rayon::join(
+            || WaveformData::generate(&pcm),
+            || {
+                rayon::join(
+                    || analyze_beats(pcm.samples(), pcm.sample_rate()),
+                    || analyze_key(pcm.samples(), pcm.sample_rate()),
+                )
+            },
+        )
+    });
+    let waveforms = waveforms?;
+    let beat = beat?;
+    let key = key?;
     let anlz_path = format!(
         "?/{}",
         path.file_name()
@@ -197,6 +263,21 @@ pub fn analyze_to_directory(
     output_directory: impl AsRef<Path>,
     native_log_path: Option<&Path>,
 ) -> Result<AnalyzerOutput> {
+    analyze_to_directory_with_options(
+        audio_path,
+        output_directory,
+        native_log_path,
+        AnalysisOptions::default(),
+    )
+}
+
+/// Analyze one recording with an explicit native CPU budget and persist all artifacts.
+pub fn analyze_to_directory_with_options(
+    audio_path: impl AsRef<Path>,
+    output_directory: impl AsRef<Path>,
+    native_log_path: Option<&Path>,
+    options: AnalysisOptions,
+) -> Result<AnalyzerOutput> {
     let started = Instant::now();
     let audio_path = audio_path
         .as_ref()
@@ -220,7 +301,7 @@ pub fn analyze_to_directory(
     )?;
 
     let load_started = Instant::now();
-    let generated = analyze_audio_file(&audio_path)?;
+    let generated = analyze_audio_file_with_options(&audio_path, options)?;
     let backend_ms = load_started.elapsed().as_secs_f64() * 1_000.0;
 
     let output_started = Instant::now();

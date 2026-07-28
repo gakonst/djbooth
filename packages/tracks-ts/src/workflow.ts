@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   analyzeTracks,
+  DEFAULT_ANALYZER_THREAD_BUDGET,
   type AnalyzeTracksOptions,
   type AnalyzeTracksResult,
 } from "@gakonst/rekordbox";
@@ -53,6 +54,8 @@ type SourceSetArtifact = NonNullable<SetManifest["artifacts"]["sourceSet"]>;
 
 export const DEFAULT_NATIVE_ANALYSIS_CONCURRENCY = 4;
 export const MAX_NATIVE_ANALYSIS_CONCURRENCY = 64;
+export const DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET = DEFAULT_ANALYZER_THREAD_BUDGET;
+export const MAX_NATIVE_ANALYSIS_THREAD_BUDGET = 64;
 
 export type WorkflowStageName =
   | "resolve"
@@ -350,19 +353,30 @@ export async function runSetToRekordbox(
 
   const sourceSet = options.allowSourceSetClips ? manifest.artifacts.sourceSet : undefined;
   const analysisConcurrency = options.analysisConcurrency ?? DEFAULT_NATIVE_ANALYSIS_CONCURRENCY;
+  validateAnalysisConcurrency(analysisConcurrency);
+  const analysisThreadBudget = validateAnalysisThreadBudget(
+    options.analysis?.threads ?? DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET,
+  );
+  const activeAnalysisWorkers = Math.min(
+    analysisConcurrency,
+    analysisThreadBudget,
+    Math.max(1, manifest.entries.length),
+  );
+  const analysisWorkerBudgets = distributeThreadBudget(analysisThreadBudget, activeAnalysisWorkers);
   const analysisRuns: AnalyzeTracksResult[] = [];
   const analysisByPath = new Map<string, AnalyzeTracksResult["results"][number]>();
   const analysisByIdentity = new Map<string, AnalyzeTracksResult["results"][number]>();
   const analysisTasks = new Map<string, Promise<void>>();
-  const analysisLimit = createPromiseLimiter(analysisConcurrency);
+  const analysisLimit = createPromiseLimiter(activeAnalysisWorkers);
   let analysisStarted: number | undefined;
   let analysisPeakConcurrency = 0;
   let activeAnalysis = 0;
   let acquisitionPasses = 0;
   let sourceSetFallbacks = 0;
-  const analyzerOptions = (concurrency: number): AnalyzeTracksOptions => ({
+  const analyzerOptions = (concurrency: number, threads: number): AnalyzeTracksOptions => ({
     ...options.analysis,
     concurrency,
+    threads,
     ...(options.signal ? { signal: options.signal } : {}),
     onProgress(progress) {
       options.analysis?.onProgress?.(progress);
@@ -386,7 +400,7 @@ export async function runSetToRekordbox(
         message: "analysis started while acquisition continues",
       });
     }
-    const task = analysisLimit(async () => {
+    const task = analysisLimit(async (workerIndex) => {
       activeAnalysis += 1;
       analysisPeakConcurrency = Math.max(analysisPeakConcurrency, activeAnalysis);
       try {
@@ -395,7 +409,10 @@ export async function runSetToRekordbox(
           analysisByPath,
           analysisByIdentity,
           [{ path, identity }],
-          await dependencies.analyze([path], analyzerOptions(1)),
+          await dependencies.analyze(
+            [path],
+            analyzerOptions(1, analysisWorkerBudgets[workerIndex]!),
+          ),
         );
       } finally {
         activeAnalysis -= 1;
@@ -523,7 +540,7 @@ export async function runSetToRekordbox(
     }
     const fallback = await dependencies.analyze(
       missingAnalysis.map(({ path }) => path),
-      analyzerOptions(analysisConcurrency),
+      analyzerOptions(activeAnalysisWorkers, analysisThreadBudget),
     );
     analysisPeakConcurrency = Math.max(analysisPeakConcurrency, fallback.concurrency);
     recordAnalysisRun(analysisRuns, analysisByPath, analysisByIdentity, missingAnalysis, fallback);
@@ -537,6 +554,8 @@ export async function runSetToRekordbox(
     mediaPaths,
     analysisPeakConcurrency,
     analysisDurationMs,
+    analysisThreadBudget,
+    analysisWorkerBudgets,
   );
   const analysisArtifacts = analysis.results.map((result, index) =>
     toAnalysisArtifact(mediaPaths[index]!, result),
@@ -924,6 +943,8 @@ function combineAnalysisRuns(
   mediaPaths: readonly string[],
   concurrency: number,
   elapsedMs: number,
+  threadBudget: number,
+  workerThreadBudgets: readonly number[],
 ): AnalyzeTracksResult {
   const results = mediaPaths.map((mediaPath) => {
     const result = byPath.get(resolve(mediaPath));
@@ -939,6 +960,7 @@ function combineAnalysisRuns(
     elapsedMs: Math.round(elapsedMs),
     requested: mediaPaths.length,
     results,
+    threadBudget,
     throughputTracksPerSecond:
       analyzed && elapsedMs ? roundMilliseconds((analyzed * 1_000) / elapsedMs) : 0,
     timings: {
@@ -946,10 +968,11 @@ function combineAnalysisRuns(
       preflightMs: Math.max(0, ...runs.map((run) => run.timings.preflightMs)),
       totalMs: elapsedMs,
     },
+    workerThreadBudgets: [...workerThreadBudgets],
   };
 }
 
-function createPromiseLimiter(concurrency: number) {
+function validateAnalysisConcurrency(concurrency: number): void {
   if (
     !Number.isSafeInteger(concurrency) ||
     concurrency < 1 ||
@@ -959,20 +982,47 @@ function createPromiseLimiter(concurrency: number) {
       `analysisConcurrency must be an integer between 1 and ${String(MAX_NATIVE_ANALYSIS_CONCURRENCY)}`,
     );
   }
-  let active = 0;
-  const queue: Array<() => void> = [];
-  const release = (): void => {
-    const next = queue.shift();
-    if (next) next();
-    else active -= 1;
+}
+
+function validateAnalysisThreadBudget(threads: number): number {
+  if (
+    !Number.isSafeInteger(threads) ||
+    threads < 1 ||
+    threads > MAX_NATIVE_ANALYSIS_THREAD_BUDGET
+  ) {
+    throw new RangeError(
+      `analysis threads must be an integer between 1 and ${String(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)}`,
+    );
+  }
+  return threads;
+}
+
+function distributeThreadBudget(threadBudget: number, workers: number): number[] {
+  const base = Math.floor(threadBudget / workers);
+  const remainder = threadBudget % workers;
+  return Array.from({ length: workers }, (_, index) => base + Number(index < remainder));
+}
+
+function createPromiseLimiter(concurrency: number) {
+  validateAnalysisConcurrency(concurrency);
+  const available = Array.from({ length: concurrency }, (_, index) => index);
+  const queue: Array<(workerIndex: number) => void> = [];
+  const acquire = async (): Promise<number> => {
+    const workerIndex = available.shift();
+    if (workerIndex !== undefined) return workerIndex;
+    return new Promise<number>((resolve) => queue.push(resolve));
   };
-  return async <T>(task: () => Promise<T>): Promise<T> => {
-    if (active < concurrency) active += 1;
-    else await new Promise<void>((resolve) => queue.push(resolve));
+  const release = (workerIndex: number): void => {
+    const next = queue.shift();
+    if (next) next(workerIndex);
+    else available.push(workerIndex);
+  };
+  return async <T>(task: (workerIndex: number) => Promise<T>): Promise<T> => {
+    const workerIndex = await acquire();
     try {
-      return await task();
+      return await task(workerIndex);
     } finally {
-      release();
+      release(workerIndex);
     }
   };
 }

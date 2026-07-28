@@ -13,8 +13,9 @@ pub mod rhythm;
 pub mod waveform;
 
 pub use analysis::{
-    AnalysisFileSummary, AnalyzerOutput, AnalyzerTimings, BeatGridSummary, BeatSummary,
-    GeneratedAnalysis, OutputSummary, analyze_audio_file, analyze_to_directory,
+    AnalysisFileSummary, AnalysisOptions, AnalyzerOutput, AnalyzerTimings, BeatGridSummary,
+    BeatSummary, GeneratedAnalysis, MAX_ANALYZER_THREADS, OutputSummary, analyze_audio_file,
+    analyze_audio_file_with_options, analyze_to_directory, analyze_to_directory_with_options,
 };
 pub use anlz::{
     AnlzFile, AnlzTag, BeatGridEntry, CountedWaveform, DatAnalysis, ExtAnalysis, ExtendedBeatGrid,

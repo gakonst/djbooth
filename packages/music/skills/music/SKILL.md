@@ -347,12 +347,14 @@ music rekordbox analyze doctor --engine clean --format json
 music rekordbox analyze track "$AUDIO_PATH" \
   --engine clean \
   --output-directory "$ANALYSIS_DIR" \
+  --threads 12 \
   --format json
 music rekordbox analyze tracks \
   --audio-path "$AUDIO_PATH_1" \
   --audio-path "$AUDIO_PATH_2" \
   --engine clean \
   --concurrency 4 \
+  --threads 12 \
   --format json
 ```
 
@@ -372,8 +374,11 @@ reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact. 
 back from clean to reference.
 
 For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated worker processes
-and preserves input order. Default to at most four workers unless measurement on the target machine
-supports another limit. Parallelize analysis only. Keep Rekordbox database installation
+and preserves input order. `--threads` is one total native CPU budget divided deterministically
+across active processes, not a per-process multiplier; `--concurrency 4 --threads 12` produces
+worker budgets `[3, 3, 3, 3]`. Omit it to use available parallelism, or lower it when analysis
+competes with live DJ software. Default to at most four processes unless measurement on the target
+machine supports another limit. Parallelize analysis only. Keep Rekordbox database installation
 stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
 
 For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
@@ -384,6 +389,7 @@ timestamped run ledger in the manifest:
 music tracks analyze-existing "$MANIFEST" \
   --engine clean \
   --concurrency 4 \
+  --threads 12 \
   --progress always \
   --format json
 ```

@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex32};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,12 @@ struct FrequencyBin {
 struct ChromaFeatures {
     energy_weighted: Vec<[f32; 12]>,
     robust: Vec<[f32; 12]>,
+}
+
+#[derive(Debug)]
+struct RawChromaFeatures {
+    energy_weighted: Vec<[f32; 12]>,
+    high_resolution: Vec<[f32; HIGH_RES_BINS]>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -117,9 +124,6 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
             0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
         })
         .collect::<Vec<_>>();
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
-    let mut spectrum = vec![Complex32::default(); FFT_SIZE];
     let first_bin = (MIN_FREQUENCY * FFT_SIZE as f32 / sample_rate as f32)
         .floor()
         .max(1.0) as usize;
@@ -136,11 +140,94 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
             }
         })
         .collect::<Vec<_>>();
-    let mut magnitudes = vec![0.0f32; last_bin + 2];
-    let mut energy_weighted_frames = Vec::with_capacity(samples.len() / HOP_SIZE);
-    let mut high_resolution_frames = Vec::with_capacity(samples.len() / HOP_SIZE);
+    let frame_count = 1 + samples.len().saturating_sub(FFT_SIZE) / HOP_SIZE;
+    let worker_count = rayon::current_thread_index()
+        .map(|_| rayon::current_num_threads())
+        .unwrap_or(1)
+        .min(frame_count);
+    let chunk_len = frame_count.div_ceil(worker_count);
+    let chunks = (0..frame_count)
+        .step_by(chunk_len)
+        .map(|start| start..(start + chunk_len).min(frame_count))
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|range| {
+            raw_chroma_features(
+                samples,
+                sample_rate,
+                &window,
+                first_bin,
+                last_bin,
+                &frequency_bins,
+                range,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut energy_weighted_frames = Vec::with_capacity(frame_count);
+    let mut high_resolution_frames = Vec::with_capacity(frame_count);
+    for chunk in chunks {
+        energy_weighted_frames.extend(chunk.energy_weighted);
+        high_resolution_frames.extend(chunk.high_resolution);
+    }
 
-    for frame in samples.windows(FFT_SIZE).step_by(HOP_SIZE) {
+    let tuning_offset = tuning_offset(&high_resolution_frames);
+    let robust = high_resolution_frames
+        .into_iter()
+        .map(|high_resolution| {
+            let mut continuous = [0.0f32; 12];
+            for (pitch_class, value) in continuous.iter_mut().enumerate() {
+                let center = (pitch_class as i32 * BINS_PER_PITCH_CLASS as i32 + tuning_offset)
+                    .rem_euclid(HIGH_RES_BINS as i32) as usize;
+                *value = high_resolution[center];
+            }
+            normalize_l1(&mut continuous);
+            let mut cens = continuous.map(|value| {
+                if value < 0.05 {
+                    0.0
+                } else if value < 0.10 {
+                    1.0
+                } else if value < 0.20 {
+                    2.0
+                } else if value < 0.40 {
+                    3.0
+                } else {
+                    4.0
+                }
+            });
+            normalize_l1(&mut cens);
+            let mut combined = [0.0f32; 12];
+            for ((value, continuous), cens) in combined.iter_mut().zip(continuous).zip(cens) {
+                *value = 0.65 * continuous + 0.35 * cens;
+            }
+            normalize_l1(&mut combined);
+            combined
+        })
+        .collect();
+    ChromaFeatures {
+        energy_weighted: energy_weighted_frames,
+        robust,
+    }
+}
+
+fn raw_chroma_features(
+    samples: &[f32],
+    sample_rate: u32,
+    window: &[f32],
+    first_bin: usize,
+    last_bin: usize,
+    frequency_bins: &[FrequencyBin],
+    range: std::ops::Range<usize>,
+) -> RawChromaFeatures {
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(FFT_SIZE);
+    let mut spectrum = vec![Complex32::default(); FFT_SIZE];
+    let mut magnitudes = vec![0.0f32; last_bin + 2];
+    let mut energy_weighted_frames = Vec::with_capacity(range.len());
+    let mut high_resolution_frames = Vec::with_capacity(range.len());
+
+    for frame_index in range {
+        let frame_start = frame_index * HOP_SIZE;
+        let frame = &samples[frame_start..frame_start + FFT_SIZE];
         let rms = (frame.iter().map(|value| value * value).sum::<f32>() / FFT_SIZE as f32).sqrt();
         if rms < 1.0e-5 {
             continue;
@@ -160,7 +247,7 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
         }
 
         let mut energy_weighted = [0.0f32; 12];
-        for bin in &frequency_bins {
+        for bin in frequency_bins {
             let magnitude = magnitudes[bin.index];
             if magnitude <= magnitudes[bin.index - 1] || magnitude < magnitudes[bin.index + 1] {
                 continue;
@@ -186,7 +273,7 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
         let mut band_sums = [0.0f32; SPECTRAL_BANDS];
         let mut band_counts = [0usize; SPECTRAL_BANDS];
         let mut band_maxima = [0.0f32; SPECTRAL_BANDS];
-        for bin in &frequency_bins {
+        for bin in frequency_bins {
             band_sums[bin.spectral_band] += magnitudes[bin.index];
             band_counts[bin.spectral_band] += 1;
             band_maxima[bin.spectral_band] =
@@ -194,7 +281,7 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
         }
         let global_maximum = band_maxima.iter().copied().fold(0.0f32, f32::max);
         let mut peaks = Vec::new();
-        for bin in &frequency_bins {
+        for bin in frequency_bins {
             let magnitude = magnitudes[bin.index];
             if magnitude <= magnitudes[bin.index - 1]
                 || magnitude < magnitudes[bin.index + 1]
@@ -244,43 +331,9 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
             high_resolution_frames.push(high_resolution);
         }
     }
-
-    let tuning_offset = tuning_offset(&high_resolution_frames);
-    let robust = high_resolution_frames
-        .into_iter()
-        .map(|high_resolution| {
-            let mut continuous = [0.0f32; 12];
-            for (pitch_class, value) in continuous.iter_mut().enumerate() {
-                let center = (pitch_class as i32 * BINS_PER_PITCH_CLASS as i32 + tuning_offset)
-                    .rem_euclid(HIGH_RES_BINS as i32) as usize;
-                *value = high_resolution[center];
-            }
-            normalize_l1(&mut continuous);
-            let mut cens = continuous.map(|value| {
-                if value < 0.05 {
-                    0.0
-                } else if value < 0.10 {
-                    1.0
-                } else if value < 0.20 {
-                    2.0
-                } else if value < 0.40 {
-                    3.0
-                } else {
-                    4.0
-                }
-            });
-            normalize_l1(&mut cens);
-            let mut combined = [0.0f32; 12];
-            for ((value, continuous), cens) in combined.iter_mut().zip(continuous).zip(cens) {
-                *value = 0.65 * continuous + 0.35 * cens;
-            }
-            normalize_l1(&mut combined);
-            combined
-        })
-        .collect();
-    ChromaFeatures {
+    RawChromaFeatures {
         energy_weighted: energy_weighted_frames,
-        robust,
+        high_resolution: high_resolution_frames,
     }
 }
 

@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
-    AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, analyze_to_directory,
-    compare_output_directories,
+    AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
+    analyze_to_directory_with_options, compare_output_directories,
 };
 
+const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
@@ -25,7 +26,7 @@ fn run() -> Result<()> {
             println!(
                 "Clean-room audio-to-Rekordbox analyzer\n\n\
                  Usage:\n  \
-                   rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG]\n  \
+                   rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N]\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
@@ -43,11 +44,9 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("analyze") => {
-            let audio = required_path(args.next(), "audio path")?;
-            let output = required_path(args.next(), "output directory")?;
-            let log = args.next().map(PathBuf::from);
-            ensure_exhausted(args, "analyze")?;
-            let result = analyze_to_directory(&audio, &output, log.as_deref())?;
+            let (audio, output, log, options) = analyze_arguments(args)?;
+            let result =
+                analyze_to_directory_with_options(&audio, &output, log.as_deref(), options)?;
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }
@@ -115,9 +114,57 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG]|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
+}
+
+fn analyze_arguments(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(PathBuf, PathBuf, Option<PathBuf>, AnalysisOptions)> {
+    let audio = required_path(args.next(), "audio path")?;
+    let output = required_path(args.next(), "output directory")?;
+    let mut log = None;
+    let mut threads = None;
+    while let Some(argument) = args.next() {
+        if argument == "--threads" {
+            if threads.is_some() {
+                bail!("analyze received --threads more than once");
+            }
+            let value = args.next().context("--threads requires an integer value")?;
+            threads = Some(parse_analyzer_threads(&value, "--threads")?);
+        } else if let Some(value) = argument.strip_prefix("--threads=") {
+            if threads.is_some() {
+                bail!("analyze received --threads more than once");
+            }
+            threads = Some(parse_analyzer_threads(value, "--threads")?);
+        } else if argument.starts_with('-') {
+            bail!("analyze received unknown option '{argument}'");
+        } else if log.is_none() {
+            log = Some(PathBuf::from(argument));
+        } else {
+            bail!("analyze received unexpected extra argument '{argument}'");
+        }
+    }
+
+    let threads = match threads {
+        Some(threads) => threads,
+        None => match std::env::var(ANALYZER_THREADS_ENV) {
+            Ok(value) => parse_analyzer_threads(&value, ANALYZER_THREADS_ENV)?,
+            Err(std::env::VarError::NotPresent) => AnalysisOptions::automatic(),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("{ANALYZER_THREADS_ENV} must contain a UTF-8 integer")
+            }
+        },
+    };
+    Ok((audio, output, log, threads))
+}
+
+fn parse_analyzer_threads(value: &str, source: &str) -> Result<AnalysisOptions> {
+    let threads = value
+        .parse::<usize>()
+        .with_context(|| format!("{source} must be an integer"))?;
+    AnalysisOptions::new(threads)
 }
 
 fn rebuild(input: &Path, source: &[u8]) -> Result<Vec<u8>> {

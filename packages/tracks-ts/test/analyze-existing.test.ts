@@ -91,8 +91,10 @@ function batch(results: RekordboxAnalysisResult[]): AnalyzeTracksResult {
     elapsedMs: 1,
     requested: results.length,
     results,
+    threadBudget: 4,
     throughputTracksPerSecond: results.length * 1_000,
     timings: { analyzeMs: 1, preflightMs: 0, totalMs: 1 },
+    workerThreadBudgets: results.length ? [4] : [],
   };
 }
 
@@ -123,12 +125,13 @@ describe("analysis-only manifest workflow", () => {
     const result = await analyzeExistingManifest({
       manifestPath,
       engine: "reference",
+      threads: 7,
       dependencies: mocks.value,
     });
 
     expect(analyze).toHaveBeenCalledWith(
       mediaPaths,
-      expect.objectContaining({ concurrency: 4, engine: "reference" }),
+      expect.objectContaining({ concurrency: 4, engine: "reference", threads: 7 }),
     );
     expect(result.manifest.artifacts.analysis).toHaveLength(2);
     expect(result.manifest.artifacts.analysisRuns).toEqual([
@@ -183,8 +186,10 @@ describe("analysis-only manifest workflow", () => {
         failed: 0,
         requested: 2,
         results: [analysis(mediaPaths[0]!), undefined],
+        threadBudget: 4,
         throughputTracksPerSecond: 0,
         timings: { analyzeMs: 10, preflightMs: 0, totalMs: 10 },
+        workerThreadBudgets: [4],
       },
     });
     const mocks = dependencies(

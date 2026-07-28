@@ -3,6 +3,15 @@
 `rekordbox-analyzer` is MIT-licensed code that links third-party Rust crates.
 The exact resolved versions and checksums are recorded in `Cargo.lock`.
 
+## Rayon
+
+The executable includes unmodified `rayon` and `rayon-core` code. These crates
+are available under either the Apache License 2.0 or the MIT License:
+
+- License: <https://github.com/rayon-rs/rayon#license>
+- Upstream source: <https://github.com/rayon-rs/rayon>
+- Exact resolved versions and checksums: `Cargo.lock`
+
 ## Symphonia 0.6.0
 
 The executable includes unmodified code from these Project Symphonia crates:

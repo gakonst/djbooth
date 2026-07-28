@@ -243,14 +243,25 @@ rekordbox analyze doctor --engine clean --format json
 rekordbox analyze track /Music/track.flac \
   --engine clean \
   --output-directory /Music/track.rekordbox \
+  --threads 12 \
   --format json
 rekordbox analyze tracks \
   --audio-path /Music/one.flac \
   --audio-path /Music/two.flac \
   --engine clean \
   --concurrency 4 \
+  --threads 12 \
   --format json
 ```
+
+For `analyze track`, `--threads` is the native worker count for that one
+process. For `analyze tracks`, it is a total CPU budget, not a per-process
+multiplier. The batch runner caps its process count to the budget and divides
+the budget deterministically across active workers: for example,
+`--concurrency 4 --threads 12` launches at most four clean analyzers with three
+native threads each. Omitting it uses Node's available-parallelism value,
+bounded to 64. The selected `threadBudget` and `workerThreadBudgets` are
+reported in structured output.
 
 After closing Rekordbox and backing up the library, install the verified artifacts for an existing
 content row:
@@ -302,6 +313,14 @@ concurrency one and were excluded from that timing. Moving from 12 to 27 workers
 as many native processes for roughly 17% lower wall time, so higher concurrency remains an explicit,
 measured override. Warm validation of all 26 cached analyses
 took 11.65 ms. These numbers do not describe the clean engine.
+
+For the clean engine on the same 12-core machine, deterministic native
+parallelism reduced four representative single-track medians by 1.74–2.38x
+versus the scalar baseline. A four-track run with one shared 12-thread budget
+took 0.81 seconds using four processes with budgets `[3, 3, 3, 3]`, versus
+1.86 seconds when processing the same files sequentially. DAT/EXT/2EX hashes
+were unchanged at 1, 2, 3, 4, 8, and 12 threads. Treat these as host-specific
+measurements; lower `--threads` when analysis competes with live DJ software.
 
 Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains

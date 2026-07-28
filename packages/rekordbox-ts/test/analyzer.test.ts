@@ -21,6 +21,7 @@ import {
   AnalyzeTracksCancelledError,
   AnalyzeTracksError,
   DEFAULT_ANALYZER_CONCURRENCY,
+  DEFAULT_ANALYZER_THREAD_BUDGET,
   diagnoseAnalyzer,
   getAnalyzerBinary,
   readAnalysisResult,
@@ -34,6 +35,7 @@ const analyzerRoot = process.env.REKORDBOX_ANALYZER_ROOT;
 const cleanAnalyzerBinary = process.env.REKORDBOX_CLEAN_ANALYZER_BINARY;
 const genericAnalyzerBinary = process.env.REKORDBOX_ANALYZER_BINARY;
 const referenceAnalyzerBinary = process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY;
+const fakeAnalyzerThreadsLog = process.env.FAKE_ANALYZER_THREADS_LOG;
 
 const fakeAnalyzer = `#!/usr/bin/env node
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
@@ -65,6 +67,11 @@ if (command === "doctor") {
 const [audioPath, outputDirectory, nativeLog] = process.argv.slice(2);
 if (process.env.FAKE_ANALYZER_COUNTER)
   appendFileSync(process.env.FAKE_ANALYZER_COUNTER, "1\\n");
+if (process.env.FAKE_ANALYZER_THREADS_LOG)
+  appendFileSync(
+    process.env.FAKE_ANALYZER_THREADS_LOG,
+    (process.env.REKORDBOX_ANALYZER_THREADS ?? "unset") + "\\n",
+  );
 if (mode === "fail" || basename(audioPath).includes("fail")) {
   console.error("fake analyzer failure");
   process.exit(2);
@@ -160,6 +167,8 @@ afterEach(() => {
   delete process.env.FAKE_ANALYZER_COUNTER;
   delete process.env.FAKE_ANALYZER_DOCTOR_COUNTER;
   delete process.env.FAKE_ANALYZER_MODE;
+  if (fakeAnalyzerThreadsLog === undefined) delete process.env.FAKE_ANALYZER_THREADS_LOG;
+  else process.env.FAKE_ANALYZER_THREADS_LOG = fakeAnalyzerThreadsLog;
   if (analyzerRoot === undefined) delete process.env.REKORDBOX_ANALYZER_ROOT;
   else process.env.REKORDBOX_ANALYZER_ROOT = analyzerRoot;
   if (cleanAnalyzerBinary === undefined) delete process.env.REKORDBOX_CLEAN_ANALYZER_BINARY;
@@ -218,9 +227,68 @@ describe("Rekordbox analyzer wrapper", () => {
     await expect(analyzeTracks([], { concurrency: 65 })).rejects.toThrow(
       "concurrency must be an integer",
     );
+    await expect(analyzeTracks([], { threads: 0 })).rejects.toThrow(
+      "thread budget must be an integer",
+    );
+    await expect(analyzeTracks([], { threads: 65 })).rejects.toThrow(
+      "thread budget must be an integer",
+    );
     await expect(analyzeTracks(["same.mp3", "same.mp3"])).rejects.toThrow(
       "Multiple tracks resolve",
     );
+  });
+
+  it("shares one explicit native thread budget across isolated workers", async () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const threadsLog = join(root, "threads");
+    process.env.FAKE_ANALYZER_THREADS_LOG = threadsLog;
+    const audioPaths = Array.from({ length: 4 }, (_, index) =>
+      makeAudio(root, `track-${String(index)}.mp3`),
+    );
+
+    const result = await analyzeTracks(audioPaths, {
+      analyzerBinary: process.execPath,
+      concurrency: 4,
+      force: true,
+      threads: 7,
+    });
+
+    expect(DEFAULT_ANALYZER_THREAD_BUDGET).toBeGreaterThan(0);
+    expect(result).toMatchObject({
+      concurrency: 4,
+      threadBudget: 7,
+      workerThreadBudgets: [2, 2, 2, 1],
+    });
+    expect(
+      readFileSync(threadsLog, "utf8")
+        .trim()
+        .split(/\r?\n/u)
+        .map(Number)
+        .sort((a, b) => a - b),
+    ).toEqual([1, 2, 2, 2]);
+
+    const single = makeAudio(root, "single.mp3");
+    analyzeTrack(single, {
+      analyzerBinary: process.execPath,
+      force: true,
+      threads: 5,
+    });
+    expect(readFileSync(threadsLog, "utf8").trim().split(/\r?\n/u).at(-1)).toBe("5");
+
+    const bounded = await analyzeTracks(
+      [makeAudio(root, "bounded-one.mp3"), makeAudio(root, "bounded-two.mp3")],
+      {
+        analyzerBinary: process.execPath,
+        concurrency: 4,
+        force: true,
+        threads: 1,
+      },
+    );
+    expect(bounded.concurrency).toBe(1);
+    expect(bounded.workerThreadBudgets).toEqual([1]);
   });
 
   it("defaults to four workers and reports cached and completed progress", async () => {

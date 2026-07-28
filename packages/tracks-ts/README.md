@@ -268,6 +268,7 @@ tracks import-set "$SET_URL" \
   --manifest ./adam-ten/manifest.json \
   --local-directory "$HOME/Music/2026/Adam Ten - MAXA x BiPolar Express Link up - Burning Man 2025" \
   --folder-name 'DJ Sets I Like' \
+  --analysis-threads 12 \
   --write \
   --format json
 ```
@@ -286,7 +287,11 @@ created.
 Analysis defaults to the releasable clean-room Rust engine; no Rekordbox application or proprietary
 helper is required. `--analysis-engine reference` is reserved for an explicit local parity run and
 requires the separately supplied reference helper. `--analyzer-binary`, `--rekordbox-app`,
-`--rekordbox-cache`, and `--analysis-timeout-ms` are carried through the same one-shot command.
+`--rekordbox-cache`, `--analysis-timeout-ms`, and `--analysis-threads` are carried through the same
+one-shot command. `--analysis-threads` is the total native CPU budget for all overlapping analysis
+slots, not a per-process value. The workflow divides it deterministically across active slots, so
+`--analysis-concurrency 4 --analysis-threads 12` gives each of four simultaneous clean analyzers
+three threads.
 
 With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
 individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
@@ -306,9 +311,15 @@ failed/cancelled counts for later performance study:
 tracks analyze-existing ./adam-ten/manifest.json \
   --engine clean \
   --concurrency 4 \
+  --threads 12 \
   --progress always \
   --format json
 ```
+
+`analyze-existing --threads` has the same total-budget semantics and reports
+both `threadBudget` and `workerThreadBudgets`. The worker count is capped by
+that budget, preventing outer process concurrency from multiplying native
+parallelism.
 
 Once acquisition and analysis are complete, import that checkpoint without rerunning network
 stages. `--write` remains mandatory; the importer coordinates the database lock with the open
@@ -389,9 +400,10 @@ The boundary is deliberate:
   checkpointed failure becomes a cue-bounded source extract in a bounded second pass during the same
   invocation and stays on that recovery path on later warm runs.
 - Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
-  clean-room analysis uses four. Soulseek and native ytdlp candidate searches overlap while download
-  priority remains deterministic. Explicit reference search stays deferred until native reports a
-  safe capability gap. Clean-room analysis begins per artifact while remaining downloads continue.
+  clean-room analysis uses at most four process slots sharing one available-CPU thread budget.
+  Soulseek and native ytdlp candidate searches overlap while download priority remains
+  deterministic. Explicit reference search stays deferred until native reports a safe capability
+  gap. Clean-room analysis begins per artifact while remaining downloads continue.
 - Direct Rekordbox import begins only after all planned files are present, checksummed, and analyzed.
   Its file preflight, hashing, analysis installation, and backup copies use up to eight workers,
   bounded further by Node's available parallelism. Encrypted database access stays serialized in

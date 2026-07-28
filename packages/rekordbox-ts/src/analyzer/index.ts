@@ -11,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { availableParallelism, homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
@@ -22,6 +22,8 @@ import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
 const cleanHelperName = "rekordbox-analyzer";
 const referenceHelperName = "rekordbox-analyzer-reference";
+const analyzerThreadsEnvironment = "REKORDBOX_ANALYZER_THREADS";
+const maximumAnalyzerThreads = 64;
 
 /** Select the releasable clean-room DSP or the local proprietary parity oracle. */
 export type AnalyzerEngine = "clean" | "reference";
@@ -145,11 +147,19 @@ export type AnalyzeTrackOptions = {
   rekordboxApp?: string;
   rekordboxCache?: string;
   signal?: AbortSignal;
+  /** Native CPU workers for one clean analyzer process. */
+  threads?: number;
   timeoutMs?: number;
 };
 
 /** Conservative default for process-isolated analyzer workers. */
 export const DEFAULT_ANALYZER_CONCURRENCY = 4;
+
+/** Default total native CPU budget shared across active analyzer processes. */
+export const DEFAULT_ANALYZER_THREAD_BUDGET = Math.min(
+  maximumAnalyzerThreads,
+  availableParallelism(),
+);
 
 /** Progress emitted by a bounded multi-track analyzer run. */
 export type AnalyzeTracksProgress = {
@@ -174,12 +184,14 @@ export type AnalyzeTracksResult = {
   elapsedMs: number;
   requested: number;
   results: Array<RekordboxAnalysisResult>;
+  threadBudget: number;
   throughputTracksPerSecond: number;
   timings: {
     analyzeMs: number;
     preflightMs: number;
     totalMs: number;
   };
+  workerThreadBudgets: Array<number>;
 };
 
 /** Stable failure classification for one item in a batch analyzer run. */
@@ -351,6 +363,10 @@ export async function analyzeTracks(
     configuredConcurrency > 64
   )
     throw new TypeError("Analyzer concurrency must be an integer between 1 and 64");
+  const threadBudget = validateAnalyzerThreads(
+    options.threads ?? DEFAULT_ANALYZER_THREAD_BUDGET,
+    "Analyzer thread budget",
+  );
 
   const absolutePaths = audioPaths.map((audioPath) => resolve(audioPath));
   if (options.signal?.aborted) {
@@ -359,13 +375,15 @@ export async function analyzeTracks(
       analyzed: 0,
       cacheHits: 0,
       cancelled: requested,
-      concurrency: Math.min(configuredConcurrency, requested),
+      concurrency: Math.min(configuredConcurrency, threadBudget, requested),
       elapsedMs: 0,
       failed: 0,
       requested,
       results: Array.from({ length: requested }),
+      threadBudget,
       throughputTracksPerSecond: 0,
       timings: { analyzeMs: 0, preflightMs: 0, totalMs: 0 },
+      workerThreadBudgets: [],
     });
   }
   const outputDirectories = absolutePaths.map(defaultOutputDirectory);
@@ -380,10 +398,10 @@ export async function analyzeTracks(
   const preflightStarted = performance.now();
   const verifiedHelpers = new Set<string>();
   const prepared = absolutePaths.map((audioPath) =>
-    prepareAnalysis(audioPath, options, verifiedHelpers),
+    prepareAnalysis(audioPath, { ...options, threads: undefined }, verifiedHelpers),
   );
   const preflightMs = roundMilliseconds(performance.now() - preflightStarted);
-  const concurrency = Math.min(configuredConcurrency, absolutePaths.length);
+  const concurrency = Math.min(configuredConcurrency, threadBudget, absolutePaths.length);
   const results = Array.from<RekordboxAnalysisResult>({ length: absolutePaths.length });
   const failures = Array.from<AnalyzeTrackFailure | undefined>({ length: absolutePaths.length });
   const pending: number[] = [];
@@ -402,8 +420,10 @@ export async function analyzeTracks(
     } else pending.push(index);
   }
   const analyzeStarted = performance.now();
+  const activeWorkers = Math.min(concurrency, pending.length);
+  const workerThreadBudgets = distributeThreadBudget(threadBudget, activeWorkers);
   let nextIndex = 0;
-  const worker = async () => {
+  const worker = async (nativeThreads: number) => {
     while (true) {
       if (options.signal?.aborted) return;
       const index = pending[nextIndex++];
@@ -417,7 +437,7 @@ export async function analyzeTracks(
         total: absolutePaths.length,
       });
       try {
-        const analysis = prepared[index]!;
+        const analysis = withAnalyzerThreads(prepared[index]!, nativeThreads);
         const stdout = await runAnalyzerWithCompatibilityFallback(
           analysis,
           options.timeoutMs ?? 300_000,
@@ -462,7 +482,7 @@ export async function analyzeTracks(
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(concurrency, pending.length) }, worker));
+  await Promise.all(workerThreadBudgets.map(worker));
   const analyzeMs = roundMilliseconds(performance.now() - analyzeStarted);
   const totalMs = roundMilliseconds(performance.now() - started);
   const itemFailures = failures.filter(
@@ -483,9 +503,11 @@ export async function analyzeTracks(
     failed: itemFailures.length,
     requested: absolutePaths.length,
     results,
+    threadBudget,
     throughputTracksPerSecond:
       analyzed && analyzeMs ? roundMilliseconds((analyzed * 1_000) / analyzeMs) : 0,
     timings: { analyzeMs, preflightMs, totalMs },
+    workerThreadBudgets,
   };
   if (options.signal?.aborted) {
     throw new AnalyzeTracksCancelledError(abortError(options.signal), partialResult, itemFailures);
@@ -500,10 +522,39 @@ export async function analyzeTracks(
     elapsedMs: Math.round(totalMs),
     requested: absolutePaths.length,
     results,
+    threadBudget,
     throughputTracksPerSecond:
       pending.length && analyzeMs ? roundMilliseconds((pending.length * 1_000) / analyzeMs) : 0,
     timings: { analyzeMs, preflightMs, totalMs },
+    workerThreadBudgets,
   };
+}
+
+function distributeThreadBudget(threadBudget: number, workers: number): Array<number> {
+  if (workers === 0) return [];
+  const base = Math.floor(threadBudget / workers);
+  const remainder = threadBudget % workers;
+  return Array.from({ length: workers }, (_, index) => base + Number(index < remainder));
+}
+
+function withAnalyzerThreads(prepared: PreparedAnalysis, threads: number): PreparedAnalysis {
+  if (prepared.engine !== "clean") return prepared;
+  return {
+    ...prepared,
+    env: {
+      ...prepared.env,
+      [analyzerThreadsEnvironment]: String(threads),
+    },
+  };
+}
+
+function validateAnalyzerThreads(value: number, label = "Analyzer threads"): number {
+  if (!Number.isInteger(value) || value < 1 || value > maximumAnalyzerThreads) {
+    throw new TypeError(
+      `${label} must be an integer between 1 and ${String(maximumAnalyzerThreads)}`,
+    );
+  }
+  return value;
 }
 
 function emitAnalyzeProgress(
@@ -553,6 +604,7 @@ function prepareAnalysis(
           : "; the local reference oracle is not included in releases"
       }`,
     );
+  if (options.threads !== undefined) validateAnalyzerThreads(options.threads);
   const env = analyzerEnvironment(engine, analyzerBinary, options);
   verifyAnalyzerEngine(engine, analyzerBinary, env, verifiedHelpers);
   const source = sourceFingerprint(absoluteAudioPath);
@@ -656,11 +708,14 @@ function cachedResultMatchesEngine(
 function analyzerEnvironment(
   engine: AnalyzerEngine,
   analyzerBinary: string,
-  options: Pick<AnalyzeTrackOptions, "rekordboxApp" | "rekordboxCache">,
+  options: Pick<AnalyzeTrackOptions, "rekordboxApp" | "rekordboxCache" | "threads">,
 ): NodeJS.ProcessEnv {
   const env = { ...process.env };
   env.REKORDBOX_ANALYZER_ENGINE = engine;
   env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
+  if (engine === "clean" && options.threads !== undefined) {
+    env[analyzerThreadsEnvironment] = String(options.threads);
+  }
   if (options.rekordboxApp) env.REKORDBOX_ANALYZER_APP = resolve(options.rekordboxApp);
   if (options.rekordboxCache) env.REKORDBOX_ANALYZER_CACHE = resolve(options.rekordboxCache);
   return env;

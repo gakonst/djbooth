@@ -227,7 +227,7 @@ try {
     "--engine native",
     "shared cross-process database lock",
     "offline bulk workflows",
-    "packages do not redistribute the proprietary helper",
+    "reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact",
     "## 8. Serve and load connected CDJs",
     "Spotify streaming tracks cannot be LINK EXPORTed",
     "music djlink search <query>",

@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use rayon::prelude::*;
 use rustfft::{FftPlanner, num_complex::Complex32};
 use serde::{Deserialize, Serialize};
 
@@ -82,23 +83,67 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
 }
 
 fn spectral_flux(samples: &[f32]) -> Vec<f32> {
+    let frame_count = samples
+        .len()
+        .saturating_sub(FFT_SIZE)
+        .checked_div(HOP_SIZE)
+        .unwrap_or_default()
+        + usize::from(samples.len() >= FFT_SIZE);
+    if frame_count == 0 {
+        return Vec::new();
+    }
     let window = (0..FFT_SIZE)
         .map(|index| {
             0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
         })
         .collect::<Vec<_>>();
+    let worker_count = rayon::current_thread_index()
+        .map(|_| rayon::current_num_threads())
+        .unwrap_or(1)
+        .min(frame_count);
+    let chunk_len = frame_count.div_ceil(worker_count);
+    let ranges = (0..frame_count)
+        .step_by(chunk_len)
+        .map(|start| start..(start + chunk_len).min(frame_count))
+        .collect::<Vec<_>>();
+    let chunks = ranges
+        .into_par_iter()
+        .map(|range| spectral_flux_range(samples, &window, range))
+        .collect::<Vec<_>>();
+    let mut flux = Vec::with_capacity(frame_count);
+    for chunk in chunks {
+        flux.extend(chunk);
+    }
+
+    adaptive_normalize(&flux, 8)
+}
+
+fn spectral_flux_range(samples: &[f32], window: &[f32], range: std::ops::Range<usize>) -> Vec<f32> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
     let mut previous = vec![0.0f32; FFT_SIZE / 2 + 1];
-    let mut flux = Vec::with_capacity(samples.len().saturating_sub(FFT_SIZE) / HOP_SIZE + 1);
+    let mut flux = Vec::with_capacity(range.len());
 
-    for frame in samples.windows(FFT_SIZE).step_by(HOP_SIZE) {
+    if range.start > 0 {
+        let previous_start = (range.start - 1) * HOP_SIZE;
+        let frame = &samples[previous_start..previous_start + FFT_SIZE];
         for (index, value) in frame.iter().enumerate() {
             spectrum[index] = Complex32::new(*value * window[index], 0.0);
         }
         fft.process(&mut spectrum);
+        for (magnitude, bin) in previous.iter_mut().zip(&spectrum).skip(1) {
+            *magnitude = (1.0 + 10.0 * bin.norm()).ln();
+        }
+    }
 
+    for frame_index in range {
+        let frame_start = frame_index * HOP_SIZE;
+        let frame = &samples[frame_start..frame_start + FFT_SIZE];
+        for (index, value) in frame.iter().enumerate() {
+            spectrum[index] = Complex32::new(*value * window[index], 0.0);
+        }
+        fft.process(&mut spectrum);
         let mut value = 0.0;
         for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
             let magnitude = (1.0 + 10.0 * bin.norm()).ln();
@@ -107,8 +152,7 @@ fn spectral_flux(samples: &[f32]) -> Vec<f32> {
         }
         flux.push(value);
     }
-
-    adaptive_normalize(&flux, 8)
+    flux
 }
 
 fn adaptive_normalize(values: &[f32], radius: usize) -> Vec<f32> {
