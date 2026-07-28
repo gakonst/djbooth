@@ -53,19 +53,15 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     let (period, initial_phase, mut alignment) = refine_period_and_phase(&onset, initial_period);
     let selected_phase = robust_phase(&onset, period, initial_phase);
     let energy_phase = robust_energy_phase(&onset, period, selected_phase);
-    let time_domain_phase = robust_time_domain_phase(
-        samples,
-        sample_rate,
-        onset.full.len(),
-        period,
-        selected_phase,
-    );
+    let time_domain = time_domain_envelopes(samples, sample_rate, onset.full.len());
+    let time_domain_phase = select_time_domain_phase(&time_domain, period, selected_phase);
     let phase = if energy_phase != selected_phase {
         energy_phase
     } else {
         time_domain_phase
     };
     let phase = robust_body_phase(&onset, period, phase);
+    let phase = robust_peak_cadence_phase(&time_domain, period, phase);
     if phase != initial_phase {
         alignment = grid_alignment_score(&onset, period, phase);
     }
@@ -145,6 +141,7 @@ struct OnsetEnvelopes {
 struct TimeDomainEnvelopes {
     peak: Vec<f32>,
     rms: Vec<f32>,
+    low_rms_local: Vec<f32>,
     mid_rms: Vec<f32>,
     high_rms: Vec<f32>,
 }
@@ -348,17 +345,6 @@ fn robust_energy_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32)
     }
 }
 
-fn robust_time_domain_phase(
-    samples: &[f32],
-    sample_rate: u32,
-    frame_count: usize,
-    period: f32,
-    selected_phase: f32,
-) -> f32 {
-    let envelopes = time_domain_envelopes(samples, sample_rate, frame_count);
-    select_time_domain_phase(&envelopes, period, selected_phase)
-}
-
 fn select_time_domain_phase(
     envelopes: &TimeDomainEnvelopes,
     period: f32,
@@ -387,6 +373,66 @@ fn select_time_domain_phase(
     }
 }
 
+fn robust_peak_cadence_phase(
+    envelopes: &TimeDomainEnvelopes,
+    period: f32,
+    selected_phase: f32,
+) -> f32 {
+    const SEGMENT_BEATS: usize = 16;
+
+    let candidate_phase = (selected_phase + period * 0.5).rem_euclid(period);
+    let selected = optimized_time_domain_evidence(envelopes, period, selected_phase);
+    let candidate = optimized_time_domain_evidence(envelopes, period, candidate_phase);
+    let selected_low =
+        optimized_envelope_moments(&envelopes.low_rms_local, period, selected_phase).0;
+    let candidate_low =
+        optimized_envelope_moments(&envelopes.low_rms_local, period, candidate_phase).0;
+    let (selected_votes, candidate_votes, tied_votes) = cadence_phase_votes(
+        &envelopes.peak,
+        period,
+        selected_phase,
+        candidate_phase,
+        SEGMENT_BEATS,
+    );
+    let (selected_low_votes, candidate_low_votes, tied_low_votes) = cadence_phase_votes(
+        &envelopes.low_rms_local,
+        period,
+        selected_phase,
+        candidate_phase,
+        SEGMENT_BEATS,
+    );
+    let total_votes = selected_votes + candidate_votes + tied_votes;
+    let total_low_votes = selected_low_votes + candidate_low_votes + tied_low_votes;
+    let supported = total_votes >= 8
+        && total_low_votes >= 8
+        && peak_cadence_supports_opposite_phase(
+            candidate_votes as f32 / total_votes.max(1) as f32,
+            candidate_low_votes as f32 / total_low_votes.max(1) as f32,
+            candidate.peak_mean / selected.peak_mean.max(f32::EPSILON),
+            candidate.peak_top_half / selected.peak_top_half.max(f32::EPSILON),
+            candidate_low / selected_low.max(f32::EPSILON),
+        );
+    if supported {
+        candidate_phase
+    } else {
+        selected_phase
+    }
+}
+
+fn peak_cadence_supports_opposite_phase(
+    vote_share: f32,
+    low_vote_share: f32,
+    peak_mean_ratio: f32,
+    peak_top_half_ratio: f32,
+    low_local_ratio: f32,
+) -> bool {
+    vote_share >= 0.6
+        && low_vote_share >= 0.6
+        && (1.03..=1.10).contains(&peak_mean_ratio)
+        && peak_top_half_ratio <= 0.98
+        && low_local_ratio >= 0.5
+}
+
 fn time_domain_envelopes(
     samples: &[f32],
     sample_rate: u32,
@@ -401,6 +447,7 @@ fn time_domain_envelopes(
     let block_count = samples.len().div_ceil(HOP_SIZE);
     let mut peak = Vec::with_capacity(block_count);
     let mut rms = Vec::with_capacity(block_count);
+    let mut low_rms = Vec::with_capacity(block_count);
     let mut mid_rms = Vec::with_capacity(block_count);
     let mut high_rms = Vec::with_capacity(block_count);
     let mut low_state = 0.0f32;
@@ -408,6 +455,7 @@ fn time_domain_envelopes(
     for block in samples.chunks(HOP_SIZE) {
         let mut peak_value = 0.0f32;
         let mut energy = 0.0f32;
+        let mut low_energy = 0.0f32;
         let mut mid_energy = 0.0f32;
         let mut high_energy = 0.0f32;
         for &sample in block {
@@ -417,18 +465,29 @@ fn time_domain_envelopes(
             let high = sample - high_cut_state;
             peak_value = peak_value.max(sample.abs());
             energy += sample * sample;
+            low_energy += low_state * low_state;
             mid_energy += mid * mid;
             high_energy += high * high;
         }
         let denominator = block.len().max(1) as f32;
         peak.push(peak_value);
         rms.push((energy / denominator).sqrt());
+        low_rms.push((low_energy / denominator).sqrt());
         mid_rms.push((mid_energy / denominator).sqrt());
         high_rms.push((high_energy / denominator).sqrt());
     }
+    let align = |values: &[f32]| {
+        values
+            .iter()
+            .skip(FFT_CENTER_OFFSET_FRAMES as usize)
+            .take(frame_count)
+            .copied()
+            .collect::<Vec<_>>()
+    };
     TimeDomainEnvelopes {
         peak: align_and_normalize_envelope(&peak, frame_count),
         rms: align_and_normalize_envelope(&rms, frame_count),
+        low_rms_local: adaptive_normalize(&align(&low_rms), 8),
         mid_rms: align_and_normalize_envelope(&mid_rms, frame_count),
         high_rms: align_and_normalize_envelope(&high_rms, frame_count),
     }
@@ -456,6 +515,7 @@ fn align_and_normalize_envelope(values: &[f32], frame_count: usize) -> Vec<f32> 
 #[derive(Clone, Copy, Default)]
 struct TimeDomainEvidence {
     peak_mean: f32,
+    peak_top_half: f32,
     rms_top_half: f32,
     mid_squared: f32,
     high_top_half: f32,
@@ -468,6 +528,7 @@ fn optimized_time_domain_evidence(
 ) -> TimeDomainEvidence {
     let mut best = TimeDomainEvidence {
         peak_mean: f32::NEG_INFINITY,
+        peak_top_half: f32::NEG_INFINITY,
         rms_top_half: f32::NEG_INFINITY,
         mid_squared: f32::NEG_INFINITY,
         high_top_half: f32::NEG_INFINITY,
@@ -476,6 +537,7 @@ fn optimized_time_domain_evidence(
     for step in -radius_steps..=radius_steps {
         let evidence = time_domain_evidence(envelopes, period, phase + step as f32 * 0.25);
         best.peak_mean = best.peak_mean.max(evidence.peak_mean);
+        best.peak_top_half = best.peak_top_half.max(evidence.peak_top_half);
         best.rms_top_half = best.rms_top_half.max(evidence.rms_top_half);
         best.mid_squared = best.mid_squared.max(evidence.mid_squared);
         best.high_top_half = best.high_top_half.max(evidence.high_top_half);
@@ -494,24 +556,26 @@ fn time_domain_evidence(
         frame += period;
     }
     let end = envelopes.rms.len() as f32 - margin;
-    let mut peak_sum = 0.0;
     let mut mid_squared = 0.0;
+    let mut peaks = Vec::new();
     let mut rms = Vec::new();
     let mut high = Vec::new();
     while frame < end {
-        peak_sum += interpolate(&envelopes.peak, frame);
+        peaks.push(interpolate(&envelopes.peak, frame));
         let mid = interpolate(&envelopes.mid_rms, frame);
         mid_squared += mid * mid;
         rms.push(interpolate(&envelopes.rms, frame));
         high.push(interpolate(&envelopes.high_rms, frame));
         frame += period;
     }
+    peaks.sort_by(|left, right| right.total_cmp(left));
     rms.sort_by(|left, right| right.total_cmp(left));
     high.sort_by(|left, right| right.total_cmp(left));
     let count = rms.len().max(1) as f32;
     let retained = (rms.len() / 2).max(1);
     TimeDomainEvidence {
-        peak_mean: peak_sum / count,
+        peak_mean: peaks.iter().sum::<f32>() / count,
+        peak_top_half: peaks.iter().take(retained).sum::<f32>() / retained as f32,
         rms_top_half: rms.iter().take(retained).sum::<f32>() / retained as f32,
         mid_squared: mid_squared / count,
         high_top_half: high.iter().take(retained).sum::<f32>() / retained as f32,
@@ -935,6 +999,53 @@ fn phase_segment_votes(
     (selected_votes, candidate_votes, tied_votes)
 }
 
+fn cadence_phase_votes(
+    envelope: &[f32],
+    period: f32,
+    selected_phase: f32,
+    candidate_phase: f32,
+    segment_beats: usize,
+) -> (usize, usize, usize) {
+    let margin = period * 4.0;
+    let end = envelope.len() as f32 - margin;
+    let mut selected_frame = selected_phase;
+    let mut candidate_frame = candidate_phase;
+    while selected_frame < margin {
+        selected_frame += period;
+    }
+    while candidate_frame < margin {
+        candidate_frame += period;
+    }
+
+    let mut selected_votes = 0;
+    let mut candidate_votes = 0;
+    let mut tied_votes = 0;
+    let mut selected_score = 0.0;
+    let mut candidate_score = 0.0;
+    let mut beat_count = 0;
+    while selected_frame < end && candidate_frame < end {
+        selected_score += interpolate(envelope, selected_frame);
+        candidate_score += interpolate(envelope, candidate_frame);
+        beat_count += 1;
+        selected_frame += period;
+        candidate_frame += period;
+        if beat_count == segment_beats {
+            let scale = selected_score.max(candidate_score).max(f32::EPSILON);
+            if (selected_score - candidate_score).abs() <= scale * 0.01 {
+                tied_votes += 1;
+            } else if selected_score > candidate_score {
+                selected_votes += 1;
+            } else {
+                candidate_votes += 1;
+            }
+            selected_score = 0.0;
+            candidate_score = 0.0;
+            beat_count = 0;
+        }
+    }
+    (selected_votes, candidate_votes, tied_votes)
+}
+
 fn record_phase_vote(
     selected_score: f32,
     candidate_score: f32,
@@ -1011,6 +1122,7 @@ struct VariableGridCandidate {
     offset_min: f64,
     offset_max: f64,
     transition_abs_max: f64,
+    offset_trend_correlation: f64,
 }
 
 fn should_select_variable_grid(candidate: &VariableGridCandidate) -> bool {
@@ -1020,11 +1132,18 @@ fn should_select_variable_grid(candidate: &VariableGridCandidate) -> bool {
     const MIN_FORWARD_OFFSET_FRAMES: f64 = 10.0;
     const MIN_BACKWARD_OFFSET_FRAMES: f64 = -2.0;
 
-    candidate.emission_gain >= MIN_EMISSION_GAIN
+    let forward_drift = candidate.emission_gain >= MIN_EMISSION_GAIN
         && candidate.transition_abs_max <= MAX_BAR_TRANSITION_FRAMES
         && candidate.offset_max - candidate.offset_min >= MIN_ACCUMULATED_DRIFT_FRAMES
         && candidate.offset_max >= MIN_FORWARD_OFFSET_FRAMES
-        && candidate.offset_min >= MIN_BACKWARD_OFFSET_FRAMES
+        && candidate.offset_min >= MIN_BACKWARD_OFFSET_FRAMES;
+    let coherent_backward_drift = candidate.emission_gain >= 0.24
+        && candidate.transition_abs_max <= 2.0
+        && candidate.offset_max - candidate.offset_min >= 20.0
+        && candidate.offset_min <= -10.0
+        && candidate.offset_max <= 8.0
+        && candidate.offset_trend_correlation.abs() >= 0.70;
+    forward_drift || coherent_backward_drift
 }
 
 fn barwise_tempo_grid(
@@ -1142,12 +1261,42 @@ fn barwise_tempo_grid(
         .windows(2)
         .map(|pair| (pair[1] - pair[0]).abs())
         .fold(0.0, f64::max);
+    let offset_trend_correlation = index_correlation(&offsets);
     VariableGridCandidate {
         beats,
         emission_gain: selected_emission - constant_emission,
         offset_min,
         offset_max,
         transition_abs_max,
+        offset_trend_correlation,
+    }
+}
+
+fn index_correlation(values: &[f64]) -> f64 {
+    if values.len() < 2 {
+        return 0.0;
+    }
+    let count = values.len() as f64;
+    let index_mean = (count - 1.0) * 0.5;
+    let value_mean = values.iter().sum::<f64>() / count;
+    let (covariance, index_variance, value_variance) =
+        values
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0, 0.0), |accumulator, (index, value)| {
+                let centered_index = index as f64 - index_mean;
+                let centered_value = *value - value_mean;
+                (
+                    accumulator.0 + centered_index * centered_value,
+                    accumulator.1 + centered_index * centered_index,
+                    accumulator.2 + centered_value * centered_value,
+                )
+            });
+    let denominator = (index_variance * value_variance).sqrt();
+    if denominator <= f64::EPSILON {
+        0.0
+    } else {
+        covariance / denominator
     }
 }
 
@@ -1267,6 +1416,7 @@ mod tests {
         const BEATS: usize = 200;
         let mut peak = vec![0.0; PERIOD * BEATS];
         let mut rms = peak.clone();
+        let mut low_rms_local = peak.clone();
         let mut mid_rms = peak.clone();
         let mut high_rms = peak.clone();
         for beat in 0..BEATS {
@@ -1276,6 +1426,8 @@ mod tests {
             peak[candidate] = peak_levels.1;
             rms[selected] = rms_levels.0;
             rms[candidate] = rms_levels.1;
+            low_rms_local[selected] = rms_levels.0;
+            low_rms_local[candidate] = rms_levels.1;
             mid_rms[selected] = mid_levels.0;
             mid_rms[candidate] = mid_levels.1;
             high_rms[selected] = high_levels.0;
@@ -1284,6 +1436,7 @@ mod tests {
         TimeDomainEnvelopes {
             peak,
             rms,
+            low_rms_local,
             mid_rms,
             high_rms,
         }
@@ -1369,26 +1522,43 @@ mod tests {
 
     #[test]
     fn variable_grid_gate_requires_smooth_directional_drift() {
-        let candidate =
-            |emission_gain, offset_min, offset_max, transition_abs_max| VariableGridCandidate {
-                beats: Vec::new(),
-                emission_gain,
-                offset_min,
-                offset_max,
-                transition_abs_max,
-            };
+        let candidate = |emission_gain,
+                         offset_min,
+                         offset_max,
+                         transition_abs_max,
+                         offset_trend_correlation| VariableGridCandidate {
+            beats: Vec::new(),
+            emission_gain,
+            offset_min,
+            offset_max,
+            transition_abs_max,
+            offset_trend_correlation,
+        };
         assert!(should_select_variable_grid(&candidate(
-            0.37, -1.5, 12.0, 0.75,
+            0.37, -1.5, 12.0, 0.75, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.35, -1.5, 12.0, 0.75,
+            0.35, -1.5, 12.0, 0.75, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.37, -2.5, 12.0, 0.75,
+            0.37, -2.5, 12.0, 0.75, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.37, -1.5, 9.5, 1.0,
+            0.37, -1.5, 9.5, 1.0, 0.0,
         )));
+        assert!(should_select_variable_grid(&candidate(
+            0.24, -14.0, 7.0, 2.0, -0.70,
+        )));
+        assert!(!should_select_variable_grid(&candidate(
+            0.24, -14.0, 7.0, 2.0, -0.69,
+        )));
+    }
+
+    #[test]
+    fn index_correlation_requires_coherent_motion() {
+        assert!((index_correlation(&[4.0, 2.0, 0.0, -2.0]) + 1.0).abs() < 1.0e-12);
+        assert_eq!(index_correlation(&[3.0, 3.0, 3.0]), 0.0);
+        assert_eq!(index_correlation(&[3.0]), 0.0);
     }
 
     #[test]
@@ -1490,6 +1660,45 @@ mod tests {
         assert!(!body_consensus_supports_opposite_phase(
             0.20, 0.20, 0.67, 1.96, 0.98, 0.95,
         ));
+    }
+
+    #[test]
+    fn peak_cadence_requires_bounded_gain_and_low_band_support() {
+        assert!(peak_cadence_supports_opposite_phase(
+            0.61, 0.72, 1.05, 0.96, 0.55,
+        ));
+        assert!(!peak_cadence_supports_opposite_phase(
+            0.59, 0.72, 1.05, 0.96, 0.55,
+        ));
+        assert!(!peak_cadence_supports_opposite_phase(
+            0.61, 0.59, 1.05, 0.96, 0.55,
+        ));
+        assert!(!peak_cadence_supports_opposite_phase(
+            0.61, 0.72, 1.11, 0.96, 0.55,
+        ));
+        assert!(!peak_cadence_supports_opposite_phase(
+            0.61, 0.72, 1.05, 0.99, 0.55,
+        ));
+        assert!(!peak_cadence_supports_opposite_phase(
+            0.61, 0.72, 1.05, 0.96, 0.49,
+        ));
+    }
+
+    #[test]
+    fn cadence_votes_compare_complete_relative_segments() {
+        let mut envelope = vec![0.0; 40 * 200];
+        for beat in 0..200 {
+            envelope[beat * 40 + 10] = 0.5;
+            envelope[beat * 40 + 30] = if (beat / 16).is_multiple_of(3) {
+                0.4
+            } else {
+                0.6
+            };
+        }
+        let (selected, candidate, tied) = cadence_phase_votes(&envelope, 40.0, 10.0, 30.0, 16);
+        assert!(candidate > selected);
+        assert_eq!(tied, 0);
+        assert_eq!(selected + candidate, 12);
     }
 
     #[test]

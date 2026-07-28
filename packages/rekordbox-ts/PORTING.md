@@ -753,3 +753,42 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   complex-bass, and HFC combinations that failed the fresh controls. ID 12 and
   alternate Apathy/Conga copies retain contradictory half-beat annotations;
   no track-specific exception was added.
+
+## Peak-cadence and backward-drift checkpoint (2026-07-28)
+
+- Added a final time-domain cadence gate for residual half-beat errors. A phase
+  can move only when at least eight complete 16-beat windows, bounded
+  whole-track peak gain, reduced top-half peak saturation, and independent
+  locally normalized low-band mean and segment votes agree. The low envelope
+  reuses the existing `250 Hz` one-pole state; no transform or proprietary
+  runtime was added.
+- The first peak-only candidate correctly fixed both `I Never Knew` versions
+  but incorrectly selected Jay Vegas' `Come Soon`, whose prior grid already
+  scored `0.998588` F1. Low-band cadence voted `43–0` against that move, while
+  the two valid corrections voted `28–1` and `37–1` for it. Requiring
+  cross-band vote consensus retained both fixes and made `Come Soon`
+  byte-identical again.
+- Extended the existing barwise Viterbi selector with a symmetric
+  negative-basin branch. It accepts only at least `0.24` emission gain,
+  `<=2`-frame bar transitions, `>=20` frames of total drift, a
+  `-10..=8`-frame basin, and at least `0.70` absolute Pearson correlation
+  between bar index and selected offset. This adds only linear arithmetic over
+  the already-computed state path.
+- The backward branch changed only the two James Brown variable-tempo tracks.
+  `I Got Ants In My Pants` moved from `0.579242 → 0.732132` F1 and
+  `251.275 → 214.855 ms` p95 while emitting 140 local tempo changes against
+  175 native changes. `Get Up Offa That Thing` moved from
+  `0.682652 → 0.899859` F1 and `184.260 → 133.190 ms` p95 with 64 changes
+  against 72 native changes.
+- Combined exact replay changed only differential IDs 58, 61, 106, and 110.
+  Tracks at `>=0.99` F1 moved from `92 → 94/110`; mean F1 moved from
+  `0.855844 → 0.877391`, and mean p95 timing error from
+  `49.187 → 44.088 ms`. Both `I Never Knew` versions reached `1.0` timing F1
+  and `4.165/3.527 ms` p95. Their native grids retain a two-beat meter-label
+  rotation, so downbeat numbering remains a separate open problem.
+- Final selectors changed `0/848` available held-out DATs and `0/609`
+  additional disjoint DATs. The three held-out paths admitted by the broader
+  backward-drift superset had trend correlations of only
+  `0.060/0.204/0.406` and remained byte-identical under the final gate.
+  Forty alternating five-track runs measured `1.299 s` candidate versus
+  `1.291 s` baseline median (`+0.60%`), with no failures.
