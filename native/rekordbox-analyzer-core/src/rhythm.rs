@@ -8,7 +8,12 @@ use crate::anlz::BeatGridEntry;
 const FFT_SIZE: usize = 2_048;
 const HOP_SIZE: usize = 512;
 const LOW_ONSET_MAX_BIN: usize = 7;
+const BASS_ONSET_MAX_BIN: usize = 12;
 const BODY_ONSET_MAX_BIN: usize = 93;
+const KICK_ONSET_MIN_BIN: usize = 5;
+const KICK_ONSET_MAX_BIN: usize = 12;
+const MID_ONSET_MIN_BIN: usize = 33;
+const MID_ONSET_MAX_BIN: usize = 64;
 const FFT_CENTER_OFFSET_FRAMES: f32 = FFT_SIZE as f32 / (2 * HOP_SIZE) as f32;
 const MIN_BPM: f32 = 70.0;
 const MAX_BPM: f32 = 180.0;
@@ -45,7 +50,11 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     }
     let onset_rate = sample_rate as f32 / HOP_SIZE as f32;
     let (initial_period, tempo_score, runner_up_score) = estimate_period(&onset.full, onset_rate)?;
-    let (period, phase, alignment) = refine_period_and_phase(&onset, initial_period);
+    let (period, initial_phase, mut alignment) = refine_period_and_phase(&onset, initial_period);
+    let phase = robust_phase(&onset, period, initial_phase);
+    if phase != initial_phase {
+        alignment = grid_alignment_score(&onset, period, phase);
+    }
     let raw_beats = regular_grid(onset.full.len() as f64, period, phase);
     if raw_beats.len() < 4 {
         bail!("beat analysis produced too few beats");
@@ -95,6 +104,9 @@ struct OnsetEnvelopes {
     full: Vec<f32>,
     low: Vec<f32>,
     body: Vec<f32>,
+    kick: Vec<f32>,
+    bass: Vec<f32>,
+    mid: Vec<f32>,
 }
 
 fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
@@ -109,6 +121,9 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
             full: Vec::new(),
             low: Vec::new(),
             body: Vec::new(),
+            kick: Vec::new(),
+            bass: Vec::new(),
+            mid: Vec::new(),
         };
     }
     let window = (0..FFT_SIZE)
@@ -132,16 +147,25 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
     let mut full = Vec::with_capacity(frame_count);
     let mut low = Vec::with_capacity(frame_count);
     let mut body = Vec::with_capacity(frame_count);
-    for (full_chunk, low_chunk, body_chunk) in chunks {
-        full.extend(full_chunk);
-        low.extend(low_chunk);
-        body.extend(body_chunk);
+    let mut kick = Vec::with_capacity(frame_count);
+    let mut bass = Vec::with_capacity(frame_count);
+    let mut mid = Vec::with_capacity(frame_count);
+    for chunk in chunks {
+        full.extend(chunk.full);
+        low.extend(chunk.low);
+        body.extend(chunk.body);
+        kick.extend(chunk.kick);
+        bass.extend(chunk.bass);
+        mid.extend(chunk.mid);
     }
 
     OnsetEnvelopes {
         full: adaptive_normalize(&full, 8),
         low: adaptive_normalize(&low, 8),
         body: adaptive_normalize(&body, 8),
+        kick: adaptive_normalize(&kick, 8),
+        bass: adaptive_normalize(&bass, 8),
+        mid: adaptive_normalize(&mid, 8),
     }
 }
 
@@ -149,7 +173,7 @@ fn spectral_flux_range(
     samples: &[f32],
     window: &[f32],
     range: std::ops::Range<usize>,
-) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+) -> OnsetEnvelopes {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
@@ -157,6 +181,9 @@ fn spectral_flux_range(
     let mut full_flux = Vec::with_capacity(range.len());
     let mut low_flux = Vec::with_capacity(range.len());
     let mut body_flux = Vec::with_capacity(range.len());
+    let mut kick_flux = Vec::with_capacity(range.len());
+    let mut bass_flux = Vec::with_capacity(range.len());
+    let mut mid_flux = Vec::with_capacity(range.len());
 
     if range.start > 0 {
         let previous_start = (range.start - 1) * HOP_SIZE;
@@ -180,6 +207,9 @@ fn spectral_flux_range(
         let mut full_value = 0.0;
         let mut low_value = 0.0;
         let mut body_value = 0.0;
+        let mut kick_value = 0.0;
+        let mut bass_value = 0.0;
+        let mut mid_value = 0.0;
         for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
             let magnitude = (1.0 + 10.0 * bin.norm()).ln();
             let difference = (magnitude - previous[index]).max(0.0);
@@ -190,13 +220,32 @@ fn spectral_flux_range(
             if index <= BODY_ONSET_MAX_BIN {
                 body_value += difference;
             }
+            if (KICK_ONSET_MIN_BIN..=KICK_ONSET_MAX_BIN).contains(&index) {
+                kick_value += difference;
+            }
+            if index <= BASS_ONSET_MAX_BIN {
+                bass_value += difference;
+            }
+            if (MID_ONSET_MIN_BIN..=MID_ONSET_MAX_BIN).contains(&index) {
+                mid_value += difference;
+            }
             previous[index] = magnitude;
         }
         full_flux.push(full_value);
         low_flux.push(low_value);
         body_flux.push(body_value);
+        kick_flux.push(kick_value);
+        bass_flux.push(bass_value);
+        mid_flux.push(mid_value);
     }
-    (full_flux, low_flux, body_flux)
+    OnsetEnvelopes {
+        full: full_flux,
+        low: low_flux,
+        body: body_flux,
+        kick: kick_flux,
+        bass: bass_flux,
+        mid: mid_flux,
+    }
 }
 
 fn adaptive_normalize(values: &[f32], radius: usize) -> Vec<f32> {
@@ -243,19 +292,25 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
         *value = normalized_correlation(onset, lag);
     }
 
-    let mut candidates = (min_lag..=max_lag)
-        .map(|lag| {
-            let bpm = 60.0 * onset_rate / lag as f32;
-            let center_prior = (-0.5 * (bpm / 120.0).log2().powi(2) / 0.55f32.powi(2)).exp();
-            let harmonic = correlations.get(lag * 2).copied().unwrap_or_default() * 0.10
-                + correlations.get(lag / 2).copied().unwrap_or_default() * 0.15;
-            (
-                lag,
-                (correlations[lag] + harmonic) * (0.55 + 0.45 * center_prior),
-            )
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let mut baseline_candidates =
+        tempo_candidates(&correlations, onset_rate, min_lag, max_lag, 0.55, 0.15);
+    let mut alternative_candidates =
+        tempo_candidates(&correlations, onset_rate, min_lag, max_lag, 0.4, 0.10);
+    baseline_candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+    alternative_candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let baseline_lag = baseline_candidates
+        .first()
+        .map(|value| value.0)
+        .unwrap_or(min_lag);
+    let alternative_lag = alternative_candidates
+        .first()
+        .map(|value| value.0)
+        .unwrap_or(baseline_lag);
+    let candidates = if canonical_tempo_ratio(alternative_lag as f32 / baseline_lag as f32) {
+        &alternative_candidates
+    } else {
+        &baseline_candidates
+    };
     let Some(&(best_lag, best_score)) = candidates.first() else {
         bail!("tempo search produced no candidates");
     };
@@ -278,6 +333,35 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
         0.0
     };
     Ok((best_lag as f32 + delta, best_score, runner_up))
+}
+
+fn tempo_candidates(
+    correlations: &[f32],
+    onset_rate: f32,
+    min_lag: usize,
+    max_lag: usize,
+    prior_sigma: f32,
+    half_harmonic_weight: f32,
+) -> Vec<(usize, f32)> {
+    (min_lag..=max_lag)
+        .map(|lag| {
+            let bpm = 60.0 * onset_rate / lag as f32;
+            let center_prior = (-0.5 * (bpm / 120.0).log2().powi(2) / prior_sigma.powi(2)).exp();
+            let harmonic = correlations.get(lag * 2).copied().unwrap_or_default() * 0.10
+                + correlations.get(lag / 2).copied().unwrap_or_default() * half_harmonic_weight;
+            (
+                lag,
+                (correlations[lag] + harmonic) * (0.55 + 0.45 * center_prior),
+            )
+        })
+        .collect()
+}
+
+fn canonical_tempo_ratio(ratio: f32) -> bool {
+    (0.48..=0.52).contains(&ratio)
+        || (0.64..=0.70).contains(&ratio)
+        || (0.78..=0.81).contains(&ratio)
+        || (1.30..=1.36).contains(&ratio)
 }
 
 fn normalized_correlation(values: &[f32], lag: usize) -> f32 {
@@ -349,6 +433,204 @@ fn grid_alignment_score(onset: &OnsetEnvelopes, period: f32, phase: f32) -> f32 
     score / count.max(1) as f32
 }
 
+fn robust_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32) -> f32 {
+    const MIN_SEGMENTS: usize = 8;
+    const MIN_KICK_GAIN: f32 = 0.075;
+    const MIN_KICK_VOTE_SHARE: f32 = 0.75;
+    const MIN_BASS_RATIO: f32 = 1.12;
+    const MIN_MID_MEAN_RATIO: f32 = 1.33;
+    const MIN_MID_SQUARED_RATIO: f32 = 1.48;
+    const MIN_MID_KICK_GAIN: f32 = -0.2;
+
+    let selected_kick_score = kick_alignment_score(onset, period, selected_phase);
+    let (kick_phase, kick_score) = best_opposite_phase(period, selected_phase, |phase| {
+        kick_alignment_score(onset, period, phase)
+    });
+    let kick_gain = (kick_score - selected_kick_score) / kick_score.max(f32::EPSILON);
+    let (selected_votes, kick_votes, tied_votes) =
+        kick_segment_votes(onset, period, selected_phase, kick_phase, 16);
+    let total_segments = selected_votes + kick_votes + tied_votes;
+    let selected_bass = optimized_envelope_moments(&onset.bass, period, selected_phase).0;
+    let kick_bass = optimized_envelope_moments(&onset.bass, period, kick_phase).0;
+    if circular_distance(kick_phase, selected_phase, period) >= period * 0.35
+        && kick_gain >= MIN_KICK_GAIN
+        && total_segments >= MIN_SEGMENTS
+        && kick_votes as f32 / total_segments as f32 >= MIN_KICK_VOTE_SHARE
+        && kick_bass > f32::EPSILON
+        && kick_bass >= selected_bass * MIN_BASS_RATIO
+    {
+        return kick_phase;
+    }
+
+    let (mid_phase, _) = best_opposite_phase(period, selected_phase, |phase| {
+        envelope_alignment_moments(&onset.mid, period, phase).0
+    });
+    let selected_mid = optimized_envelope_moments(&onset.mid, period, selected_phase);
+    let candidate_mid = optimized_envelope_moments(&onset.mid, period, mid_phase);
+    if circular_distance(mid_phase, selected_phase, period) >= period * 0.35
+        && candidate_mid.0 > f32::EPSILON
+        && candidate_mid.1 > f32::EPSILON
+        && candidate_mid.0 >= selected_mid.0 * MIN_MID_MEAN_RATIO
+        && candidate_mid.1 >= selected_mid.1 * MIN_MID_SQUARED_RATIO
+        && kick_gain >= MIN_MID_KICK_GAIN
+    {
+        return mid_phase;
+    }
+
+    selected_phase
+}
+
+fn best_opposite_phase(
+    period: f32,
+    selected_phase: f32,
+    mut score: impl FnMut(f32) -> f32,
+) -> (f32, f32) {
+    let mut best = (selected_phase, f32::NEG_INFINITY);
+    for step in 0..(period * 20.0).ceil() as usize {
+        let phase = step as f32 * 0.05;
+        if circular_distance(phase, selected_phase, period) < period * 0.35 {
+            continue;
+        }
+        let candidate_score = score(phase);
+        if candidate_score > best.1 {
+            best = (phase, candidate_score);
+        }
+    }
+    best
+}
+
+fn kick_alignment_score(onset: &OnsetEnvelopes, period: f32, phase: f32) -> f32 {
+    let margin = period * 4.0;
+    let mut frame = phase;
+    while frame < margin {
+        frame += period;
+    }
+    let end = onset.full.len() as f32 - margin;
+    let mut score = 0.0;
+    let mut count = 0usize;
+    while frame < end {
+        score += kick_alignment_value(onset, frame);
+        count += 1;
+        frame += period;
+    }
+    score / count.max(1) as f32
+}
+
+fn kick_alignment_value(onset: &OnsetEnvelopes, frame: f32) -> f32 {
+    let current = 0.65 * interpolate(&onset.low, frame) + 0.35 * interpolate(&onset.body, frame);
+    interpolate(&onset.kick, frame) + 0.1 * current
+}
+
+fn kick_segment_votes(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    selected_phase: f32,
+    candidate_phase: f32,
+    segment_beats: usize,
+) -> (usize, usize, usize) {
+    let margin = period * 4.0;
+    let end = onset.full.len() as f32 - margin;
+    let mut selected_frame = selected_phase;
+    let mut candidate_frame = candidate_phase;
+    while selected_frame < margin {
+        selected_frame += period;
+    }
+    while candidate_frame < margin {
+        candidate_frame += period;
+    }
+
+    let mut selected_votes = 0;
+    let mut candidate_votes = 0;
+    let mut tied_votes = 0;
+    let mut selected_score = 0.0;
+    let mut candidate_score = 0.0;
+    let mut beat_count = 0;
+    while selected_frame < end && candidate_frame < end {
+        selected_score += kick_alignment_value(onset, selected_frame);
+        candidate_score += kick_alignment_value(onset, candidate_frame);
+        beat_count += 1;
+        selected_frame += period;
+        candidate_frame += period;
+        if beat_count == segment_beats {
+            record_phase_vote(
+                selected_score,
+                candidate_score,
+                &mut selected_votes,
+                &mut candidate_votes,
+                &mut tied_votes,
+            );
+            selected_score = 0.0;
+            candidate_score = 0.0;
+            beat_count = 0;
+        }
+    }
+    if beat_count > 0 {
+        record_phase_vote(
+            selected_score / beat_count as f32,
+            candidate_score / beat_count as f32,
+            &mut selected_votes,
+            &mut candidate_votes,
+            &mut tied_votes,
+        );
+    }
+    (selected_votes, candidate_votes, tied_votes)
+}
+
+fn record_phase_vote(
+    selected_score: f32,
+    candidate_score: f32,
+    selected_votes: &mut usize,
+    candidate_votes: &mut usize,
+    tied_votes: &mut usize,
+) {
+    if (selected_score - candidate_score).abs() <= 1.0e-6 {
+        *tied_votes += 1;
+    } else if selected_score > candidate_score {
+        *selected_votes += 1;
+    } else {
+        *candidate_votes += 1;
+    }
+}
+
+fn optimized_envelope_moments(envelope: &[f32], period: f32, phase: f32) -> (f32, f32) {
+    let mut best_mean = f32::NEG_INFINITY;
+    let mut best_squared = f32::NEG_INFINITY;
+    let radius_steps = (period * 0.2 / 0.25).ceil() as i32;
+    for step in -radius_steps..=radius_steps {
+        let (mean, squared) =
+            envelope_alignment_moments(envelope, period, phase + step as f32 * 0.25);
+        best_mean = best_mean.max(mean);
+        best_squared = best_squared.max(squared);
+    }
+    (best_mean, best_squared)
+}
+
+fn envelope_alignment_moments(envelope: &[f32], period: f32, phase: f32) -> (f32, f32) {
+    let margin = period * 4.0;
+    let mut frame = phase;
+    while frame < margin {
+        frame += period;
+    }
+    let end = envelope.len() as f32 - margin;
+    let mut sum = 0.0;
+    let mut squared = 0.0;
+    let mut count = 0;
+    while frame < end {
+        let value = interpolate(envelope, frame);
+        sum += value;
+        squared += value * value;
+        count += 1;
+        frame += period;
+    }
+    let denominator = count.max(1) as f32;
+    (sum / denominator, squared / denominator)
+}
+
+fn circular_distance(left: f32, right: f32, period: f32) -> f32 {
+    let distance = (left - right).abs().rem_euclid(period);
+    distance.min(period - distance)
+}
+
 fn regular_grid(onset_len: f64, period: f32, phase: f32) -> Vec<f64> {
     let mut beats = Vec::new();
     let period = f64::from(period);
@@ -408,6 +690,45 @@ fn interpolate(values: &[f32], position: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn phase_fixture(
+        selected_kick: f32,
+        candidate_kick: f32,
+        selected_bass: f32,
+        candidate_bass: f32,
+        selected_mid: f32,
+        candidate_mid: f32,
+    ) -> OnsetEnvelopes {
+        const PERIOD: usize = 40;
+        const BEATS: usize = 200;
+        let mut low = vec![0.0; PERIOD * BEATS];
+        let mut body = low.clone();
+        let mut kick = low.clone();
+        let mut bass = low.clone();
+        let mut mid = low.clone();
+        for beat in 0..BEATS {
+            let selected = beat * PERIOD + 10;
+            let candidate = beat * PERIOD + 30;
+            low[selected] = 0.6;
+            low[candidate] = 0.6;
+            body[selected] = 0.6;
+            body[candidate] = 0.6;
+            kick[selected] = selected_kick;
+            kick[candidate] = candidate_kick;
+            bass[selected] = selected_bass;
+            bass[candidate] = candidate_bass;
+            mid[selected] = selected_mid;
+            mid[candidate] = candidate_mid;
+        }
+        OnsetEnvelopes {
+            full: body.clone(),
+            low,
+            body,
+            kick,
+            bass,
+            mid,
+        }
+    }
 
     fn clicks(bpm: f32, seconds: usize, downbeat_gain: f32) -> Vec<f32> {
         let sample_rate = 44_100usize;
@@ -485,6 +806,34 @@ mod tests {
         let beats = (0..16).map(|index| index as f32 * 40.0).collect::<Vec<_>>();
         assert_eq!(estimate_bar_offset(&onset, &beats, 38.0, 40.0), 1);
         assert_eq!(estimate_bar_offset(&onset, &beats, 20.0, 40.0), 0);
+    }
+
+    #[test]
+    fn metrical_tempo_gate_only_accepts_validated_ratio_families() {
+        for ratio in [0.5, 2.0 / 3.0, 0.8, 4.0 / 3.0] {
+            assert!(canonical_tempo_ratio(ratio));
+        }
+        for ratio in [0.6, 0.75, 1.0, 1.5] {
+            assert!(!canonical_tempo_ratio(ratio));
+        }
+    }
+
+    #[test]
+    fn kick_phase_requires_bass_and_segment_consensus() {
+        let supported = phase_fixture(0.4, 1.0, 0.4, 1.0, 0.0, 0.0);
+        assert!(circular_distance(robust_phase(&supported, 40.0, 10.0), 30.0, 40.0) < 0.1);
+
+        let offbeat_bass = phase_fixture(0.4, 1.0, 1.0, 1.0, 0.0, 0.0);
+        assert_eq!(robust_phase(&offbeat_bass, 40.0, 10.0), 10.0);
+    }
+
+    #[test]
+    fn mid_band_phase_requires_noncontradictory_kick_evidence() {
+        let supported = phase_fixture(0.6, 0.55, 1.0, 1.0, 0.4, 0.8);
+        assert!(circular_distance(robust_phase(&supported, 40.0, 10.0), 30.0, 40.0) < 0.1);
+
+        let contradicted = phase_fixture(1.0, 0.4, 1.0, 1.0, 0.4, 0.8);
+        assert_eq!(robust_phase(&contradicted, 40.0, 10.0), 10.0);
     }
 
     #[test]

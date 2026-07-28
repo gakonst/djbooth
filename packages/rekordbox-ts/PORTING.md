@@ -639,3 +639,35 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   fractions, correlation, means, MAE, percentiles, extrema, and signed bias.
   Public docs, Music agent guidance, fake-helper tests, deterministic pipeline
   tests, and packed-install smoke contracts cover the new surface.
+
+## Multi-band phase and metrical-tempo checkpoint (2026-07-28)
+
+- Expanded the read-only release gate from the 110-track differential to 849
+  independently sampled, decodable tracks with complete Rekordbox DAT/EXT/2EX
+  references from the 16,071-track master library. The prior analyzer passed
+  694/849 (`81.7%`) at 70 ms; failures separated into half-beat phase,
+  metrical-tempo, and variable-grid classes.
+- Added kick (`108–258 Hz`), cumulative bass (`<=258 Hz`), and mid-band
+  (`710–1,378 Hz`) onset envelopes to the existing STFT pass. A phase can move
+  to the opposite basin only when whole-track gain, at least eight 16-beat
+  windows, and independently optimized bass evidence agree. A second mid-band
+  gate requires both mean and squared-energy gains while rejecting candidates
+  contradicted by kick evidence.
+- Added a second autocorrelation tempo prior and retained it only for validated
+  metrical lag-ratio families near `1/2`, `2/3`, `4/5`, and `4/3`. This avoids
+  the three regressions produced by applying the stronger center prior
+  globally while fixing the constant-grid subdivision errors.
+- Production validation moved the original differential from 79/110 to 85/110
+  tracks at `>=0.99` F1, with mean F1 `0.752310 → 0.803211` and mean p95 timing
+  error `73.445 → 61.530 ms`. No formerly passing track regressed. On the
+  independent library, the complete 64-track switch set produced 59 new
+  passes, 63 improvements, and zero regressions, projecting `694 → 753/849`
+  (`88.7%`) while every non-switch candidate retained the prior path.
+- Kept the hot path bounded: the extra envelopes reuse the existing FFT,
+  segment voting is allocation-free, and alternative tempo ranking spans only
+  the existing lag range. Five real-track release runs averaged `466.68 ms`
+  versus `459.51 ms` before the pass (`+1.56%`).
+- Added synthetic gates for bass-supported kick consensus, off-beat-bass
+  rejection, mid-band evidence with kick veto, and accepted/rejected metrical
+  tempo families. Variable-tempo grids and contradictory/manual duplicate
+  analyses remain explicit open cases rather than track-specific exceptions.
