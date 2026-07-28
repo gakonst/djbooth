@@ -547,7 +547,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts native analysis as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. It never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
+      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. The proprietary reference oracle is opt-in only through --analysis-engine reference and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -567,7 +567,7 @@ export const tracksCli = Cli.create("tracks", {
 
 tracksCli.command("import-existing", {
   description:
-    "Import checkpointed media and native analysis from one manifest in a single verified Rekordbox transaction.",
+    "Import checkpointed media and analyzer artifacts from one manifest in a single verified Rekordbox transaction.",
   args: z.object({ manifest: z.string().describe("Durable dj-set-pipeline manifest path") }),
   options: z.object({
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
@@ -653,11 +653,21 @@ tracksCli.command("analyze-existing", {
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
-      .describe("Parallel native analyzer workers; defaults to 4"),
+      .describe("Parallel clean-room analyzer workers; defaults to 4"),
+    engine: z
+      .enum(["clean", "reference"])
+      .default("clean")
+      .describe("Analyzer engine; clean is releasable, reference is a local parity oracle"),
     force: z.boolean().default(false).describe("Ignore valid cached analyzer summaries"),
-    analyzerBinary: z.string().optional().describe("Native analyzer helper override"),
-    rekordboxApp: z.string().optional().describe("Rekordbox application directory override"),
-    rekordboxCache: z.string().optional().describe("Rekordbox analysis cache override"),
+    analyzerBinary: z.string().optional().describe("Selected analyzer binary override"),
+    rekordboxApp: z
+      .string()
+      .optional()
+      .describe("Reference-engine Rekordbox application directory override"),
+    rekordboxCache: z
+      .string()
+      .optional()
+      .describe("Reference-engine Rekordbox analysis cache override"),
     timeoutMs: z
       .number()
       .int()
@@ -672,6 +682,7 @@ tracksCli.command("analyze-existing", {
     analyzed: z.number().int().nonnegative(),
     cacheHits: z.number().int().nonnegative(),
     concurrency: z.number().int().nonnegative(),
+    engine: z.enum(["clean", "reference"]),
     analysisDirectories: z.record(z.string(), z.string()),
     startedAt: z.string(),
     finishedAt: z.string(),
@@ -689,6 +700,7 @@ tracksCli.command("analyze-existing", {
       const result = await analyzeExistingManifest({
         manifestPath: context.args.manifest,
         concurrency: context.options.concurrency,
+        engine: context.options.engine,
         force: context.options.force,
         timeoutMs: context.options.timeoutMs,
         signal: controller.signal,
@@ -715,6 +727,7 @@ tracksCli.command("analyze-existing", {
         analyzed: result.analysis.analyzed,
         cacheHits: result.analysis.cacheHits,
         concurrency: result.analysis.concurrency,
+        engine: context.options.engine,
         analysisDirectories: result.analysisDirectories,
         startedAt: result.startedAt,
         finishedAt: result.finishedAt,
@@ -731,8 +744,8 @@ tracksCli.command("analyze-existing", {
 
 tracksCli.command("import-set", {
   description:
-    "One-shot an approved set through resolution, deterministic Spotify primary selection, canonical acquisition, same-run cue fallback, native analysis, and one verified ordered Rekordbox playlist commit.",
-  hint: "This is the full set workflow. Pass --allow-set-clips with --source-set-path to recover failed individual tracks automatically in pass 2/2.",
+    "One-shot an approved set through resolution, deterministic Spotify primary selection, canonical acquisition, same-run cue fallback, clean-room analysis, and one verified ordered Rekordbox playlist commit.",
+  hint: "This is the full set workflow; clean analysis is automatic. Pass --allow-set-clips with --source-set-path to recover failed individual tracks automatically in pass 2/2.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
@@ -798,7 +811,28 @@ tracksCli.command("import-set", {
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
-      .describe("Parallel native Rekordbox analyzer workers; defaults to 4"),
+      .describe("Parallel clean-room Rekordbox analyzer workers; defaults to 4"),
+    analysisEngine: z
+      .enum(["clean", "reference"])
+      .default("clean")
+      .describe(
+        "Analyzer engine; clean is default, reference is a local proprietary parity oracle",
+      ),
+    analyzerBinary: z.string().optional().describe("Selected analyzer binary override"),
+    rekordboxApp: z
+      .string()
+      .optional()
+      .describe("Reference-engine Rekordbox application directory override"),
+    rekordboxCache: z
+      .string()
+      .optional()
+      .describe("Reference-engine Rekordbox analysis cache override"),
+    analysisTimeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .default(300_000)
+      .describe("Per-track analyzer timeout in milliseconds"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     folderName: z.string().optional().describe("Destination Rekordbox folder"),
@@ -822,6 +856,7 @@ tracksCli.command("import-set", {
     sourceSetFallbacks: z.number().int().nonnegative(),
     analyzed: z.number().int().nonnegative(),
     analysisCacheHits: z.number().int().nonnegative(),
+    analysisEngine: z.enum(["clean", "reference"]),
     dbPath: z.string(),
     folderId: z.string(),
     playlistId: z.string(),
@@ -893,6 +928,17 @@ tracksCli.command("import-set", {
         verificationConcurrency: context.options.verificationConcurrency,
         spotifyConcurrency: context.options.spotifyConcurrency,
         analysisConcurrency: context.options.analysisConcurrency,
+        analysis: {
+          engine: context.options.analysisEngine,
+          timeoutMs: context.options.analysisTimeoutMs,
+          ...(context.options.analyzerBinary
+            ? { analyzerBinary: context.options.analyzerBinary }
+            : {}),
+          ...(context.options.rekordboxApp ? { rekordboxApp: context.options.rekordboxApp } : {}),
+          ...(context.options.rekordboxCache
+            ? { rekordboxCache: context.options.rekordboxCache }
+            : {}),
+        },
         signal: controller.signal,
         rekordbox: {
           ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
@@ -923,6 +969,7 @@ tracksCli.command("import-set", {
         sourceSetFallbacks: result.performance.automation.sourceSetFallbacks,
         analyzed: result.analysis.analyzed,
         analysisCacheHits: result.analysis.cacheHits,
+        analysisEngine: context.options.analysisEngine,
         dbPath: result.rekordbox.dbPath,
         folderId: result.rekordbox.folderId,
         playlistId: result.rekordbox.playlistId,

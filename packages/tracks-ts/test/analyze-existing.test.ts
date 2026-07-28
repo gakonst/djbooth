@@ -122,10 +122,14 @@ describe("analysis-only manifest workflow", () => {
 
     const result = await analyzeExistingManifest({
       manifestPath,
+      engine: "reference",
       dependencies: mocks.value,
     });
 
-    expect(analyze).toHaveBeenCalledWith(mediaPaths, expect.objectContaining({ concurrency: 4 }));
+    expect(analyze).toHaveBeenCalledWith(
+      mediaPaths,
+      expect.objectContaining({ concurrency: 4, engine: "reference" }),
+    );
     expect(result.manifest.artifacts.analysis).toHaveLength(2);
     expect(result.manifest.artifacts.analysisRuns).toEqual([
       expect.objectContaining({

@@ -862,7 +862,7 @@ function recordAnalysisRun(
 ): void {
   if (run.results.length !== requests.length) {
     throw new Error(
-      `Native analysis returned ${String(run.results.length)} results for ${String(requests.length)} requested media paths`,
+      `Analysis returned ${String(run.results.length)} results for ${String(requests.length)} requested media paths`,
     );
   }
   for (const [index, request] of requests.entries()) {
@@ -870,13 +870,13 @@ function recordAnalysisRun(
     const resultIdentity = resolve(result.source.path);
     if (resultIdentity !== request.identity) {
       throw new Error(
-        `Native analysis result '${resultIdentity}' does not match requested media identity '${request.identity}'`,
+        `Analysis result '${resultIdentity}' does not match requested media identity '${request.identity}'`,
       );
     }
     if (byPath.has(request.path))
-      throw new Error(`Native analysis returned duplicate media path '${request.path}'`);
+      throw new Error(`Analysis returned duplicate media path '${request.path}'`);
     if (byIdentity.has(request.identity))
-      throw new Error(`Native analysis returned duplicate media identity '${request.identity}'`);
+      throw new Error(`Analysis returned duplicate media identity '${request.identity}'`);
   }
   runs.push(run);
   for (const [index, request] of requests.entries()) {
@@ -927,7 +927,7 @@ function combineAnalysisRuns(
 ): AnalyzeTracksResult {
   const results = mediaPaths.map((mediaPath) => {
     const result = byPath.get(resolve(mediaPath));
-    if (!result) throw new Error(`Native analysis returned no result for '${resolve(mediaPath)}'`);
+    if (!result) throw new Error(`Analysis returned no result for '${resolve(mediaPath)}'`);
     return result;
   });
   const analyzed = runs.reduce((total, run) => total + run.analyzed, 0);

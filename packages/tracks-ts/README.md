@@ -259,7 +259,7 @@ tracks completions zsh
 
 The narrow workspace libraries can be composed directly, or driven by one Incur-native local
 command. `import-set` resumes the same manifest at every boundary, deterministically selects a safe
-Spotify acquisition primary while retaining all alternatives, starts native analysis as each
+Spotify acquisition primary while retaining all alternatives, starts clean-room analysis as each
 verified recording lands, persists the analyzer summary path/BPM/key per recording, and performs
 one final normal-database transaction:
 
@@ -283,13 +283,18 @@ imports reuse a matching canonical recording. Playlist order is written directly
 Rekordbox database under the source-derived playlist name; no playlist-specific audio copies are
 created.
 
+Analysis defaults to the releasable clean-room Rust engine; no Rekordbox application or proprietary
+helper is required. `--analysis-engine reference` is reserved for an explicit local parity run and
+requires the separately supplied reference helper. `--analyzer-binary`, `--rekordbox-app`,
+`--rekordbox-cache`, and `--analysis-timeout-ms` are carried through the same one-shot command.
+
 With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
 individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
 tracks with complete cues from the verified local set, then the same invocation continues through
 analysis and Rekordbox commit. Structured output reports `acquisitionPasses`,
 `sourceSetFallbacks`, and `spotifyCanonicalSelections`.
 
-Resume native analysis independently when media is already checkpointed. This command loads no
+Resume clean-room analysis independently when media is already checkpointed. This command loads no
 Spotify, Soulseek, or downloader credentials and never acquires, retags, or imports media. It writes
 successful analyzer artifacts back to the same locked manifest, including cache hits and partial
 successes when another item fails or the run is interrupted. Its compare-and-swap checkpoint
@@ -299,6 +304,7 @@ failed/cancelled counts for later performance study:
 
 ```sh
 tracks analyze-existing ./adam-ten/manifest.json \
+  --engine clean \
   --concurrency 4 \
   --progress always \
   --format json
@@ -383,9 +389,9 @@ The boundary is deliberate:
   checkpointed failure becomes a cue-bounded source extract in a bounded second pass during the same
   invocation and stays on that recovery path on later warm runs.
 - Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
-  native analysis uses four. Soulseek and native ytdlp candidate searches overlap while download
+  clean-room analysis uses four. Soulseek and native ytdlp candidate searches overlap while download
   priority remains deterministic. Explicit reference search stays deferred until native reports a
-  safe capability gap. Native analysis begins per artifact while remaining downloads continue.
+  safe capability gap. Clean-room analysis begins per artifact while remaining downloads continue.
 - Direct Rekordbox import begins only after all planned files are present, checksummed, and analyzed.
   Its file preflight, hashing, analysis installation, and backup copies use up to eight workers,
   bounded further by Node's available parallelism. Encrypted database access stays serialized in
@@ -457,7 +463,7 @@ the bundled runner derives a one-way session fingerprint without storing the cre
 `acquireManifest` defaults to three independent recording workers. Verification, Spotify enrichment,
 and Spotify refresh default to eight. Acquisition accepts up to 8 workers, verification up to 16,
 and Spotify work up to 32; actual
-workers never exceed queued work. Native analysis defaults to four with a 64-worker cap. Candidate
+workers never exceed queued work. Clean-room analysis defaults to four with a 64-worker cap. Candidate
 fallback and manifest checkpoints remain serialized per recording, and provider clients retain
 their retry/rate-limit handling. Completed media gets one concurrent verification pass; the bundled
 runner injects a stat-keyed cache that eliminates unchanged repeat hash/probe work. Library callers

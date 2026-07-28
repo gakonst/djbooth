@@ -57,7 +57,7 @@ and three explicitly approved source-set clips.
 | Strict resume through clip + DB import      |      13.33 s | 34/34 analyzed, imported, and post-verified                             |
 | Fully warm steady-state resume              |       1.56 s | 34 audio hits, 34 analysis hits, zero downloads, zero database mutation |
 
-On the successful strict resume, acquisition occupied 9.97 s and native analysis occupied 9.41 s,
+On this historical reference-engine resume, acquisition occupied 9.97 s and analysis occupied 9.41 s,
 but they overlapped; the complete critical path including the 3.35 s Rekordbox boundary was 13.33 s
 rather than their 22.73 s serial sum. The warm library path spent 49.84 ms in acquisition, 12.38 ms
 in analysis, and 1.50 s fully reverifying the existing normal-database checkpoint and recovery
@@ -95,7 +95,7 @@ backup directory, proving the repaired checkpoint returns to the no-mutation fas
 - Eight verification, Spotify enrichment, and Spotify refresh workers by default. Callers may
   override acquisition up to 8, verification up to 16, and Spotify work up to 32; actual workers
   never exceed queued work.
-- Three local recognition workers by default with an eight-call cap; native analysis defaults to
+- Three local recognition workers by default with an eight-call cap; clean-room analysis defaults to
   four with an explicit 64-worker expert cap. Rekordbox media preflight, checksum verification, and backup copies use up to
   eight workers or Node's available parallelism, whichever is lower, while every encrypted database
   read, write, and the single commit remain serialized.
@@ -106,7 +106,7 @@ backup directory, proving the repaired checkpoint returns to the no-mutation fas
   mutation. Media preflight records the artifact's probed, rounded duration beside its checksum and
   reuses that receipt for unchanged warm-path and commit rechecks instead of running ffprobe again.
   Legacy checkpoints with analysis-file flags but missing BPM/key, or with a `Length` derived from
-  platform metadata, take a metadata-only warm repair path and do not rerun native analysis or
+  platform metadata, take a metadata-only warm repair path and do not rerun analysis or
   recopy DAT/EXT/2EX.
 - Structured stage timing, cache counters, checkpoint counts, and wall timestamps in results.
 

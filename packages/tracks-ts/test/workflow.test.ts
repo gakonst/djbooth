@@ -208,12 +208,12 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
 }
 
 describe("runSetToRekordbox", () => {
-  test("uses a four-worker native analysis default without lowering the explicit cap", () => {
+  test("uses a four-worker clean-room analysis default without lowering the explicit cap", () => {
     expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBe(4);
     expect(MAX_NATIVE_ANALYSIS_CONCURRENCY).toBe(64);
   });
 
-  test("composes the entire approved flow as libraries and installs native analysis", async () => {
+  test("composes the entire approved flow as libraries and installs clean-room analysis", async () => {
     const writes: SetManifest[] = [];
     const calls: string[] = [];
     let plannedOptions: unknown;
@@ -270,6 +270,10 @@ describe("runSetToRekordbox", () => {
         calls.push("analyze");
         expect(paths).toEqual([mediaPath]);
         expect(options?.concurrency).toBe(1);
+        expect(options).toMatchObject({
+          analyzerBinary: "/tmp/rekordbox-analyzer",
+          engine: "clean",
+        });
         return analysisResult(false);
       },
       importRekordbox: async (options) => {
@@ -287,6 +291,10 @@ describe("runSetToRekordbox", () => {
       approved: true,
       spotify: { raw: vi.fn() },
       acquirers: [],
+      analysis: {
+        analyzerBinary: "/tmp/rekordbox-analyzer",
+        engine: "clean",
+      },
       localArtifactDirectories: [resolve("/tmp/local-tracks")],
       dependencies,
     });

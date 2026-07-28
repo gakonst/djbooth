@@ -79,6 +79,7 @@ export async function analyzeExistingManifest(
       analysis = await dependencies.analyze(mediaPaths, {
         concurrency: options.concurrency ?? DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
         ...(options.analyzerBinary ? { analyzerBinary: options.analyzerBinary } : {}),
+        ...(options.engine ? { engine: options.engine } : {}),
         ...(options.force === undefined ? {} : { force: options.force }),
         ...(options.rekordboxApp ? { rekordboxApp: options.rekordboxApp } : {}),
         ...(options.rekordboxCache ? { rekordboxCache: options.rekordboxCache } : {}),

@@ -284,7 +284,8 @@ music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format 
 
 This resolves, enriches, acquires into the canonical library, analyzes, then creates or updates the
 ordered Rekordbox playlist. Call it once; do not ask for separate resolution, download, analysis,
-or add-to-playlist steps after it succeeds.
+or add-to-playlist steps after it succeeds. Clean-room analysis is automatic; do not pause to ask
+which analyzer to use. Pass `--analysis-engine reference` only for an explicit local parity request.
 
 When the user also approves cue recovery from an existing local set recording, include the approval
 in the same invocation:
@@ -337,29 +338,42 @@ source untouched.
 
 ## 6. Analyze for Rekordbox
 
-On macOS, use the native Rekordbox rehost analyzer after audio has been acquired. Analysis reads the
-installed Rekordbox application but does not open or mutate `master.db`:
+Use the releasable clean-room Rust analyzer after audio has been acquired. It is the default on every
+supported platform, requires no Rekordbox application/JUCE/runtime bytes, and never opens or mutates
+`master.db`:
 
 ```sh
-rekordbox analyze doctor --format json
-rekordbox analyze track "$AUDIO_PATH" --output-directory "$ANALYSIS_DIR" --format json
-rekordbox analyze tracks \
+music rekordbox analyze doctor --engine clean --format json
+music rekordbox analyze track "$AUDIO_PATH" \
+  --engine clean \
+  --output-directory "$ANALYSIS_DIR" \
+  --format json
+music rekordbox analyze tracks \
   --audio-path "$AUDIO_PATH_1" \
   --audio-path "$AUDIO_PATH_2" \
+  --engine clean \
   --concurrency 4 \
   --format json
 ```
 
-Require macOS, Rosetta on Apple Silicon, and successful doctor checks before analysis. Public npm
-packages do not redistribute the proprietary helper or Rekordbox runtime: set
-`REKORDBOX_ANALYZER_BINARY`, install `rekordbox-analyzer` on `PATH`, or build the repository-local
-helper, and use `--rekordbox-app` to select a compatible user-installed application. The output
-directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`,
-`ANLZ0000.2EX`, `analysis.json`, and `rehost-native.log`. Keep these artifacts with the recording or
-manifest. Do not treat Spotify BPM/key or a local DSP approximation as Rekordbox analysis.
-For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated x86_64 worker
-processes and preserves input order. Default to at most four workers unless measurement on the target
-machine supports another limit. Parallelize analysis only. Keep Rekordbox database installation
+Require a successful clean doctor check before analysis. Discover `rekordbox-analyzer` through
+`REKORDBOX_CLEAN_ANALYZER_BINARY`, `PATH`, or the repository build. Treat the legacy
+`REKORDBOX_ANALYZER_BINARY` override as reference-only so it cannot contaminate the clean default.
+The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`, `ANLZ0000.2EX`,
+`analysis.json`, and `clean-room-analyzer.log`. Keep these artifacts with the recording or manifest.
+Treat analyzer BPM/key as measurements from the acquired audio; never substitute Spotify metadata.
+The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform/beat/key baselines;
+do not claim proprietary byte-for-byte DSP parity.
+
+Use `--engine reference` only when the user explicitly asks for local parity investigation. That
+mode requires macOS, Rosetta on Apple Silicon, a separately supplied
+`rekordbox-analyzer-reference`, and a compatible user-installed Rekordbox application. Neither the
+reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact. Do not silently fall
+back from clean to reference.
+
+For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated worker processes
+and preserves input order. Default to at most four workers unless measurement on the target machine
+supports another limit. Parallelize analysis only. Keep Rekordbox database installation
 stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
 
 For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
@@ -367,7 +381,11 @@ does not load provider credentials or download anything. It checkpoints per-item
 timestamped run ledger in the manifest:
 
 ```sh
-music tracks analyze-existing "$MANIFEST" --concurrency 4 --progress always --format json
+music tracks analyze-existing "$MANIFEST" \
+  --engine clean \
+  --concurrency 4 \
+  --progress always \
+  --format json
 ```
 
 ## 7. Import into Rekordbox
@@ -383,7 +401,7 @@ music tracks import-existing "$MANIFEST" \
   --write --format json
 ```
 
-`import-existing` loads only checkpointed media and native analysis, takes one verified backup when
+`import-existing` loads only checkpointed media and analyzer artifacts, takes one verified backup when
 state must change, commits once, and is a no-backup `changed: false` verification on a warm rerun.
 Its result includes UTC start/finish timestamps and stage duration. Keep the workbench open; the
 shared lock serializes the brief write and the database watcher refreshes the UI.
