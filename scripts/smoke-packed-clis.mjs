@@ -201,6 +201,15 @@ try {
   }
   process.stdout.write("✓ music djlink composed CLI\n");
 
+  const analyzeHelp = run(music, ["rekordbox", "analyze", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (!analyzeHelp.stdout.includes("beat-grid-diff")) {
+    throw new Error("Packed music CLI did not expose semantic beat-grid comparison");
+  }
+  process.stdout.write("✓ music rekordbox analyze composed CLI\n");
+
   const skills = run(music, ["skills", "list"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
@@ -228,6 +237,7 @@ try {
     "shared cross-process database lock",
     "offline bulk workflows",
     "reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact",
+    "music rekordbox analyze beat-grid-diff",
     "## 8. Serve and load connected CDJs",
     "Spotify streaming tracks cannot be LINK EXPORTed",
     "music djlink search <query>",
@@ -246,6 +256,7 @@ try {
     [
       "music-rekordbox",
       [
+        "# music rekordbox analyze beat-grid-diff",
         "# music rekordbox db playlist create",
         "# music rekordbox db playlist list",
         "# music rekordbox db playlist show",

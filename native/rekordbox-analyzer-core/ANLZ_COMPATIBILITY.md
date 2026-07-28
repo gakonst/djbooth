@@ -238,6 +238,63 @@ mean per-band absolute error from `31.58..48.12` bytes to `9.50..12.78` bytes.
 The native bands overlap and have a stateful envelope, so cutoff and
 normalization parity remain open rather than being guessed from these probes.
 
+## Variable-tempo and syncopated-phase audit
+
+A second clean-room pass tested local-period estimation, beat snapping,
+barwise reconstruction, and pulse-based phase selection against nine real
+PQTZ/PQT2 grids. The oracle tempo fields are piecewise constant and strongly
+bar-quantized: every run in the corpus spans at least four beats and the
+median run is four beats. The three variable-tempo targets have the following
+run shapes:
+
+| Track | Tempo range | Runs | Minimum/median/maximum beats | Runs divisible by four |
+| --- | ---: | ---: | ---: | ---: |
+| James Brown — Ants | 107.25–108.59 | 176 | 4 / 4 / 28 | 175 / 176 |
+| James Brown — Get Up | 146.88–151.06 | 73 | 4 / 4 / 35 | 71 / 73 |
+| Chopin | 81.90–154.24 | 22 | 4 / 4 / 280 | 19 / 22 |
+
+The unchanged global-grid baseline is:
+
+| Track | Reference/clean beats | Median/p95 error | F1 at 70/100 ms |
+| --- | ---: | ---: | ---: |
+| Ants | 806 / 803 | 53.496 / 251.856 ms | 0.579 / 0.641 |
+| Get Up | 354 / 355 | 37.344 / 184.841 ms | 0.683 / 0.725 |
+| Chopin | 692 / 786 | 98.803 / 188.479 ms | 0.315 / 0.451 |
+
+A 64-beat windowed autocorrelation estimated Ants' local tempo well
+(`0.189` BPM median error), but using those estimates to integrate a grid
+reduced its 70/100 ms F1. Get Up's local estimate had `0.702` BPM median
+error, yet its integrated grid also regressed. Chopin retained octave and
+subdivision ambiguity (`21.245/73.385` BPM median/p95 error), so the same path
+was not confidence-safe.
+
+The strongest barwise reconstructions still failed the release gate. Ants
+improved to `34.986` ms median and `0.592/0.650` F1, but p95 worsened to
+`267.531` ms. Get Up improved to `27.671` ms median and `0.686/0.743` F1,
+but p95 worsened to `242.8` ms. Independent beat snapping could reach
+`0.755/0.784` F1 on Get Up, but emitted 353 beats and raised p95 to
+`215.5` ms; it did not improve Ants. Better local BPM fields are therefore
+not accepted without better integrated timestamps and stable tails.
+
+Lenny Kravitz remains a genuine syncopated-phase ambiguity. The clean period
+is `59.183` onset frames (`87.3217` BPM); its selected `35.4`-frame phase has
+a mixed-band alignment score of `0.685`, while the native `50.861`-frame
+phase scores `0.312`. An overlap-added predominant-local-pulse probe over
+one-, three-, and five-second windows selected `34.15` frames, corroborating
+the clean onset phase rather than the native grid. A corpus-specific
+173-millisecond shift would not be an evidence-based analyzer rule.
+
+The evaluated clean-room designs follow the transition-constrained beat
+tracking and local-tempo ideas in
+[Ellis (2007)](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf),
+[Wu et al. (2011)](https://ismir2011.ismir.net/papers/PS2-4.pdf), and
+[Chiu et al. (2023)](https://arxiv.org/abs/2308.10355). None passed the
+required joint gate: meaningful timing/F1 improvement on both James Brown
+tracks, no regression on Science Fiction, Crystalised, Pleasure from the Bass,
+Ana Tijoux, Michael Jackson, or Lenny Kravitz, and barwise segments of at
+least four beats. No analyzer code, ignored corpus test, or local oracle
+artifact was retained, so distributable output remains unchanged.
+
 ## Known semantic gaps
 
 - Rekordbox EXT files for two tested FLACs contain an undocumented `PVB2`
@@ -253,8 +310,8 @@ normalization parity remain open rather than being guessed from these probes.
 - `PWVC` uses the observed fixed configuration; its remaining semantics are
   not claimed as DSP parity.
 - Variable-tempo tracking remains intentionally unimplemented. A global static
-  grid reaches 70/100 ms F1 of `0.579/0.643` on James Brown's “Ants,”
-  `0.683/0.725` on the live “Get Up,” and `0.315/0.452` on the strongly
+  grid reaches 70/100 ms F1 of `0.579/0.641` on James Brown's “Ants,”
+  `0.683/0.725` on the live “Get Up,” and `0.315/0.451` on the strongly
   variable Chopin heldout. The native grids contain 175, 72, and 21 local tempo
   changes while the clean grid contains none. A barwise/local-tempo path needs
   its own confidence gate and steady-track non-regression corpus before release.

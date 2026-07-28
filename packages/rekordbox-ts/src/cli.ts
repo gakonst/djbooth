@@ -11,6 +11,7 @@ import {
   analyzeTrackAsync,
   analyzeTracks,
   BeatGridTag,
+  compareBeatGrids,
   DEFAULT_ANALYZER_CONCURRENCY,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   ExtendedBeatGridTag,
@@ -220,6 +221,27 @@ analyzeCli.command("doctor", {
   }),
   run(c) {
     return diagnoseAnalyzer(c.options);
+  },
+});
+
+analyzeCli.command("beat-grid-diff", {
+  description:
+    "Compare reference and candidate PQTZ/PQT2 grids with sub-millisecond timing and downbeat metrics.",
+  args: z.object({
+    referenceDirectory: z.string().describe("Reference DAT/EXT/2EX analysis directory"),
+    candidateDirectory: z.string().describe("Candidate DAT/EXT/2EX analysis directory"),
+  }),
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Clean-room analyzer executable override"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(30_000)
+      .describe("Comparison timeout in milliseconds"),
+  }),
+  run(c) {
+    return compareBeatGrids(c.args.referenceDirectory, c.args.candidateDirectory, c.options);
   },
 });
 

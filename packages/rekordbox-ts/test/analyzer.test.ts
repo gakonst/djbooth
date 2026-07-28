@@ -22,13 +22,14 @@ import {
   AnalyzeTracksError,
   DEFAULT_ANALYZER_CONCURRENCY,
   DEFAULT_ANALYZER_THREAD_BUDGET,
+  compareBeatGrids,
   diagnoseAnalyzer,
   getAnalyzerBinary,
   readAnalysisResult,
 } from "../src/analyzer/index.js";
 
 const roots: Array<string> = [];
-const helperPaths = [resolve("analyze"), resolve("doctor")];
+const helperPaths = [resolve("analyze"), resolve("beat-grid-diff"), resolve("doctor")];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const archDescriptor = Object.getOwnPropertyDescriptor(process, "arch");
 const analyzerRoot = process.env.REKORDBOX_ANALYZER_ROOT;
@@ -60,6 +61,51 @@ if (command === "doctor") {
     cleanRoom: !legacy && process.env.REKORDBOX_ANALYZER_ENGINE !== "reference",
     proprietaryDependencies: legacy || process.env.REKORDBOX_ANALYZER_ENGINE === "reference",
     root: process.env.REKORDBOX_ANALYZER_ROOT,
+  }));
+  process.exit(0);
+}
+
+if (command === "beat-grid-diff") {
+  if (mode === "fail") {
+    console.error("fake beat-grid failure");
+    process.exit(2);
+  }
+  if (mode === "invalid-json") {
+    console.log("not json");
+    process.exit(0);
+  }
+  const [referenceDirectory, candidateDirectory] = process.argv.slice(2);
+  const endpoint = { beat: 1, bpm: 125, timeMs: 500 };
+  const timestampError = { meanMs: 2, medianMs: 1, p95Ms: 4, maxMs: 5 };
+  const tempoError = { meanBpm: 0.01, medianBpm: 0.01, p95Bpm: 0.02, maxBpm: 0.03 };
+  const matchRate = { toleranceMs: 70, matches: 64, precision: 1, recall: 1, f1: 1 };
+  console.log(JSON.stringify({
+    referenceDirectory: realpathSync(referenceDirectory),
+    candidateDirectory: realpathSync(candidateDirectory),
+    referenceBeatCount: 64,
+    candidateBeatCount: 64,
+    matchedBeats: 64,
+    referenceUnmatchedBeats: 0,
+    candidateUnmatchedBeats: 0,
+    referenceFirst: endpoint,
+    candidateFirst: endpoint,
+    referenceLast: endpoint,
+    candidateLast: endpoint,
+    firstTimestampErrorMs: -1,
+    lastTimestampErrorMs: 2,
+    alignedTimestampError: timestampError,
+    driftMsPer100Beats: 0.25,
+    beatNumberPhase: 0,
+    beatNumberAccuracy: 1,
+    referenceTempoChanges: 2,
+    candidateTempoChanges: 1,
+    alignedTempoError: tempoError,
+    referenceDownbeatCount: 16,
+    candidateDownbeatCount: 16,
+    matchedDownbeats: 16,
+    downbeatTimestampError: timestampError,
+    at70Ms: matchRate,
+    at100Ms: { ...matchRate, toleranceMs: 100 },
   }));
   process.exit(0);
 }
@@ -493,6 +539,52 @@ describe("Rekordbox analyzer wrapper", () => {
     expect(() =>
       diagnoseAnalyzer({ analyzerBinary: process.execPath, engine: "reference" }),
     ).toThrow("requires macOS");
+  });
+
+  it("compares beat grids through the clean helper with validated bounded output", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const reference = join(root, "reference");
+    const candidate = join(root, "candidate");
+    mkdirSync(reference);
+    mkdirSync(candidate);
+
+    expect(
+      compareBeatGrids(reference, candidate, {
+        analyzerBinary: process.execPath,
+        timeoutMs: 1_000,
+      }),
+    ).toMatchObject({
+      referenceDirectory: realpathSync(reference),
+      candidateDirectory: realpathSync(candidate),
+      referenceBeatCount: 64,
+      candidateBeatCount: 64,
+      alignedTimestampError: { medianMs: 1, p95Ms: 4 },
+      beatNumberAccuracy: 1,
+      at70Ms: { f1: 1 },
+    });
+    expect(() =>
+      compareBeatGrids(join(root, "missing"), candidate, {
+        analyzerBinary: process.execPath,
+      }),
+    ).toThrow("does not exist");
+    expect(() =>
+      compareBeatGrids(reference, candidate, {
+        analyzerBinary: process.execPath,
+        timeoutMs: 0,
+      }),
+    ).toThrow("positive integer");
+
+    process.env.FAKE_ANALYZER_MODE = "invalid-json";
+    expect(() =>
+      compareBeatGrids(reference, candidate, { analyzerBinary: process.execPath }),
+    ).toThrow("malformed JSON");
+    process.env.FAKE_ANALYZER_MODE = "fail";
+    expect(() =>
+      compareBeatGrids(reference, candidate, { analyzerBinary: process.execPath }),
+    ).toThrow("exited with 2");
   });
 
   it("rejects a legacy proprietary helper before clean audio analysis", () => {

@@ -252,7 +252,16 @@ rekordbox analyze tracks \
   --concurrency 4 \
   --threads 12 \
   --format json
+rekordbox analyze beat-grid-diff \
+  /Music/reference.rekordbox \
+  /Music/candidate.rekordbox \
+  --format json
 ```
+
+`analyze beat-grid-diff` compares PQTZ plus PQT2 semantically instead of treating opaque ANLZ bytes
+as the metric. Its bounded monotonic alignment reports missing/extra beats, sub-millisecond
+timestamp distributions, drift, beat-number phase, downbeat error, tempo changes, and F1 at 70 and
+100 ms. Use an independently produced Rekordbox directory as the reference during parity work.
 
 For `analyze track`, `--threads` is the native worker count for that one
 process. For `analyze tracks`, it is a total CPU budget, not a per-process

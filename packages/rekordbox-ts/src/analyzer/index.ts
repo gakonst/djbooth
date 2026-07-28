@@ -81,8 +81,77 @@ export type RekordboxAnalysisMetadata = {
   tempoBpm: number | null;
 };
 
+/** One endpoint in a sub-millisecond Rekordbox beat-grid comparison. */
+export type BeatGridEndpoint = {
+  beat: number;
+  bpm: number;
+  timeMs: number;
+};
+
+/** Absolute aligned beat timestamp errors, in milliseconds. */
+export type BeatTimestampErrorDistribution = {
+  meanMs: number;
+  medianMs: number;
+  p95Ms: number;
+  maxMs: number;
+};
+
+/** Absolute aligned tempo errors, in beats per minute. */
+export type BeatTempoErrorDistribution = {
+  meanBpm: number;
+  medianBpm: number;
+  p95Bpm: number;
+  maxBpm: number;
+};
+
+/** Precision, recall, and F1 inside one beat-timing collar. */
+export type BeatGridMatchRate = {
+  toleranceMs: number;
+  matches: number;
+  precision: number;
+  recall: number;
+  f1: number;
+};
+
+/** Semantic PQTZ/PQT2 comparison produced by the clean-room analyzer. */
+export type BeatGridDifferential = {
+  referenceDirectory: string;
+  candidateDirectory: string;
+  referenceBeatCount: number;
+  candidateBeatCount: number;
+  matchedBeats: number;
+  referenceUnmatchedBeats: number;
+  candidateUnmatchedBeats: number;
+  referenceFirst: BeatGridEndpoint;
+  candidateFirst: BeatGridEndpoint;
+  referenceLast: BeatGridEndpoint;
+  candidateLast: BeatGridEndpoint;
+  firstTimestampErrorMs: number;
+  lastTimestampErrorMs: number;
+  alignedTimestampError: BeatTimestampErrorDistribution;
+  driftMsPer100Beats: number;
+  beatNumberPhase: number;
+  beatNumberAccuracy: number;
+  referenceTempoChanges: number;
+  candidateTempoChanges: number;
+  alignedTempoError: BeatTempoErrorDistribution;
+  referenceDownbeatCount: number;
+  candidateDownbeatCount: number;
+  matchedDownbeats: number;
+  downbeatTimestampError: BeatTimestampErrorDistribution;
+  at70Ms: BeatGridMatchRate;
+  at100Ms: BeatGridMatchRate;
+};
+
+/** Options for a bounded semantic beat-grid comparison. */
+export type CompareBeatGridsOptions = {
+  analyzerBinary?: string;
+  timeoutMs?: number;
+};
+
 const finiteNumber = z.number().finite();
 const nonNegativeNumber = finiteNumber.min(0);
+const nonNegativeInteger = z.number().int().min(0);
 const beatSchema = z.object({
   beat: z.number().int().min(1),
   bpm: finiteNumber.positive(),
@@ -136,6 +205,58 @@ const analysisResultSchema = z.object({
     summarizeMs: nonNegativeNumber,
     totalMs: nonNegativeNumber,
   }),
+});
+const beatGridEndpointSchema = z.object({
+  beat: z.number().int().min(1).max(4),
+  bpm: finiteNumber.positive(),
+  timeMs: nonNegativeNumber,
+});
+const timestampErrorDistributionSchema = z.object({
+  meanMs: nonNegativeNumber,
+  medianMs: nonNegativeNumber,
+  p95Ms: nonNegativeNumber,
+  maxMs: nonNegativeNumber,
+});
+const tempoErrorDistributionSchema = z.object({
+  meanBpm: nonNegativeNumber,
+  medianBpm: nonNegativeNumber,
+  p95Bpm: nonNegativeNumber,
+  maxBpm: nonNegativeNumber,
+});
+const beatGridMatchRateSchema = z.object({
+  toleranceMs: nonNegativeNumber,
+  matches: nonNegativeInteger,
+  precision: finiteNumber.min(0).max(1),
+  recall: finiteNumber.min(0).max(1),
+  f1: finiteNumber.min(0).max(1),
+});
+const beatGridDifferentialSchema = z.object({
+  referenceDirectory: z.string().min(1),
+  candidateDirectory: z.string().min(1),
+  referenceBeatCount: nonNegativeInteger,
+  candidateBeatCount: nonNegativeInteger,
+  matchedBeats: nonNegativeInteger,
+  referenceUnmatchedBeats: nonNegativeInteger,
+  candidateUnmatchedBeats: nonNegativeInteger,
+  referenceFirst: beatGridEndpointSchema,
+  candidateFirst: beatGridEndpointSchema,
+  referenceLast: beatGridEndpointSchema,
+  candidateLast: beatGridEndpointSchema,
+  firstTimestampErrorMs: finiteNumber,
+  lastTimestampErrorMs: finiteNumber,
+  alignedTimestampError: timestampErrorDistributionSchema,
+  driftMsPer100Beats: finiteNumber,
+  beatNumberPhase: nonNegativeInteger.max(3),
+  beatNumberAccuracy: finiteNumber.min(0).max(1),
+  referenceTempoChanges: nonNegativeInteger,
+  candidateTempoChanges: nonNegativeInteger,
+  alignedTempoError: tempoErrorDistributionSchema,
+  referenceDownbeatCount: nonNegativeInteger,
+  candidateDownbeatCount: nonNegativeInteger,
+  matchedDownbeats: nonNegativeInteger,
+  downbeatTimestampError: timestampErrorDistributionSchema,
+  at70Ms: beatGridMatchRateSchema,
+  at100Ms: beatGridMatchRateSchema,
 });
 
 /** Options for producing Rekordbox DAT, EXT, and 2EX files. */
@@ -311,6 +432,62 @@ export function diagnoseAnalyzer(
     throw new TypeError(`${engine} analyzer helper '${analyzerBinary}' does not exist`);
   const env = analyzerEnvironment(engine, analyzerBinary, options);
   return runAnalyzerDoctor(engine, analyzerBinary, env);
+}
+
+/** Compare two Rekordbox PQTZ/PQT2 grids with bounded monotonic alignment. */
+export function compareBeatGrids(
+  referenceDirectory: string,
+  candidateDirectory: string,
+  options: CompareBeatGridsOptions = {},
+): BeatGridDifferential {
+  const reference = analysisDirectory(referenceDirectory, "Reference");
+  const candidate = analysisDirectory(candidateDirectory, "Candidate");
+  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, "clean");
+  if (!existsSync(analyzerBinary)) {
+    throw new TypeError(
+      `clean analyzer helper '${analyzerBinary}' does not exist; set REKORDBOX_CLEAN_ANALYZER_BINARY or build it with pnpm --filter @gakonst/rekordbox build:analyzer`,
+    );
+  }
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+    throw new TypeError("Beat-grid comparison timeout must be a positive integer");
+  }
+  const env = analyzerEnvironment("clean", analyzerBinary, {});
+  verifyAnalyzerEngine("clean", analyzerBinary, env);
+  const { args, command } = analyzerInvocation("clean", analyzerBinary, [
+    "beat-grid-diff",
+    reference,
+    candidate,
+  ]);
+  const child = spawnSync(command, args, {
+    encoding: "utf8",
+    env,
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: timeoutMs,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    throw new Error(
+      `beat-grid comparison exited with ${child.status ?? "no status"}: ${child.stderr.trim()}`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(child.stdout) as unknown;
+  } catch (cause) {
+    throw new TypeError("Beat-grid comparison returned malformed JSON", { cause });
+  }
+  const parsed = beatGridDifferentialSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new TypeError(`Invalid beat-grid comparison: ${z.prettifyError(parsed.error)}`);
+  }
+  if (
+    resolve(parsed.data.referenceDirectory) !== reference ||
+    resolve(parsed.data.candidateDirectory) !== candidate
+  ) {
+    throw new TypeError("Beat-grid comparison returned mismatched analysis directories");
+  }
+  return parsed.data;
 }
 
 /** Produce structurally compatible DAT, EXT, and 2EX analysis artifacts. */
@@ -780,6 +957,17 @@ function verifyAnalyzerEngine(
   if (verifiedHelpers?.has(identity)) return;
   runAnalyzerDoctor(engine, analyzerBinary, env);
   verifiedHelpers?.add(identity);
+}
+
+function analysisDirectory(path: string, label: string): string {
+  const absolute = resolve(path);
+  if (!existsSync(absolute))
+    throw new TypeError(`${label} analysis directory '${absolute}' does not exist`);
+  const metadata = statSync(absolute);
+  if (!metadata.isDirectory()) {
+    throw new TypeError(`${label} analysis path '${absolute}' is not a directory`);
+  }
+  return realpathSync(absolute);
 }
 
 function sourceFingerprint(audioPath: string): RekordboxAnalysisResult["source"] {

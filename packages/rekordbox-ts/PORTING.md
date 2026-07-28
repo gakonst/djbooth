@@ -570,3 +570,44 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   one-beat meter rotation/endpoint miss. The distributable remains solely the
   clean Rust helper; vendored Rekordbox/JUCE code and local oracle files are not
   runtime or release dependencies.
+
+## Variable-tempo and phase audit (2026-07-27)
+
+- Re-derived the native tempo-run structure across nine real PQTZ grids.
+  Every run is at least four beats and the median is four beats. Ants, Get Up,
+  and Chopin contain `176/73/22` runs over `107.25–108.59`,
+  `146.88–151.06`, and `81.90–154.24` BPM respectively; nearly every short
+  run is bar-aligned.
+- Evaluated windowed local autocorrelation, confidence/distance-constrained
+  snapping, unsmoothed and median-smoothed barwise integration, and
+  overlap-added predominant local pulse phase evidence. The designs follow
+  [Ellis (2007)](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf),
+  [Wu et al. (2011)](https://ismir2011.ismir.net/papers/PS2-4.pdf), and
+  [Chiu et al. (2023)](https://arxiv.org/abs/2308.10355).
+- Ants' strongest barwise candidate moved median error/F1 from
+  `53.496 ms, 0.579/0.641` to `34.986 ms, 0.592/0.650`, but p95 regressed
+  from `251.856` to `267.531` ms. Get Up moved from
+  `37.344 ms, 0.683/0.725` to `27.671 ms, 0.686/0.743`, but p95 regressed
+  from `184.841` to `242.8` ms. Chopin's local-period search retained
+  octave/subdivision ambiguity with `21.245/73.385` BPM median/p95 error.
+- Rejected a track-specific Lenny phase shift. Its clean `35.4`-frame onset
+  phase scores `0.685`; the native `50.861`-frame phase scores `0.312`, and
+  integrated one-/three-/five-second pulse evidence selects `34.15` frames.
+- Shipped no analyzer change: no candidate improved both variable-tempo
+  targets while preserving timing tails plus Science Fiction, Crystalised,
+  Pleasure from the Bass, Ana Tijoux, Michael Jackson, and Lenny Kravitz.
+  Removed the diagnostic-only corpus tests and retained no private audio,
+  oracle, or proprietary runtime dependency.
+
+## Semantic beat-grid CLI surface (2026-07-27)
+
+- Exposed the Rust `beat-grid-diff` oracle as the typed
+  `compareBeatGrids()` API and `rekordbox analyze beat-grid-diff` command.
+  The wrapper resolves both directories canonically, verifies the clean-room
+  helper identity, applies a bounded timeout, validates the complete structured
+  report, and rejects mismatched paths or malformed output.
+- Added command help, public types, fake-helper failure coverage, Music CLI/MCP
+  guidance, the bundled Music skill workflow, README usage, and packed-install
+  smoke checks. Future parity passes can now use one discoverable structured
+  command instead of invoking a hidden native helper or comparing raw ANLZ
+  hashes.

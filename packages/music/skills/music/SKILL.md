@@ -356,6 +356,10 @@ music rekordbox analyze tracks \
   --concurrency 4 \
   --threads 12 \
   --format json
+music rekordbox analyze beat-grid-diff \
+  "$REFERENCE_ANALYSIS_DIR" \
+  "$CANDIDATE_ANALYSIS_DIR" \
+  --format json
 ```
 
 Require a successful clean doctor check before analysis. Discover `rekordbox-analyzer` through
@@ -366,6 +370,9 @@ The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`, `ANL
 Treat analyzer BPM/key as measurements from the acquired audio; never substitute Spotify metadata.
 The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform/beat/key baselines;
 do not claim proprietary byte-for-byte DSP parity.
+For parity work, use `analyze beat-grid-diff` rather than raw file hashes. Require matching beat
+counts and labels for steady-tempo material, inspect median/p95/max timing error and drift, and retain
+the reported missing/extra beats, downbeat error, tempo changes, and F1 collars for held-out tracks.
 
 Use `--engine reference` only when the user explicitly asks for local parity investigation. That
 mode requires macOS, Rosetta on Apple Silicon, a separately supplied
