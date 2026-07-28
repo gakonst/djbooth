@@ -210,8 +210,9 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
 }
 
 describe("runSetToRekordbox", () => {
-  test("uses a four-worker clean-room analysis default without lowering the explicit cap", () => {
-    expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBe(4);
+  test("uses a CPU-adaptive clean-room analysis default without lowering the explicit cap", () => {
+    expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBeGreaterThan(0);
+    expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBeLessThanOrEqual(12);
     expect(MAX_NATIVE_ANALYSIS_CONCURRENCY).toBe(64);
   });
 

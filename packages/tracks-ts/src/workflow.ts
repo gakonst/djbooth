@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import {
   analyzeTracks,
+  DEFAULT_ANALYZER_CONCURRENCY,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   type AnalyzeTracksOptions,
   type AnalyzeTracksResult,
@@ -52,7 +53,7 @@ export type SetSourceClip = {
 
 type SourceSetArtifact = NonNullable<SetManifest["artifacts"]["sourceSet"]>;
 
-export const DEFAULT_NATIVE_ANALYSIS_CONCURRENCY = 4;
+export const DEFAULT_NATIVE_ANALYSIS_CONCURRENCY = DEFAULT_ANALYZER_CONCURRENCY;
 export const MAX_NATIVE_ANALYSIS_CONCURRENCY = 64;
 export const DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET = DEFAULT_ANALYZER_THREAD_BUDGET;
 export const MAX_NATIVE_ANALYSIS_THREAD_BUDGET = 64;

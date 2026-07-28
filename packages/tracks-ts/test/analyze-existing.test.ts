@@ -11,6 +11,7 @@ import {
 } from "../src/analyze-existing.js";
 import { createManifest, type SetManifest } from "../src/manifest.js";
 import { planRekordboxImport } from "../src/rekordbox-db.js";
+import { DEFAULT_NATIVE_ANALYSIS_CONCURRENCY } from "../src/workflow.js";
 
 const manifestPath = resolve("/tmp/music-ts-analysis-only/manifest.json");
 const mediaPaths = [
@@ -131,7 +132,11 @@ describe("analysis-only manifest workflow", () => {
 
     expect(analyze).toHaveBeenCalledWith(
       mediaPaths,
-      expect.objectContaining({ concurrency: 4, engine: "reference", threads: 7 }),
+      expect.objectContaining({
+        concurrency: DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
+        engine: "reference",
+        threads: 7,
+      }),
     );
     expect(result.manifest.artifacts.analysis).toHaveLength(2);
     expect(result.manifest.artifacts.analysisRuns).toEqual([

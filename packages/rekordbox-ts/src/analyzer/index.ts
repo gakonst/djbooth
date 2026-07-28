@@ -346,14 +346,17 @@ export type AnalyzeTrackOptions = {
   timeoutMs?: number;
 };
 
-/** Conservative default for process-isolated analyzer workers. */
-export const DEFAULT_ANALYZER_CONCURRENCY = 4;
-
 /** Default total native CPU budget shared across active analyzer processes. */
 export const DEFAULT_ANALYZER_THREAD_BUDGET = Math.min(
   maximumAnalyzerThreads,
   availableParallelism(),
 );
+
+/** CPU-adaptive default for process-isolated clean analyzer workers. */
+export const DEFAULT_ANALYZER_CONCURRENCY = Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET);
+
+/** Measured single-track sweet spot before native parallelism plateaus. */
+export const DEFAULT_ANALYZER_TRACK_THREADS = Math.min(4, DEFAULT_ANALYZER_THREAD_BUDGET);
 
 /** Progress emitted by a bounded multi-track analyzer run. */
 export type AnalyzeTracksProgress = {
@@ -1019,8 +1022,8 @@ function analyzerEnvironment(
   const env = { ...process.env };
   env.REKORDBOX_ANALYZER_ENGINE = engine;
   env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
-  if (engine === "clean" && options.threads !== undefined) {
-    env[analyzerThreadsEnvironment] = String(options.threads);
+  if (engine === "clean") {
+    env[analyzerThreadsEnvironment] = String(options.threads ?? DEFAULT_ANALYZER_TRACK_THREADS);
   }
   if (options.rekordboxApp) env.REKORDBOX_ANALYZER_APP = resolve(options.rekordboxApp);
   if (options.rekordboxCache) env.REKORDBOX_ANALYZER_CACHE = resolve(options.rekordboxCache);

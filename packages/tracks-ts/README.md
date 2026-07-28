@@ -291,7 +291,8 @@ requires the separately supplied reference helper. `--analyzer-binary`, `--rekor
 one-shot command. `--analysis-threads` is the total native CPU budget for all overlapping analysis
 slots, not a per-process value. The workflow divides it deterministically across active slots, so
 `--analysis-concurrency 4 --analysis-threads 12` gives each of four simultaneous clean analyzers
-three threads.
+three threads. Without an override, clean analysis uses up to 12 isolated processes, bounded by
+available parallelism, the thread budget, and the number of uncached tracks.
 
 With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
 individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
@@ -310,8 +311,6 @@ failed/cancelled counts for later performance study:
 ```sh
 tracks analyze-existing ./adam-ten/manifest.json \
   --engine clean \
-  --concurrency 4 \
-  --threads 12 \
   --progress always \
   --format json
 ```
@@ -319,7 +318,7 @@ tracks analyze-existing ./adam-ten/manifest.json \
 `analyze-existing --threads` has the same total-budget semantics and reports
 both `threadBudget` and `workerThreadBudgets`. The worker count is capped by
 that budget, preventing outer process concurrency from multiplying native
-parallelism.
+parallelism. The CPU-adaptive default is inherited from `@gakonst/rekordbox`.
 
 Once acquisition and analysis are complete, import that checkpoint without rerunning network
 stages. `--write` remains mandatory; the importer coordinates the database lock with the open
@@ -475,12 +474,13 @@ the bundled runner derives a one-way session fingerprint without storing the cre
 `acquireManifest` defaults to three independent recording workers. Verification, Spotify enrichment,
 and Spotify refresh default to eight. Acquisition accepts up to 8 workers, verification up to 16,
 and Spotify work up to 32; actual
-workers never exceed queued work. Clean-room analysis defaults to four with a 64-worker cap. Candidate
-fallback and manifest checkpoints remain serialized per recording, and provider clients retain
-their retry/rate-limit handling. Completed media gets one concurrent verification pass; the bundled
-runner injects a stat-keyed cache that eliminates unchanged repeat hash/probe work. Library callers
-can inject the same `JsonDiskCache` through `verificationCache`. A fully verified resume takes the
-fast path without loading an acquisition backend.
+workers never exceed queued work. Clean-room analysis has a CPU-adaptive default of at most 12 and
+an explicit 64-worker cap. Candidate fallback and manifest checkpoints remain serialized per
+recording, and provider clients retain their retry/rate-limit handling. Completed media gets one
+concurrent verification pass; the bundled runner injects a stat-keyed cache that eliminates
+unchanged repeat hash/probe work. Library callers can inject the same `JsonDiskCache` through
+`verificationCache`. A fully verified resume takes the fast path without loading an acquisition
+backend.
 The normal Rekordbox importer similarly verifies an already-imported playlist and returns
 `performance.changed: false` without another backup or write.
 

@@ -21,6 +21,7 @@ import {
   AnalyzeTracksCancelledError,
   AnalyzeTracksError,
   DEFAULT_ANALYZER_CONCURRENCY,
+  DEFAULT_ANALYZER_TRACK_THREADS,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   compareBeatGrids,
   compareWaveforms,
@@ -371,6 +372,14 @@ describe("Rekordbox analyzer wrapper", () => {
     });
     expect(readFileSync(threadsLog, "utf8").trim().split(/\r?\n/u).at(-1)).toBe("5");
 
+    analyzeTrack(makeAudio(root, "default-single.mp3"), {
+      analyzerBinary: process.execPath,
+      force: true,
+    });
+    expect(readFileSync(threadsLog, "utf8").trim().split(/\r?\n/u).at(-1)).toBe(
+      String(DEFAULT_ANALYZER_TRACK_THREADS),
+    );
+
     const bounded = await analyzeTracks(
       [makeAudio(root, "bounded-one.mp3"), makeAudio(root, "bounded-two.mp3")],
       {
@@ -384,7 +393,7 @@ describe("Rekordbox analyzer wrapper", () => {
     expect(bounded.workerThreadBudgets).toEqual([1]);
   });
 
-  it("defaults to four workers and reports cached and completed progress", async () => {
+  it("uses CPU-adaptive worker defaults and reports cached and completed progress", async () => {
     installFakeAnalyzer();
     stubNativeRuntime();
     const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
@@ -400,7 +409,8 @@ describe("Rekordbox analyzer wrapper", () => {
         firstProgress.push(progress.phase);
       },
     });
-    expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(4);
+    expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET));
+    expect(DEFAULT_ANALYZER_TRACK_THREADS).toBe(Math.min(4, DEFAULT_ANALYZER_THREAD_BUDGET));
     expect(first.concurrency).toBe(2);
     expect(counterValue(doctorCounter)).toBe(1);
     expect(firstProgress.filter((phase) => phase === "started")).toHaveLength(2);

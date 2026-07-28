@@ -655,7 +655,9 @@ tracksCli.command("analyze-existing", {
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
-      .describe("Parallel clean-room analyzer workers; defaults to 4"),
+      .describe(
+        `Parallel clean-room analyzer workers; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; raise with --threads to oversubscribe`,
+      ),
     engine: z
       .enum(["clean", "reference"])
       .default("clean")
@@ -682,7 +684,9 @@ tracksCli.command("analyze-existing", {
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
       .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
-      .describe("Total native CPU budget shared across analyzer workers"),
+      .describe(
+        "Total native CPU budget shared across analyzer workers; raise with --concurrency to oversubscribe",
+      ),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
   }),
   output: z.object({
@@ -825,14 +829,18 @@ tracksCli.command("import-set", {
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
-      .describe("Parallel clean-room Rekordbox analyzer workers; defaults to 4"),
+      .describe(
+        `Parallel clean-room Rekordbox analyzer workers; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; raise with --analysis-threads to oversubscribe`,
+      ),
     analysisThreads: z
       .number()
       .int()
       .min(1)
       .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
       .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
-      .describe("Total native CPU budget shared across all analyzer workers"),
+      .describe(
+        "Total native CPU budget shared across all analyzer workers; raise with --analysis-concurrency to oversubscribe",
+      ),
     analysisEngine: z
       .enum(["clean", "reference"])
       .default("clean")

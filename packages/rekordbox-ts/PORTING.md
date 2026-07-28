@@ -25,6 +25,26 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-28 — Samply profiles and adaptive clean scheduling
+
+- Profile the optimized, debuginfo-enabled Rust release with Samply 0.13.1 at 1 kHz. A five-run,
+  491-second M4A scalar profile attributes 23.6% of CPU to decode, 23.4% to waveform generation,
+  22.9% to beat spectral flux, 18.6% to key chroma, and 10.3% to beat post-processing. Stateful
+  waveform biquads are the largest leaf at 21.3%.
+- Single-track scaling plateaus at four native threads: medians are 1,456.7 ms at one thread,
+  705.5 ms at four, 704.9 ms at eight, and 721.8 ms at twelve. Default clean single-track wrappers
+  to four threads while preserving explicit overrides.
+- Prefer independent process parallelism for batches. A cold 100-track, 8.55-hour corpus improves
+  from 16.09 seconds at four processes to 11.33 seconds at twelve (29.6% lower wall time);
+  an initial 24-process run reaches 11.23 seconds. Rotated repeats put 12 and 24 at effectively
+  identical 11.402/11.401-second medians, while 32 reaches 11.503 seconds. Aggregate analyzer RSS
+  peaks at 0.60 GiB at four processes, 1.60 GiB at twelve, 3.02 GiB at twenty-four, and 4.10 GiB at
+  thirty-two on the 12-core/32-GiB profiling host.
+- Default clean batch concurrency to `min(12, availableParallelism, threadBudget, uncachedTracks)`.
+  Preserve explicit concurrency and thread budgets, ordered results, isolated processes, and
+  deterministic worker-budget division. Both explicit limits remain available through 64 for
+  deliberate oversubscription.
+
 ### 2026-07-26 — Composed CLI runtime
 
 - Pin Incur `0.4.13` across every package mounted by `@gakonst/music`. Clean consumers must not
@@ -241,10 +261,9 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   profile measured 26 real tracks at 60.02 seconds with four workers, 32.23 seconds with eight, and
   28.83 seconds with twelve. A 64-default stress run completed 27 compatible real artifacts in 23.85
   seconds at effective concurrency 27 and 1.13 tracks/second; two other files reproduced a native
-  `startAnalyze` incompatibility at concurrency one and were excluded. The default is four workers
-  (bounded by the uncached track count); higher values remain explicit measured overrides. The batch
-  result reports preflight time, analyzer time, cache hits, and throughput; a warm 26-track cache
-  validation took 11.65 ms.
+  `startAnalyze` incompatibility at concurrency one and were excluded. The original reference-engine
+  default was four workers; the batch result reports preflight time, analyzer time, cache hits, and
+  throughput. A warm 26-track cache validation took 11.65 ms.
 - Packaged sanitized DAT/EXT seed shapes and made them the fallback when a local Rekordbox analysis
   library is absent. Build and packed-package smoke checks now fail if either seed is missing. An
   extracted npm tarball analyzed the same track with an empty HOME and no prebuilt runtime cache in
@@ -253,7 +272,8 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 ## Analyzer scheduler/cancellation checkpoint (2026-07-14)
 
 - Historical Codex sessions and the benchmark above showed that a blanket 64-worker default
-  oversubscribed interactive hosts. Batch analysis now defaults to four process-isolated workers.
+  oversubscribed interactive hosts. Batch analysis initially defaulted to four process-isolated
+  workers; the 2026-07-28 clean-engine profile replaces that with a bounded CPU-adaptive default.
 - Batch analysis exposes structured cache/start/completion/failure/cancellation progress. The Incur
   CLI renders it on stderr by default for humans and agents, with `--progress never` available.
 - Progress callbacks are observational; callback exceptions are isolated from analyzer workers.

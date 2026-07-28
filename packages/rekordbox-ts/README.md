@@ -243,14 +243,12 @@ rekordbox analyze doctor --engine clean --format json
 rekordbox analyze track /Music/track.flac \
   --engine clean \
   --output-directory /Music/track.rekordbox \
-  --threads 12 \
+  --threads 4 \
   --format json
 rekordbox analyze tracks \
   --audio-path /Music/one.flac \
   --audio-path /Music/two.flac \
   --engine clean \
-  --concurrency 4 \
-  --threads 12 \
   --format json
 rekordbox analyze beat-grid-diff \
   /Music/reference.rekordbox \
@@ -271,14 +269,14 @@ components over the overlapping columns. It reports entry-count deltas, exact-va
 Pearson correlation, means, MAE, median/p95/max absolute error, and signed bias instead of conflating
 packed bitfields or differing tail lengths.
 
-For `analyze track`, `--threads` is the native worker count for that one
-process. For `analyze tracks`, it is a total CPU budget, not a per-process
-multiplier. The batch runner caps its process count to the budget and divides
-the budget deterministically across active workers: for example,
-`--concurrency 4 --threads 12` launches at most four clean analyzers with three
-native threads each. Omitting it uses Node's available-parallelism value,
-bounded to 64. The selected `threadBudget` and `workerThreadBudgets` are
-reported in structured output.
+For `analyze track`, `--threads` is the native worker count for that one process. The default is
+the profiled four-thread sweet spot. For `analyze tracks`, it is a total CPU budget, not a
+per-process multiplier. The clean batch runner defaults to the lower of 12 workers, available
+parallelism, the thread budget, and the uncached track count. It divides the budget deterministically
+across active workers: for example, `--concurrency 4 --threads 12` launches at most four clean
+analyzers with three native threads each. Explicit values remain available when analysis must leave
+capacity for live DJ software. The selected `threadBudget` and `workerThreadBudgets` are reported in
+structured output.
 
 After closing Rekordbox and backing up the library, install the verified artifacts for an existing
 content row:
@@ -305,9 +303,9 @@ rekordbox db content sync-analysis-metadata \
 ```
 
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
-runs a bounded pool of isolated worker processes, preserves input order, and defaults to four
-workers or the number of uncached tracks, whichever is lower. The CLI reports cache, start,
-completion, failure, and cancellation progress on stderr; `--progress never` disables it.
+runs a bounded pool of isolated worker processes, preserves input order, and uses the same
+CPU-adaptive maximum of 12 workers. The CLI reports cache, start, completion, failure, and
+cancellation progress on stderr; `--progress never` disables it.
 SIGINT/SIGTERM stop active child analyzers and prevent new work. Keep database installation separate
 and serialized: call
 `MasterDatabase.installContentAnalysis()` for each verified result only after analysis finishes.
@@ -321,23 +319,34 @@ hundredths value, normalized key name, and resolved key ID. The set-import workf
 summary in its durable manifest, post-verifies `BPM`, `KeyID`, and the active key name after reopening
 the database, and treats missing or mismatched values as repairable checkpoint drift on a warm
 resume.
-Four workers is the stable interactive default. Historical reference-engine measurements on a
-12-core machine found that 26 real set tracks took 60.02 seconds with four workers,
-32.23 seconds with eight, and 28.83 seconds with twelve. A 64-default stress run completed 27
+Historical reference-engine measurements on a 12-core machine found that 26 real set tracks took
+60.02 seconds with four workers, 32.23 seconds with eight, and 28.83 seconds with twelve. A
+64-worker stress run completed 27
 compatible real artifacts in 23.85 seconds at an effective concurrency of 27 (1.13 tracks/second).
 Two additional source files returned the same native `startAnalyze` incompatibility alone at
 concurrency one and were excluded from that timing. Moving from 12 to 27 workers used more than twice
-as many native processes for roughly 17% lower wall time, so higher concurrency remains an explicit,
-measured override. Warm validation of all 26 cached analyses
-took 11.65 ms. These numbers do not describe the clean engine.
+as many native processes for roughly 17% lower wall time. Warm validation of all 26 cached analyses
+took 11.65 ms. These historical numbers describe only the explicit reference engine.
 
-For the clean engine on the same 12-core machine, deterministic native
-parallelism reduced four representative single-track medians by 1.74–2.38x
-versus the scalar baseline. A four-track run with one shared 12-thread budget
-took 0.81 seconds using four processes with budgets `[3, 3, 3, 3]`, versus
-1.86 seconds when processing the same files sequentially. DAT/EXT/2EX hashes
-were unchanged at 1, 2, 3, 4, 8, and 12 threads. Treat these as host-specific
-measurements; lower `--threads` when analysis competes with live DJ software.
+For the clean engine, Samply 0.13.1 profiles at 1 kHz over five runs of a 491-second M4A found
+single-track medians of 1,456.7 ms at one thread, 979.4 ms at two, 850.2 ms at three, 705.5 ms at
+four, 706.2 ms at six, 704.9 ms at eight, and 721.8 ms at twelve. Native parallelism therefore
+plateaus at four threads. The scalar CPU profile divides into decode (23.6%), waveform generation
+(23.4%; its stateful biquad filters are the 21.3% top leaf), beat spectral flux (22.9%), key chroma
+(18.6%), and beat post-processing (10.3%).
+
+Process isolation scales better across independent tracks. A cold 100-track corpus containing
+8.55 hours of audio took 16.09 seconds at four processes with a shared 12-thread budget
+(6.23 tracks/second), versus 11.33 seconds at twelve one-thread processes
+(8.85 tracks/second), a 29.6% wall-time reduction. Twenty-four processes improved only to
+11.23 seconds (8.93 tracks/second). Rotated follow-up runs put the 12- and 24-process medians at
+11.402 and 11.401 seconds, respectively, while 32 processes reached 11.503 seconds. Peak aggregate
+analyzer RSS was 0.60 GiB at four processes, 1.60 GiB at twelve, 3.02 GiB at twenty-four, and
+4.10 GiB at thirty-two. These measurements set the adaptive 12-process and four-thread defaults.
+Both `--concurrency` and `--threads` accept explicit values through 64 when a caller intentionally
+prefers oversubscription.
+DAT/EXT/2EX hashes remain deterministic at 1, 2, 3, 4, 8, and 12 threads. Treat all numbers as
+host-specific; lower `--threads` or `--concurrency` when analysis competes with live DJ software.
 
 Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains

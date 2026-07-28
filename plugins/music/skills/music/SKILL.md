@@ -347,14 +347,12 @@ music rekordbox analyze doctor --engine clean --format json
 music rekordbox analyze track "$AUDIO_PATH" \
   --engine clean \
   --output-directory "$ANALYSIS_DIR" \
-  --threads 12 \
+  --threads 4 \
   --format json
 music rekordbox analyze tracks \
   --audio-path "$AUDIO_PATH_1" \
   --audio-path "$AUDIO_PATH_2" \
   --engine clean \
-  --concurrency 4 \
-  --threads 12 \
   --format json
 music rekordbox analyze beat-grid-diff \
   "$REFERENCE_ANALYSIS_DIR" \
@@ -390,10 +388,14 @@ back from clean to reference.
 For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated worker processes
 and preserves input order. `--threads` is one total native CPU budget divided deterministically
 across active processes, not a per-process multiplier; `--concurrency 4 --threads 12` produces
-worker budgets `[3, 3, 3, 3]`. Omit it to use available parallelism, or lower it when analysis
-competes with live DJ software. Default to at most four processes unless measurement on the target
-machine supports another limit. Parallelize analysis only. Keep Rekordbox database installation
-stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
+worker budgets `[3, 3, 3, 3]`. The clean scheduler defaults to the lower of 12 processes, available
+parallelism, the thread budget, and the uncached track count. Single-track analysis defaults to four
+native threads because measured scaling plateaus there. Lower `--threads` or `--concurrency` when
+analysis competes with live DJ software. Both limits accept values through 64; raise them together
+only for deliberate oversubscription. On the profiled 12-core host, 24 processes doubled analyzer
+memory without a material median throughput gain. Parallelize analysis only. Keep Rekordbox
+database installation stopped-Rekordbox, backed up, locked, and serialized through the workflow
+below.
 
 For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
 does not load provider credentials or download anything. It checkpoints per-item cache results and a
@@ -402,8 +404,6 @@ timestamped run ledger in the manifest:
 ```sh
 music tracks analyze-existing "$MANIFEST" \
   --engine clean \
-  --concurrency 4 \
-  --threads 12 \
   --progress always \
   --format json
 ```

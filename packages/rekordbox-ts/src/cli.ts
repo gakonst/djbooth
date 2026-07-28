@@ -14,6 +14,7 @@ import {
   compareBeatGrids,
   compareWaveforms,
   DEFAULT_ANALYZER_CONCURRENCY,
+  DEFAULT_ANALYZER_TRACK_THREADS,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   ExtendedBeatGridTag,
   createMySettingFile,
@@ -118,7 +119,7 @@ analyzeCli.command("track", {
       .max(64)
       .optional()
       .describe(
-        `Native CPU workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
+        `Native CPU workers; defaults to the profiled single-track sweet spot (${String(DEFAULT_ANALYZER_TRACK_THREADS)} here)`,
       ),
   }),
   async run(c) {
@@ -150,7 +151,7 @@ analyzeCli.command("tracks", {
       .max(64)
       .optional()
       .describe(
-        `Parallel analyzer workers; defaults to ${String(DEFAULT_ANALYZER_CONCURRENCY)} (bounded by uncached track count)`,
+        `Parallel analyzer workers; CPU-adaptive default ${String(DEFAULT_ANALYZER_CONCURRENCY)} here; raise this and --threads together to oversubscribe (max 64)`,
       ),
     engine: z
       .enum(["clean", "reference"])
@@ -173,7 +174,7 @@ analyzeCli.command("tracks", {
       .max(64)
       .optional()
       .describe(
-        `Total native CPU budget shared across analyzer workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
+        `Total native CPU budget shared across analyzer workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here); raise with --concurrency to oversubscribe`,
       ),
   }),
   async run(c) {
