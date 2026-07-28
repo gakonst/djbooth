@@ -1445,17 +1445,19 @@ describe("Rekordbox direct database planning", () => {
       const stale = new Date(Date.now() - 25 * 60 * 60 * 1_000);
       await utimes(guardPath, stale, stale);
 
-      const results = await Promise.allSettled([
-        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
-        acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
-      ]);
+      const attempts = 32;
+      const results = await Promise.allSettled(
+        Array.from({ length: attempts }, () =>
+          acquireRekordboxDatabaseLock(dbPath, { durability: "session" }),
+        ),
+      );
       const acquired = results.flatMap((result) =>
         result.status === "fulfilled" ? [result.value] : [],
       );
       expect(acquired).toHaveLength(1);
-      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+      expect(results.filter(({ status }) => status === "rejected")).toHaveLength(attempts - 1);
 
-      await acquired[0]!();
+      await Promise.all(Array.from({ length: attempts }, () => acquired[0]!()));
       await expect(readFile(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(readFile(guardPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

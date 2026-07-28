@@ -312,7 +312,7 @@ export type ImportManifestToRekordboxOptions = {
   /** Reuse this exact Rekordbox playlist across provider renames and duplicate display names. */
   playlistId?: string;
   backupRoot?: string;
-  /** Native analyzer output directories keyed by absolute media path. */
+  /** Analyzer output directories keyed by absolute media path. */
   analysisDirectories?: Readonly<Record<string, string>>;
   now?: Date;
   /** Inject the library directly for tests or a custom runtime. */
@@ -1969,54 +1969,54 @@ export async function acquireRekordboxDatabaseLock(
   const durable = options.durability !== "session";
   const canonicalDbPath = await realpath(resolve(dbPath));
   const path = `${canonicalDbPath}.tracks-ts.lock`;
-  const guard = await acquireRekordboxDatabaseLockGuard(path, durable);
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   const token = randomUUID();
-  try {
+  await withRekordboxDatabaseLockGuard(path, durable, async () => {
     try {
-      handle = await open(path, "wx", 0o600);
-    } catch (error) {
-      if (!isAlreadyExistsError(error)) throw error;
-      if (await isStaleRekordboxDatabaseLock(path)) {
-        await unlink(path).catch(() => undefined);
-        if (durable) await syncDirectory(dirname(path));
+      try {
         handle = await open(path, "wx", 0o600);
-      } else {
-        const owner = await readLockOwner(path);
-        throw new TracksError(
-          "TOOL_FAILED",
-          `Rekordbox database import lock already exists: ${path}`,
-          { details: { path, owner } },
-        );
+      } catch (error) {
+        if (!isAlreadyExistsError(error)) throw error;
+        if (await isStaleRekordboxDatabaseLock(path)) {
+          await unlink(path).catch(() => undefined);
+          if (durable) await syncDirectory(dirname(path));
+          handle = await open(path, "wx", 0o600);
+        } else {
+          const owner = await readLockOwner(path);
+          throw new TracksError(
+            "TOOL_FAILED",
+            `Rekordbox database import lock already exists: ${path}`,
+            { details: { path, owner } },
+          );
+        }
       }
+      if (!handle) throw new TracksError("TOOL_FAILED", `Could not acquire database lock ${path}`);
+      await handle.writeFile(
+        `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), dbPath: canonicalDbPath })}\n`,
+        "utf8",
+      );
+      if (durable) {
+        await handle.sync();
+        await syncDirectory(dirname(path));
+      }
+    } catch (error) {
+      if (handle)
+        await closeAndRemoveOwnedFile(path, handle, undefined, durable).catch(() => undefined);
+      throw error;
     }
-    if (!handle) throw new TracksError("TOOL_FAILED", `Could not acquire database lock ${path}`);
-    await handle.writeFile(
-      `${JSON.stringify({ pid: process.pid, token, createdAt: new Date().toISOString(), dbPath: canonicalDbPath })}\n`,
-      "utf8",
-    );
-    if (durable) {
-      await handle.sync();
-      await syncDirectory(dirname(path));
-    }
-  } catch (error) {
-    if (handle)
-      await closeAndRemoveOwnedFile(path, handle, undefined, durable).catch(() => undefined);
-    throw error;
-  } finally {
-    await guard.release();
-  }
+  });
+  const acquiredHandle = handle;
+  if (!acquiredHandle)
+    throw new TracksError("TOOL_FAILED", `Could not acquire database lock ${path}`);
 
   let released = false;
   return async () => {
     if (released) return;
-    const releaseGuard = await acquireRekordboxDatabaseLockGuard(path, durable);
-    try {
+    await withRekordboxDatabaseLockGuard(path, durable, async () => {
+      if (released) return;
       released = true;
-      await closeAndRemoveOwnedFile(path, handle, token, durable);
-    } finally {
-      await releaseGuard.release();
-    }
+      await closeAndRemoveOwnedFile(path, acquiredHandle, token, durable);
+    });
   };
 }
 
@@ -2025,6 +2025,37 @@ type OwnedLockFile = {
   path: string;
   release(): Promise<void>;
 };
+
+const rekordboxDatabaseLockGuardTails = new Map<string, Promise<void>>();
+
+// The file guard excludes other processes; this promise lane prevents local
+// stale-recovery callers from unlinking a guard recreated by an earlier caller.
+async function withRekordboxDatabaseLockGuard<Result>(
+  lockPath: string,
+  durable: boolean,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  const previous = rekordboxDatabaseLockGuardTails.get(lockPath) ?? Promise.resolve();
+  let finishTurn = (): void => undefined;
+  const turn = new Promise<void>((resolveTurn) => {
+    finishTurn = resolveTurn;
+  });
+  const tail = previous.then(() => turn);
+  rekordboxDatabaseLockGuardTails.set(lockPath, tail);
+  await previous;
+  try {
+    const guard = await acquireRekordboxDatabaseLockGuard(lockPath, durable);
+    try {
+      return await action();
+    } finally {
+      await guard.release();
+    }
+  } finally {
+    finishTurn();
+    if (rekordboxDatabaseLockGuardTails.get(lockPath) === tail)
+      rekordboxDatabaseLockGuardTails.delete(lockPath);
+  }
+}
 
 async function acquireRekordboxDatabaseLockGuard(
   lockPath: string,
