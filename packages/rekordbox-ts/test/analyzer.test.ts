@@ -31,6 +31,9 @@ const helperPaths = [resolve("analyze"), resolve("doctor")];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const archDescriptor = Object.getOwnPropertyDescriptor(process, "arch");
 const analyzerRoot = process.env.REKORDBOX_ANALYZER_ROOT;
+const cleanAnalyzerBinary = process.env.REKORDBOX_CLEAN_ANALYZER_BINARY;
+const genericAnalyzerBinary = process.env.REKORDBOX_ANALYZER_BINARY;
+const referenceAnalyzerBinary = process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY;
 
 const fakeAnalyzer = `#!/usr/bin/env node
 import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
@@ -39,13 +42,21 @@ import { basename, join } from "node:path";
 const command = basename(process.argv[1]);
 const mode = process.env.FAKE_ANALYZER_MODE;
 if (command === "doctor") {
+  if (process.env.FAKE_ANALYZER_DOCTOR_COUNTER)
+    appendFileSync(process.env.FAKE_ANALYZER_DOCTOR_COUNTER, "1\\n");
   if (mode === "fail-doctor") {
     console.error("fake doctor failure");
     process.exit(3);
   }
+  const legacy = mode === "legacy-doctor";
   console.log(JSON.stringify({
     app: process.env.REKORDBOX_ANALYZER_APP,
+    backend: legacy || process.env.REKORDBOX_ANALYZER_ENGINE === "reference"
+      ? "rekordbox-dlopen-rehost"
+      : "clean-room-test",
     cache: process.env.REKORDBOX_ANALYZER_CACHE,
+    cleanRoom: !legacy && process.env.REKORDBOX_ANALYZER_ENGINE !== "reference",
+    proprietaryDependencies: legacy || process.env.REKORDBOX_ANALYZER_ENGINE === "reference",
     root: process.env.REKORDBOX_ANALYZER_ROOT,
   }));
   process.exit(0);
@@ -95,7 +106,9 @@ if (mode === "invalid-json") {
 console.log(JSON.stringify({
   analyzePath: join(outputDirectory, "ANLZ0000.DAT"),
   audioPath: realpathSync(audioPath),
-  backend: "fake",
+  backend: process.env.REKORDBOX_ANALYZER_ENGINE === "reference"
+    ? "rekordbox-dlopen-rehost"
+    : "clean-room-test",
   binary: process.execPath,
   callbackError: null,
   callbackStatus: 0,
@@ -145,9 +158,16 @@ afterEach(() => {
   if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
   if (archDescriptor) Object.defineProperty(process, "arch", archDescriptor);
   delete process.env.FAKE_ANALYZER_COUNTER;
+  delete process.env.FAKE_ANALYZER_DOCTOR_COUNTER;
   delete process.env.FAKE_ANALYZER_MODE;
   if (analyzerRoot === undefined) delete process.env.REKORDBOX_ANALYZER_ROOT;
   else process.env.REKORDBOX_ANALYZER_ROOT = analyzerRoot;
+  if (cleanAnalyzerBinary === undefined) delete process.env.REKORDBOX_CLEAN_ANALYZER_BINARY;
+  else process.env.REKORDBOX_CLEAN_ANALYZER_BINARY = cleanAnalyzerBinary;
+  if (genericAnalyzerBinary === undefined) delete process.env.REKORDBOX_ANALYZER_BINARY;
+  else process.env.REKORDBOX_ANALYZER_BINARY = genericAnalyzerBinary;
+  if (referenceAnalyzerBinary === undefined) delete process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY;
+  else process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY = referenceAnalyzerBinary;
   for (const path of helperPaths) rmSync(path, { force: true });
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
@@ -161,6 +181,22 @@ describe("Rekordbox analyzer wrapper", () => {
     const result = { backend: "rekordbox-dlopen-rehost", summaryPath: path };
     writeFileSync(path, JSON.stringify(result));
     expect(() => readAnalysisResult(path)).toThrow("Invalid Rekordbox analysis summary");
+  });
+
+  it("does not route the legacy proprietary helper override into the clean engine", () => {
+    process.env.REKORDBOX_ANALYZER_BINARY = "/tmp/legacy-reference-analyzer";
+    delete process.env.REKORDBOX_CLEAN_ANALYZER_BINARY;
+    delete process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY;
+
+    expect(getAnalyzerBinary(undefined, "clean")).not.toBe(
+      resolve("/tmp/legacy-reference-analyzer"),
+    );
+    expect(getAnalyzerBinary(undefined, "reference")).toBe(
+      resolve("/tmp/legacy-reference-analyzer"),
+    );
+
+    process.env.REKORDBOX_CLEAN_ANALYZER_BINARY = "/tmp/clean-analyzer";
+    expect(getAnalyzerBinary(undefined, "clean")).toBe(resolve("/tmp/clean-analyzer"));
   });
 
   it("rejects a missing audio file before launching the native helper", () => {
@@ -193,6 +229,8 @@ describe("Rekordbox analyzer wrapper", () => {
     const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
     roots.push(root);
     const audioPaths = [makeAudio(root, "one.mp3"), makeAudio(root, "two.mp3")];
+    const doctorCounter = join(root, "doctor-counter");
+    process.env.FAKE_ANALYZER_DOCTOR_COUNTER = doctorCounter;
     const firstProgress: Array<string> = [];
     const first = await analyzeTracks(audioPaths, {
       analyzerBinary: process.execPath,
@@ -203,6 +241,7 @@ describe("Rekordbox analyzer wrapper", () => {
     });
     expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(4);
     expect(first.concurrency).toBe(2);
+    expect(counterValue(doctorCounter)).toBe(1);
     expect(firstProgress.filter((phase) => phase === "started")).toHaveLength(2);
     expect(firstProgress.filter((phase) => phase === "completed")).toHaveLength(2);
 
@@ -214,6 +253,7 @@ describe("Rekordbox analyzer wrapper", () => {
       },
     });
     expect(warmProgress).toEqual(["cached", "cached"]);
+    expect(counterValue(doctorCounter)).toBe(2);
   });
 
   it("does not let progress observer failures interrupt analyzer workers", async () => {
@@ -300,6 +340,7 @@ describe("Rekordbox analyzer wrapper", () => {
     process.env.FAKE_ANALYZER_MODE = "unicode-path";
     const result = await analyzeTrackAsync(audioPath, {
       analyzerBinary: process.execPath,
+      engine: "reference",
       force: true,
     });
     expect(result.audioPath).toBe(realpathSync(audioPath));
@@ -359,7 +400,10 @@ describe("Rekordbox analyzer wrapper", () => {
       }),
     ).toEqual({
       app: resolve("rekordbox.app"),
+      backend: "clean-room-test",
       cache: resolve("cache"),
+      cleanRoom: true,
+      proprietaryDependencies: false,
       root: dirname(dirname(process.execPath)),
     });
 
@@ -372,7 +416,31 @@ describe("Rekordbox analyzer wrapper", () => {
       "does not exist",
     );
     stubNativeRuntime("linux");
-    expect(() => diagnoseAnalyzer({ analyzerBinary: process.execPath })).toThrow("requires macOS");
+    expect(diagnoseAnalyzer({ analyzerBinary: process.execPath })).toEqual({
+      backend: "clean-room-test",
+      cleanRoom: true,
+      proprietaryDependencies: false,
+      root: dirname(dirname(process.execPath)),
+    });
+    expect(() =>
+      diagnoseAnalyzer({ analyzerBinary: process.execPath, engine: "reference" }),
+    ).toThrow("requires macOS");
+  });
+
+  it("rejects a legacy proprietary helper before clean audio analysis", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    process.env.FAKE_ANALYZER_MODE = "legacy-doctor";
+
+    expect(() =>
+      analyzeTrack(audioPath, { analyzerBinary: process.execPath, force: true }),
+    ).toThrow("clean analyzer identity check failed");
+    expect(() => diagnoseAnalyzer({ analyzerBinary: process.execPath })).toThrow(
+      "clean analyzer identity check failed",
+    );
   });
 
   it("runs synchronously, validates cache artifacts, and invalidates stale sources", () => {
@@ -402,6 +470,58 @@ describe("Rekordbox analyzer wrapper", () => {
     expect(counterValue(counter)).toBe(3);
 
     expect(() => analyzeTrack(root, { analyzerBinary: process.execPath })).toThrow("is not a file");
+  });
+
+  it("never reuses analysis artifacts across clean and reference engines", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const outputDirectory = join(root, "output");
+    const counter = join(root, "counter");
+    process.env.FAKE_ANALYZER_COUNTER = counter;
+    const options = { analyzerBinary: process.execPath, outputDirectory };
+
+    expect(analyzeTrack(audioPath, { ...options, force: true }).backend).toBe("clean-room-test");
+    expect(analyzeTrack(audioPath, { ...options, engine: "reference" }).backend).toBe(
+      "rekordbox-dlopen-rehost",
+    );
+    expect(analyzeTrack(audioPath, { ...options, engine: "reference" }).backend).toBe(
+      "rekordbox-dlopen-rehost",
+    );
+    expect(analyzeTrack(audioPath, options).backend).toBe("clean-room-test");
+    expect(counterValue(counter)).toBe(3);
+  });
+
+  it("keeps force replacement bounded and rejects output aliases to the input", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const outputDirectory = join(root, "output");
+    mkdirSync(outputDirectory);
+    const unrelated = join(outputDirectory, "keep.txt");
+    writeFileSync(unrelated, "caller-owned");
+
+    analyzeTrack(audioPath, {
+      analyzerBinary: process.execPath,
+      force: true,
+      outputDirectory,
+    });
+    expect(readFileSync(unrelated, "utf8")).toBe("caller-owned");
+
+    const collidingAudio = makeAudio(root, "analysis.json");
+    const before = readFileSync(collidingAudio);
+    expect(() =>
+      analyzeTrack(collidingAudio, {
+        analyzerBinary: process.execPath,
+        force: true,
+        outputDirectory: root,
+      }),
+    ).toThrow("collides with input audio");
+    expect(readFileSync(collidingAudio)).toEqual(before);
   });
 
   it("handles asynchronous success, helper failure, malformed output, and timeout", async () => {

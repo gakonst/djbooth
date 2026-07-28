@@ -4,17 +4,30 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
-description = "Clean-room Rekordbox DAT, EXT, and 2EX primitives and differential tooling"
+description = "Clean-room audio DSP, Rekordbox DAT/EXT/2EX generation, and differential tooling"
 homepage = "https://github.com/gakonst/music-ts"
 readme = "ANLZ_COMPATIBILITY.md"
 repository = "https://github.com/gakonst/music-ts"
-include = ["Cargo.toml", "Cargo.lock", "src/**", "ANLZ_COMPATIBILITY.md"]
+include = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "src/**",
+  "tests/**",
+  "ANLZ_COMPATIBILITY.md",
+  "THIRD_PARTY_LICENSES.md",
+]
+
+[[bin]]
+name = "rekordbox-analyzer"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+rustfft = "6"
+symphonia = { version = "0.6", default-features = false, features = ["all-codecs", "all-formats", "all-meta"] }
 
 [dev-dependencies]
 tempfile = "3"

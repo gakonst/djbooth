@@ -437,18 +437,32 @@ pub struct ExtAnalysis {
     pub extended_beat_grid: ExtendedBeatGrid,
     pub color_detail_waveform: CountedWaveform,
     pub color_preview_waveform: CountedWaveform,
+    pub vbr_2: Option<AnlzTag>,
     pub song_structure: AnlzTag,
 }
 
 impl ExtAnalysis {
-    /// Decode the ten-section EXT shape emitted by Rekordbox 6.8.2.
+    /// Decode the EXT shape emitted by Rekordbox 6.8.2, preserving optional PVB2.
     pub fn parse(file: &AnlzFile) -> Result<Self> {
         let tags = file.tags();
-        let expected = [
+        let expected_without_vbr = [
             *b"PPTH", *b"PWV3", *b"PCOB", *b"PCOB", *b"PCO2", *b"PCO2", *b"PQT2", *b"PWV5",
             *b"PWV4", *b"PSSI",
         ];
-        require_tag_order(tags, &expected, "EXT")?;
+        let expected_with_vbr = [
+            *b"PPTH", *b"PWV3", *b"PCOB", *b"PCOB", *b"PCO2", *b"PCO2", *b"PQT2", *b"PWV5",
+            *b"PWV4", *b"PVB2", *b"PSSI",
+        ];
+        let has_vbr_2 = tags.get(9).is_some_and(|tag| tag.kind() == *b"PVB2");
+        require_tag_order(
+            tags,
+            if has_vbr_2 {
+                &expected_with_vbr
+            } else {
+                &expected_without_vbr
+            },
+            "EXT",
+        )?;
         Ok(Self {
             path: parse_path_tag(&tags[0])?,
             detail_waveform: CountedWaveform::parse(&tags[1])?,
@@ -459,7 +473,8 @@ impl ExtAnalysis {
             extended_beat_grid: ExtendedBeatGrid::parse(&tags[6])?,
             color_detail_waveform: CountedWaveform::parse(&tags[7])?,
             color_preview_waveform: CountedWaveform::parse(&tags[8])?,
-            song_structure: tags[9].clone(),
+            vbr_2: has_vbr_2.then(|| tags[9].clone()),
+            song_structure: tags[usize::from(has_vbr_2) + 9].clone(),
         })
     }
 
@@ -485,7 +500,10 @@ impl ExtAnalysis {
         ] {
             require_kind(&tag.kind(), kind, context)?;
         }
-        AnlzFile::from_tags(vec![
+        if let Some(vbr_2) = &self.vbr_2 {
+            require_kind(&vbr_2.kind(), b"PVB2", "secondary VBR index")?;
+        }
+        let mut tags = vec![
             build_path_tag(&self.path)?,
             self.detail_waveform.to_tag()?,
             self.hot_cues.clone(),
@@ -495,8 +513,10 @@ impl ExtAnalysis {
             self.extended_beat_grid.to_tag()?,
             self.color_detail_waveform.to_tag()?,
             self.color_preview_waveform.to_tag()?,
-            self.song_structure.clone(),
-        ])
+        ];
+        tags.extend(self.vbr_2.iter().cloned());
+        tags.push(self.song_structure.clone());
+        AnlzFile::from_tags(tags)
     }
 }
 

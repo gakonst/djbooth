@@ -90,7 +90,7 @@ export type InstallContentAnalysisResult = {
   tempoBpm: number | null;
 };
 
-/** BPM and key metadata synchronized from a native analyzer summary. */
+/** BPM and key metadata synchronized from a validated analyzer summary. */
 export type SyncContentAnalysisMetadataResult = {
   bpmHundredths: number | null;
   contentId: string;
@@ -2931,7 +2931,7 @@ export class MasterDatabase {
     return this.readContentAnlzFile(content, normalized);
   }
 
-  /** Install native analyzer artifacts and mark a content row analyzed. */
+  /** Install validated analyzer artifacts and mark a content row analyzed. */
   installContentAnalysis(
     content: models.DjmdContent | string | number,
     analysisDirectory: string,
@@ -2989,7 +2989,7 @@ export class MasterDatabase {
     return { analysisDataPath, contentId: row.ID, directory, paths, ...metadata };
   }
 
-  /** Synchronize BPM and key from an existing native analyzer summary without recopying ANLZ files. */
+  /** Synchronize BPM and key from an existing analyzer summary without recopying ANLZ files. */
   syncContentAnalysisMetadata(
     content: models.DjmdContent | string | number,
     analysisDirectory: string,

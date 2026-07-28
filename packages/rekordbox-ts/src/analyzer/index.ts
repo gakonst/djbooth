@@ -20,9 +20,13 @@ import { z } from "zod";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
-const helperName = "rekordbox-analyzer";
+const cleanHelperName = "rekordbox-analyzer";
+const referenceHelperName = "rekordbox-analyzer-reference";
 
-/** Parsed beat-grid summary emitted by the native Rekordbox analyzer. */
+/** Select the releasable clean-room DSP or the local proprietary parity oracle. */
+export type AnalyzerEngine = "clean" | "reference";
+
+/** Parsed beat-grid summary emitted by an analyzer engine. */
 export type RekordboxBeatGridSummary = {
   avg_bpm: number;
   beat_count: number;
@@ -33,7 +37,7 @@ export type RekordboxBeatGridSummary = {
   min_bpm: number;
 };
 
-/** Native analyzer result plus the durable summary path. */
+/** Analyzer result plus the durable summary path. */
 export type RekordboxAnalysisResult = {
   analyzePath: string;
   audioPath: string;
@@ -132,9 +136,10 @@ const analysisResultSchema = z.object({
   }),
 });
 
-/** Options for producing native Rekordbox DAT, EXT, and 2EX files. */
+/** Options for producing Rekordbox DAT, EXT, and 2EX files. */
 export type AnalyzeTrackOptions = {
   analyzerBinary?: string;
+  engine?: AnalyzerEngine;
   force?: boolean;
   outputDirectory?: string;
   rekordboxApp?: string;
@@ -143,7 +148,7 @@ export type AnalyzeTrackOptions = {
   timeoutMs?: number;
 };
 
-/** Conservative default for process-isolated native analyzer workers. */
+/** Conservative default for process-isolated analyzer workers. */
 export const DEFAULT_ANALYZER_CONCURRENCY = 4;
 
 /** Progress emitted by a bounded multi-track analyzer run. */
@@ -155,7 +160,7 @@ export type AnalyzeTracksProgress = {
   total: number;
 };
 
-/** Options for bounded, process-isolated native Rekordbox analysis. */
+/** Options for bounded, process-isolated Rekordbox analysis. */
 export type AnalyzeTracksOptions = Omit<AnalyzeTrackOptions, "outputDirectory"> & {
   concurrency?: number;
   onProgress?: (progress: AnalyzeTracksProgress) => void;
@@ -232,6 +237,7 @@ type PreparedAnalysis = {
   args: Array<string>;
   cached?: RekordboxAnalysisResult;
   command: string;
+  engine: AnalyzerEngine;
   env: NodeJS.ProcessEnv;
   inputPath: string;
   outputDirectory: string;
@@ -240,47 +246,62 @@ type PreparedAnalysis = {
 };
 
 /** Resolve an explicit, PATH-installed, user-local, or repository-built analyzer helper. */
-export function getAnalyzerBinary(explicit?: string): string {
-  const path = explicit ?? process.env.REKORDBOX_ANALYZER_BINARY;
+export function getAnalyzerBinary(explicit?: string, engine: AnalyzerEngine = "clean"): string {
+  const helperName = engine === "clean" ? cleanHelperName : referenceHelperName;
+  const path =
+    explicit ??
+    (engine === "clean"
+      ? process.env.REKORDBOX_CLEAN_ANALYZER_BINARY
+      : (process.env.REKORDBOX_REFERENCE_ANALYZER_BINARY ?? process.env.REKORDBOX_ANALYZER_BINARY));
   if (path) return resolve(path);
   const pathCandidates = (process.env.PATH ?? "")
     .split(delimiter)
     .filter(Boolean)
     .map((directory) => join(directory, helperName));
-  const candidates = [
+  const installedCandidates = [
     ...pathCandidates,
     join(homedir(), ".local/bin", helperName),
-    "/opt/homebrew/bin/rekordbox-analyzer",
-    "/usr/local/bin/rekordbox-analyzer",
-    fileURLToPath(new URL(`../../vendor/${helperName}`, import.meta.url)),
+    `/opt/homebrew/bin/${helperName}`,
+    `/usr/local/bin/${helperName}`,
   ];
+  const candidates =
+    engine === "clean"
+      ? [
+          fileURLToPath(new URL(`../../.rekordbox-analyzer/${cleanHelperName}`, import.meta.url)),
+          fileURLToPath(
+            new URL(
+              `../../../../native/rekordbox-analyzer-core/target/release/${cleanHelperName}`,
+              import.meta.url,
+            ),
+          ),
+          ...installedCandidates,
+        ]
+      : [
+          ...installedCandidates,
+          fileURLToPath(new URL(`../../vendor/${cleanHelperName}`, import.meta.url)),
+        ];
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
-/** Inspect Rekordbox application discovery, binary offsets, cache, and signatures. */
+/** Inspect the selected clean-room analyzer or local reference oracle. */
 export function diagnoseAnalyzer(
-  options: Pick<AnalyzeTrackOptions, "analyzerBinary" | "rekordboxApp" | "rekordboxCache"> = {},
+  options: Pick<
+    AnalyzeTrackOptions,
+    "analyzerBinary" | "engine" | "rekordboxApp" | "rekordboxCache"
+  > = {},
 ): unknown {
-  if (process.platform !== "darwin") throw new TypeError("Rekordbox analysis requires macOS");
-  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary);
+  const engine = options.engine ?? "clean";
+  if (engine === "reference" && process.platform !== "darwin") {
+    throw new TypeError("The Rekordbox reference analyzer requires macOS");
+  }
+  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, engine);
   if (!existsSync(analyzerBinary))
-    throw new TypeError(`Rekordbox analyzer helper '${analyzerBinary}' does not exist`);
-  const env = { ...process.env };
-  env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
-  if (options.rekordboxApp) env.REKORDBOX_ANALYZER_APP = resolve(options.rekordboxApp);
-  if (options.rekordboxCache) env.REKORDBOX_ANALYZER_CACHE = resolve(options.rekordboxCache);
-  const command = process.arch === "arm64" ? "/usr/bin/arch" : analyzerBinary;
-  const args = process.arch === "arm64" ? ["-x86_64", analyzerBinary, "doctor"] : ["doctor"];
-  const child = spawnSync(command, args, { encoding: "utf8", env, maxBuffer: 4 * 1024 * 1024 });
-  if (child.error) throw child.error;
-  if (child.status !== 0)
-    throw new Error(
-      `Rekordbox analyzer doctor exited with ${child.status ?? "no status"}: ${child.stderr.trim()}`,
-    );
-  return JSON.parse(child.stdout) as unknown;
+    throw new TypeError(`${engine} analyzer helper '${analyzerBinary}' does not exist`);
+  const env = analyzerEnvironment(engine, analyzerBinary, options);
+  return runAnalyzerDoctor(engine, analyzerBinary, env);
 }
 
-/** Produce the same DAT, EXT, and 2EX artifacts as Rekordbox's native analyzer. */
+/** Produce structurally compatible DAT, EXT, and 2EX analysis artifacts. */
 export function analyzeTrack(
   audioPath: string,
   options: AnalyzeTrackOptions = {},
@@ -357,7 +378,10 @@ export async function analyzeTracks(
 
   const started = performance.now();
   const preflightStarted = performance.now();
-  const prepared = absolutePaths.map((audioPath) => prepareAnalysis(audioPath, options));
+  const verifiedHelpers = new Set<string>();
+  const prepared = absolutePaths.map((audioPath) =>
+    prepareAnalysis(audioPath, options, verifiedHelpers),
+  );
   const preflightMs = roundMilliseconds(performance.now() - preflightStarted);
   const concurrency = Math.min(configuredConcurrency, absolutePaths.length);
   const results = Array.from<RekordboxAnalysisResult>({ length: absolutePaths.length });
@@ -504,23 +528,50 @@ function classifyAnalyzerFailure(cause: unknown): AnalyzeTrackFailure["kind"] {
   return "unknown";
 }
 
-function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): PreparedAnalysis {
+function prepareAnalysis(
+  audioPath: string,
+  options: AnalyzeTrackOptions,
+  verifiedHelpers?: Set<string>,
+): PreparedAnalysis {
   const absoluteAudioPath = resolve(audioPath);
   if (!existsSync(absoluteAudioPath))
     throw new TypeError(`Audio file '${absoluteAudioPath}' does not exist`);
-  if (process.platform !== "darwin") throw new TypeError("Rekordbox analysis requires macOS");
-  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary);
+  const engine = options.engine ?? "clean";
+  if (engine === "reference" && process.platform !== "darwin") {
+    throw new TypeError("The Rekordbox reference analyzer requires macOS");
+  }
+  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, engine);
   if (!existsSync(analyzerBinary))
     throw new TypeError(
-      `Rekordbox analyzer helper '${analyzerBinary}' does not exist; set REKORDBOX_ANALYZER_BINARY or build the repository-local helper with pnpm --filter @gakonst/rekordbox build:analyzer`,
+      `${engine} analyzer helper '${analyzerBinary}' does not exist; set ${
+        engine === "clean"
+          ? "REKORDBOX_CLEAN_ANALYZER_BINARY"
+          : "REKORDBOX_REFERENCE_ANALYZER_BINARY"
+      }${
+        engine === "clean"
+          ? " or build it with pnpm --filter @gakonst/rekordbox build:analyzer"
+          : "; the local reference oracle is not included in releases"
+      }`,
     );
+  const env = analyzerEnvironment(engine, analyzerBinary, options);
+  verifyAnalyzerEngine(engine, analyzerBinary, env, verifiedHelpers);
   const source = sourceFingerprint(absoluteAudioPath);
   const outputDirectory = resolve(
     options.outputDirectory ?? defaultOutputDirectory(absoluteAudioPath),
   );
   const summaryPath = join(outputDirectory, "analysis.json");
-  const nativeLogPath = join(outputDirectory, "rehost-native.log");
-  if (options.force) rmSync(outputDirectory, { force: true, recursive: true });
+  const nativeLogPath = join(
+    outputDirectory,
+    engine === "clean" ? "clean-room-analyzer.log" : "rehost-native.log",
+  );
+  const outputPaths = [
+    join(outputDirectory, "ANLZ0000.DAT"),
+    join(outputDirectory, "ANLZ0000.EXT"),
+    join(outputDirectory, "ANLZ0000.2EX"),
+    nativeLogPath,
+    summaryPath,
+  ];
+  assertDistinctAnalyzerTargets(source.path, outputPaths);
   mkdirSync(outputDirectory, { recursive: true });
   const existing = getAnlzPaths(outputDirectory);
   if (
@@ -535,13 +586,15 @@ function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): Prepa
       if (
         cached.source?.path === source.path &&
         cached.source.size === source.size &&
-        cached.source.mtimeMs === source.mtimeMs
+        cached.source.mtimeMs === source.mtimeMs &&
+        cachedResultMatchesEngine(cached, engine)
       ) {
         validateAnalysisFiles(outputDirectory, source.path);
         return {
           args: [],
           cached,
           command: analyzerBinary,
+          engine,
           env: process.env,
           inputPath: absoluteAudioPath,
           outputDirectory,
@@ -550,20 +603,128 @@ function prepareAnalysis(audioPath: string, options: AnalyzeTrackOptions): Prepa
         };
       }
     } catch {
-      // Invalid or stale cached artifacts are replaced by a new native analysis.
+      // Invalid or stale cached artifacts are replaced by a new analysis.
     }
   }
+  // Remove only the bounded analyzer artifacts before a real run. This keeps a
+  // helper that omitted one output from accidentally validating a stale file.
+  for (const path of outputPaths) rmSync(path, { force: true });
 
+  const { args, command } = analyzerInvocation(engine, analyzerBinary, [
+    "analyze",
+    absoluteAudioPath,
+    outputDirectory,
+    nativeLogPath,
+  ]);
+  return {
+    args,
+    command,
+    engine,
+    env,
+    inputPath: absoluteAudioPath,
+    outputDirectory,
+    source,
+    summaryPath,
+  };
+}
+
+function assertDistinctAnalyzerTargets(sourcePath: string, targets: Array<string>): void {
+  const sourceIdentity = realpathSync(sourcePath);
+  const seen = new Map<string, string>();
+  for (const target of targets) {
+    const identity = existsSync(target) ? realpathSync(target) : resolve(target);
+    if (identity === sourceIdentity) {
+      throw new TypeError(`Analyzer output '${target}' collides with input audio '${sourcePath}'`);
+    }
+    const previous = seen.get(identity);
+    if (previous) {
+      throw new TypeError(`Analyzer output '${target}' collides with '${previous}'`);
+    }
+    seen.set(identity, target);
+  }
+}
+
+function cachedResultMatchesEngine(
+  result: RekordboxAnalysisResult,
+  engine: AnalyzerEngine,
+): boolean {
+  return engine === "clean"
+    ? result.backend.startsWith("clean-room-")
+    : result.backend === "rekordbox-dlopen-rehost";
+}
+
+function analyzerEnvironment(
+  engine: AnalyzerEngine,
+  analyzerBinary: string,
+  options: Pick<AnalyzeTrackOptions, "rekordboxApp" | "rekordboxCache">,
+): NodeJS.ProcessEnv {
   const env = { ...process.env };
+  env.REKORDBOX_ANALYZER_ENGINE = engine;
   env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
   if (options.rekordboxApp) env.REKORDBOX_ANALYZER_APP = resolve(options.rekordboxApp);
   if (options.rekordboxCache) env.REKORDBOX_ANALYZER_CACHE = resolve(options.rekordboxCache);
-  const command = process.arch === "arm64" ? "/usr/bin/arch" : analyzerBinary;
-  const args =
-    process.arch === "arm64"
-      ? ["-x86_64", analyzerBinary, "analyze", absoluteAudioPath, outputDirectory, nativeLogPath]
-      : ["analyze", absoluteAudioPath, outputDirectory, nativeLogPath];
-  return { args, command, env, inputPath: absoluteAudioPath, outputDirectory, source, summaryPath };
+  return env;
+}
+
+function analyzerInvocation(
+  engine: AnalyzerEngine,
+  analyzerBinary: string,
+  args: Array<string>,
+): { args: Array<string>; command: string } {
+  if (engine === "reference" && process.arch === "arm64") {
+    return { args: ["-x86_64", analyzerBinary, ...args], command: "/usr/bin/arch" };
+  }
+  return { args, command: analyzerBinary };
+}
+
+function runAnalyzerDoctor(
+  engine: AnalyzerEngine,
+  analyzerBinary: string,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  const { args, command } = analyzerInvocation(engine, analyzerBinary, ["doctor"]);
+  const child = spawnSync(command, args, { encoding: "utf8", env, maxBuffer: 4 * 1024 * 1024 });
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    throw new Error(
+      `${engine} analyzer doctor exited with ${child.status ?? "no status"}: ${child.stderr.trim()}`,
+    );
+  }
+  let report: unknown;
+  try {
+    report = JSON.parse(child.stdout) as unknown;
+  } catch (cause) {
+    throw new TypeError(`${engine} analyzer doctor returned malformed JSON`, { cause });
+  }
+  if (engine === "clean") {
+    const record =
+      report && typeof report === "object" ? (report as Record<string, unknown>) : undefined;
+    if (
+      record?.cleanRoom !== true ||
+      record.proprietaryDependencies !== false ||
+      typeof record.backend !== "string" ||
+      !record.backend.startsWith("clean-room-")
+    ) {
+      throw new TypeError(
+        `clean analyzer identity check failed for '${analyzerBinary}'; refusing a legacy or proprietary helper`,
+      );
+    }
+  }
+  return report;
+}
+
+function verifyAnalyzerEngine(
+  engine: AnalyzerEngine,
+  analyzerBinary: string,
+  env: NodeJS.ProcessEnv,
+  verifiedHelpers?: Set<string>,
+): void {
+  if (engine !== "clean") return;
+  const metadata = statSync(analyzerBinary);
+  const identity = `${realpathSync(analyzerBinary)}\u0000${String(metadata.size)}\u0000${String(metadata.mtimeMs)}`;
+  if (verifiedHelpers?.has(identity)) return;
+  runAnalyzerDoctor(engine, analyzerBinary, env);
+  verifiedHelpers?.add(identity);
 }
 
 function sourceFingerprint(audioPath: string): RekordboxAnalysisResult["source"] {
@@ -663,7 +824,12 @@ async function runAnalyzerWithCompatibilityFallback(
   try {
     return await runAnalyzer(prepared, timeoutMs, signal);
   } catch (cause) {
-    if (!requiresAsciiInputFallback(cause, prepared.source.path)) throw cause;
+    if (
+      prepared.engine !== "reference" ||
+      !requiresAsciiInputFallback(cause, prepared.source.path)
+    ) {
+      throw cause;
+    }
   }
 
   throwIfAborted(signal);
@@ -729,10 +895,11 @@ function analyzerTrackPath(audioPath: string): string {
 function validateNativeAnalyzerOutput(stdout: string, prepared: PreparedAnalysis): void {
   const native = JSON.parse(stdout) as Omit<RekordboxAnalysisResult, "source" | "summaryPath">;
   native.audioPath = prepared.source.path;
-  parseAnalysisResult(
+  const result = parseAnalysisResult(
     { ...native, source: prepared.source, summaryPath: prepared.summaryPath },
     "staged native analyzer output",
   );
+  assertAnalysisEngine(result, prepared.engine);
 }
 
 function replaceDirectoryAtomically(source: string, destination: string): void {
@@ -840,12 +1007,19 @@ function persistAnalysisResult(
   validateAnalysisFiles(prepared.outputDirectory, prepared.source.path);
   const result = parseAnalysisResult(
     { ...native, source: prepared.source, summaryPath: prepared.summaryPath },
-    "native analyzer output",
+    "analyzer output",
   );
+  assertAnalysisEngine(result, prepared.engine);
   const temporary = `${prepared.summaryPath}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(result, null, 2)}\n`);
   renameSync(temporary, prepared.summaryPath);
   return result;
+}
+
+function assertAnalysisEngine(result: RekordboxAnalysisResult, engine: AnalyzerEngine): void {
+  if (!cachedResultMatchesEngine(result, engine)) {
+    throw new TypeError(`${engine} analyzer returned incompatible backend '${result.backend}'`);
+  }
 }
 
 function validateAnalysisFiles(outputDirectory: string, audioPath?: string): void {

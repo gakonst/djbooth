@@ -73,7 +73,7 @@ Top-level command families:
 | `config`    | Discover Rekordbox 5/6/7 installations and library paths      |
 | `xml`       | Inspect and mutate collection tracks and playlists            |
 | `anlz`      | Scan, inspect, and mutate DAT/EXT/2EX analysis files          |
-| `analyze`   | Produce native Rekordbox DAT/EXT/2EX analysis files on macOS  |
+| `analyze`   | Produce clean DAT/EXT/2EX analysis; optional macOS oracle     |
 | `settings`  | Read, update, and create all four My Settings binary formats  |
 | `smartlist` | Parse, construct, and compile smart playlists                 |
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
@@ -220,25 +220,34 @@ settings.save("MYSETTING-updated.DAT");
 
 Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and PQT2 expose typed beat-grid mutation; every tag additionally exposes bounded raw and parsed byte editing. Mutations recalculate file lengths/checksums and preserve PSSI obfuscation.
 
-### Native analysis and database installation
+### Audio analysis and database installation
 
-The repository can build a universal macOS rehost helper that produces real `ANLZ0000.DAT`, `.EXT`,
-and `.2EX` files without mutating the library. The public package does not include that helper or a
-Rekordbox runtime; analysis discovers an explicit, PATH-installed, user-local, or repository-built
-helper:
+Analysis defaults to the releasable `rekordbox-analyzer` Rust binary. It decodes local audio and
+produces deterministic `ANLZ0000.DAT`, `.EXT`, and `.2EX` files without opening Rekordbox or
+`master.db`. The clean engine requires no Rekordbox/JUCE/runtime bytes and runs directly on supported
+platforms.
 
-Release artifacts must never contain `packages/rekordbox-ts/vendor`, the reference helper, or any
-Rekordbox application/runtime bytes. The independently packageable clean-room Rust core now rebuilds
-the known DAT/EXT/2EX binary shapes byte-for-byte, but audio DSP parity is not complete; until it is,
-track analysis still requires a separately supplied helper and a compatible user-installed
-Rekordbox application.
+`pnpm --filter @gakonst/rekordbox build:analyzer` produces a signed universal
+macOS helper and copies `LICENSE` plus `THIRD_PARTY_LICENSES.md` beside it. Keep
+both with any distributed binary: the bundled Symphonia 0.6.0 codec crates are
+MPL-2.0 and the notice identifies their exact corresponding source.
+
+The repository-local macOS rehost remains an explicit `--engine reference` parity oracle. Release
+artifacts must never contain `packages/rekordbox-ts/vendor`, the reference helper, Rekordbox
+application/runtime bytes, or captured goldens. Clean output is protocol-valid and structurally
+compatible, but waveform, beat-grid, key, phrase, and unknown-tag values are not claimed to match the
+proprietary DSP byte-for-byte.
 
 ```sh
-rekordbox analyze doctor --format json
-rekordbox analyze track /Music/track.flac --output-directory /Music/track.rekordbox --format json
+rekordbox analyze doctor --engine clean --format json
+rekordbox analyze track /Music/track.flac \
+  --engine clean \
+  --output-directory /Music/track.rekordbox \
+  --format json
 rekordbox analyze tracks \
   --audio-path /Music/one.flac \
   --audio-path /Music/two.flac \
+  --engine clean \
   --concurrency 4 \
   --format json
 ```
@@ -268,7 +277,7 @@ rekordbox db content sync-analysis-metadata \
 ```
 
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`
-runs a bounded pool of isolated native worker processes, preserves input order, and defaults to four
+runs a bounded pool of isolated worker processes, preserves input order, and defaults to four
 workers or the number of uncached tracks, whichever is lower. The CLI reports cache, start,
 completion, failure, and cancellation progress on stderr; `--progress never` disables it.
 SIGINT/SIGTERM stop active child analyzers and prevent new work. Keep database installation separate
@@ -284,24 +293,28 @@ hundredths value, normalized key name, and resolved key ID. The set-import workf
 summary in its durable manifest, post-verifies `BPM`, `KeyID`, and the active key name after reopening
 the database, and treats missing or mismatched values as repairable checkpoint drift on a warm
 resume.
-Four workers is the stable interactive default. On a 12-core machine, 26 real set tracks took 60.02 seconds with four workers,
+Four workers is the stable interactive default. Historical reference-engine measurements on a
+12-core machine found that 26 real set tracks took 60.02 seconds with four workers,
 32.23 seconds with eight, and 28.83 seconds with twelve. A 64-default stress run completed 27
 compatible real artifacts in 23.85 seconds at an effective concurrency of 27 (1.13 tracks/second).
 Two additional source files returned the same native `startAnalyze` incompatibility alone at
 concurrency one and were excluded from that timing. Moving from 12 to 27 workers used more than twice
 as many native processes for roughly 17% lower wall time, so higher concurrency remains an explicit,
 measured override. Warm validation of all 26 cached analyses
-took 11.65 ms. Analysis
-requires macOS and Rosetta on Apple Silicon. The public package does not redistribute an analyzer
-helper or AlphaTheta/Rekordbox runtime. Set `REKORDBOX_ANALYZER_BINARY`, place a locally built
-`rekordbox-analyzer` on `PATH`, or pass `analyzerBinary`; `analyze doctor` validates that local
-helper, offsets, cache, and signatures. `REKORDBOX_ANALYZER_APP` selects the user's compatible
-`rekordbox.app`.
+took 11.65 ms. These numbers do not describe the clean engine.
 
-The native backend can reject otherwise valid Unicode-heavy source paths with `startAnalyze` status
-`-1`. The async wrapper retries only that exact failure through a byte-identical ASCII input/output
-staging directory, then atomically moves validated artifacts back to their canonical output path and
-records the original source path in `analysis.json`. Other native failures remain fail-closed.
+Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
+`analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains
+reference-only so an old proprietary helper cannot be selected by the clean default. For an explicit
+reference run, set `REKORDBOX_REFERENCE_ANALYZER_BINARY` or place
+`rekordbox-analyzer-reference` on `PATH`; that mode requires macOS, Rosetta on Apple Silicon, and
+`REKORDBOX_ANALYZER_APP` pointing to the user's compatible `rekordbox.app`.
+
+Only the reference backend can reject otherwise valid Unicode-heavy source paths with
+`startAnalyze` status `-1`. The async wrapper retries only that exact reference failure through a
+byte-identical ASCII input/output staging directory, then atomically moves validated artifacts back
+to their canonical output path and records the original source path in `analysis.json`. Other
+reference failures remain fail-closed.
 
 ### Collection XML interchange
 

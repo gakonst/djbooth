@@ -4,9 +4,18 @@
 //! proprietary runtime dependencies. The proprietary analyzer can be used as
 //! a local differential oracle by the sibling `rekordbox-analyzer` crate.
 
+pub mod analysis;
 pub mod anlz;
+pub mod audio;
 pub mod differential;
+pub mod key;
+pub mod rhythm;
+pub mod waveform;
 
+pub use analysis::{
+    AnalysisFileSummary, AnalyzerOutput, AnalyzerTimings, BeatGridSummary, BeatSummary,
+    GeneratedAnalysis, OutputSummary, analyze_audio_file, analyze_to_directory,
+};
 pub use anlz::{
     AnlzFile, AnlzTag, BeatGridEntry, CountedWaveform, DatAnalysis, ExtAnalysis, ExtendedBeatGrid,
     FILE_HEADER_LEN, ThreeBandAnalysis, WaveformColorConfig, build_beat_grid_tag,
@@ -14,7 +23,16 @@ pub use anlz::{
     build_vbr_tag, build_vbr_tag_with_unknowns, build_waveform_color_config_tag,
     build_waveform_tag,
 };
+pub use audio::{
+    ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DETAIL_COLUMNS_PER_SECOND, DETAIL_FRAME_SAMPLES,
+    DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
+};
 pub use differential::{
     DifferentialReport, FileDifferential, FirstDifference, TagDifferential,
     compare_output_directories,
+};
+pub use key::{KeyAnalysis, analyze_key};
+pub use rhythm::{BeatAnalysis, analyze_beats};
+pub use waveform::{
+    COLOR_PREVIEW_COLUMNS, MONOCHROME_PREVIEW_COLUMNS, TINY_PREVIEW_COLUMNS, WaveformData,
 };

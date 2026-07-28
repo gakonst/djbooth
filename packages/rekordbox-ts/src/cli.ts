@@ -85,18 +85,23 @@ rekordboxCli.command("status", {
 });
 
 const analyzeCli = Cli.create("analyze", {
-  description: "Produce native Rekordbox DAT, EXT, and 2EX analysis files.",
+  description:
+    "Produce clean-room DAT, EXT, and 2EX analysis files; optionally run a local oracle.",
 });
 
 analyzeCli.command("track", {
-  description: "Analyze one local audio file with Rekordbox's native analyzer.",
+  description: "Analyze one local audio file with releasable clean-room DSP by default.",
   args: z.object({ audioPath: z.string().describe("Existing audio file") }),
   options: z.object({
-    analyzerBinary: z.string().optional().describe("Universal native helper override"),
+    analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
+    engine: z
+      .enum(["clean", "reference"])
+      .default("clean")
+      .describe("Clean-room DSP, or an explicit local proprietary parity oracle"),
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
     outputDirectory: z.string().optional().describe("Artifact directory; defaults beside audio"),
-    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
-    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
     timeoutMs: z
       .number()
       .int()
@@ -122,9 +127,9 @@ analyzeCli.command("track", {
 });
 
 analyzeCli.command("tracks", {
-  description: "Analyze local audio files with bounded isolated native workers.",
+  description: "Analyze local audio files with bounded isolated clean-room workers.",
   options: z.object({
-    analyzerBinary: z.string().optional().describe("Universal native helper override"),
+    analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
     audioPath: z.array(z.string()).describe("Existing audio file; repeat for multiple tracks"),
     concurrency: z
       .number()
@@ -135,9 +140,13 @@ analyzeCli.command("tracks", {
       .describe(
         `Parallel analyzer workers; defaults to ${String(DEFAULT_ANALYZER_CONCURRENCY)} (bounded by uncached track count)`,
       ),
+    engine: z
+      .enum(["clean", "reference"])
+      .default("clean")
+      .describe("Clean-room DSP, or an explicit local proprietary parity oracle"),
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
-    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
-    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
     timeoutMs: z
       .number()
@@ -158,6 +167,7 @@ analyzeCli.command("tracks", {
       return await analyzeTracks(c.options.audioPath, {
         analyzerBinary: c.options.analyzerBinary,
         concurrency: c.options.concurrency,
+        engine: c.options.engine,
         force: c.options.force,
         rekordboxApp: c.options.rekordboxApp,
         rekordboxCache: c.options.rekordboxCache,
@@ -181,11 +191,12 @@ analyzeCli.command("tracks", {
 });
 
 analyzeCli.command("doctor", {
-  description: "Inspect native analyzer backend discovery and compatibility.",
+  description: "Inspect the clean-room analyzer or an explicit local reference oracle.",
   options: z.object({
-    analyzerBinary: z.string().optional().describe("Universal native helper override"),
-    rekordboxApp: z.string().optional().describe("Rekordbox.app override"),
-    rekordboxCache: z.string().optional().describe("Native backend cache directory"),
+    analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
+    engine: z.enum(["clean", "reference"]).default("clean").describe("Analyzer backend to inspect"),
+    rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
   }),
   run(c) {
     return diagnoseAnalyzer(c.options);

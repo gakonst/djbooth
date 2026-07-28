@@ -4,6 +4,7 @@ coverage/
 native/rekordbox-analyzer/target/
 native/rekordbox-analyzer-core/target/
 packages/rekordbox-ts/.rekordbox-analyzer/
+.rekordbox-analyzer/
 downloads/
 .DS_Store
 *.log

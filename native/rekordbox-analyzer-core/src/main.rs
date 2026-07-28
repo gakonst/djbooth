@@ -1,9 +1,14 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
-    AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, compare_output_directories,
+    AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, analyze_to_directory,
+    compare_output_directories,
 };
+
+static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
     if let Err(error) = run() {
@@ -15,6 +20,52 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
+        Some("-h" | "--help" | "help") => {
+            ensure_exhausted(args, "help")?;
+            println!(
+                "Clean-room audio-to-Rekordbox analyzer\n\n\
+                 Usage:\n  \
+                   rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG]\n  \
+                   rekordbox-analyzer doctor\n  \
+                   rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
+                 Commands:\n  \
+                   analyze       Decode audio, write DAT/EXT/2EX, and emit summary JSON\n  \
+                   doctor        Report codec, DSP, and proprietary-dependency status\n  \
+                   diff          Compare reference and candidate ANLZ directories exactly\n  \
+                   rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape"
+            );
+            Ok(())
+        }
+        Some("-V" | "--version") => {
+            ensure_exhausted(args, "version")?;
+            println!("rekordbox-analyzer {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("analyze") => {
+            let audio = required_path(args.next(), "audio path")?;
+            let output = required_path(args.next(), "output directory")?;
+            let log = args.next().map(PathBuf::from);
+            ensure_exhausted(args, "analyze")?;
+            let result = analyze_to_directory(&audio, &output, log.as_deref())?;
+            println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Some("doctor") => {
+            ensure_exhausted(args, "doctor")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "backend": "clean-room-rust-dsp",
+                    "cleanRoom": true,
+                    "proprietaryDependencies": false,
+                    "analysisSampleRate": 44_100,
+                    "formats": ["WAV", "AIFF", "CAF", "MP3", "AAC/MP4", "ALAC", "FLAC", "Vorbis/OGG"],
+                    "dspCompatibility": "protocol-compatible-baseline",
+                }))?
+            );
+            Ok(())
+        }
         Some("diff") => {
             let reference = required_path(args.next(), "reference output directory")?;
             let candidate = required_path(args.next(), "candidate output directory")?;
@@ -30,32 +81,41 @@ fn run() -> Result<()> {
             let input = required_path(args.next(), "input ANLZ path")?;
             let output = required_path(args.next(), "output ANLZ path")?;
             ensure_exhausted(args, "rebuild-anlz")?;
+            let input = input
+                .canonicalize()
+                .with_context(|| format!("failed to resolve {}", input.display()))?;
             let source = std::fs::read(&input)
                 .with_context(|| format!("failed to read {}", input.display()))?;
             let rebuilt = rebuild(&input, &source)?;
-            if let Some(parent) = output.parent() {
+            if rebuilt != source {
+                bail!("semantic ANLZ rebuild is not byte-for-byte compatible; output not written");
+            }
+            if let Some(parent) = output
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("failed to create {}", parent.display()))?;
             }
-            std::fs::write(&output, &rebuilt)
-                .with_context(|| format!("failed to write {}", output.display()))?;
+            reject_non_file_target(&output)?;
+            if resolve_write_target(&output)? == input {
+                bail!("rebuild input and output must be distinct; input was not overwritten");
+            }
+            write_atomically(&output, &rebuilt)?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
-                    "byteExact": rebuilt == source,
+                    "byteExact": true,
                     "input": input,
                     "output": output,
                     "size": rebuilt.len(),
                 }))?
             );
-            if rebuilt != source {
-                bail!("semantic ANLZ rebuild is not byte-for-byte compatible");
-            }
             Ok(())
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer-core <diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG]|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }
@@ -87,4 +147,72 @@ fn ensure_exhausted(mut args: impl Iterator<Item = String>, command: &str) -> Re
         bail!("{command} received unexpected extra arguments");
     }
     Ok(())
+}
+
+fn resolve_write_target(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current directory")?
+            .join(path)
+    };
+    if absolute.exists() {
+        return absolute
+            .canonicalize()
+            .with_context(|| format!("failed to resolve output {}", absolute.display()));
+    }
+    let parent = absolute
+        .parent()
+        .context("output path has no parent directory")?
+        .canonicalize()
+        .with_context(|| format!("failed to resolve output parent for {}", absolute.display()))?;
+    let name = absolute
+        .file_name()
+        .context("output path has no filename")?;
+    Ok(parent.join(name))
+}
+
+fn reject_non_file_target(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            bail!(
+                "rebuild output '{}' exists but is not a regular file",
+                path.display()
+            )
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
+    let sequence = TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = path.with_extension(format!(
+        "{}.{}.{}.tmp",
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default(),
+        std::process::id(),
+        sequence,
+    ));
+    let result = (|| -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .with_context(|| format!("failed to create {}", temporary.display()))?;
+        file.write_all(bytes)
+            .with_context(|| format!("failed to write {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", temporary.display()))?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("failed to install {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }

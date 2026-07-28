@@ -454,3 +454,50 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   detection/post-adjustment, key detection, and phrase analysis must be re-derived against
   synthetic oracle probes. The vendor helper and Rekordbox runtime remain local-only references and
   must never enter release artifacts.
+
+## Clean DSP and physical incremental-search checkpoint (2026-07-27)
+
+- Completed a clean Rust audio-to-ANLZ path: Symphonia decode, deterministic mono/44.1 kHz
+  resampling, all seven waveform families, spectral-flux/autocorrelation rhythm analysis,
+  tuning-aware chroma/HPCP key detection, MP3 VBR indexing, and atomic DAT/EXT/2EX plus
+  helper-compatible summary output persisted as `analysis.json` by the TypeScript wrapper. Nightly
+  format, 25 passing unit tests, two end-to-end integration tests, and strict
+  all-target/all-feature Clippy pass.
+- Differential-tested three real recordings without mutating the library. Tempo error was
+  0.105–0.177%; key matched D, Bm, and Gm; detailed monochrome waveform correlation was
+  0.985–0.999; release analysis took 0.52–0.98 seconds per track. Downbeat phase, three-band
+  normalization, phrase `PSSI`, and proprietary DSP byte parity remain open and are reported
+  explicitly. Semantic EXT rebuilds now preserve undocumented FLAC `PVB2` sections byte-for-byte.
+- Re-derived `PWV7` packing from 114 local 6.8.2 2EX oracles (5,279,881 entries) plus deterministic
+  pure-tone probes: bytes are 7-bit low/mid/high, not 8-bit mid/high/low. Correcting only those two
+  proven fields raised aligned three-track band correlations from 0.158–0.782 to 0.533–0.937 and
+  cut mean per-band absolute error from 31.58–48.12 bytes to 9.50–12.78 bytes. The overlapping
+  filters, stateful envelope, and channel-specific nonlinear normalization remain open.
+- Re-derived MPEG-1 Layer III `PVBR` from 44 paired local Rekordbox 6.8.2 analyses: 36 CBR inputs
+  retain the native zero table, while eight `Xing` VBR inputs match all 3,200 oracle entries using
+  first-data-frame-relative offsets and an eight-frame decoder preroll. The Science Fiction
+  generated `PVBR` tag now matches its oracle SHA-256 exactly. Unsupported MPEG/VBR variants fail
+  conservatively to the zero table rather than emitting guessed byte offsets.
+- Made clean analysis the TypeScript and one-shot Tracks default. Added explicit
+  `clean|reference` engine selection, engine-safe caches, helper/runtime separation, and
+  `import-set` analyzer binary/cache/timeout plumbing. An identity handshake rejects the legacy
+  proprietary helper before clean audio analysis; the clean doctor and a full Crystalised CLI run
+  pass without loading Rekordbox.
+- Changed the analyzer build to produce only the clean universal Rust helper outside `vendor`.
+  Package release files exclude the tracked private reference helper and the 102 MiB Rekordbox
+  runtime; those remain local differential oracles. The helper build now places the required
+  MPL-2.0 Symphonia source/license notice beside every universal binary.
+- Hardened write boundaries after adversarial audit: input/log/artifact aliases and non-file
+  targets fail before decode, semantic rebuilds reject in-place output and never write a non-exact
+  candidate, temporary files are unique and synced, PQT2 uses the observed first/last beat anchors,
+  and a 12-second synthetic D-major/120-BPM fixture gates deterministic full DAT/EXT/2EX output. A
+  real Crystalised FLAC EXT containing `PVB2` and its 2EX both rebuild byte-for-byte. TypeScript
+  `--force` now removes only the five known analyzer artifacts, preserves unrelated output-directory
+  files, and rejects any output path that aliases the source recording.
+- Serialized same-process database guard commands through a per-library promise lane. A 32-way
+  stale-guard acquisition plus 32-way release stress gate eliminates the prior replacement-unlink
+  race while retaining the on-disk cross-process guard.
+- Replayed 20 fragmented CDJ-3000 `0x1500` keyboard edits with interleaved artwork, waveform, and
+  one-row renders over one TCP connection. Every render uses the full result count and succeeds
+  without Back or reconnect. The physical deck independently exercised repeated incremental
+  searches and result renders on the running server, confirming the patched path is working.
