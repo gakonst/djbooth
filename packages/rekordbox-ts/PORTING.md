@@ -524,3 +524,22 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   allowlist excludes `vendor/`; and the native build compiles only the
   clean-room crate. No reference rehost or Rekordbox/JUCE bytes are needed in a
   release.
+
+## Clean RGB waveform checkpoint (2026-07-27)
+
+- Re-derived `PWV4` and `PWV5` as separate DSP paths from 31-frequency
+  pure-tone outputs, 0 to -60 dB ladders/ramps, and three matched-PCM
+  real-track references. `PWV4` now uses linear peak/filter amplitudes plus
+  the nonzero inverse luminance byte instead of peak-power and a constant
+  opacity byte.
+- Made `PWV5` color amplitude-invariant spectral hue: continuous Butterworth
+  band filters, 294-sample band RMS divided by broadband frame RMS, and
+  independent three-bit RGB quantization. Kept the already-correlated
+  peak-power height path separate. Exact tone hues now match at 80 Hz
+  (`7/0/0`), 500 Hz (`0/7/1`), and 4 kHz (`0/2/7`) through -60 dB.
+- Science Fiction visible mean RGB improved from `3.59/2.04/0.90` to
+  `6.27/1.36/1.67`, against Rekordbox `6.59/0.98/1.84`. Its PWV4 fields now
+  correlate `0.968/0.999/0.993/0.824/0.755` for amplitude/bottom/red/green/blue;
+  RGB detail MAE is `0.63/0.79/1.21`, while height correlation remains
+  `0.993`. Crystalised and Pleasure remain held-out parity gates rather than
+  bundled fixtures.

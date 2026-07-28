@@ -1,8 +1,8 @@
 //! Deterministic waveform feature extraction and ANLZ-ready entry packing.
 //!
-//! The container layouts and entry bit packing are understood. The proprietary
-//! Rekordbox filters and quantizers are not; this module deliberately exposes a
-//! stable clean-room baseline that can be differentially refined.
+//! The container layouts and entry bit packing are understood. Frequency
+//! splits and quantizers are clean-room approximations derived from public
+//! format documentation plus synthetic pure-tone differential probes.
 
 use anyhow::{Result, bail};
 
@@ -25,6 +25,16 @@ const PWV4_FORMAT_WORD: u32 = 0;
 const PWV5_FORMAT_WORD: u32 = 0x0096_0305;
 const PWV7_FORMAT_WORD: u32 = 0x0096_0000;
 const THREE_BAND_MAXIMUM: u8 = 127;
+// PWV4 and PWV5 are distinct representations. PWV4 stores absolute linear
+// band peaks; PWV5 stores amplitude-invariant spectral hue beside a separate
+// height. These gains are bounded fits against pure-tone and matched-PCM
+// Rekordbox 6.8.2 outputs.
+const COLOR_DETAIL_RED_GAIN: f64 = 1.18;
+const COLOR_DETAIL_GREEN_GAIN: f64 = 0.95;
+const COLOR_DETAIL_BLUE_GAIN: f64 = 0.95;
+const COLOR_DETAIL_BLUE_EXPONENT: f64 = 0.60;
+const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
+const COLOR_PREVIEW_BLUE_GAIN: f64 = 0.513;
 
 /// All waveform entry arrays needed by DAT, EXT, and 2EX analysis files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +63,10 @@ impl WaveformData {
         }
 
         let detail_features = extract_detail_features(pcm);
+        let detail_peak = detail_features
+            .iter()
+            .map(|feature| feature.peak)
+            .fold(0.0_f64, f64::max);
         let monochrome_preview_features =
             reduce_features(&detail_features, MONOCHROME_PREVIEW_COLUMNS);
         let tiny_preview_features = reduce_features(&detail_features, TINY_PREVIEW_COLUMNS);
@@ -74,7 +88,7 @@ impl WaveformData {
                 .collect(),
             color_detail: detail_features
                 .iter()
-                .flat_map(|feature| pack_color_detail(feature).to_be_bytes())
+                .flat_map(|feature| pack_color_detail(feature, detail_peak).to_be_bytes())
                 .collect(),
             three_band_preview: color_preview_features
                 .iter()
@@ -184,6 +198,13 @@ impl WaveformData {
 struct FrameFeatures {
     peak: f64,
     rms: f64,
+    color_preview_bottom: f64,
+    color_preview_red: f64,
+    color_preview_green: f64,
+    color_preview_blue: f64,
+    color_detail_red: f64,
+    color_detail_green: f64,
+    color_detail_blue: f64,
     low: f64,
     mid: f64,
     high: f64,
@@ -207,12 +228,166 @@ impl BandSplitter {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct Biquad {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    z1: f64,
+    z2: f64,
+}
+
+impl Biquad {
+    fn low_pass(cutoff_hz: f64, q: f64) -> Self {
+        Self::new(cutoff_hz, q, false)
+    }
+
+    fn high_pass(cutoff_hz: f64, q: f64) -> Self {
+        Self::new(cutoff_hz, q, true)
+    }
+
+    fn new(cutoff_hz: f64, q: f64, high_pass: bool) -> Self {
+        let omega = 2.0 * std::f64::consts::PI * cutoff_hz / f64::from(ANALYSIS_SAMPLE_RATE);
+        let cosine = omega.cos();
+        let alpha = omega.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        let (b0, b1, b2) = if high_pass {
+            ((1.0 + cosine) / 2.0, -(1.0 + cosine), (1.0 + cosine) / 2.0)
+        } else {
+            ((1.0 - cosine) / 2.0, 1.0 - cosine, (1.0 - cosine) / 2.0)
+        };
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: -2.0 * cosine / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn process(&mut self, sample: f64) -> f64 {
+        let output = self.b0 * sample + self.z1;
+        self.z1 = self.b1 * sample - self.a1 * output + self.z2;
+        self.z2 = self.b2 * sample - self.a2 * output;
+        output
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Butterworth<const STAGES: usize> {
+    stages: [Biquad; STAGES],
+}
+
+impl<const STAGES: usize> Butterworth<STAGES> {
+    fn low_pass(cutoff_hz: f64) -> Self {
+        Self::new(cutoff_hz, false)
+    }
+
+    fn high_pass(cutoff_hz: f64) -> Self {
+        Self::new(cutoff_hz, true)
+    }
+
+    fn new(cutoff_hz: f64, high_pass: bool) -> Self {
+        let order = 2 * STAGES;
+        Self {
+            stages: std::array::from_fn(|index| {
+                let angle = std::f64::consts::PI * (2 * index + 1) as f64 / (2 * order) as f64;
+                let q = 1.0 / (2.0 * angle.cos());
+                if high_pass {
+                    Biquad::high_pass(cutoff_hz, q)
+                } else {
+                    Biquad::low_pass(cutoff_hz, q)
+                }
+            }),
+        }
+    }
+
+    fn process(&mut self, mut sample: f64) -> f64 {
+        for stage in &mut self.stages {
+            sample = stage.process(sample);
+        }
+        sample
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ColorBandSplitter {
+    preview_bottom: Butterworth<1>,
+    preview_red: Butterworth<2>,
+    preview_green_high: Butterworth<2>,
+    preview_green_low: Butterworth<1>,
+    preview_blue: Butterworth<3>,
+    detail_red: Butterworth<2>,
+    detail_green_high: Butterworth<2>,
+    detail_green_low: Butterworth<1>,
+    detail_blue: Butterworth<2>,
+}
+
+impl Default for ColorBandSplitter {
+    fn default() -> Self {
+        Self {
+            preview_bottom: Butterworth::low_pass(400.0),
+            preview_red: Butterworth::low_pass(160.0),
+            preview_green_high: Butterworth::high_pass(230.0),
+            preview_green_low: Butterworth::low_pass(900.0),
+            preview_blue: Butterworth::high_pass(2_500.0),
+            detail_red: Butterworth::low_pass(156.0),
+            detail_green_high: Butterworth::high_pass(210.0),
+            detail_green_low: Butterworth::low_pass(2_100.0),
+            detail_blue: Butterworth::high_pass(1_255.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ColorBands {
+    preview_bottom: f64,
+    preview_red: f64,
+    preview_green: f64,
+    preview_blue: f64,
+    detail_red: f64,
+    detail_green: f64,
+    detail_blue: f64,
+}
+
+impl ColorBandSplitter {
+    fn process(&mut self, sample: f64) -> ColorBands {
+        let preview_green = self
+            .preview_green_low
+            .process(self.preview_green_high.process(sample));
+        let detail_green = self
+            .detail_green_low
+            .process(self.detail_green_high.process(sample));
+        ColorBands {
+            preview_bottom: self.preview_bottom.process(sample),
+            preview_red: self.preview_red.process(sample),
+            preview_green: preview_green * COLOR_PREVIEW_GREEN_GAIN,
+            preview_blue: self.preview_blue.process(sample) * COLOR_PREVIEW_BLUE_GAIN,
+            detail_red: self.detail_red.process(sample),
+            detail_green,
+            detail_blue: self.detail_blue.process(sample),
+        }
+    }
+}
+
 fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
     let mut splitter = BandSplitter::default();
+    let mut color_splitter = ColorBandSplitter::default();
     pcm.detail_frames()
         .map(|frame| {
             let mut peak = 0.0_f64;
             let mut sum_square = 0.0_f64;
+            let mut color_preview_bottom = 0.0_f64;
+            let mut color_preview_red = 0.0_f64;
+            let mut color_preview_green = 0.0_f64;
+            let mut color_preview_blue = 0.0_f64;
+            let mut color_detail_red_square = 0.0_f64;
+            let mut color_detail_green_square = 0.0_f64;
+            let mut color_detail_blue_square = 0.0_f64;
             let mut low_square = 0.0_f64;
             let mut mid_square = 0.0_f64;
             let mut high_square = 0.0_f64;
@@ -220,6 +395,14 @@ fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
                 let sample = f64::from(*sample);
                 peak = peak.max(sample.abs());
                 sum_square += sample * sample;
+                let color = color_splitter.process(sample);
+                color_preview_bottom = color_preview_bottom.max(color.preview_bottom.abs());
+                color_preview_red = color_preview_red.max(color.preview_red.abs());
+                color_preview_green = color_preview_green.max(color.preview_green.abs());
+                color_preview_blue = color_preview_blue.max(color.preview_blue.abs());
+                color_detail_red_square += color.detail_red * color.detail_red;
+                color_detail_green_square += color.detail_green * color.detail_green;
+                color_detail_blue_square += color.detail_blue * color.detail_blue;
                 let (low, mid, high) = splitter.process(sample);
                 low_square += low * low;
                 mid_square += mid * mid;
@@ -229,6 +412,13 @@ fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
             FrameFeatures {
                 peak,
                 rms: (sum_square / denominator).sqrt(),
+                color_preview_bottom,
+                color_preview_red,
+                color_preview_green,
+                color_preview_blue,
+                color_detail_red: (color_detail_red_square / denominator).sqrt(),
+                color_detail_green: (color_detail_green_square / denominator).sqrt(),
+                color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
                 low: (low_square / denominator).sqrt(),
                 mid: (mid_square / denominator).sqrt(),
                 high: (high_square / denominator).sqrt(),
@@ -253,6 +443,17 @@ fn reduce_features(features: &[FrameFeatures], width: usize) -> Vec<FrameFeature
                 |result, feature| FrameFeatures {
                     peak: result.peak.max(feature.peak),
                     rms: result.rms.max(feature.rms),
+                    color_preview_bottom: result
+                        .color_preview_bottom
+                        .max(feature.color_preview_bottom),
+                    color_preview_red: result.color_preview_red.max(feature.color_preview_red),
+                    color_preview_green: result
+                        .color_preview_green
+                        .max(feature.color_preview_green),
+                    color_preview_blue: result.color_preview_blue.max(feature.color_preview_blue),
+                    color_detail_red: result.color_detail_red.max(feature.color_detail_red),
+                    color_detail_green: result.color_detail_green.max(feature.color_detail_green),
+                    color_detail_blue: result.color_detail_blue.max(feature.color_detail_blue),
                     low: result.low.max(feature.low),
                     mid: result.mid.max(feature.mid),
                     high: result.high.max(feature.high),
@@ -264,6 +465,12 @@ fn reduce_features(features: &[FrameFeatures], width: usize) -> Vec<FrameFeature
 
 fn perceptual_level(amplitude: f64, maximum: u8) -> u8 {
     (amplitude.clamp(0.0, 1.0).sqrt() * f64::from(maximum))
+        .round()
+        .clamp(0.0, f64::from(maximum)) as u8
+}
+
+fn linear_level(amplitude: f64, maximum: u8) -> u8 {
+    (amplitude.clamp(0.0, 1.0) * f64::from(maximum))
         .round()
         .clamp(0.0, f64::from(maximum)) as u8
 }
@@ -285,36 +492,50 @@ fn pack_monochrome(feature: &FrameFeatures) -> u8 {
     (whiteness << 5) | height
 }
 
-fn color_components(feature: &FrameFeatures, maximum: u8) -> [u8; 3] {
-    let low = feature.low.clamp(0.0, 1.0);
-    let mid = feature.mid.clamp(0.0, 1.0);
-    let high = feature.high.clamp(0.0, 1.0);
-    [
-        perceptual_level((mid + high).min(1.0), maximum),
-        perceptual_level((mid * 0.65 + high).min(1.0), maximum),
-        perceptual_level((low + high).min(1.0), maximum),
-    ]
-}
-
 fn pack_color_preview(feature: &FrameFeatures) -> [u8; 6] {
-    if feature.peak <= f64::EPSILON {
+    let amplitude = linear_level(feature.peak, 127);
+    if amplitude == 0 {
         return [0; 6];
     }
-    let [red, green, blue] = color_components(feature, 127);
-    let lower_half = perceptual_level((feature.low + feature.mid).min(1.0), 127);
+    let boost = u8::try_from(256_u16.saturating_sub(u16::from(amplitude)).min(255))
+        .expect("PWV4 luminance boost fits one byte");
     [
-        waveform_height(feature.peak, 127),
-        127,
-        lower_half,
-        red,
-        green,
-        blue,
+        amplitude,
+        boost,
+        linear_level(feature.color_preview_bottom, 127),
+        linear_level(feature.color_preview_red, 127),
+        linear_level(feature.color_preview_green, 127),
+        linear_level(feature.color_preview_blue, 127),
     ]
 }
 
-fn pack_color_detail(feature: &FrameFeatures) -> u16 {
-    let [red, green, blue] = color_components(feature, 7);
-    let height = waveform_height(feature.peak, 31);
+fn pack_color_detail(feature: &FrameFeatures, detail_peak: f64) -> u16 {
+    let [red, green, blue] = if feature.rms > f64::EPSILON {
+        [
+            linear_level(
+                COLOR_DETAIL_RED_GAIN * feature.color_detail_red / feature.rms,
+                7,
+            ),
+            linear_level(
+                COLOR_DETAIL_GREEN_GAIN * feature.color_detail_green / feature.rms,
+                7,
+            ),
+            linear_level(
+                (COLOR_DETAIL_BLUE_GAIN * feature.color_detail_blue / feature.rms)
+                    .clamp(0.0, 1.0)
+                    .powf(COLOR_DETAIL_BLUE_EXPONENT),
+                7,
+            ),
+        ]
+    } else {
+        [0; 3]
+    };
+    let normalized_peak = if detail_peak > f64::EPSILON {
+        feature.peak / detail_peak
+    } else {
+        0.0
+    };
+    let height = waveform_height(normalized_peak, 31);
     (u16::from(red) << 13)
         | (u16::from(green) << 10)
         | (u16::from(blue) << 7)
@@ -337,6 +558,60 @@ mod tests {
     fn height_uses_peak_power_without_changing_band_loudness_curve() {
         assert_eq!(waveform_height(0.5, 31), 8);
         assert_eq!(perceptual_level(0.5, 31), 22);
+    }
+
+    #[test]
+    fn color_preview_uses_linear_amplitude_and_inverse_luminance() {
+        assert_eq!(
+            pack_color_preview(&FrameFeatures {
+                peak: 0.5,
+                color_preview_bottom: 0.5,
+                color_preview_red: 0.25,
+                color_preview_green: 0.125,
+                ..FrameFeatures::default()
+            }),
+            [64, 192, 64, 32, 16, 0]
+        );
+        assert_eq!(
+            pack_color_preview(&FrameFeatures {
+                peak: 0.001,
+                ..FrameFeatures::default()
+            }),
+            [0; 6]
+        );
+    }
+
+    #[test]
+    fn color_detail_matches_reference_tone_hues_and_normalizes_track_peak() {
+        fn analyze_tone(frequency_hz: f64, amplitude: f32) -> [u8; 4] {
+            let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 2)
+                .map(|index| {
+                    (2.0 * std::f64::consts::PI * frequency_hz * index as f64
+                        / f64::from(ANALYSIS_SAMPLE_RATE))
+                    .sin() as f32
+                        * amplitude
+                })
+                .collect();
+            let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("tone PCM");
+            let waveforms = WaveformData::generate(&pcm).expect("tone waveforms");
+            let offset = 100 * 2;
+            let packed = u16::from_be_bytes([
+                waveforms.color_detail()[offset],
+                waveforms.color_detail()[offset + 1],
+            ]);
+            [
+                ((packed >> 13) & 7) as u8,
+                ((packed >> 10) & 7) as u8,
+                ((packed >> 7) & 7) as u8,
+                ((packed >> 2) & 31) as u8,
+            ]
+        }
+
+        for amplitude in [0.5, 0.000_5] {
+            assert_eq!(analyze_tone(80.0, amplitude), [7, 0, 0, 31]);
+            assert_eq!(analyze_tone(500.0, amplitude), [0, 7, 1, 31]);
+            assert_eq!(analyze_tone(4_000.0, amplitude), [0, 2, 7, 31]);
+        }
     }
 
     #[test]

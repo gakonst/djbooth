@@ -103,9 +103,11 @@ platform codec dependency:
 - The waveform path emits fixed 400-byte `PWAV`, 100-byte `PWV2`,
   1,200-column `PWV4`/`PWV6`, and variable 150 Hz
   `PWV3`/`PWV5`/`PWV7` arrays. Peak-power height quantization and known
-  monochrome/RGB packing match the public ANLZ layouts. Local corpus and
-  pure-tone probes establish that each three-band entry is 7-bit
-  low/mid/high, despite older public notes describing a different order.
+  monochrome/RGB packing match the public ANLZ layouts. `PWV4` uses separate
+  linear-amplitude preview filters and its inverse luminance byte; `PWV5`
+  stores frame-RMS-normalized spectral hue independently from its height.
+  Local corpus and pure-tone probes establish that each three-band entry is
+  7-bit low/mid/high, despite older public notes describing a different order.
 - Rhythm analysis uses STFT spectral flux, bounded autocorrelation, tempo
   candidate scoring, and a deterministic phase/grid pass.
 - Key analysis combines peak chroma with a tuning-aware whitened 36-bin
@@ -172,6 +174,29 @@ monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and 0.999; color
 detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986. Peak-power
 quantization also brought clean/reference `PWV3` means within 0.14, 0.34, and
 0.26 of one another.
+
+The RGB path was subsequently re-derived from 31 steady-frequency tones,
+0 to -60 dB amplitude ladders/ramps, and matched-PCM copies of the same three
+recordings. `PWV4` is an absolute representation: its first byte is linear
+peak, its second nonzero byte is approximately `256 - peak`, and its remaining
+fields are separately filtered linear band peaks. At -6 dB, clean PWV4
+medians for 80 Hz, 500 Hz, and 4 kHz are respectively
+`64/192/63/63/1/0`, `64/192/34/1/53/0`, and
+`64/192/1/0/3/33`; the reference values are
+`64/192/63/62/0/0`, `64/192/34/0/53/0`, and
+`64/192/0/0/0/33`.
+
+`PWV5` color is amplitude-invariant spectral hue, not absolute band loudness.
+Continuous Butterworth filters feed 294-sample band RMS values which are
+divided by broadband frame RMS before three-bit quantization; height remains a
+separate peak-power field. The same three tones now produce the exact reference
+hues `7/0/0`, `0/7/1`, and `0/2/7`, including when the tone is attenuated to
+-60 dB. On visible frames in Science Fiction, the clean mean RGB moved from
+the former direct-map `3.59/2.04/0.90` to `6.27/1.36/1.67`, versus the
+reference `6.59/0.98/1.84`. Across Science Fiction, Crystalised, and Pleasure
+from the Bass, visible per-channel MAE is `0.49..1.16` red, `0.66..0.85`
+green, and `0.78..1.29` blue. PWV5 height correlations remain
+`0.993/0.913/0.986`.
 
 This is not a byte-parity claim. The clean first downbeats were 137 ms early,
 1,279 ms late, and 1,633 ms late. Two decoder/framer boundaries differed by 8
