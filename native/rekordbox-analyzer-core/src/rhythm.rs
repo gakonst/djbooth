@@ -70,9 +70,14 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
         bail!("beat analysis produced too few beats");
     }
     let variable_candidate = barwise_tempo_grid(&onset, period, &regular_beats);
+    let refined_coherent_candidate = coherent_backward_drift(&variable_candidate)
+        .then(|| refine_coherent_drift_grid(&onset, period, &regular_beats, &variable_candidate));
     let use_variable_grid = should_select_variable_grid(&variable_candidate);
+    let selected_variable_candidate = refined_coherent_candidate
+        .as_ref()
+        .unwrap_or(&variable_candidate);
     let raw_beats = if use_variable_grid {
-        variable_candidate.beats.as_slice()
+        selected_variable_candidate.beats.as_slice()
     } else {
         regular_beats.as_slice()
     };
@@ -81,7 +86,27 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
         .iter()
         .map(|frame| *frame as f32 - FFT_CENTER_OFFSET_FRAMES)
         .collect::<Vec<_>>();
-    let bar_offset = estimate_bar_offset(&onset.low, &onset_beats, raw_beats[0] as f32, period);
+    let bar_offset = if refined_coherent_candidate.is_some() {
+        let initial_onset_beats = variable_candidate
+            .beats
+            .iter()
+            .map(|frame| *frame as f32 - FFT_CENTER_OFFSET_FRAMES)
+            .collect::<Vec<_>>();
+        let initial_bar_offset = estimate_bar_offset(
+            &onset.low,
+            &initial_onset_beats,
+            variable_candidate.beats[0] as f32,
+            period,
+        );
+        preserve_bar_offset(
+            initial_bar_offset,
+            variable_candidate.beats[0],
+            raw_beats[0],
+            f64::from(period),
+        )
+    } else {
+        estimate_bar_offset(&onset.low, &onset_beats, raw_beats[0] as f32, period)
+    };
     let bpm = 60.0 * onset_rate as f64 / period as f64;
     let bpm_hundredths = (bpm * 100.0).round().clamp(1.0, u16::MAX as f64) as u16;
     let duration_ms = samples.len() as f64 * 1_000.0 / sample_rate as f64;
@@ -1122,6 +1147,7 @@ struct VariableGridCandidate {
     offset_min: f64,
     offset_max: f64,
     transition_abs_max: f64,
+    offset_trend_slope_per_bar: f64,
     offset_trend_correlation: f64,
 }
 
@@ -1137,13 +1163,84 @@ fn should_select_variable_grid(candidate: &VariableGridCandidate) -> bool {
         && candidate.offset_max - candidate.offset_min >= MIN_ACCUMULATED_DRIFT_FRAMES
         && candidate.offset_max >= MIN_FORWARD_OFFSET_FRAMES
         && candidate.offset_min >= MIN_BACKWARD_OFFSET_FRAMES;
-    let coherent_backward_drift = candidate.emission_gain >= 0.24
+    forward_drift || coherent_backward_drift(candidate)
+}
+
+fn coherent_backward_drift(candidate: &VariableGridCandidate) -> bool {
+    candidate.emission_gain >= 0.24
         && candidate.transition_abs_max <= 2.0
         && candidate.offset_max - candidate.offset_min >= 20.0
         && candidate.offset_min <= -10.0
         && candidate.offset_max <= 8.0
-        && candidate.offset_trend_correlation.abs() >= 0.70;
-    forward_drift || coherent_backward_drift
+        && candidate.offset_trend_correlation.abs() >= 0.70
+}
+
+fn refine_coherent_drift_grid(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    regular_beats: &[f64],
+    initial_candidate: &VariableGridCandidate,
+) -> VariableGridCandidate {
+    const NEGATIVE_DRIFT_RADIUS_PERIODS: f64 = 0.96;
+
+    if should_recenter_coherent_drift(initial_candidate) {
+        recentered_barwise_tempo_grid(onset, period, regular_beats, initial_candidate)
+    } else {
+        barwise_tempo_grid_with_radius(
+            onset,
+            period,
+            regular_beats,
+            NEGATIVE_DRIFT_RADIUS_PERIODS,
+            true,
+        )
+    }
+}
+
+fn should_recenter_coherent_drift(candidate: &VariableGridCandidate) -> bool {
+    candidate.offset_trend_slope_per_bar > 0.0
+}
+
+fn recentered_barwise_tempo_grid(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    regular_beats: &[f64],
+    initial_candidate: &VariableGridCandidate,
+) -> VariableGridCandidate {
+    const BEATS_PER_BAR: f64 = 4.0;
+    const REGULARIZATION_COMPENSATION: f64 = 2.0;
+    const MAX_PERIOD_CORRECTION_FRAMES: f64 = 0.5;
+    const POSITIVE_DRIFT_RADIUS_PERIODS: f64 = 0.84;
+
+    // Split the phase difference between the global grid and the first
+    // regularized path so period correction cannot invent a fresh downbeat.
+    let anchor = 0.5 * (regular_beats[0] + initial_candidate.beats[0]);
+    let period_correction = (REGULARIZATION_COMPENSATION
+        * initial_candidate.offset_trend_slope_per_bar
+        / BEATS_PER_BAR)
+        .clamp(-MAX_PERIOD_CORRECTION_FRAMES, MAX_PERIOD_CORRECTION_FRAMES);
+    let corrected_period = f64::from(period) + period_correction;
+    let recentered = regular_grid_from_anchor(onset.full.len() as f64, corrected_period, anchor);
+    barwise_tempo_grid_with_radius(
+        onset,
+        corrected_period as f32,
+        &recentered,
+        POSITIVE_DRIFT_RADIUS_PERIODS,
+        true,
+    )
+}
+
+fn regular_grid_from_anchor(onset_len: f64, period: f64, anchor: f64) -> Vec<f64> {
+    let mut first = anchor;
+    while first - period >= 1.0 {
+        first -= period;
+    }
+    let mut beats = Vec::new();
+    let mut predicted = first;
+    while predicted < onset_len + f64::from(FFT_CENTER_OFFSET_FRAMES) {
+        beats.push(predicted);
+        predicted += period;
+    }
+    beats
 }
 
 fn barwise_tempo_grid(
@@ -1151,20 +1248,37 @@ fn barwise_tempo_grid(
     period: f32,
     regular_beats: &[f64],
 ) -> VariableGridCandidate {
+    barwise_tempo_grid_with_radius(onset, period, regular_beats, 0.48, false)
+}
+
+fn barwise_tempo_grid_with_radius(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    regular_beats: &[f64],
+    state_radius_periods: f64,
+    center_states_on_zero: bool,
+) -> VariableGridCandidate {
     const BEATS_PER_BAR: usize = 4;
     const STATE_STEP: f64 = 0.25;
-    const STATE_RADIUS_PERIODS: f64 = 0.48;
     const MAX_TRANSITION_FRAMES: f64 = 2.0;
     const TRANSITION_PENALTY: f64 = 0.15;
 
     let bar_count = regular_beats.len().div_ceil(BEATS_PER_BAR);
-    let radius = f64::from(period) * STATE_RADIUS_PERIODS;
-    let mut states = Vec::new();
-    let mut state = -radius;
-    while state <= radius + 1.0e-6 {
-        states.push(state);
-        state += STATE_STEP;
-    }
+    let radius = f64::from(period) * state_radius_periods;
+    let states = if center_states_on_zero {
+        let radius_steps = (radius / STATE_STEP).floor() as i32;
+        (-radius_steps..=radius_steps)
+            .map(|step| f64::from(step) * STATE_STEP)
+            .collect::<Vec<_>>()
+    } else {
+        let mut states = Vec::new();
+        let mut state = -radius;
+        while state <= radius + 1.0e-6 {
+            states.push(state);
+            state += STATE_STEP;
+        }
+        states
+    };
     let emission = (0..bar_count)
         .map(|bar| {
             states
@@ -1261,20 +1375,21 @@ fn barwise_tempo_grid(
         .windows(2)
         .map(|pair| (pair[1] - pair[0]).abs())
         .fold(0.0, f64::max);
-    let offset_trend_correlation = index_correlation(&offsets);
+    let (offset_trend_slope_per_bar, offset_trend_correlation) = index_trend(&offsets);
     VariableGridCandidate {
         beats,
         emission_gain: selected_emission - constant_emission,
         offset_min,
         offset_max,
         transition_abs_max,
+        offset_trend_slope_per_bar,
         offset_trend_correlation,
     }
 }
 
-fn index_correlation(values: &[f64]) -> f64 {
+fn index_trend(values: &[f64]) -> (f64, f64) {
     if values.len() < 2 {
-        return 0.0;
+        return (0.0, 0.0);
     }
     let count = values.len() as f64;
     let index_mean = (count - 1.0) * 0.5;
@@ -1294,10 +1409,23 @@ fn index_correlation(values: &[f64]) -> f64 {
             });
     let denominator = (index_variance * value_variance).sqrt();
     if denominator <= f64::EPSILON {
-        0.0
+        (0.0, 0.0)
     } else {
-        covariance / denominator
+        (
+            covariance / index_variance.max(f64::EPSILON),
+            covariance / denominator,
+        )
     }
+}
+
+fn preserve_bar_offset(
+    initial_bar_offset: usize,
+    initial_first_beat: f64,
+    refined_first_beat: f64,
+    period: f64,
+) -> usize {
+    let beat_delta = ((refined_first_beat - initial_first_beat) / period).round() as isize;
+    (initial_bar_offset as isize + beat_delta).rem_euclid(4) as usize
 }
 
 fn estimate_bar_offset(
@@ -1521,44 +1649,64 @@ mod tests {
     }
 
     #[test]
+    fn refined_grid_preserves_absolute_meter_phase() {
+        assert_eq!(preserve_bar_offset(3, 40.0, 40.0, 20.0), 3);
+        assert_eq!(preserve_bar_offset(3, 40.0, 60.0, 20.0), 0);
+        assert_eq!(preserve_bar_offset(0, 40.0, 20.0, 20.0), 3);
+    }
+
+    #[test]
+    fn recentered_regular_grid_preserves_anchor_phase() {
+        let grid = regular_grid_from_anchor(100.0, 20.0, 45.0);
+        assert_eq!(grid, vec![5.0, 25.0, 45.0, 65.0, 85.0]);
+    }
+
+    #[test]
     fn variable_grid_gate_requires_smooth_directional_drift() {
         let candidate = |emission_gain,
                          offset_min,
                          offset_max,
                          transition_abs_max,
+                         offset_trend_slope_per_bar,
                          offset_trend_correlation| VariableGridCandidate {
             beats: Vec::new(),
             emission_gain,
             offset_min,
             offset_max,
             transition_abs_max,
+            offset_trend_slope_per_bar,
             offset_trend_correlation,
         };
         assert!(should_select_variable_grid(&candidate(
-            0.37, -1.5, 12.0, 0.75, 0.0,
+            0.37, -1.5, 12.0, 0.75, 0.0, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.35, -1.5, 12.0, 0.75, 0.0,
+            0.35, -1.5, 12.0, 0.75, 0.0, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.37, -2.5, 12.0, 0.75, 0.0,
+            0.37, -2.5, 12.0, 0.75, 0.0, 0.0,
         )));
         assert!(!should_select_variable_grid(&candidate(
-            0.37, -1.5, 9.5, 1.0, 0.0,
+            0.37, -1.5, 9.5, 1.0, 0.0, 0.0,
         )));
-        assert!(should_select_variable_grid(&candidate(
-            0.24, -14.0, 7.0, 2.0, -0.70,
-        )));
+        let positive_drift = candidate(0.24, -14.0, 7.0, 2.0, 0.1, -0.70);
+        assert!(should_select_variable_grid(&positive_drift));
+        assert!(should_recenter_coherent_drift(&positive_drift));
+        let negative_drift = candidate(0.24, -14.0, 7.0, 2.0, -0.1, -0.70);
+        assert!(should_select_variable_grid(&negative_drift));
+        assert!(!should_recenter_coherent_drift(&negative_drift));
         assert!(!should_select_variable_grid(&candidate(
-            0.24, -14.0, 7.0, 2.0, -0.69,
+            0.24, -14.0, 7.0, 2.0, 0.1, -0.69,
         )));
     }
 
     #[test]
-    fn index_correlation_requires_coherent_motion() {
-        assert!((index_correlation(&[4.0, 2.0, 0.0, -2.0]) + 1.0).abs() < 1.0e-12);
-        assert_eq!(index_correlation(&[3.0, 3.0, 3.0]), 0.0);
-        assert_eq!(index_correlation(&[3.0]), 0.0);
+    fn index_trend_requires_coherent_motion() {
+        let (slope, correlation) = index_trend(&[4.0, 2.0, 0.0, -2.0]);
+        assert!((slope + 2.0).abs() < 1.0e-12);
+        assert!((correlation + 1.0).abs() < 1.0e-12);
+        assert_eq!(index_trend(&[3.0, 3.0, 3.0]), (0.0, 0.0));
+        assert_eq!(index_trend(&[3.0]), (0.0, 0.0));
     }
 
     #[test]

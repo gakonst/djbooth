@@ -792,3 +792,38 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `0.060/0.204/0.406` and remained byte-identical under the final gate.
   Forty alternating five-track runs measured `1.299 s` candidate versus
   `1.291 s` baseline median (`+0.60%`), with no failures.
+
+## Residual-trend variable-grid refinement checkpoint (2026-07-28)
+
+- Diagnosed the two remaining selected variable grids beat by beat. Both
+  accumulated residual timing error against the native dynamic grid while the
+  first-pass Viterbi path saturated at its `±0.48`-period state boundary. The
+  existing activation predicate remains unchanged; refinement runs only after
+  the already-screened coherent negative-basin gate accepts a track.
+- Added one isolated second pass. A negative residual trend expands the
+  zero-centered state lattice to `±0.96` period. A positive residual trend
+  estimates one bounded period correction from the per-bar path slope,
+  recenters a regular grid between the global and first-pass phases, and
+  searches `±0.84` period. Refined timing is mapped back to the first-pass
+  meter offset so the second pass cannot silently rotate beat labels.
+- `I Got Ants In My Pants` moved from `0.732132 → 0.805469` F1 and
+  `214.855 → 172.226 ms` p95 timing error, with `145` local tempo changes
+  against `175` native changes. Its existing `0.377335` beat-label accuracy
+  was preserved exactly; downbeat p95 changed by `+0.972 ms`, an explicit
+  remaining meter gap rather than a hidden phase trade.
+- `Get Up Offa That Thing` moved from `0.899859 → 0.926554` F1 and
+  `133.190 → 96.337 ms` p95 timing error. Beat-label accuracy improved from
+  `0.765537 → 0.798867`, downbeat p95 improved from
+  `403.980 → 392.972 ms`, and both native and generated grids contain 354
+  beats.
+- Full 110-track replay changed exactly IDs 106 and 110; the other 108 DATs
+  remained byte-identical. The `>=0.99` count remains `94/110`, while mean F1
+  moved from `0.877391 → 0.878300` and mean p95 timing error from
+  `44.088 → 43.365 ms`.
+- Because refinement is strictly downstream of the unchanged selector, the
+  prior `0/848` held-out and `0/609` disjoint activation proofs compose with
+  this pass. Direct replays of the three closest held-out near misses and the
+  fresh cadence adversary were also byte-identical. Thirty-two alternating
+  four-track runs measured a `+0.10%` median runtime difference, treated as no
+  measurable overhead. The release remains clean-room Rust with no Rekordbox,
+  JUCE, FFmpeg, or proprietary runtime dependency.
