@@ -7290,7 +7290,7 @@ fn playlist_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntr
                     META_PLAYLIST
                 },
                 entry_id3: 0,
-                position: 0,
+                position: playlist.sequence,
                 flags: 0,
                 label: false,
                 tail1: 0,
@@ -11371,6 +11371,54 @@ mod tests {
         );
         assert_eq!(tracks_by_first_id.len(), 1);
         assert_eq!(tracks_by_first_id[0].entry_id2, track.track_id);
+    }
+
+    #[test]
+    fn playlist_rows_carry_master_sequence_for_back_navigation() {
+        let selected = PlaylistRecord {
+            playlist_id: 0x5293_8822,
+            name: "Selected playlist".to_string(),
+            parent_id: 0,
+            is_folder: false,
+            sequence: 5,
+            tracks: Vec::new(),
+        };
+        let library = LibrarySnapshot {
+            master_db_id: 0x0102_0304,
+            tracks_by_id: Default::default(),
+            all_tracks: Vec::new(),
+            playlists: vec![
+                PlaylistRecord {
+                    playlist_id: 0x0102_0305,
+                    name: "Parent folder".to_string(),
+                    parent_id: 0,
+                    is_folder: true,
+                    sequence: 1,
+                    tracks: Vec::new(),
+                },
+                selected.clone(),
+            ],
+        };
+
+        let rows = playlist_entries(
+            &library,
+            &[
+                DbValue::Int32(0x0101_0401),
+                DbValue::Int32(0),
+                DbValue::Int32(0),
+                DbValue::Int32(1),
+            ],
+        );
+        let selected_row = rows
+            .iter()
+            .find(|row| row.entry_id2 == selected.playlist_id)
+            .expect("selected playlist row");
+
+        assert_eq!(selected_row.position, selected.sequence);
+        assert_eq!(
+            menu_entry_args(selected_row).get(9),
+            Some(&DbValue::Int32(selected.sequence))
+        );
     }
 
     #[test]

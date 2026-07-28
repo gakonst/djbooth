@@ -144,5 +144,7 @@ same-transaction MENU_HEADER echoes its requested offset; it rejects the proven 
 TRACK SEARCH/Back-button failure. The patched physical CDJ-3000 capture passes with 173 matching
 renders, six nonzero cursors, zero missing/mismatched headers, and no TCP sequence gaps; its paired
 trace contains accepted `0x1500` edits interleaved with artwork, metadata, and ANLZ requests.
+Playlist and folder `MENU_ITEM` argument 10 carries the row's master `Seq`; emitting zero makes a
+CDJ restore the correct child cursor but highlight the first parent row after Back.
 Golden payloads, capture hashes, and the wire contract live in
 `native/crates/djtools-link/tests/fixtures/` and `native/crates/djtools-link/PROTOCOL.md`.
