@@ -671,3 +671,41 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   rejection, mid-band evidence with kick veto, and accepted/rejected metrical
   tempo families. Variable-tempo grids and contradictory/manual duplicate
   analyses remain explicit open cases rather than track-specific exceptions.
+
+## Energy and time-domain phase consensus checkpoint (2026-07-28)
+
+- Added non-flux STFT power envelopes for the kick band (`108–258 Hz`) and
+  cumulative bass (`<=258 Hz`) without another transform. Opposite-phase
+  selection requires at least eight 16-beat segments, 75% segment consensus,
+  1.25x kick power, nondecreasing bass power, and 1.20x kick concentration
+  relative to the cumulative bass gain.
+- Added an independent 512-sample time-domain pass with broadband RMS,
+  `250 Hz–4 kHz` mid RMS, `>4 kHz` high RMS, and peak envelopes. The selector
+  accepts an opposite phase only for strongly separated broadband or mid-band
+  evidence, or when broadband peaks and high-frequency energy agree. Both
+  selectors evaluate the same previously selected phase; the stricter
+  non-flux candidate takes precedence so overlapping evidence cannot flip a
+  phase twice.
+- Exact production replay moved the original differential from 85/110 to
+  89/110 tracks at `>=0.99` F1, with mean F1 `0.803211 → 0.839553` and mean
+  p95 timing error `61.530 → 53.546 ms`. IDs 39, 40, 74, and 108 became
+  passes; none of the prior 85 passes regressed.
+- A complete fresh replay of all 849 independent references moved
+  `753 → 772/849` passes. Twenty tracks improved, nineteen became new passes,
+  no track worsened, mean F1 reached `0.923541`, and mean p95 timing error
+  reached `40.228 ms`.
+- Reusing the FFT kept the non-flux path effectively free. Fifteen alternating
+  five-track runs measured `349.77 ms` mean for the combined analyzer versus
+  `357.46 ms` for the prior release, treated as no measurable slowdown rather
+  than a claimed speedup.
+- Added synthetic coverage for kick concentration and bass support,
+  broadband RMS, mid-band squared energy, high-frequency/peak consensus, and
+  high-frequency peak contradiction. Alternate Apathy and Conga copies retain
+  half-beat-opposed Rekordbox references; those contradictory/manual analyses
+  remain explicit corpus conflicts rather than track-specific exceptions.
+- Audited HFC, SuperFlux, complex-domain, centroid, and power novelty
+  envelopes against the 110 + 849 corpora. Two centroid consensus rules fixed
+  residual IDs 17 and 109, but a frozen replay on 613 additional disjoint
+  decodes selected already-correct tracks and flipped two from parity to zero
+  F1. Rejected both rules and retained none of the diagnostic-only second FFT
+  path.

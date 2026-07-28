@@ -51,7 +51,20 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     let onset_rate = sample_rate as f32 / HOP_SIZE as f32;
     let (initial_period, tempo_score, runner_up_score) = estimate_period(&onset.full, onset_rate)?;
     let (period, initial_phase, mut alignment) = refine_period_and_phase(&onset, initial_period);
-    let phase = robust_phase(&onset, period, initial_phase);
+    let selected_phase = robust_phase(&onset, period, initial_phase);
+    let energy_phase = robust_energy_phase(&onset, period, selected_phase);
+    let time_domain_phase = robust_time_domain_phase(
+        samples,
+        sample_rate,
+        onset.full.len(),
+        period,
+        selected_phase,
+    );
+    let phase = if energy_phase != selected_phase {
+        energy_phase
+    } else {
+        time_domain_phase
+    };
     if phase != initial_phase {
         alignment = grid_alignment_score(&onset, period, phase);
     }
@@ -107,6 +120,15 @@ struct OnsetEnvelopes {
     kick: Vec<f32>,
     bass: Vec<f32>,
     mid: Vec<f32>,
+    kick_energy: Vec<f32>,
+    bass_energy: Vec<f32>,
+}
+
+struct TimeDomainEnvelopes {
+    peak: Vec<f32>,
+    rms: Vec<f32>,
+    mid_rms: Vec<f32>,
+    high_rms: Vec<f32>,
 }
 
 fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
@@ -124,6 +146,8 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
             kick: Vec::new(),
             bass: Vec::new(),
             mid: Vec::new(),
+            kick_energy: Vec::new(),
+            bass_energy: Vec::new(),
         };
     }
     let window = (0..FFT_SIZE)
@@ -150,6 +174,8 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
     let mut kick = Vec::with_capacity(frame_count);
     let mut bass = Vec::with_capacity(frame_count);
     let mut mid = Vec::with_capacity(frame_count);
+    let mut kick_energy = Vec::with_capacity(frame_count);
+    let mut bass_energy = Vec::with_capacity(frame_count);
     for chunk in chunks {
         full.extend(chunk.full);
         low.extend(chunk.low);
@@ -157,6 +183,8 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
         kick.extend(chunk.kick);
         bass.extend(chunk.bass);
         mid.extend(chunk.mid);
+        kick_energy.extend(chunk.kick_energy);
+        bass_energy.extend(chunk.bass_energy);
     }
 
     OnsetEnvelopes {
@@ -166,6 +194,8 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
         kick: adaptive_normalize(&kick, 8),
         bass: adaptive_normalize(&bass, 8),
         mid: adaptive_normalize(&mid, 8),
+        kick_energy: adaptive_normalize(&kick_energy, 8),
+        bass_energy: adaptive_normalize(&bass_energy, 8),
     }
 }
 
@@ -184,6 +214,8 @@ fn spectral_flux_range(
     let mut kick_flux = Vec::with_capacity(range.len());
     let mut bass_flux = Vec::with_capacity(range.len());
     let mut mid_flux = Vec::with_capacity(range.len());
+    let mut kick_energy = Vec::with_capacity(range.len());
+    let mut bass_energy = Vec::with_capacity(range.len());
 
     if range.start > 0 {
         let previous_start = (range.start - 1) * HOP_SIZE;
@@ -210,6 +242,8 @@ fn spectral_flux_range(
         let mut kick_value = 0.0;
         let mut bass_value = 0.0;
         let mut mid_value = 0.0;
+        let mut kick_power = 0.0;
+        let mut bass_power = 0.0;
         for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
             let magnitude = (1.0 + 10.0 * bin.norm()).ln();
             let difference = (magnitude - previous[index]).max(0.0);
@@ -229,6 +263,12 @@ fn spectral_flux_range(
             if (MID_ONSET_MIN_BIN..=MID_ONSET_MAX_BIN).contains(&index) {
                 mid_value += difference;
             }
+            if (KICK_ONSET_MIN_BIN..=KICK_ONSET_MAX_BIN).contains(&index) {
+                kick_power += bin.norm_sqr();
+            }
+            if index <= BASS_ONSET_MAX_BIN {
+                bass_power += bin.norm_sqr();
+            }
             previous[index] = magnitude;
         }
         full_flux.push(full_value);
@@ -237,6 +277,8 @@ fn spectral_flux_range(
         kick_flux.push(kick_value);
         bass_flux.push(bass_value);
         mid_flux.push(mid_value);
+        kick_energy.push(kick_power.ln_1p());
+        bass_energy.push(bass_power.ln_1p());
     }
     OnsetEnvelopes {
         full: full_flux,
@@ -245,6 +287,216 @@ fn spectral_flux_range(
         kick: kick_flux,
         bass: bass_flux,
         mid: mid_flux,
+        kick_energy,
+        bass_energy,
+    }
+}
+
+fn robust_energy_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32) -> f32 {
+    const MIN_SEGMENTS: usize = 8;
+    const MIN_KICK_RATIO: f32 = 1.25;
+    const MIN_KICK_CONCENTRATION: f32 = 1.2;
+    const MIN_VOTE_SHARE: f32 = 0.75;
+
+    let (candidate_phase, _) = best_opposite_phase(period, selected_phase, |phase| {
+        envelope_alignment_moments(&onset.kick_energy, period, phase).0
+    });
+    let selected_kick = optimized_envelope_moments(&onset.kick_energy, period, selected_phase);
+    let candidate_kick = optimized_envelope_moments(&onset.kick_energy, period, candidate_phase);
+    let selected_bass = optimized_envelope_moments(&onset.bass_energy, period, selected_phase);
+    let candidate_bass = optimized_envelope_moments(&onset.bass_energy, period, candidate_phase);
+    let (selected_votes, candidate_votes, tied_votes) = phase_segment_votes(
+        onset.kick_energy.len(),
+        period,
+        selected_phase,
+        candidate_phase,
+        16,
+        |frame| interpolate(&onset.kick_energy, frame),
+    );
+    let total_segments = selected_votes + candidate_votes + tied_votes;
+    let kick_ratio = candidate_kick.0 / selected_kick.0.max(f32::EPSILON);
+    let bass_ratio = candidate_bass.0 / selected_bass.0.max(f32::EPSILON);
+    if circular_distance(candidate_phase, selected_phase, period) >= period * 0.35
+        && total_segments >= MIN_SEGMENTS
+        && candidate_votes as f32 / total_segments as f32 >= MIN_VOTE_SHARE
+        && candidate_kick.0 >= selected_kick.0 * MIN_KICK_RATIO
+        && candidate_bass.0 > f32::EPSILON
+        && candidate_bass.0 >= selected_bass.0
+        && kick_ratio >= bass_ratio * MIN_KICK_CONCENTRATION
+    {
+        candidate_phase
+    } else {
+        selected_phase
+    }
+}
+
+fn robust_time_domain_phase(
+    samples: &[f32],
+    sample_rate: u32,
+    frame_count: usize,
+    period: f32,
+    selected_phase: f32,
+) -> f32 {
+    let envelopes = time_domain_envelopes(samples, sample_rate, frame_count);
+    select_time_domain_phase(&envelopes, period, selected_phase)
+}
+
+fn select_time_domain_phase(
+    envelopes: &TimeDomainEnvelopes,
+    period: f32,
+    selected_phase: f32,
+) -> f32 {
+    const MIN_RMS_TOP_HALF_RATIO: f32 = 1.20;
+    const MIN_MID_SQUARED_RATIO: f32 = 1.40;
+    const MIN_PEAK_MEAN_RATIO: f32 = 1.05;
+    const MIN_HIGH_TOP_HALF_RATIO: f32 = 1.84;
+
+    let candidate_phase = (selected_phase + period * 0.5).rem_euclid(period);
+    let selected = optimized_time_domain_evidence(envelopes, period, selected_phase);
+    let candidate = optimized_time_domain_evidence(envelopes, period, candidate_phase);
+    let rms_switch = candidate.rms_top_half > f32::EPSILON
+        && candidate.rms_top_half >= selected.rms_top_half * MIN_RMS_TOP_HALF_RATIO;
+    let mid_switch = candidate.mid_squared > f32::EPSILON
+        && candidate.mid_squared >= selected.mid_squared * MIN_MID_SQUARED_RATIO;
+    let high_switch = candidate.peak_mean > f32::EPSILON
+        && candidate.high_top_half > f32::EPSILON
+        && candidate.peak_mean >= selected.peak_mean * MIN_PEAK_MEAN_RATIO
+        && candidate.high_top_half >= selected.high_top_half * MIN_HIGH_TOP_HALF_RATIO;
+    if rms_switch || mid_switch || high_switch {
+        candidate_phase
+    } else {
+        selected_phase
+    }
+}
+
+fn time_domain_envelopes(
+    samples: &[f32],
+    sample_rate: u32,
+    frame_count: usize,
+) -> TimeDomainEnvelopes {
+    const LOW_CUTOFF_HZ: f32 = 250.0;
+    const HIGH_CUTOFF_HZ: f32 = 4_000.0;
+
+    let sample_rate = sample_rate as f32;
+    let low_alpha = 1.0 - (-std::f32::consts::TAU * LOW_CUTOFF_HZ / sample_rate).exp();
+    let high_alpha = 1.0 - (-std::f32::consts::TAU * HIGH_CUTOFF_HZ / sample_rate).exp();
+    let block_count = samples.len().div_ceil(HOP_SIZE);
+    let mut peak = Vec::with_capacity(block_count);
+    let mut rms = Vec::with_capacity(block_count);
+    let mut mid_rms = Vec::with_capacity(block_count);
+    let mut high_rms = Vec::with_capacity(block_count);
+    let mut low_state = 0.0f32;
+    let mut high_cut_state = 0.0f32;
+    for block in samples.chunks(HOP_SIZE) {
+        let mut peak_value = 0.0f32;
+        let mut energy = 0.0f32;
+        let mut mid_energy = 0.0f32;
+        let mut high_energy = 0.0f32;
+        for &sample in block {
+            low_state += low_alpha * (sample - low_state);
+            high_cut_state += high_alpha * (sample - high_cut_state);
+            let mid = high_cut_state - low_state;
+            let high = sample - high_cut_state;
+            peak_value = peak_value.max(sample.abs());
+            energy += sample * sample;
+            mid_energy += mid * mid;
+            high_energy += high * high;
+        }
+        let denominator = block.len().max(1) as f32;
+        peak.push(peak_value);
+        rms.push((energy / denominator).sqrt());
+        mid_rms.push((mid_energy / denominator).sqrt());
+        high_rms.push((high_energy / denominator).sqrt());
+    }
+    TimeDomainEnvelopes {
+        peak: align_and_normalize_envelope(&peak, frame_count),
+        rms: align_and_normalize_envelope(&rms, frame_count),
+        mid_rms: align_and_normalize_envelope(&mid_rms, frame_count),
+        high_rms: align_and_normalize_envelope(&high_rms, frame_count),
+    }
+}
+
+fn align_and_normalize_envelope(values: &[f32], frame_count: usize) -> Vec<f32> {
+    let mut output = values
+        .iter()
+        .skip(FFT_CENTER_OFFSET_FRAMES as usize)
+        .take(frame_count)
+        .copied()
+        .collect::<Vec<_>>();
+    if output.is_empty() {
+        return output;
+    }
+    let mut sorted = output.clone();
+    sorted.sort_by(f32::total_cmp);
+    let scale = sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)].max(f32::EPSILON);
+    for value in &mut output {
+        *value = (*value / scale).clamp(0.0, 1.0);
+    }
+    output
+}
+
+#[derive(Clone, Copy, Default)]
+struct TimeDomainEvidence {
+    peak_mean: f32,
+    rms_top_half: f32,
+    mid_squared: f32,
+    high_top_half: f32,
+}
+
+fn optimized_time_domain_evidence(
+    envelopes: &TimeDomainEnvelopes,
+    period: f32,
+    phase: f32,
+) -> TimeDomainEvidence {
+    let mut best = TimeDomainEvidence {
+        peak_mean: f32::NEG_INFINITY,
+        rms_top_half: f32::NEG_INFINITY,
+        mid_squared: f32::NEG_INFINITY,
+        high_top_half: f32::NEG_INFINITY,
+    };
+    let radius_steps = (period * 0.2 / 0.25).ceil() as i32;
+    for step in -radius_steps..=radius_steps {
+        let evidence = time_domain_evidence(envelopes, period, phase + step as f32 * 0.25);
+        best.peak_mean = best.peak_mean.max(evidence.peak_mean);
+        best.rms_top_half = best.rms_top_half.max(evidence.rms_top_half);
+        best.mid_squared = best.mid_squared.max(evidence.mid_squared);
+        best.high_top_half = best.high_top_half.max(evidence.high_top_half);
+    }
+    best
+}
+
+fn time_domain_evidence(
+    envelopes: &TimeDomainEnvelopes,
+    period: f32,
+    phase: f32,
+) -> TimeDomainEvidence {
+    let margin = period * 4.0;
+    let mut frame = phase;
+    while frame < margin {
+        frame += period;
+    }
+    let end = envelopes.rms.len() as f32 - margin;
+    let mut peak_sum = 0.0;
+    let mut mid_squared = 0.0;
+    let mut rms = Vec::new();
+    let mut high = Vec::new();
+    while frame < end {
+        peak_sum += interpolate(&envelopes.peak, frame);
+        let mid = interpolate(&envelopes.mid_rms, frame);
+        mid_squared += mid * mid;
+        rms.push(interpolate(&envelopes.rms, frame));
+        high.push(interpolate(&envelopes.high_rms, frame));
+        frame += period;
+    }
+    rms.sort_by(|left, right| right.total_cmp(left));
+    high.sort_by(|left, right| right.total_cmp(left));
+    let count = rms.len().max(1) as f32;
+    let retained = (rms.len() / 2).max(1);
+    TimeDomainEvidence {
+        peak_mean: peak_sum / count,
+        rms_top_half: rms.iter().take(retained).sum::<f32>() / retained as f32,
+        mid_squared: mid_squared / count,
+        high_top_half: high.iter().take(retained).sum::<f32>() / retained as f32,
     }
 }
 
@@ -447,8 +699,14 @@ fn robust_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32) -> f32
         kick_alignment_score(onset, period, phase)
     });
     let kick_gain = (kick_score - selected_kick_score) / kick_score.max(f32::EPSILON);
-    let (selected_votes, kick_votes, tied_votes) =
-        kick_segment_votes(onset, period, selected_phase, kick_phase, 16);
+    let (selected_votes, kick_votes, tied_votes) = phase_segment_votes(
+        onset.full.len(),
+        period,
+        selected_phase,
+        kick_phase,
+        16,
+        |frame| kick_alignment_value(onset, frame),
+    );
     let total_segments = selected_votes + kick_votes + tied_votes;
     let selected_bass = optimized_envelope_moments(&onset.bass, period, selected_phase).0;
     let kick_bass = optimized_envelope_moments(&onset.bass, period, kick_phase).0;
@@ -521,15 +779,16 @@ fn kick_alignment_value(onset: &OnsetEnvelopes, frame: f32) -> f32 {
     interpolate(&onset.kick, frame) + 0.1 * current
 }
 
-fn kick_segment_votes(
-    onset: &OnsetEnvelopes,
+fn phase_segment_votes(
+    frame_count: usize,
     period: f32,
     selected_phase: f32,
     candidate_phase: f32,
     segment_beats: usize,
+    mut score: impl FnMut(f32) -> f32,
 ) -> (usize, usize, usize) {
     let margin = period * 4.0;
-    let end = onset.full.len() as f32 - margin;
+    let end = frame_count as f32 - margin;
     let mut selected_frame = selected_phase;
     let mut candidate_frame = candidate_phase;
     while selected_frame < margin {
@@ -546,8 +805,8 @@ fn kick_segment_votes(
     let mut candidate_score = 0.0;
     let mut beat_count = 0;
     while selected_frame < end && candidate_frame < end {
-        selected_score += kick_alignment_value(onset, selected_frame);
-        candidate_score += kick_alignment_value(onset, candidate_frame);
+        selected_score += score(selected_frame);
+        candidate_score += score(candidate_frame);
         beat_count += 1;
         selected_frame += period;
         candidate_frame += period;
@@ -727,6 +986,60 @@ mod tests {
             kick,
             bass,
             mid,
+            kick_energy: vec![0.0; PERIOD * BEATS],
+            bass_energy: vec![0.0; PERIOD * BEATS],
+        }
+    }
+
+    fn energy_phase_fixture(
+        selected_kick: f32,
+        candidate_kick: f32,
+        selected_bass: f32,
+        candidate_bass: f32,
+    ) -> OnsetEnvelopes {
+        const PERIOD: usize = 40;
+        const BEATS: usize = 200;
+        let mut onset = phase_fixture(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        for beat in 0..BEATS {
+            let selected = beat * PERIOD + 10;
+            let candidate = beat * PERIOD + 30;
+            onset.kick_energy[selected] = selected_kick;
+            onset.kick_energy[candidate] = candidate_kick;
+            onset.bass_energy[selected] = selected_bass;
+            onset.bass_energy[candidate] = candidate_bass;
+        }
+        onset
+    }
+
+    fn time_domain_phase_fixture(
+        peak_levels: (f32, f32),
+        rms_levels: (f32, f32),
+        mid_levels: (f32, f32),
+        high_levels: (f32, f32),
+    ) -> TimeDomainEnvelopes {
+        const PERIOD: usize = 40;
+        const BEATS: usize = 200;
+        let mut peak = vec![0.0; PERIOD * BEATS];
+        let mut rms = peak.clone();
+        let mut mid_rms = peak.clone();
+        let mut high_rms = peak.clone();
+        for beat in 0..BEATS {
+            let selected = beat * PERIOD + 10;
+            let candidate = beat * PERIOD + 30;
+            peak[selected] = peak_levels.0;
+            peak[candidate] = peak_levels.1;
+            rms[selected] = rms_levels.0;
+            rms[candidate] = rms_levels.1;
+            mid_rms[selected] = mid_levels.0;
+            mid_rms[candidate] = mid_levels.1;
+            high_rms[selected] = high_levels.0;
+            high_rms[candidate] = high_levels.1;
+        }
+        TimeDomainEnvelopes {
+            peak,
+            rms,
+            mid_rms,
+            high_rms,
         }
     }
 
@@ -834,6 +1147,37 @@ mod tests {
 
         let contradicted = phase_fixture(1.0, 0.4, 1.0, 1.0, 0.4, 0.8);
         assert_eq!(robust_phase(&contradicted, 40.0, 10.0), 10.0);
+    }
+
+    #[test]
+    fn non_flux_energy_phase_requires_concentrated_kick_and_bass_support() {
+        let supported = energy_phase_fixture(0.5, 0.75, 0.5, 0.55);
+        assert!(circular_distance(robust_energy_phase(&supported, 40.0, 10.0), 30.0, 40.0) < 0.1);
+
+        let bass_contradicted = energy_phase_fixture(0.5, 0.75, 0.5, 0.4);
+        assert_eq!(robust_energy_phase(&bass_contradicted, 40.0, 10.0), 10.0);
+
+        let sub_bass_dominated = energy_phase_fixture(0.5, 0.75, 0.5, 1.0);
+        assert_eq!(robust_energy_phase(&sub_bass_dominated, 40.0, 10.0), 10.0);
+    }
+
+    #[test]
+    fn time_domain_phase_accepts_broadband_mid_or_high_frequency_consensus() {
+        let broadband = time_domain_phase_fixture((0.5, 0.5), (0.5, 0.7), (0.5, 0.5), (0.5, 0.5));
+        assert_eq!(select_time_domain_phase(&broadband, 40.0, 10.0), 30.0);
+
+        let mid = time_domain_phase_fixture((0.5, 0.5), (0.5, 0.5), (0.5, 0.65), (0.5, 0.5));
+        assert_eq!(select_time_domain_phase(&mid, 40.0, 10.0), 30.0);
+
+        let high = time_domain_phase_fixture((0.8, 0.88), (0.5, 0.5), (0.5, 0.5), (0.3, 0.6));
+        assert_eq!(select_time_domain_phase(&high, 40.0, 10.0), 30.0);
+
+        let peak_contradicted =
+            time_domain_phase_fixture((1.0, 0.9), (0.5, 0.5), (0.5, 0.5), (0.3, 0.6));
+        assert_eq!(
+            select_time_domain_phase(&peak_contradicted, 40.0, 10.0),
+            10.0
+        );
     }
 
     #[test]
