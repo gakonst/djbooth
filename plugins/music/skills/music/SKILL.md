@@ -347,7 +347,7 @@ music rekordbox analyze doctor --engine clean --format json
 music rekordbox analyze track "$AUDIO_PATH" \
   --engine clean \
   --output-directory "$ANALYSIS_DIR" \
-  --threads 4 \
+  --threads 8 \
   --format json
 music rekordbox analyze tracks \
   --audio-path "$AUDIO_PATH_1" \
@@ -389,13 +389,14 @@ For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolat
 and preserves input order. `--threads` is one total native CPU budget divided deterministically
 across active processes, not a per-process multiplier; `--concurrency 4 --threads 12` produces
 worker budgets `[3, 3, 3, 3]`. The clean scheduler defaults to the lower of 12 processes, available
-parallelism, the thread budget, and the uncached track count. Single-track analysis defaults to four
-native threads because measured scaling plateaus there. Lower `--threads` or `--concurrency` when
-analysis competes with live DJ software. Both limits accept values through 64; raise them together
-only for deliberate oversubscription. On the profiled 12-core host, 24 processes doubled analyzer
-memory without a material median throughput gain. Parallelize analysis only. Keep Rekordbox
-database installation stopped-Rekordbox, backed up, locked, and serialized through the workflow
-below.
+parallelism, the thread budget, and the uncached track count. Single-track analysis defaults to eight
+native threads: its five-second decode/DSP pipeline measured `2.07x` faster than the prior buffered
+implementation, while twelve threads regressed from topology and cache pressure. Batch analysis
+still defaults to 12 one-thread processes; 16 tied it, while 20 and 24 did not improve the median.
+Lower `--threads` or `--concurrency` when analysis competes with live DJ software. Both limits accept
+values through 64, but values above the profiled defaults are overrides rather than expected
+speedups. Parallelize analysis only. Keep Rekordbox database installation stopped-Rekordbox, backed
+up, locked, and serialized through the workflow below.
 
 For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
 does not load provider credentials or download anything. It checkpoints per-item cache results and a

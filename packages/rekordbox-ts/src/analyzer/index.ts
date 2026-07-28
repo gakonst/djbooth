@@ -355,8 +355,8 @@ export const DEFAULT_ANALYZER_THREAD_BUDGET = Math.min(
 /** CPU-adaptive default for process-isolated clean analyzer workers. */
 export const DEFAULT_ANALYZER_CONCURRENCY = Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET);
 
-/** Measured single-track sweet spot before native parallelism plateaus. */
-export const DEFAULT_ANALYZER_TRACK_THREADS = Math.min(4, DEFAULT_ANALYZER_THREAD_BUDGET);
+/** Measured single-track sweet spot before native parallelism regresses. */
+export const DEFAULT_ANALYZER_TRACK_THREADS = Math.min(8, DEFAULT_ANALYZER_THREAD_BUDGET);
 
 /** Progress emitted by a bounded multi-track analyzer run. */
 export type AnalyzeTracksProgress = {

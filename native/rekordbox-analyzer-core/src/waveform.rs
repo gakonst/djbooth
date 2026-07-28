@@ -4,7 +4,15 @@
 //! splits and quantizers are clean-room approximations derived from public
 //! format documentation plus synthetic pure-tone differential probes.
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::aarch64::{
+    float64x2_t, vabsq_f64, vaddq_f64, vdupq_n_f64, vextq_f64, vld1q_f64, vmaxq_f64, vmulq_f64,
+    vst1q_f64, vsubq_f64, vuzp1q_f64, vuzp2q_f64,
+};
+
 use anyhow::{Result, bail};
+#[cfg(target_arch = "aarch64")]
+use rayon::prelude::*;
 
 use crate::anlz::{AnlzTag, CountedWaveform, build_waveform_tag};
 use crate::audio::{ANALYSIS_SAMPLE_RATE, DETAIL_FRAME_SAMPLES, MonoPcm};
@@ -43,6 +51,10 @@ const THREE_BAND_PREVIEW_LOW_GAIN: f64 = 0.54;
 const THREE_BAND_PREVIEW_LOW_POWER: f64 = 1.14;
 const THREE_BAND_PREVIEW_MID_GAIN: f64 = 0.84;
 const THREE_BAND_PREVIEW_MID_POWER: f64 = 1.36;
+#[cfg(target_arch = "aarch64")]
+const FILTER_PREROLL_FRAMES: usize = 150;
+#[cfg(target_arch = "aarch64")]
+const MIN_PARALLEL_CHUNK_FRAMES: usize = 3_000;
 
 /// All waveform entry arrays needed by DAT, EXT, and 2EX analysis files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,44 +82,7 @@ impl WaveformData {
             );
         }
 
-        let detail_features = extract_detail_features(pcm);
-        let detail_peak = detail_features
-            .iter()
-            .map(|feature| feature.peak)
-            .fold(0.0_f64, f64::max);
-        let monochrome_preview_features =
-            reduce_features(&detail_features, MONOCHROME_PREVIEW_COLUMNS);
-        let tiny_preview_features = reduce_features(&detail_features, TINY_PREVIEW_COLUMNS);
-        let color_preview_features = reduce_features(&detail_features, COLOR_PREVIEW_COLUMNS);
-        let three_band_detail = detail_features
-            .iter()
-            .flat_map(pack_three_band)
-            .collect::<Vec<_>>();
-
-        Ok(Self {
-            monochrome_preview: monochrome_preview_features
-                .iter()
-                .map(pack_monochrome)
-                .collect(),
-            tiny_preview: tiny_preview_features
-                .iter()
-                .map(|feature| waveform_height(feature.peak, 15))
-                .collect(),
-            monochrome_detail: detail_features.iter().map(pack_monochrome).collect(),
-            color_preview: color_preview_features
-                .iter()
-                .flat_map(pack_color_preview)
-                .collect(),
-            color_detail: detail_features
-                .iter()
-                .flat_map(|feature| pack_color_detail(feature, detail_peak).to_be_bytes())
-                .collect(),
-            three_band_preview: reduce_three_band_preview(
-                &three_band_detail,
-                COLOR_PREVIEW_COLUMNS,
-            ),
-            three_band_detail,
-        })
+        Ok(pack_waveforms(&extract_detail_features(pcm)))
     }
 
     /// Packed 400-byte `PWAV` entries.
@@ -206,6 +181,42 @@ impl WaveformData {
     }
 }
 
+fn pack_waveforms(detail_features: &[FrameFeatures]) -> WaveformData {
+    let detail_peak = detail_features
+        .iter()
+        .map(|feature| feature.peak)
+        .fold(0.0_f64, f64::max);
+    let monochrome_preview_features = reduce_features(detail_features, MONOCHROME_PREVIEW_COLUMNS);
+    let tiny_preview_features = reduce_features(detail_features, TINY_PREVIEW_COLUMNS);
+    let color_preview_features = reduce_features(detail_features, COLOR_PREVIEW_COLUMNS);
+    let three_band_detail = detail_features
+        .iter()
+        .flat_map(pack_three_band)
+        .collect::<Vec<_>>();
+
+    WaveformData {
+        monochrome_preview: monochrome_preview_features
+            .iter()
+            .map(pack_monochrome)
+            .collect(),
+        tiny_preview: tiny_preview_features
+            .iter()
+            .map(|feature| waveform_height(feature.peak, 15))
+            .collect(),
+        monochrome_detail: detail_features.iter().map(pack_monochrome).collect(),
+        color_preview: color_preview_features
+            .iter()
+            .flat_map(pack_color_preview)
+            .collect(),
+        color_detail: detail_features
+            .iter()
+            .flat_map(|feature| pack_color_detail(feature, detail_peak).to_be_bytes())
+            .collect(),
+        three_band_preview: reduce_three_band_preview(&three_band_detail, COLOR_PREVIEW_COLUMNS),
+        three_band_detail,
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct FrameFeatures {
     peak: f64,
@@ -222,13 +233,15 @@ struct FrameFeatures {
     high: f64,
 }
 
+#[cfg(any(not(target_arch = "aarch64"), test))]
 #[derive(Debug, Clone, Copy, Default)]
-struct BandSplitter {
+struct ScalarBandSplitter {
     low_state: f64,
     high_cut_state: f64,
 }
 
-impl BandSplitter {
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarBandSplitter {
     fn process(&mut self, sample: f64) -> (f64, f64, f64) {
         self.low_state += LOW_PASS_ALPHA_250_HZ * (sample - self.low_state);
         self.high_cut_state += LOW_PASS_ALPHA_4_KHZ * (sample - self.high_cut_state);
@@ -237,6 +250,56 @@ impl BandSplitter {
             self.high_cut_state - self.low_state,
             sample - self.high_cut_state,
         )
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type BandSplitter = ScalarBandSplitter;
+
+#[cfg(target_arch = "aarch64")]
+struct BandSplitter {
+    alpha: float64x2_t,
+    state: float64x2_t,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Default for BandSplitter {
+    fn default() -> Self {
+        Self {
+            alpha: load_f64x2([LOW_PASS_ALPHA_250_HZ, LOW_PASS_ALPHA_4_KHZ]),
+            state: load_f64x2([0.0; 2]),
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BandSplitter {
+    #[inline(always)]
+    fn process_vectors(&mut self, sample: f64) -> (float64x2_t, float64x2_t) {
+        let input = unsafe { vdupq_n_f64(sample) };
+        // Keep the scalar operation order: state + alpha * (sample - state).
+        self.state = unsafe {
+            vaddq_f64(
+                self.state,
+                vmulq_f64(self.alpha, vsubq_f64(input, self.state)),
+            )
+        };
+        let reversed_state = unsafe { vextq_f64::<1>(self.state, self.state) };
+        let reversed_difference = unsafe {
+            let difference = vsubq_f64(self.state, reversed_state);
+            vextq_f64::<1>(difference, difference)
+        };
+        let low_mid = unsafe { vuzp1q_f64(self.state, reversed_difference) };
+        let sample_high = unsafe { vuzp2q_f64(input, vsubq_f64(input, self.state)) };
+        (low_mid, sample_high)
+    }
+
+    #[cfg(test)]
+    fn process(&mut self, sample: f64) -> (f64, f64, f64) {
+        let (low_mid, sample_high) = self.process_vectors(sample);
+        let [low, mid] = store_f64x2(low_mid);
+        let [_, high] = store_f64x2(sample_high);
+        (low, mid, high)
     }
 }
 
@@ -281,6 +344,7 @@ impl Biquad {
         }
     }
 
+    #[cfg(any(not(target_arch = "aarch64"), test))]
     fn process(&mut self, sample: f64) -> f64 {
         let output = self.b0 * sample + self.z1;
         self.z1 = self.b1 * sample - self.a1 * output + self.z2;
@@ -318,6 +382,7 @@ impl<const STAGES: usize> Butterworth<STAGES> {
         }
     }
 
+    #[cfg(any(not(target_arch = "aarch64"), test))]
     fn process(&mut self, mut sample: f64) -> f64 {
         for stage in &mut self.stages {
             sample = stage.process(sample);
@@ -326,8 +391,9 @@ impl<const STAGES: usize> Butterworth<STAGES> {
     }
 }
 
+#[cfg(any(not(target_arch = "aarch64"), test))]
 #[derive(Debug, Clone)]
-struct ColorBandSplitter {
+struct ScalarColorBandSplitter {
     preview_bottom: Butterworth<1>,
     preview_red: Butterworth<2>,
     preview_green_high: Butterworth<2>,
@@ -339,7 +405,8 @@ struct ColorBandSplitter {
     detail_blue: Butterworth<2>,
 }
 
-impl Default for ColorBandSplitter {
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl Default for ScalarColorBandSplitter {
     fn default() -> Self {
         Self {
             preview_bottom: Butterworth::low_pass(400.0),
@@ -355,6 +422,7 @@ impl Default for ColorBandSplitter {
     }
 }
 
+#[cfg(any(not(target_arch = "aarch64"), test))]
 #[derive(Debug, Clone, Copy)]
 struct ColorBands {
     preview_bottom: f64,
@@ -366,7 +434,8 @@ struct ColorBands {
     detail_blue: f64,
 }
 
-impl ColorBandSplitter {
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarColorBandSplitter {
     fn process(&mut self, sample: f64) -> ColorBands {
         let preview_green = self
             .preview_green_low
@@ -386,57 +455,421 @@ impl ColorBandSplitter {
     }
 }
 
-fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    let mut splitter = BandSplitter::default();
-    let mut color_splitter = ColorBandSplitter::default();
+#[cfg(not(target_arch = "aarch64"))]
+type ColorBandSplitter = ScalarColorBandSplitter;
+
+#[cfg(target_arch = "aarch64")]
+struct BiquadPair {
+    b0: float64x2_t,
+    b1: float64x2_t,
+    b2: float64x2_t,
+    a1: float64x2_t,
+    a2: float64x2_t,
+    z1: float64x2_t,
+    z2: float64x2_t,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BiquadPair {
+    fn new(left: Biquad, right: Biquad) -> Self {
+        Self {
+            b0: load_f64x2([left.b0, right.b0]),
+            b1: load_f64x2([left.b1, right.b1]),
+            b2: load_f64x2([left.b2, right.b2]),
+            a1: load_f64x2([left.a1, right.a1]),
+            a2: load_f64x2([left.a2, right.a2]),
+            z1: load_f64x2([left.z1, right.z1]),
+            z2: load_f64x2([left.z2, right.z2]),
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, input: float64x2_t) -> float64x2_t {
+        // Separate multiply/add/subtract instructions preserve the scalar
+        // transposed-direct-form-II operation order lane by lane.
+        let output = unsafe { vaddq_f64(vmulq_f64(self.b0, input), self.z1) };
+        self.z1 = unsafe {
+            vaddq_f64(
+                vsubq_f64(vmulq_f64(self.b1, input), vmulq_f64(self.a1, output)),
+                self.z2,
+            )
+        };
+        self.z2 = unsafe { vsubq_f64(vmulq_f64(self.b2, input), vmulq_f64(self.a2, output)) };
+        output
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+struct ColorBandSplitter {
+    stage_zero: [BiquadPair; 4],
+    stage_one: [BiquadPair; 3],
+    preview_blue_stage_two: BiquadPair,
+    green_low_passes: BiquadPair,
+}
+
+#[cfg(target_arch = "aarch64")]
+struct ColorBandVectors {
+    preview_bottom_red: float64x2_t,
+    preview_green_blue: float64x2_t,
+    detail_red_green: float64x2_t,
+    detail_blue: float64x2_t,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Default for ColorBandSplitter {
+    fn default() -> Self {
+        let [preview_bottom] = Butterworth::<1>::low_pass(400.0).stages;
+        let [preview_red_zero, preview_red_one] = Butterworth::<2>::low_pass(160.0).stages;
+        let [preview_green_zero, preview_green_one] = Butterworth::<2>::high_pass(230.0).stages;
+        let [preview_green_low] = Butterworth::<1>::low_pass(900.0).stages;
+        let [preview_blue_zero, preview_blue_one, preview_blue_two] =
+            Butterworth::<3>::high_pass(2_500.0).stages;
+        let [detail_red_zero, detail_red_one] = Butterworth::<2>::low_pass(156.0).stages;
+        let [detail_green_zero, detail_green_one] = Butterworth::<2>::high_pass(210.0).stages;
+        let [detail_green_low] = Butterworth::<1>::low_pass(2_100.0).stages;
+        let [detail_blue_zero, detail_blue_one] = Butterworth::<2>::high_pass(1_255.0).stages;
+        let unused = Biquad::default();
+
+        Self {
+            stage_zero: [
+                BiquadPair::new(preview_bottom, preview_red_zero),
+                BiquadPair::new(preview_green_zero, preview_blue_zero),
+                BiquadPair::new(detail_red_zero, detail_green_zero),
+                BiquadPair::new(detail_blue_zero, unused),
+            ],
+            stage_one: [
+                BiquadPair::new(preview_red_one, preview_green_one),
+                BiquadPair::new(preview_blue_one, detail_red_one),
+                BiquadPair::new(detail_green_one, detail_blue_one),
+            ],
+            preview_blue_stage_two: BiquadPair::new(preview_blue_two, unused),
+            green_low_passes: BiquadPair::new(preview_green_low, detail_green_low),
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl ColorBandSplitter {
+    #[inline(always)]
+    fn process_vectors(&mut self, sample: f64) -> ColorBandVectors {
+        let input = unsafe { vdupq_n_f64(sample) };
+        let zero = unsafe { vdupq_n_f64(0.0) };
+        let sample_zero = unsafe { vuzp1q_f64(input, zero) };
+        let preview_bottom_red_zero = self.stage_zero[0].process(input);
+        let preview_green_blue_zero = self.stage_zero[1].process(input);
+        let detail_red_green_zero = self.stage_zero[2].process(input);
+        let detail_blue_zero = self.stage_zero[3].process(sample_zero);
+
+        let preview_red_green_high = self.stage_one[0]
+            .process(unsafe { vextq_f64::<1>(preview_bottom_red_zero, preview_green_blue_zero) });
+        let preview_blue_one_detail_red = self.stage_one[1]
+            .process(unsafe { vextq_f64::<1>(preview_green_blue_zero, detail_red_green_zero) });
+        let detail_green_high_blue = self.stage_one[2]
+            .process(unsafe { vextq_f64::<1>(detail_red_green_zero, detail_blue_zero) });
+        let preview_blue = self
+            .preview_blue_stage_two
+            .process(unsafe { vuzp1q_f64(preview_blue_one_detail_red, zero) });
+        let preview_green_detail_green = self
+            .green_low_passes
+            .process(unsafe { vextq_f64::<1>(preview_red_green_high, detail_green_high_blue) });
+
+        ColorBandVectors {
+            preview_bottom_red: unsafe {
+                vuzp1q_f64(preview_bottom_red_zero, preview_red_green_high)
+            },
+            preview_green_blue: unsafe {
+                vmulq_f64(
+                    vuzp1q_f64(preview_green_detail_green, preview_blue),
+                    load_f64x2([COLOR_PREVIEW_GREEN_GAIN, COLOR_PREVIEW_BLUE_GAIN]),
+                )
+            },
+            detail_red_green: unsafe {
+                vuzp2q_f64(preview_blue_one_detail_red, preview_green_detail_green)
+            },
+            detail_blue: unsafe { vuzp2q_f64(detail_green_high_blue, zero) },
+        }
+    }
+
+    #[cfg(test)]
+    fn process(&mut self, sample: f64) -> ColorBands {
+        let vectors = self.process_vectors(sample);
+        let [preview_bottom, preview_red] = store_f64x2(vectors.preview_bottom_red);
+        let [preview_green, preview_blue] = store_f64x2(vectors.preview_green_blue);
+        let [detail_red, detail_green] = store_f64x2(vectors.detail_red_green);
+        let [detail_blue, _] = store_f64x2(vectors.detail_blue);
+        ColorBands {
+            preview_bottom,
+            preview_red,
+            preview_green,
+            preview_blue,
+            detail_red,
+            detail_green,
+            detail_blue,
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn load_f64x2(values: [f64; 2]) -> float64x2_t {
+    // SAFETY: `values` always contains exactly two contiguous `f64` lanes.
+    unsafe { vld1q_f64(values.as_ptr()) }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn store_f64x2(value: float64x2_t) -> [f64; 2] {
+    let mut values = [0.0; 2];
+    // SAFETY: `values` always has writable storage for exactly two `f64` lanes.
+    unsafe { vst1q_f64(values.as_mut_ptr(), value) };
+    values
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
+    let mut splitter = ScalarBandSplitter::default();
+    let mut color_splitter = ScalarColorBandSplitter::default();
     pcm.detail_frames()
         .map(|frame| {
-            let mut peak = 0.0_f64;
-            let mut sum_square = 0.0_f64;
-            let mut color_preview_bottom = 0.0_f64;
-            let mut color_preview_red = 0.0_f64;
-            let mut color_preview_green = 0.0_f64;
-            let mut color_preview_blue = 0.0_f64;
-            let mut color_detail_red_square = 0.0_f64;
-            let mut color_detail_green_square = 0.0_f64;
-            let mut color_detail_blue_square = 0.0_f64;
-            let mut low_square = 0.0_f64;
-            let mut mid_square = 0.0_f64;
-            let mut high_square = 0.0_f64;
-            for sample in frame.valid_samples() {
-                let sample = f64::from(*sample);
-                peak = peak.max(sample.abs());
-                sum_square += sample * sample;
-                let color = color_splitter.process(sample);
-                color_preview_bottom = color_preview_bottom.max(color.preview_bottom.abs());
-                color_preview_red = color_preview_red.max(color.preview_red.abs());
-                color_preview_green = color_preview_green.max(color.preview_green.abs());
-                color_preview_blue = color_preview_blue.max(color.preview_blue.abs());
-                color_detail_red_square += color.detail_red * color.detail_red;
-                color_detail_green_square += color.detail_green * color.detail_green;
-                color_detail_blue_square += color.detail_blue * color.detail_blue;
-                let (low, mid, high) = splitter.process(sample);
-                low_square += low * low;
-                mid_square += mid * mid;
-                high_square += high * high;
-            }
-            let denominator = DETAIL_FRAME_SAMPLES as f64;
-            FrameFeatures {
-                peak,
-                rms: (sum_square / denominator).sqrt(),
-                color_preview_bottom,
-                color_preview_red,
-                color_preview_green,
-                color_preview_blue,
-                color_detail_red: (color_detail_red_square / denominator).sqrt(),
-                color_detail_green: (color_detail_green_square / denominator).sqrt(),
-                color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
-                low: (low_square / denominator).sqrt(),
-                mid: (mid_square / denominator).sqrt(),
-                high: (high_square / denominator).sqrt(),
-            }
+            extract_detail_frame_scalar(frame.valid_samples(), &mut splitter, &mut color_splitter)
         })
         .collect()
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+fn extract_detail_frame_scalar(
+    samples: &[f32],
+    splitter: &mut ScalarBandSplitter,
+    color_splitter: &mut ScalarColorBandSplitter,
+) -> FrameFeatures {
+    let mut peak = 0.0_f64;
+    let mut sum_square = 0.0_f64;
+    let mut color_preview_bottom = 0.0_f64;
+    let mut color_preview_red = 0.0_f64;
+    let mut color_preview_green = 0.0_f64;
+    let mut color_preview_blue = 0.0_f64;
+    let mut color_detail_red_square = 0.0_f64;
+    let mut color_detail_green_square = 0.0_f64;
+    let mut color_detail_blue_square = 0.0_f64;
+    let mut low_square = 0.0_f64;
+    let mut mid_square = 0.0_f64;
+    let mut high_square = 0.0_f64;
+    for sample in samples {
+        let sample = f64::from(*sample);
+        peak = peak.max(sample.abs());
+        sum_square += sample * sample;
+        let color = color_splitter.process(sample);
+        color_preview_bottom = color_preview_bottom.max(color.preview_bottom.abs());
+        color_preview_red = color_preview_red.max(color.preview_red.abs());
+        color_preview_green = color_preview_green.max(color.preview_green.abs());
+        color_preview_blue = color_preview_blue.max(color.preview_blue.abs());
+        color_detail_red_square += color.detail_red * color.detail_red;
+        color_detail_green_square += color.detail_green * color.detail_green;
+        color_detail_blue_square += color.detail_blue * color.detail_blue;
+        let (low, mid, high) = splitter.process(sample);
+        low_square += low * low;
+        mid_square += mid * mid;
+        high_square += high * high;
+    }
+    let denominator = DETAIL_FRAME_SAMPLES as f64;
+    FrameFeatures {
+        peak,
+        rms: (sum_square / denominator).sqrt(),
+        color_preview_bottom,
+        color_preview_red,
+        color_preview_green,
+        color_preview_blue,
+        color_detail_red: (color_detail_red_square / denominator).sqrt(),
+        color_detail_green: (color_detail_green_square / denominator).sqrt(),
+        color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
+        low: (low_square / denominator).sqrt(),
+        mid: (mid_square / denominator).sqrt(),
+        high: (high_square / denominator).sqrt(),
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
+    extract_detail_features_scalar(pcm)
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn extract_detail_frame(
+    samples: &[f32],
+    splitter: &mut BandSplitter,
+    color_splitter: &mut ColorBandSplitter,
+) -> FrameFeatures {
+    extract_detail_frame_scalar(samples, splitter, color_splitter)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
+    let frame_count = pcm.len().div_ceil(DETAIL_FRAME_SAMPLES);
+    if frame_count == 0 {
+        return Vec::new();
+    }
+    let worker_count = rayon::current_num_threads()
+        .min(frame_count.div_ceil(MIN_PARALLEL_CHUNK_FRAMES))
+        .max(1);
+    let chunk_len = frame_count.div_ceil(worker_count);
+    (0..frame_count)
+        .step_by(chunk_len)
+        .map(|start| start..(start + chunk_len).min(frame_count))
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|range| extract_detail_feature_range(pcm, range))
+        .flatten()
+        .collect()
+}
+
+#[cfg(target_arch = "aarch64")]
+fn extract_detail_feature_range(
+    pcm: &MonoPcm,
+    range: std::ops::Range<usize>,
+) -> Vec<FrameFeatures> {
+    let mut splitter = BandSplitter::default();
+    let mut color_splitter = ColorBandSplitter::default();
+    let warm_start = range.start.saturating_sub(FILTER_PREROLL_FRAMES);
+    let mut features = Vec::with_capacity(range.len());
+    for frame_index in warm_start..range.end {
+        let start = frame_index * DETAIL_FRAME_SAMPLES;
+        let end = (start + DETAIL_FRAME_SAMPLES).min(pcm.len());
+        let feature = extract_detail_frame(
+            &pcm.samples()[start..end],
+            &mut splitter,
+            &mut color_splitter,
+        );
+        if frame_index >= range.start {
+            features.push(feature);
+        }
+    }
+    features
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+fn extract_detail_frame(
+    samples: &[f32],
+    splitter: &mut BandSplitter,
+    color_splitter: &mut ColorBandSplitter,
+) -> FrameFeatures {
+    let mut peak = 0.0_f64;
+    let mut color_preview_bottom_red = unsafe { vdupq_n_f64(0.0) };
+    let mut color_preview_green_blue = unsafe { vdupq_n_f64(0.0) };
+    let mut color_detail_red_green_square = unsafe { vdupq_n_f64(0.0) };
+    let mut color_detail_blue_square = unsafe { vdupq_n_f64(0.0) };
+    let mut low_mid_square = unsafe { vdupq_n_f64(0.0) };
+    let mut sample_high_square = unsafe { vdupq_n_f64(0.0) };
+    for sample in samples {
+        let sample = f64::from(*sample);
+        peak = peak.max(sample.abs());
+        let color = color_splitter.process_vectors(sample);
+        color_preview_bottom_red = unsafe {
+            vmaxq_f64(
+                color_preview_bottom_red,
+                vabsq_f64(color.preview_bottom_red),
+            )
+        };
+        color_preview_green_blue = unsafe {
+            vmaxq_f64(
+                color_preview_green_blue,
+                vabsq_f64(color.preview_green_blue),
+            )
+        };
+        color_detail_red_green_square = unsafe {
+            vaddq_f64(
+                color_detail_red_green_square,
+                vmulq_f64(color.detail_red_green, color.detail_red_green),
+            )
+        };
+        color_detail_blue_square = unsafe {
+            vaddq_f64(
+                color_detail_blue_square,
+                vmulq_f64(color.detail_blue, color.detail_blue),
+            )
+        };
+        let (low_mid, sample_high) = splitter.process_vectors(sample);
+        low_mid_square = unsafe { vaddq_f64(low_mid_square, vmulq_f64(low_mid, low_mid)) };
+        sample_high_square =
+            unsafe { vaddq_f64(sample_high_square, vmulq_f64(sample_high, sample_high)) };
+    }
+    let [color_preview_bottom, color_preview_red] = store_f64x2(color_preview_bottom_red);
+    let [color_preview_green, color_preview_blue] = store_f64x2(color_preview_green_blue);
+    let [color_detail_red_square, color_detail_green_square] =
+        store_f64x2(color_detail_red_green_square);
+    let [color_detail_blue_square, _] = store_f64x2(color_detail_blue_square);
+    let [low_square, mid_square] = store_f64x2(low_mid_square);
+    let [sum_square, high_square] = store_f64x2(sample_high_square);
+    let denominator = DETAIL_FRAME_SAMPLES as f64;
+    FrameFeatures {
+        peak,
+        rms: (sum_square / denominator).sqrt(),
+        color_preview_bottom,
+        color_preview_red,
+        color_preview_green,
+        color_preview_blue,
+        color_detail_red: (color_detail_red_square / denominator).sqrt(),
+        color_detail_green: (color_detail_green_square / denominator).sqrt(),
+        color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
+        low: (low_square / denominator).sqrt(),
+        mid: (mid_square / denominator).sqrt(),
+        high: (high_square / denominator).sqrt(),
+    }
+}
+
+pub(crate) struct StreamingWaveformAccumulator {
+    splitter: BandSplitter,
+    color_splitter: ColorBandSplitter,
+    pending: Vec<f32>,
+    features: Vec<FrameFeatures>,
+}
+
+impl StreamingWaveformAccumulator {
+    pub(crate) fn new() -> Self {
+        Self {
+            splitter: BandSplitter::default(),
+            color_splitter: ColorBandSplitter::default(),
+            pending: Vec::with_capacity(DETAIL_FRAME_SAMPLES),
+            features: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, mut samples: &[f32]) {
+        if !self.pending.is_empty() {
+            let consumed = (DETAIL_FRAME_SAMPLES - self.pending.len()).min(samples.len());
+            self.pending.extend_from_slice(&samples[..consumed]);
+            samples = &samples[consumed..];
+            if self.pending.len() == DETAIL_FRAME_SAMPLES {
+                self.features.push(extract_detail_frame(
+                    &self.pending,
+                    &mut self.splitter,
+                    &mut self.color_splitter,
+                ));
+                self.pending.clear();
+            }
+        }
+
+        let complete_len = samples.len() / DETAIL_FRAME_SAMPLES * DETAIL_FRAME_SAMPLES;
+        for frame in samples[..complete_len].chunks_exact(DETAIL_FRAME_SAMPLES) {
+            self.features.push(extract_detail_frame(
+                frame,
+                &mut self.splitter,
+                &mut self.color_splitter,
+            ));
+        }
+        self.pending.extend_from_slice(&samples[complete_len..]);
+    }
+
+    pub(crate) fn finish(mut self) -> WaveformData {
+        if !self.pending.is_empty() {
+            self.features.push(extract_detail_frame(
+                &self.pending,
+                &mut self.splitter,
+                &mut self.color_splitter,
+            ));
+        }
+        pack_waveforms(&self.features)
+    }
 }
 
 fn reduce_features(features: &[FrameFeatures], width: usize) -> Vec<FrameFeatures> {
@@ -612,6 +1045,117 @@ fn calibrated_preview_level(level: u8, gain: f64, power: f64) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_batches_preserve_packed_waveforms() {
+        let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 3)
+            .map(|index| {
+                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+                (0.55 * (phase * 83.0).sin()
+                    + 0.27 * (phase * 719.0).sin()
+                    + 0.12 * (phase * 4_117.0).sin()) as f32
+            })
+            .collect::<Vec<_>>();
+        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples.clone()).expect("PCM");
+        let expected = WaveformData::generate(&pcm).expect("waveforms");
+        let mut accumulator = StreamingWaveformAccumulator::new();
+        for chunk in samples.chunks(997) {
+            accumulator.push(chunk);
+        }
+        assert_eq!(accumulator.finish(), expected);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_simd_filter_bank_is_scalar_bit_exact() {
+        let mut scalar_bands = ScalarBandSplitter::default();
+        let mut simd_bands = BandSplitter::default();
+        let mut scalar_colors = ScalarColorBandSplitter::default();
+        let mut simd_colors = ColorBandSplitter::default();
+
+        for index in 0..44_100 {
+            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+            let sample = 0.55 * (phase * 83.0).sin()
+                + 0.27 * (phase * 719.0).sin()
+                + 0.12 * (phase * 4_117.0).sin();
+            let scalar_band_values = scalar_bands.process(sample);
+            let simd_band_values = simd_bands.process(sample);
+            for (scalar, simd) in [
+                (scalar_band_values.0, simd_band_values.0),
+                (scalar_band_values.1, simd_band_values.1),
+                (scalar_band_values.2, simd_band_values.2),
+            ] {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+
+            let scalar = scalar_colors.process(sample);
+            let simd = simd_colors.process(sample);
+            for (scalar, simd) in [
+                (scalar.preview_bottom, simd.preview_bottom),
+                (scalar.preview_red, simd.preview_red),
+                (scalar.preview_green, simd.preview_green),
+                (scalar.preview_blue, simd.preview_blue),
+                (scalar.detail_red, simd.detail_red),
+                (scalar.detail_green, simd.detail_green),
+                (scalar.detail_blue, simd.detail_blue),
+            ] {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_simd_feature_accumulation_is_scalar_bit_exact() {
+        let samples = (0..44_100)
+            .map(|index| {
+                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+                (0.55 * (phase * 83.0).sin()
+                    + 0.27 * (phase * 719.0).sin()
+                    + 0.12 * (phase * 4_117.0).sin()) as f32
+            })
+            .collect();
+        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
+        let scalar = extract_detail_features_scalar(&pcm);
+        let simd = extract_detail_features(&pcm);
+        assert_eq!(scalar.len(), simd.len());
+        for (scalar, simd) in scalar.iter().zip(simd) {
+            for (scalar, simd) in [
+                (scalar.peak, simd.peak),
+                (scalar.rms, simd.rms),
+                (scalar.color_preview_bottom, simd.color_preview_bottom),
+                (scalar.color_preview_red, simd.color_preview_red),
+                (scalar.color_preview_green, simd.color_preview_green),
+                (scalar.color_preview_blue, simd.color_preview_blue),
+                (scalar.color_detail_red, simd.color_detail_red),
+                (scalar.color_detail_green, simd.color_detail_green),
+                (scalar.color_detail_blue, simd.color_detail_blue),
+                (scalar.low, simd.low),
+                (scalar.mid, simd.mid),
+                (scalar.high, simd.high),
+            ] {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_parallel_feature_chunks_preserve_packed_waveforms() {
+        let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 42)
+            .map(|index| {
+                let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+                (0.55 * (phase * 83.0).sin()
+                    + 0.27 * (phase * 719.0).sin()
+                    + 0.12 * (phase * 4_117.0).sin()) as f32
+            })
+            .collect();
+        let pcm = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
+        let scalar = extract_detail_features_scalar(&pcm);
+        let parallel = extract_detail_features(&pcm);
+        assert_eq!(scalar.len(), parallel.len());
+        assert_eq!(pack_waveforms(&scalar), pack_waveforms(&parallel));
+    }
 
     #[test]
     fn height_uses_peak_power_without_changing_band_loudness_curve() {

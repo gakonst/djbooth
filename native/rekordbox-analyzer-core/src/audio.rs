@@ -64,7 +64,11 @@ impl DecodedAudio {
 
     /// Resample the decoded mono signal to 44.1 kHz.
     pub fn into_analysis_pcm(self) -> Result<MonoPcm> {
-        self.mono.resample_linear(ANALYSIS_SAMPLE_RATE)
+        if self.mono.sample_rate == ANALYSIS_SAMPLE_RATE {
+            Ok(self.mono)
+        } else {
+            self.mono.resample_linear(ANALYSIS_SAMPLE_RATE)
+        }
     }
 }
 
@@ -77,23 +81,19 @@ pub struct MonoPcm {
 
 impl MonoPcm {
     /// Validate and construct normalized mono PCM.
-    pub fn new(sample_rate: u32, samples: Vec<f32>) -> Result<Self> {
+    pub fn new(sample_rate: u32, mut samples: Vec<f32>) -> Result<Self> {
         if sample_rate == 0 {
             bail!("mono PCM sample rate must be nonzero");
         }
-        if let Some((index, _)) = samples
-            .iter()
-            .enumerate()
-            .find(|(_, sample)| !sample.is_finite())
-        {
-            bail!("mono PCM sample {index} is not finite");
+        for (index, sample) in samples.iter_mut().enumerate() {
+            if !sample.is_finite() {
+                bail!("mono PCM sample {index} is not finite");
+            }
+            *sample = sample.clamp(-1.0, 1.0);
         }
         Ok(Self {
             sample_rate,
-            samples: samples
-                .into_iter()
-                .map(|sample| sample.clamp(-1.0, 1.0))
-                .collect(),
+            samples,
         })
     }
 
@@ -167,7 +167,10 @@ impl MonoPcm {
             output.push((left + (right - left) * fraction) as f32);
         }
 
-        Self::new(target_rate, output)
+        Ok(Self {
+            sample_rate: target_rate,
+            samples: output,
+        })
     }
 
     /// Borrow the signal as fixed-width, fixed-hop frames.
@@ -345,12 +348,23 @@ impl<'a> Iterator for PcmFrames<'a> {
 
 impl ExactSizeIterator for PcmFrames<'_> {}
 
-/// Decode a local audio file to equal-weight mono PCM with scalar Symphonia codecs.
+/// Decode a local audio file to equal-weight mono PCM with Symphonia codecs.
 ///
 /// Decoder errors fail the operation rather than silently dropping packets. All
-/// selected Symphonia features are pure Rust and redistributable; SIMD features
-/// are disabled so output does not depend on host vector instruction selection.
+/// selected Symphonia features are pure Rust and redistributable. Architecture-
+/// appropriate SIMD kernels accelerate codec transforms.
 pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
+    decode_audio_file_with_progress(path, usize::MAX, |_, _, _| Ok(()))
+}
+
+pub(crate) fn decode_audio_file_with_progress(
+    path: impl AsRef<Path>,
+    progress_interval_frames: usize,
+    mut progress: impl FnMut(u32, &[f32], bool) -> Result<()>,
+) -> Result<DecodedAudio> {
+    if progress_interval_frames == 0 {
+        bail!("decode progress interval must be nonzero");
+    }
     let path = path.as_ref();
     let file = File::open(path)
         .with_context(|| format!("failed to open audio file {}", path.display()))?;
@@ -377,6 +391,10 @@ pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
         .and_then(|parameters| parameters.audio())
         .context("audio track has no codec parameters")?
         .clone();
+    let expected_frames = track
+        .num_frames
+        .and_then(|frames| usize::try_from(frames).ok())
+        .unwrap_or_default();
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
         .context("failed to create audio decoder")?;
@@ -384,7 +402,8 @@ pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
     let mut decoded_sample_rate = None;
     let mut decoded_channels = None;
     let mut interleaved = Vec::<f32>::new();
-    let mut mono = Vec::<f32>::new();
+    let mut mono = Vec::<f32>::with_capacity(expected_frames);
+    let mut next_progress = progress_interval_frames;
 
     while let Some(packet) = format
         .next_packet()
@@ -432,10 +451,15 @@ pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
             })?;
             mono.push((sum / channels as f64).clamp(-1.0, 1.0) as f32);
         }
+        if mono.len() >= next_progress {
+            progress(sample_rate, &mono, false)?;
+            next_progress = mono.len().saturating_add(progress_interval_frames);
+        }
     }
 
     let sample_rate = decoded_sample_rate.context("audio decoder produced no sample buffers")?;
     let channels = decoded_channels.context("audio decoder produced no channel layout")?;
+    progress(sample_rate, &mono, true)?;
     let decoded_frames = mono.len();
     Ok(DecodedAudio {
         source: AudioSourceInfo {
@@ -443,7 +467,11 @@ pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
             channels,
             decoded_frames,
         },
-        mono: MonoPcm::new(sample_rate, mono)?,
+        // Every decoded sample was checked and clamped while mixing above.
+        mono: MonoPcm {
+            sample_rate,
+            samples: mono,
+        },
     })
 }
 

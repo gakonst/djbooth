@@ -119,7 +119,7 @@ analyzeCli.command("track", {
       .max(64)
       .optional()
       .describe(
-        `Native CPU workers; defaults to the profiled single-track sweet spot (${String(DEFAULT_ANALYZER_TRACK_THREADS)} here)`,
+        `Pipelined native CPU workers; defaults to the profiled single-track sweet spot (${String(DEFAULT_ANALYZER_TRACK_THREADS)} here)`,
       ),
   }),
   async run(c) {
@@ -151,7 +151,7 @@ analyzeCli.command("tracks", {
       .max(64)
       .optional()
       .describe(
-        `Parallel analyzer workers; CPU-adaptive default ${String(DEFAULT_ANALYZER_CONCURRENCY)} here; raise this and --threads together to oversubscribe (max 64)`,
+        `Parallel analyzer processes; profiled CPU-adaptive default ${String(DEFAULT_ANALYZER_CONCURRENCY)} here (max 64)`,
       ),
     engine: z
       .enum(["clean", "reference"])
@@ -174,7 +174,7 @@ analyzeCli.command("tracks", {
       .max(64)
       .optional()
       .describe(
-        `Total native CPU budget shared across analyzer workers; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here); raise with --concurrency to oversubscribe`,
+        `Total native CPU budget shared across analyzer processes; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
       ),
   }),
   async run(c) {

@@ -1,6 +1,8 @@
 use std::io::Write;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
@@ -11,10 +13,20 @@ use crate::anlz::{
     AnlzFile, AnlzTag, DatAnalysis, ExtendedBeatGrid, ThreeBandAnalysis, WaveformColorConfig,
     build_empty_cue_tag, build_path_tag,
 };
-use crate::audio::{ANALYSIS_SAMPLE_RATE, AudioSourceInfo, decode_audio_file};
-use crate::key::{KeyAnalysis, analyze_key};
-use crate::rhythm::{BeatAnalysis, analyze_beats};
-use crate::waveform::WaveformData;
+use crate::audio::{
+    ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, decode_audio_file,
+    decode_audio_file_with_progress,
+};
+use crate::key::{
+    FFT_SIZE as KEY_FFT_SIZE, HOP_SIZE as KEY_HOP_SIZE, KeyAnalysis, KeyFeaturePlan,
+    RawChromaFeatures, analyze_key, analyze_key_from_raw,
+};
+use crate::rhythm::{
+    BeatAnalysis, FFT_SIZE as BEAT_FFT_SIZE, HOP_SIZE as BEAT_HOP_SIZE, OnsetEnvelopes,
+    SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
+    analyze_beats_from_streamed_features, normalize_spectral_flux,
+};
+use crate::waveform::{StreamingWaveformAccumulator, WaveformData};
 
 const OUTPUT_NAMES: [(&str, &str); 3] = [
     ("DAT", "ANLZ0000.DAT"),
@@ -22,6 +34,9 @@ const OUTPUT_NAMES: [(&str, &str); 3] = [
     ("2EX", "ANLZ0000.2EX"),
 ];
 const VBR_ENTRY_COUNT: usize = 400;
+const STREAMING_BATCH_FRAMES: usize = ANALYSIS_SAMPLE_RATE as usize * 5;
+/// Profiled single-track worker default.
+pub const DEFAULT_ANALYZER_THREADS: usize = 8;
 /// Hard ceiling for one analyzer process.
 pub const MAX_ANALYZER_THREADS: usize = 64;
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -43,13 +58,13 @@ impl AnalysisOptions {
         Ok(Self { threads })
     }
 
-    /// Use the host's available parallelism, within the analyzer ceiling.
+    /// Use the profiled default, bounded by the host's available parallelism.
     pub fn automatic() -> Self {
         Self {
             threads: std::thread::available_parallelism()
                 .map(usize::from)
                 .unwrap_or(1)
-                .clamp(1, MAX_ANALYZER_THREADS),
+                .clamp(1, DEFAULT_ANALYZER_THREADS),
         }
     }
 
@@ -157,25 +172,54 @@ pub fn analyze_audio_file_with_options(
     options: AnalysisOptions,
 ) -> Result<GeneratedAnalysis> {
     let path = path.as_ref();
-    let decoded = decode_audio_file(path)?;
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(options.threads())
+        .thread_name(|index| format!("rekordbox-analyzer-{index}"))
+        .build()
+        .context("failed to create analyzer worker pool")?;
+    let (decoded, streamed_features) = if options.threads() > 1 {
+        decode_with_streaming_features(path, &pool)?
+    } else {
+        (decode_audio_file(path)?, None)
+    };
     let source = decoded.source();
     let pcm = decoded.into_analysis_pcm()?;
     if pcm.is_empty() {
         bail!("decoded audio contains no PCM frames");
     }
 
-    let pool = ThreadPoolBuilder::new()
-        .num_threads(options.threads())
-        .thread_name(|index| format!("rekordbox-analyzer-{index}"))
-        .build()
-        .context("failed to create analyzer worker pool")?;
+    let (streamed_waveforms, streamed_onset, streamed_time_domain, streamed_key) =
+        streamed_features
+            .map(|features| {
+                (
+                    Some(features.waveforms),
+                    Some(features.onset),
+                    Some(features.time_domain),
+                    Some(features.key),
+                )
+            })
+            .unwrap_or_default();
     let (waveforms, (beat, key)) = pool.install(|| {
         rayon::join(
-            || WaveformData::generate(&pcm),
+            || match streamed_waveforms {
+                Some(waveforms) => Ok(waveforms),
+                None => WaveformData::generate(&pcm),
+            },
             || {
                 rayon::join(
-                    || analyze_beats(pcm.samples(), pcm.sample_rate()),
-                    || analyze_key(pcm.samples(), pcm.sample_rate()),
+                    || match (streamed_onset, streamed_time_domain) {
+                        (Some(onset), Some(time_domain)) => analyze_beats_from_streamed_features(
+                            pcm.samples(),
+                            pcm.sample_rate(),
+                            onset,
+                            time_domain,
+                        ),
+                        _ => analyze_beats(pcm.samples(), pcm.sample_rate()),
+                    },
+                    || match streamed_key {
+                        Some(raw) => analyze_key_from_raw(raw, pcm.sample_rate()),
+                        None => analyze_key(pcm.samples(), pcm.sample_rate()),
+                    },
                 )
             },
         )
@@ -265,6 +309,281 @@ pub fn analyze_audio_file_with_options(
         source,
         duration_seconds: pcm.duration_seconds(),
     })
+}
+
+struct StreamedFeatures {
+    waveforms: WaveformData,
+    onset: OnsetEnvelopes,
+    time_domain: TimeDomainEnvelopes,
+    key: RawChromaFeatures,
+}
+
+#[derive(Clone)]
+struct StreamedPcmBatch {
+    samples: Arc<[f32]>,
+    range: Range<usize>,
+}
+
+enum StreamedPcmMessage {
+    Samples(StreamedPcmBatch),
+    Complete { beat_frame_count: usize },
+    Abort,
+}
+
+fn decode_with_streaming_features(
+    path: &Path,
+    pool: &rayon::ThreadPool,
+) -> Result<(DecodedAudio, Option<StreamedFeatures>)> {
+    let beat_plan = SpectralFluxPlan::new();
+    let key_plan = KeyFeaturePlan::new(ANALYSIS_SAMPLE_RATE);
+    let (beat_sender, beat_receiver) = mpsc::channel();
+    let (key_sender, key_receiver) = mpsc::channel();
+    let (waveform_sender, waveform_receiver) = mpsc::channel();
+    let (waveform_result_sender, waveform_result_receiver) = mpsc::channel();
+    let (time_domain_sender, time_domain_receiver) = mpsc::channel();
+    let (time_domain_result_sender, time_domain_result_receiver) = mpsc::channel();
+
+    let (decoded, beat_jobs, key_jobs, streaming_active) = pool.install(|| {
+        rayon::scope(|scope| -> Result<_> {
+            let mut waveform_receiver = Some(waveform_receiver);
+            let mut time_domain_receiver = Some(time_domain_receiver);
+            let mut next_beat_frame = 0usize;
+            let mut next_key_frame = 0usize;
+            let mut next_stream_sample = 0usize;
+            let mut beat_jobs = 0usize;
+            let mut key_jobs = 0usize;
+            let mut streaming_active = false;
+            let decoded = decode_audio_file_with_progress(
+                path,
+                STREAMING_BATCH_FRAMES,
+                |sample_rate, samples, complete| {
+                    if sample_rate != ANALYSIS_SAMPLE_RATE {
+                        return Ok(());
+                    }
+                    if !complete {
+                        if !streaming_active {
+                            streaming_active = true;
+                            let receiver = waveform_receiver
+                                .take()
+                                .expect("waveform receiver starts once");
+                            let sender = waveform_result_sender.clone();
+                            scope.spawn(move |_| {
+                                consume_streamed_waveforms(receiver, sender);
+                            });
+                            let receiver = time_domain_receiver
+                                .take()
+                                .expect("time-domain receiver starts once");
+                            let sender = time_domain_result_sender.clone();
+                            scope.spawn(move |_| {
+                                consume_streamed_time_domain(receiver, sender);
+                            });
+                        }
+                    } else if !streaming_active {
+                        return Ok(());
+                    }
+
+                    let beat_frame_count =
+                        complete_frame_count(samples.len(), BEAT_FFT_SIZE, BEAT_HOP_SIZE);
+                    let key_frame_count =
+                        complete_frame_count(samples.len(), KEY_FFT_SIZE, KEY_HOP_SIZE);
+                    let beat_range = next_beat_frame..beat_frame_count;
+                    let key_range = next_key_frame..key_frame_count;
+                    if beat_range.is_empty()
+                        && key_range.is_empty()
+                        && next_stream_sample == samples.len()
+                    {
+                        if complete {
+                            waveform_sender
+                                .send(StreamedPcmMessage::Complete { beat_frame_count })
+                                .context("streaming waveform worker disconnected")?;
+                            time_domain_sender
+                                .send(StreamedPcmMessage::Complete { beat_frame_count })
+                                .context("streaming time-domain worker disconnected")?;
+                        }
+                        return Ok(());
+                    }
+
+                    let beat_start = (!beat_range.is_empty())
+                        .then(|| beat_range.start.saturating_sub(1) * BEAT_HOP_SIZE);
+                    let key_start = (!key_range.is_empty()).then(|| key_range.start * KEY_HOP_SIZE);
+                    let required_start = beat_start
+                        .into_iter()
+                        .chain(key_start)
+                        .chain([next_stream_sample])
+                        .min()
+                        .unwrap_or_default();
+                    let copy_start = required_start / KEY_HOP_SIZE * KEY_HOP_SIZE;
+                    let beat_end = (!beat_range.is_empty())
+                        .then(|| (beat_range.end - 1) * BEAT_HOP_SIZE + BEAT_FFT_SIZE);
+                    let key_end = (!key_range.is_empty())
+                        .then(|| (key_range.end - 1) * KEY_HOP_SIZE + KEY_FFT_SIZE);
+                    let copy_end = beat_end
+                        .into_iter()
+                        .chain(key_end)
+                        .chain([samples.len()])
+                        .max()
+                        .unwrap_or(copy_start);
+                    let batch = Arc::<[f32]>::from(&samples[copy_start..copy_end]);
+
+                    if !beat_range.is_empty() {
+                        let sender = beat_sender.clone();
+                        let batch = Arc::clone(&batch);
+                        let range_start = beat_range.start;
+                        let local_start =
+                            (beat_range.start * BEAT_HOP_SIZE - copy_start) / BEAT_HOP_SIZE;
+                        let local_range = local_start..local_start + beat_range.len();
+                        let plan = &beat_plan;
+                        scope.spawn(move |_| {
+                            let features = plan.extract(&batch, local_range);
+                            sender
+                                .send((range_start, features))
+                                .expect("streaming beat receiver remains connected");
+                        });
+                        next_beat_frame = beat_range.end;
+                        beat_jobs += 1;
+                    }
+                    if !key_range.is_empty() {
+                        let sender = key_sender.clone();
+                        let batch = Arc::clone(&batch);
+                        let range_start = key_range.start;
+                        let local_start =
+                            (key_range.start * KEY_HOP_SIZE - copy_start) / KEY_HOP_SIZE;
+                        let local_range = local_start..local_start + key_range.len();
+                        let plan = &key_plan;
+                        scope.spawn(move |_| {
+                            let features = plan.extract(&batch, local_range);
+                            sender
+                                .send((range_start, features))
+                                .expect("streaming key receiver remains connected");
+                        });
+                        next_key_frame = key_range.end;
+                        key_jobs += 1;
+                    }
+                    let stream_batch = StreamedPcmBatch {
+                        samples: batch,
+                        range: next_stream_sample - copy_start..samples.len() - copy_start,
+                    };
+                    waveform_sender
+                        .send(StreamedPcmMessage::Samples(stream_batch.clone()))
+                        .context("streaming waveform worker disconnected")?;
+                    time_domain_sender
+                        .send(StreamedPcmMessage::Samples(stream_batch))
+                        .context("streaming time-domain worker disconnected")?;
+                    next_stream_sample = samples.len();
+                    if complete {
+                        waveform_sender
+                            .send(StreamedPcmMessage::Complete { beat_frame_count })
+                            .context("streaming waveform worker disconnected")?;
+                        time_domain_sender
+                            .send(StreamedPcmMessage::Complete { beat_frame_count })
+                            .context("streaming time-domain worker disconnected")?;
+                    }
+                    Ok(())
+                },
+            );
+            if decoded.is_err() && streaming_active {
+                let _ = waveform_sender.send(StreamedPcmMessage::Abort);
+                let _ = time_domain_sender.send(StreamedPcmMessage::Abort);
+            }
+            let decoded = decoded?;
+            Ok((decoded, beat_jobs, key_jobs, streaming_active))
+        })
+    })?;
+
+    if !streaming_active {
+        return Ok((decoded, None));
+    }
+
+    let mut beat_chunks = receive_feature_chunks(&beat_receiver, beat_jobs)?;
+    let mut key_chunks = receive_feature_chunks(&key_receiver, key_jobs)?;
+    beat_chunks.sort_by_key(|(start, _)| *start);
+    key_chunks.sort_by_key(|(start, _)| *start);
+    let mut onset = OnsetEnvelopes::default();
+    for (_, chunk) in beat_chunks {
+        onset.append(chunk);
+    }
+    let mut key = RawChromaFeatures::default();
+    for (_, chunk) in key_chunks {
+        key.append(chunk);
+    }
+    let waveforms = waveform_result_receiver
+        .recv()
+        .context("streaming waveform worker disconnected")?;
+    let time_domain = time_domain_result_receiver
+        .recv()
+        .context("streaming time-domain worker disconnected")?;
+    Ok((
+        decoded,
+        Some(StreamedFeatures {
+            waveforms,
+            onset: normalize_spectral_flux(onset),
+            time_domain,
+            key,
+        }),
+    ))
+}
+
+fn consume_streamed_waveforms(
+    receiver: mpsc::Receiver<StreamedPcmMessage>,
+    result: mpsc::Sender<WaveformData>,
+) {
+    let mut accumulator = StreamingWaveformAccumulator::new();
+    while let Ok(message) = receiver.recv() {
+        match message {
+            StreamedPcmMessage::Samples(batch) => {
+                accumulator.push(&batch.samples[batch.range]);
+            }
+            StreamedPcmMessage::Complete { .. } => {
+                result
+                    .send(accumulator.finish())
+                    .expect("streaming waveform result receiver remains connected");
+                return;
+            }
+            StreamedPcmMessage::Abort => return,
+        }
+    }
+}
+
+fn consume_streamed_time_domain(
+    receiver: mpsc::Receiver<StreamedPcmMessage>,
+    result: mpsc::Sender<TimeDomainEnvelopes>,
+) {
+    let mut accumulator = TimeDomainAccumulator::new(ANALYSIS_SAMPLE_RATE);
+    while let Ok(message) = receiver.recv() {
+        match message {
+            StreamedPcmMessage::Samples(batch) => {
+                accumulator.push(&batch.samples[batch.range]);
+            }
+            StreamedPcmMessage::Complete { beat_frame_count } => {
+                result
+                    .send(accumulator.finish(beat_frame_count))
+                    .expect("streaming time-domain result receiver remains connected");
+                return;
+            }
+            StreamedPcmMessage::Abort => return,
+        }
+    }
+}
+
+fn complete_frame_count(sample_count: usize, frame_size: usize, hop_size: usize) -> usize {
+    if sample_count < frame_size {
+        0
+    } else {
+        1 + (sample_count - frame_size) / hop_size
+    }
+}
+
+fn receive_feature_chunks<T>(
+    receiver: &mpsc::Receiver<(usize, T)>,
+    count: usize,
+) -> Result<Vec<(usize, T)>> {
+    (0..count)
+        .map(|_| {
+            receiver
+                .recv()
+                .context("streaming analysis worker disconnected")
+        })
+        .collect()
 }
 
 /// Analyze one recording, persist all artifacts, and return helper-compatible JSON.
@@ -791,6 +1110,20 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn automatic_worker_budget_uses_the_profiled_single_track_cap() {
+        let available = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1);
+        assert_eq!(
+            AnalysisOptions::automatic().threads(),
+            available.clamp(1, DEFAULT_ANALYZER_THREADS)
+        );
+        assert!(AnalysisOptions::new(MAX_ANALYZER_THREADS).is_ok());
+        assert!(AnalysisOptions::new(0).is_err());
+        assert!(AnalysisOptions::new(MAX_ANALYZER_THREADS + 1).is_err());
+    }
 
     #[test]
     fn mp3_header_parser_accepts_mpeg1_layer3() {

@@ -847,3 +847,33 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   four-track runs measured a `+0.10%` median runtime difference, treated as no
   measurable overhead. The release remains clean-room Rust with no Rekordbox,
   JUCE, FFmpeg, or proprietary runtime dependency.
+
+## Pipelined SIMD analyzer checkpoint (2026-07-28)
+
+- Replaced the long-track decode-then-analyze barrier with a bounded five-second
+  pipeline. Symphonia decode publishes one shared PCM batch to independent beat,
+  key, waveform, and time-domain consumers. Stateful consumers remain ordered;
+  command delivery uses scoped Rayon work plus bounded channels, with no
+  hot-path mutex.
+- Enabled Symphonia's architecture SIMD, reused FFT plans and scratch buffers,
+  fused spectral passes, added deterministic AArch64 NEON waveform filters, and
+  avoided a copy/resample for already-valid 44.1 kHz mono PCM. Short,
+  resampled, and one-thread inputs retain the simpler buffered path.
+- A paired ten-run, eight-thread benchmark on a 491-second AAC/M4A moved from
+  `720.22 ms` to `347.16 ms` median: `2.07x` faster and about `1,415x` real
+  time. A final Samply profile averaged `3.48` occupied cores. The serial AAC
+  decoder, about `315 ms` of process CPU in that profile, is now the critical
+  path rather than the parallel DSP stages.
+- Six and eight threads were effectively tied on AAC; eight won the mixed-codec
+  check, while twelve regressed from topology and cache pressure. The
+  single-track default is now eight. More threads cannot shorten the
+  temporally dependent codec path.
+- A cold 100-track, 8.55-hour corpus completed in `9.46 s` median with both 12
+  and 16 one-thread processes, `9.65 s` with 20, and `9.51 s` with 24. The
+  adaptive batch default remains 12, now `17.0%` faster than the prior
+  `11.402 s` median without the extra memory pressure of oversubscription.
+- Streamed versus buffered analysis produced 300/300 byte-identical artifacts.
+  The 110-track beat-grid oracle remained at 94/110 tracks with `>=0.99` F1,
+  mean F1 `0.878300`, and mean p95 `43.365 ms`. Codec SIMD versus the frozen
+  scalar build changed 9/300 files only: maximum beat drift `0.174 ms` and one
+  quantization level in each of two waveform values.

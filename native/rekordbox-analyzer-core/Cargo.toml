@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 rustfft = "6"
-symphonia = { version = "0.6", default-features = false, features = ["all-codecs", "all-formats", "all-meta"] }
+symphonia = { version = "0.6", default-features = false, features = ["all-codecs", "all-formats", "all-meta", "opt-simd"] }
 
 [dev-dependencies]
 tempfile = "3"

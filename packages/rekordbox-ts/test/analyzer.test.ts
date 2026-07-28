@@ -410,7 +410,7 @@ describe("Rekordbox analyzer wrapper", () => {
       },
     });
     expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET));
-    expect(DEFAULT_ANALYZER_TRACK_THREADS).toBe(Math.min(4, DEFAULT_ANALYZER_THREAD_BUDGET));
+    expect(DEFAULT_ANALYZER_TRACK_THREADS).toBe(Math.min(8, DEFAULT_ANALYZER_THREAD_BUDGET));
     expect(first.concurrency).toBe(2);
     expect(counterValue(doctorCounter)).toBe(1);
     expect(firstProgress.filter((phase) => phase === "started")).toHaveLength(2);

@@ -1,12 +1,12 @@
 use anyhow::{Result, bail};
 use rayon::prelude::*;
-use rustfft::{FftPlanner, num_complex::Complex32};
+use rustfft::{Fft, FftPlanner, num_complex::Complex32};
 use serde::{Deserialize, Serialize};
 
 use crate::anlz::BeatGridEntry;
 
-const FFT_SIZE: usize = 2_048;
-const HOP_SIZE: usize = 512;
+pub(crate) const FFT_SIZE: usize = 2_048;
+pub(crate) const HOP_SIZE: usize = 512;
 const LOW_ONSET_MAX_BIN: usize = 7;
 const BASS_ONSET_MAX_BIN: usize = 12;
 const BODY_ONSET_MAX_BIN: usize = 93;
@@ -34,6 +34,21 @@ pub struct BeatAnalysis {
 /// a 2,048-sample Hann STFT, positive spectral flux, an unbiased
 /// autocorrelation tempo search, and a separate phase search.
 pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> {
+    validate_beat_input(samples, sample_rate)?;
+    analyze_beats_from_validated_onset(samples, sample_rate, spectral_flux(samples), None)
+}
+
+pub(crate) fn analyze_beats_from_streamed_features(
+    samples: &[f32],
+    sample_rate: u32,
+    onset: OnsetEnvelopes,
+    time_domain: TimeDomainEnvelopes,
+) -> Result<BeatAnalysis> {
+    validate_beat_input(samples, sample_rate)?;
+    analyze_beats_from_validated_onset(samples, sample_rate, onset, Some(time_domain))
+}
+
+fn validate_beat_input(samples: &[f32], sample_rate: u32) -> Result<()> {
     if sample_rate == 0 {
         bail!("beat analysis requires a non-zero sample rate");
     }
@@ -43,17 +58,52 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     if samples.iter().any(|sample| !sample.is_finite()) {
         bail!("beat analysis received non-finite PCM");
     }
+    Ok(())
+}
 
-    let onset = spectral_flux(samples);
+fn analyze_beats_from_validated_onset(
+    samples: &[f32],
+    sample_rate: u32,
+    onset: OnsetEnvelopes,
+    precomputed_time_domain: Option<TimeDomainEnvelopes>,
+) -> Result<BeatAnalysis> {
     if onset.full.len() < 8 {
         bail!("beat analysis produced too few onset frames");
     }
     let onset_rate = sample_rate as f32 / HOP_SIZE as f32;
-    let (initial_period, tempo_score, runner_up_score) = estimate_period(&onset.full, onset_rate)?;
-    let (period, initial_phase, mut alignment) = refine_period_and_phase(&onset, initial_period);
-    let selected_phase = robust_phase(&onset, period, initial_phase);
-    let energy_phase = robust_energy_phase(&onset, period, selected_phase);
-    let time_domain = time_domain_envelopes(samples, sample_rate, onset.full.len());
+    let rhythm_seed = || {
+        let (initial_period, tempo_score, runner_up_score) =
+            estimate_period(&onset.full, onset_rate)?;
+        let (period, initial_phase, alignment) = refine_period_and_phase(&onset, initial_period);
+        let selected_phase = robust_phase(&onset, period, initial_phase);
+        let energy_phase = robust_energy_phase(&onset, period, selected_phase);
+        Ok::<_, anyhow::Error>((
+            tempo_score,
+            runner_up_score,
+            period,
+            initial_phase,
+            alignment,
+            selected_phase,
+            energy_phase,
+        ))
+    };
+    let (rhythm_seed, time_domain) = if let Some(time_domain) = precomputed_time_domain {
+        (rhythm_seed()?, time_domain)
+    } else {
+        let (rhythm_seed, time_domain) = rayon::join(rhythm_seed, || {
+            time_domain_envelopes(samples, sample_rate, onset.full.len())
+        });
+        (rhythm_seed?, time_domain)
+    };
+    let (
+        tempo_score,
+        runner_up_score,
+        period,
+        initial_phase,
+        mut alignment,
+        selected_phase,
+        energy_phase,
+    ) = rhythm_seed;
     let time_domain_phase = select_time_domain_phase(&time_domain, period, selected_phase);
     let phase = if energy_phase != selected_phase {
         energy_phase
@@ -152,7 +202,8 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     })
 }
 
-struct OnsetEnvelopes {
+#[derive(Default)]
+pub(crate) struct OnsetEnvelopes {
     full: Vec<f32>,
     low: Vec<f32>,
     body: Vec<f32>,
@@ -163,12 +214,215 @@ struct OnsetEnvelopes {
     bass_energy: Vec<f32>,
 }
 
-struct TimeDomainEnvelopes {
+impl OnsetEnvelopes {
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.full.append(&mut other.full);
+        self.low.append(&mut other.low);
+        self.body.append(&mut other.body);
+        self.kick.append(&mut other.kick);
+        self.bass.append(&mut other.bass);
+        self.mid.append(&mut other.mid);
+        self.kick_energy.append(&mut other.kick_energy);
+        self.bass_energy.append(&mut other.bass_energy);
+    }
+}
+
+pub(crate) struct SpectralFluxPlan {
+    window: Vec<f32>,
+    fft: std::sync::Arc<dyn Fft<f32>>,
+}
+
+impl SpectralFluxPlan {
+    pub(crate) fn new() -> Self {
+        let window = (0..FFT_SIZE)
+            .map(|index| {
+                0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
+            })
+            .collect::<Vec<_>>();
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+        Self { window, fft }
+    }
+
+    pub(crate) fn extract(&self, samples: &[f32], range: std::ops::Range<usize>) -> OnsetEnvelopes {
+        spectral_flux_range(samples, &self.window, self.fft.as_ref(), range)
+    }
+}
+
+pub(crate) struct TimeDomainEnvelopes {
     peak: Vec<f32>,
     rms: Vec<f32>,
     low_rms_local: Vec<f32>,
     mid_rms: Vec<f32>,
     high_rms: Vec<f32>,
+}
+
+pub(crate) struct TimeDomainAccumulator {
+    low_alpha: f32,
+    high_alpha: f32,
+    low_state: f32,
+    high_cut_state: f32,
+    block_samples: usize,
+    block_peak: f32,
+    block_energy: f32,
+    block_low_energy: f32,
+    block_mid_energy: f32,
+    block_high_energy: f32,
+    peak: Vec<f32>,
+    rms: Vec<f32>,
+    low_rms: Vec<f32>,
+    mid_rms: Vec<f32>,
+    high_rms: Vec<f32>,
+}
+
+impl TimeDomainAccumulator {
+    pub(crate) fn new(sample_rate: u32) -> Self {
+        const LOW_CUTOFF_HZ: f32 = 250.0;
+        const HIGH_CUTOFF_HZ: f32 = 4_000.0;
+
+        let sample_rate = sample_rate as f32;
+        Self {
+            low_alpha: 1.0 - (-std::f32::consts::TAU * LOW_CUTOFF_HZ / sample_rate).exp(),
+            high_alpha: 1.0 - (-std::f32::consts::TAU * HIGH_CUTOFF_HZ / sample_rate).exp(),
+            low_state: 0.0,
+            high_cut_state: 0.0,
+            block_samples: 0,
+            block_peak: 0.0,
+            block_energy: 0.0,
+            block_low_energy: 0.0,
+            block_mid_energy: 0.0,
+            block_high_energy: 0.0,
+            peak: Vec::new(),
+            rms: Vec::new(),
+            low_rms: Vec::new(),
+            mid_rms: Vec::new(),
+            high_rms: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, mut samples: &[f32]) {
+        if self.block_samples > 0 {
+            let consumed = (HOP_SIZE - self.block_samples).min(samples.len());
+            self.process_samples(&samples[..consumed]);
+            samples = &samples[consumed..];
+            if self.block_samples == HOP_SIZE {
+                self.finish_block();
+            }
+        }
+
+        let complete_len = samples.len() / HOP_SIZE * HOP_SIZE;
+        for block in samples[..complete_len].chunks_exact(HOP_SIZE) {
+            self.process_samples(block);
+            self.finish_block();
+        }
+        self.process_samples(&samples[complete_len..]);
+    }
+
+    fn process_samples(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            self.low_state += self.low_alpha * (sample - self.low_state);
+            self.high_cut_state += self.high_alpha * (sample - self.high_cut_state);
+            let mid = self.high_cut_state - self.low_state;
+            let high = sample - self.high_cut_state;
+            self.block_peak = self.block_peak.max(sample.abs());
+            self.block_energy += sample * sample;
+            self.block_low_energy += self.low_state * self.low_state;
+            self.block_mid_energy += mid * mid;
+            self.block_high_energy += high * high;
+        }
+        self.block_samples += samples.len();
+    }
+
+    pub(crate) fn finish(mut self, frame_count: usize) -> TimeDomainEnvelopes {
+        if self.block_samples > 0 {
+            self.finish_block();
+        }
+        time_domain_envelopes_from_raw(
+            &self.peak,
+            &self.rms,
+            &self.low_rms,
+            &self.mid_rms,
+            &self.high_rms,
+            frame_count,
+        )
+    }
+
+    fn finish_block(&mut self) {
+        let denominator = self.block_samples.max(1) as f32;
+        self.peak.push(self.block_peak);
+        self.rms.push((self.block_energy / denominator).sqrt());
+        self.low_rms
+            .push((self.block_low_energy / denominator).sqrt());
+        self.mid_rms
+            .push((self.block_mid_energy / denominator).sqrt());
+        self.high_rms
+            .push((self.block_high_energy / denominator).sqrt());
+        self.block_samples = 0;
+        self.block_peak = 0.0;
+        self.block_energy = 0.0;
+        self.block_low_energy = 0.0;
+        self.block_mid_energy = 0.0;
+        self.block_high_energy = 0.0;
+    }
+}
+
+#[derive(Default)]
+struct SpectralFrameAccumulator {
+    full: f32,
+    low: f32,
+    body: f32,
+    kick: f32,
+    bass: f32,
+    mid: f32,
+    kick_power: f32,
+    bass_power: f32,
+}
+
+impl SpectralFrameAccumulator {
+    #[inline(always)]
+    fn accumulate<
+        const LOW: bool,
+        const BODY: bool,
+        const KICK: bool,
+        const BASS: bool,
+        const MID: bool,
+    >(
+        &mut self,
+        bin: Complex32,
+        previous: &mut f32,
+    ) {
+        let magnitude = compressed_magnitude(bin);
+        let difference = (magnitude - *previous).max(0.0);
+        self.full += difference;
+        if LOW {
+            self.low += difference;
+        }
+        if BODY {
+            self.body += difference;
+        }
+        if KICK {
+            self.kick += difference;
+        }
+        if BASS {
+            self.bass += difference;
+        }
+        if MID {
+            self.mid += difference;
+        }
+        if BASS {
+            let power = bin.norm_sqr();
+            if KICK {
+                self.kick_power += power;
+            }
+            self.bass_power += power;
+        }
+        *previous = magnitude;
+    }
+}
+
+#[inline(always)]
+fn compressed_magnitude(bin: Complex32) -> f32 {
+    (1.0 + 10.0 * bin.norm()).ln()
 }
 
 fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
@@ -190,11 +444,7 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
             bass_energy: Vec::new(),
         };
     }
-    let window = (0..FFT_SIZE)
-        .map(|index| {
-            0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
-        })
-        .collect::<Vec<_>>();
+    let plan = SpectralFluxPlan::new();
     let worker_count = rayon::current_thread_index()
         .map(|_| rayon::current_num_threads())
         .unwrap_or(1)
@@ -206,47 +456,36 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
         .collect::<Vec<_>>();
     let chunks = ranges
         .into_par_iter()
-        .map(|range| spectral_flux_range(samples, &window, range))
+        .map(|range| plan.extract(samples, range))
         .collect::<Vec<_>>();
-    let mut full = Vec::with_capacity(frame_count);
-    let mut low = Vec::with_capacity(frame_count);
-    let mut body = Vec::with_capacity(frame_count);
-    let mut kick = Vec::with_capacity(frame_count);
-    let mut bass = Vec::with_capacity(frame_count);
-    let mut mid = Vec::with_capacity(frame_count);
-    let mut kick_energy = Vec::with_capacity(frame_count);
-    let mut bass_energy = Vec::with_capacity(frame_count);
+    let mut raw = OnsetEnvelopes::default();
     for chunk in chunks {
-        full.extend(chunk.full);
-        low.extend(chunk.low);
-        body.extend(chunk.body);
-        kick.extend(chunk.kick);
-        bass.extend(chunk.bass);
-        mid.extend(chunk.mid);
-        kick_energy.extend(chunk.kick_energy);
-        bass_energy.extend(chunk.bass_energy);
+        raw.append(chunk);
     }
+    normalize_spectral_flux(raw)
+}
 
+pub(crate) fn normalize_spectral_flux(raw: OnsetEnvelopes) -> OnsetEnvelopes {
     OnsetEnvelopes {
-        full: adaptive_normalize(&full, 8),
-        low: adaptive_normalize(&low, 8),
-        body: adaptive_normalize(&body, 8),
-        kick: adaptive_normalize(&kick, 8),
-        bass: adaptive_normalize(&bass, 8),
-        mid: adaptive_normalize(&mid, 8),
-        kick_energy: adaptive_normalize(&kick_energy, 8),
-        bass_energy: adaptive_normalize(&bass_energy, 8),
+        full: adaptive_normalize(&raw.full, 8),
+        low: adaptive_normalize(&raw.low, 8),
+        body: adaptive_normalize(&raw.body, 8),
+        kick: adaptive_normalize(&raw.kick, 8),
+        bass: adaptive_normalize(&raw.bass, 8),
+        mid: adaptive_normalize(&raw.mid, 8),
+        kick_energy: adaptive_normalize(&raw.kick_energy, 8),
+        bass_energy: adaptive_normalize(&raw.bass_energy, 8),
     }
 }
 
 fn spectral_flux_range(
     samples: &[f32],
     window: &[f32],
+    fft: &dyn Fft<f32>,
     range: std::ops::Range<usize>,
 ) -> OnsetEnvelopes {
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
+    let mut fft_scratch = vec![Complex32::default(); fft.get_inplace_scratch_len()];
     let mut previous = vec![0.0f32; FFT_SIZE / 2 + 1];
     let mut full_flux = Vec::with_capacity(range.len());
     let mut low_flux = Vec::with_capacity(range.len());
@@ -263,9 +502,9 @@ fn spectral_flux_range(
         for (index, value) in frame.iter().enumerate() {
             spectrum[index] = Complex32::new(*value * window[index], 0.0);
         }
-        fft.process(&mut spectrum);
+        fft.process_with_scratch(&mut spectrum, &mut fft_scratch);
         for (magnitude, bin) in previous.iter_mut().zip(&spectrum).skip(1) {
-            *magnitude = (1.0 + 10.0 * bin.norm()).ln();
+            *magnitude = compressed_magnitude(*bin);
         }
     }
 
@@ -275,50 +514,56 @@ fn spectral_flux_range(
         for (index, value) in frame.iter().enumerate() {
             spectrum[index] = Complex32::new(*value * window[index], 0.0);
         }
-        fft.process(&mut spectrum);
-        let mut full_value = 0.0;
-        let mut low_value = 0.0;
-        let mut body_value = 0.0;
-        let mut kick_value = 0.0;
-        let mut bass_value = 0.0;
-        let mut mid_value = 0.0;
-        let mut kick_power = 0.0;
-        let mut bass_power = 0.0;
-        for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
-            let magnitude = (1.0 + 10.0 * bin.norm()).ln();
-            let difference = (magnitude - previous[index]).max(0.0);
-            full_value += difference;
-            if index <= LOW_ONSET_MAX_BIN {
-                low_value += difference;
-            }
-            if index <= BODY_ONSET_MAX_BIN {
-                body_value += difference;
-            }
-            if (KICK_ONSET_MIN_BIN..=KICK_ONSET_MAX_BIN).contains(&index) {
-                kick_value += difference;
-            }
-            if index <= BASS_ONSET_MAX_BIN {
-                bass_value += difference;
-            }
-            if (MID_ONSET_MIN_BIN..=MID_ONSET_MAX_BIN).contains(&index) {
-                mid_value += difference;
-            }
-            if (KICK_ONSET_MIN_BIN..=KICK_ONSET_MAX_BIN).contains(&index) {
-                kick_power += bin.norm_sqr();
-            }
-            if index <= BASS_ONSET_MAX_BIN {
-                bass_power += bin.norm_sqr();
-            }
-            previous[index] = magnitude;
+        fft.process_with_scratch(&mut spectrum, &mut fft_scratch);
+        let mut values = SpectralFrameAccumulator::default();
+        for index in 1..KICK_ONSET_MIN_BIN {
+            values.accumulate::<true, true, false, true, false>(
+                spectrum[index],
+                &mut previous[index],
+            );
         }
-        full_flux.push(full_value);
-        low_flux.push(low_value);
-        body_flux.push(body_value);
-        kick_flux.push(kick_value);
-        bass_flux.push(bass_value);
-        mid_flux.push(mid_value);
-        kick_energy.push(kick_power.ln_1p());
-        bass_energy.push(bass_power.ln_1p());
+        for index in KICK_ONSET_MIN_BIN..=LOW_ONSET_MAX_BIN {
+            values
+                .accumulate::<true, true, true, true, false>(spectrum[index], &mut previous[index]);
+        }
+        for index in LOW_ONSET_MAX_BIN + 1..=KICK_ONSET_MAX_BIN {
+            values.accumulate::<false, true, true, true, false>(
+                spectrum[index],
+                &mut previous[index],
+            );
+        }
+        for index in BASS_ONSET_MAX_BIN + 1..MID_ONSET_MIN_BIN {
+            values.accumulate::<false, true, false, false, false>(
+                spectrum[index],
+                &mut previous[index],
+            );
+        }
+        for index in MID_ONSET_MIN_BIN..=MID_ONSET_MAX_BIN {
+            values.accumulate::<false, true, false, false, true>(
+                spectrum[index],
+                &mut previous[index],
+            );
+        }
+        for index in MID_ONSET_MAX_BIN + 1..=BODY_ONSET_MAX_BIN {
+            values.accumulate::<false, true, false, false, false>(
+                spectrum[index],
+                &mut previous[index],
+            );
+        }
+        for index in BODY_ONSET_MAX_BIN + 1..=FFT_SIZE / 2 {
+            values.accumulate::<false, false, false, false, false>(
+                spectrum[index],
+                &mut previous[index],
+            );
+        }
+        full_flux.push(values.full);
+        low_flux.push(values.low);
+        body_flux.push(values.body);
+        kick_flux.push(values.kick);
+        bass_flux.push(values.bass);
+        mid_flux.push(values.mid);
+        kick_energy.push(values.kick_power.ln_1p());
+        bass_energy.push(values.bass_power.ln_1p());
     }
     OnsetEnvelopes {
         full: full_flux,
@@ -463,44 +708,19 @@ fn time_domain_envelopes(
     sample_rate: u32,
     frame_count: usize,
 ) -> TimeDomainEnvelopes {
-    const LOW_CUTOFF_HZ: f32 = 250.0;
-    const HIGH_CUTOFF_HZ: f32 = 4_000.0;
+    let mut accumulator = TimeDomainAccumulator::new(sample_rate);
+    accumulator.push(samples);
+    accumulator.finish(frame_count)
+}
 
-    let sample_rate = sample_rate as f32;
-    let low_alpha = 1.0 - (-std::f32::consts::TAU * LOW_CUTOFF_HZ / sample_rate).exp();
-    let high_alpha = 1.0 - (-std::f32::consts::TAU * HIGH_CUTOFF_HZ / sample_rate).exp();
-    let block_count = samples.len().div_ceil(HOP_SIZE);
-    let mut peak = Vec::with_capacity(block_count);
-    let mut rms = Vec::with_capacity(block_count);
-    let mut low_rms = Vec::with_capacity(block_count);
-    let mut mid_rms = Vec::with_capacity(block_count);
-    let mut high_rms = Vec::with_capacity(block_count);
-    let mut low_state = 0.0f32;
-    let mut high_cut_state = 0.0f32;
-    for block in samples.chunks(HOP_SIZE) {
-        let mut peak_value = 0.0f32;
-        let mut energy = 0.0f32;
-        let mut low_energy = 0.0f32;
-        let mut mid_energy = 0.0f32;
-        let mut high_energy = 0.0f32;
-        for &sample in block {
-            low_state += low_alpha * (sample - low_state);
-            high_cut_state += high_alpha * (sample - high_cut_state);
-            let mid = high_cut_state - low_state;
-            let high = sample - high_cut_state;
-            peak_value = peak_value.max(sample.abs());
-            energy += sample * sample;
-            low_energy += low_state * low_state;
-            mid_energy += mid * mid;
-            high_energy += high * high;
-        }
-        let denominator = block.len().max(1) as f32;
-        peak.push(peak_value);
-        rms.push((energy / denominator).sqrt());
-        low_rms.push((low_energy / denominator).sqrt());
-        mid_rms.push((mid_energy / denominator).sqrt());
-        high_rms.push((high_energy / denominator).sqrt());
-    }
+fn time_domain_envelopes_from_raw(
+    peak: &[f32],
+    rms: &[f32],
+    low_rms: &[f32],
+    mid_rms: &[f32],
+    high_rms: &[f32],
+    frame_count: usize,
+) -> TimeDomainEnvelopes {
     let align = |values: &[f32]| {
         values
             .iter()
@@ -510,11 +730,11 @@ fn time_domain_envelopes(
             .collect::<Vec<_>>()
     };
     TimeDomainEnvelopes {
-        peak: align_and_normalize_envelope(&peak, frame_count),
-        rms: align_and_normalize_envelope(&rms, frame_count),
-        low_rms_local: adaptive_normalize(&align(&low_rms), 8),
-        mid_rms: align_and_normalize_envelope(&mid_rms, frame_count),
-        high_rms: align_and_normalize_envelope(&high_rms, frame_count),
+        peak: align_and_normalize_envelope(peak, frame_count),
+        rms: align_and_normalize_envelope(rms, frame_count),
+        low_rms_local: adaptive_normalize(&align(low_rms), 8),
+        mid_rms: align_and_normalize_envelope(mid_rms, frame_count),
+        high_rms: align_and_normalize_envelope(high_rms, frame_count),
     }
 }
 
@@ -642,14 +862,12 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
     let mut correlations = vec![0.0f32; max_lag + 2];
     let correlation_start = min_lag.saturating_sub(1);
     let correlation_end = (max_lag + 1).min(onset.len() - 1);
-    for (lag, value) in correlations
-        .iter_mut()
+    correlations[correlation_start..=correlation_end]
+        .par_iter_mut()
         .enumerate()
-        .take(correlation_end + 1)
-        .skip(correlation_start)
-    {
-        *value = normalized_correlation(onset, lag);
-    }
+        .for_each(|(offset, value)| {
+            *value = normalized_correlation(onset, correlation_start + offset);
+        });
 
     let mut baseline_candidates =
         tempo_candidates(&correlations, onset_rate, min_lag, max_lag, 0.55, 0.15);
@@ -766,30 +984,50 @@ fn normalized_correlation(values: &[f32], lag: usize) -> f32 {
 
 fn refine_period_and_phase(onset: &OnsetEnvelopes, initial_period: f32) -> (f32, f32, f32) {
     let mut best = (initial_period, 0.0, f32::NEG_INFINITY);
-    for period_step in -100..=100 {
-        let period = initial_period + period_step as f32 * 0.01;
-        if period <= 2.0 {
-            continue;
-        }
-        let phase_steps = (period * 2.0).ceil() as usize;
-        for phase_step in 0..phase_steps {
-            let phase = phase_step as f32 * 0.5;
-            let score = grid_alignment_score(onset, period, phase);
-            if score > best.2 {
-                best = (period, phase, score);
+    let coarse_candidates = (-100..=100)
+        .into_par_iter()
+        .map(|period_step| {
+            let period = initial_period + period_step as f32 * 0.01;
+            if period <= 2.0 {
+                return None;
             }
+            let phase_steps = (period * 2.0).ceil() as usize;
+            let mut local_best = (period, 0.0, f32::NEG_INFINITY);
+            for phase_step in 0..phase_steps {
+                let phase = phase_step as f32 * 0.5;
+                let score = grid_alignment_score(onset, period, phase);
+                if score > local_best.2 {
+                    local_best = (period, phase, score);
+                }
+            }
+            Some(local_best)
+        })
+        .collect::<Vec<Option<(f32, f32, f32)>>>();
+    for candidate in coarse_candidates.into_iter().flatten() {
+        if candidate.2 > best.2 {
+            best = candidate;
         }
     }
 
     let coarse = best;
-    for period_step in -30..=30 {
-        let period = coarse.0 + period_step as f32 * 0.001;
-        for phase_step in -10..=10 {
-            let phase = (coarse.1 + phase_step as f32 * 0.05).rem_euclid(period);
-            let score = grid_alignment_score(onset, period, phase);
-            if score > best.2 {
-                best = (period, phase, score);
+    let fine_candidates = (-30..=30)
+        .into_par_iter()
+        .map(|period_step| {
+            let period = coarse.0 + period_step as f32 * 0.001;
+            let mut local_best = (period, coarse.1, f32::NEG_INFINITY);
+            for phase_step in -10..=10 {
+                let phase = (coarse.1 + phase_step as f32 * 0.05).rem_euclid(period);
+                let score = grid_alignment_score(onset, period, phase);
+                if score > local_best.2 {
+                    local_best = (period, phase, score);
+                }
             }
+            local_best
+        })
+        .collect::<Vec<_>>();
+    for candidate in fine_candidates {
+        if candidate.2 > best.2 {
+            best = candidate;
         }
     }
     best
@@ -1472,6 +1710,51 @@ fn interpolate(values: &[f32], position: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamed_time_domain_batches_preserve_envelopes() {
+        let samples = (0..44_100 * 3)
+            .map(|index| {
+                let phase = std::f32::consts::TAU * index as f32 / 44_100.0;
+                0.55 * (phase * 83.0).sin()
+                    + 0.27 * (phase * 719.0).sin()
+                    + 0.12 * (phase * 4_117.0).sin()
+            })
+            .collect::<Vec<_>>();
+        let frame_count = complete_test_frame_count(samples.len(), FFT_SIZE, HOP_SIZE);
+        let expected = time_domain_envelopes(&samples, 44_100, frame_count);
+        let mut accumulator = TimeDomainAccumulator::new(44_100);
+        for chunk in samples.chunks(997) {
+            accumulator.push(chunk);
+        }
+        let actual = accumulator.finish(frame_count);
+        for (expected, actual) in [
+            (&expected.peak, &actual.peak),
+            (&expected.rms, &actual.rms),
+            (&expected.low_rms_local, &actual.low_rms_local),
+            (&expected.mid_rms, &actual.mid_rms),
+            (&expected.high_rms, &actual.high_rms),
+        ] {
+            assert_eq!(
+                expected
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                actual
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    fn complete_test_frame_count(sample_count: usize, frame_size: usize, hop_size: usize) -> usize {
+        if sample_count < frame_size {
+            0
+        } else {
+            1 + (sample_count - frame_size) / hop_size
+        }
+    }
 
     fn phase_fixture(
         selected_kick: f32,

@@ -243,7 +243,7 @@ rekordbox analyze doctor --engine clean --format json
 rekordbox analyze track /Music/track.flac \
   --engine clean \
   --output-directory /Music/track.rekordbox \
-  --threads 4 \
+  --threads 8 \
   --format json
 rekordbox analyze tracks \
   --audio-path /Music/one.flac \
@@ -270,7 +270,7 @@ Pearson correlation, means, MAE, median/p95/max absolute error, and signed bias 
 packed bitfields or differing tail lengths.
 
 For `analyze track`, `--threads` is the native worker count for that one process. The default is
-the profiled four-thread sweet spot. For `analyze tracks`, it is a total CPU budget, not a
+the profiled eight-thread sweet spot. For `analyze tracks`, it is a total CPU budget, not a
 per-process multiplier. The clean batch runner defaults to the lower of 12 workers, available
 parallelism, the thread budget, and the uncached track count. It divides the budget deterministically
 across active workers: for example, `--concurrency 4 --threads 12` launches at most four clean
@@ -328,25 +328,28 @@ concurrency one and were excluded from that timing. Moving from 12 to 27 workers
 as many native processes for roughly 17% lower wall time. Warm validation of all 26 cached analyses
 took 11.65 ms. These historical numbers describe only the explicit reference engine.
 
-For the clean engine, Samply 0.13.1 profiles at 1 kHz over five runs of a 491-second M4A found
-single-track medians of 1,456.7 ms at one thread, 979.4 ms at two, 850.2 ms at three, 705.5 ms at
-four, 706.2 ms at six, 704.9 ms at eight, and 721.8 ms at twelve. Native parallelism therefore
-plateaus at four threads. The scalar CPU profile divides into decode (23.6%), waveform generation
-(23.4%; its stateful biquad filters are the 21.3% top leaf), beat spectral flux (22.9%), key chroma
-(18.6%), and beat post-processing (10.3%).
+For the clean engine, decode now feeds five-second PCM batches into concurrent beat, key,
+waveform, and time-domain consumers. The long-track fast path reuses FFT plans and scratch,
+enables Symphonia's architecture-specific SIMD, and keeps stateful waveform filters ordered while
+the decoder advances. On the profiled Apple Silicon host, paired ten-run measurements of a
+491-second M4A at eight threads fell from a `720.22 ms` median to `347.16 ms`: `2.07x` faster,
+or roughly `1,415x` real time. A final 1 kHz Samply profile averaged `3.48` occupied cores; the
+serial AAC decoder is now the critical path, with most DSP hidden underneath it.
 
-Process isolation scales better across independent tracks. A cold 100-track corpus containing
-8.55 hours of audio took 16.09 seconds at four processes with a shared 12-thread budget
-(6.23 tracks/second), versus 11.33 seconds at twelve one-thread processes
-(8.85 tracks/second), a 29.6% wall-time reduction. Twenty-four processes improved only to
-11.23 seconds (8.93 tracks/second). Rotated follow-up runs put the 12- and 24-process medians at
-11.402 and 11.401 seconds, respectively, while 32 processes reached 11.503 seconds. Peak aggregate
-analyzer RSS was 0.60 GiB at four processes, 1.60 GiB at twelve, 3.02 GiB at twenty-four, and
-4.10 GiB at thirty-two. These measurements set the adaptive 12-process and four-thread defaults.
-Both `--concurrency` and `--threads` accept explicit values through 64 when a caller intentionally
-prefers oversubscription.
-DAT/EXT/2EX hashes remain deterministic at 1, 2, 3, 4, 8, and 12 threads. Treat all numbers as
-host-specific; lower `--threads` or `--concurrency` when analysis competes with live DJ software.
+Six and eight native workers were effectively tied on AAC, while eight was fastest on the mixed
+AAC/FLAC check; twelve regressed from scheduling and cache pressure. This sets the single-track
+default to eight. Process isolation remains best for independent tracks: a cold 100-track,
+8.55-hour corpus completed in `9.46 s` at both 12 and 16 one-thread processes, `9.65 s` at 20,
+and `9.51 s` at 24. The profiled 12-process default is therefore retained and is `17.0%` faster
+than the earlier `11.402 s` median.
+
+The streamed and non-streamed implementations produced 300/300 identical DAT/EXT/2EX artifacts.
+The full 110-track beat-grid oracle retained exactly the same pass count and aggregate metrics.
+Enabling codec SIMD changed 9/300 files relative to the frozen scalar build: beat timestamps moved
+by at most `0.174 ms`, and only one quantization level changed in each of two waveform values.
+Both `--concurrency` and `--threads` still accept explicit values through 64, but values above the
+profiled defaults are overrides rather than expected speedups. Treat all numbers as host-specific;
+lower either limit when analysis competes with live DJ software.
 
 Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains

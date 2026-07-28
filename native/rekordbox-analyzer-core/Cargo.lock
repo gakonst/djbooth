@@ -501,6 +501,7 @@ dependencies = [
  "lazy_static",
  "log",
  "num-complex",
+ "rustfft",
  "smallvec",
 ]
 

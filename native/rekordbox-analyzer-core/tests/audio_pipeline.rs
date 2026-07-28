@@ -17,10 +17,7 @@ fn synthetic_wav_decodes_normalizes_frames_and_builds_waveform_tags() {
 
     let first = decode_audio_file(&fixture).expect("decode WAV");
     let second = decode_audio_file(&fixture).expect("decode WAV again");
-    assert_eq!(
-        first, second,
-        "the scalar decode path must be deterministic"
-    );
+    assert_eq!(first, second, "the decode path must be deterministic");
     assert_eq!(first.source().sample_rate(), 22_050);
     assert_eq!(first.source().channels(), 2);
     assert_eq!(first.source().decoded_frames(), mono_frames.len());
@@ -254,6 +251,38 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
             .contains("exists but is not a regular file")
     );
     assert!(directory_output.is_dir());
+}
+
+#[test]
+fn exact_stream_batch_boundary_matches_single_thread_analysis() {
+    let fixture_dir = tempdir().expect("fixture directory");
+    let fixture = fixture_dir.path().join("stream-boundary-44100.wav");
+    write_pcm16_wav(&fixture, 44_100, 2, &tonal_click_track(44_100, 5, 120.0));
+    let scalar_directory = fixture_dir.path().join("scalar");
+    let streamed_directory = fixture_dir.path().join("streamed");
+
+    analyze_to_directory_with_options(
+        &fixture,
+        &scalar_directory,
+        None,
+        AnalysisOptions::new(1).expect("scalar options"),
+    )
+    .expect("single-thread analysis");
+    analyze_to_directory_with_options(
+        &fixture,
+        &streamed_directory,
+        None,
+        AnalysisOptions::new(8).expect("streamed options"),
+    )
+    .expect("streamed analysis");
+
+    for name in ["ANLZ0000.DAT", "ANLZ0000.EXT", "ANLZ0000.2EX"] {
+        assert_eq!(
+            std::fs::read(scalar_directory.join(name)).expect("scalar artifact"),
+            std::fs::read(streamed_directory.join(name)).expect("streamed artifact"),
+            "{name} must not depend on streaming boundaries"
+        );
+    }
 }
 
 fn tonal_click_track(sample_rate: u32, seconds: usize, bpm: f64) -> Vec<i16> {

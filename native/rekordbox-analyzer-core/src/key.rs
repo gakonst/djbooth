@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use rayon::prelude::*;
-use rustfft::{FftPlanner, num_complex::Complex32};
+use rustfft::{Fft, FftPlanner, num_complex::Complex32};
 use serde::{Deserialize, Serialize};
 
-const FFT_SIZE: usize = 8_192;
-const HOP_SIZE: usize = 4_096;
+pub(crate) const FFT_SIZE: usize = 8_192;
+pub(crate) const HOP_SIZE: usize = 4_096;
 const MIN_FREQUENCY: f32 = 55.0;
 const MAX_FREQUENCY: f32 = 5_000.0;
 const HIGH_RES_BINS: usize = 36;
@@ -39,6 +39,9 @@ const KEY_NAMES: [&str; 12] = [
 struct FrequencyBin {
     index: usize,
     spectral_band: usize,
+    pitch_lower: usize,
+    pitch_fraction: f32,
+    frequency_sqrt: f32,
 }
 
 #[derive(Debug)]
@@ -47,10 +50,82 @@ struct ChromaFeatures {
     robust: Vec<[f32; 12]>,
 }
 
-#[derive(Debug)]
-struct RawChromaFeatures {
+#[derive(Debug, Default)]
+pub(crate) struct RawChromaFeatures {
     energy_weighted: Vec<[f32; 12]>,
     high_resolution: Vec<[f32; HIGH_RES_BINS]>,
+}
+
+impl RawChromaFeatures {
+    pub(crate) fn append(&mut self, mut other: Self) {
+        self.energy_weighted.append(&mut other.energy_weighted);
+        self.high_resolution.append(&mut other.high_resolution);
+    }
+}
+
+pub(crate) struct KeyFeaturePlan {
+    sample_rate: u32,
+    window: Vec<f32>,
+    first_bin: usize,
+    last_bin: usize,
+    frequency_bins: Vec<FrequencyBin>,
+    band_counts: [usize; SPECTRAL_BANDS],
+    fft: std::sync::Arc<dyn Fft<f32>>,
+}
+
+impl KeyFeaturePlan {
+    pub(crate) fn new(sample_rate: u32) -> Self {
+        let window = (0..FFT_SIZE)
+            .map(|index| {
+                0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
+            })
+            .collect::<Vec<_>>();
+        let first_bin = (MIN_FREQUENCY * FFT_SIZE as f32 / sample_rate as f32)
+            .floor()
+            .max(1.0) as usize;
+        let last_bin = (MAX_FREQUENCY * FFT_SIZE as f32 / sample_rate as f32)
+            .ceil()
+            .min((FFT_SIZE / 2 - 1) as f32) as usize;
+        let frequency_bins = (first_bin..=last_bin)
+            .map(|index| {
+                let frequency = index as f32 * sample_rate as f32 / FFT_SIZE as f32;
+                let spectral_band = (frequency / MIN_FREQUENCY).log2().floor().max(0.0) as usize;
+                let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
+                let pitch = midi.rem_euclid(12.0);
+                let pitch_floor = pitch.floor();
+                FrequencyBin {
+                    index,
+                    spectral_band: spectral_band.min(SPECTRAL_BANDS - 1),
+                    pitch_lower: pitch_floor as usize % 12,
+                    pitch_fraction: pitch - pitch_floor,
+                    frequency_sqrt: frequency.sqrt(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut band_counts = [0usize; SPECTRAL_BANDS];
+        for bin in &frequency_bins {
+            band_counts[bin.spectral_band] += 1;
+        }
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+        Self {
+            sample_rate,
+            window,
+            first_bin,
+            last_bin,
+            frequency_bins,
+            band_counts,
+            fft,
+        }
+    }
+
+    pub(crate) fn extract(
+        &self,
+        samples: &[f32],
+        range: std::ops::Range<usize>,
+    ) -> RawChromaFeatures {
+        raw_chroma_features(samples, self, range)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,7 +166,17 @@ pub fn analyze_key(samples: &[f32], sample_rate: u32) -> Result<KeyAnalysis> {
         bail!("key analysis received non-finite PCM");
     }
 
-    let features = chroma_features(samples, sample_rate);
+    analyze_key_features(chroma_features(samples, sample_rate), sample_rate)
+}
+
+pub(crate) fn analyze_key_from_raw(
+    raw: RawChromaFeatures,
+    sample_rate: u32,
+) -> Result<KeyAnalysis> {
+    analyze_key_features(chroma_features_from_raw(raw), sample_rate)
+}
+
+fn analyze_key_features(features: ChromaFeatures, sample_rate: u32) -> Result<KeyAnalysis> {
     let Some(energy_weighted) = aggregate_chroma(&features.energy_weighted) else {
         bail!("audio has no measurable harmonic energy");
     };
@@ -119,27 +204,7 @@ pub fn analyze_key(samples: &[f32], sample_rate: u32) -> Result<KeyAnalysis> {
 }
 
 fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
-    let window = (0..FFT_SIZE)
-        .map(|index| {
-            0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / (FFT_SIZE - 1) as f32).cos()
-        })
-        .collect::<Vec<_>>();
-    let first_bin = (MIN_FREQUENCY * FFT_SIZE as f32 / sample_rate as f32)
-        .floor()
-        .max(1.0) as usize;
-    let last_bin = (MAX_FREQUENCY * FFT_SIZE as f32 / sample_rate as f32)
-        .ceil()
-        .min((FFT_SIZE / 2 - 1) as f32) as usize;
-    let frequency_bins = (first_bin..=last_bin)
-        .map(|index| {
-            let frequency = index as f32 * sample_rate as f32 / FFT_SIZE as f32;
-            let spectral_band = (frequency / MIN_FREQUENCY).log2().floor().max(0.0) as usize;
-            FrequencyBin {
-                index,
-                spectral_band: spectral_band.min(SPECTRAL_BANDS - 1),
-            }
-        })
-        .collect::<Vec<_>>();
+    let plan = KeyFeaturePlan::new(sample_rate);
     let frame_count = 1 + samples.len().saturating_sub(FFT_SIZE) / HOP_SIZE;
     let worker_count = rayon::current_thread_index()
         .map(|_| rayon::current_num_threads())
@@ -151,27 +216,19 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
         .map(|start| start..(start + chunk_len).min(frame_count))
         .collect::<Vec<_>>()
         .into_par_iter()
-        .map(|range| {
-            raw_chroma_features(
-                samples,
-                sample_rate,
-                &window,
-                first_bin,
-                last_bin,
-                &frequency_bins,
-                range,
-            )
-        })
+        .map(|range| plan.extract(samples, range))
         .collect::<Vec<_>>();
-    let mut energy_weighted_frames = Vec::with_capacity(frame_count);
-    let mut high_resolution_frames = Vec::with_capacity(frame_count);
+    let mut raw = RawChromaFeatures::default();
     for chunk in chunks {
-        energy_weighted_frames.extend(chunk.energy_weighted);
-        high_resolution_frames.extend(chunk.high_resolution);
+        raw.append(chunk);
     }
+    chroma_features_from_raw(raw)
+}
 
-    let tuning_offset = tuning_offset(&high_resolution_frames);
-    let robust = high_resolution_frames
+fn chroma_features_from_raw(raw: RawChromaFeatures) -> ChromaFeatures {
+    let tuning_offset = tuning_offset(&raw.high_resolution);
+    let robust = raw
+        .high_resolution
         .into_iter()
         .map(|high_resolution| {
             let mut continuous = [0.0f32; 12];
@@ -204,26 +261,22 @@ fn chroma_features(samples: &[f32], sample_rate: u32) -> ChromaFeatures {
         })
         .collect();
     ChromaFeatures {
-        energy_weighted: energy_weighted_frames,
+        energy_weighted: raw.energy_weighted,
         robust,
     }
 }
 
 fn raw_chroma_features(
     samples: &[f32],
-    sample_rate: u32,
-    window: &[f32],
-    first_bin: usize,
-    last_bin: usize,
-    frequency_bins: &[FrequencyBin],
+    plan: &KeyFeaturePlan,
     range: std::ops::Range<usize>,
 ) -> RawChromaFeatures {
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
-    let mut magnitudes = vec![0.0f32; last_bin + 2];
+    let mut fft_scratch = vec![Complex32::default(); plan.fft.get_inplace_scratch_len()];
+    let mut magnitudes = vec![0.0f32; plan.last_bin + 2];
     let mut energy_weighted_frames = Vec::with_capacity(range.len());
     let mut high_resolution_frames = Vec::with_capacity(range.len());
+    let mut peaks = Vec::with_capacity(MAX_PEAKS_PER_FRAME);
 
     for frame_index in range {
         let frame_start = frame_index * HOP_SIZE;
@@ -233,33 +286,33 @@ fn raw_chroma_features(
             continue;
         }
         for (index, value) in frame.iter().enumerate() {
-            spectrum[index] = Complex32::new(*value * window[index], 0.0);
+            spectrum[index] = Complex32::new(*value * plan.window[index], 0.0);
         }
-        fft.process(&mut spectrum);
+        plan.fft
+            .process_with_scratch(&mut spectrum, &mut fft_scratch);
 
         for (magnitude, bin) in magnitudes
             .iter_mut()
             .zip(&spectrum)
-            .take(last_bin + 2)
-            .skip(first_bin.saturating_sub(1))
+            .take(plan.last_bin + 2)
+            .skip(plan.first_bin.saturating_sub(1))
         {
             *magnitude = bin.norm();
         }
 
         let mut energy_weighted = [0.0f32; 12];
-        for bin in frequency_bins {
+        let mut band_sums = [0.0f32; SPECTRAL_BANDS];
+        let mut band_maxima = [0.0f32; SPECTRAL_BANDS];
+        for bin in &plan.frequency_bins {
             let magnitude = magnitudes[bin.index];
+            band_sums[bin.spectral_band] += magnitude;
+            band_maxima[bin.spectral_band] = band_maxima[bin.spectral_band].max(magnitude);
             if magnitude <= magnitudes[bin.index - 1] || magnitude < magnitudes[bin.index + 1] {
                 continue;
             }
-            let frequency = bin.index as f32 * sample_rate as f32 / FFT_SIZE as f32;
-            let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
-            let pitch = midi.rem_euclid(12.0);
-            let lower = pitch.floor() as usize % 12;
-            let fraction = pitch - pitch.floor();
-            let weight = magnitude.sqrt() / frequency.sqrt();
-            energy_weighted[lower] += weight * (1.0 - fraction);
-            energy_weighted[(lower + 1) % 12] += weight * fraction;
+            let weight = magnitude.sqrt() / bin.frequency_sqrt;
+            energy_weighted[bin.pitch_lower] += weight * (1.0 - bin.pitch_fraction);
+            energy_weighted[(bin.pitch_lower + 1) % 12] += weight * bin.pitch_fraction;
         }
         let source = energy_weighted;
         for (index, value) in energy_weighted.iter_mut().enumerate() {
@@ -270,18 +323,9 @@ fn raw_chroma_features(
             energy_weighted_frames.push(energy_weighted);
         }
 
-        let mut band_sums = [0.0f32; SPECTRAL_BANDS];
-        let mut band_counts = [0usize; SPECTRAL_BANDS];
-        let mut band_maxima = [0.0f32; SPECTRAL_BANDS];
-        for bin in frequency_bins {
-            band_sums[bin.spectral_band] += magnitudes[bin.index];
-            band_counts[bin.spectral_band] += 1;
-            band_maxima[bin.spectral_band] =
-                band_maxima[bin.spectral_band].max(magnitudes[bin.index]);
-        }
         let global_maximum = band_maxima.iter().copied().fold(0.0f32, f32::max);
-        let mut peaks = Vec::new();
-        for bin in frequency_bins {
+        peaks.clear();
+        for bin in &plan.frequency_bins {
             let magnitude = magnitudes[bin.index];
             if magnitude <= magnitudes[bin.index - 1]
                 || magnitude < magnitudes[bin.index + 1]
@@ -299,11 +343,11 @@ fn raw_chroma_features(
             } else {
                 0.0
             };
-            let frequency = (bin.index as f32 + offset) * sample_rate as f32 / FFT_SIZE as f32;
+            let frequency = (bin.index as f32 + offset) * plan.sample_rate as f32 / FFT_SIZE as f32;
             let midi = 69.0 + 12.0 * (frequency / 440.0).log2();
             let pitch = midi.rem_euclid(12.0);
             let band_mean =
-                band_sums[bin.spectral_band] / band_counts[bin.spectral_band].max(1) as f32;
+                band_sums[bin.spectral_band] / plan.band_counts[bin.spectral_band].max(1) as f32;
             let whitened = magnitude / band_mean.max(f32::MIN_POSITIVE);
             peaks.push((whitened.sqrt(), pitch));
         }
@@ -311,7 +355,7 @@ fn raw_chroma_features(
         peaks.truncate(MAX_PEAKS_PER_FRAME);
 
         let mut high_resolution = [0.0f32; HIGH_RES_BINS];
-        for (weight, pitch) in peaks {
+        for &(weight, pitch) in &peaks {
             let position = pitch * BINS_PER_PITCH_CLASS as f32;
             let nearest = position.round() as i32;
             for offset in -(BINS_PER_PITCH_CLASS as i32)..=BINS_PER_PITCH_CLASS as i32 {
