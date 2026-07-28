@@ -3,8 +3,8 @@ use std::process::Command;
 
 use rekordbox_analyzer_core::{
     ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
-    DETAIL_FRAME_SAMPLES, ExtAnalysis, WaveformData, analyze_to_directory_with_options,
-    decode_audio_file,
+    DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, WaveformData,
+    analyze_to_directory_with_options, compare_beat_grids, decode_audio_file,
 };
 use tempfile::tempdir;
 
@@ -131,6 +131,55 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
             );
         }
     }
+
+    let dat = DatAnalysis::parse(
+        &AnlzFile::parse(
+            &std::fs::read(first_directory.join("ANLZ0000.DAT")).expect("generated DAT"),
+        )
+        .expect("parse generated DAT"),
+    )
+    .expect("decode generated DAT");
+    let ext = ExtAnalysis::parse(
+        &AnlzFile::parse(
+            &std::fs::read(first_directory.join("ANLZ0000.EXT")).expect("generated EXT"),
+        )
+        .expect("parse generated EXT"),
+    )
+    .expect("decode generated EXT");
+    assert_eq!(
+        ext.extended_beat_grid.entries.len(),
+        dat.beat_grid.len(),
+        "PQT2 must carry one sub-millisecond remainder per PQTZ beat"
+    );
+    assert!(
+        ext.extended_beat_grid
+            .entries
+            .iter()
+            .map(|entry| u16::from_be_bytes(*entry))
+            .all(|residual| residual <= 999)
+    );
+    assert!(
+        ext.extended_beat_grid
+            .entries
+            .iter()
+            .any(|entry| *entry != [0, 0]),
+        "synthetic phase should retain non-zero microseconds"
+    );
+    let expected_checksum = dat.beat_grid.iter().fold(0_u32, |sum, entry| {
+        sum.wrapping_add(
+            u32::from(entry.beat)
+                .wrapping_add(u32::from(entry.bpm_hundredths))
+                .wrapping_add(entry.time_ms),
+        )
+    });
+    assert_eq!(ext.extended_beat_grid.unknown_3, expected_checksum);
+
+    let semantic =
+        compare_beat_grids(&first_directory, &second_directory).expect("semantic beat-grid diff");
+    assert_eq!(semantic.reference_beat_count, semantic.candidate_beat_count);
+    assert_eq!(semantic.matched_beats, semantic.reference_beat_count);
+    assert_eq!(semantic.aligned_timestamp_error.max_ms, 0.0);
+    assert_eq!(semantic.at_70_ms.f1, 1.0);
 
     let explicit_directory = fixture_dir.path().join("explicit-threads");
     let explicit = Command::new(env!("CARGO_BIN_EXE_rekordbox-analyzer"))

@@ -29,8 +29,9 @@ pub use audio::{
     DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
 };
 pub use differential::{
-    DifferentialReport, FileDifferential, FirstDifference, TagDifferential,
-    compare_output_directories,
+    BeatGridDifferential, BeatGridEndpoint, BeatMatchRate, DifferentialReport, FileDifferential,
+    FirstDifference, TagDifferential, TempoErrorDistribution, TimestampErrorDistribution,
+    compare_beat_grids, compare_output_directories,
 };
 pub use key::{KeyAnalysis, analyze_key};
 pub use rhythm::{BeatAnalysis, analyze_beats};

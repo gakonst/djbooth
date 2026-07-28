@@ -217,10 +217,20 @@ pub fn analyze_audio_file_with_options(
                 .last()
                 .expect("beat analysis yields at least four beats"),
         ],
-        unknown_3: 0,
+        unknown_3: beat.beats.iter().fold(0u32, |sum, entry| {
+            sum.wrapping_add(
+                u32::from(entry.beat)
+                    .wrapping_add(u32::from(entry.bpm_hundredths))
+                    .wrapping_add(entry.time_ms),
+            )
+        }),
         unknown_4: 0,
         unknown_5: 0,
-        entries: vec![[0, 0]; beat.beats.len()],
+        entries: beat
+            .beat_time_residuals_us
+            .iter()
+            .map(|residual| residual.to_be_bytes())
+            .collect(),
     };
     let ext = AnlzFile::from_tags(vec![
         build_path_tag(&anlz_path)?,

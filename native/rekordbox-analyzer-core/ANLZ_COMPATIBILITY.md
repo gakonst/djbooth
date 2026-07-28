@@ -31,10 +31,17 @@ REKORDBOX_ANALYZER_ROOT=/path/to/music-ts/packages/rekordbox-ts \
 # Candidate generation by clean-room Rust code, followed by an exact gate.
 native/rekordbox-analyzer-core/target/debug/rekordbox-analyzer \
   diff REFERENCE_DIR CANDIDATE_DIR
+
+# Timing/tempo/downbeat comparison with sub-millisecond PQT2 precision.
+native/rekordbox-analyzer-core/target/debug/rekordbox-analyzer \
+  beat-grid-diff REFERENCE_DIR CANDIDATE_DIR
 ```
 
 `diff` compares all three files, SHA-256 hashes, lengths, ordered tags, and the
-first differing byte. It exits nonzero on any mismatch.
+first differing byte. `beat-grid-diff` monotonically aligns PQTZ/PQT2 grids and
+reports endpoint, drift, tempo, downbeat, and 70/100 ms match metrics. Its trace
+allocation is bounded to 25 million cells. `diff` exits nonzero on any exact
+mismatch.
 
 `rebuild-anlz INPUT OUTPUT` performs a non-destructive semantic clean-room
 rebuild for the supported Rekordbox 6.8.2 DAT/EXT/2EX shapes. The retained
@@ -62,7 +69,7 @@ The following fields remain named as unknown and are round-tripped explicitly:
 
 - the four PMAI words after `len_file`;
 - the PVBR word before its 400 seek entries and its trailing word;
-- PQT2 words at offsets 12, 16, 20, 44, 48, and 52;
+- PQT2 words at offsets 12, 16, 20, 48, and 52;
 - PWV3/PWV4/PWV5/PWV7 format words;
 - the PWVC word at offset 12;
 - all uninterpreted waveform entry bits and cue/song-structure bytes.
@@ -108,8 +115,13 @@ platform codec dependency:
   stores frame-RMS-normalized spectral hue independently from its height.
   Local corpus and pure-tone probes establish that each three-band entry is
   7-bit low/mid/high, despite older public notes describing a different order.
-- Rhythm analysis uses STFT spectral flux, bounded autocorrelation, tempo
-  candidate scoring, and a deterministic phase/grid pass.
+- Rhythm analysis uses full- and low-band STFT spectral flux, bounded
+  autocorrelation/harmonic scoring, hierarchical sub-frame tempo/phase
+  refinement, FFT-center correction, a continuous non-snapping grid, and
+  low-band meter evidence. PQTZ stores floor milliseconds; each paired PQT2
+  word stores its big-endian `0..=999` microsecond remainder. The PQT2 word at
+  offset 44 is the wrapping sum of every PQTZ entry's beat, BPM-hundredths, and
+  floor-millisecond time.
 - Key analysis combines peak chroma with a tuning-aware whitened 36-bin
   HPCP/CENS path, Krumhansl and Faraldo BGate profiles, and bounded
   intro/outro tonic evidence.
@@ -124,9 +136,12 @@ platform codec dependency:
 The integration suite verifies scalar WAV decode, 22.05-to-44.1 kHz
 normalization, framing, and waveform entry counts. A separate 12-second,
 120-BPM D-major synthetic track runs twice through decode, beat/key analysis,
-DAT/EXT/2EX persistence, PQT2 first/last anchors, optional `PVB2` preservation,
-byte-identical artifact comparison, and clean ANLZ parsing. No user library or
-proprietary fixture is mutated or packaged.
+DAT/EXT/2EX persistence, PQT2 first/last anchors, timestamp remainders and
+checksum, optional `PVB2` preservation, byte-identical artifact comparison,
+semantic beat-grid comparison, and clean ANLZ parsing. Synthetic straight-grid
+tests also reject independent beat snapping by requiring all precise intervals
+to differ by at most one microsecond. No user library or proprietary fixture is
+mutated or packaged.
 
 ## Deterministic parallel analysis
 
@@ -165,9 +180,14 @@ read-only with their Rekordbox 6.8.2 oracle artifacts:
 
 | Track | Reference BPM | Clean BPM | Error | Reference/clean key | Beat count |
 | --- | ---: | ---: | ---: | --- | ---: |
-| Science Fiction | 126.998379 | 126.788952 | 0.165% | D / D | 839 / 838 |
-| Crystalised | 123.424746 | 123.295469 | 0.105% | Bm / Bm | 413 / 413 |
-| Pleasure from the Bass | 126.983124 | 126.758357 | 0.177% | Gm / Gm | 493 / 491 |
+| Science Fiction | 126.998379 | 127.003948 | 0.0044% | D / D | 839 / 839 |
+| Crystalised | 123.424746 | 123.416192 | 0.0069% | Bm / Bm | 413 / 413 |
+| Pleasure from the Bass | 126.983124 | 126.985722 | 0.0020% | Gm / Gm | 493 / 493 |
+
+The semantic beat-grid gate aligns all beats in those three tracks with no
+insertions or deletions. Beat-number accuracy and F1 at both 70 and 100 ms are
+`1.0` for all three. Median/p95 absolute timestamp errors are respectively
+`3.088/8.905`, `6.196/27.056`, and `4.032/7.341` ms.
 
 Wall time was 0.52–0.98 seconds per track on the test machine. The detailed
 monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and 0.999; color
@@ -198,10 +218,14 @@ from the Bass, visible per-channel MAE is `0.49..1.16` red, `0.66..0.85`
 green, and `0.78..1.29` blue. PWV5 height correlations remain
 `0.993/0.913/0.986`.
 
-This is not a byte-parity claim. The clean first downbeats were 137 ms early,
-1,279 ms late, and 1,633 ms late. Two decoder/framer boundaries differed by 8
-and 14 detail entries; the MP3 track matched its 59,528-entry oracle count
-exactly.
+This is not a byte-parity claim. Three additional mostly steady heldouts expose
+the boundary of the current estimator: Ana Tijoux has exact count/downbeat
+phase and `12.358/35.690` ms median/p95 error; Michael Jackson has accurate
+timing (`4.842/10.589` ms) but one missing endpoint beat and a one-beat meter
+rotation; Lenny Kravitz has the exact `87.32` BPM/count but selects a syncopated
+phase about 173 ms from the native grid and rotates the bar by two beats. Two
+decoder/framer boundaries also differ by 8 and 14 detail entries; the Science
+Fiction MP3 matches its 59,528-entry oracle count exactly.
 
 The `PWV7` byte order and range were re-derived from 114 local 6.8.2 2EX
 oracles containing 5,279,881 detail entries. Every observed band byte was in
@@ -226,11 +250,16 @@ normalization parity remain open rather than being guessed from these probes.
   empty scaffolding instead of a proprietary phrase map.
 - Cue sections are emitted empty. Non-empty `PCOB`, `PCO2`, and obfuscated
   `PSSI` remain losslessly preservable by the format core.
-- Unknown `PQT2` entry words use deterministic zero baselines and `PWVC` uses
-  the observed fixed configuration. These values are not reverse-engineered
-  DSP parity.
-- Beat phase/downbeat post-adjustment and three-band filter/envelope/normalization
-  remain the highest-value differential work.
+- `PWVC` uses the observed fixed configuration; its remaining semantics are
+  not claimed as DSP parity.
+- Variable-tempo tracking remains intentionally unimplemented. A global static
+  grid reaches 70/100 ms F1 of `0.579/0.643` on James Brown's “Ants,”
+  `0.683/0.725` on the live “Get Up,” and `0.315/0.452` on the strongly
+  variable Chopin heldout. The native grids contain 175, 72, and 21 local tempo
+  changes while the clean grid contains none. A barwise/local-tempo path needs
+  its own confidence gate and steady-track non-regression corpus before release.
+- Syncopated phase/meter post-adjustment and three-band
+  filter/envelope/normalization remain high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.

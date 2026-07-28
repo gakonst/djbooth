@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
     AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
-    analyze_to_directory_with_options, compare_output_directories,
+    analyze_to_directory_with_options, compare_beat_grids, compare_output_directories,
 };
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
@@ -27,11 +27,13 @@ fn run() -> Result<()> {
                 "Clean-room audio-to-Rekordbox analyzer\n\n\
                  Usage:\n  \
                    rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N]\n  \
+                   rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
                    analyze       Decode audio, write DAT/EXT/2EX, and emit summary JSON\n  \
+                   beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
                    rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape"
@@ -63,6 +65,14 @@ fn run() -> Result<()> {
                     "dspCompatibility": "protocol-compatible-baseline",
                 }))?
             );
+            Ok(())
+        }
+        Some("beat-grid-diff") => {
+            let reference = required_path(args.next(), "reference output directory")?;
+            let candidate = required_path(args.next(), "candidate output directory")?;
+            ensure_exhausted(args, "beat-grid-diff")?;
+            let report = compare_beat_grids(&reference, &candidate)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
         }
         Some("diff") => {
@@ -114,7 +124,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }

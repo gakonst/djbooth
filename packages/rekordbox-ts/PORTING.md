@@ -543,3 +543,30 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   RGB detail MAE is `0.63/0.79/1.21`, while height correlation remains
   `0.993`. Crystalised and Pleasure remain held-out parity gates rather than
   bundled fixtures.
+
+## Clean beat-grid checkpoint (2026-07-27)
+
+- Re-derived PQT2 from 1,745 paired real entries: each two-byte payload is the
+  big-endian `0..=999` microsecond remainder of its PQTZ floor-millisecond
+  timestamp. The word at offset 44 is the wrapping sum of
+  `beat + bpm_hundredths + time_ms` across every PQTZ entry. The full synthetic
+  audio pipeline now gates both facts.
+- Replaced independent onset snapping with a deterministic continuous grid,
+  FFT-center correction, low-band onset/meter evidence, reduced octave
+  harmonic bias, and hierarchical sub-frame tempo/phase refinement. Science
+  Fiction, Crystalised, and Pleasure now have exact native beat counts and bar
+  labels, 70/100 ms F1 of `1.0`, and median timing error of
+  `3.088/6.196/4.032` ms. The final grid integrator uses `f64`, limiting
+  precise straight-grid interval quantization to one microsecond without
+  widening the `f32` spectral-analysis path.
+- Added `rekordbox-analyzer beat-grid-diff`: bounded monotonic
+  insertion/deletion alignment plus precise endpoint, drift, tempo, downbeat,
+  and 70/100 ms match reports. Tests cover an inserted beat, allocation bounds,
+  nonzero PQT2 residuals/checksum, and one-microsecond straight-grid
+  continuity.
+- Kept variable-tempo tracking open instead of adding a corpus-regressing
+  heuristic. James Brown live/remix and Chopin heldouts demonstrate the gap;
+  Lenny Kravitz also retains a syncopated phase ambiguity and Michael Jackson a
+  one-beat meter rotation/endpoint miss. The distributable remains solely the
+  clean Rust helper; vendored Rekordbox/JUCE code and local oracle files are not
+  runtime or release dependencies.

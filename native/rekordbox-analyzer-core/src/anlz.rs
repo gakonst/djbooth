@@ -377,9 +377,13 @@ pub struct ExtendedBeatGrid {
     pub format: u32,
     pub unknown_2: u32,
     pub anchors: [BeatGridEntry; 2],
+    /// Wrapping sum of `beat + bpm_hundredths + time_ms` over every PQTZ entry.
+    ///
+    /// The compatibility-oriented field name predates the clean-room corpus proof.
     pub unknown_3: u32,
     pub unknown_4: u32,
     pub unknown_5: u32,
+    /// Big-endian microsecond remainders (`0..=999`) paired with PQTZ entries.
     pub entries: Vec<[u8; 2]>,
 }
 

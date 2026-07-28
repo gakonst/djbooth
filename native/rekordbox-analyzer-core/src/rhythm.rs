@@ -7,6 +7,8 @@ use crate::anlz::BeatGridEntry;
 
 const FFT_SIZE: usize = 2_048;
 const HOP_SIZE: usize = 512;
+const LOW_ONSET_MAX_BIN: usize = 7;
+const FFT_CENTER_OFFSET_FRAMES: f32 = FFT_SIZE as f32 / (2 * HOP_SIZE) as f32;
 const MIN_BPM: f32 = 70.0;
 const MAX_BPM: f32 = 180.0;
 
@@ -16,6 +18,8 @@ pub struct BeatAnalysis {
     pub bpm: f64,
     pub confidence: f32,
     pub beats: Vec<BeatGridEntry>,
+    /// Microsecond remainder paired by index with each floor-millisecond PQTZ entry.
+    pub beat_time_residuals_us: Vec<u16>,
 }
 
 /// Estimate tempo, phase, bar position, and a complete Rekordbox beat grid.
@@ -35,39 +39,42 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     }
 
     let onset = spectral_flux(samples);
-    if onset.len() < 8 {
+    if onset.full.len() < 8 {
         bail!("beat analysis produced too few onset frames");
     }
     let onset_rate = sample_rate as f32 / HOP_SIZE as f32;
-    let (period, tempo_score, runner_up_score) = estimate_period(&onset, onset_rate)?;
-    let phase = estimate_phase(&onset, period);
-    let raw_beats = track_beats(&onset, period, phase);
+    let (initial_period, tempo_score, runner_up_score) = estimate_period(&onset.full, onset_rate)?;
+    let (period, phase, alignment) = refine_period_and_phase(&onset, initial_period);
+    let raw_beats = regular_grid(onset.full.len() as f64, period, phase);
     if raw_beats.len() < 4 {
         bail!("beat analysis produced too few beats");
     }
 
-    let bar_offset = estimate_bar_offset(&onset, &raw_beats);
+    let onset_beats = raw_beats
+        .iter()
+        .map(|frame| *frame as f32 - FFT_CENTER_OFFSET_FRAMES)
+        .collect::<Vec<_>>();
+    let bar_offset = estimate_bar_offset(&onset.low, &onset_beats, raw_beats[0] as f32, period);
     let bpm = 60.0 * onset_rate as f64 / period as f64;
     let bpm_hundredths = (bpm * 100.0).round().clamp(1.0, u16::MAX as f64) as u16;
     let duration_ms = samples.len() as f64 * 1_000.0 / sample_rate as f64;
-    let beats = raw_beats
+    let timed_beats = raw_beats
         .iter()
         .enumerate()
         .filter_map(|(index, frame)| {
-            let time_ms = *frame as f64 * HOP_SIZE as f64 * 1_000.0 / sample_rate as f64;
-            (time_ms <= duration_ms + 1.0).then_some(BeatGridEntry {
-                beat: ((index + bar_offset) % 4 + 1) as u16,
-                bpm_hundredths,
-                time_ms: time_ms.round().clamp(0.0, u32::MAX as f64) as u32,
-            })
+            let time_us = (*frame * HOP_SIZE as f64 * 1_000_000.0 / sample_rate as f64).round();
+            let time_ms = time_us / 1_000.0;
+            (time_ms <= duration_ms + 1.0).then_some((
+                BeatGridEntry {
+                    beat: ((index + bar_offset) % 4 + 1) as u16,
+                    bpm_hundredths,
+                    time_ms: (time_us / 1_000.0).floor().clamp(0.0, u32::MAX as f64) as u32,
+                },
+                time_us.rem_euclid(1_000.0) as u16,
+            ))
         })
         .collect::<Vec<_>>();
-
-    let alignment = raw_beats
-        .iter()
-        .map(|frame| interpolate(&onset, *frame))
-        .sum::<f32>()
-        / raw_beats.len() as f32;
+    let (beats, beat_time_residuals_us) = timed_beats.into_iter().unzip();
     let tempo_margin = if tempo_score > 0.0 {
         ((tempo_score - runner_up_score) / tempo_score).max(0.0)
     } else {
@@ -79,10 +86,16 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
         bpm,
         confidence,
         beats,
+        beat_time_residuals_us,
     })
 }
 
-fn spectral_flux(samples: &[f32]) -> Vec<f32> {
+struct OnsetEnvelopes {
+    full: Vec<f32>,
+    low: Vec<f32>,
+}
+
+fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
     let frame_count = samples
         .len()
         .saturating_sub(FFT_SIZE)
@@ -90,7 +103,10 @@ fn spectral_flux(samples: &[f32]) -> Vec<f32> {
         .unwrap_or_default()
         + usize::from(samples.len() >= FFT_SIZE);
     if frame_count == 0 {
-        return Vec::new();
+        return OnsetEnvelopes {
+            full: Vec::new(),
+            low: Vec::new(),
+        };
     }
     let window = (0..FFT_SIZE)
         .map(|index| {
@@ -110,20 +126,30 @@ fn spectral_flux(samples: &[f32]) -> Vec<f32> {
         .into_par_iter()
         .map(|range| spectral_flux_range(samples, &window, range))
         .collect::<Vec<_>>();
-    let mut flux = Vec::with_capacity(frame_count);
-    for chunk in chunks {
-        flux.extend(chunk);
+    let mut full = Vec::with_capacity(frame_count);
+    let mut low = Vec::with_capacity(frame_count);
+    for (full_chunk, low_chunk) in chunks {
+        full.extend(full_chunk);
+        low.extend(low_chunk);
     }
 
-    adaptive_normalize(&flux, 8)
+    OnsetEnvelopes {
+        full: adaptive_normalize(&full, 8),
+        low: adaptive_normalize(&low, 8),
+    }
 }
 
-fn spectral_flux_range(samples: &[f32], window: &[f32], range: std::ops::Range<usize>) -> Vec<f32> {
+fn spectral_flux_range(
+    samples: &[f32],
+    window: &[f32],
+    range: std::ops::Range<usize>,
+) -> (Vec<f32>, Vec<f32>) {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
     let mut previous = vec![0.0f32; FFT_SIZE / 2 + 1];
-    let mut flux = Vec::with_capacity(range.len());
+    let mut full_flux = Vec::with_capacity(range.len());
+    let mut low_flux = Vec::with_capacity(range.len());
 
     if range.start > 0 {
         let previous_start = (range.start - 1) * HOP_SIZE;
@@ -144,15 +170,21 @@ fn spectral_flux_range(samples: &[f32], window: &[f32], range: std::ops::Range<u
             spectrum[index] = Complex32::new(*value * window[index], 0.0);
         }
         fft.process(&mut spectrum);
-        let mut value = 0.0;
+        let mut full_value = 0.0;
+        let mut low_value = 0.0;
         for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
             let magnitude = (1.0 + 10.0 * bin.norm()).ln();
-            value += (magnitude - previous[index]).max(0.0);
+            let difference = (magnitude - previous[index]).max(0.0);
+            full_value += difference;
+            if index <= LOW_ONSET_MAX_BIN {
+                low_value += difference;
+            }
             previous[index] = magnitude;
         }
-        flux.push(value);
+        full_flux.push(full_value);
+        low_flux.push(low_value);
     }
-    flux
+    (full_flux, low_flux)
 }
 
 fn adaptive_normalize(values: &[f32], radius: usize) -> Vec<f32> {
@@ -203,7 +235,7 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
         .map(|lag| {
             let bpm = 60.0 * onset_rate / lag as f32;
             let center_prior = (-0.5 * (bpm / 120.0).log2().powi(2) / 0.55f32.powi(2)).exp();
-            let harmonic = correlations.get(lag * 2).copied().unwrap_or_default() * 0.35
+            let harmonic = correlations.get(lag * 2).copied().unwrap_or_default() * 0.10
                 + correlations.get(lag / 2).copied().unwrap_or_default() * 0.15;
             (
                 lag,
@@ -255,66 +287,86 @@ fn normalized_correlation(values: &[f32], lag: usize) -> f32 {
     }
 }
 
-fn estimate_phase(onset: &[f32], period: f32) -> f32 {
-    let steps = (period * 4.0).ceil().max(1.0) as usize;
-    (0..steps)
-        .map(|step| step as f32 / 4.0)
-        .map(|phase| {
-            let mut score = 0.0;
-            let mut count = 0usize;
-            let mut frame = phase;
-            while frame < onset.len() as f32 {
-                score += interpolate(onset, frame);
-                count += 1;
-                frame += period;
+fn refine_period_and_phase(onset: &OnsetEnvelopes, initial_period: f32) -> (f32, f32, f32) {
+    let mut best = (initial_period, 0.0, f32::NEG_INFINITY);
+    for period_step in -100..=100 {
+        let period = initial_period + period_step as f32 * 0.01;
+        if period <= 2.0 {
+            continue;
+        }
+        let phase_steps = (period * 2.0).ceil() as usize;
+        for phase_step in 0..phase_steps {
+            let phase = phase_step as f32 * 0.5;
+            let score = grid_alignment_score(onset, period, phase);
+            if score > best.2 {
+                best = (period, phase, score);
             }
-            (phase, score / count.max(1) as f32)
-        })
-        .max_by(|left, right| left.1.total_cmp(&right.1))
-        .map(|(phase, _)| phase)
-        .unwrap_or_default()
+        }
+    }
+
+    let coarse = best;
+    for period_step in -30..=30 {
+        let period = coarse.0 + period_step as f32 * 0.001;
+        for phase_step in -10..=10 {
+            let phase = (coarse.1 + phase_step as f32 * 0.05).rem_euclid(period);
+            let score = grid_alignment_score(onset, period, phase);
+            if score > best.2 {
+                best = (period, phase, score);
+            }
+        }
+    }
+    best
 }
 
-fn track_beats(onset: &[f32], period: f32, phase: f32) -> Vec<f32> {
-    let mut phase = phase;
-    while phase - period >= 0.0 {
-        phase -= period;
-    }
-    while phase < 0.0 {
-        phase += period;
-    }
+fn grid_alignment_score(onset: &OnsetEnvelopes, period: f32, phase: f32) -> f32 {
+    grid_alignment_score_weighted(onset, period, phase, 0.7)
+}
 
-    let radius = (period * 0.12).round().max(1.0) as isize;
+fn grid_alignment_score_weighted(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    phase: f32,
+    low_weight: f32,
+) -> f32 {
+    let margin = period * 4.0;
+    let mut frame = phase;
+    while frame < margin {
+        frame += period;
+    }
+    let end = onset.full.len() as f32 - margin;
+    let mut score = 0.0;
+    let mut count = 0usize;
+    while frame < end {
+        score += low_weight * interpolate(&onset.low, frame)
+            + (1.0 - low_weight) * interpolate(&onset.full, frame);
+        count += 1;
+        frame += period;
+    }
+    score / count.max(1) as f32
+}
+
+fn regular_grid(onset_len: f64, period: f32, phase: f32) -> Vec<f64> {
     let mut beats = Vec::new();
-    let mut predicted = phase;
-    while predicted < onset.len() as f32 {
-        let center = predicted.round() as isize;
-        let mut best = predicted;
-        let mut best_score = interpolate(onset, predicted) + 0.05;
-        for candidate in center - radius..=center + radius {
-            if candidate < 0 || candidate as usize >= onset.len() {
-                continue;
-            }
-            let distance = (candidate as f32 - predicted).abs() / radius as f32;
-            let score = onset[candidate as usize] - 0.15 * distance;
-            if score > best_score {
-                best = candidate as f32;
-                best_score = score;
-            }
-        }
-        if beats
-            .last()
-            .is_none_or(|previous| best - previous > period * 0.55)
-        {
-            beats.push(best);
-        }
+    let period = f64::from(period);
+    let mut predicted = f64::from(phase.rem_euclid(period as f32) + FFT_CENTER_OFFSET_FRAMES);
+    let backfilled = predicted - period;
+    if backfilled >= 1.0 {
+        predicted = backfilled;
+    }
+    while predicted < onset_len + f64::from(FFT_CENTER_OFFSET_FRAMES) {
+        beats.push(predicted);
         predicted += period;
     }
     beats
 }
 
-fn estimate_bar_offset(onset: &[f32], beats: &[f32]) -> usize {
-    let strongest = (0..4)
+fn estimate_bar_offset(
+    onset: &[f32],
+    beats: &[f32],
+    first_centered_beat: f32,
+    period: f32,
+) -> usize {
+    let mut scores = (0..4)
         .map(|offset| {
             let mut values = beats
                 .iter()
@@ -327,9 +379,17 @@ fn estimate_bar_offset(onset: &[f32], beats: &[f32]) -> usize {
             let score = values.iter().take(retained).sum::<f32>() / retained as f32;
             (offset, score)
         })
-        .max_by(|left, right| left.1.total_cmp(&right.1))
-        .map(|(offset, _)| offset)
-        .unwrap_or_default();
+        .collect::<Vec<_>>();
+    scores.sort_by(|left, right| right.1.total_cmp(&left.1));
+    let (strongest, strongest_score) = scores[0];
+    let runner_up_score = scores.get(1).map(|(_, score)| *score).unwrap_or_default();
+    let relative_margin =
+        (strongest_score - runner_up_score).max(0.0) / strongest_score.max(f32::EPSILON);
+    if relative_margin <= 0.02 {
+        // Native grids overwhelmingly start on beat one, except when analysis
+        // begins just before the next full beat and omits a negative-time beat.
+        return usize::from(first_centered_beat >= period * 0.9);
+    }
     (4 - strongest) % 4
 }
 
@@ -389,7 +449,38 @@ mod tests {
                     .all(|pair| pair[1].beat == pair[0].beat % 4 + 1)
             );
             assert!(result.beats[0].time_ms < (60_000.0 / expected) as u32 + 30);
+            assert_eq!(result.beats.len(), result.beat_time_residuals_us.len());
+            assert!(
+                result
+                    .beat_time_residuals_us
+                    .iter()
+                    .all(|residual| *residual <= 999)
+            );
+            let precise_times = result
+                .beats
+                .iter()
+                .zip(&result.beat_time_residuals_us)
+                .map(|(beat, residual)| u64::from(beat.time_ms) * 1_000 + u64::from(*residual))
+                .collect::<Vec<_>>();
+            let intervals = precise_times
+                .windows(2)
+                .map(|pair| pair[1] - pair[0])
+                .collect::<Vec<_>>();
+            let shortest = intervals.iter().min().copied().expect("beat interval");
+            let longest = intervals.iter().max().copied().expect("beat interval");
+            assert!(
+                longest - shortest <= 1,
+                "straight grids must not independently snap or jitter: {shortest}..={longest} us"
+            );
         }
+    }
+
+    #[test]
+    fn ambiguous_meter_uses_native_start_boundary_prior() {
+        let onset = vec![0.0; 256];
+        let beats = (0..16).map(|index| index as f32 * 40.0).collect::<Vec<_>>();
+        assert_eq!(estimate_bar_offset(&onset, &beats, 38.0, 40.0), 1);
+        assert_eq!(estimate_bar_offset(&onset, &beats, 20.0, 40.0), 0);
     }
 
     #[test]
