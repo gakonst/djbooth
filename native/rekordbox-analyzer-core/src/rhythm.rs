@@ -65,13 +65,21 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
     } else {
         time_domain_phase
     };
+    let phase = robust_body_phase(&onset, period, phase);
     if phase != initial_phase {
         alignment = grid_alignment_score(&onset, period, phase);
     }
-    let raw_beats = regular_grid(onset.full.len() as f64, period, phase);
-    if raw_beats.len() < 4 {
+    let regular_beats = regular_grid(onset.full.len() as f64, period, phase);
+    if regular_beats.len() < 4 {
         bail!("beat analysis produced too few beats");
     }
+    let variable_candidate = barwise_tempo_grid(&onset, period, &regular_beats);
+    let use_variable_grid = should_select_variable_grid(&variable_candidate);
+    let raw_beats = if use_variable_grid {
+        variable_candidate.beats.as_slice()
+    } else {
+        regular_beats.as_slice()
+    };
 
     let onset_beats = raw_beats
         .iter()
@@ -90,7 +98,17 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
             (time_ms <= duration_ms + 1.0).then_some((
                 BeatGridEntry {
                     beat: ((index + bar_offset) % 4 + 1) as u16,
-                    bpm_hundredths,
+                    bpm_hundredths: if use_variable_grid {
+                        let interval = raw_beats
+                            .get(index + 1)
+                            .map(|next| *next - *frame)
+                            .unwrap_or_else(|| *frame - raw_beats[index - 1]);
+                        (60.0 * f64::from(onset_rate) / interval * 100.0)
+                            .round()
+                            .clamp(1.0, u16::MAX as f64) as u16
+                    } else {
+                        bpm_hundredths
+                    },
                     time_ms: (time_us / 1_000.0).floor().clamp(0.0, u32::MAX as f64) as u32,
                 },
                 time_us.rem_euclid(1_000.0) as u16,
@@ -563,7 +581,9 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
     } else {
         &baseline_candidates
     };
-    let Some(&(best_lag, best_score)) = candidates.first() else {
+    let best = strong_three_over_two_tempo_candidate(&baseline_candidates, &alternative_candidates)
+        .or_else(|| candidates.first().copied());
+    let Some((best_lag, best_score)) = best else {
         bail!("tempo search produced no candidates");
     };
     if best_score <= f32::EPSILON {
@@ -585,6 +605,26 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
         0.0
     };
     Ok((best_lag as f32 + delta, best_score, runner_up))
+}
+
+fn strong_three_over_two_tempo_candidate(
+    baseline: &[(usize, f32)],
+    alternative: &[(usize, f32)],
+) -> Option<(usize, f32)> {
+    const MIN_RELATIVE_SCORE: f32 = 0.93;
+
+    let &(baseline_lag, baseline_score) = baseline.first()?;
+    let &(alternative_lag, _) = alternative.first()?;
+    if baseline_lag != alternative_lag {
+        return None;
+    }
+    let target = baseline_lag as f32 * 2.0 / 3.0;
+    baseline
+        .iter()
+        .copied()
+        .filter(|(lag, _)| (*lag as f32 - target).abs() <= 1.0)
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .filter(|(_, score)| *score >= baseline_score * MIN_RELATIVE_SCORE)
 }
 
 fn tempo_candidates(
@@ -736,6 +776,66 @@ fn robust_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32) -> f32
     }
 
     selected_phase
+}
+
+fn robust_body_phase(onset: &OnsetEnvelopes, period: f32, selected_phase: f32) -> f32 {
+    const MIN_SEGMENTS: usize = 8;
+
+    let selected_kick_score = kick_alignment_score(onset, period, selected_phase);
+    let (candidate_phase, candidate_kick_score) =
+        best_opposite_phase(period, selected_phase, |phase| {
+            kick_alignment_score(onset, period, phase)
+        });
+    let kick_gain =
+        (candidate_kick_score - selected_kick_score) / candidate_kick_score.max(f32::EPSILON);
+    let (selected_votes, candidate_votes, tied_votes) = phase_segment_votes(
+        onset.full.len(),
+        period,
+        selected_phase,
+        candidate_phase,
+        16,
+        |frame| kick_alignment_value(onset, frame),
+    );
+    let total_segments = selected_votes + candidate_votes + tied_votes;
+    let selected_grid = grid_alignment_score(onset, period, selected_phase);
+    let candidate_grid = grid_alignment_score(onset, period, candidate_phase);
+    let selected_body = envelope_alignment_moments(&onset.body, period, selected_phase).0;
+    let candidate_body = envelope_alignment_moments(&onset.body, period, candidate_phase).0;
+    let selected_mid = optimized_envelope_moments(&onset.mid, period, selected_phase).0;
+    let candidate_mid = optimized_envelope_moments(&onset.mid, period, candidate_phase).0;
+    let selected_bass = optimized_envelope_moments(&onset.bass, period, selected_phase).0;
+    let candidate_bass = optimized_envelope_moments(&onset.bass, period, candidate_phase).0;
+    let supported = circular_distance(candidate_phase, selected_phase, period) >= period * 0.35
+        && total_segments >= MIN_SEGMENTS
+        && body_consensus_supports_opposite_phase(
+            (candidate_grid - selected_grid) / selected_grid.max(f32::EPSILON),
+            kick_gain,
+            candidate_votes as f32 / total_segments.max(1) as f32,
+            candidate_body / selected_body.max(f32::EPSILON),
+            candidate_mid / selected_mid.max(f32::EPSILON),
+            candidate_bass / selected_bass.max(f32::EPSILON),
+        );
+    if supported {
+        candidate_phase
+    } else {
+        selected_phase
+    }
+}
+
+fn body_consensus_supports_opposite_phase(
+    grid_gain: f32,
+    kick_gain: f32,
+    kick_vote_share: f32,
+    body_ratio: f32,
+    mid_ratio: f32,
+    bass_ratio: f32,
+) -> bool {
+    (0.0..=0.1).contains(&grid_gain)
+        && kick_gain >= 0.15
+        && kick_vote_share >= 0.6
+        && (1.5..=5.0).contains(&body_ratio)
+        && mid_ratio >= 0.9
+        && bass_ratio >= 0.9
 }
 
 fn best_opposite_phase(
@@ -903,6 +1003,152 @@ fn regular_grid(onset_len: f64, period: f32, phase: f32) -> Vec<f64> {
         predicted += period;
     }
     beats
+}
+
+struct VariableGridCandidate {
+    beats: Vec<f64>,
+    emission_gain: f64,
+    offset_min: f64,
+    offset_max: f64,
+    transition_abs_max: f64,
+}
+
+fn should_select_variable_grid(candidate: &VariableGridCandidate) -> bool {
+    const MIN_EMISSION_GAIN: f64 = 0.36;
+    const MAX_BAR_TRANSITION_FRAMES: f64 = 0.75;
+    const MIN_ACCUMULATED_DRIFT_FRAMES: f64 = 10.0;
+    const MIN_FORWARD_OFFSET_FRAMES: f64 = 10.0;
+    const MIN_BACKWARD_OFFSET_FRAMES: f64 = -2.0;
+
+    candidate.emission_gain >= MIN_EMISSION_GAIN
+        && candidate.transition_abs_max <= MAX_BAR_TRANSITION_FRAMES
+        && candidate.offset_max - candidate.offset_min >= MIN_ACCUMULATED_DRIFT_FRAMES
+        && candidate.offset_max >= MIN_FORWARD_OFFSET_FRAMES
+        && candidate.offset_min >= MIN_BACKWARD_OFFSET_FRAMES
+}
+
+fn barwise_tempo_grid(
+    onset: &OnsetEnvelopes,
+    period: f32,
+    regular_beats: &[f64],
+) -> VariableGridCandidate {
+    const BEATS_PER_BAR: usize = 4;
+    const STATE_STEP: f64 = 0.25;
+    const STATE_RADIUS_PERIODS: f64 = 0.48;
+    const MAX_TRANSITION_FRAMES: f64 = 2.0;
+    const TRANSITION_PENALTY: f64 = 0.15;
+
+    let bar_count = regular_beats.len().div_ceil(BEATS_PER_BAR);
+    let radius = f64::from(period) * STATE_RADIUS_PERIODS;
+    let mut states = Vec::new();
+    let mut state = -radius;
+    while state <= radius + 1.0e-6 {
+        states.push(state);
+        state += STATE_STEP;
+    }
+    let emission = (0..bar_count)
+        .map(|bar| {
+            states
+                .iter()
+                .map(|offset| {
+                    let start = bar * BEATS_PER_BAR;
+                    let end = (start + BEATS_PER_BAR).min(regular_beats.len());
+                    let score = regular_beats[start..end]
+                        .iter()
+                        .map(|beat| {
+                            let frame =
+                                (*beat - f64::from(FFT_CENTER_OFFSET_FRAMES) + *offset) as f32;
+                            0.65 * interpolate(&onset.low, frame)
+                                + 0.35 * interpolate(&onset.body, frame)
+                        })
+                        .sum::<f32>();
+                    f64::from(score) / (end - start) as f64
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let mut scores = vec![vec![f64::NEG_INFINITY; states.len()]; bar_count];
+    let mut trace = vec![vec![usize::MAX; states.len()]; bar_count];
+    scores[0].clone_from_slice(&emission[0]);
+    let max_state_jump = (MAX_TRANSITION_FRAMES / STATE_STEP).ceil() as usize;
+    for bar in 1..bar_count {
+        for state_index in 0..states.len() {
+            let start = state_index.saturating_sub(max_state_jump);
+            let end = (state_index + max_state_jump).min(states.len() - 1);
+            let mut best = (f64::NEG_INFINITY, usize::MAX);
+            for previous in start..=end {
+                let delta = states[state_index] - states[previous];
+                let score = scores[bar - 1][previous] - TRANSITION_PENALTY * delta * delta;
+                if score > best.0 {
+                    best = (score, previous);
+                }
+            }
+            scores[bar][state_index] = best.0 + emission[bar][state_index];
+            trace[bar][state_index] = best.1;
+        }
+    }
+
+    let mut state_index = scores[bar_count - 1]
+        .iter()
+        .enumerate()
+        .max_by(|left, right| left.1.total_cmp(right.1))
+        .map(|(index, _)| index)
+        .unwrap_or_default();
+    let mut state_path = vec![0; bar_count];
+    for bar in (0..bar_count).rev() {
+        state_path[bar] = state_index;
+        if bar > 0 {
+            state_index = trace[bar][state_index];
+        }
+    }
+    let offsets = state_path
+        .iter()
+        .map(|index| states[*index])
+        .collect::<Vec<_>>();
+    let beats = regular_beats
+        .iter()
+        .enumerate()
+        .map(|(index, beat)| {
+            let bar = index / BEATS_PER_BAR;
+            let fraction = (index % BEATS_PER_BAR) as f64 / BEATS_PER_BAR as f64;
+            let left = offsets[bar];
+            let right = offsets[(bar + 1).min(offsets.len() - 1)];
+            *beat + left * (1.0 - fraction) + right * fraction
+        })
+        .collect();
+    let zero_state = states
+        .iter()
+        .enumerate()
+        .min_by(|left, right| left.1.abs().total_cmp(&right.1.abs()))
+        .map(|(index, _)| index)
+        .unwrap_or_default();
+    let constant_emission = emission
+        .iter()
+        .map(|values| values[zero_state])
+        .sum::<f64>()
+        / bar_count as f64;
+    let selected_emission = emission
+        .iter()
+        .zip(&state_path)
+        .map(|(values, selected)| values[*selected])
+        .sum::<f64>()
+        / bar_count as f64;
+    let (offset_min, offset_max) = offsets.iter().fold(
+        (f64::INFINITY, f64::NEG_INFINITY),
+        |(minimum, maximum), offset| (minimum.min(*offset), maximum.max(*offset)),
+    );
+    let transition_abs_max = offsets
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .fold(0.0, f64::max);
+    VariableGridCandidate {
+        beats,
+        emission_gain: selected_emission - constant_emission,
+        offset_min,
+        offset_max,
+        transition_abs_max,
+    }
 }
 
 fn estimate_bar_offset(
@@ -1122,6 +1368,77 @@ mod tests {
     }
 
     #[test]
+    fn variable_grid_gate_requires_smooth_directional_drift() {
+        let candidate =
+            |emission_gain, offset_min, offset_max, transition_abs_max| VariableGridCandidate {
+                beats: Vec::new(),
+                emission_gain,
+                offset_min,
+                offset_max,
+                transition_abs_max,
+            };
+        assert!(should_select_variable_grid(&candidate(
+            0.37, -1.5, 12.0, 0.75,
+        )));
+        assert!(!should_select_variable_grid(&candidate(
+            0.35, -1.5, 12.0, 0.75,
+        )));
+        assert!(!should_select_variable_grid(&candidate(
+            0.37, -2.5, 12.0, 0.75,
+        )));
+        assert!(!should_select_variable_grid(&candidate(
+            0.37, -1.5, 9.5, 1.0,
+        )));
+    }
+
+    #[test]
+    fn straight_onsets_keep_the_regular_grid() {
+        let onset = phase_fixture(1.0, 0.0, 1.0, 0.0, 1.0, 0.0);
+        let regular = (0..200)
+            .map(|index| 12.0 + index as f64 * 40.0)
+            .collect::<Vec<_>>();
+        let candidate = barwise_tempo_grid(&onset, 40.0, &regular);
+        assert_eq!(candidate.beats.len(), regular.len());
+        assert!(!should_select_variable_grid(&candidate));
+    }
+
+    #[test]
+    fn barwise_tracker_accepts_smooth_drift() {
+        const PERIOD: f64 = 40.0;
+        const BAR_COUNT: usize = 28;
+        let regular = (0..BAR_COUNT * 4)
+            .map(|index| 42.0 + index as f64 * PERIOD)
+            .collect::<Vec<_>>();
+        let onset_len = regular.last().copied().unwrap_or_default().ceil() as usize + 64;
+        let mut low = vec![0.0; onset_len];
+        let mut body = low.clone();
+        for (index, beat) in regular.iter().enumerate() {
+            let position =
+                *beat - f64::from(FFT_CENTER_OFFSET_FRAMES) + index.div_euclid(4) as f64 * 0.5;
+            let left = position.floor() as usize;
+            for envelope in [&mut low, &mut body] {
+                envelope[left] = 1.0;
+                envelope[left + 1] = 1.0;
+            }
+        }
+        let onset = OnsetEnvelopes {
+            full: body.clone(),
+            low,
+            body,
+            kick: vec![0.0; onset_len],
+            bass: vec![0.0; onset_len],
+            mid: vec![0.0; onset_len],
+            kick_energy: vec![0.0; onset_len],
+            bass_energy: vec![0.0; onset_len],
+        };
+
+        let candidate = barwise_tempo_grid(&onset, PERIOD as f32, &regular);
+        assert!(should_select_variable_grid(&candidate));
+        assert!(candidate.beats.last().unwrap() - regular.last().unwrap() >= 10.0);
+        assert!(candidate.transition_abs_max <= 0.75);
+    }
+
+    #[test]
     fn metrical_tempo_gate_only_accepts_validated_ratio_families() {
         for ratio in [0.5, 2.0 / 3.0, 0.8, 4.0 / 3.0] {
             assert!(canonical_tempo_ratio(ratio));
@@ -1132,12 +1449,47 @@ mod tests {
     }
 
     #[test]
+    fn strong_three_over_two_tempo_requires_prior_agreement_and_close_score() {
+        let baseline = [(49, 0.666), (65, 0.654), (33, 0.624)];
+        let agreeing = [(49, 0.652), (33, 0.576)];
+        assert_eq!(
+            strong_three_over_two_tempo_candidate(&baseline, &agreeing),
+            Some((33, 0.624)),
+        );
+
+        let disagreeing = [(33, 0.633), (49, 0.575)];
+        assert_eq!(
+            strong_three_over_two_tempo_candidate(&baseline, &disagreeing),
+            None,
+        );
+
+        let weak = [(49, 0.666), (33, 0.60)];
+        assert_eq!(
+            strong_three_over_two_tempo_candidate(&weak, &agreeing),
+            None,
+        );
+    }
+
+    #[test]
     fn kick_phase_requires_bass_and_segment_consensus() {
         let supported = phase_fixture(0.4, 1.0, 0.4, 1.0, 0.0, 0.0);
         assert!(circular_distance(robust_phase(&supported, 40.0, 10.0), 30.0, 40.0) < 0.1);
 
         let offbeat_bass = phase_fixture(0.4, 1.0, 1.0, 1.0, 0.0, 0.0);
         assert_eq!(robust_phase(&offbeat_bass, 40.0, 10.0), 10.0);
+    }
+
+    #[test]
+    fn body_consensus_only_relaxes_near_tied_opposite_phase() {
+        assert!(body_consensus_supports_opposite_phase(
+            0.05, 0.20, 0.67, 1.96, 0.98, 0.95,
+        ));
+        assert!(!body_consensus_supports_opposite_phase(
+            0.05, 0.20, 0.67, 20.0, 0.98, 0.95,
+        ));
+        assert!(!body_consensus_supports_opposite_phase(
+            0.20, 0.20, 0.67, 1.96, 0.98, 0.95,
+        ));
     }
 
     #[test]

@@ -709,3 +709,47 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   decodes selected already-correct tracks and flipped two from parity to zero
   F1. Rejected both rules and retained none of the diagnostic-only second FFT
   path.
+
+## Barwise drift and residual consensus checkpoint (2026-07-28)
+
+- Added one conservative `3:2` tempo escape for cases where both existing
+  autocorrelation priors choose the same lag and the faster competing family
+  retains at least 93% of its score. It selected only differential ID 5:
+  `105.80 → 158.70 BPM`, 607/607 native beats, correct downbeat phase,
+  `0.401186 → 1.0` F1, and `35.949 ms` p95 error. The gate selected no track
+  in the 848 currently available held-out references.
+- Added final body-band phase consensus after the existing flux, power, and
+  time-domain selectors. A half-beat move requires a near-tied global grid,
+  at least 15% kick gain and 60% segment support, bounded `1.5–5.0x` body
+  gain, and noncontradictory mid/bass evidence. It selected only ID 17:
+  `0 → 1.0` F1 with `18.264 ms` p95 error. The implementation reuses existing
+  envelopes and performs no additional FFT.
+- Added a guarded bar-boundary Viterbi tracker following the dynamic-programming
+  structure in [Ellis (2007)](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf)
+  and the barwise tempo-state model in
+  [Krebs et al. (2015)](https://ismir2015.uma.es/articles/239_Paper.pdf).
+  Quarter-frame offset states span `±0.48` global periods, transitions carry a
+  quadratic tempo-change penalty, and selected offsets are linearly integrated
+  into four-beat tempo runs. The variable grid is emitted only with at least
+  `0.36` onset-emission gain, no transition above `0.75` frame, at least ten
+  frames of accumulated forward drift, and no backward excursion below two
+  frames.
+- The tracker selected only differential ID 32. Its timing moved from
+  `0.806266 → 0.999478` F1 and `113.321 → 10.182 ms` p95 error while emitting
+  139 local tempo changes against the reference's 153. A full 849-track
+  held-out replay selected no variable grid and preserved all prior outputs.
+- Combined production replay reached 92/110 tracks at `>=0.99` F1, up from
+  89/110, with mean F1 `0.839553 → 0.855844` and mean p95 error
+  `53.546 → 49.187 ms`. Exactly IDs 5, 17, and 32 changed; all improved and no
+  prior pass regressed. The held-out result remains 772/849.
+- An additional disjoint screen completed 609 currently available recordings
+  from the frozen 613-track fresh cohort. Neither new tempo path activated;
+  four source recordings had moved or disappeared. The five adversarial
+  controls that defeated the broader centroid rule remained byte-identical.
+  Five paired ID-32 runs measured `1.404 s` mean for the tracker build versus
+  `1.428 s` for the prior binary, treated as no measurable slowdown.
+- Rejected a local-RMS phase rule despite two held-out fixes because it changed
+  one exact held-out pass from `1 → 0` F1. Also rejected SuperFlux,
+  complex-bass, and HFC combinations that failed the fresh controls. ID 12 and
+  alternate Apathy/Conga copies retain contradictory half-beat annotations;
+  no track-specific exception was added.
