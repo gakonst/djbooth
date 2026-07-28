@@ -31,7 +31,8 @@ pub use audio::{
 pub use differential::{
     BeatGridDifferential, BeatGridEndpoint, BeatMatchRate, DifferentialReport, FileDifferential,
     FirstDifference, TagDifferential, TempoErrorDistribution, TimestampErrorDistribution,
-    compare_beat_grids, compare_output_directories,
+    WaveformComponentDifferential, WaveformDifferential, WaveformTagDifferential,
+    compare_beat_grids, compare_output_directories, compare_waveforms,
 };
 pub use key::{KeyAnalysis, analyze_key};
 pub use rhythm::{BeatAnalysis, analyze_beats};

@@ -4,7 +4,9 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::anlz::{AnlzFile, AnlzTag, BeatGridEntry, DatAnalysis, ExtAnalysis};
+use crate::anlz::{
+    AnlzFile, AnlzTag, BeatGridEntry, CountedWaveform, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
+};
 
 const OUTPUT_NAMES: [&str; 3] = ["ANLZ0000.DAT", "ANLZ0000.EXT", "ANLZ0000.2EX"];
 const MAX_BEAT_ALIGNMENT_CELLS: usize = 25_000_000;
@@ -130,6 +132,48 @@ pub struct BeatGridDifferential {
     pub downbeat_timestamp_error: TimestampErrorDistribution,
     pub at_70_ms: BeatMatchRate,
     pub at_100_ms: BeatMatchRate,
+}
+
+/// Same-column scalar errors for one decoded waveform component.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformComponentDifferential {
+    pub name: String,
+    pub reference_count: usize,
+    pub candidate_count: usize,
+    pub overlap_count: usize,
+    pub count_delta: i64,
+    pub exact_values: usize,
+    pub exact_fraction: f64,
+    pub correlation: Option<f64>,
+    pub mean_reference: f64,
+    pub mean_candidate: f64,
+    pub mean_absolute_error: f64,
+    pub median_absolute_error: f64,
+    pub p95_absolute_error: f64,
+    pub max_absolute_error: f64,
+    pub signed_mean_error: f64,
+}
+
+/// Semantic component comparison for one Rekordbox waveform tag.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformTagDifferential {
+    pub kind: String,
+    pub entry_bytes: usize,
+    pub reference_count: usize,
+    pub candidate_count: usize,
+    pub count_delta: i64,
+    pub components: Vec<WaveformComponentDifferential>,
+}
+
+/// Semantic PWAV/PWV2/PWV3/PWV4/PWV5/PWV6/PWV7 comparison.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformDifferential {
+    pub reference_directory: PathBuf,
+    pub candidate_directory: PathBuf,
+    pub waveforms: Vec<WaveformTagDifferential>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +320,338 @@ pub fn compare_beat_grids(
             100_000,
         ),
     })
+}
+
+/// Compare all Rekordbox waveform tags by decoded same-column components.
+pub fn compare_waveforms(
+    reference_directory: &Path,
+    candidate_directory: &Path,
+) -> Result<WaveformDifferential> {
+    let reference = read_semantic_waveforms(reference_directory)?;
+    let candidate = read_semantic_waveforms(candidate_directory)?;
+    if reference.len() != candidate.len() {
+        bail!(
+            "waveform tag count differs: reference {} candidate {}",
+            reference.len(),
+            candidate.len()
+        );
+    }
+    let waveforms = reference
+        .iter()
+        .zip(&candidate)
+        .map(|(reference, candidate)| compare_semantic_waveform(reference, candidate))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(WaveformDifferential {
+        reference_directory: reference_directory.to_path_buf(),
+        candidate_directory: candidate_directory.to_path_buf(),
+        waveforms,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticWaveform {
+    kind: &'static str,
+    entry_bytes: usize,
+    components: Vec<(&'static str, Vec<u8>)>,
+}
+
+impl SemanticWaveform {
+    fn count(&self) -> usize {
+        self.components
+            .first()
+            .map(|(_, values)| values.len())
+            .unwrap_or_default()
+    }
+}
+
+fn read_semantic_waveforms(directory: &Path) -> Result<Vec<SemanticWaveform>> {
+    let dat_path = directory.join("ANLZ0000.DAT");
+    let ext_path = directory.join("ANLZ0000.EXT");
+    let two_ex_path = directory.join("ANLZ0000.2EX");
+    let dat = DatAnalysis::parse(&AnlzFile::read(&dat_path)?)
+        .with_context(|| format!("invalid waveform file {}", dat_path.display()))?;
+    let ext = ExtAnalysis::parse(&AnlzFile::read(&ext_path)?)
+        .with_context(|| format!("invalid waveform file {}", ext_path.display()))?;
+    let two_ex = ThreeBandAnalysis::parse(&AnlzFile::read(&two_ex_path)?)
+        .with_context(|| format!("invalid waveform file {}", two_ex_path.display()))?;
+
+    Ok(vec![
+        decode_waveform("PWAV", 1, &dat.preview_waveform)?,
+        decode_waveform("PWV2", 1, &dat.tiny_preview_waveform)?,
+        decode_counted_waveform(&ext.detail_waveform)?,
+        decode_counted_waveform(&ext.color_preview_waveform)?,
+        decode_counted_waveform(&ext.color_detail_waveform)?,
+        decode_counted_waveform(&two_ex.preview_waveform)?,
+        decode_counted_waveform(&two_ex.detail_waveform)?,
+    ])
+}
+
+fn decode_counted_waveform(waveform: &CountedWaveform) -> Result<SemanticWaveform> {
+    decode_waveform(
+        match &waveform.kind {
+            b"PWV3" => "PWV3",
+            b"PWV4" => "PWV4",
+            b"PWV5" => "PWV5",
+            b"PWV6" => "PWV6",
+            b"PWV7" => "PWV7",
+            kind => bail!(
+                "{} is not a supported semantic waveform",
+                String::from_utf8_lossy(kind)
+            ),
+        },
+        usize::try_from(waveform.entry_bytes).context("waveform entry width overflow")?,
+        &waveform.entries,
+    )
+}
+
+fn decode_waveform(
+    kind: &'static str,
+    entry_bytes: usize,
+    entries: &[u8],
+) -> Result<SemanticWaveform> {
+    let expected_entry_bytes = match kind {
+        "PWAV" | "PWV2" | "PWV3" => 1,
+        "PWV5" => 2,
+        "PWV6" | "PWV7" => 3,
+        "PWV4" => 6,
+        _ => bail!("{kind} is not a supported semantic waveform"),
+    };
+    if entry_bytes != expected_entry_bytes || !entries.len().is_multiple_of(entry_bytes) {
+        bail!(
+            "{kind} requires {expected_entry_bytes}-byte entries, received width {entry_bytes} and {} bytes",
+            entries.len()
+        );
+    }
+    let components = match kind {
+        "PWAV" | "PWV3" => vec![
+            ("height", entries.iter().map(|value| value & 0x1f).collect()),
+            (
+                "whiteness",
+                entries.iter().map(|value| value >> 5).collect(),
+            ),
+        ],
+        "PWV2" => vec![
+            ("height", entries.iter().map(|value| value & 0x0f).collect()),
+            (
+                "unusedHigh",
+                entries.iter().map(|value| value >> 4).collect(),
+            ),
+        ],
+        "PWV4" => {
+            let names = [
+                "amplitude",
+                "inverseLuminance",
+                "bottom",
+                "red",
+                "green",
+                "blue",
+            ];
+            names
+                .into_iter()
+                .enumerate()
+                .map(|(component, name)| {
+                    (
+                        name,
+                        entries
+                            .chunks_exact(entry_bytes)
+                            .map(|entry| entry[component])
+                            .collect(),
+                    )
+                })
+                .collect()
+        }
+        "PWV5" => {
+            let values = entries
+                .chunks_exact(entry_bytes)
+                .map(|entry| u16::from_be_bytes([entry[0], entry[1]]))
+                .collect::<Vec<_>>();
+            vec![
+                (
+                    "red",
+                    values
+                        .iter()
+                        .map(|value| ((value >> 13) & 7) as u8)
+                        .collect(),
+                ),
+                (
+                    "green",
+                    values
+                        .iter()
+                        .map(|value| ((value >> 10) & 7) as u8)
+                        .collect(),
+                ),
+                (
+                    "blue",
+                    values
+                        .iter()
+                        .map(|value| ((value >> 7) & 7) as u8)
+                        .collect(),
+                ),
+                (
+                    "height",
+                    values
+                        .iter()
+                        .map(|value| ((value >> 2) & 31) as u8)
+                        .collect(),
+                ),
+                (
+                    "unusedLow",
+                    values.iter().map(|value| (value & 3) as u8).collect(),
+                ),
+            ]
+        }
+        // A 114-track Rekordbox 6.8.2 corpus and pure-tone probes establish
+        // low/mid/high byte order, despite older public notes describing
+        // mid/high/low.
+        "PWV6" | "PWV7" => ["low", "mid", "high"]
+            .into_iter()
+            .enumerate()
+            .map(|(component, name)| {
+                (
+                    name,
+                    entries
+                        .chunks_exact(entry_bytes)
+                        .map(|entry| entry[component])
+                        .collect(),
+                )
+            })
+            .collect(),
+        _ => unreachable!("validated waveform kind"),
+    };
+    Ok(SemanticWaveform {
+        kind,
+        entry_bytes,
+        components,
+    })
+}
+
+fn compare_semantic_waveform(
+    reference: &SemanticWaveform,
+    candidate: &SemanticWaveform,
+) -> Result<WaveformTagDifferential> {
+    if reference.kind != candidate.kind
+        || reference.entry_bytes != candidate.entry_bytes
+        || reference.components.len() != candidate.components.len()
+    {
+        bail!(
+            "waveform shape mismatch: reference {} candidate {}",
+            reference.kind,
+            candidate.kind
+        );
+    }
+    let components = reference
+        .components
+        .iter()
+        .zip(&candidate.components)
+        .map(
+            |((reference_name, reference_values), (candidate_name, candidate_values))| {
+            if reference_name != candidate_name {
+                bail!(
+                    "{} component mismatch: reference {reference_name} candidate {candidate_name}",
+                    reference.kind
+                );
+            }
+            compare_waveform_component(
+                reference_name,
+                reference_values,
+                candidate_values,
+            )
+        },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    Ok(WaveformTagDifferential {
+        kind: reference.kind.to_string(),
+        entry_bytes: reference.entry_bytes,
+        reference_count: reference.count(),
+        candidate_count: candidate.count(),
+        count_delta: count_delta(reference.count(), candidate.count())?,
+        components,
+    })
+}
+
+fn compare_waveform_component(
+    name: &str,
+    reference: &[u8],
+    candidate: &[u8],
+) -> Result<WaveformComponentDifferential> {
+    let reference_count = reference.len();
+    let candidate_count = candidate.len();
+    let overlap_count = reference_count.min(candidate_count);
+    let reference = &reference[..overlap_count];
+    let candidate = &candidate[..overlap_count];
+    let absolute_errors = reference
+        .iter()
+        .zip(candidate)
+        .map(|(reference, candidate)| reference.abs_diff(*candidate))
+        .collect::<Vec<_>>();
+    let mut sorted_errors = absolute_errors.clone();
+    sorted_errors.sort_unstable();
+    let signed_error_sum = reference
+        .iter()
+        .zip(candidate)
+        .map(|(reference, candidate)| f64::from(*candidate) - f64::from(*reference))
+        .sum::<f64>();
+    let denominator = overlap_count.max(1) as f64;
+    let exact_values = absolute_errors.iter().filter(|error| **error == 0).count();
+    Ok(WaveformComponentDifferential {
+        name: name.to_string(),
+        reference_count,
+        candidate_count,
+        overlap_count,
+        count_delta: count_delta(reference_count, candidate_count)?,
+        exact_values,
+        exact_fraction: exact_values as f64 / denominator,
+        correlation: pearson_correlation(reference, candidate),
+        mean_reference: reference.iter().map(|value| f64::from(*value)).sum::<f64>() / denominator,
+        mean_candidate: candidate.iter().map(|value| f64::from(*value)).sum::<f64>() / denominator,
+        mean_absolute_error: absolute_errors
+            .iter()
+            .map(|value| f64::from(*value))
+            .sum::<f64>()
+            / denominator,
+        median_absolute_error: f64::from(percentile(&sorted_errors, 0.50)),
+        p95_absolute_error: f64::from(percentile(&sorted_errors, 0.95)),
+        max_absolute_error: f64::from(sorted_errors.last().copied().unwrap_or_default()),
+        signed_mean_error: signed_error_sum / denominator,
+    })
+}
+
+fn count_delta(reference: usize, candidate: usize) -> Result<i64> {
+    let reference = i64::try_from(reference).context("reference waveform count exceeds i64")?;
+    let candidate = i64::try_from(candidate).context("candidate waveform count exceeds i64")?;
+    Ok(candidate - reference)
+}
+
+fn pearson_correlation(reference: &[u8], candidate: &[u8]) -> Option<f64> {
+    let count = reference.len().min(candidate.len());
+    if count < 2 {
+        return None;
+    }
+    let mean_reference = reference[..count]
+        .iter()
+        .map(|value| f64::from(*value))
+        .sum::<f64>()
+        / count as f64;
+    let mean_candidate = candidate[..count]
+        .iter()
+        .map(|value| f64::from(*value))
+        .sum::<f64>()
+        / count as f64;
+    let (covariance, reference_variance, candidate_variance) =
+        reference[..count].iter().zip(&candidate[..count]).fold(
+            (0.0, 0.0, 0.0),
+            |(covariance, reference_variance, candidate_variance), (reference, candidate)| {
+                let reference = f64::from(*reference) - mean_reference;
+                let candidate = f64::from(*candidate) - mean_candidate;
+                (
+                    covariance + reference * candidate,
+                    reference_variance + reference * reference,
+                    candidate_variance + candidate * candidate,
+                )
+            },
+        );
+    let denominator = (reference_variance * candidate_variance).sqrt();
+    (denominator > f64::EPSILON).then_some((covariance / denominator).clamp(-1.0, 1.0))
 }
 
 fn read_precise_beat_grid(directory: &Path) -> Result<Vec<PreciseBeat>> {
@@ -733,5 +1109,54 @@ mod tests {
             .collect::<Vec<_>>();
         let error = align_beats(&long, &long).expect_err("bounded alignment");
         assert!(error.to_string().contains("maximum is"));
+    }
+
+    #[test]
+    fn semantic_waveforms_decode_bitfields_and_report_overlap_errors() {
+        let monochrome = decode_waveform("PWAV", 1, &[0b1011_0010]).expect("PWAV");
+        assert_eq!(
+            monochrome.components,
+            vec![("height", vec![18]), ("whiteness", vec![5])]
+        );
+        let tiny = decode_waveform("PWV2", 1, &[0xab]).expect("PWV2");
+        assert_eq!(
+            tiny.components,
+            vec![("height", vec![11]), ("unusedHigh", vec![10])]
+        );
+        let color = decode_waveform("PWV5", 2, &[0b1011_0110, 0b1101_0110]).expect("PWV5");
+        assert_eq!(
+            color.components,
+            vec![
+                ("red", vec![5]),
+                ("green", vec![5]),
+                ("blue", vec![5]),
+                ("height", vec![21]),
+                ("unusedLow", vec![2]),
+            ]
+        );
+        let three_band = decode_waveform("PWV7", 3, &[10, 20, 30, 40, 50, 60]).expect("PWV7");
+        assert_eq!(
+            three_band.components,
+            vec![
+                ("low", vec![10, 40]),
+                ("mid", vec![20, 50]),
+                ("high", vec![30, 60]),
+            ]
+        );
+
+        let report =
+            compare_waveform_component("height", &[1, 2, 3], &[1, 4]).expect("component diff");
+        assert_eq!(report.reference_count, 3);
+        assert_eq!(report.candidate_count, 2);
+        assert_eq!(report.overlap_count, 2);
+        assert_eq!(report.count_delta, -1);
+        assert_eq!(report.exact_values, 1);
+        assert_eq!(report.exact_fraction, 0.5);
+        assert_eq!(report.correlation, Some(1.0));
+        assert_eq!(report.mean_absolute_error, 1.0);
+        assert_eq!(report.median_absolute_error, 2.0);
+        assert_eq!(report.p95_absolute_error, 2.0);
+        assert_eq!(report.max_absolute_error, 2.0);
+        assert_eq!(report.signed_mean_error, 1.0);
     }
 }

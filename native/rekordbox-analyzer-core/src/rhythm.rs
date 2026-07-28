@@ -8,6 +8,7 @@ use crate::anlz::BeatGridEntry;
 const FFT_SIZE: usize = 2_048;
 const HOP_SIZE: usize = 512;
 const LOW_ONSET_MAX_BIN: usize = 7;
+const BODY_ONSET_MAX_BIN: usize = 93;
 const FFT_CENTER_OFFSET_FRAMES: f32 = FFT_SIZE as f32 / (2 * HOP_SIZE) as f32;
 const MIN_BPM: f32 = 70.0;
 const MAX_BPM: f32 = 180.0;
@@ -93,6 +94,7 @@ pub fn analyze_beats(samples: &[f32], sample_rate: u32) -> Result<BeatAnalysis> 
 struct OnsetEnvelopes {
     full: Vec<f32>,
     low: Vec<f32>,
+    body: Vec<f32>,
 }
 
 fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
@@ -106,6 +108,7 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
         return OnsetEnvelopes {
             full: Vec::new(),
             low: Vec::new(),
+            body: Vec::new(),
         };
     }
     let window = (0..FFT_SIZE)
@@ -128,14 +131,17 @@ fn spectral_flux(samples: &[f32]) -> OnsetEnvelopes {
         .collect::<Vec<_>>();
     let mut full = Vec::with_capacity(frame_count);
     let mut low = Vec::with_capacity(frame_count);
-    for (full_chunk, low_chunk) in chunks {
+    let mut body = Vec::with_capacity(frame_count);
+    for (full_chunk, low_chunk, body_chunk) in chunks {
         full.extend(full_chunk);
         low.extend(low_chunk);
+        body.extend(body_chunk);
     }
 
     OnsetEnvelopes {
         full: adaptive_normalize(&full, 8),
         low: adaptive_normalize(&low, 8),
+        body: adaptive_normalize(&body, 8),
     }
 }
 
@@ -143,13 +149,14 @@ fn spectral_flux_range(
     samples: &[f32],
     window: &[f32],
     range: std::ops::Range<usize>,
-) -> (Vec<f32>, Vec<f32>) {
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut spectrum = vec![Complex32::default(); FFT_SIZE];
     let mut previous = vec![0.0f32; FFT_SIZE / 2 + 1];
     let mut full_flux = Vec::with_capacity(range.len());
     let mut low_flux = Vec::with_capacity(range.len());
+    let mut body_flux = Vec::with_capacity(range.len());
 
     if range.start > 0 {
         let previous_start = (range.start - 1) * HOP_SIZE;
@@ -172,6 +179,7 @@ fn spectral_flux_range(
         fft.process(&mut spectrum);
         let mut full_value = 0.0;
         let mut low_value = 0.0;
+        let mut body_value = 0.0;
         for (index, bin) in spectrum[..=FFT_SIZE / 2].iter().enumerate().skip(1) {
             let magnitude = (1.0 + 10.0 * bin.norm()).ln();
             let difference = (magnitude - previous[index]).max(0.0);
@@ -179,12 +187,16 @@ fn spectral_flux_range(
             if index <= LOW_ONSET_MAX_BIN {
                 low_value += difference;
             }
+            if index <= BODY_ONSET_MAX_BIN {
+                body_value += difference;
+            }
             previous[index] = magnitude;
         }
         full_flux.push(full_value);
         low_flux.push(low_value);
+        body_flux.push(body_value);
     }
-    (full_flux, low_flux)
+    (full_flux, low_flux, body_flux)
 }
 
 fn adaptive_normalize(values: &[f32], radius: usize) -> Vec<f32> {
@@ -239,7 +251,7 @@ fn estimate_period(onset: &[f32], onset_rate: f32) -> Result<(f32, f32, f32)> {
                 + correlations.get(lag / 2).copied().unwrap_or_default() * 0.15;
             (
                 lag,
-                (correlations[lag] + harmonic) * (0.85 + 0.15 * center_prior),
+                (correlations[lag] + harmonic) * (0.55 + 0.45 * center_prior),
             )
         })
         .collect::<Vec<_>>();
@@ -319,15 +331,6 @@ fn refine_period_and_phase(onset: &OnsetEnvelopes, initial_period: f32) -> (f32,
 }
 
 fn grid_alignment_score(onset: &OnsetEnvelopes, period: f32, phase: f32) -> f32 {
-    grid_alignment_score_weighted(onset, period, phase, 0.7)
-}
-
-fn grid_alignment_score_weighted(
-    onset: &OnsetEnvelopes,
-    period: f32,
-    phase: f32,
-    low_weight: f32,
-) -> f32 {
     let margin = period * 4.0;
     let mut frame = phase;
     while frame < margin {
@@ -337,8 +340,9 @@ fn grid_alignment_score_weighted(
     let mut score = 0.0;
     let mut count = 0usize;
     while frame < end {
-        score += low_weight * interpolate(&onset.low, frame)
-            + (1.0 - low_weight) * interpolate(&onset.full, frame);
+        let low = interpolate(&onset.low, frame);
+        let body = interpolate(&onset.body, frame);
+        score += 0.65 * low + 0.35 * body;
         count += 1;
         frame += period;
     }

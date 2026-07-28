@@ -611,3 +611,31 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   smoke checks. Future parity passes can now use one discoverable structured
   command instead of invoking a hidden native helper or comparing raw ANLZ
   hashes.
+
+## 110-track beat-grid and waveform differential (2026-07-28)
+
+- Matched 113 local recordings to 115 Rekordbox 6.8.2 reference directories
+  and completed read-only differentials on 110 valid decodes. Three malformed
+  or truncated media inputs failed closed without partial output.
+- Strengthened the center-tempo prior and blended 35% body-band onset evidence
+  into phase scoring. The tempo change fixed all 26 observed 2:3 subharmonic
+  selections while preserving all 78 formerly correct choices; body evidence
+  fixed two additional half-beat phase errors. Mean F1 at 70 ms moved from
+  `0.664846` to `0.752310`, and tracks at `>=0.99` moved from 59 to 79 of 110.
+  Rejected a narrower low-band candidate that fixed three but regressed ten.
+- Rebuilt `PWV6` as a mean reduction of encoded `PWV7` detail with
+  independently gated low/mid preview calibration. Weighted low/mid/high MAE
+  moved from `52.011/36.540/15.041` to `4.834/5.142/5.647`; all 110 tracks
+  improved, with median correlations `0.8973/0.8128/0.9023`. On 77 independent
+  tone/level/transient fixtures, 73 improved; the high path retained exact
+  mean reduction to preserve the four non-regression cases.
+- Kept PWV7 detail unchanged. A global calibration reduced aggregate error but
+  regressed ten real tracks, confirming that the remaining gap is the
+  overlapping stateful filter/envelope detector rather than a safe global
+  gain. PWV3 remains at `0.99868` median correlation and `0.586` weighted MAE.
+- Added native `waveform-diff`, typed `compareWaveforms()`, and
+  `rekordbox analyze waveform-diff`. The bounded report decodes every supported
+  waveform family into semantic components and returns counts, exact
+  fractions, correlation, means, MAE, percentiles, extrema, and signed bias.
+  Public docs, Music agent guidance, fake-helper tests, deterministic pipeline
+  tests, and packed-install smoke contracts cover the new surface.

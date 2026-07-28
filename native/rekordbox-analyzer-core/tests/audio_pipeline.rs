@@ -4,7 +4,7 @@ use std::process::Command;
 use rekordbox_analyzer_core::{
     ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
     DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, WaveformData,
-    analyze_to_directory_with_options, compare_beat_grids, decode_audio_file,
+    analyze_to_directory_with_options, compare_beat_grids, compare_waveforms, decode_audio_file,
 };
 use tempfile::tempdir;
 
@@ -180,6 +180,16 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
     assert_eq!(semantic.matched_beats, semantic.reference_beat_count);
     assert_eq!(semantic.aligned_timestamp_error.max_ms, 0.0);
     assert_eq!(semantic.at_70_ms.f1, 1.0);
+
+    let waveform =
+        compare_waveforms(&first_directory, &second_directory).expect("semantic waveform diff");
+    assert_eq!(waveform.waveforms.len(), 7);
+    assert!(waveform.waveforms.iter().all(|tag| tag.count_delta == 0));
+    assert!(waveform.waveforms.iter().all(|tag| {
+        tag.components
+            .iter()
+            .all(|component| component.mean_absolute_error == 0.0)
+    }));
 
     let explicit_directory = fixture_dir.path().join("explicit-threads");
     let explicit = Command::new(env!("CARGO_BIN_EXE_rekordbox-analyzer"))

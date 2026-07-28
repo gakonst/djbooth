@@ -35,6 +35,14 @@ const COLOR_DETAIL_BLUE_GAIN: f64 = 0.95;
 const COLOR_DETAIL_BLUE_EXPONENT: f64 = 0.60;
 const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
 const COLOR_PREVIEW_BLUE_GAIN: f64 = 0.513;
+// PWV6 is not a max-pooled PWV7. A 110-track split-sample fit, checked
+// independently against 77 tone/level/transient probes, establishes mean
+// reduction followed by separate low/mid preview quantizers. High remains the
+// rounded mean. These transforms improve every real-track oracle in the corpus.
+const THREE_BAND_PREVIEW_LOW_GAIN: f64 = 0.54;
+const THREE_BAND_PREVIEW_LOW_POWER: f64 = 1.14;
+const THREE_BAND_PREVIEW_MID_GAIN: f64 = 0.84;
+const THREE_BAND_PREVIEW_MID_POWER: f64 = 1.36;
 
 /// All waveform entry arrays needed by DAT, EXT, and 2EX analysis files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +79,10 @@ impl WaveformData {
             reduce_features(&detail_features, MONOCHROME_PREVIEW_COLUMNS);
         let tiny_preview_features = reduce_features(&detail_features, TINY_PREVIEW_COLUMNS);
         let color_preview_features = reduce_features(&detail_features, COLOR_PREVIEW_COLUMNS);
+        let three_band_detail = detail_features
+            .iter()
+            .flat_map(pack_three_band)
+            .collect::<Vec<_>>();
 
         Ok(Self {
             monochrome_preview: monochrome_preview_features
@@ -90,11 +102,11 @@ impl WaveformData {
                 .iter()
                 .flat_map(|feature| pack_color_detail(feature, detail_peak).to_be_bytes())
                 .collect(),
-            three_band_preview: color_preview_features
-                .iter()
-                .flat_map(pack_three_band)
-                .collect(),
-            three_band_detail: detail_features.iter().flat_map(pack_three_band).collect(),
+            three_band_preview: reduce_three_band_preview(
+                &three_band_detail,
+                COLOR_PREVIEW_COLUMNS,
+            ),
+            three_band_detail,
         })
     }
 
@@ -550,6 +562,53 @@ fn pack_three_band(feature: &FrameFeatures) -> [u8; 3] {
     ]
 }
 
+fn reduce_three_band_preview(detail: &[u8], width: usize) -> Vec<u8> {
+    debug_assert!(detail.len().is_multiple_of(3));
+    let detail_count = detail.len() / 3;
+    if detail_count == 0 {
+        return vec![0; width * 3];
+    }
+    (0..width)
+        .flat_map(|column| {
+            let start = (column * detail_count / width).min(detail_count - 1);
+            let numerator = (column + 1)
+                .checked_mul(detail_count)
+                .expect("three-band preview range fits usize");
+            let end = numerator.div_ceil(width).max(start + 1).min(detail_count);
+            let count = u64::try_from(end - start).expect("preview range fits u64");
+            let mut sums = [0_u64; 3];
+            for entry in detail[start * 3..end * 3].chunks_exact(3) {
+                for band in 0..3 {
+                    sums[band] += u64::from(entry[band]);
+                }
+            }
+            let means = sums.map(|sum| {
+                u8::try_from((sum + count / 2) / count).expect("mean of seven-bit levels fits u8")
+            });
+            [
+                calibrated_preview_level(
+                    means[0],
+                    THREE_BAND_PREVIEW_LOW_GAIN,
+                    THREE_BAND_PREVIEW_LOW_POWER,
+                ),
+                calibrated_preview_level(
+                    means[1],
+                    THREE_BAND_PREVIEW_MID_GAIN,
+                    THREE_BAND_PREVIEW_MID_POWER,
+                ),
+                means[2],
+            ]
+        })
+        .collect()
+}
+
+fn calibrated_preview_level(level: u8, gain: f64, power: f64) -> u8 {
+    let normalized = f64::from(level) / f64::from(THREE_BAND_MAXIMUM);
+    (gain * normalized.powf(power) * f64::from(THREE_BAND_MAXIMUM))
+        .round()
+        .clamp(0.0, f64::from(THREE_BAND_MAXIMUM)) as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,6 +771,19 @@ mod tests {
                 .chain(alternating_waveforms.three_band_detail())
                 .all(|value| *value <= THREE_BAND_MAXIMUM)
         );
+    }
+
+    #[test]
+    fn three_band_preview_mean_reduces_detail_with_band_quantizers() {
+        assert_eq!(
+            reduce_three_band_preview(&[0, 0, 0, 127, 127, 127], 1),
+            [31, 42, 64]
+        );
+        assert_eq!(
+            reduce_three_band_preview(&[127, 127, 127], 1),
+            [69, 107, 127]
+        );
+        assert_eq!(reduce_three_band_preview(&[], 2), [0; 6]);
     }
 
     #[test]

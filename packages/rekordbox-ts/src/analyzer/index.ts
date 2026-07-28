@@ -149,6 +149,48 @@ export type CompareBeatGridsOptions = {
   timeoutMs?: number;
 };
 
+/** Same-column scalar errors for one decoded Rekordbox waveform component. */
+export type WaveformComponentDifferential = {
+  name: string;
+  referenceCount: number;
+  candidateCount: number;
+  overlapCount: number;
+  countDelta: number;
+  exactValues: number;
+  exactFraction: number;
+  correlation: number | null;
+  meanReference: number;
+  meanCandidate: number;
+  meanAbsoluteError: number;
+  medianAbsoluteError: number;
+  p95AbsoluteError: number;
+  maxAbsoluteError: number;
+  signedMeanError: number;
+};
+
+/** Semantic component comparison for one Rekordbox waveform tag. */
+export type WaveformTagDifferential = {
+  kind: string;
+  entryBytes: number;
+  referenceCount: number;
+  candidateCount: number;
+  countDelta: number;
+  components: Array<WaveformComponentDifferential>;
+};
+
+/** Semantic PWAV/PWV2/PWV3/PWV4/PWV5/PWV6/PWV7 comparison. */
+export type WaveformDifferential = {
+  referenceDirectory: string;
+  candidateDirectory: string;
+  waveforms: Array<WaveformTagDifferential>;
+};
+
+/** Options for a bounded semantic waveform comparison. */
+export type CompareWaveformsOptions = {
+  analyzerBinary?: string;
+  timeoutMs?: number;
+};
+
 const finiteNumber = z.number().finite();
 const nonNegativeNumber = finiteNumber.min(0);
 const nonNegativeInteger = z.number().int().min(0);
@@ -257,6 +299,37 @@ const beatGridDifferentialSchema = z.object({
   downbeatTimestampError: timestampErrorDistributionSchema,
   at70Ms: beatGridMatchRateSchema,
   at100Ms: beatGridMatchRateSchema,
+});
+const waveformComponentDifferentialSchema = z.object({
+  name: z.string().min(1),
+  referenceCount: nonNegativeInteger,
+  candidateCount: nonNegativeInteger,
+  overlapCount: nonNegativeInteger,
+  countDelta: z.number().int(),
+  exactValues: nonNegativeInteger,
+  exactFraction: finiteNumber.min(0).max(1),
+  correlation: finiteNumber.min(-1).max(1).nullable(),
+  meanReference: nonNegativeNumber,
+  meanCandidate: nonNegativeNumber,
+  meanAbsoluteError: nonNegativeNumber,
+  medianAbsoluteError: nonNegativeNumber,
+  p95AbsoluteError: nonNegativeNumber,
+  maxAbsoluteError: nonNegativeNumber,
+  signedMeanError: finiteNumber,
+});
+const waveformDifferentialSchema = z.object({
+  referenceDirectory: z.string().min(1),
+  candidateDirectory: z.string().min(1),
+  waveforms: z.array(
+    z.object({
+      kind: z.enum(["PWAV", "PWV2", "PWV3", "PWV4", "PWV5", "PWV6", "PWV7"]),
+      entryBytes: z.number().int().min(1).max(6),
+      referenceCount: nonNegativeInteger,
+      candidateCount: nonNegativeInteger,
+      countDelta: z.number().int(),
+      components: z.array(waveformComponentDifferentialSchema).min(1),
+    }),
+  ),
 });
 
 /** Options for producing Rekordbox DAT, EXT, and 2EX files. */
@@ -486,6 +559,62 @@ export function compareBeatGrids(
     resolve(parsed.data.candidateDirectory) !== candidate
   ) {
     throw new TypeError("Beat-grid comparison returned mismatched analysis directories");
+  }
+  return parsed.data;
+}
+
+/** Compare decoded waveform values rather than opaque ANLZ bytes. */
+export function compareWaveforms(
+  referenceDirectory: string,
+  candidateDirectory: string,
+  options: CompareWaveformsOptions = {},
+): WaveformDifferential {
+  const reference = analysisDirectory(referenceDirectory, "Reference");
+  const candidate = analysisDirectory(candidateDirectory, "Candidate");
+  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, "clean");
+  if (!existsSync(analyzerBinary)) {
+    throw new TypeError(
+      `clean analyzer helper '${analyzerBinary}' does not exist; set REKORDBOX_CLEAN_ANALYZER_BINARY or build it with pnpm --filter @gakonst/rekordbox build:analyzer`,
+    );
+  }
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+    throw new TypeError("Waveform comparison timeout must be a positive integer");
+  }
+  const env = analyzerEnvironment("clean", analyzerBinary, {});
+  verifyAnalyzerEngine("clean", analyzerBinary, env);
+  const { args, command } = analyzerInvocation("clean", analyzerBinary, [
+    "waveform-diff",
+    reference,
+    candidate,
+  ]);
+  const child = spawnSync(command, args, {
+    encoding: "utf8",
+    env,
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: timeoutMs,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    throw new Error(
+      `waveform comparison exited with ${child.status ?? "no status"}: ${child.stderr.trim()}`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(child.stdout) as unknown;
+  } catch (cause) {
+    throw new TypeError("Waveform comparison returned malformed JSON", { cause });
+  }
+  const parsed = waveformDifferentialSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new TypeError(`Invalid waveform comparison: ${z.prettifyError(parsed.error)}`);
+  }
+  if (
+    resolve(parsed.data.referenceDirectory) !== reference ||
+    resolve(parsed.data.candidateDirectory) !== candidate
+  ) {
+    throw new TypeError("Waveform comparison returned mismatched analysis directories");
   }
   return parsed.data;
 }

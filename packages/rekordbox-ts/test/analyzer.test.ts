@@ -23,13 +23,19 @@ import {
   DEFAULT_ANALYZER_CONCURRENCY,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   compareBeatGrids,
+  compareWaveforms,
   diagnoseAnalyzer,
   getAnalyzerBinary,
   readAnalysisResult,
 } from "../src/analyzer/index.js";
 
 const roots: Array<string> = [];
-const helperPaths = [resolve("analyze"), resolve("beat-grid-diff"), resolve("doctor")];
+const helperPaths = [
+  resolve("analyze"),
+  resolve("beat-grid-diff"),
+  resolve("doctor"),
+  resolve("waveform-diff"),
+];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const archDescriptor = Object.getOwnPropertyDescriptor(process, "arch");
 const analyzerRoot = process.env.REKORDBOX_ANALYZER_ROOT;
@@ -106,6 +112,47 @@ if (command === "beat-grid-diff") {
     downbeatTimestampError: timestampError,
     at70Ms: matchRate,
     at100Ms: { ...matchRate, toleranceMs: 100 },
+  }));
+  process.exit(0);
+}
+
+if (command === "waveform-diff") {
+  if (mode === "fail") {
+    console.error("fake waveform failure");
+    process.exit(2);
+  }
+  if (mode === "invalid-json") {
+    console.log("not json");
+    process.exit(0);
+  }
+  const [referenceDirectory, candidateDirectory] = process.argv.slice(2);
+  console.log(JSON.stringify({
+    referenceDirectory: realpathSync(referenceDirectory),
+    candidateDirectory: realpathSync(candidateDirectory),
+    waveforms: [{
+      kind: "PWV7",
+      entryBytes: 3,
+      referenceCount: 64,
+      candidateCount: 63,
+      countDelta: -1,
+      components: [{
+        name: "low",
+        referenceCount: 64,
+        candidateCount: 63,
+        overlapCount: 63,
+        countDelta: -1,
+        exactValues: 42,
+        exactFraction: 2 / 3,
+        correlation: 0.95,
+        meanReference: 20,
+        meanCandidate: 19,
+        meanAbsoluteError: 1,
+        medianAbsoluteError: 1,
+        p95AbsoluteError: 2,
+        maxAbsoluteError: 3,
+        signedMeanError: -1,
+      }],
+    }],
   }));
   process.exit(0);
 }
@@ -584,6 +631,54 @@ describe("Rekordbox analyzer wrapper", () => {
     process.env.FAKE_ANALYZER_MODE = "fail";
     expect(() =>
       compareBeatGrids(reference, candidate, { analyzerBinary: process.execPath }),
+    ).toThrow("exited with 2");
+  });
+
+  it("compares decoded waveforms through the clean helper with validated bounded output", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const reference = join(root, "reference");
+    const candidate = join(root, "candidate");
+    mkdirSync(reference);
+    mkdirSync(candidate);
+
+    expect(
+      compareWaveforms(reference, candidate, {
+        analyzerBinary: process.execPath,
+        timeoutMs: 1_000,
+      }),
+    ).toMatchObject({
+      referenceDirectory: realpathSync(reference),
+      candidateDirectory: realpathSync(candidate),
+      waveforms: [
+        {
+          kind: "PWV7",
+          countDelta: -1,
+          components: [{ name: "low", correlation: 0.95, meanAbsoluteError: 1 }],
+        },
+      ],
+    });
+    expect(() =>
+      compareWaveforms(join(root, "missing"), candidate, {
+        analyzerBinary: process.execPath,
+      }),
+    ).toThrow("does not exist");
+    expect(() =>
+      compareWaveforms(reference, candidate, {
+        analyzerBinary: process.execPath,
+        timeoutMs: 0,
+      }),
+    ).toThrow("positive integer");
+
+    process.env.FAKE_ANALYZER_MODE = "invalid-json";
+    expect(() =>
+      compareWaveforms(reference, candidate, { analyzerBinary: process.execPath }),
+    ).toThrow("malformed JSON");
+    process.env.FAKE_ANALYZER_MODE = "fail";
+    expect(() =>
+      compareWaveforms(reference, candidate, { analyzerBinary: process.execPath }),
     ).toThrow("exited with 2");
   });
 

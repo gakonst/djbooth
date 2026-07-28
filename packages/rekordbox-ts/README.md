@@ -256,12 +256,20 @@ rekordbox analyze beat-grid-diff \
   /Music/reference.rekordbox \
   /Music/candidate.rekordbox \
   --format json
+rekordbox analyze waveform-diff \
+  /Music/reference.rekordbox \
+  /Music/candidate.rekordbox \
+  --format json
 ```
 
 `analyze beat-grid-diff` compares PQTZ plus PQT2 semantically instead of treating opaque ANLZ bytes
 as the metric. Its bounded monotonic alignment reports missing/extra beats, sub-millisecond
 timestamp distributions, drift, beat-number phase, downbeat error, tempo changes, and F1 at 70 and
 100 ms. Use an independently produced Rekordbox directory as the reference during parity work.
+`analyze waveform-diff` decodes every supported waveform family and compares its semantic
+components over the overlapping columns. It reports entry-count deltas, exact-value fractions,
+Pearson correlation, means, MAE, median/p95/max absolute error, and signed bias instead of conflating
+packed bitfields or differing tail lengths.
 
 For `analyze track`, `--threads` is the native worker count for that one
 process. For `analyze tracks`, it is a total CPU budget, not a per-process

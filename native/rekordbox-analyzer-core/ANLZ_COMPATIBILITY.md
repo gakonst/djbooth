@@ -35,13 +35,19 @@ native/rekordbox-analyzer-core/target/debug/rekordbox-analyzer \
 # Timing/tempo/downbeat comparison with sub-millisecond PQT2 precision.
 native/rekordbox-analyzer-core/target/debug/rekordbox-analyzer \
   beat-grid-diff REFERENCE_DIR CANDIDATE_DIR
+
+# Decoded waveform-component comparison across DAT, EXT, and 2EX.
+native/rekordbox-analyzer-core/target/debug/rekordbox-analyzer \
+  waveform-diff REFERENCE_DIR CANDIDATE_DIR
 ```
 
 `diff` compares all three files, SHA-256 hashes, lengths, ordered tags, and the
 first differing byte. `beat-grid-diff` monotonically aligns PQTZ/PQT2 grids and
 reports endpoint, drift, tempo, downbeat, and 70/100 ms match metrics. Its trace
-allocation is bounded to 25 million cells. `diff` exits nonzero on any exact
-mismatch.
+allocation is bounded to 25 million cells. `waveform-diff` decodes the semantic
+components of PWAV/PWV2/PWV3/PWV4/PWV5/PWV6/PWV7 and reports count deltas,
+exact fractions, correlation, mean, MAE, error percentiles, and signed bias.
+`diff` exits nonzero on any exact mismatch.
 
 `rebuild-anlz INPUT OUTPUT` performs a non-destructive semantic clean-room
 rebuild for the supported Rekordbox 6.8.2 DAT/EXT/2EX shapes. The retained
@@ -113,9 +119,11 @@ platform codec dependency:
   monochrome/RGB packing match the public ANLZ layouts. `PWV4` uses separate
   linear-amplitude preview filters and its inverse luminance byte; `PWV5`
   stores frame-RMS-normalized spectral hue independently from its height.
+  `PWV6` mean-reduces encoded `PWV7` detail into its exact 1,200-column preview
+  window, then applies corpus-gated low/mid preview calibration.
   Local corpus and pure-tone probes establish that each three-band entry is
   7-bit low/mid/high, despite older public notes describing a different order.
-- Rhythm analysis uses full- and low-band STFT spectral flux, bounded
+- Rhythm analysis uses low- and body-band STFT spectral flux, bounded
   autocorrelation/harmonic scoring, hierarchical sub-frame tempo/phase
   refinement, FFT-center correction, a continuous non-snapping grid, and
   low-band meter evidence. PQTZ stores floor milliseconds; each paired PQT2
@@ -237,6 +245,32 @@ three-track band correlations from `0.158..0.782` to `0.533..0.937` and reduced
 mean per-band absolute error from `31.58..48.12` bytes to `9.50..12.78` bytes.
 The native bands overlap and have a stateful envelope, so cutoff and
 normalization parity remain open rather than being guessed from these probes.
+
+## 110-track differential checkpoint
+
+A read-only corpus pass matched 113 local recordings to 115 Rekordbox 6.8.2
+reference directories; 110 decoded successfully. Three malformed/short media
+files were rejected without partial output. Strengthening the center-tempo
+prior removed all 26 observed 2:3 subharmonic selections and broke none of the
+78 previously correct tempo choices. Adding 35% body-band evidence to phase
+selection fixed two half-beat phase errors. Mean F1 at 70 ms improved from
+`0.664846` to `0.752310`, and tracks at `>=0.99` moved from 59 to 79 of 110.
+
+For `PWV6`, preview generation now mean-reduces the encoded detail envelope
+instead of max-pooling raw features. Weighted byte MAE moved from
+`52.011/36.540/15.041` to `4.834/5.142/5.647` for low/mid/high. Every one of
+the 110 tracks improved; median per-track correlations are
+`0.8973/0.8128/0.9023`. Science Fiction's average PWV6 MAE moved from `36.664`
+to `6.777`. An independent 77-fixture tone/level/transient corpus improved on
+73 fixtures; high-band mean reduction remained uncalibrated to preserve the
+four non-regression gates.
+
+The pass intentionally retained PWV3, PWV5, and PWV7 detail. PWV3 already has
+median correlation `0.99868` and weighted MAE `0.586`; PWV5 channel median
+correlations are `0.852/0.847/0.837`. A global PWV7 gain curve improved
+aggregate error but regressed ten real tracks, so the unresolved
+filter/envelope detector was not guessed. A narrower rhythm low band likewise
+fixed three tracks but regressed ten and was rejected.
 
 ## Variable-tempo and syncopated-phase audit
 

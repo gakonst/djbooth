@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
     AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
     analyze_to_directory_with_options, compare_beat_grids, compare_output_directories,
+    compare_waveforms,
 };
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
@@ -30,12 +31,14 @@ fn run() -> Result<()> {
                    rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   rekordbox-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
                    analyze       Decode audio, write DAT/EXT/2EX, and emit summary JSON\n  \
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
+                   waveform-diff  Compare decoded waveform components semantically\n  \
                    rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape"
             );
             Ok(())
@@ -86,6 +89,14 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Some("waveform-diff") => {
+            let reference = required_path(args.next(), "reference output directory")?;
+            let candidate = required_path(args.next(), "candidate output directory")?;
+            ensure_exhausted(args, "waveform-diff")?;
+            let report = compare_waveforms(&reference, &candidate)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            Ok(())
+        }
         Some("rebuild-anlz") => {
             let input = required_path(args.next(), "input ANLZ path")?;
             let output = required_path(args.next(), "output ANLZ path")?;
@@ -124,7 +135,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }

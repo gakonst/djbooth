@@ -12,6 +12,7 @@ import {
   analyzeTracks,
   BeatGridTag,
   compareBeatGrids,
+  compareWaveforms,
   DEFAULT_ANALYZER_CONCURRENCY,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   ExtendedBeatGridTag,
@@ -242,6 +243,27 @@ analyzeCli.command("beat-grid-diff", {
   }),
   run(c) {
     return compareBeatGrids(c.args.referenceDirectory, c.args.candidateDirectory, c.options);
+  },
+});
+
+analyzeCli.command("waveform-diff", {
+  description:
+    "Compare decoded PWAV/PWV2/PWV3/PWV4/PWV5/PWV6/PWV7 components with correlation and error metrics.",
+  args: z.object({
+    referenceDirectory: z.string().describe("Reference DAT/EXT/2EX analysis directory"),
+    candidateDirectory: z.string().describe("Candidate DAT/EXT/2EX analysis directory"),
+  }),
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Clean-room analyzer executable override"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(30_000)
+      .describe("Comparison timeout in milliseconds"),
+  }),
+  run(c) {
+    return compareWaveforms(c.args.referenceDirectory, c.args.candidateDirectory, c.options);
   },
 });
 

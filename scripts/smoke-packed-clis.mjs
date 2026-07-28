@@ -205,8 +205,11 @@ try {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (!analyzeHelp.stdout.includes("beat-grid-diff")) {
-    throw new Error("Packed music CLI did not expose semantic beat-grid comparison");
+  if (
+    !analyzeHelp.stdout.includes("beat-grid-diff") ||
+    !analyzeHelp.stdout.includes("waveform-diff")
+  ) {
+    throw new Error("Packed music CLI did not expose semantic analysis comparisons");
   }
   process.stdout.write("✓ music rekordbox analyze composed CLI\n");
 
@@ -238,6 +241,7 @@ try {
     "offline bulk workflows",
     "reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact",
     "music rekordbox analyze beat-grid-diff",
+    "music rekordbox analyze waveform-diff",
     "## 8. Serve and load connected CDJs",
     "Spotify streaming tracks cannot be LINK EXPORTed",
     "music djlink search <query>",
@@ -257,6 +261,7 @@ try {
       "music-rekordbox",
       [
         "# music rekordbox analyze beat-grid-diff",
+        "# music rekordbox analyze waveform-diff",
         "# music rekordbox db playlist create",
         "# music rekordbox db playlist list",
         "# music rekordbox db playlist show",

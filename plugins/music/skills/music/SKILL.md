@@ -360,6 +360,10 @@ music rekordbox analyze beat-grid-diff \
   "$REFERENCE_ANALYSIS_DIR" \
   "$CANDIDATE_ANALYSIS_DIR" \
   --format json
+music rekordbox analyze waveform-diff \
+  "$REFERENCE_ANALYSIS_DIR" \
+  "$CANDIDATE_ANALYSIS_DIR" \
+  --format json
 ```
 
 Require a successful clean doctor check before analysis. Discover `rekordbox-analyzer` through
@@ -373,6 +377,9 @@ do not claim proprietary byte-for-byte DSP parity.
 For parity work, use `analyze beat-grid-diff` rather than raw file hashes. Require matching beat
 counts and labels for steady-tempo material, inspect median/p95/max timing error and drift, and retain
 the reported missing/extra beats, downbeat error, tempo changes, and F1 collars for held-out tracks.
+Use `analyze waveform-diff` for waveform parity. Compare decoded component correlations, means, MAE,
+signed bias, exact fractions, and entry-count deltas; do not compare packed waveform bytes as scalar
+samples or silently discard non-overlapping tails.
 
 Use `--engine reference` only when the user explicitly asks for local parity investigation. That
 mode requires macOS, Rosetta on Apple Silicon, a separately supplied
