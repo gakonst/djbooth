@@ -17,6 +17,7 @@ pub mod phrase;
 pub mod phrase_frontend;
 pub mod rhythm;
 pub mod sample_rate_converter;
+pub mod stems;
 pub mod unit_envelope;
 pub mod waveform;
 
@@ -76,6 +77,10 @@ pub use phrase_frontend::{
 pub use rhythm::{BeatAnalysis, analyze_beats};
 pub use sample_rate_converter::{
     AnalysisSampleRateConverter, analysis_sample_rate, quantize_analysis_pcm,
+};
+pub use stems::{
+    RecombinedStems, STEMS_CHUNK_SAMPLES, STEMS_FFT_SAMPLES, STEMS_FRAME_STRIDE, STEMS_HOP_SAMPLES,
+    STEMS_MODEL_FRAMES, StemsChunk, plan_stems_chunks, recombine_spleeter_sources,
 };
 pub use unit_envelope::{
     UnitEnvelopeAdjustment, UnitEnvelopeAdjustmentReport, UnitEnvelopeFeature,

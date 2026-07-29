@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer::backend::diagnose_rekordbox_backend;
 use rekordbox_analyzer::rehost::{RehostOptions, bundle_rekordbox_templates, run_rehost};
+use rekordbox_analyzer::stems::run_stems_probe;
 use rekordbox_analyzer_core::{
     AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, compare_output_directories,
 };
@@ -76,6 +77,23 @@ fn run() -> Result<()> {
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>();
             println!("{}", serde_json::to_string_pretty(&outputs)?);
+            Ok(())
+        }
+        Some("stems-probe") => {
+            let app_path = required_path(args.next(), "Rekordbox app path")?;
+            let sample_count = args
+                .next()
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .context("invalid Stems probe sample count")?;
+            if args.next().is_some() {
+                bail!("stems-probe accepts a Rekordbox app path and optional sample count");
+            }
+            let result = run_stems_probe(&app_path, sample_count)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            if !result.operation_succeeded {
+                bail!("Rekordbox Stems operation failed");
+            }
             Ok(())
         }
         Some("diff") => {
@@ -164,7 +182,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|analyze-trace AUDIO OUTPUT_DIR TRACE_JSON [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|analyze-trace AUDIO OUTPUT_DIR TRACE_JSON [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|stems-probe REKORDBOX_APP [SAMPLE_COUNT]|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
         ),
     }
 }

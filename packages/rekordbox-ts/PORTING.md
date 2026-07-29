@@ -8,6 +8,7 @@ This file is the durable project journal: source pins, compatibility scope, deci
 - `wevm/incur`: `4c0fc4b15b4e0b72136f30b0a0ad25cc35e0a84b` (2026-07-10), npm `0.4.13`
 - `Holzhaus/rekordcrate`: `e8574896b099d8b9e68b389a738e5872cdc8b5b2` (empty legacy Device Library scaffold and independent format reference)
 - `fragmede/rekordbox-pdb-rs`: `b9896c4e279f2ffd5a8eee1f05a7a0282fe44f35` (independent generated-output verification)
+- `Noelo-Lab/kuna`: `5834b3009cbcec3f3bddf1d5cafe50bb03e15474` (agent-oriented native decompiler used for Stems recovery)
 
 The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
 
@@ -27,6 +28,32 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Legacy Device Library PDB    | implemented    | `music usb ...` | 9 tests      | hardware validation pending |
 
 ## Decisions
+
+### 2026-07-29 — Rekordbox 6 Stems model-boundary recovery
+
+- Used Kuna's load-once Mach-O analysis against Rekordbox 6.8.2.0018's x86_64
+  `libSpleeter.dylib`, then checked the recovered ABI by calling the exported C
+  separator API under Rosetta. The reference-only `stems-probe` command loads
+  TensorFlow 2.8 and the model from a user-supplied Rekordbox app, feeds bounded
+  synthetic stereo PCM, and emits finite-count, RMS, peak, mean, SHA-256, and
+  reconstruction diagnostics without opening a library database or user audio.
+- The SavedModel accepts `mix_stft:0` as complex64 with shape
+  `[-1, -1, -1, 2]` and exposes `mul:0`, `mul_1:0`, `mul_2:0`, and `mul_3:0`
+  as vocals, drums, bass, and other. The native wrapper requests vocals, bass,
+  and other; its published outputs are instrumental (`bass + other`), vocals,
+  and drums (`mixture - instrumental - vocals`). It intentionally derives drums
+  as a residual instead of publishing the model's drums tensor.
+- Recovered a 4,096-sample periodic-Hann STFT, 1,024-sample hop, 512-frame model
+  windows, and a 507-frame/519,168-sample inference stride. Each channel receives
+  4,096 leading zero samples, and reconstructed output is read after the same
+  4,096-sample offset. Added clean-room chunk planning and source recombination
+  primitives with focused tests.
+- A 44,100-frame differential probe completed successfully with all 264,600
+  output samples finite. Summing all three outputs reproduced the two input
+  channels within `2.97e-10/2.34e-10` RMS and `1.49e-8` peak error. Clean code
+  currently covers only the wrapper/DSP contract; the 150 MiB Rekordbox model
+  weights and TensorFlow runtime remain local proprietary oracle inputs and are
+  neither copied nor distributed.
 
 ### 2026-07-29 — Bidirectional, differential CDJ USB synchronization
 
