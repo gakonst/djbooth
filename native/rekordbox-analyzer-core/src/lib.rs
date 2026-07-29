@@ -66,7 +66,8 @@ pub use phrase::{
 };
 pub use phrase_frontend::{
     NativePhraseChangeFeatures, NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
-    derive_native_phrase_bar_change_features, derive_native_phrase_change_features,
+    adjust_native_mood_23_phrase_candidates, derive_native_phrase_bar_change_features,
+    derive_native_phrase_change_features, detect_native_mood_23_sound_changes,
     extract_native_phrase_features, generate_phrase_multirate,
     judge_native_mood_23_phrase_boundaries, judge_native_phrase_change_window,
 };

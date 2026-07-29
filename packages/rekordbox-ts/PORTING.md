@@ -1757,3 +1757,18 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `0.999985758`, and mean p95 error from `0.833718` to `0.677055 ms`.
   All 110 remain at F1 `>= 0.99`; 109 are F1 `1.0`. The sole count residual is
   the existing Funkytown source/reference mismatch.
+
+## Mood-2/3 native phrase-judge checkpoint (2026-07-29)
+
+- Recovered and ported the complete `VerseHookJudge23` path: seed cleanup,
+  overlapping 22-bar windows, all three feature-family sub-judges, candidate
+  scoring, protected-bar rules, adjacent suppression, and beat remapping.
+  Clean replay matches two mood-2 captures at `25/25` boundaries each and one
+  mood-3 capture at `20/20`.
+- Traced every `VerseHookAdd_genre23` helper. The clean
+  `SouonChangeDet` port exactly reproduces the captured mood-2 bars
+  `[2, 225, 226]` and the empty mood-3 result. The final
+  `CandidatesAdjustment` port exactly expands the two judge outputs from
+  `25→31` and `20→22` boundaries.
+- Production routing remains gated on the three remaining genre detectors,
+  dynamic-grid feature-window parity, and upstream seed construction.

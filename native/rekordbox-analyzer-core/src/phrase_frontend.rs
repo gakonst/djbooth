@@ -607,6 +607,108 @@ pub fn judge_native_mood_23_phrase_boundaries(
         .collect()
 }
 
+/// Detect native mood-2/3 sound-level changes from beat-synchronous features.
+///
+/// The linked `SouonChangeDet` pass averages complete four-beat groups while
+/// retaining one zero guard bar, folds adjacent ratios above one, and reports
+/// one-based bars whose ratio spike is followed by two stable ratios.
+pub fn detect_native_mood_23_sound_changes(values: &[f64]) -> Result<Vec<i32>> {
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native mood-2/3 sound-change detection requires finite input");
+    }
+    if values.len() < 20 {
+        return Ok(Vec::new());
+    }
+
+    let bar_count = values.len() / 4;
+    let mut averages = vec![0.0; bar_count];
+    for (bar, average) in averages
+        .iter_mut()
+        .take(bar_count.saturating_sub(1))
+        .enumerate()
+    {
+        let start = bar * 4;
+        *average =
+            ((values[start] + values[start + 2]) + (values[start + 1] + values[start + 3])) * 0.25;
+    }
+
+    let mut symmetric_ratio = vec![0.0; bar_count];
+    for bar in 1..bar_count.saturating_sub(1) {
+        if averages[bar - 1] == 0.0 {
+            averages[bar - 1] = 0.003;
+        }
+        if averages[bar] == 0.0 {
+            averages[bar] = 0.003;
+        }
+        let ratio = averages[bar] / averages[bar - 1];
+        symmetric_ratio[bar] = if ratio < 1.0 { 1.0 / ratio } else { ratio };
+    }
+
+    let mut candidates = Vec::new();
+    for bar in 0..bar_count.saturating_sub(4) {
+        let ratio = symmetric_ratio[bar + 1];
+        let following_average = (symmetric_ratio[bar + 3] + symmetric_ratio[bar + 4]) * 0.5;
+        if ratio != 0.0 && ratio >= 1.8 && following_average <= 1.11 {
+            candidates.push(
+                i32::try_from(bar + 2)
+                    .map_err(|_| anyhow::anyhow!("native phrase bar exceeds i32"))?,
+            );
+        }
+    }
+    Ok(candidates)
+}
+
+/// Merge mood-2/3 detector bars into judged beat candidates.
+///
+/// This is the native `CandidatesAdjustment` pass used after short-break,
+/// sound-change, snare-fill, and vocal-in detection. Detector candidates are
+/// one-based bars; judged candidates and the result are one-based beats.
+pub fn adjust_native_mood_23_phrase_candidates(
+    judged_beats: &[i32],
+    detector_bars: &[i32],
+    feature_origin: i32,
+    bar_count: i32,
+) -> Result<Vec<i32>> {
+    if judged_beats.is_empty() {
+        bail!("native mood-2/3 candidate adjustment requires judged beats");
+    }
+    if bar_count <= 0 {
+        bail!("native mood-2/3 candidate adjustment requires a positive bar count");
+    }
+
+    let mut collapsed_detector_bars = detector_bars.to_vec();
+    collapse_native_consecutive_runs(&mut collapsed_detector_bars);
+    let judged_bars = judged_beats
+        .iter()
+        .map(|beat| {
+            beat.checked_sub(feature_origin)
+                .map(|relative| relative / 4 + 1)
+                .ok_or_else(|| anyhow::anyhow!("native phrase beat offset overflow"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for judged_bar in judged_bars.iter().skip(1) {
+        collapsed_detector_bars.retain(|detector_bar| detector_bar.abs_diff(*judged_bar) > 1);
+    }
+
+    let mut merged = judged_bars;
+    merged.extend(collapsed_detector_bars);
+    merged.retain(|bar| *bar != 0);
+    merged.sort_unstable();
+    let last_allowed = bar_count
+        .checked_sub(4)
+        .ok_or_else(|| anyhow::anyhow!("native phrase bar limit overflow"))?;
+    merged.retain(|bar| *bar <= last_allowed);
+    merged
+        .into_iter()
+        .map(|bar| {
+            bar.checked_mul(4)
+                .and_then(|beat| beat.checked_add(feature_origin))
+                .and_then(|beat| beat.checked_sub(4))
+                .ok_or_else(|| anyhow::anyhow!("native phrase beat position overflow"))
+        })
+        .collect()
+}
+
 fn validate_native_phrase_change_window(
     primary: &[f64],
     secondary: &[f64],
@@ -1537,10 +1639,71 @@ mod tests {
     }
 
     #[test]
+    fn native_mood_23_candidate_adjustment_matches_captured_mood_2() {
+        let judged = [
+            4, 64, 128, 148, 164, 240, 256, 304, 328, 336, 384, 412, 432, 496, 512, 576, 604, 640,
+            656, 744, 752, 808, 848, 872, 880,
+        ];
+        let detector_bars = [2, 77, 99, 105, 112, 123, 128, 136, 156, 221, 225, 226];
+        assert_eq!(
+            adjust_native_mood_23_phrase_candidates(&judged, &detector_bars, 4, 229)
+                .expect("candidate adjustment"),
+            [
+                4, 8, 64, 128, 148, 164, 240, 256, 304, 328, 336, 384, 396, 412, 420, 432, 448,
+                496, 512, 544, 576, 604, 624, 640, 656, 744, 752, 808, 848, 872, 880,
+            ]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_candidate_adjustment_matches_captured_mood_3() {
+        let judged = [
+            1, 17, 49, 65, 129, 161, 193, 217, 225, 257, 289, 321, 353, 413, 445, 481, 513, 573,
+            593, 625,
+        ];
+        assert_eq!(
+            adjust_native_mood_23_phrase_candidates(&judged, &[17, 70, 81, 89, 123, 129], 1, 162,)
+                .expect("candidate adjustment"),
+            [
+                1, 17, 49, 65, 129, 161, 193, 217, 225, 257, 277, 289, 321, 353, 413, 445, 481,
+                489, 513, 573, 593, 625,
+            ]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_sound_change_matches_captured_transition_shape() {
+        let mut features = vec![0.3; 916];
+        let bar_averages = [
+            (0, 0.331_914_893_617_021_26),
+            (1, 0.063_829_787_234_042_55),
+            (2, 0.336_170_212_765_957_43),
+            (3, 0.353_191_489_361_702_14),
+            (4, 0.327_659_574_468_085_14),
+            (5, 0.378_723_404_255_319_14),
+            (6, 0.391_489_361_702_127_67),
+            (223, 0.476_595_744_680_851_1),
+            (224, 0.085_106_382_978_723_4),
+            (225, 0.0),
+            (226, 0.0),
+            (227, 0.0),
+        ];
+        for (bar, average) in bar_averages {
+            features[bar * 4..bar * 4 + 4].fill(average);
+        }
+
+        assert_eq!(
+            detect_native_mood_23_sound_changes(&features).expect("sound changes"),
+            [2, 225, 226]
+        );
+    }
+
+    #[test]
     fn native_change_features_reject_invalid_inputs() {
         assert!(derive_native_phrase_change_features(&[f64::NAN]).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 8], 0).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 3], 1).is_err());
+        assert!(detect_native_mood_23_sound_changes(&[f64::NAN]).is_err());
         assert!(
             judge_native_phrase_change_window(
                 &NativePhraseChangeFeatures {

@@ -41,6 +41,11 @@ const VERSE_HOOK_JUDGE_23_OFFSET: usize = 0x11dc800;
 const VERSE_HOOK_JUDGE_23_SUB_OFFSET: usize = 0x177a620;
 const VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x15d5ce0;
 const VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x1172de0;
+const SHORT_BREAK_DETECTION_OFFSET: usize = 0x0f9f340;
+const SOUON_CHANGE_DET_OFFSET: usize = 0x15db3c0;
+const SNARE_FILLIN_DET_OFFSET: usize = 0x0f9fd30;
+const VOCAL_IN_DETECTION_OFFSET: usize = 0x148ccc0;
+const CANDIDATES_ADJUSTMENT_OFFSET: usize = 0x162bca0;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 const LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET: usize = 0x40d3bf8;
 const FWRITE_OFFSET: usize = 0x21dcd98;
@@ -103,6 +108,11 @@ const CALL_VERSE_HOOK_JUDGE_23_SUB_1_OFFSET: usize = 0x11dd071;
 const CALL_VERSE_HOOK_JUDGE_23_SUB_2_OFFSET: usize = 0x11dd120;
 const CALL_VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x1790bc5;
 const CALL_VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x179083f;
+const CALL_SHORT_BREAK_DETECTION_OFFSET: usize = 0x15d5de3;
+const CALL_SOUON_CHANGE_DET_OFFSET: usize = 0x15d5e11;
+const CALL_SNARE_FILLIN_DET_OFFSET: usize = 0x15d5e45;
+const CALL_VOCAL_IN_DETECTION_OFFSET: usize = 0x15d5e7a;
+const CALL_CANDIDATES_ADJUSTMENT_OFFSET: usize = 0x15d5fa3;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -308,6 +318,13 @@ type VerseHookAnaData23 = unsafe extern "C" fn(
     *mut c_void,
     *mut c_void,
 ) -> u8;
+type ShortBreakDetection =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, i32, *mut c_void) -> u8;
+type SouonChangeDet = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> u8;
+type SnareFillinDet = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32, *mut c_void) -> u8;
+type VocalInDetection = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut c_void) -> u8;
+type CandidatesAdjustment =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, *mut c_void) -> u8;
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 type Exp10 = unsafe extern "C" fn(f64) -> f64;
 
@@ -342,6 +359,11 @@ static VERSE_HOOK_JUDGE_23: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_JUDGE_23_SUB: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_ADD_GENRE_23: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_ANA_DATA_23: AtomicUsize = AtomicUsize::new(0);
+static SHORT_BREAK_DETECTION: AtomicUsize = AtomicUsize::new(0);
+static SOUON_CHANGE_DET: AtomicUsize = AtomicUsize::new(0);
+static SNARE_FILLIN_DET: AtomicUsize = AtomicUsize::new(0);
+static VOCAL_IN_DETECTION: AtomicUsize = AtomicUsize::new(0);
+static CANDIDATES_ADJUSTMENT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
@@ -381,6 +403,7 @@ struct ReferenceTrace {
     phrase_judge_23: Vec<PhraseJudge23Trace>,
     phrase_judge_23_sub: Vec<PhraseJudge23SubTrace>,
     phrase_add_genre_23: Vec<PhraseAddGenre23Trace>,
+    phrase_genre_23_stages: Vec<PhraseGenre23StageTrace>,
     phrase_ana_data_23: Vec<PhraseAnaData23Trace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
@@ -876,6 +899,24 @@ struct PhraseAddGenre23Trace {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PhraseGenre23StageTrace {
+    stage: &'static str,
+    feature_a: Vec<f64>,
+    feature_b: Vec<f64>,
+    candidates_a_before: Vec<i32>,
+    candidates_a_after: Vec<i32>,
+    candidates_b_before: Vec<i32>,
+    candidates_b_after: Vec<i32>,
+    feature_length: Option<i32>,
+    bar_count: Option<i32>,
+    feature_origin: Option<i32>,
+    output_before: Vec<i32>,
+    output_after: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PhraseAnaData23Trace {
     feature_origin: i32,
     inputs: [Vec<f64>; 4],
@@ -903,7 +944,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 17,
+        schema_version: 18,
         requested_engine: requested_engine().to_string(),
         trace_scope: requested_trace_scope().to_string(),
         ..ReferenceTrace::default()
@@ -1125,6 +1166,11 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         &VERSE_HOOK_ANA_DATA_23,
         base + VERSE_HOOK_ANA_DATA_23_OFFSET,
     );
+    set_original(&SHORT_BREAK_DETECTION, base + SHORT_BREAK_DETECTION_OFFSET);
+    set_original(&SOUON_CHANGE_DET, base + SOUON_CHANGE_DET_OFFSET);
+    set_original(&SNARE_FILLIN_DET, base + SNARE_FILLIN_DET_OFFSET);
+    set_original(&VOCAL_IN_DETECTION, base + VOCAL_IN_DETECTION_OFFSET);
+    set_original(&CANDIDATES_ADJUSTMENT, base + CANDIDATES_ADJUSTMENT_OFFSET);
     set_original(&MALLOC, base + MALLOC_OFFSET);
     set_original(&EXP10, base + EXP10_OFFSET);
 
@@ -1451,6 +1497,31 @@ unsafe fn patch_phrase_trace(base: usize) -> Result<()> {
             base + CALL_VERSE_HOOK_ANA_DATA_23_OFFSET,
             base + VERSE_HOOK_ANA_DATA_23_OFFSET,
             trace_verse_hook_ana_data_23 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SHORT_BREAK_DETECTION_OFFSET,
+            base + SHORT_BREAK_DETECTION_OFFSET,
+            trace_short_break_detection as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SOUON_CHANGE_DET_OFFSET,
+            base + SOUON_CHANGE_DET_OFFSET,
+            trace_souon_change_det as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SNARE_FILLIN_DET_OFFSET,
+            base + SNARE_FILLIN_DET_OFFSET,
+            trace_snare_fillin_det as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VOCAL_IN_DETECTION_OFFSET,
+            base + VOCAL_IN_DETECTION_OFFSET,
+            trace_vocal_in_detection as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_CANDIDATES_ADJUSTMENT_OFFSET,
+            base + CANDIDATES_ADJUSTMENT_OFFSET,
+            trace_candidates_adjustment as usize,
         )
     }
 }
@@ -3987,6 +4058,243 @@ unsafe fn trace_verse_hook_judge_23_sub(
         result,
     });
     result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_short_break_detection(
+    analyzer: *mut c_void,
+    feature_a: *mut c_void,
+    feature_b: *mut c_void,
+    feature_length: i32,
+    bar_count: i32,
+    feature_origin: i32,
+    output: *mut c_void,
+) -> u8 {
+    let feature_a_snapshot = unsafe { snapshot_mat_f64(feature_a) };
+    let feature_b_snapshot = unsafe { snapshot_mat_f64(feature_b) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: ShortBreakDetection = unsafe { original(&SHORT_BREAK_DETECTION) };
+    let result = unsafe {
+        function(
+            analyzer,
+            feature_a,
+            feature_b,
+            feature_length,
+            bar_count,
+            feature_origin,
+            output,
+        )
+    };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+    record_phrase_genre_23_stage(
+        "shortBreak",
+        feature_a_snapshot,
+        feature_b_snapshot,
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Some(feature_length),
+        Some(bar_count),
+        Some(feature_origin),
+        output_before_snapshot,
+        output_after_snapshot,
+        result,
+    );
+    result
+}
+
+unsafe extern "C" fn trace_souon_change_det(
+    analyzer: *mut c_void,
+    feature: *mut c_void,
+    output: *mut c_void,
+) -> u8 {
+    let feature_snapshot = unsafe { snapshot_mat_f64(feature) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: SouonChangeDet = unsafe { original(&SOUON_CHANGE_DET) };
+    let result = unsafe { function(analyzer, feature, output) };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+    record_phrase_genre_23_stage(
+        "soundChange",
+        feature_snapshot,
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        None,
+        None,
+        None,
+        output_before_snapshot,
+        output_after_snapshot,
+        result,
+    );
+    result
+}
+
+unsafe extern "C" fn trace_snare_fillin_det(
+    analyzer: *mut c_void,
+    feature: *mut c_void,
+    feature_length: i32,
+    bar_count: i32,
+    output: *mut c_void,
+) -> u8 {
+    let feature_snapshot = unsafe { snapshot_mat_f64(feature) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: SnareFillinDet = unsafe { original(&SNARE_FILLIN_DET) };
+    let result = unsafe { function(analyzer, feature, feature_length, bar_count, output) };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+    record_phrase_genre_23_stage(
+        "snareFill",
+        feature_snapshot,
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Some(feature_length),
+        Some(bar_count),
+        None,
+        output_before_snapshot,
+        output_after_snapshot,
+        result,
+    );
+    result
+}
+
+unsafe extern "C" fn trace_vocal_in_detection(
+    analyzer: *mut c_void,
+    feature: *mut c_void,
+    feature_length: i32,
+    output: *mut c_void,
+) -> u8 {
+    let feature_snapshot = unsafe { snapshot_mat_f64(feature) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: VocalInDetection = unsafe { original(&VOCAL_IN_DETECTION) };
+    let result = unsafe { function(analyzer, feature, feature_length, output) };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+    record_phrase_genre_23_stage(
+        "vocalIn",
+        feature_snapshot,
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        Some(feature_length),
+        None,
+        None,
+        output_before_snapshot,
+        output_after_snapshot,
+        result,
+    );
+    result
+}
+
+unsafe extern "C" fn trace_candidates_adjustment(
+    analyzer: *mut c_void,
+    candidates_a: *mut c_void,
+    candidates_b: *mut c_void,
+    feature_origin: i32,
+    bar_count: i32,
+    output: *mut c_void,
+) -> u8 {
+    let candidates_a_before = unsafe { snapshot_mat_i32(candidates_a) };
+    let candidates_b_before = unsafe { snapshot_mat_i32(candidates_b) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: CandidatesAdjustment = unsafe { original(&CANDIDATES_ADJUSTMENT) };
+    let result = unsafe {
+        function(
+            analyzer,
+            candidates_a,
+            candidates_b,
+            feature_origin,
+            bar_count,
+            output,
+        )
+    };
+    let candidates_a_after = unsafe { snapshot_mat_i32(candidates_a) };
+    let candidates_b_after = unsafe { snapshot_mat_i32(candidates_b) };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+    record_phrase_genre_23_stage(
+        "candidateAdjustment",
+        Ok(Vec::new()),
+        Ok(Vec::new()),
+        candidates_a_before,
+        candidates_a_after,
+        candidates_b_before,
+        candidates_b_after,
+        None,
+        Some(bar_count),
+        Some(feature_origin),
+        output_before_snapshot,
+        output_after_snapshot,
+        result,
+    );
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_phrase_genre_23_stage(
+    stage: &'static str,
+    feature_a: Result<Vec<f64>>,
+    feature_b: Result<Vec<f64>>,
+    candidates_a_before: Result<Vec<i32>>,
+    candidates_a_after: Result<Vec<i32>>,
+    candidates_b_before: Result<Vec<i32>>,
+    candidates_b_after: Result<Vec<i32>>,
+    feature_length: Option<i32>,
+    bar_count: Option<i32>,
+    feature_origin: Option<i32>,
+    output_before: Result<Vec<i32>>,
+    output_after: Result<Vec<i32>>,
+    result: u8,
+) {
+    let mut failures = Vec::new();
+    let feature_a = snapshot_or_empty(feature_a, "genre23 stage feature A", &mut failures);
+    let feature_b = snapshot_or_empty(feature_b, "genre23 stage feature B", &mut failures);
+    let candidates_a_before = snapshot_or_empty(
+        candidates_a_before,
+        "genre23 stage candidates A before",
+        &mut failures,
+    );
+    let candidates_a_after = snapshot_or_empty(
+        candidates_a_after,
+        "genre23 stage candidates A after",
+        &mut failures,
+    );
+    let candidates_b_before = snapshot_or_empty(
+        candidates_b_before,
+        "genre23 stage candidates B before",
+        &mut failures,
+    );
+    let candidates_b_after = snapshot_or_empty(
+        candidates_b_after,
+        "genre23 stage candidates B after",
+        &mut failures,
+    );
+    let output_before =
+        snapshot_or_empty(output_before, "genre23 stage output before", &mut failures);
+    let output_after = snapshot_or_empty(output_after, "genre23 stage output after", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_genre_23_stages.push(PhraseGenre23StageTrace {
+        stage,
+        feature_a,
+        feature_b,
+        candidates_a_before,
+        candidates_a_after,
+        candidates_b_before,
+        candidates_b_after,
+        feature_length,
+        bar_count,
+        feature_origin,
+        output_before,
+        output_after,
+        result,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]

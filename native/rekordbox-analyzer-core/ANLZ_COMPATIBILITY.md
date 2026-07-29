@@ -510,6 +510,18 @@ feature arrays matches both mood-2 captures at `25/25` candidates and the
 mood-3 capture at `20/20`. The downstream `VerseHookAdd_genre23` insertion
 pass and its upstream seed construction still gate production integration.
 
+The downstream pass is now traced at each helper and partially ported.
+`detect_native_mood_23_sound_changes` reproduces `SouonChangeDet`: native
+four-beat accumulation order, its unpopulated guard bar, `0.003` zero floor,
+folded adjacent ratios, `1.8` spike gate, and `1.11` two-bar settling gate.
+Direct replay returns the exact captured mood-2 bars `[2, 225, 226]` and the
+empty mood-3 result. `adjust_native_mood_23_phrase_candidates` ports the final
+merge: consecutive detector runs retain their right edge, detector bars
+within one bar of an existing judged boundary are suppressed, the last four
+bars are excluded, and results map back to beats. It exactly expands the two
+captured judge outputs from `25→31` and `20→22` boundaries. Short-break,
+snare-fill, and vocal-in detection remain to be ported before production use.
+
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight
 boundary F1 improving from `0.5245/0.6348/0.6855` to
