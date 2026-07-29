@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { diagnoseStems, separateStems } from "../src/index.js";
+import { diagnoseStems, separateStems, separateStemsBatch } from "../src/index.js";
 
 const roots: Array<string> = [];
 
@@ -19,6 +19,7 @@ function fakeUv(root: string, payload: unknown): string {
     executable,
     `#!/bin/sh
 printf '%s\\n' "$@" > "$REKORDBOX_STEMS_FAKE_ARGS"
+printf '%s\\n' "$UV_PROJECT_ENVIRONMENT" > "$REKORDBOX_STEMS_FAKE_ARGS.env"
 printf '%s\\n' '${JSON.stringify(payload)}'
 `,
   );
@@ -46,6 +47,7 @@ describe("MLX stems boundary", () => {
       model: "model",
       modelRevision: "revision",
       python: "3.12.12",
+      pythonEnvironment: "/cache/python-3.12",
     });
 
     await expect(diagnoseStems({ uvBinary })).resolves.toMatchObject({
@@ -54,6 +56,7 @@ describe("MLX stems boundary", () => {
       device: "Device(gpu, 0)",
     });
     expect(readFileSync(argsPath, "utf8")).toContain("--locked\n--no-dev\npython");
+    expect(readFileSync(argsPath, "utf8")).not.toContain("--isolated");
   });
 
   it("forwards the selected output layout and force policy", async () => {
@@ -77,6 +80,7 @@ describe("MLX stems boundary", () => {
       processingSeconds: 1,
       reconstruction: { peakError: 0, rmsError: 0 },
       sampleRate: 44_100,
+      selectedStems: ["vocals"],
     });
 
     await expect(
@@ -84,6 +88,7 @@ describe("MLX stems boundary", () => {
         cacheDirectory: join(root, "cache"),
         force: true,
         layout: "four-stem",
+        stems: ["vocals"],
         uvBinary,
       }),
     ).resolves.toMatchObject({ backend: "mlx", layout: "four-stem" });
@@ -91,5 +96,59 @@ describe("MLX stems boundary", () => {
     expect(args).toContain("four-stem");
     expect(args).toContain("--force");
     expect(args).toContain("--cache-directory");
+    expect(args).toContain("vocals");
+    expect(readFileSync(`${argsPath}.env`, "utf8").trim()).toBe(join(root, "cache", "python-3.12"));
+  });
+
+  it("sends a bounded batch request and loads one helper process", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-stems-test-"));
+    roots.push(root);
+    const first = join(root, "first.wav");
+    const second = join(root, "second.wav");
+    const argsPath = join(root, "args.txt");
+    writeFileSync(first, "fixture");
+    writeFileSync(second, "fixture");
+    process.env.REKORDBOX_STEMS_FAKE_ARGS = argsPath;
+    const separation = (audioPath: string, outputDirectory: string) => ({
+      audioPath,
+      backend: "mlx",
+      device: "Device(gpu, 0)",
+      durationSeconds: 1,
+      layout: "four-stem",
+      model: "model",
+      modelRevision: "revision",
+      outputDirectory,
+      outputs: [],
+      processingSeconds: 1,
+      reconstruction: { peakError: 0, rmsError: 0 },
+      sampleRate: 44_100,
+      selectedStems: ["vocals"],
+    });
+    const uvBinary = fakeUv(root, {
+      backend: "mlx",
+      layout: "four-stem",
+      model: "model",
+      modelLoadSeconds: 1,
+      modelRevision: "revision",
+      processingSeconds: 3,
+      results: [separation(first, join(root, "one")), separation(second, join(root, "two"))],
+      selectedStems: ["vocals"],
+      trackCount: 2,
+    });
+
+    await expect(
+      separateStemsBatch(
+        [
+          { audioPath: first, outputDirectory: join(root, "one") },
+          { audioPath: second, outputDirectory: join(root, "two") },
+        ],
+        { layout: "four-stem", stems: ["vocals"], uvBinary },
+      ),
+    ).resolves.toMatchObject({ trackCount: 2, selectedStems: ["vocals"] });
+    const args = readFileSync(argsPath, "utf8").trim().split("\n");
+    const batchIndex = args.indexOf("batch");
+    expect(batchIndex).toBeGreaterThan(-1);
+    expect(args).toContain("vocals");
+    expect(() => readFileSync(args[batchIndex + 1]!, "utf8")).toThrow();
   });
 });

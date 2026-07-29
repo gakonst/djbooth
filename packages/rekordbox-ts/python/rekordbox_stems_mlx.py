@@ -29,6 +29,10 @@ CONFIG_FILENAME = "config.yaml"
 CONFIG_SHA256 = "78e7b1da662fce6045fc5d8737e940e5f25c4c4045ca9e0458de1606a93df479"
 MODEL_LICENSE = "Apache-2.0"
 SAMPLE_RATE = 44_100
+LAYOUT_STEMS = {
+    "rekordbox": ("instrumental", "vocals", "drums"),
+    "four-stem": ("drums", "bass", "other", "vocals"),
+}
 
 
 def default_cache_directory() -> Path:
@@ -294,6 +298,20 @@ def output_sources(layout: str, mixture: Any, sources: dict[str, Any]) -> dict[s
     return {"instrumental": instrumental, "vocals": vocals, "drums": drums}
 
 
+def requested_stems(layout: str, stems: list[str] | None) -> tuple[str, ...]:
+    available = LAYOUT_STEMS[layout]
+    if not stems:
+        return available
+    selected = tuple(dict.fromkeys(stems))
+    invalid = sorted(set(selected) - set(available))
+    if invalid:
+        raise ValueError(
+            f"Stem(s) {', '.join(invalid)} are unavailable in {layout} layout; "
+            f"choose from {', '.join(available)}"
+        )
+    return selected
+
+
 def write_outputs(
     output_directory: Path,
     sources: dict[str, Any],
@@ -337,12 +355,16 @@ def write_outputs(
     ]
 
 
-def refuse_existing_outputs(output_directory: Path, layout: str, *, force: bool) -> None:
+def refuse_existing_outputs(
+    output_directory: Path,
+    layout: str,
+    stems: list[str] | None,
+    *,
+    force: bool,
+) -> None:
     if force:
         return
-    names = ("instrumental", "vocals", "drums")
-    if layout == "four-stem":
-        names = ("drums", "bass", "other", "vocals")
+    names = requested_stems(layout, stems)
     existing = [output_directory / f"{name}.wav" for name in names]
     existing = [path for path in existing if path.exists()]
     if existing:
@@ -356,29 +378,57 @@ def separate(
     *,
     force: bool,
     layout: str,
+    stems: list[str] | None,
 ) -> dict[str, Any]:
     require_apple_silicon()
     if not audio_path.is_file():
         raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
-    refuse_existing_outputs(output_directory, layout, force=force)
+    refuse_existing_outputs(output_directory, layout, stems, force=force)
     convert_model(cache_directory)
     checkpoint, config_path, _ = model_paths(cache_directory)
 
     started = time.perf_counter()
     separator = separator_for(checkpoint, config_path, output_directory)
+    result = separate_loaded(
+        separator,
+        audio_path,
+        output_directory,
+        force=force,
+        layout=layout,
+        stems=stems,
+    )
+    result["processingSeconds"] = time.perf_counter() - started
+    import mlx.core as mx
+
+    del separator
+    mx.clear_cache()
+    gc.collect()
+    return result
+
+
+def separate_loaded(
+    separator: Any,
+    audio_path: Path,
+    output_directory: Path,
+    *,
+    force: bool,
+    layout: str,
+    stems: list[str] | None,
+) -> dict[str, Any]:
     import mlx.core as mx
     import numpy as np
 
+    started = time.perf_counter()
     mixture = np.asarray(separator.prepare_mix(str(audio_path)), dtype=np.float32)
     sources = separator._demix_mlx(mixture)
-    outputs_by_name = output_sources(layout, mixture, sources)
-    reconstruction = sum(outputs_by_name.values())
+    all_outputs = output_sources(layout, mixture, sources)
+    reconstruction = sum(all_outputs.values())
     error = np.asarray(reconstruction - mixture, dtype=np.float64)
-    outputs = write_outputs(output_directory, outputs_by_name, force=force)
+    selected_names = requested_stems(layout, stems)
+    selected_outputs = {name: all_outputs[name] for name in selected_names}
+    outputs = write_outputs(output_directory, selected_outputs, force=force)
     elapsed = time.perf_counter() - started
-    del separator, sources, outputs_by_name
-    mx.clear_cache()
-    gc.collect()
+    del sources, all_outputs, selected_outputs
     return {
         "audioPath": str(audio_path.resolve()),
         "backend": "mlx",
@@ -395,6 +445,75 @@ def separate(
             "rmsError": float(np.sqrt(np.mean(error * error))),
         },
         "sampleRate": SAMPLE_RATE,
+        "selectedStems": list(selected_names),
+    }
+
+
+def separate_batch(
+    request_path: Path,
+    cache_directory: Path,
+    *,
+    force: bool,
+    layout: str,
+    stems: list[str] | None,
+) -> dict[str, Any]:
+    require_apple_silicon()
+    payload = json.loads(request_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Batch request must contain at least one job")
+
+    jobs: list[tuple[Path, Path]] = []
+    destinations: set[Path] = set()
+    for index, job in enumerate(payload):
+        if not isinstance(job, dict):
+            raise ValueError(f"Batch job {index} must be an object")
+        audio_path = Path(job.get("audioPath", ""))
+        output_directory = Path(job.get("outputDirectory", ""))
+        if not audio_path.is_file():
+            raise FileNotFoundError(f"Audio file does not exist: {audio_path}")
+        destination = output_directory.resolve()
+        if destination in destinations:
+            raise ValueError(f"Multiple batch jobs target {destination}")
+        destinations.add(destination)
+        refuse_existing_outputs(output_directory, layout, stems, force=force)
+        jobs.append((audio_path, output_directory))
+
+    convert_model(cache_directory)
+    checkpoint, config_path, _ = model_paths(cache_directory)
+    started = time.perf_counter()
+    load_started = time.perf_counter()
+    separator = separator_for(checkpoint, config_path, jobs[0][1])
+    model_load_seconds = time.perf_counter() - load_started
+    results = []
+    try:
+        for audio_path, output_directory in jobs:
+            results.append(
+                separate_loaded(
+                    separator,
+                    audio_path,
+                    output_directory,
+                    force=force,
+                    layout=layout,
+                    stems=stems,
+                )
+            )
+    finally:
+        import mlx.core as mx
+
+        del separator
+        mx.clear_cache()
+        gc.collect()
+
+    return {
+        "backend": "mlx",
+        "layout": layout,
+        "model": MODEL_REPOSITORY,
+        "modelLoadSeconds": model_load_seconds,
+        "modelRevision": MODEL_REVISION,
+        "processingSeconds": time.perf_counter() - started,
+        "results": results,
+        "selectedStems": list(requested_stems(layout, stems)),
+        "trackCount": len(results),
     }
 
 
@@ -417,6 +536,7 @@ def doctor(cache_directory: Path) -> dict[str, Any]:
         "model": MODEL_REPOSITORY,
         "modelRevision": MODEL_REVISION,
         "python": platform.python_version(),
+        "pythonEnvironment": os.environ.get("VIRTUAL_ENV", ""),
     }
 
 
@@ -433,6 +553,16 @@ def parser() -> argparse.ArgumentParser:
     separate_parser.add_argument(
         "--layout", choices=("rekordbox", "four-stem"), default="rekordbox"
     )
+    separate_parser.add_argument(
+        "--stem", action="append", choices=sorted(set(sum(LAYOUT_STEMS.values(), ())))
+    )
+    batch_parser = commands.add_parser("batch")
+    batch_parser.add_argument("request_path", type=Path)
+    batch_parser.add_argument("--force", action="store_true")
+    batch_parser.add_argument("--layout", choices=("rekordbox", "four-stem"), default="rekordbox")
+    batch_parser.add_argument(
+        "--stem", action="append", choices=sorted(set(sum(LAYOUT_STEMS.values(), ())))
+    )
     return root
 
 
@@ -444,13 +574,22 @@ def main() -> int:
             result = doctor(arguments.cache_directory)
         elif arguments.command == "setup":
             result = convert_model(arguments.cache_directory)
-        else:
+        elif arguments.command == "separate":
             result = separate(
                 arguments.audio_path,
                 arguments.output_directory,
                 arguments.cache_directory,
                 force=arguments.force,
                 layout=arguments.layout,
+                stems=arguments.stem,
+            )
+        else:
+            result = separate_batch(
+                arguments.request_path,
+                arguments.cache_directory,
+                force=arguments.force,
+                layout=arguments.layout,
+                stems=arguments.stem,
             )
         print(json.dumps(result, sort_keys=True))
         return 0

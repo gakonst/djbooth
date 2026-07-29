@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
@@ -32,6 +32,7 @@ import {
   readMySettingFile,
   RekordboxXml,
   separateStems,
+  separateStemsBatch,
   setupStems,
   SmartList,
   updateConfig,
@@ -322,6 +323,7 @@ const stemsRuntimeOptions = z.object({
   cacheDirectory: z.string().optional().describe("Persistent model cache override"),
   uvBinary: z.string().optional().describe("uv executable override"),
 });
+const stemName = z.enum(["instrumental", "vocals", "drums", "bass", "other"]);
 
 stemsCli.command("doctor", {
   description: "Inspect Apple Silicon, MLX, and local model readiness.",
@@ -360,6 +362,7 @@ stemsCli.command("separate", {
       .enum(["rekordbox", "four-stem"])
       .default("rekordbox")
       .describe("Rekordbox three-source contract, or model-native four sources"),
+    stem: z.array(stemName).optional().describe("Only write this source; repeat for several"),
   }),
   async run(c) {
     return await separateStems(c.args.audioPath, c.args.outputDirectory, {
@@ -369,8 +372,77 @@ stemsCli.command("separate", {
       onLog(message) {
         process.stderr.write(message);
       },
+      stems: c.options.stem,
       uvBinary: c.options.uvBinary,
     });
+  },
+});
+
+stemsCli.command("playlist", {
+  description: "Separate every local track in a Rekordbox playlist with one model load.",
+  hint: "The database is opened read-only. Duplicate playlist memberships are separated once, and each content ID gets its own output directory.",
+  args: z.object({
+    playlistId: z.string().describe("Regular or smart playlist ID"),
+    outputRoot: z.string().describe("Root directory for per-track stem directories"),
+  }),
+  options: stemsRuntimeOptions.extend({
+    force: z.boolean().default(false).describe("Replace existing selected stem WAV files"),
+    layout: z
+      .enum(["rekordbox", "four-stem"])
+      .default("rekordbox")
+      .describe("Rekordbox three-source contract, or model-native four sources"),
+    limit: z.number().int().min(1).max(100_000).optional().describe("Maximum tracks to separate"),
+    offset: z.number().int().min(0).default(0).describe("Playlist tracks to skip"),
+    path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
+    plain: z.boolean().default(false).describe("Open an unencrypted SQLite database"),
+    stem: z.array(stemName).optional().describe("Only write this source; repeat for several"),
+  }),
+  async run(c) {
+    const db = openDatabase(c.options);
+    let playlistTracks;
+    let playlistTrackCount;
+    try {
+      playlistTrackCount = db.countPlaylistTracks(c.args.playlistId);
+      playlistTracks = db.getPlaylistTracks(c.args.playlistId, {
+        limit: c.options.limit,
+        offset: c.options.offset,
+      });
+    } finally {
+      db.close();
+    }
+
+    const uniqueTracks = new Map(
+      playlistTracks.map((track) => [track.contentId, track] as const),
+    ).values();
+    const outputRoot = resolve(c.args.outputRoot);
+    const jobs = [...uniqueTracks].map((track) => {
+      if (!track.path) throw new TypeError(`Content '${track.contentId}' has no local audio path`);
+      const fileStem = basename(track.path, extname(track.path));
+      return {
+        audioPath: track.path,
+        outputDirectory: join(outputRoot, `${track.contentId} - ${fileStem}`),
+      };
+    });
+    const result = await separateStemsBatch(jobs, {
+      cacheDirectory: c.options.cacheDirectory,
+      force: c.options.force,
+      layout: c.options.layout,
+      onLog(message) {
+        process.stderr.write(message);
+      },
+      stems: c.options.stem,
+      uvBinary: c.options.uvBinary,
+    });
+    return {
+      outputRoot,
+      limit: c.options.limit ?? null,
+      offset: c.options.offset,
+      playlistId: c.args.playlistId,
+      playlistTrackCount,
+      selectedTrackCount: playlistTracks.length,
+      skippedDuplicateCount: playlistTracks.length - jobs.length,
+      ...result,
+    };
   },
 });
 

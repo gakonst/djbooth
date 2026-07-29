@@ -1,11 +1,22 @@
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
 const pythonProjectDirectory = fileURLToPath(new URL("../../python/", import.meta.url));
 const pythonScript = fileURLToPath(new URL("../../python/rekordbox_stems_mlx.py", import.meta.url));
+const defaultPythonEnvironmentDirectory = join(
+  homedir(),
+  "Library",
+  "Caches",
+  "rekordbox-ts",
+  "stems",
+  "python-3.12",
+);
+const stemNameSchema = z.enum(["instrumental", "vocals", "drums", "bass", "other"]);
 
 const stemArtifactSchema = z.object({
   channels: z.number().int().positive(),
@@ -29,6 +40,19 @@ const stemsSeparationResultSchema = z.object({
   processingSeconds: z.number().nonnegative(),
   reconstruction: z.object({ peakError: z.number(), rmsError: z.number() }),
   sampleRate: z.number().int().positive(),
+  selectedStems: z.array(stemNameSchema),
+});
+
+const stemsBatchResultSchema = z.object({
+  backend: z.literal("mlx"),
+  layout: z.enum(["rekordbox", "four-stem"]),
+  model: z.string(),
+  modelLoadSeconds: z.number().nonnegative(),
+  modelRevision: z.string(),
+  processingSeconds: z.number().nonnegative(),
+  results: z.array(stemsSeparationResultSchema),
+  selectedStems: z.array(stemNameSchema),
+  trackCount: z.number().int().nonnegative(),
 });
 
 const stemsDoctorResultSchema = z.object({
@@ -45,6 +69,7 @@ const stemsDoctorResultSchema = z.object({
   model: z.string(),
   modelRevision: z.string(),
   python: z.string(),
+  pythonEnvironment: z.string(),
 });
 
 const optionalArtifactSchema = z
@@ -66,11 +91,25 @@ const stemsSetupResultSchema = z.object({
 /** Output layout from the clean MLX separator. */
 export type StemsLayout = "rekordbox" | "four-stem";
 
+/** One source that can be selected from a compatible output layout. */
+export type StemName = z.infer<typeof stemNameSchema>;
+
 /** One stem WAV emitted by the MLX separator. */
 export type StemArtifact = z.infer<typeof stemArtifactSchema>;
 
 /** Structured result from MLX stem separation. */
 export type StemsSeparationResult = z.infer<typeof stemsSeparationResultSchema>;
+
+/** Structured result from a model-reusing batch separation. */
+export type StemsBatchResult = z.infer<typeof stemsBatchResultSchema>;
+
+/** One input/output pair in a model-reusing batch separation. */
+export type StemsBatchJob = {
+  /** Existing local recording. */
+  audioPath: string;
+  /** Directory receiving this recording's selected stem WAVs. */
+  outputDirectory: string;
+};
 
 /** MLX runtime and local model readiness. */
 export type StemsDoctorResult = z.infer<typeof stemsDoctorResultSchema>;
@@ -94,6 +133,8 @@ export type SeparateStemsOptions = StemsRuntimeOptions & {
   force?: boolean;
   /** Three Rekordbox-compatible sources, or the model's native four sources. */
   layout?: StemsLayout;
+  /** Write only these compatible stems; inference still predicts all four sources. */
+  stems?: Array<StemName>;
 };
 
 /** Inspect Apple Silicon, MLX, and converted model readiness. */
@@ -120,7 +161,35 @@ export async function separateStems(
     options.layout ?? "rekordbox",
   ];
   if (options.force) args.push("--force");
+  for (const stem of options.stems ?? []) args.push("--stem", stem);
   return stemsSeparationResultSchema.parse(await runPython(args, options));
+}
+
+/** Separate multiple recordings while loading the 3.76 GB model only once. */
+export async function separateStemsBatch(
+  jobs: Array<StemsBatchJob>,
+  options: SeparateStemsOptions = {},
+): Promise<StemsBatchResult> {
+  if (jobs.length === 0) throw new TypeError("At least one stems batch job is required");
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), "rekordbox-stems-batch-"));
+  const requestPath = join(temporaryDirectory, "jobs.json");
+  writeFileSync(
+    requestPath,
+    `${JSON.stringify(
+      jobs.map((job) => ({
+        audioPath: realpathSync(job.audioPath),
+        outputDirectory: resolve(job.outputDirectory),
+      })),
+    )}\n`,
+  );
+  const args = ["batch", requestPath, "--layout", options.layout ?? "rekordbox"];
+  if (options.force) args.push("--force");
+  for (const stem of options.stems ?? []) args.push("--stem", stem);
+  try {
+    return stemsBatchResultSchema.parse(await runPython(args, options));
+  } finally {
+    rmSync(temporaryDirectory, { force: true, recursive: true });
+  }
 }
 
 async function runPython(
@@ -132,7 +201,6 @@ async function runPython(
     : commandArgs;
   const args = [
     "run",
-    "--isolated",
     "--python",
     "3.12",
     "--project",
@@ -144,8 +212,14 @@ async function runPython(
     ...helperArgs,
   ];
   const command = options.uvBinary ?? "uv";
+  const pythonEnvironmentDirectory = options.cacheDirectory
+    ? join(resolve(options.cacheDirectory), "python-3.12")
+    : defaultPythonEnvironmentDirectory;
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      env: { ...process.env, UV_PROJECT_ENVIRONMENT: pythonEnvironmentDirectory },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -154,7 +228,7 @@ async function runPython(
       stdout += chunk;
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stderr = `${stderr}${chunk}`.slice(-1_000_000);
       options.onLog?.(chunk);
     });
     child.on("error", (error) => {

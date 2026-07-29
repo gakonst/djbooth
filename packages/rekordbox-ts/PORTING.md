@@ -32,6 +32,23 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — library-scale MLX model reuse and selected stem output
+
+- Added `separateStemsBatch` and `stems playlist`. The playlist command opens the discovered
+  Rekordbox 6/7 database read-only, resolves regular or smart playlist audio paths, deduplicates
+  repeated memberships, and keeps one 3.76 GB model instance resident across serial track jobs.
+- Replaced uv's per-command isolated environment with a lock-synchronized Python 3.12 environment
+  under the stems cache. A warm `doctor` invocation dropped from `0.49 s` to `0.14 s`; the npm
+  package remains free of Python wheels and the checked-in uv lock remains authoritative.
+- Added repeatable `--stem` selection for acapella and part workflows. The model still predicts all
+  four sources, preserving model behavior, while only selected compatible WAVs are written and
+  hashed. Existing-output checks happen for the selected files before model loading.
+- On the M2 Max, two swapped-order runs of identical 10-second vocals-only jobs took `1.77–1.79 s`
+  in one batch and `2.23–3.41 s` as independent invocations (`1.26–1.91x` throughput). All generated
+  vocal files were byte-identical (`a3fc9a5d...ba8d`). Writing vocals only reduced output bytes by
+  75%; an earlier same-state gate showed inference-bound wall time effectively unchanged versus
+  writing all four sources (`3.78 s` versus `3.87 s`).
+
 ### 2026-07-29 — local synchronized stems audition UI
 
 - Added a dependency-free local Web Audio player for the 45-second London Grammar example. It

@@ -155,18 +155,35 @@ rekordbox stems separate track.flac track.stems --format json
 
 # Native model outputs: drums, bass, other, vocals
 rekordbox stems separate track.flac track.4stems --layout four-stem --format json
+
+# Write only an acapella; avoids the other three WAV files
+rekordbox stems separate track.flac track.acapella --layout four-stem --stem vocals --format json
+
+# Resolve a Rekordbox playlist read-only and reuse one loaded model across every track
+rekordbox stems playlist PLAYLIST_ID ./playlist-stems \
+  --layout four-stem --stem vocals --format json
 ```
 
 The backend pins `mlx-audio-separator` 0.1.5 and the Apache-2.0
 `SYH99999/MelBandRoformer4StemFTLarge` checkpoint at an immutable Hugging Face revision. Model
 artifacts stay in `~/Library/Caches/rekordbox-ts/stems`; they are never included in the npm package.
 Inference uses MLX on the Apple GPU. Initial conversion needs PyTorch only to deserialize the
-checkpoint; subsequent loads prefer the converted safetensors.
+checkpoint; subsequent loads prefer the converted safetensors. uv keeps the locked Python 3.12
+runtime in the same cache tree, avoiding a temporary dependency install on every command.
 
 The model predicts drums, bass, other, and vocals. Default output follows the recovered Rekordbox
 6 contract: `instrumental = bass + other`, vocals pass through, and drums are the exact mixture
 residual. Use `--layout four-stem` when separate bass and other files matter more than exact
 three-source reconstruction. Existing named WAVs are refused unless `--force` is explicit.
+`--stem` can select only the files needed for an acapella or drum/bass/other edit; inference still
+predicts all four sources, but unselected WAVs are not written or hashed.
+
+`stems playlist` reads regular or smart playlist membership and source paths from an auto-discovered
+Rekordbox 6/7 database without mutating it. It deduplicates repeated memberships, writes each track
+under a content-ID-prefixed directory, and keeps one model resident for the batch. On the M2 Max,
+two swapped-order runs of identical 10-second jobs took 1.77–1.79 seconds through the batch path
+versus 2.23–3.41 seconds through independent calls (1.26–1.91× throughput); all vocal output hashes
+matched. Use `--limit` and `--offset` to stage large playlists.
 
 Audition the bundled example in a synchronized local A/B mixer:
 
