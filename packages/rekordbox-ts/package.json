@@ -24,6 +24,7 @@
     "rekordbox-ts": "./dist/cli.js"
   },
   "files": [
+    "demo",
     "dist",
     "python",
     "PORTING.md",
@@ -92,6 +93,7 @@
     "format:check": "oxfmt --check .",
     "lint": "oxlint src test",
     "prepack": "pnpm build",
+    "stems:ui": "node demo/stems-player/server.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

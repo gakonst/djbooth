@@ -168,6 +168,17 @@ The model predicts drums, bass, other, and vocals. Default output follows the re
 residual. Use `--layout four-stem` when separate bass and other files matter more than exact
 three-source reconstruction. Existing named WAVs are refused unless `--force` is explicit.
 
+Audition the bundled example in a synchronized local A/B mixer:
+
+```sh
+pnpm --filter @gakonst/rekordbox stems:ui
+```
+
+The player opens `http://127.0.0.1:4178` and loads the London Grammar demo generated during this
+port. Point it at another four-stem result with
+`--audio-dir /path/to/stems`; the directory must contain `mixture.wav`, `vocals.wav`, `drums.wav`,
+`bass.wav`, and `other.wav`.
+
 ## TypeScript API
 
 The root entry point exports the common API. Format-specific subpaths avoid name collisions such as the separate master/device `Content`, `PlaylistType`, and `FileType` models.

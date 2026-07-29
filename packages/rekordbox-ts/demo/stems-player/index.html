@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Stemroom · MLX audition</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div>
+          <div class="eyebrow"><span class="pulse"></span> LOCAL MLX AUDITION</div>
+          <h1 id="title">Loading session…</h1>
+          <p id="subtitle">Preparing synchronized float32 stems</p>
+        </div>
+        <div class="engine-badge">
+          <span>ENGINE</span>
+          <strong id="backend">Mel‑Band‑RoFormer</strong>
+        </div>
+      </header>
+
+      <section class="transport panel" aria-label="Transport controls">
+        <button id="play" class="play" type="button" disabled aria-label="Play">
+          <span class="play-icon">▶</span>
+        </button>
+        <div class="timeline-wrap">
+          <div class="time-row">
+            <span id="position">0:00.0</span>
+            <span id="status">Loading 0 / 5</span>
+            <span id="duration">0:45.0</span>
+          </div>
+          <input id="timeline" type="range" min="0" max="45" value="0" step="0.01" disabled />
+        </div>
+      </section>
+
+      <section class="ab-panel panel" aria-label="A/B comparison">
+        <div class="ab-copy">
+          <span class="section-label">INSTANT A / B</span>
+          <strong>Reference mix vs. four separated stems</strong>
+          <small>Switches are sample-synchronized. No pause, no reload.</small>
+        </div>
+        <div class="ab-switch" role="group" aria-label="Mix preset">
+          <button class="preset active" type="button" data-preset="original">
+            <kbd>1</kbd> Original
+          </button>
+          <button class="preset" type="button" data-preset="separated">
+            <kbd>2</kbd> Stem sum
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <div>
+            <span class="section-label">CHANNEL STRIPS</span>
+            <h2>Pull the mix apart</h2>
+          </div>
+          <button id="reset" class="text-button" type="button">Reset mixer</button>
+        </div>
+        <div id="mixer" class="mixer" aria-live="polite"></div>
+      </section>
+
+      <footer>
+        <span>Space: play/pause</span><span>1: original</span><span>2: stem sum</span>
+        <span>V / D / B / O: solo stem</span>
+      </footer>
+    </main>
+
+    <template id="channel-template">
+      <article class="channel panel">
+        <div class="channel-top">
+          <div>
+            <span class="channel-kind"></span>
+            <h3 class="channel-name"></h3>
+          </div>
+          <div class="channel-actions">
+            <button class="mini mute" type="button">M</button>
+            <button class="mini solo" type="button">S</button>
+          </div>
+        </div>
+        <div class="meter"><span></span></div>
+        <div class="fader-row">
+          <input class="fader" type="range" min="-60" max="6" value="0" step="0.5" />
+          <output class="gain">0.0 dB</output>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
