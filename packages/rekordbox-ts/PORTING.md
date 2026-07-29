@@ -1185,3 +1185,39 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   the recovered decoder in the production rhythm path, replay the complete
   five-track linked corpus, and resolve the few PCM-dependent BeatSensor
   endpoint ties before selecting it as the default grid.
+
+## Linked hypothesis-run pruning checkpoint (2026-07-28)
+
+- Recovered the two missing source-vector pruning passes from first principles.
+  The continuous pass first constructs a sparse period timeline indexed by
+  `generation >> 8`. A previously empty generation is backfilled only when its
+  period matches the next populated generation directly, at half time, or at
+  double time within the strict `min(4%, 20 ms)` reference window.
+- Empty generations are erased as complete generations. One- and
+  two-generation islands are always erased; three- through eight-generation
+  islands are erased when the following generation reconnects to the preceding
+  retained family. The clean implementation preserves the native rewind after
+  erasure and its asymmetric `f32` comparisons.
+- The second pass operates on source-position order. Runs of at most eight
+  records are removed. Runs of nine through 32 records are also removed when
+  the next record reconnects to the preceding family; a 33-record run is kept.
+  This exactly explains Power's two four-record removals, Rafael's leading
+  eight-record removal, and Get Up's 27-record bridge removal.
+- Ported both state machines as `prune_discontinuous_hypotheses` and
+  `prune_short_hypothesis_runs`. A separate Rust replay matches every semantic
+  record after both stages on all five traces:
+  Science `17,287 → 17,264 → 17,264`,
+  Luv `12,085 → 12,041 → 12,041`,
+  Power `1,393 → 1,344 → 1,336`,
+  Rafael `968 → 915 → 907`, and
+  Get Up `3,700 → 3,693 → 3,666`.
+- Corrected the earlier interpretation of the nominal `tempoFamily` trace
+  boundary. Variable-tempo analysis builds an analyzer-local section-candidate
+  vector and jumps directly to section refinement; it bypasses the
+  constant-tempo dominant-family source-vector filter. The identical
+  minimum/tempo source snapshots are therefore control-flow invariants, not a
+  five-track coincidence.
+- Remaining integration work is PCM-dependent rather than decoder-dependent:
+  close the small BeatSensor endpoint/tie differences, then route its exact
+  survivor stream through these passes and the already recovered
+  section/phase/grid pipeline.

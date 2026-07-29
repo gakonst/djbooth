@@ -35,7 +35,8 @@ pub use beat_decoder::{
     AdjustedTempoSection, BeatTempoSection, ExpandedBeat, ProvisionalTempoSection,
     RefinedTempoSection, adjust_tempo_section_phases, build_provisional_tempo_sections,
     correct_expanded_beat_gaps, expand_tempo_sections, finalize_expanded_beats,
-    refine_tempo_sections, suppress_nearby_hypotheses,
+    prune_discontinuous_hypotheses, prune_short_hypothesis_runs, refine_tempo_sections,
+    suppress_nearby_hypotheses,
 };
 pub use beat_sensor::{
     BeatSensorAnalysis, BeatSensorCandidate, BeatSensorEvent, BeatSensorHypothesis,

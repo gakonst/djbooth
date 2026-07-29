@@ -103,6 +103,177 @@ pub struct ExpandedBeat {
     pub beat_number: u8,
 }
 
+/// Remove callback generations that do not form a continuous metrical region.
+///
+/// The linked analyzer first builds a sparse callback-generation timeline.
+/// Periods propagate backward only when they match the next populated
+/// generation directly, at half time, or at double time. Empty generations,
+/// isolated one- or two-generation regions, and short regions interrupting a
+/// previously retained family are removed as complete generations.
+pub fn prune_discontinuous_hypotheses(
+    hypotheses: &[BeatSensorHypothesis],
+) -> Result<Vec<BeatSensorHypothesis>> {
+    validate_pruning_hypotheses(hypotheses)?;
+    if hypotheses.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut periods = Vec::new();
+    for hypothesis in hypotheses {
+        let generation = linked_callback_generation(hypothesis.generation);
+        if generation >= periods.len() {
+            periods.resize(generation + 1, 0.0);
+            periods[generation] = hypothesis.period_ms;
+            continue;
+        }
+        if periods[generation] != 0.0 {
+            continue;
+        }
+
+        let Some(next_period) = periods[generation + 1..]
+            .iter()
+            .copied()
+            .find(|period| *period != 0.0)
+        else {
+            continue;
+        };
+        if linked_period_matches_reference(next_period, hypothesis.period_ms) {
+            periods[generation] = hypothesis.period_ms;
+        }
+    }
+
+    let mut removed = vec![false; periods.len()];
+    let mut generation = 0;
+    while generation < periods.len() {
+        if periods[generation] == 0.0 {
+            removed[generation] = true;
+            generation += 1;
+            continue;
+        }
+        if generation + 1 >= periods.len() {
+            break;
+        }
+
+        let mut region_start = generation;
+        let mut cursor = generation + 1;
+        let mut reference_period = periods[generation];
+        let mut region_steps = 0_u32;
+        let mut previous_region_steps = 0_u32;
+        let mut previous_region_period = 0.0_f32;
+        while cursor < periods.len() {
+            let candidate_period = periods[cursor];
+            if candidate_period == 0.0 {
+                removed[cursor] = true;
+                cursor += 1;
+                continue;
+            }
+            if linked_period_matches_reference(reference_period, candidate_period) {
+                cursor += 1;
+                region_steps += 1;
+                reference_period = candidate_period;
+                continue;
+            }
+
+            let removes_region = region_steps <= 1
+                || (region_steps <= 7
+                    && linked_period_matches_reference(previous_region_period, candidate_period));
+            if removes_region {
+                removed[region_start..cursor].fill(true);
+                if previous_region_steps != 0 {
+                    region_start = cursor;
+                    reference_period = previous_region_period;
+                    region_steps = previous_region_steps;
+                } else {
+                    region_start = cursor;
+                    reference_period = periods[cursor];
+                    previous_region_steps = 0;
+                    region_steps = 0;
+                }
+                continue;
+            }
+
+            previous_region_period = reference_period;
+            previous_region_steps = region_steps;
+            region_steps = 0;
+            region_start = cursor;
+            cursor += 1;
+            reference_period = candidate_period;
+        }
+
+        if previous_region_steps != 0 && region_steps == 0 && region_start < cursor {
+            removed[region_start..cursor].fill(true);
+        }
+        break;
+    }
+
+    Ok(hypotheses
+        .iter()
+        .copied()
+        .filter(|hypothesis| !removed[linked_callback_generation(hypothesis.generation)])
+        .collect())
+}
+
+/// Remove short position-ordered tempo-family runs.
+///
+/// Runs of at most eight records are always removed. Runs of nine through 32
+/// records are also removed when the following record reconnects to the
+/// preceding retained family. The iterator rewind after erasure and the
+/// asymmetric reference-period tolerance match the linked implementation.
+pub fn prune_short_hypothesis_runs(
+    hypotheses: &[BeatSensorHypothesis],
+) -> Result<Vec<BeatSensorHypothesis>> {
+    validate_pruning_hypotheses(hypotheses)?;
+    let mut output = hypotheses.to_vec();
+    if output.len() < 2 {
+        return Ok(output);
+    }
+
+    let mut region_start = 0_usize;
+    let mut cursor = 1_usize;
+    let mut previous_region_period = 0.0_f32;
+    let mut region_steps = 0_u32;
+    let mut previous_region_steps = 0_u32;
+    let mut reference_period = output[0].period_ms;
+    while cursor < output.len() {
+        let candidate_period = output[cursor].period_ms;
+        if linked_period_matches_reference(reference_period, candidate_period) {
+            cursor += 1;
+            region_steps += 1;
+            reference_period = candidate_period;
+            continue;
+        }
+
+        let removes_region = region_steps <= 7
+            || (region_steps <= 31
+                && linked_period_matches_reference(previous_region_period, candidate_period));
+        if removes_region && region_start != cursor {
+            output.drain(region_start..cursor);
+            cursor = region_start;
+            if previous_region_steps != 0 {
+                reference_period = previous_region_period;
+                region_steps = previous_region_steps;
+            } else {
+                reference_period = output[region_start].period_ms;
+                previous_region_steps = 0;
+                region_steps = 0;
+            }
+            continue;
+        }
+
+        region_start = cursor;
+        cursor += 1;
+        previous_region_period = reference_period;
+        previous_region_steps = region_steps;
+        region_steps = 0;
+        reference_period = candidate_period;
+    }
+
+    if region_start != cursor && previous_region_steps != 0 && region_steps <= 7 {
+        output.truncate(region_start);
+    }
+    Ok(output)
+}
+
 /// Build the linked analyzer's provisional tempo sections.
 ///
 /// Each source hypothesis starts an inclusive eight-second forward histogram.
@@ -169,25 +340,17 @@ pub fn build_provisional_tempo_sections(
             }
         }
         let selected_period = 60_000.0_f32 / selected_bpm as f32;
-        let continues_previous = metrical_period_compatible(
-            selected_period,
-            previous_window_period,
-            period_tolerance(previous_window_period),
-        );
+        let continues_previous =
+            linked_period_matches_reference(previous_window_period, selected_period);
         previous_window_period = selected_period;
         if continues_previous {
             source_index += 1;
             continue;
         }
 
-        let selected_tolerance = period_tolerance(selected_period);
         let anchor_index = (source_index..histogram_end)
             .find(|&index| {
-                metrical_period_compatible(
-                    hypotheses[index].period_ms,
-                    selected_period,
-                    selected_tolerance,
-                )
+                linked_period_matches_reference(selected_period, hypotheses[index].period_ms)
             })
             .expect("the selected histogram family has a compatible hypothesis");
         let representative_index = (source_index..histogram_end)
@@ -298,10 +461,9 @@ pub fn refine_tempo_sections(
         sections[section_index].generation = 4;
 
         let merges_previous = section_index > 0
-            && metrical_period_compatible(
-                sections[section_index].period_ms,
+            && linked_period_matches_reference(
                 sections[section_index - 1].period_ms,
-                period_tolerance(sections[section_index - 1].period_ms),
+                sections[section_index].period_ms,
             );
         if merges_previous {
             sections.remove(section_index);
@@ -1045,10 +1207,33 @@ fn period_tolerance(period_ms: f32) -> f32 {
     (f64::from(period_ms) * 0.04).min(20.0) as f32
 }
 
-fn metrical_period_compatible(left: f32, right: f32, tolerance: f32) -> bool {
-    (left - right).abs() <= tolerance
-        || (left - right * 2.0).abs() <= tolerance
-        || (left - right * 0.5).abs() <= tolerance
+fn linked_callback_generation(generation: u32) -> usize {
+    (generation >> 8) as usize
+}
+
+fn linked_period_matches_reference(reference: f32, candidate: f32) -> bool {
+    let tolerance = period_tolerance(reference);
+    let lower = reference - tolerance;
+    let upper = reference + tolerance;
+    (candidate > lower && candidate < upper)
+        || (candidate + candidate > lower && candidate + candidate < upper)
+        || (candidate * 0.5 > lower && candidate * 0.5 < upper)
+}
+
+fn validate_pruning_hypotheses(hypotheses: &[BeatSensorHypothesis]) -> Result<()> {
+    if hypotheses
+        .windows(2)
+        .any(|pair| pair[0].peak_frame > pair[1].peak_frame)
+    {
+        bail!("hypothesis pruning requires frame-ordered hypotheses");
+    }
+    if hypotheses
+        .iter()
+        .any(|hypothesis| !hypothesis.period_ms.is_finite() || hypothesis.period_ms <= 0.0)
+    {
+        bail!("hypothesis pruning requires positive finite periods");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1073,6 +1258,119 @@ mod tests {
             section_anchor: false,
             beat_number: 0,
         }
+    }
+
+    fn hypotheses_for_periods(periods: &[f32]) -> Vec<BeatSensorHypothesis> {
+        periods
+            .iter()
+            .enumerate()
+            .map(|(index, &period_ms)| {
+                hypothesis(index as u64 * 1_000, ((index as u32) << 8) | 3, period_ms)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn discontinuous_pruning_removes_short_bridged_generations() {
+        let mut hypotheses = hypotheses_for_periods(
+            &[
+                [500.0; 10].as_slice(),
+                [350.0; 3].as_slice(),
+                [500.0; 10].as_slice(),
+            ]
+            .concat(),
+        );
+        hypotheses.insert(
+            11,
+            BeatSensorHypothesis {
+                peak_frame: 10_500,
+                period_ratio: 2.0,
+                period_ms: 350.0,
+                generation: (10 << 8) | 7,
+                band: 4,
+            },
+        );
+
+        let result = prune_discontinuous_hypotheses(&hypotheses).unwrap();
+
+        assert_eq!(result.len(), 20);
+        assert!(result.iter().all(|item| item.period_ms == 500.0));
+        assert!(
+            result
+                .iter()
+                .all(|item| !(10..=12).contains(&(item.generation >> 8)))
+        );
+    }
+
+    #[test]
+    fn discontinuous_pruning_backfills_only_compatible_generations() {
+        let hypotheses = [
+            hypothesis(100, (2 << 8) | 3, 500.0),
+            hypothesis(200, (0 << 8) | 3, 500.0),
+            hypothesis(300, (1 << 8) | 3, 700.0),
+            hypothesis(400, (3 << 8) | 3, 500.0),
+            hypothesis(500, (4 << 8) | 3, 500.0),
+            hypothesis(600, (5 << 8) | 3, 500.0),
+        ];
+
+        let result = prune_discontinuous_hypotheses(&hypotheses).unwrap();
+
+        assert!(result.iter().all(|item| item.generation >> 8 != 1));
+    }
+
+    #[test]
+    fn short_run_pruning_removes_prefix_bridge_and_suffix() {
+        let periods = [
+            [700.0; 4].as_slice(),
+            [500.0; 12].as_slice(),
+            [700.0; 27].as_slice(),
+            [500.0; 12].as_slice(),
+            [700.0; 8].as_slice(),
+        ]
+        .concat();
+        let hypotheses = hypotheses_for_periods(&periods);
+
+        let result = prune_short_hypothesis_runs(&hypotheses).unwrap();
+
+        assert_eq!(result.len(), 24);
+        assert!(result.iter().all(|item| item.period_ms == 500.0));
+    }
+
+    #[test]
+    fn short_run_pruning_keeps_a_33_record_bridge() {
+        let periods = [
+            [500.0; 12].as_slice(),
+            [700.0; 33].as_slice(),
+            [500.0; 12].as_slice(),
+        ]
+        .concat();
+        let hypotheses = hypotheses_for_periods(&periods);
+
+        let result = prune_short_hypothesis_runs(&hypotheses).unwrap();
+
+        assert_eq!(result, hypotheses);
+    }
+
+    #[test]
+    fn pruning_uses_strict_asymmetric_period_bounds() {
+        let reference = 500.0_f32;
+        let tolerance = period_tolerance(reference);
+
+        assert!(!linked_period_matches_reference(
+            reference,
+            reference - tolerance
+        ));
+        assert!(!linked_period_matches_reference(
+            reference,
+            reference + tolerance
+        ));
+        assert!(linked_period_matches_reference(reference, 500.1));
+        assert!(linked_period_matches_reference(reference, 1_039.0));
+        assert!(!linked_period_matches_reference(reference, 1_040.0));
+        assert!(!linked_period_matches_reference(reference, 235.0));
+        assert!(linked_period_matches_reference(reference, 241.0));
+        assert!(linked_period_matches_reference(reference, 250.0));
+        assert!(linked_period_matches_reference(reference, 1_000.0));
     }
 
     #[test]
