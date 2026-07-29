@@ -22,7 +22,7 @@ playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
 | [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
 | [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
 | [`@gakonst/djlink`](packages/djlink)                       | `djlink`            | Manifest-backed Pro DJ Link RemoteDB/NFS source and CDJ load control   |
-| [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | Read-only Linux USB gadget and immutable image lifecycle               |
+| [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | CDJ-3000 legacy-media export and read-only Linux USB gadget             |
 
 Package licenses remain package-local; see each package manifest for its terms.
 
@@ -40,7 +40,7 @@ import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
 import { RekordboxLibraryService } from "@gakonst/music/library";
 import { loadDjLinkTrack, startDjLink } from "@gakonst/music/djlink";
-import { attachCdjUsb, publishCdjUsbImage } from "@gakonst/music/usb";
+import { exportLegacyDeviceLibrary } from "@gakonst/music/usb";
 ```
 
 ## Pipeline
@@ -54,7 +54,14 @@ YouTube / SoundCloud set
   -> tracks: bounded set extracts only for unavailable IDs
   -> rekordbox: automatic verified playlist membership in the normal encrypted database
   -> djlink: serve verified local audio/ANLZ and load/cue it on a connected CDJ
-  -> usb: alternatively expose a prepared immutable image through the deck's front USB port
+  -> usb: compile SQLite into legacy export.pdb, copied audio, and rewritten ANLZ for front USB
+```
+
+The front-USB compiler keeps `master.db` as the source of truth and does not use Device Library
+Plus:
+
+```sh
+music usb export /mnt/cdj --database /path/to/master.db --format json
 ```
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording

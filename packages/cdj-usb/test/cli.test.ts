@@ -19,14 +19,24 @@ async function serve(cli: ReturnType<typeof Cli.create>, argv: string[]) {
 }
 
 describe("CDJ USB CLI", () => {
-  it("exposes the bounded immutable-image lifecycle", async () => {
+  it("exposes SQLite export and the bounded transport lifecycle", async () => {
     const { output, exitCode } = await serve(cdjUsbCli, ["--llms-full", "--format", "json"]);
     const manifest = JSON.parse(output) as { commands: Array<{ name: string }> };
 
     expect(exitCode).toBeUndefined();
     expect(manifest.commands.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(["doctor", "status", "publish", "attach", "detach", "run"]),
+      expect.arrayContaining(["export", "doctor", "status", "publish", "attach", "detach", "run"]),
     );
+  });
+
+  it("documents the CDJ-3000 legacy conversion without Device Library Plus", async () => {
+    const { output, exitCode } = await serve(cdjUsbCli, ["export", "--help"]);
+
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("usb export <target>");
+    expect(output).toContain("master.db");
+    expect(output).toContain("legacy export.pdb");
+    expect(output).toContain("does not create Device Library Plus");
   });
 
   it("retains the physical eject boundary when mounted under music", async () => {

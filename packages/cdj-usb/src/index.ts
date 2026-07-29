@@ -1,4 +1,9 @@
 export {
+  exportLegacyDeviceLibrary,
+  type ExportLegacyDeviceLibraryOptions,
+  type LegacyDeviceLibraryExportResult,
+} from "@gakonst/rekordbox/devicelib";
+export {
   attachCdjUsb,
   CdjUsbError,
   detachCdjUsb,

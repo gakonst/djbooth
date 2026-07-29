@@ -45,6 +45,7 @@ describe("music CLI", () => {
       expect.arrayContaining([
         "usb attach",
         "usb doctor",
+        "usb export",
         "usb publish",
         "usb status",
         "djlink devices",

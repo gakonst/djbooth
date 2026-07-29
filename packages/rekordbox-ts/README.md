@@ -2,7 +2,13 @@
 
 A TypeScript port of [dylanljones/pyrekordbox](https://github.com/dylanljones/pyrekordbox), with a synchronous typed database API and an agent-friendly CLI built on [wevm/incur](https://github.com/wevm/incur).
 
-The primary workflow is direct access to encrypted Rekordbox 6/7 `master.db` libraries through `MasterDatabase`. The port also covers Device Library Plus databases, ANLZ analysis files, My Settings binaries, smart playlists, `masterPlaylists6.xml`, and collection XML interchange. The pinned Python revision, compatibility policy, verification evidence, and implementation decisions are recorded in [PORTING.md](./PORTING.md).
+The primary workflow is direct access to encrypted Rekordbox 6/7 `master.db` libraries through
+`MasterDatabase`. The package can compile that SQLite library into the legacy `export.pdb` Device
+Library used by CDJ-3000 media without using Device Library Plus. It also covers Device Library
+Plus databases, ANLZ analysis files, My Settings binaries, smart playlists,
+`masterPlaylists6.xml`, and collection XML interchange. The pinned source revisions, compatibility
+policy, verification evidence, and implementation decisions are recorded in
+[PORTING.md](./PORTING.md).
 
 > [!CAUTION]
 > Back up your Rekordbox collection before using any write operation. This project is not affiliated with AlphaTheta Corporation, Pioneer Corporation, or their related companies.
@@ -78,6 +84,20 @@ Top-level command families:
 | `smartlist` | Parse, construct, and compile smart playlists                 |
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
 | `device`    | Query and mutate Device Library Plus `exportLibrary.db` files |
+
+The composed `music` CLI exposes the legacy CDJ-3000 compiler separately from the `device`
+Device Library Plus commands:
+
+```sh
+music usb export /mnt/cdj --database /path/to/master.db --format json
+```
+
+The destination is a mounted FAT/exFAT root or a staging directory. The compiler writes
+`PIONEER/rekordbox/export.pdb`, copies supported audio beneath `Contents/`, copies DAT/EXT/2EX
+beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH` path, and materializes the active playlist
+tree. A later `--replace` is accepted only when the volume carries the ownership marker written by
+the first successful export. The source SQLite database is opened read-only and remains
+authoritative.
 
 Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 
@@ -197,6 +217,35 @@ music rekordbox db content delete-cue CONTENT_ID CUE_ID --write
 ```
 
 For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.
+
+### Legacy CDJ-3000 Device Library export
+
+```ts
+import { exportLegacyDeviceLibrary, inspectLegacyDevicePdb } from "@gakonst/rekordbox/devicelib";
+import { MasterDatabase } from "@gakonst/rekordbox/masterdb";
+
+const database = new MasterDatabase();
+try {
+  const result = await exportLegacyDeviceLibrary({
+    database,
+    targetDirectory: "/mnt/cdj",
+  });
+  console.log(result);
+} finally {
+  database.close();
+}
+```
+
+`exportLegacyDeviceLibrary` is a compiler, not a second database. It starts with an empty legacy
+DeviceSQL scaffold and generates a disposable `export.pdb` from the current SQLite rows. Supported
+audio types are MP3, M4A, FLAC, WAV, and AIFF. Tracks without a regular local audio file or at least
+`ANLZ0000.DAT` fail closed rather than producing an export that looks valid but is incomplete.
+Regular playlists preserve duplicate memberships and order; smart playlists are materialized at
+export time.
+
+`LegacyDevicePdbWriter` and `inspectLegacyDevicePdb` expose the lower-level binary compiler and a
+bounded semantic verifier. Generated output is tested against the package parser and independently
+against the pinned Rust `rekordbox-pdb` parser.
 
 ### ANLZ and My Settings
 

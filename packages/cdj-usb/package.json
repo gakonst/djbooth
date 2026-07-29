@@ -1,7 +1,7 @@
 {
   "name": "@gakonst/cdj-usb",
   "version": "0.1.0",
-  "description": "Safe Linux USB mass-storage appliance controller for CDJ-compatible disk images",
+  "description": "CDJ-3000 legacy-media exporter and safe Linux USB mass-storage appliance controller",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -47,6 +47,7 @@
     "validate": "pnpm check && pnpm build"
   },
   "dependencies": {
+    "@gakonst/rekordbox": "workspace:*",
     "incur": "0.4.13",
     "zod": "^4.4.3"
   },

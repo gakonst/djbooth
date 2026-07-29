@@ -1,6 +1,6 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings over Pro DJ Link; and control a read-only Linux front-USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front USB image inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings over Pro DJ Link; compile CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front-USB export or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
@@ -91,9 +91,10 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
   use Spotify APIs for DJ mixing, segueing, or overlapping playback.
 - Treat `music djlink load` as remote load/cue, not transport control. Keep deck PLAY physical;
   CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
-- Treat `music usb` as front-panel read-only block storage, not DJ Link. Require a prepared complete
-  image, never publish while the gadget is configured, and require physical USB STOP/eject before
-  `detach --confirm-host-ejected`. Do not claim this package synthesizes legacy `export.pdb`.
+- Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb export` to compile the
+  normal SQLite library into legacy `export.pdb`, copied audio, and rewritten ANLZ; do not use Device
+  Library Plus. Never change gadget media while configured, and require physical USB STOP/eject
+  before `detach --confirm-host-ejected`.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
 - When CDJ Search appears broken, run `music djlink search <query>` first. It exercises the exact
@@ -519,9 +520,22 @@ For a request to play Spotify on a deck, choose the legitimate path explicitly:
   analyze it, then serve that verified file. Spotify metadata may help identity matching but must
   not be described as the audio source.
 
-## 9. Expose a prepared front USB image
+## 9. Export and expose front USB media
 
-Use this only on a Linux board whose deck-facing connector exposes a USB device controller:
+Compile the normal Rekordbox SQLite library onto mounted FAT/exFAT media or a staging directory:
+
+```sh
+music usb export "$MEDIA_ROOT" --database "$MASTER_DB" --format json
+```
+
+This writes `PIONEER/rekordbox/export.pdb`, copies supported local audio beneath `Contents/`,
+copies DAT/EXT/2EX beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`, and materializes the
+playlist tree. SQLite remains authoritative and Device Library Plus is not involved. The exporter
+does not create an image. Use `--replace` only for a previous export carrying the music-ts ownership
+marker.
+
+The current low-level transport uses an immutable complete backing image. Use it only on a Linux
+board whose deck-facing connector exposes a USB device controller:
 
 ```sh
 music usb doctor "$IMAGE" --format json
@@ -530,7 +544,6 @@ sudo music usb publish "$IMAGE" --format json
 sudo music usb attach --format json
 ```
 
-The image must already contain the filesystem and Rekordbox export expected by the target deck.
 `publish` content-addresses and fsyncs an immutable generation; `attach` re-hashes it and configures
 one read-only mass-storage LUN. Linux serves blocks after the Rust controller exits. Before changing
 generations, stop playback, press USB STOP/eject on the physical deck, then run:

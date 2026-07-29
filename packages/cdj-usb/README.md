@@ -1,27 +1,37 @@
 # @gakonst/cdj-usb
 
-Linux appliance controller for presenting one prepared CDJ-compatible block image through a
-front-panel USB port. The deck remains the USB host. The board is self-powered and behaves as a
-read-only USB mass-storage device:
+CDJ-3000 front-USB export and Linux-appliance support. The normal content workflow compiles the
+ordinary Rekordbox `master.db` directly onto a mounted FAT/exFAT media root:
 
 ```text
-Wi-Fi / application pipeline
-            |
-   private working storage
-            |
-   publish immutable image generation
-            |
-Linux configfs + mass_storage.0
-            |
- board USB device/OTG port ── one cable ── CDJ front USB-A
+Rekordbox master.db + local audio + ANLZ
+                    |
+             music usb export
+                    |
+      Contents/ + PIONEER/USBANLZ/
+       + PIONEER/rekordbox/export.pdb
 ```
 
-The native Rust controller configures the gadget and exits. Linux serves subsequent block reads, so
-there is no userspace server on the playback path.
+This is the legacy Device Library format used by CDJ-3000 media. It does not create Device Library
+Plus, mutate the source SQLite database, or require a disk-image file.
+
+The package also contains a lower-level Linux configfs controller for presenting an immutable
+backing image through a board's USB device/OTG port. In that mode the deck remains the USB host, the
+board is self-powered, and the gadget is read-only. Linux serves subsequent block reads after the
+controller exits, so there is no userspace server on the playback path.
 
 ## Current boundary
 
-This package deliberately starts with the transport and publication-safety boundary:
+The exporter:
+
+- reads an open `MasterDatabase` or discovers/opens `master.db` read-only;
+- generates `PIONEER/rekordbox/export.pdb` from active tracks and playlists;
+- copies MP3, M4A, FLAC, WAV, or AIFF audio beneath `Contents/`;
+- copies DAT/EXT/2EX analysis beneath `PIONEER/USBANLZ/` and rewrites every `PPTH`;
+- materializes regular and smart playlists while preserving order and duplicate memberships;
+- stages the complete result and replaces only an earlier music-ts-owned export.
+
+The current low-level gadget controller:
 
 - imports a complete block image into content-addressed, immutable appliance storage;
 - atomically selects one active generation only while the gadget is detached;
@@ -30,11 +40,10 @@ This package deliberately starts with the transport and publication-safety bound
 - refuses to unbind a configured host without an explicit physical-eject confirmation;
 - reports the kernel UDC state, backing file, active generation, and preflight checks as typed JSON.
 
-It does **not** claim to synthesize every Rekordbox USB format. `@gakonst/rekordbox` can read and
-mutate Device Library Plus `exportLibrary.db`, but the repository does not yet contain a legacy
-`export.pdb` publisher for CDJ-3000-class media. For the first hardware proof, publish an image
-prepared by Rekordbox. A later publisher can build an inactive image and hand it to this package
-without weakening the attach/swap boundary.
+The two operations are intentionally separate. `export` writes a mounted directory. The current
+`publish`/`attach` transport still consumes a complete backing image; it does not hot-mount or
+modify media while the CDJ owns it. Actual CDJ-3000 enumeration and browsing remain a hardware
+validation gate.
 
 ## Board requirement
 
@@ -110,9 +119,38 @@ ls -1 /sys/class/udc
 The `dwc2` Raspberry Pi overlay is not portable to Allwinner or Rockchip Orange Pi boards. Use the
 board's actual OTG controller/device-tree configuration.
 
-## Safe lifecycle
+## Export a CDJ-3000 library
 
-Start with a detached appliance and a complete disk image:
+Export to the root of mounted FAT/exFAT media or to a staging directory:
+
+```sh
+music usb export /mnt/cdj --database /path/to/master.db --format json
+```
+
+The result contains:
+
+```text
+/mnt/cdj/
+├── .music-cdj-export.json
+├── Contents/...
+└── PIONEER/
+    ├── USBANLZ/...
+    └── rekordbox/export.pdb
+```
+
+SQLite remains authoritative; `export.pdb` is disposable compiled output. Tracks missing a regular
+local audio file or `ANLZ0000.DAT` fail the whole staged export. To update media created by this
+command:
+
+```sh
+music usb export /mnt/cdj --database /path/to/master.db --replace --format json
+```
+
+`--replace` refuses to touch a Rekordbox-created or otherwise unowned export.
+
+## Low-level image transport
+
+The current configfs controller starts with a detached appliance and a complete backing image:
 
 ```sh
 music usb doctor ./rekordbox-usb.img --format json
@@ -177,7 +215,18 @@ the read-only LUN protects the filesystem, but it cannot preserve playback after
 ## Direct TypeScript API
 
 ```ts
-import { attachCdjUsb, doctorCdjUsb, publishCdjUsbImage, statusCdjUsb } from "@gakonst/cdj-usb";
+import {
+  attachCdjUsb,
+  doctorCdjUsb,
+  exportLegacyDeviceLibrary,
+  publishCdjUsbImage,
+  statusCdjUsb,
+} from "@gakonst/cdj-usb";
+
+await exportLegacyDeviceLibrary({
+  databasePath: "/path/to/master.db",
+  targetDirectory: "/mnt/cdj",
+});
 
 const preflight = await doctorCdjUsb({ imagePath: "./rekordbox-usb.img" });
 if (!preflight.ok) throw new Error("USB appliance preflight failed");

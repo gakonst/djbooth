@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { Cli } from "incur";
 import { z } from "zod";
 
+import { exportLegacyDeviceLibrary } from "@gakonst/rekordbox/devicelib";
+
 import {
   attachCdjUsb,
   CdjUsbError,
@@ -76,6 +78,19 @@ const runOutput = z.object({
   attach: attachOutput,
 });
 
+const exportOutput = z.object({
+  schemaVersion: z.literal(1),
+  format: z.literal("legacy-device-library"),
+  databasePath: z.string(),
+  targetDirectory: z.string(),
+  pdbPath: z.string(),
+  tracks: z.number().int().nonnegative(),
+  playlists: z.number().int().nonnegative(),
+  analysisFiles: z.number().int().nonnegative(),
+  bytesCopied: z.number().int().nonnegative(),
+  generatedAt: z.string(),
+});
+
 const runtimeOptions = {
   binary: z.string().optional().describe("Native music-cdj-usb helper override"),
   configfsRoot: z
@@ -103,20 +118,61 @@ const identityOptions = {
 export const cdjUsbCli = Cli.create("usb", {
   version: CDJ_USB_VERSION,
   description:
-    "Publish an immutable CDJ-compatible disk image through a battery-powered Linux USB gadget.",
-  hint: "Use doctor first. Publish is only allowed while detached; attach always exposes the active image read-only. The kernel serves blocks after the command exits.",
+    "Compile a Rekordbox SQLite library for CDJ-3000 media and expose it through a Linux USB gadget.",
+  hint: "Use export to compile master.db into legacy export.pdb, copied audio, and rewritten ANLZ files. SQLite remains authoritative; Device Library Plus is not used.",
   mcp: {
     instructions:
-      "Treat the front-deck USB boundary as read-only block storage, not DJ Link. Never publish while configured. Before detach, require the user to eject or press USB STOP on the physical deck and pass --confirm-host-ejected. A successful attach means only that Linux bound the mass-storage gadget; validate enumeration and browsing on the target deck separately.",
+      "Use export for CDJ-3000 legacy Device Library media; it compiles master.db to export.pdb and never uses Device Library Plus. Treat the front-deck USB boundary as read-only block storage, not DJ Link. Never change it while configured. Before detach, require the user to eject or press USB STOP on the physical deck and pass --confirm-host-ejected.",
   },
   sync: {
     suggestions: [
+      "export my SQLite Rekordbox library for a CDJ-3000",
       "check whether this Linux board can act as a USB drive",
       "show the active CDJ USB image and deck connection",
-      "publish a prepared Rekordbox USB image",
       "attach the active image to the deck",
       "detach the USB image after I eject it on the deck",
     ],
+  },
+});
+
+cdjUsbCli.command("export", {
+  description:
+    "Compile master.db into CDJ-3000 legacy export.pdb, copy audio, and rewrite ANLZ paths.",
+  hint: "The target must be a mounted FAT/exFAT volume or staging directory. SQLite remains the source of truth. This command does not create Device Library Plus exportLibrary.db.",
+  args: z.object({
+    target: z.string().min(1).describe("Mounted CDJ media root or staging directory"),
+  }),
+  options: z.object({
+    database: z
+      .string()
+      .optional()
+      .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
+    databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
+    replace: z
+      .boolean()
+      .default(false)
+      .describe("Replace only a prior export carrying the music-ts ownership marker"),
+    copyConcurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(32)
+      .default(4)
+      .describe("Parallel audio-copy workers"),
+  }),
+  output: exportOutput,
+  async run(c) {
+    try {
+      return await exportLegacyDeviceLibrary({
+        targetDirectory: c.args.target,
+        databasePath: c.options.database,
+        databaseKey: c.options.databaseKey,
+        replace: c.options.replace,
+        copyConcurrency: c.options.copyConcurrency,
+      });
+    } catch (error) {
+      return failExport(c, error);
+    }
   },
 });
 
@@ -314,6 +370,36 @@ function fail(
     cta: {
       description: "Inspect the appliance state before changing the USB attachment:",
       commands,
+    },
+  });
+}
+
+function failExport(
+  context: {
+    displayName: string;
+    error(options: {
+      code: string;
+      exitCode?: number;
+      message: string;
+      retryable?: boolean;
+      cta?: {
+        description?: string;
+        commands: Array<string | { command: string; description?: string }>;
+      };
+    }): never;
+  },
+  error: unknown,
+): never {
+  const message = error instanceof Error ? error.message : String(error);
+  return context.error({
+    code: "CDJ_USB_EXPORT_ERROR",
+    message,
+    exitCode: 1,
+    retryable: false,
+    cta: {
+      description:
+        "Check the read-only Rekordbox source, local audio/ANLZ files, and detached target media:",
+      commands: [scopedCommand(context.displayName, "export --help")],
     },
   });
 }

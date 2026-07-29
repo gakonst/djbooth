@@ -28,6 +28,11 @@ const packages = [
     bins: ["djlink", "music-djlink-native"],
   },
   {
+    name: "@gakonst/cdj-usb",
+    prefix: "gakonst-cdj-usb-",
+    bins: ["cdj-usb"],
+  },
+  {
     name: "@gakonst/rekordbox-library",
     prefix: "gakonst-rekordbox-library-",
     bins: ["rekordbox-library"],
@@ -201,6 +206,30 @@ try {
   }
   process.stdout.write("✓ music djlink composed CLI\n");
 
+  const usbHelp = run(music, ["usb", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    !usbHelp.stdout.includes("music usb") ||
+    !usbHelp.stdout.includes("export") ||
+    !usbHelp.stdout.includes("doctor")
+  ) {
+    throw new Error("Packed music CLI did not compose the CDJ front-USB workflow");
+  }
+  const usbExportHelp = run(music, ["usb", "export", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    !usbExportHelp.stdout.includes("--database") ||
+    !usbExportHelp.stdout.includes("--replace") ||
+    !usbExportHelp.stdout.includes("export.pdb")
+  ) {
+    throw new Error("Packed music CLI did not expose the legacy Device Library exporter");
+  }
+  process.stdout.write("✓ music usb export composed CLI\n");
+
   const analyzeHelp = run(music, ["rekordbox", "analyze", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
@@ -218,10 +247,11 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !skills.stdout.includes("9 skills") ||
+    !skills.stdout.includes("10 skills") ||
     !skills.stdout.includes("music-djlink") ||
     !skills.stdout.includes("music-library") ||
-    !skills.stdout.includes("music-rekordbox")
+    !skills.stdout.includes("music-rekordbox") ||
+    !skills.stdout.includes("music-usb")
   ) {
     throw new Error("Packed music CLI did not expose its workflow and typed command-group skills");
   }
@@ -243,6 +273,7 @@ try {
     "music rekordbox analyze beat-grid-diff",
     "music rekordbox analyze waveform-diff",
     "## 8. Serve and load connected CDJs",
+    "music usb export",
     "Spotify streaming tracks cannot be LINK EXPORTed",
     "music djlink search <query>",
   ];
@@ -256,6 +287,7 @@ try {
     ["music-spots", ["# music spots api search"]],
     ["music-soundcloud", ["# music soundcloud resolve"]],
     ["music-slsk", ["# music slsk download"]],
+    ["music-usb", ["# music usb doctor", "# music usb export"]],
     ["music-ytdlp-ts", ["# music ytdlp-ts download"]],
     [
       "music-rekordbox",
@@ -283,7 +315,7 @@ try {
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/djlink", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/djlink", "@gakonst/djlink/cli", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/music", "@gakonst/music/djlink", "@gakonst/music/usb", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/djlink", "@gakonst/djlink/cli", "@gakonst/cdj-usb", "@gakonst/cdj-usb/cli", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli", "@gakonst/rekordbox/devicelib"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
