@@ -371,6 +371,12 @@ music rekordbox analyze waveform-diff \
   "$REFERENCE_ANALYSIS_DIR" \
   "$CANDIDATE_ANALYSIS_DIR" \
   --format json
+music rekordbox analyze phrase-features \
+  "$AUDIO_PATH" \
+  "$REFERENCE_ANALYSIS_DIR/ANLZ0000.DAT" \
+  --offset 0 \
+  --limit 128 \
+  --format json
 ```
 
 Require a successful clean doctor check before analysis. Discover `rekordbox-analyzer` through
@@ -390,10 +396,13 @@ quality levels.
 The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform, beat, key, seek,
 and non-empty song-structure baselines. Its PSSI path follows the recovered 44.1/48 kHz
 signed-16-bit 99%-left/1%-right reader contract, writes every known phrase field, exposes bounded
-per-phrase feature evidence, and includes clean `/2`, `/8`, and `/32` native-filter primitives.
+per-phrase feature evidence, and includes clean `/2`, `/8`, and `/32` native-filter primitives plus
+the recovered low/middle/high consumers. Use `analyze phrase-features` with a frozen reference DAT
+to inspect paged one-based beat windows, quarter-beat power/peaks, and eighth-beat high peaks without
+mutating the library or changing production labels.
 Do not claim whole-analyzer proprietary byte identity: the recovered Dynamic beat path can match
-reference timing while exact multirate phrase-feature consumers, phrase boundaries/kinds/auxiliary
-fields, waveform normalization, and finishing stages still have independent parity work.
+reference timing while phrase boundary/kind/auxiliary judges, waveform normalization, and finishing
+stages still have independent parity work.
 For parity work, use `analyze beat-grid-diff` rather than raw file hashes. Require matching beat
 counts and labels for steady-tempo material, inspect median/p95/max timing error and drift, and retain
 the reported missing/extra beats, downbeat error, tempo changes, and F1 collars for held-out tracks.

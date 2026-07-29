@@ -11,7 +11,9 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use crate::sample_rate_converter::quantize_analysis_pcm;
+use crate::sample_rate_converter::{
+    AnalysisSampleRateConverter, analysis_sample_rate, quantize_analysis_pcm,
+};
 
 /// Sample rate used by the Rekordbox 6 analysis primitives.
 pub const ANALYSIS_SAMPLE_RATE: u32 = 44_100;
@@ -105,6 +107,50 @@ impl DecodedAudio {
         } else {
             self.mono.resample_linear(ANALYSIS_SAMPLE_RATE)
         }
+    }
+
+    /// Build the native reader-rate, signed-16-bit 99% left/1% right signal
+    /// consumed by song-structure analysis.
+    pub fn phrase_analysis_pcm(&self) -> Result<MonoPcm> {
+        let target_rate = analysis_sample_rate(self.source.sample_rate())?;
+        if self.source.sample_rate() == target_rate && self.source.reader_padding_frames() == 0 {
+            return Ok(self.phrase_mono.clone());
+        }
+
+        let converter = AnalysisSampleRateConverter::new(self.source.sample_rate(), target_rate)?;
+        if self.source.sample_rate() != target_rate {
+            let [left, right] = self
+                .waveform_stereo()
+                .context("converted phrase reader is missing source channels")?;
+            let (left, right) = rayon::join(
+                || {
+                    converter.resample_mono_for_reader(
+                        left.samples(),
+                        self.source.reader_padding_frames(),
+                    )
+                },
+                || {
+                    converter.resample_mono_for_reader(
+                        right.samples(),
+                        self.source.reader_padding_frames(),
+                    )
+                },
+            );
+            let samples = left?
+                .into_iter()
+                .zip(right?)
+                .map(|(left, right)| native_phrase_mono_pair(left, right))
+                .collect();
+            return MonoPcm::new(target_rate, samples);
+        }
+
+        MonoPcm::new(
+            target_rate,
+            converter.resample_mono_for_reader(
+                self.phrase_mono.samples(),
+                self.source.reader_padding_frames(),
+            )?,
+        )
     }
 }
 
@@ -1330,6 +1376,56 @@ mod tests {
         assert_eq!(
             native_phrase_mono_pair(-1.0, 32_767.0 / 32_768.0).to_bits(),
             0xbf7a_e14d
+        );
+    }
+
+    #[test]
+    fn phrase_reader_converts_channels_before_native_mix() {
+        let source_rate = 32_000;
+        let left_samples = vec![0.75; 64];
+        let right_samples = vec![-0.25; 64];
+        let left = MonoPcm::new(source_rate, left_samples.clone()).expect("left");
+        let right = MonoPcm::new(source_rate, right_samples.clone()).expect("right");
+        let decoded = DecodedAudio {
+            source: AudioSourceInfo {
+                sample_rate: source_rate,
+                channels: 2,
+                decoded_frames: 64,
+                reader_padding_frames: 0,
+            },
+            mono: MonoPcm::new(source_rate, vec![0.25; 64]).expect("mono"),
+            phrase_mono: MonoPcm::new(source_rate, vec![0.74; 64]).expect("phrase"),
+            waveform_mono: MonoPcm::new(source_rate, vec![0.25; 64]).expect("waveform"),
+            waveform_midpoint: MonoPcm::new(source_rate, vec![0.25; 64]).expect("midpoint"),
+            waveform_stereo: Some([left, right]),
+        };
+
+        let phrase = decoded.phrase_analysis_pcm().expect("phrase reader");
+
+        assert_eq!(phrase.sample_rate(), 48_000);
+        assert!(!phrase.is_empty());
+        let converter = AnalysisSampleRateConverter::new(source_rate, 48_000).expect("converter");
+        let expected = converter
+            .resample_mono_for_reader(&left_samples, 0)
+            .expect("left conversion")
+            .into_iter()
+            .zip(
+                converter
+                    .resample_mono_for_reader(&right_samples, 0)
+                    .expect("right conversion"),
+            )
+            .map(|(left, right)| native_phrase_mono_pair(left, right))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phrase
+                .samples()
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
         );
     }
 

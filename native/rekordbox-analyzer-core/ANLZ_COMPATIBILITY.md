@@ -443,6 +443,11 @@ eight-way high-peak slices. The filters match the linked constructors:
 first-order envelope coefficients, native quarter/eighth rounding, and
 out-of-range zero behavior are explicit and unit-tested. These traces remain
 off the production label path until held-out replay demonstrates a gain.
+The `phrase-features AUDIO REFERENCE_DAT` diagnostic command reconstructs the
+same 99%-left/1%-right reader signal, uses the frozen PQTZ BPM/first-beat
+boundary, and emits bounded pages of those traces. The TypeScript wrapper
+canonicalizes inputs, verifies the clean helper, and validates the complete
+page before returning it.
 
 The analyzer now emits at most 38 per-phrase feature diagnostics in
 `clean-room-analyzer.log`; the first twelve are nested into the bounded JSON

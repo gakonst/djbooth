@@ -310,6 +310,12 @@ rekordbox analyze waveform-diff \
   /Music/reference.rekordbox \
   /Music/candidate.rekordbox \
   --format json
+rekordbox analyze phrase-features \
+  /Music/track.flac \
+  /Music/reference.rekordbox/ANLZ0000.DAT \
+  --offset 0 \
+  --limit 128 \
+  --format json
 ```
 
 `analyze beat-grid-diff` compares PQTZ plus PQT2 semantically instead of treating opaque ANLZ bytes
@@ -320,6 +326,10 @@ timestamp distributions, drift, beat-number phase, downbeat error, tempo changes
 components over the overlapping columns. It reports entry-count deltas, exact-value fractions,
 Pearson correlation, means, MAE, median/p95/max absolute error, and signed bias instead of conflating
 packed bitfields or differing tail lengths.
+`analyze phrase-features` uses a frozen DAT grid to return one bounded page from the recovered
+native-shaped phrase frontend and consumers. It includes one-based `/2`, `/8`, and `/32` positions,
+beat sums and maxima, four quarter-beat power/peak records, and eight high-band peak records. The
+command is read-only and does not route diagnostic features into production labels.
 
 `--rhythm-mode normal` emits a static grid for steady-tempo recordings. `dynamic` runs the recovered
 Rekordbox 6.8.2 variable-tempo path for live, rubato, and materially changing tempo. `auto` ignores

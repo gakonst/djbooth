@@ -26,6 +26,7 @@ import {
   compareBeatGrids,
   compareWaveforms,
   diagnoseAnalyzer,
+  extractPhraseFeatures,
   getAnalyzerBinary,
   readAnalysisResult,
 } from "../src/analyzer/index.js";
@@ -35,6 +36,7 @@ const helperPaths = [
   resolve("analyze"),
   resolve("beat-grid-diff"),
   resolve("doctor"),
+  resolve("phrase-features"),
   resolve("waveform-diff"),
 ];
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -154,6 +156,60 @@ if (command === "waveform-diff") {
         signedMeanError: -1,
       }],
     }],
+  }));
+  process.exit(0);
+}
+
+if (command === "phrase-features") {
+  if (mode === "fail") {
+    console.error("fake phrase-feature failure");
+    process.exit(2);
+  }
+  if (mode === "invalid-json") {
+    console.log("not json");
+    process.exit(0);
+  }
+  const [audioPath, referenceDat, ...options] = process.argv.slice(2);
+  const offsetIndex = options.indexOf("--offset");
+  const limitIndex = options.indexOf("--limit");
+  const requestedOffset = Number(options[offsetIndex + 1] ?? 0);
+  const limit = Number(options[limitIndex + 1] ?? 128);
+  const total = 3;
+  const offset = Math.min(requestedOffset, total);
+  const returned = Math.min(limit, total - offset);
+  const quarter = [1, 2, 3, 4];
+  const eighth = [1, 2, 3, 4, 5, 6, 7, 8];
+  const beats = Array.from({ length: returned }, (_, index) => ({
+    beat: offset + index + 1,
+    highStart: 100 + index,
+    middleStart: 25 + index,
+    lowStart: 7 + index,
+    lowLevel: 10,
+    middleLevel: 9,
+    dividedLowLevel: 8,
+    dividedMiddleLevel: 7,
+    lowPeak: 6,
+    lowPeakQuarters: quarter,
+    middlePeak: 5,
+    allLevel: 4,
+    allPowerQuarterEnergy: quarter,
+    allPowerQuarterPeak: quarter,
+    highPeakEighths: eighth,
+  }));
+  console.log(JSON.stringify({
+    audioPath: realpathSync(audioPath),
+    referenceDat: realpathSync(referenceDat),
+    readerRate: 44100,
+    bpm: 125,
+    firstBeatMs: 50,
+    page: {
+      total,
+      offset,
+      limit,
+      returned,
+      hasMore: offset + returned < total,
+    },
+    beats,
   }));
   process.exit(0);
 }
@@ -726,6 +782,61 @@ describe("Rekordbox analyzer wrapper", () => {
     process.env.FAKE_ANALYZER_MODE = "fail";
     expect(() =>
       compareWaveforms(reference, candidate, { analyzerBinary: process.execPath }),
+    ).toThrow("exited with 2");
+  });
+
+  it("extracts validated bounded native-shaped phrase features", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const referenceDat = join(root, "ANLZ0000.DAT");
+    writeFileSync(referenceDat, "reference");
+
+    expect(
+      extractPhraseFeatures(audioPath, referenceDat, {
+        analyzerBinary: process.execPath,
+        limit: 1,
+        offset: 1,
+        timeoutMs: 1_000,
+      }),
+    ).toMatchObject({
+      audioPath: realpathSync(audioPath),
+      referenceDat: realpathSync(referenceDat),
+      bpm: 125,
+      page: { total: 3, offset: 1, limit: 1, returned: 1, hasMore: true },
+      beats: [
+        {
+          beat: 2,
+          lowPeakQuarters: [1, 2, 3, 4],
+          highPeakEighths: [1, 2, 3, 4, 5, 6, 7, 8],
+        },
+      ],
+    });
+    expect(() =>
+      extractPhraseFeatures(audioPath, join(root, "missing.DAT"), {
+        analyzerBinary: process.execPath,
+      }),
+    ).toThrow("does not exist");
+    expect(() =>
+      extractPhraseFeatures(audioPath, referenceDat, {
+        analyzerBinary: process.execPath,
+        limit: 4_097,
+      }),
+    ).toThrow("1 through 4096");
+
+    process.env.FAKE_ANALYZER_MODE = "invalid-json";
+    expect(() =>
+      extractPhraseFeatures(audioPath, referenceDat, {
+        analyzerBinary: process.execPath,
+      }),
+    ).toThrow("malformed JSON");
+    process.env.FAKE_ANALYZER_MODE = "fail";
+    expect(() =>
+      extractPhraseFeatures(audioPath, referenceDat, {
+        analyzerBinary: process.execPath,
+      }),
     ).toThrow("exited with 2");
   });
 

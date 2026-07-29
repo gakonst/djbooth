@@ -133,6 +133,12 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   `BP400–1000/10`, and `BP5000–7000/10` chains with exact Butterworth damping
   and native rounding. Production labels remain unchanged pending complete
   held-out replay.
+- Added `extractPhraseFeatures()` and
+  `rekordbox analyze phrase-features AUDIO REFERENCE_DAT`. The command
+  canonicalizes both read-only inputs, verifies the clean helper identity,
+  reconstructs the native phrase reader mix/rate, validates every finite
+  feature, and pages at most 4,096 beat records with self-consistent metadata.
+  The generated Music/Rekordbox skill now exposes the command directly.
 - Added bounded per-phrase feature evidence: all at-most-38 records in the
   clean log and the first twelve in `analysis.json`. Records include the six
   standardized features, duration, energy delta, and transition distance.

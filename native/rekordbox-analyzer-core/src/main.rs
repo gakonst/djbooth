@@ -7,7 +7,9 @@ use rekordbox_analyzer_core::{
     AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, RhythmMode, ThreeBandAnalysis,
     analyze_beat_sensor_events, analyze_to_directory_with_options, compare_beat_grids,
     compare_output_directories, compare_waveforms, decode_audio_file,
+    extract_native_phrase_features,
 };
+use serde::Serialize;
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
 const ANALYZER_RHYTHM_MODE_ENV: &str = "REKORDBOX_ANALYZER_RHYTHM_MODE";
@@ -33,6 +35,7 @@ fn run() -> Result<()> {
                    rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   rekordbox-analyzer phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]\n  \
                    rekordbox-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
@@ -41,6 +44,7 @@ fn run() -> Result<()> {
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
+                   phrase-features  Page native-shaped beat features using a reference grid\n  \
                    waveform-diff  Compare decoded waveform components semantically\n  \
                    rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape\n\n\
                  Rhythm modes:\n  \
@@ -133,6 +137,109 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Some("phrase-features") => {
+            let audio = required_path(args.next(), "audio path")?;
+            let reference_dat = required_path(args.next(), "reference DAT path")?;
+            let mut offset = 0;
+            let mut limit = 128;
+            let mut saw_offset = false;
+            let mut saw_limit = false;
+            while let Some(argument) = args.next() {
+                let (name, value) = if matches!(argument.as_str(), "--offset" | "--limit") {
+                    let value = args
+                        .next()
+                        .with_context(|| format!("{argument} requires an integer value"))?;
+                    (argument, value)
+                } else if let Some(value) = argument.strip_prefix("--offset=") {
+                    ("--offset".to_string(), value.to_string())
+                } else if let Some(value) = argument.strip_prefix("--limit=") {
+                    ("--limit".to_string(), value.to_string())
+                } else {
+                    bail!("phrase-features received unknown option '{argument}'");
+                };
+                let parsed = value
+                    .parse::<usize>()
+                    .with_context(|| format!("{name} must be a non-negative integer"))?;
+                match name.as_str() {
+                    "--offset" if !saw_offset => {
+                        saw_offset = true;
+                        offset = parsed;
+                    }
+                    "--offset" => bail!("phrase-features received --offset more than once"),
+                    "--limit" if saw_limit => {
+                        bail!("phrase-features received --limit more than once")
+                    }
+                    "--limit" if (1..=4_096).contains(&parsed) => {
+                        saw_limit = true;
+                        limit = parsed;
+                    }
+                    "--limit" => bail!("--limit must be between 1 and 4096"),
+                    _ => unreachable!("validated phrase-features option"),
+                }
+            }
+
+            let dat_bytes = std::fs::read(&reference_dat).with_context(|| {
+                format!("failed to read reference DAT {}", reference_dat.display())
+            })?;
+            let dat_file = AnlzFile::parse(&dat_bytes).context("failed to parse reference DAT")?;
+            let dat = DatAnalysis::parse(&dat_file).context("failed to decode reference DAT")?;
+            let first = dat
+                .beat_grid
+                .first()
+                .context("reference DAT contains no beat-grid entries")?;
+            if first.bpm_hundredths == 0 {
+                bail!("reference DAT starts with a zero BPM");
+            }
+            let bpm = f64::from(first.bpm_hundredths) * 0.01;
+            let first_beat_ms = f64::from(first.time_ms);
+            let decoded = decode_audio_file(&audio)?;
+            let phrase_pcm = decoded.phrase_analysis_pcm()?;
+            let trace = extract_native_phrase_features(
+                phrase_pcm.samples(),
+                phrase_pcm.sample_rate(),
+                bpm,
+                first_beat_ms,
+            )?;
+            let total = trace.low_level.len();
+            let start = offset.min(total);
+            let end = start.saturating_add(limit).min(total);
+            let beats = (start..end)
+                .map(|index| PhraseFeatureBeat {
+                    all_level: trace.all_level[index],
+                    all_power_quarter_energy: trace.all_power_quarter_energy[index],
+                    all_power_quarter_peak: trace.all_power_quarter_peak[index],
+                    beat: index + 1,
+                    divided_low_level: trace.divided_low_level[index],
+                    divided_middle_level: trace.divided_middle_level[index],
+                    high_peak_eighths: trace.high_peak_eighths[index],
+                    high_start: trace.boundaries.high_pass_2[index],
+                    low_level: trace.low_level[index],
+                    low_peak: trace.low_peak[index],
+                    low_peak_quarters: trace.low_peak_quarters[index],
+                    low_start: trace.boundaries.low_pass_32[index],
+                    middle_level: trace.middle_level[index],
+                    middle_peak: trace.middle_peak[index],
+                    middle_start: trace.boundaries.low_pass_8[index],
+                })
+                .collect();
+            let output = PhraseFeatureOutput {
+                audio_path: audio.display().to_string(),
+                bpm,
+                first_beat_ms,
+                page: PhraseFeaturePage {
+                    has_more: end < total,
+                    limit,
+                    offset: start,
+                    returned: end - start,
+                    total,
+                },
+                reader_rate: phrase_pcm.sample_rate(),
+                reference_dat: reference_dat.display().to_string(),
+                beats,
+            };
+            println!("{}", serde_json::to_string(&output)?);
+            Ok(())
+        }
         Some("waveform-diff") => {
             let reference = required_path(args.next(), "reference output directory")?;
             let candidate = required_path(args.next(), "candidate output directory")?;
@@ -179,9 +286,51 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseFeatureOutput {
+    audio_path: String,
+    reference_dat: String,
+    reader_rate: u32,
+    bpm: f64,
+    first_beat_ms: f64,
+    page: PhraseFeaturePage,
+    beats: Vec<PhraseFeatureBeat>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseFeaturePage {
+    total: usize,
+    offset: usize,
+    limit: usize,
+    returned: usize,
+    has_more: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseFeatureBeat {
+    beat: usize,
+    high_start: i32,
+    middle_start: i32,
+    low_start: i32,
+    low_level: f64,
+    middle_level: f64,
+    divided_low_level: f64,
+    divided_middle_level: f64,
+    low_peak: f64,
+    low_peak_quarters: [f64; 4],
+    middle_peak: f64,
+    all_level: f64,
+    all_power_quarter_energy: [f64; 4],
+    all_power_quarter_peak: [f64; 4],
+    high_peak_eighths: [f64; 8],
 }
 
 fn analyze_arguments(

@@ -238,6 +238,50 @@ export type CompareWaveformsOptions = {
   timeoutMs?: number;
 };
 
+/** One page item from the recovered native-shaped phrase feature pipeline. */
+export type NativePhraseFeatureBeat = {
+  allLevel: number;
+  allPowerQuarterEnergy: [number, number, number, number];
+  allPowerQuarterPeak: [number, number, number, number];
+  beat: number;
+  dividedLowLevel: number;
+  dividedMiddleLevel: number;
+  highPeakEighths: [number, number, number, number, number, number, number, number];
+  highStart: number;
+  lowLevel: number;
+  lowPeak: number;
+  lowPeakQuarters: [number, number, number, number];
+  lowStart: number;
+  middleLevel: number;
+  middlePeak: number;
+  middleStart: number;
+};
+
+/** Bounded page of beat-synchronous native-shaped phrase features. */
+export type NativePhraseFeaturePage = {
+  audioPath: string;
+  beats: Array<NativePhraseFeatureBeat>;
+  bpm: number;
+  firstBeatMs: number;
+  page: {
+    hasMore: boolean;
+    limit: number;
+    offset: number;
+    returned: number;
+    total: number;
+  };
+  readerRate: 44_100 | 48_000;
+  referenceDat: string;
+};
+
+/** Options for extracting one bounded native phrase-feature page. */
+export type ExtractPhraseFeaturesOptions = {
+  analyzerBinary?: string;
+  limit?: number;
+  offset?: number;
+  timeoutMs?: number;
+};
+
 const finiteNumber = z.number().finite();
 const nonNegativeNumber = finiteNumber.min(0);
 const nonNegativeInteger = z.number().int().min(0);
@@ -422,6 +466,52 @@ const waveformDifferentialSchema = z.object({
       components: z.array(waveformComponentDifferentialSchema).min(1),
     }),
   ),
+});
+const phraseQuarterSchema = z.tuple([finiteNumber, finiteNumber, finiteNumber, finiteNumber]);
+const phraseEighthSchema = z.tuple([
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+  finiteNumber,
+]);
+const nativePhraseFeaturePageSchema = z.object({
+  audioPath: z.string().min(1),
+  referenceDat: z.string().min(1),
+  readerRate: z.union([z.literal(44_100), z.literal(48_000)]),
+  bpm: finiteNumber.positive(),
+  firstBeatMs: nonNegativeNumber,
+  page: z.object({
+    total: nonNegativeInteger,
+    offset: nonNegativeInteger,
+    limit: z.number().int().min(1).max(4_096),
+    returned: nonNegativeInteger.max(4_096),
+    hasMore: z.boolean(),
+  }),
+  beats: z
+    .array(
+      z.object({
+        beat: z.number().int().min(1),
+        highStart: z.number().int(),
+        middleStart: z.number().int(),
+        lowStart: z.number().int(),
+        lowLevel: finiteNumber,
+        middleLevel: finiteNumber,
+        dividedLowLevel: finiteNumber,
+        dividedMiddleLevel: finiteNumber,
+        lowPeak: finiteNumber,
+        lowPeakQuarters: phraseQuarterSchema,
+        middlePeak: finiteNumber,
+        allLevel: finiteNumber,
+        allPowerQuarterEnergy: phraseQuarterSchema,
+        allPowerQuarterPeak: phraseQuarterSchema,
+        highPeakEighths: phraseEighthSchema,
+      }),
+    )
+    .max(4_096),
 });
 
 /** Options for producing Rekordbox DAT, EXT, and 2EX files. */
@@ -722,6 +812,85 @@ export function compareWaveforms(
     resolve(parsed.data.candidateDirectory) !== candidate
   ) {
     throw new TypeError("Waveform comparison returned mismatched analysis directories");
+  }
+  return parsed.data;
+}
+
+/** Extract a bounded page from the recovered native phrase-feature pipeline. */
+export function extractPhraseFeatures(
+  audioPath: string,
+  referenceDat: string,
+  options: ExtractPhraseFeaturesOptions = {},
+): NativePhraseFeaturePage {
+  const audio = existingFile(audioPath, "Audio");
+  const reference = existingFile(referenceDat, "Reference DAT");
+  const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, "clean");
+  if (!existsSync(analyzerBinary)) {
+    throw new TypeError(
+      `clean analyzer helper '${analyzerBinary}' does not exist; set REKORDBOX_CLEAN_ANALYZER_BINARY or build it with pnpm --filter @gakonst/rekordbox build:analyzer`,
+    );
+  }
+  const timeoutMs = options.timeoutMs ?? 300_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+    throw new TypeError("Phrase-feature timeout must be a positive integer");
+  }
+  const offset = options.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new TypeError("Phrase-feature offset must be a non-negative integer");
+  }
+  const limit = options.limit ?? 128;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 4_096) {
+    throw new TypeError("Phrase-feature limit must be an integer from 1 through 4096");
+  }
+
+  const env = analyzerEnvironment("clean", analyzerBinary, {});
+  verifyAnalyzerEngine("clean", analyzerBinary, env);
+  const { args, command } = analyzerInvocation("clean", analyzerBinary, [
+    "phrase-features",
+    audio,
+    reference,
+    "--offset",
+    String(offset),
+    "--limit",
+    String(limit),
+  ]);
+  const child = spawnSync(command, args, {
+    encoding: "utf8",
+    env,
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: timeoutMs,
+  });
+  if (child.error) throw child.error;
+  if (child.status !== 0) {
+    throw new Error(
+      `phrase-feature extraction exited with ${child.status ?? "no status"}: ${child.stderr.trim()}`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(child.stdout) as unknown;
+  } catch (cause) {
+    throw new TypeError("Phrase-feature extraction returned malformed JSON", { cause });
+  }
+  const parsed = nativePhraseFeaturePageSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new TypeError(`Invalid phrase-feature output: ${z.prettifyError(parsed.error)}`);
+  }
+  if (
+    realpathSync(parsed.data.audioPath) !== audio ||
+    realpathSync(parsed.data.referenceDat) !== reference
+  ) {
+    throw new TypeError("Phrase-feature extraction returned mismatched input paths");
+  }
+  if (
+    parsed.data.page.offset !== Math.min(offset, parsed.data.page.total) ||
+    parsed.data.page.limit !== limit ||
+    parsed.data.page.returned !== parsed.data.beats.length ||
+    parsed.data.page.offset + parsed.data.page.returned > parsed.data.page.total ||
+    parsed.data.page.hasMore !==
+      parsed.data.page.offset + parsed.data.page.returned < parsed.data.page.total
+  ) {
+    throw new TypeError("Phrase-feature extraction returned inconsistent paging metadata");
   }
   return parsed.data;
 }
@@ -1226,6 +1395,13 @@ function analysisDirectory(path: string, label: string): string {
   if (!metadata.isDirectory()) {
     throw new TypeError(`${label} analysis path '${absolute}' is not a directory`);
   }
+  return realpathSync(absolute);
+}
+
+function existingFile(path: string, label: string): string {
+  const absolute = resolve(path);
+  if (!existsSync(absolute)) throw new TypeError(`${label} '${absolute}' does not exist`);
+  if (!statSync(absolute).isFile()) throw new TypeError(`${label} '${absolute}' is not a file`);
   return realpathSync(absolute);
 }
 

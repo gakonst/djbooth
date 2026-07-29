@@ -17,6 +17,7 @@ import {
   DEFAULT_ANALYZER_TRACK_THREADS,
   DEFAULT_ANALYZER_THREAD_BUDGET,
   ExtendedBeatGridTag,
+  extractPhraseFeatures,
   createMySettingFile,
   diagnoseAnalyzer,
   getAnlzPaths,
@@ -280,6 +281,30 @@ analyzeCli.command("waveform-diff", {
   }),
   run(c) {
     return compareWaveforms(c.args.referenceDirectory, c.args.candidateDirectory, c.options);
+  },
+});
+
+analyzeCli.command("phrase-features", {
+  description:
+    "Page recovered native-shaped low, middle, high, quarter-beat, and eighth-beat phrase features.",
+  hint: "Use a native or frozen DAT grid as the timing reference. This diagnostic does not mutate the library or alter production phrase labels.",
+  args: z.object({
+    audioPath: z.string().describe("Existing audio file"),
+    referenceDat: z.string().describe("Reference ANLZ0000.DAT beat grid"),
+  }),
+  options: z.object({
+    analyzerBinary: z.string().optional().describe("Clean-room analyzer executable override"),
+    limit: z.number().int().min(1).max(4_096).default(128).describe("Beat records to return"),
+    offset: z.number().int().min(0).default(0).describe("Beat records to skip"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(300_000)
+      .describe("Extraction timeout in milliseconds"),
+  }),
+  run(c) {
+    return extractPhraseFeatures(c.args.audioPath, c.args.referenceDat, c.options);
   },
 });
 
