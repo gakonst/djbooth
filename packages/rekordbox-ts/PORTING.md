@@ -98,10 +98,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   labels; a phase-shifted synthetic regression test pins the behavior.
 - On the 110 decodable-track differential, mood family matches `90.0%`.
   Native/clean phrase counts average `18.164/17.664` with `2.482` mean absolute
-  count error. Boundary F1 is `0.5665` exact, `0.6833` within four beat-grid
-  entries, and `0.7233` within eight; first/last phrase-kind agreement is
-  `99.09%/87.27%`. This is valid non-empty protocol output, not proprietary
-  segmentation or label parity.
+  count error. Boundary F1 is `0.5749` exact, `0.6914` within four beat-grid
+  entries, and `0.7362` within eight; first/last phrase-kind agreement is
+  `99.09%/87.27%`, and micro/macro kind agreement on boundaries matched within
+  four entries is `61.93%/61.59%`. This is valid non-empty protocol output,
+  not proprietary segmentation or label parity.
 - Rejected a first/last-segment bias after a complete replay: exact F1 moved
   only `+0.0016`, while four/eight-entry boundary F1 regressed
   `-0.0024/-0.0067` and label agreement regressed `-0.0040`.
@@ -110,6 +111,19 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   already supplied the useful metrical evidence; removing the redundant
   per-boundary bonus raised corrected-input exact/within-four F1 by
   `+0.0169/+0.0239`.
+- A further complete sweep reduced local novelty weight to `0.75`, improving
+  exact/four/eight-entry F1 by `+0.0084/+0.0081/+0.0129` with mood, count, and
+  end-beat metrics unchanged. High-mood Down now requires a real
+  greater-than-one-standard-deviation energy drop; removing the unvalidated
+  positive-delta Up override raised matched-label micro/macro agreement from
+  `45.73%/45.61%` to `61.93%/61.59%`.
+- Recovered the exact linked `/8` phrase frontend: four zero-state
+  direct-form-II-transposed Butterworth sections, cutoff `Fs/20`, native
+  damping constants, source phase `7 mod 8`, and a 210-second cap. Rekordbox
+  feeds later feature extraction with synchronized `/2`, `/8`, and `/32`
+  streams. A full replay correctly rejected substituting only `/8` into the
+  independent bar model (`33.64%` mood accuracy, `0.3584` exact F1); the
+  recovered filter is a specification for the pending multirate feature port.
 - A valid committed-HEAD comparator measured initial phrase generation at
   `+56 ms/+0.29%` for 100 tracks. Samply placed representative phrase CPU at
   `0.35–0.74%`, almost all in the scalar feature scan. Phrase work now overlaps

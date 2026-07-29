@@ -17,6 +17,7 @@ const HEADER_BYTES: usize = 32;
 const BEATS_PER_BAR: usize = 4;
 const FEATURE_COUNT: usize = 6;
 const ANALYSIS_STRIDE: usize = 4;
+const BOUNDARY_NOVELTY_WEIGHT: f64 = 0.75;
 
 /// One phrase start in a Rekordbox `PSSI` song-structure tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -506,8 +507,9 @@ fn select_phrase_boundaries(features: &[BarFeature], mood: u16) -> Vec<usize> {
                     continue;
                 }
                 let boundary_evidence = if start == 0 { 0.0 } else { boundary_evidence };
-                let candidate =
-                    previous + boundary_evidence + phrase_duration_score(mood, end - start);
+                let candidate = previous
+                    + BOUNDARY_NOVELTY_WEIGHT * boundary_evidence
+                    + phrase_duration_score(mood, end - start);
                 if candidate > scores[segment][end] {
                     scores[segment][end] = candidate;
                     predecessors[segment][end] = start;
@@ -598,8 +600,7 @@ fn label_phrases(
             let kind = match mood {
                 1 if is_first => 1,
                 1 if is_last => 6,
-                1 if current_energy < median_energy - 0.45 => 3,
-                1 if current_energy - previous_energy > 0.35 => 2,
+                1 if previous_energy - current_energy > 1.0 => 3,
                 1 if current_energy >= median_energy => 5,
                 1 => 2,
                 _ if is_first => 1,
@@ -905,5 +906,35 @@ mod tests {
         for phrase in structure.entries.iter().skip(1) {
             assert_eq!(beat.beats[usize::from(phrase.beat - 1)].beat, 1);
         }
+    }
+
+    #[test]
+    fn high_mood_labels_reserve_down_for_a_real_energy_drop() {
+        let energies = [-0.5, 1.5, 0.3, 0.0, 1.0, -0.2];
+        let features = energies
+            .into_iter()
+            .map(|energy| {
+                let mut standardized = [0.0; FEATURE_COUNT];
+                standardized[0] = energy;
+                BarFeature {
+                    standardized,
+                    raw: [0.0; FEATURE_COUNT],
+                    energy: energy.exp(),
+                    onset: 0.0,
+                }
+            })
+            .collect::<Vec<_>>();
+        let boundaries = [0, 1, 2, 3, 4, 5];
+        let bar_starts = [0, 4, 8, 12, 16, 20];
+
+        let entries = label_phrases(&features, &bar_starts, &boundaries, 1);
+
+        assert_eq!(
+            entries
+                .into_iter()
+                .map(|entry| entry.kind)
+                .collect::<Vec<_>>(),
+            [1, 5, 3, 2, 5, 6]
+        );
     }
 }

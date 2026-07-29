@@ -401,9 +401,10 @@ reports:
 - mean native/clean phrase count: `18.164/17.664`;
 - phrase-count mean absolute error: `2.482`;
 - boundary F1 exact/within 4/within 8 beat-grid entries:
-  `0.5665/0.6833/0.7233`;
+  `0.5749/0.6914/0.7362`;
 - first/last phrase-kind agreement: `99.09%/87.27%`;
-- macro kind agreement among boundaries matched within four entries: `45.61%`.
+- micro/macro kind agreement among boundaries matched within four entries:
+  `61.93%/61.59%`.
 
 These measurements establish a useful protocol-compatible baseline, not exact
 proprietary phrase analysis. A complete replay rejected an attempted endpoint
@@ -411,7 +412,23 @@ bias because it traded a `+0.0016` exact-F1 change for worse four/eight-entry
 F1 and worse matched labels. Further complete sweeps removed a redundant
 boundary-level metrical bonus: duration priors already represented meter, and
 the removal improved corrected-input exact/within-four boundary F1 by
-`+0.0169/+0.0239`.
+`+0.0169/+0.0239`. A subsequent full-corpus sweep reduced local novelty
+weight to `0.75`, improving exact/within-four/within-eight F1 by
+`+0.0084/+0.0081/+0.0129` without changing mood, count, or end-beat results.
+Labeling now reserves high-mood Down for a greater-than-one-standard-deviation
+phrase-energy drop; it no longer treats every low-energy phrase or ordinary
+positive fluctuation as a transition.
+
+Linked-analyzer inspection also recovered the next frontend checkpoint. Four
+zero-state direct-form-II-transposed Butterworth sections use damping constants
+`1.9615705608064609`, `1.6629392246050905`, `1.1111404660392046`, and
+`0.39018064403225661`, cutoff `Fs/20`, and emit source samples
+`7, 15, 23, ...` after decimation by eight, capped at 210 seconds. The native
+feature stage consumes synchronized `Fs/2`, `Fs/8`, and `Fs/32` streams. A
+complete replay rejected feeding only the recovered `Fs/8` stream into the
+independent six-feature model: mood accuracy fell to `33.64%` and exact
+boundary F1 to `0.3584`. The recovered frontend therefore remains a
+specification for the pending multirate feature port, not a false drop-in.
 
 An isolated committed-HEAD comparator measured the initial non-empty phrase
 stage at `+56 ms` (`+0.29%`) over 100 tracks. Samply attributed
