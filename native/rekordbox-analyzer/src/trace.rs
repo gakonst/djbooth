@@ -23,6 +23,7 @@ const BEAT_INFO_ANALYZE_OFFSET: usize = 0x138a960;
 const BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x1390180;
 const BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x13914f0;
 const BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x13918d0;
+const BEAT_SENSOR_CREATE_OFFSET: usize = 0x1389ba0;
 
 const CALL_BA_CREATE_VARIED_44_OFFSET: usize = 0x1068a51;
 const CALL_BA_CREATE_CONST_44_OFFSET: usize = 0x1068a9a;
@@ -37,10 +38,16 @@ const CALL_BEAT_INFO_ANALYZE_OFFSET: usize = 0x14e6695;
 const CALL_BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x138d406;
 const CALL_BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x138f837;
 const CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x138f8f4;
+const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
 const MAX_TRACE_BEATS: usize = 100_000;
+const BEAT_SENSOR_OBJECT_BYTES: usize = 0x80;
+const BEAT_SENSOR_FILTER_BYTES: usize = 0x30;
+const IIR_FILTER_BYTES: usize = 0x58;
+const BEAT_SENSOR_PEAK_BYTES: usize = 0xa0;
+const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 
 type BaCreate = unsafe extern "C" fn(i32, i32, u8, u8, u8) -> *mut c_void;
@@ -63,6 +70,7 @@ type BeatInfoSegAdjust =
     unsafe extern "C" fn(*mut c_void, *mut BeatInfoAnalyzeInfo, *mut StdVector, i32);
 type BeatInfoGapCorrect = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32);
 type BeatInfoGapCorrectRange = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, i32);
+type BeatSensorCreate = unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, i32) -> u64;
 
 static BA_CREATE_VARIED_48: AtomicUsize = AtomicUsize::new(0);
 static BA_CREATE_CONST_48: AtomicUsize = AtomicUsize::new(0);
@@ -77,6 +85,7 @@ static BEAT_INFO_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_SEG_ADJUST: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT_RANGE: AtomicUsize = AtomicUsize::new(0);
+static BEAT_SENSOR_CREATE: AtomicUsize = AtomicUsize::new(0);
 static LAST_BEAT_COUNT: AtomicI32 = AtomicI32::new(0);
 static TRACE: OnceLock<Mutex<ReferenceTrace>> = OnceLock::new();
 
@@ -86,6 +95,7 @@ struct ReferenceTrace {
     schema_version: u32,
     requested_engine: String,
     engine_creates: Vec<EngineCreateTrace>,
+    beat_sensor_creates: Vec<BeatSensorCreateTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -110,6 +120,22 @@ struct EngineCreateTrace {
     arg3: u8,
     arg4: u8,
     arg5: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BeatSensorCreateTrace {
+    sample_rate: i32,
+    arg2: i32,
+    total_frames: i32,
+    aggregate_frames: i32,
+    band_count: i32,
+    result: u64,
+    object_words: Vec<u32>,
+    filter_words: Vec<u32>,
+    filter_stage_words: Vec<Vec<u32>>,
+    peak_sensor_words: Vec<u32>,
+    band_state_words: Vec<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -217,7 +243,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 2,
+        schema_version: 3,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -269,6 +295,7 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         &BEAT_INFO_GAP_CORRECT_RANGE,
         base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
     );
+    set_original(&BEAT_SENSOR_CREATE, base + BEAT_SENSOR_CREATE_OFFSET);
 
     unsafe {
         match requested_engine() {
@@ -351,6 +378,11 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
             base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
             trace_beat_info_gap_correct_range as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_BEAT_SENSOR_CREATE_OFFSET,
+            base + BEAT_SENSOR_CREATE_OFFSET,
+            trace_beat_sensor_create as usize,
         )?;
     }
     Ok(())
@@ -479,6 +511,55 @@ create_hook!(trace_ba_create_varied_48, BA_CREATE_VARIED_48, 48_000, true);
 create_hook!(trace_ba_create_const_48, BA_CREATE_CONST_48, 48_000, false);
 create_hook!(trace_ba_create_varied_44, BA_CREATE_VARIED_44, 44_100, true);
 create_hook!(trace_ba_create_const_44, BA_CREATE_CONST_44, 44_100, false);
+
+unsafe extern "C" fn trace_beat_sensor_create(
+    sensor: *mut c_void,
+    sample_rate: i32,
+    arg2: i32,
+    total_frames: i32,
+    aggregate_frames: i32,
+    band_count: i32,
+) -> u64 {
+    let function: BeatSensorCreate = unsafe { original(&BEAT_SENSOR_CREATE) };
+    let result = unsafe {
+        function(
+            sensor,
+            sample_rate,
+            arg2,
+            total_frames,
+            aggregate_frames,
+            band_count,
+        )
+    };
+    let snapshot = unsafe { snapshot_beat_sensor(sensor, band_count) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (object_words, filter_words, filter_stage_words, peak_sensor_words, band_state_words) =
+        match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                trace.warnings.push(format!(
+                    "failed to snapshot BeatSensor after create: {error:#}"
+                ));
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            }
+        };
+    trace.beat_sensor_creates.push(BeatSensorCreateTrace {
+        sample_rate,
+        arg2,
+        total_frames,
+        aggregate_frames,
+        band_count,
+        result,
+        object_words,
+        filter_words,
+        filter_stage_words,
+        peak_sensor_words,
+        band_state_words,
+    });
+    result
+}
 
 fn record_engine_create(
     sample_rate: u32,
@@ -755,6 +836,91 @@ unsafe fn snapshot_beat_info_source(
     let info = unsafe { &*info };
     let beats = unsafe { snapshot_internal_beats(info.source_beats) }?;
     Ok((info.value_00, info.unknown_04, beats))
+}
+
+type BeatSensorSnapshot = (Vec<u32>, Vec<u32>, Vec<Vec<u32>>, Vec<u32>, Vec<u32>);
+
+unsafe fn snapshot_beat_sensor(
+    sensor: *const c_void,
+    band_count: i32,
+) -> Result<BeatSensorSnapshot> {
+    if sensor.is_null() {
+        bail!("null BeatSensor");
+    }
+    let band_count = usize::try_from(band_count).context("negative BeatSensor band count")?;
+    if band_count == 0 || band_count > 64 {
+        bail!("invalid BeatSensor band count {band_count}");
+    }
+    let sensor = sensor.cast::<u8>();
+    let filters = unsafe { read_pointer_at(sensor, 0x18) };
+    let peak_sensors = unsafe { read_pointer_at(sensor, 0x20) };
+    let band_states = unsafe { read_pointer_at(sensor, 0x28) };
+    let mut filter_stage_words = Vec::with_capacity(band_count);
+    for band in 0..band_count {
+        let filter = unsafe { filters.add(band * BEAT_SENSOR_FILTER_BYTES) };
+        let stage_count = unsafe { (filter.add(8) as *const u32).read_unaligned() } as usize;
+        if stage_count == 0 || stage_count > 16 {
+            bail!("invalid IIR stage count {stage_count} for BeatSensor band {band}");
+        }
+        let stages = unsafe { read_pointer_at(filter, 0x10) };
+        filter_stage_words.push(unsafe {
+            snapshot_u32_words(
+                stages,
+                stage_count
+                    .checked_mul(IIR_FILTER_BYTES)
+                    .context("IIR filter-stage snapshot overflow")?,
+            )
+        }?);
+    }
+    Ok((
+        unsafe { snapshot_u32_words(sensor, BEAT_SENSOR_OBJECT_BYTES) }?,
+        unsafe {
+            snapshot_u32_words(
+                filters,
+                band_count
+                    .checked_mul(BEAT_SENSOR_FILTER_BYTES)
+                    .context("BeatSensor filter snapshot overflow")?,
+            )
+        }?,
+        filter_stage_words,
+        unsafe {
+            snapshot_u32_words(
+                peak_sensors,
+                band_count
+                    .checked_mul(BEAT_SENSOR_PEAK_BYTES)
+                    .context("BeatSensor peak snapshot overflow")?,
+            )
+        }?,
+        unsafe {
+            snapshot_u32_words(
+                band_states,
+                band_count
+                    .checked_mul(BEAT_SENSOR_BAND_STATE_BYTES)
+                    .context("BeatSensor band-state snapshot overflow")?,
+            )
+        }?,
+    ))
+}
+
+unsafe fn read_pointer_at(base: *const u8, offset: usize) -> *const u8 {
+    unsafe { (base.add(offset) as *const *const u8).read_unaligned() }
+}
+
+unsafe fn snapshot_u32_words(pointer: *const u8, bytes: usize) -> Result<Vec<u32>> {
+    if bytes % std::mem::size_of::<u32>() != 0 {
+        bail!("snapshot byte length {bytes} is not word aligned");
+    }
+    if pointer.is_null() {
+        bail!("null snapshot storage for {bytes} bytes");
+    }
+    let words = bytes / std::mem::size_of::<u32>();
+    let mut snapshot = Vec::with_capacity(words);
+    for index in 0..words {
+        snapshot.push(unsafe {
+            (pointer.add(index * std::mem::size_of::<u32>()) as *const u32).read_unaligned()
+        });
+    }
+    Ok(snapshot)
 }
 
 unsafe extern "C" fn trace_unit_beat_adjust_analyze(

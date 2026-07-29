@@ -968,3 +968,37 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   observed boundary rules. The existing barwise Viterbi path remains useful
   inside one tempo family but cannot solve missing `3:2`, `4:3`, or unrelated
   section families by construction.
+
+## Linked BeatSensor front-end checkpoint (2026-07-28)
+
+- Extended the private reference tracer to the real
+  `peakss::BeatSensor::create` callsite. Schema v3 snapshots its object, all six
+  filter and peak-detector records, and every nested IIR stage immediately
+  after construction. Four linked runs at 44.1 and 48 kHz completed without a
+  trace warning; repeated tracks at one sample rate differed only in pointers
+  and track length.
+- The runtime call is exactly
+  `create(sampleRate, 0, totalFrames, 8, 6)`. Each path is averaged over eight
+  input samples. The independent paths are two identical `LP283` biquads, two
+  identical `BP150/Q1.5` biquads, alternating `HP283/LP7900` biquads, and two
+  identical `HP7900` biquads. Coefficients are double precision and now
+  captured bit for bit for both native sample rates.
+- The apparent fifth and sixth through-filter paths are not raw full-band
+  detectors. After filtering and absolute value, path 4 copies the `LP283`
+  envelope, subtracts a `max(2, round(sampleRate * 0.001))` moving average, and
+  clamps at zero. Path 5 does the same to the `HP7900` envelope with
+  `max(2, round(sampleRate * 0.0002))`. Their observed history lengths are
+  `44/48` and `9/10` samples at 44.1/48 kHz.
+- Every path uses the same `0.29 s`, `1.70 s`, and approximately `1.30 s`
+  peak-detector windows. Construction stores exact scalar state
+  `0.001/0.75/0.5/0.5`; sample-index state remains 64-bit. This front end is
+  causal time-domain DSP, not the clean analyzer's current STFT spectral-flux
+  onset curve. In particular, the two derived envelope-onset paths explain why
+  a generic local tempogram failed to recover the linked `145 → 108 BPM` and
+  `117 → 109 → 166 BPM` sections.
+- Public Pioneer tempo-detection material independently describes voting
+  periodic peaks across frequency components, but the linked runtime trace is
+  the implementation oracle. Next porting unit: reproduce the six scalar
+  streams and peak events, compare their emitted candidate records against
+  schema-v2 survivor traces, then connect the already recovered section
+  decoder.
