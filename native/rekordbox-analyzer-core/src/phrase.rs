@@ -11,6 +11,10 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::anlz::AnlzTag;
+use crate::phrase_frontend::{
+    NativePhraseLowLevelEnvelope, extract_native_phrase_low_level_envelope,
+    reduce_native_phrase_low_levels,
+};
 use crate::rhythm::BeatAnalysis;
 
 const ENTRY_BYTES: usize = 24;
@@ -19,6 +23,7 @@ const BEATS_PER_BAR: usize = 4;
 const FEATURE_COUNT: usize = 6;
 const ANALYSIS_STRIDE: usize = 4;
 const BOUNDARY_NOVELTY_WEIGHT: f64 = 0.75;
+const NATIVE_BOUNDARY_NOVELTY_WEIGHT: f64 = 1.5;
 
 /// One phrase start in a Rekordbox `PSSI` song-structure tag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,6 +212,16 @@ pub fn analyze_song_structure(
     sample_rate: u32,
     beat: &BeatAnalysis,
 ) -> Result<SongStructure> {
+    let native_low_levels = extract_native_phrase_low_level_envelope(samples, sample_rate)?;
+    analyze_song_structure_with_native_low_levels(samples, sample_rate, beat, &native_low_levels)
+}
+
+pub(crate) fn analyze_song_structure_with_native_low_levels(
+    samples: &[f32],
+    sample_rate: u32,
+    beat: &BeatAnalysis,
+    native_low_levels: &NativePhraseLowLevelEnvelope,
+) -> Result<SongStructure> {
     if sample_rate == 0 {
         bail!("song-structure analysis requires a non-zero sample rate");
     }
@@ -252,7 +267,9 @@ pub fn analyze_song_structure(
     let features = &features[..structured_bars];
     let mut diagnostics = summarize_features(features);
     let mood = classify_mood(&diagnostics, beat.bpm);
-    let boundaries = select_phrase_boundaries(features, mood);
+    let native_novelty =
+        native_boundary_novelty(native_low_levels, beat, &bar_starts, structured_bars)?;
+    let boundaries = select_phrase_boundaries(features, &native_novelty, mood);
     let (entries, phrase_features) = label_phrases(features, &bar_starts, &boundaries, mood);
     diagnostics.phrase_features = phrase_features;
     let end_index = bar_starts
@@ -473,7 +490,100 @@ fn classify_mood(diagnostics: &SongStructureDiagnostics, bpm: f64) -> u16 {
     }
 }
 
-fn select_phrase_boundaries(features: &[BarFeature], mood: u16) -> Vec<usize> {
+fn native_boundary_novelty(
+    envelope: &NativePhraseLowLevelEnvelope,
+    beat: &BeatAnalysis,
+    bar_starts: &[usize],
+    bar_count: usize,
+) -> Result<Vec<f64>> {
+    let first = beat
+        .beats
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("song-structure analysis requires a beat grid"))?;
+    let first_beat_ms = f64::from(first.time_ms)
+        + f64::from(
+            beat.beat_time_residuals_us
+                .first()
+                .copied()
+                .unwrap_or_default(),
+        ) / 1_000.0;
+    let trace = reduce_native_phrase_low_levels(envelope, beat.bpm, first_beat_ms)?;
+    let mut raw = Vec::with_capacity(bar_count);
+    for bar in 0..bar_count {
+        let start = bar_starts.get(bar).copied().unwrap_or_default();
+        let end = bar_starts
+            .get(bar + 1)
+            .copied()
+            .unwrap_or_else(|| start.saturating_add(BEATS_PER_BAR));
+        let row = (end.saturating_sub(start) == BEATS_PER_BAR
+            && end <= trace.low_level.len()
+            && end <= trace.divided_low_level.len())
+        .then(|| {
+            [
+                trace.low_level[start..end]
+                    .iter()
+                    .sum::<f64>()
+                    .max(0.0)
+                    .ln_1p(),
+                trace.divided_low_level[start..end]
+                    .iter()
+                    .sum::<f64>()
+                    .max(0.0)
+                    .ln_1p(),
+            ]
+        });
+        raw.push(row);
+    }
+
+    let valid_count = raw.iter().flatten().count();
+    if valid_count < 2 {
+        return Ok(vec![0.0; bar_count]);
+    }
+    let mut means = [0.0_f64; 2];
+    for row in raw.iter().flatten() {
+        for (mean, value) in means.iter_mut().zip(row) {
+            *mean += value;
+        }
+    }
+    for mean in &mut means {
+        *mean /= valid_count as f64;
+    }
+    let mut scales = [0.0_f64; 2];
+    for row in raw.iter().flatten() {
+        for ((scale, value), mean) in scales.iter_mut().zip(row).zip(means) {
+            *scale += (value - mean).powi(2);
+        }
+    }
+    for scale in &mut scales {
+        *scale = (*scale / valid_count as f64).sqrt().max(1.0e-12);
+    }
+    let standardized = raw
+        .into_iter()
+        .map(|row| {
+            row.map(|row| {
+                [
+                    (row[0] - means[0]) / scales[0],
+                    (row[1] - means[1]) / scales[1],
+                ]
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut novelty = vec![0.0; bar_count];
+    for boundary in 1..bar_count {
+        let Some((before, after)) = standardized[boundary - 1].zip(standardized[boundary]) else {
+            continue;
+        };
+        novelty[boundary] =
+            (((after[0] - before[0]).powi(2) + (after[1] - before[1]).powi(2)) * 0.5).sqrt();
+    }
+    Ok(novelty)
+}
+
+fn select_phrase_boundaries(
+    features: &[BarFeature],
+    native_novelty: &[f64],
+    mood: u16,
+) -> Vec<usize> {
     if features.len() <= 4 {
         return vec![0, features.len().saturating_sub(1)];
     }
@@ -530,6 +640,8 @@ fn select_phrase_boundaries(features: &[BarFeature], mood: u16) -> Vec<usize> {
                 let boundary_evidence = if start == 0 { 0.0 } else { boundary_evidence };
                 let candidate = previous
                     + BOUNDARY_NOVELTY_WEIGHT * boundary_evidence
+                    + NATIVE_BOUNDARY_NOVELTY_WEIGHT
+                        * native_novelty.get(start).copied().unwrap_or_default()
                     + phrase_duration_score(mood, end - start);
                 if candidate > scores[segment][end] {
                     scores[segment][end] = candidate;
@@ -935,7 +1047,15 @@ mod tests {
         let samples = synthetic_samples(sample_rate);
         let beat = synthetic_beat(128);
         let first = analyze_song_structure(&samples, sample_rate, &beat).expect("structure");
-        let second = analyze_song_structure(&samples, sample_rate, &beat).expect("structure");
+        let native_low_levels =
+            extract_native_phrase_low_level_envelope(&samples, sample_rate).expect("low levels");
+        let second = analyze_song_structure_with_native_low_levels(
+            &samples,
+            sample_rate,
+            &beat,
+            &native_low_levels,
+        )
+        .expect("precomputed structure");
         assert_eq!(first, second);
         assert_eq!(first.entries[0].beat, 1);
         assert!(first.entries.len() >= 4);

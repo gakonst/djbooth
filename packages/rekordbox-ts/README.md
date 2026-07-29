@@ -329,7 +329,8 @@ packed bitfields or differing tail lengths.
 `analyze phrase-features` uses a frozen DAT grid to return one bounded page from the recovered
 native-shaped phrase frontend and consumers. It includes one-based `/2`, `/8`, and `/32` positions,
 beat sums and maxima, four quarter-beat power/peak records, and eight high-band peak records. The
-command is read-only and does not route diagnostic features into production labels.
+command is read-only. Production boundary selection uses the recovered low/divided-low families;
+the remaining diagnostic families and all mood/label decisions stay outside that path.
 
 `--rhythm-mode normal` emits a static grid for steady-tempo recordings. `dynamic` runs the recovered
 Rekordbox 6.8.2 variable-tempo path for live, rubato, and materially changing tempo. `auto` ignores

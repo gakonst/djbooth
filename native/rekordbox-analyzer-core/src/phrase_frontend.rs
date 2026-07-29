@@ -43,9 +43,9 @@ pub struct PhraseBeatBoundaries {
 
 /// Beat-synchronous feature traces recovered from the linked analyzer.
 ///
-/// This is a diagnostic surface. Production phrase labels remain on the
-/// independently tuned decoder until held-out corpus replay demonstrates an
-/// improvement from these native-shaped inputs.
+/// This is the complete diagnostic surface. Production boundary selection
+/// consumes only the recovered low and divided-low families; phrase mood and
+/// labels remain on the independently tuned decoder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativePhraseFeatureTrace {
     /// One-based constant-tempo beat positions used by the native consumers.
@@ -72,6 +72,19 @@ pub struct NativePhraseFeatureTrace {
     pub all_power_quarter_peak: Vec<[f64; 4]>,
     /// Band-pass 5–7 kHz, rectified, low-pass 10 Hz eighth-beat maxima.
     pub high_peak_eighths: Vec<[f64; 8]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativePhraseLowLevelTrace {
+    pub low_level: Vec<f64>,
+    pub divided_low_level: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NativePhraseLowLevelEnvelope {
+    sample_rate: f64,
+    low_level_samples: Vec<f64>,
+    divided_low_samples: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -403,6 +416,115 @@ pub fn extract_native_phrase_features(
     })
 }
 
+#[cfg(test)]
+pub(crate) fn extract_native_phrase_low_levels(
+    samples: &[f32],
+    sample_rate: u32,
+    bpm: f64,
+    first_beat_ms: f64,
+) -> Result<NativePhraseLowLevelTrace> {
+    let envelope = extract_native_phrase_low_level_envelope(samples, sample_rate)?;
+    reduce_native_phrase_low_levels(&envelope, bpm, first_beat_ms)
+}
+
+pub(crate) fn extract_native_phrase_low_level_envelope(
+    samples: &[f32],
+    sample_rate: u32,
+) -> Result<NativePhraseLowLevelEnvelope> {
+    validate_feature_pcm(samples, sample_rate)?;
+    let sample_rate = f64::from(sample_rate);
+    let low_rate = sample_rate / 32.0;
+    let low_pass_32 = filter_and_decimate(
+        samples,
+        sample_rate,
+        sample_rate * 0.0125,
+        32,
+        Response::LowPass,
+    );
+    let (low_level_samples, divided_low_samples) =
+        extract_low_level_samples(&low_pass_32, low_rate);
+    Ok(NativePhraseLowLevelEnvelope {
+        sample_rate: low_rate,
+        low_level_samples,
+        divided_low_samples,
+    })
+}
+
+pub(crate) fn reduce_native_phrase_low_levels(
+    envelope: &NativePhraseLowLevelEnvelope,
+    bpm: f64,
+    first_beat_ms: f64,
+) -> Result<NativePhraseLowLevelTrace> {
+    validate_feature_timing(bpm, first_beat_ms)?;
+    let beat_count = native_beat_count(
+        envelope.low_level_samples.len(),
+        envelope.sample_rate,
+        bpm,
+        first_beat_ms,
+    );
+    if beat_count == 0 {
+        bail!("native phrase features require at least one complete beat");
+    }
+    let boundaries = native_beat_positions(envelope.sample_rate, bpm, first_beat_ms, beat_count);
+    let ranges = beat_ranges(&boundaries, envelope.low_level_samples.len());
+
+    Ok(NativePhraseLowLevelTrace {
+        low_level: reduce_ranges(&envelope.low_level_samples, &ranges, sum_range)
+            .into_iter()
+            .map(|value| value * 4.0)
+            .collect(),
+        divided_low_level: reduce_ranges(&envelope.divided_low_samples, &ranges, sum_range),
+    })
+}
+
+fn validate_feature_pcm(samples: &[f32], sample_rate: u32) -> Result<()> {
+    if !matches!(sample_rate, 44_100 | 48_000) {
+        bail!("phrase multirate frontend requires a 44.1 or 48 kHz reader rate");
+    }
+    if samples.iter().any(|sample| !sample.is_finite()) {
+        bail!("phrase multirate frontend requires finite PCM");
+    }
+    Ok(())
+}
+
+fn validate_feature_timing(bpm: f64, first_beat_ms: f64) -> Result<()> {
+    if !bpm.is_finite() || bpm <= 0.0 {
+        bail!("native phrase features require a positive finite BPM");
+    }
+    if !first_beat_ms.is_finite() {
+        bail!("native phrase features require a finite first-beat offset");
+    }
+    Ok(())
+}
+
+fn extract_low_level_samples(samples: &[f64], sample_rate: f64) -> (Vec<f64>, Vec<f64>) {
+    let mut low_level_filter = [Biquad::butterworth(
+        sample_rate,
+        150.0,
+        SECOND_ORDER_DAMPING,
+        Response::LowPass,
+    )];
+    let mut low_level_envelope = FirstOrderLowPass::new(sample_rate, 5.0);
+    let mut divided_low_filter = [Biquad::butterworth(
+        sample_rate,
+        500.0,
+        SECOND_ORDER_DAMPING,
+        Response::LowPass,
+    )];
+    let mut divided_low_envelope = FirstOrderLowPass::new(sample_rate, 5.0);
+    let mut low_level_samples = Vec::with_capacity(samples.len());
+    let mut divided_low_samples = Vec::with_capacity(samples.len());
+    for sample in samples.iter().copied() {
+        low_level_samples.push(
+            low_level_envelope.process(process_sections(sample, &mut low_level_filter).abs()),
+        );
+        divided_low_samples.push(
+            divided_low_envelope.process(process_sections(sample, &mut divided_low_filter).abs()),
+        );
+    }
+    (low_level_samples, divided_low_samples)
+}
+
 fn filter_and_decimate(
     samples: &[f32],
     sample_rate: f64,
@@ -635,9 +757,13 @@ mod tests {
             .collect::<Vec<_>>();
         let features =
             extract_native_phrase_features(&input, 44_100, 120.0, 10.0).expect("features");
+        let low_levels =
+            extract_native_phrase_low_levels(&input, 44_100, 120.0, 10.0).expect("low levels");
         let beat_count = features.low_level.len();
 
         assert_eq!(beat_count, 9);
+        assert_eq!(low_levels.low_level, features.low_level);
+        assert_eq!(low_levels.divided_low_level, features.divided_low_level);
         assert_eq!(features.middle_level.len(), beat_count);
         assert_eq!(features.divided_low_level.len(), beat_count);
         assert_eq!(features.divided_middle_level.len(), beat_count);

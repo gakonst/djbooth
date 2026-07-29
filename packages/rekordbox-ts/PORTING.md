@@ -131,8 +131,15 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   maxima, four quarter-beat low/raw-power records, and eight high-band peak
   records. It uses the linked `LP150/5`, `HP500/5`, `LP100/5`,
   `BP400–1000/10`, and `BP5000–7000/10` chains with exact Butterworth damping
-  and native rounding. Production labels remain unchanged pending complete
-  held-out replay.
+  and native rounding.
+- Routed only the two strongest recovered families, `lowLevel` and
+  `dividedLowLevel`, into production boundary evidence after a complete
+  coefficient sweep. On the same 120-track read-only cohort, exact/four/eight
+  beat-entry F1 improved from `0.5245/0.6348/0.6855` to
+  `0.6182/0.6842/0.7137`; all tracks completed. Mood, phrase count, count
+  error, and end beat are unchanged, while within-four matched-kind agreement
+  improves `61.23% → 61.80%`. A stable 37-track hash audit independently
+  improves `0.5735/0.6726/0.7273 → 0.6401/0.7154/0.7524`.
 - Added `extractPhraseFeatures()` and
   `rekordbox analyze phrase-features AUDIO REFERENCE_DAT`. The command
   canonicalizes both read-only inputs, verifies the clean helper identity,
@@ -151,6 +158,13 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   Allocator samples never intersected phrase stacks. Native CPU codegen and fat
   LTO/one-CGU variants were `2.44–3.41%` slower, so portable release defaults
   remain intentional.
+- Samply localized the new low-family cost to `95 ms` in the native `/32`
+  filter on the 397-second Science Fiction fixture. Precomputing that
+  beat-independent envelope beside waveform/rhythm/key work removed it from
+  the critical path. Eight alternating debuginfo-release runs measured
+  `1094.8 ms → 989.2 ms` median backend time, level with the `991.0 ms`
+  pre-integration baseline. Serial and overlapped DAT/EXT/2EX outputs are
+  byte-identical.
 
 ### 2026-07-29 — source-reader detail-count closure
 

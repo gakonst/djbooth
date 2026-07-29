@@ -388,9 +388,9 @@ mood/end-beat positions, phrase-kind fields, `k1/k2/k3`, Up3 `b` and internal
 beats, and optional fill markers.
 
 The implementation is clean-room and beat-synchronous. It uses six independent
-bar features, standardized multi-scale novelty, mood-specific phrase-duration
-priors, and a bounded dynamic-programming decoder. The first phrase retains
-native beat index one semantics. Every later phrase follows an actual
+bar features plus the recovered low/divided-low native envelopes, standardized
+novelty, mood-specific phrase-duration priors, and a bounded dynamic-programming
+decoder. The first phrase retains native beat index one semantics. Every later phrase follows an actual
 `beat == 1` label; `99.59%` of 113 native-reference post-leading boundaries
 show that same contract.
 
@@ -441,8 +441,9 @@ eight-way high-peak slices. The filters match the linked constructors:
 `HP400 → LP1000 → abs → LP10`, and
 `HP5000 → LP7000 → abs → LP10`. Second- and fourth-order Butterworth damping,
 first-order envelope coefficients, native quarter/eighth rounding, and
-out-of-range zero behavior are explicit and unit-tested. These traces remain
-off the production label path until held-out replay demonstrates a gain.
+out-of-range zero behavior are explicit and unit-tested. The complete trace
+remains diagnostic; production boundary selection consumes only `lowLevel`
+and `dividedLowLevel`, while mood and phrase labels remain independent.
 The `phrase-features AUDIO REFERENCE_DAT` diagnostic command reconstructs the
 same 99%-left/1%-right reader signal, uses the frozen PQTZ BPM/first-beat
 boundary, and emits bounded pages of those traces. The TypeScript wrapper
@@ -455,8 +456,17 @@ summary. Each record carries six standardized features, duration, energy
 delta, and transition distance. Track-grouped validation showed that these
 independent features improve mood-2/3 label accuracy only from `29.55%` to
 `31.96%`; deeper trees overfit. No learned relabeler was accepted. The next
-parity step remains the native multirate feature consumers and boundary
-judges, not corpus memorization.
+parity step remains the exact native boundary and phrase-kind judges, not
+corpus memorization.
+
+A newer 120-track read-only replay, using the same cohort before and after the
+production low-level integration, reports exact/within-four/within-eight
+boundary F1 improving from `0.5245/0.6348/0.6855` to
+`0.6182/0.6842/0.7137`. All 120 tracks completed. Mood, phrase count, count
+error, and end beat are unchanged; kind agreement among within-four matches
+improves from `61.23%` to `61.80%`. A stable hash-held 37-track audit subset
+independently improves from `0.5735/0.6726/0.7273` to
+`0.6401/0.7154/0.7524`.
 
 An isolated committed-HEAD comparator measured the initial non-empty phrase
 stage at `+56 ms` (`+0.29%`) over 100 tracks. Samply attributed
@@ -467,6 +477,15 @@ Allocator samples never intersected a phrase stack. `target-cpu=native`, fat
 LTO/one codegen unit, and their combination were `2.44–3.41%` slower than the
 portable default on the same pinned workload, so release codegen remains
 portable.
+
+The recovered low-pass chain initially added about `104 ms` to a representative
+397-second track. A 1 kHz Samply profile localized `95 ms` of CPU to the
+eight-section `/32` filter. Its beat-independent envelope is now computed in
+parallel with waveform, rhythm, and key analysis. Across eight alternating
+debuginfo-release runs, median backend time changed from `1094.8 ms` with the
+serial dependency to `989.2 ms`, statistically level with the `991.0 ms`
+pre-integration baseline. The scheduled and serial implementations emitted
+byte-identical DAT, EXT, and 2EX files.
 
 ## Historical variable-tempo and syncopated-phase audit
 

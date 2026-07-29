@@ -24,7 +24,10 @@ use crate::key::{
     RawChromaFeatures, analyze_key, analyze_key_from_raw,
 };
 use crate::linked_rhythm::analyze_linked_beats_with_reader_padding;
-use crate::phrase::{PhraseFeatureDiagnostics, SongStructure, analyze_song_structure};
+use crate::phrase::{
+    PhraseFeatureDiagnostics, SongStructure, analyze_song_structure_with_native_low_levels,
+};
+use crate::phrase_frontend::extract_native_phrase_low_level_envelope;
 use crate::rhythm::{
     BeatAnalysis, FFT_SIZE as BEAT_FFT_SIZE, HOP_SIZE as BEAT_HOP_SIZE, OnsetEnvelopes,
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
@@ -308,55 +311,66 @@ pub fn analyze_audio_file_with_options(
         .as_ref()
         .and_then(|pcms| pcms.phrase.as_ref())
         .unwrap_or_else(|| decoded.phrase_mono());
-    let (waveforms, (beat, key)) = pool.install(|| {
+    let (native_low_levels, (waveforms, (beat, key))) = pool.install(|| {
         rayon::join(
-            || match streamed_waveforms {
-                Some(waveforms) => Ok(waveforms),
-                None => {
-                    let [color, monochrome] = &waveform_pcms
-                        .as_ref()
-                        .context("waveform reader PCM was not prepared")?
-                        .waveforms;
-                    WaveformData::generate_native(color, monochrome)
-                }
+            || {
+                extract_native_phrase_low_level_envelope(
+                    phrase_pcm.samples(),
+                    phrase_pcm.sample_rate(),
+                )
             },
             || {
                 rayon::join(
-                    || {
-                        let selected = select_beat_analysis(BeatAnalysisInputs {
-                            mode: options.rhythm_mode(),
-                            source_samples: decoded.mono().samples(),
-                            source_sample_rate: decoded.mono().sample_rate(),
-                            source_reader_padding_frames: decoded.source().reader_padding_frames(),
-                            analysis_samples: pcm.samples(),
-                            analysis_sample_rate: pcm.sample_rate(),
-                            streamed_onset,
-                            streamed_time_domain,
-                        })?;
-                        let song_structure = analyze_song_structure(
-                            phrase_pcm.samples(),
-                            phrase_pcm.sample_rate(),
-                            &selected.beat,
-                        )?;
-                        Ok::<_, anyhow::Error>((selected, song_structure))
+                    || match streamed_waveforms {
+                        Some(waveforms) => Ok(waveforms),
+                        None => {
+                            let [color, monochrome] = &waveform_pcms
+                                .as_ref()
+                                .context("waveform reader PCM was not prepared")?
+                                .waveforms;
+                            WaveformData::generate_native(color, monochrome)
+                        }
                     },
-                    || match streamed_key {
-                        Some(raw) => analyze_key_from_raw(raw, pcm.sample_rate()),
-                        None => analyze_key(pcm.samples(), pcm.sample_rate()),
+                    || {
+                        rayon::join(
+                            || {
+                                select_beat_analysis(BeatAnalysisInputs {
+                                    mode: options.rhythm_mode(),
+                                    source_samples: decoded.mono().samples(),
+                                    source_sample_rate: decoded.mono().sample_rate(),
+                                    source_reader_padding_frames: decoded
+                                        .source()
+                                        .reader_padding_frames(),
+                                    analysis_samples: pcm.samples(),
+                                    analysis_sample_rate: pcm.sample_rate(),
+                                    streamed_onset,
+                                    streamed_time_domain,
+                                })
+                            },
+                            || match streamed_key {
+                                Some(raw) => analyze_key_from_raw(raw, pcm.sample_rate()),
+                                None => analyze_key(pcm.samples(), pcm.sample_rate()),
+                            },
+                        )
                     },
                 )
             },
         )
     });
+    let native_low_levels = native_low_levels?;
     let waveforms = waveforms?;
-    let (
-        SelectedBeatAnalysis {
-            beat,
-            mode: rhythm_mode,
-            fallback: rhythm_fallback,
-        },
-        song_structure,
-    ) = beat?;
+    let selected = beat?;
+    let song_structure = analyze_song_structure_with_native_low_levels(
+        phrase_pcm.samples(),
+        phrase_pcm.sample_rate(),
+        &selected.beat,
+        &native_low_levels,
+    )?;
+    let SelectedBeatAnalysis {
+        beat,
+        mode: rhythm_mode,
+        fallback: rhythm_fallback,
+    } = selected;
     let key = key?;
     let ((vbr_index, vbr_trailer_unknown), vbr_2) = seek_tables;
     let anlz_path = format!(

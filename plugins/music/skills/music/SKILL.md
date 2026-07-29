@@ -399,7 +399,8 @@ signed-16-bit 99%-left/1%-right reader contract, writes every known phrase field
 per-phrase feature evidence, and includes clean `/2`, `/8`, and `/32` native-filter primitives plus
 the recovered low/middle/high consumers. Use `analyze phrase-features` with a frozen reference DAT
 to inspect paged one-based beat windows, quarter-beat power/peaks, and eighth-beat high peaks without
-mutating the library or changing production labels.
+mutating the library. Production boundary selection consumes the recovered low/divided-low
+families; the rest of the trace is diagnostic, and mood/kind/auxiliary judges remain independent.
 Do not claim whole-analyzer proprietary byte identity: the recovered Dynamic beat path can match
 reference timing while phrase boundary/kind/auxiliary judges, waveform normalization, and finishing
 stages still have independent parity work.
