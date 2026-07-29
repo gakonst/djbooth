@@ -96,7 +96,7 @@ music djlink search "Science Fiction" --mode track --format json
 music djlink run ./set/manifest.json 1 --player 3 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink stop --format json
-music usb export /mnt/cdj --database /path/to/master.db --format json
+music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 music usb doctor ./rekordbox-usb.img --format json
 ```
 
@@ -137,12 +137,13 @@ rekordbox's official Performance-mode integration; streaming tracks cannot be LI
 served by `music djlink`. A successful `load` cues the selected deck and intentionally reports
 `playing: false`; press PLAY on the deck.
 
-`music usb export` is the separate front-panel content path. It opens the normal Rekordbox
-`master.db` read-only, compiles the active library into legacy
-`PIONEER/rekordbox/export.pdb`, copies local audio and DAT/EXT/2EX analysis, rewrites ANLZ paths,
-and materializes playlists. SQLite stays authoritative and Device Library Plus is not involved.
-The destination is a mounted FAT/exFAT media root or staging directory; no image is created by the
-export command.
+`music usb sync` is the separate front-panel content path. It first imports each unseen CDJ history
+into the normal Rekordbox `master.db` as a `DJ Set YYYY-MM-DD` playlist, preserving order and
+duplicates while updating play counts exactly once. It then differentially reconciles the complete
+active library into legacy `PIONEER/rekordbox/export.pdb`, local audio, rewritten DAT/EXT/2EX
+analysis, and playlists. SQLite stays authoritative and Device Library Plus is not involved. The
+destination is a mounted FAT/exFAT media root or staging directory; no image is created by the sync
+command. `music usb export` remains available for an outbound-only initial compile.
 
 The lower-level `doctor`, `publish`, `attach`, `detach`, `status`, and `run` commands control the
 current immutable-image Linux gadget transport. Publication is forbidden while configured, and
@@ -207,7 +208,7 @@ const codeMode = await createMusicCodeMcpServer({
 - [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox database and file formats.
 - [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
 - [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink): Manifest-backed native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
-- [`@gakonst/cdj-usb`](https://github.com/gakonst/music-ts/tree/main/packages/cdj-usb): CDJ-3000 legacy-media compiler and Linux USB mass-storage gadget.
+- [`@gakonst/cdj-usb`](https://github.com/gakonst/music-ts/tree/main/packages/cdj-usb): CDJ-3000 mounted-media synchronizer and Linux USB mass-storage gadget.
 
 ## Development
 

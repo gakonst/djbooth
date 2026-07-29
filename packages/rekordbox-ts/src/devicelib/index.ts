@@ -6,3 +6,4 @@
 
 export * from "./export.js";
 export * from "./pdb.js";
+export * from "./sync.js";

@@ -25,7 +25,16 @@ describe("CDJ USB CLI", () => {
 
     expect(exitCode).toBeUndefined();
     expect(manifest.commands.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(["export", "doctor", "status", "publish", "attach", "detach", "run"]),
+      expect.arrayContaining([
+        "export",
+        "sync",
+        "doctor",
+        "status",
+        "publish",
+        "attach",
+        "detach",
+        "run",
+      ]),
     );
   });
 
@@ -57,5 +66,17 @@ describe("CDJ USB CLI", () => {
     expect(output).toContain("usb attach");
     expect(output).toContain("ordinary USB drive");
     expect(output).toContain("kernel continues serving");
+  });
+
+  it("makes one differential round-trip command the normal mounted-media workflow", async () => {
+    const { output, exitCode } = await serve(cdjUsbCli, ["sync", "--help"]);
+
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("usb sync <target>");
+    expect(output).toContain("unseen CDJ histories");
+    expect(output).toContain("DJ Set YYYY-MM-DD");
+    expect(output).toContain("play counts advance exactly once");
+    expect(output).toContain("unchanged audio is not recopied");
+    expect(output).toContain("--write");
   });
 });

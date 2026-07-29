@@ -1,19 +1,22 @@
 # @gakonst/cdj-usb
 
-CDJ-3000 front-USB export and Linux-appliance support. The normal content workflow compiles the
-ordinary Rekordbox `master.db` directly onto a mounted FAT/exFAT media root:
+CDJ-3000 front-USB synchronization and Linux-appliance support. The normal workflow imports
+CDJ-generated history from mounted FAT/exFAT media, then differentially makes that media match the
+ordinary Rekordbox `master.db`:
 
 ```text
-Rekordbox master.db + local audio + ANLZ
-                    |
-             music usb export
-                    |
-      Contents/ + PIONEER/USBANLZ/
-       + PIONEER/rekordbox/export.pdb
+CDJ HISTORY 001 ───────> DJ Set YYYY-MM-DD + play counts
+                             in master.db
+                                  |
+                           music usb sync
+                                  |
+master.db + audio + ANLZ ─> changed USB files + export.pdb
 ```
 
 This is the legacy Device Library format used by CDJ-3000 media. It does not create Device Library
-Plus, mutate the source SQLite database, or require a disk-image file.
+Plus or require a disk-image file. `sync --write` mutates the normal master library only when the
+USB contains an unseen play history, behind the shared lock, stopped-Rekordbox check, checksummed
+backup, one transaction, and post-commit verification.
 
 The package also contains a lower-level Linux configfs controller for presenting an immutable
 backing image through a board's USB device/OTG port. In that mode the deck remains the USB host, the
@@ -22,14 +25,21 @@ controller exits, so there is no userspace server on the playback path.
 
 ## Current boundary
 
-The exporter:
+The mounted-media synchronizer:
 
-- reads an open `MasterDatabase` or discovers/opens `master.db` read-only;
+- imports every unseen ordered CDJ history as `DJ Set YYYY-MM-DD`, adding `(2)`, `(3)`, and so on
+  when a date already has a set;
+- increments `DJPlayCount` once per newly imported history occurrence, including duplicate tracks;
+- records deterministic database and USB receipts so retries cannot create duplicate playlists or
+  double-count plays;
 - generates `PIONEER/rekordbox/export.pdb` from active tracks and playlists;
-- copies MP3, M4A, FLAC, WAV, or AIFF audio beneath `Contents/`;
-- copies DAT/EXT/2EX analysis beneath `PIONEER/USBANLZ/` and rewrites every `PPTH`;
+- gives every master track a stable DeviceSQL ID and `/Contents/...` path;
+- copies only new or changed MP3, M4A, FLAC, WAV, or AIFF audio beneath `Contents/`;
+- copies only new or changed DAT/EXT/2EX analysis beneath `PIONEER/USBANLZ/` and rewrites every
+  `PPTH`;
+- removes media for tracks no longer active in the master library;
 - materializes regular and smart playlists while preserving order and duplicate memberships;
-- stages the complete result and replaces only an earlier music-ts-owned export.
+- refuses to replace unowned media or erase a history it cannot map exactly.
 
 The current low-level gadget controller:
 
@@ -40,10 +50,12 @@ The current low-level gadget controller:
 - refuses to unbind a configured host without an explicit physical-eject confirmation;
 - reports the kernel UDC state, backing file, active generation, and preflight checks as typed JSON.
 
-The two operations are intentionally separate. `export` writes a mounted directory. The current
-`publish`/`attach` transport still consumes a complete backing image; it does not hot-mount or
-modify media while the CDJ owns it. Actual CDJ-3000 enumeration and browsing remain a hardware
-validation gate.
+The two operations are intentionally separate. `sync` writes a mounted directory. The current
+`publish`/`attach` transport still consumes a complete read-only backing image; it does not
+hot-mount or modify media while the CDJ owns it and therefore cannot receive CDJ history yet. A
+writable Orange Pi appliance needs a dedicated partition that is unmounted locally while the deck
+owns it, then detached, checked, and mounted locally before `sync`. Actual CDJ-3000 enumeration and
+browsing remain a hardware validation gate.
 
 ## Board requirement
 
@@ -119,12 +131,12 @@ ls -1 /sys/class/udc
 The `dwc2` Raspberry Pi overlay is not portable to Allwinner or Rockchip Orange Pi boards. Use the
 board's actual OTG controller/device-tree configuration.
 
-## Export a CDJ-3000 library
+## Sync a CDJ-3000 USB
 
-Export to the root of mounted FAT/exFAT media or to a staging directory:
+For a new or previously music-ts-owned mounted FAT/exFAT volume:
 
 ```sh
-music usb export /mnt/cdj --database /path/to/master.db --format json
+music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
 The result contains:
@@ -138,15 +150,18 @@ The result contains:
     └── rekordbox/export.pdb
 ```
 
-SQLite remains authoritative; `export.pdb` is disposable compiled output. Tracks missing a regular
-local audio file or `ANLZ0000.DAT` fail the whole staged export. To update media created by this
-command:
+The first sync copies the complete active library. Later syncs retain stable DeviceSQL IDs and copy
+only changed audio/analysis; playlist and metadata changes normally replace only `export.pdb` and
+the ownership marker. Deleted master-library tracks are removed from exporter-owned media.
 
-```sh
-music usb export /mnt/cdj --database /path/to/master.db --replace --format json
-```
+If the CDJ added a history, sync imports it first and creates a normal playlist named
+`DJ Set YYYY-MM-DD`. History order and duplicates are preserved. Database commits are
+checksummed and verified, and an interrupted retry recognizes the deterministic playlist receipt
+instead of applying play counts again.
 
-`--replace` refuses to touch a Rekordbox-created or otherwise unowned export.
+`music usb export` remains available for an outbound-only initial compile. It refuses to overwrite
+unimported history and requires `--replace` for an existing exporter-owned volume. `sync` is the
+normal day-to-day command.
 
 ## Low-level image transport
 
@@ -218,12 +233,13 @@ the read-only LUN protects the filesystem, but it cannot preserve playback after
 import {
   attachCdjUsb,
   doctorCdjUsb,
-  exportLegacyDeviceLibrary,
   publishCdjUsbImage,
   statusCdjUsb,
+  syncLegacyDeviceLibrary,
 } from "@gakonst/cdj-usb";
 
-await exportLegacyDeviceLibrary({
+await syncLegacyDeviceLibrary({
+  approved: true,
   databasePath: "/path/to/master.db",
   targetDirectory: "/mnt/cdj",
 });

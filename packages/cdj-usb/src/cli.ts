@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { Cli } from "incur";
 import { z } from "zod";
 
-import { exportLegacyDeviceLibrary } from "@gakonst/rekordbox/devicelib";
+import { exportLegacyDeviceLibrary, syncLegacyDeviceLibrary } from "@gakonst/rekordbox/devicelib";
 
 import {
   attachCdjUsb,
@@ -89,6 +89,32 @@ const exportOutput = z.object({
   analysisFiles: z.number().int().nonnegative(),
   bytesCopied: z.number().int().nonnegative(),
   generatedAt: z.string(),
+  changed: z.boolean(),
+  tracksCopied: z.number().int().nonnegative(),
+  tracksReused: z.number().int().nonnegative(),
+  filesRemoved: z.number().int().nonnegative(),
+});
+
+const syncOutput = z.object({
+  schemaVersion: z.literal(1),
+  format: z.literal("legacy-device-library-sync"),
+  databasePath: z.string(),
+  targetDirectory: z.string(),
+  historiesFound: z.number().int().nonnegative(),
+  historiesImported: z.number().int().nonnegative(),
+  historiesAlreadyImported: z.number().int().nonnegative(),
+  playlistsCreated: z.array(
+    z.object({
+      historyId: z.number().int().nonnegative(),
+      historyName: z.string(),
+      playlistId: z.string(),
+      playlistName: z.string(),
+      tracks: z.number().int().nonnegative(),
+    }),
+  ),
+  playCountIncrements: z.number().int().nonnegative(),
+  backupDirectory: z.string().nullable(),
+  export: exportOutput,
 });
 
 const runtimeOptions = {
@@ -118,15 +144,16 @@ const identityOptions = {
 export const cdjUsbCli = Cli.create("usb", {
   version: CDJ_USB_VERSION,
   description:
-    "Compile a Rekordbox SQLite library for CDJ-3000 media and expose it through a Linux USB gadget.",
-  hint: "Use export to compile master.db into legacy export.pdb, copied audio, and rewritten ANLZ files. SQLite remains authoritative; Device Library Plus is not used.",
+    "Keep CDJ-3000 front-USB media synchronized with Rekordbox and expose it through a Linux USB gadget.",
+  hint: "Use sync for the normal round trip: import new CDJ histories as dated DJ Set playlists, update play counts once, then differentially reconcile tracks, playlists, audio, ANLZ, and export.pdb.",
   mcp: {
     instructions:
-      "Use export for CDJ-3000 legacy Device Library media; it compiles master.db to export.pdb and never uses Device Library Plus. Treat the front-deck USB boundary as read-only block storage, not DJ Link. Never change it while configured. Before detach, require the user to eject or press USB STOP on the physical deck and pass --confirm-host-ejected.",
+      "Use sync for mounted CDJ-3000 legacy Device Library media. It imports every unseen CDJ history into one dated normal playlist, increments play counts idempotently, then differentially makes the exporter-owned USB match master.db. It never uses Device Library Plus. Never sync media while a deck or USB gadget owns it.",
   },
   sync: {
     suggestions: [
-      "export my SQLite Rekordbox library for a CDJ-3000",
+      "sync my CDJ USB and import last night's set",
+      "make my mounted CDJ USB match my Rekordbox library",
       "check whether this Linux board can act as a USB drive",
       "show the active CDJ USB image and deck connection",
       "attach the active image to the deck",
@@ -148,6 +175,7 @@ cdjUsbCli.command("export", {
       .optional()
       .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
     databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
+    plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
     replace: z
       .boolean()
       .default(false)
@@ -167,11 +195,57 @@ cdjUsbCli.command("export", {
         targetDirectory: c.args.target,
         databasePath: c.options.database,
         databaseKey: c.options.databaseKey,
+        databaseUnlock: !c.options.plain,
         replace: c.options.replace,
         copyConcurrency: c.options.copyConcurrency,
       });
     } catch (error) {
       return failExport(c, error);
+    }
+  },
+});
+
+cdjUsbCli.command("sync", {
+  description:
+    "Import unseen CDJ histories, then differentially make mounted USB media match master.db.",
+  hint: "This is the normal plug-in-and-go workflow. Each unseen history becomes DJ Set YYYY-MM-DD (with a suffix when needed), ordered duplicates are preserved, play counts advance exactly once, removed library tracks are removed from exporter-owned media, and unchanged audio is not recopied. Rekordbox must be closed.",
+  args: z.object({
+    target: z.string().min(1).describe("Mounted CDJ media root"),
+  }),
+  options: z.object({
+    database: z
+      .string()
+      .optional()
+      .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
+    databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
+    plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
+    backupRoot: z.string().optional().describe("Checksummed pre-write backup directory"),
+    copyConcurrency: z
+      .number()
+      .int()
+      .min(1)
+      .max(32)
+      .default(4)
+      .describe("Parallel changed-media copy workers"),
+    write: z
+      .boolean()
+      .default(false)
+      .describe("Required acknowledgement for USB and master.db mutation"),
+  }),
+  output: syncOutput,
+  async run(c) {
+    try {
+      return await syncLegacyDeviceLibrary({
+        approved: c.options.write,
+        targetDirectory: c.args.target,
+        databasePath: c.options.database,
+        databaseKey: c.options.databaseKey,
+        databaseUnlock: !c.options.plain,
+        backupRoot: c.options.backupRoot,
+        copyConcurrency: c.options.copyConcurrency,
+      });
+    } catch (error) {
+      return failSync(c, error);
     }
   },
 });
@@ -400,6 +474,36 @@ function failExport(
       description:
         "Check the read-only Rekordbox source, local audio/ANLZ files, and detached target media:",
       commands: [scopedCommand(context.displayName, "export --help")],
+    },
+  });
+}
+
+function failSync(
+  context: {
+    displayName: string;
+    error(options: {
+      code: string;
+      exitCode?: number;
+      message: string;
+      retryable?: boolean;
+      cta?: {
+        description?: string;
+        commands: Array<string | { command: string; description?: string }>;
+      };
+    }): never;
+  },
+  error: unknown,
+): never {
+  const message = error instanceof Error ? error.message : String(error);
+  return context.error({
+    code: "CDJ_USB_SYNC_ERROR",
+    message,
+    exitCode: 1,
+    retryable: false,
+    cta: {
+      description:
+        "Close Rekordbox, ensure the deck has ejected the mounted media, and inspect the sync contract:",
+      commands: [scopedCommand(context.displayName, "sync --help")],
     },
   });
 }

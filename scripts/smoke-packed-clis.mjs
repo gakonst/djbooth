@@ -212,10 +212,23 @@ try {
   });
   if (
     !usbHelp.stdout.includes("music usb") ||
+    !usbHelp.stdout.includes("sync") ||
     !usbHelp.stdout.includes("export") ||
     !usbHelp.stdout.includes("doctor")
   ) {
     throw new Error("Packed music CLI did not compose the CDJ front-USB workflow");
+  }
+  const usbSyncHelp = run(music, ["usb", "sync", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (
+    !usbSyncHelp.stdout.includes("--database") ||
+    !usbSyncHelp.stdout.includes("--write") ||
+    !usbSyncHelp.stdout.includes("unseen CDJ histories") ||
+    !usbSyncHelp.stdout.includes("DJ Set YYYY-MM-DD")
+  ) {
+    throw new Error("Packed music CLI did not expose differential CDJ USB synchronization");
   }
   const usbExportHelp = run(music, ["usb", "export", "--help"], {
     cwd: consumer,
@@ -228,7 +241,7 @@ try {
   ) {
     throw new Error("Packed music CLI did not expose the legacy Device Library exporter");
   }
-  process.stdout.write("✓ music usb export composed CLI\n");
+  process.stdout.write("✓ music usb sync/export composed CLI\n");
 
   const analyzeHelp = run(music, ["rekordbox", "analyze", "--help"], {
     cwd: consumer,
@@ -273,7 +286,7 @@ try {
     "music rekordbox analyze beat-grid-diff",
     "music rekordbox analyze waveform-diff",
     "## 8. Serve and load connected CDJs",
-    "music usb export",
+    "music usb sync",
     "Spotify streaming tracks cannot be LINK EXPORTed",
     "music djlink search <query>",
   ];
@@ -287,7 +300,7 @@ try {
     ["music-spots", ["# music spots api search"]],
     ["music-soundcloud", ["# music soundcloud resolve"]],
     ["music-slsk", ["# music slsk download"]],
-    ["music-usb", ["# music usb doctor", "# music usb export"]],
+    ["music-usb", ["# music usb doctor", "# music usb export", "# music usb sync"]],
     ["music-ytdlp-ts", ["# music ytdlp-ts download"]],
     [
       "music-rekordbox",

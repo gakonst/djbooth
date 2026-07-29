@@ -47,6 +47,7 @@ describe("music CLI", () => {
         "usb doctor",
         "usb export",
         "usb publish",
+        "usb sync",
         "usb status",
         "djlink devices",
         "djlink load",

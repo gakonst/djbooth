@@ -4,6 +4,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
@@ -11,14 +12,15 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, extname, join, parse, resolve } from "node:path";
+import { basename, dirname, extname, join, parse, posix, resolve, sep } from "node:path";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 import { MasterDatabase, type PlaylistSummary } from "../masterdb/index.js";
 import { inspectLegacyDevicePdb, LegacyDevicePdbWriter } from "./pdb.js";
 
 const EXPORT_MARKER = ".music-cdj-export.json";
-const EXPORT_SCHEMA_VERSION = 1;
+const EXPORT_RESULT_SCHEMA_VERSION = 1;
+const EXPORT_MARKER_SCHEMA_VERSION = 2;
 const SUPPORTED_FILE_TYPES = new Set([1, 4, 5, 11, 12]);
 const FILE_TYPE_BY_EXTENSION: Readonly<Record<string, number>> = {
   ".aif": 12,
@@ -61,15 +63,62 @@ type RawExportTrack = {
 };
 
 type ExportTrackJob = {
+  analysisSources: Partial<Record<"2EX" | "DAT" | "EXT", ExportSourceFingerprint>>;
   analysisPaths: Record<"2EX" | "DAT" | "EXT", string | undefined>;
   analysisTargetDirectory: string;
+  analysisStagingDirectory: string;
+  audioSource: ExportSourceFingerprint;
   audioPath: string;
   audioTargetPath: string;
+  audioStagingPath: string;
   contentId: string;
   usbAudioPath: string;
 };
 
-type ExportMarker = {
+/** One source file fingerprint used to avoid rewriting unchanged USB media. */
+export type ExportSourceFingerprint = {
+  path: string;
+  size: number;
+  mtimeNs: string;
+};
+
+/** Stable mapping between a master-library track and its legacy DeviceSQL media identity. */
+export type LegacyDeviceTrackMapping = {
+  contentId: string;
+  pdbId: number;
+  usbAudioPath: string;
+  audio: ExportSourceFingerprint;
+  analysis: Partial<
+    Record<"2EX" | "DAT" | "EXT", ExportSourceFingerprint & { outputSize: number }>
+  >;
+};
+
+/** A history already committed to the master library. */
+export type LegacyDeviceHistoryReceipt = {
+  fingerprint: string;
+  generationId: string;
+  historyId: number;
+  historyName: string;
+  importedAt: string;
+  playlistId: string;
+  playlistName: string;
+  tracks: number;
+};
+
+/** Durable ownership, identity, and differential-sync state stored on the USB volume. */
+export type LegacyDeviceExportMarker = {
+  schemaVersion: 2;
+  format: "legacy-device-library";
+  mediaId: string;
+  generationId: string;
+  generatedAt: string;
+  tracks: number;
+  playlists: number;
+  trackMap: LegacyDeviceTrackMapping[];
+  importedHistories: LegacyDeviceHistoryReceipt[];
+};
+
+type LegacyDeviceExportMarkerV1 = {
   schemaVersion: 1;
   format: "legacy-device-library";
   generatedAt: string;
@@ -85,6 +134,8 @@ export type ExportLegacyDeviceLibraryOptions = {
   databasePath?: string;
   /** Optional SQLCipher key override for `databasePath`. */
   databaseKey?: string;
+  /** Disable SQLCipher setup for an explicitly plain SQLite fixture or library. */
+  databaseUnlock?: boolean;
   /** Mounted FAT/exFAT root that will contain `Contents/` and `PIONEER/`. */
   targetDirectory: string;
   /** Replace only files previously owned by this exporter. */
@@ -109,6 +160,20 @@ export type LegacyDeviceLibraryExportResult = {
   analysisFiles: number;
   bytesCopied: number;
   generatedAt: string;
+  changed: boolean;
+  tracksCopied: number;
+  tracksReused: number;
+  filesRemoved: number;
+};
+
+/** Internal reconciliation state supplied by the bidirectional sync operation. */
+export type ReconcileLegacyDeviceLibraryOptions = ExportLegacyDeviceLibraryOptions & {
+  /** Consume already-validated histories instead of refusing to overwrite them. */
+  consumeHistories?: boolean;
+  /** Receipts retained after histories are compiled out of the fresh Device Library. */
+  importedHistories?: LegacyDeviceHistoryReceipt[];
+  /** Advance the media generation after a recovered post-PDB/pre-marker interruption. */
+  forceGeneration?: boolean;
 };
 
 /**
@@ -119,6 +184,18 @@ export type LegacyDeviceLibraryExportResult = {
  */
 export async function exportLegacyDeviceLibrary(
   options: ExportLegacyDeviceLibraryOptions,
+): Promise<LegacyDeviceLibraryExportResult> {
+  return reconcileLegacyDeviceLibrary(options);
+}
+
+/**
+ * Reconcile a mounted legacy Device Library with stable track IDs and differential media writes.
+ *
+ * Normal callers should use {@link exportLegacyDeviceLibrary}. Bidirectional sync supplies
+ * validated history receipts and explicitly consumes the old history rows.
+ */
+export async function reconcileLegacyDeviceLibrary(
+  options: ReconcileLegacyDeviceLibraryOptions,
 ): Promise<LegacyDeviceLibraryExportResult> {
   if (options.database && options.databasePath)
     throw new TypeError("Pass either database or databasePath, not both");
@@ -132,6 +209,7 @@ export async function exportLegacyDeviceLibrary(
     : new MasterDatabase({
         ...(options.databasePath ? { path: options.databasePath } : {}),
         ...(options.databaseKey ? { key: options.databaseKey } : {}),
+        unlock: options.databaseUnlock ?? true,
         readonly: true,
       });
   const database = options.database ?? ownedDatabase!;
@@ -147,7 +225,7 @@ export async function exportLegacyDeviceLibrary(
 
 async function exportOpenDatabase(
   database: MasterDatabase,
-  options: ExportLegacyDeviceLibraryOptions & { copyConcurrency: number },
+  options: ReconcileLegacyDeviceLibraryOptions & { copyConcurrency: number },
 ): Promise<LegacyDeviceLibraryExportResult> {
   if (!database.hasTable("djmdContent"))
     throw new TypeError(`SQLite database '${database.path}' has no djmdContent table`);
@@ -171,13 +249,34 @@ async function exportOpenDatabase(
       `Refusing to replace an unowned CDJ export; '${generatedPaths.marker}' is missing`,
     );
 
+  const existingInspection =
+    marker && (await pathExists(generatedPaths.pdb))
+      ? inspectLegacyDevicePdb(await readFile(generatedPaths.pdb))
+      : undefined;
+  if (existingInspection?.histories.length && !options.consumeHistories)
+    throw new Error(
+      `USB contains ${String(existingInspection.histories.length)} unimported CDJ history item(s); run music usb sync before replacing it`,
+    );
+
+  const previous = marker?.schemaVersion === EXPORT_MARKER_SCHEMA_VERSION ? marker : undefined;
+  const previousByContentId = new Map(
+    previous?.trackMap.map((mapping) => [mapping.contentId, mapping]) ?? [],
+  );
+  validateTrackMappings(previous?.trackMap ?? []);
+  let nextTrackId = Math.max(0, ...(previous?.trackMap.map(({ pdbId }) => pdbId) ?? []));
   const stagingDirectory = join(targetDirectory, `.music-cdj-export-staging-${randomUUID()}`);
   await mkdir(stagingDirectory);
   const stagingPaths = exportPaths(stagingDirectory);
   const writer = new LegacyDevicePdbWriter();
   const trackIds = new Map<string, number>();
+  const trackMap: LegacyDeviceTrackMapping[] = [];
+  const mappingByContentId = new Map<string, LegacyDeviceTrackMapping>();
+  const installs: Array<{ staged: string; target: string }> = [];
+  let pdbChanged = false;
   let bytesCopied = 0;
   let analysisFiles = 0;
+  let tracksCopied = 0;
+  let tracksReused = 0;
   try {
     const rows = readExportTracks(database);
     if (!rows.length)
@@ -187,9 +286,8 @@ async function exportOpenDatabase(
       throwIfAborted(options.signal);
       const contentId = requiredString(row.id, "track ID");
       const audioPath = requiredString(row.path, `track '${contentId}' audio path`);
-      const audio = lstatSync(audioPath);
-      if (!audio.isFile()) throw new TypeError(`Track '${contentId}' audio is not a regular file`);
-      if (audio.size > 0xffff_ffff)
+      const audioSource = sourceFingerprint(audioPath, `Track '${contentId}' audio`);
+      if (audioSource.size > 0xffff_ffff)
         throw new RangeError(`Track '${contentId}' exceeds the legacy 4 GiB file-size field`);
       const analysisPath = requiredString(
         row.analysisPath,
@@ -200,16 +298,35 @@ async function exportOpenDatabase(
       if (!sourceAnalysis.DAT)
         throw new Error(`Track '${contentId}' has no ANLZ0000.DAT in '${analysisDirectory}'`);
 
-      const nextTrackId = trackIds.size + 1;
-      const filename = safeFilename(stringValue(row.fileName) ?? basename(audioPath), nextTrackId);
-      const idHex = nextTrackId.toString(16).toUpperCase().padStart(8, "0");
-      const usbAudioPath = `/Contents/${idHex}/${filename}`;
-      const analysisGroup = `P${String(nextTrackId % 1000).padStart(3, "0")}`;
+      const prior = previousByContentId.get(contentId);
+      const pdbId = prior?.pdbId ?? ++nextTrackId;
+      const idHex = pdbId.toString(16).toUpperCase().padStart(8, "0");
+      const filename = safeFilename(stringValue(row.fileName) ?? basename(audioPath), pdbId);
+      const usbAudioPath =
+        prior && extname(prior.usbAudioPath).toLowerCase() === extname(filename).toLowerCase()
+          ? prior.usbAudioPath
+          : `/Contents/${idHex}/${filename}`;
+      const analysisGroup = `P${String(pdbId % 1000).padStart(3, "0")}`;
       const usbAnalysisDirectory = `/PIONEER/USBANLZ/${analysisGroup}/${idHex}`;
+      const analysisSources: ExportTrackJob["analysisSources"] = {};
+      for (const type of ["DAT", "EXT", "2EX"] as const) {
+        const path = sourceAnalysis[type];
+        if (path) analysisSources[type] = sourceFingerprint(path, `Track '${contentId}' ${type}`);
+      }
+      const mapping: LegacyDeviceTrackMapping = {
+        contentId,
+        pdbId,
+        usbAudioPath,
+        audio: audioSource,
+        analysis: {},
+      };
+      trackMap.push(mapping);
+      mappingByContentId.set(contentId, mapping);
       const pdbTrackId = writer.addTrack({
+        id: pdbId,
         title: stringValue(row.title) ?? filename,
         filePath: usbAudioPath,
-        filename,
+        filename: posix.basename(usbAudioPath),
         artist: stringValue(row.artist),
         album: stringValue(row.album),
         genre: stringValue(row.genre),
@@ -226,20 +343,30 @@ async function exportOpenDatabase(
         bitrate: integerValue(row.bitRate),
         sampleRate: integerValue(row.sampleRate, 44_100),
         sampleDepth: integerValue(row.bitDepth, 16),
-        fileSize: audio.size,
+        fileSize: audioSource.size,
         trackNumber: integerValue(row.trackNumber),
         discNumber: integerValue(row.discNumber),
-        playCount: integerValue(row.playCount),
+        playCount: Math.min(integerValue(row.playCount), 0xffff),
         rating: integerValue(row.rating),
         colorId: integerValue(row.colorId),
         fileType: supportedFileType(row.fileType, filename, contentId),
       });
       trackIds.set(contentId, pdbTrackId);
       jobs.push({
+        analysisSources,
         analysisPaths: sourceAnalysis,
-        analysisTargetDirectory: join(stagingDirectory, "PIONEER", "USBANLZ", analysisGroup, idHex),
+        analysisTargetDirectory: join(targetDirectory, "PIONEER", "USBANLZ", analysisGroup, idHex),
+        analysisStagingDirectory: join(
+          stagingDirectory,
+          "PIONEER",
+          "USBANLZ",
+          analysisGroup,
+          idHex,
+        ),
+        audioSource,
         audioPath,
-        audioTargetPath: join(stagingDirectory, "Contents", idHex, filename),
+        audioTargetPath: mediaPath(targetDirectory, usbAudioPath),
+        audioStagingPath: mediaPath(stagingDirectory, usbAudioPath),
         contentId,
         usbAudioPath,
       });
@@ -248,20 +375,50 @@ async function exportOpenDatabase(
     const playlistCount = appendPlaylists(database, writer, trackIds);
     await runBounded(jobs, options.copyConcurrency, async (job) => {
       throwIfAborted(options.signal);
-      await mkdir(dirname(job.audioTargetPath), { recursive: true });
-      await copyFile(job.audioPath, job.audioTargetPath);
-      bytesCopied += (await stat(job.audioTargetPath)).size;
-      await mkdir(job.analysisTargetDirectory, { recursive: true });
+      const prior = previousByContentId.get(job.contentId);
+      if (
+        prior &&
+        prior.usbAudioPath === job.usbAudioPath &&
+        sameSource(prior.audio, job.audioSource) &&
+        (await reusableFile(job.audioTargetPath, job.audioSource.size))
+      ) {
+        tracksReused++;
+      } else {
+        await mkdir(dirname(job.audioStagingPath), { recursive: true });
+        await copyFile(job.audioPath, job.audioStagingPath);
+        bytesCopied += (await stat(job.audioStagingPath)).size;
+        tracksCopied++;
+        installs.push({ staged: job.audioStagingPath, target: job.audioTargetPath });
+      }
+
       for (const type of ["DAT", "EXT", "2EX"] as const) {
         const source = job.analysisPaths[type];
-        if (!source) continue;
+        const fingerprint = job.analysisSources[type];
+        if (!source || !fingerprint) continue;
+        analysisFiles++;
+        const target = join(job.analysisTargetDirectory, `ANLZ0000.${type}`);
+        const staged = join(job.analysisStagingDirectory, `ANLZ0000.${type}`);
+        const priorAnalysis = prior?.analysis[type];
+        if (
+          priorAnalysis &&
+          sameSource(priorAnalysis, fingerprint) &&
+          (await reusableFile(target, priorAnalysis.outputSize))
+        ) {
+          mappingByContentId.get(job.contentId)!.analysis[type] = priorAnalysis;
+          continue;
+        }
+        await mkdir(job.analysisStagingDirectory, { recursive: true });
         const file = AnlzFile.parseFile(source);
         file.setPath(job.usbAudioPath);
-        const target = join(job.analysisTargetDirectory, `ANLZ0000.${type}`);
-        file.save(target);
-        AnlzFile.parseFile(target);
-        bytesCopied += statSync(target).size;
-        analysisFiles++;
+        file.save(staged);
+        AnlzFile.parseFile(staged);
+        const outputSize = statSync(staged).size;
+        mappingByContentId.get(job.contentId)!.analysis[type] = {
+          ...fingerprint,
+          outputSize,
+        };
+        bytesCopied += outputSize;
+        installs.push({ staged, target });
       }
     });
 
@@ -275,22 +432,53 @@ async function exportOpenDatabase(
       throw new Error(
         `Generated export.pdb contains ${String(inspection.playlists.length)} playlists, expected ${String(playlistCount)}`,
       );
-    await mkdir(dirname(stagingPaths.pdb), { recursive: true });
-    await writeFile(stagingPaths.pdb, pdb);
-    await mkdir(stagingPaths.contents, { recursive: true });
-    await mkdir(stagingPaths.analysis, { recursive: true });
+    if (!(await fileEquals(generatedPaths.pdb, pdb))) {
+      pdbChanged = true;
+      await mkdir(dirname(stagingPaths.pdb), { recursive: true });
+      await writeFile(stagingPaths.pdb, pdb);
+      installs.push({ staged: stagingPaths.pdb, target: generatedPaths.pdb });
+    }
 
-    const generatedAt = (options.generatedAt ?? new Date()).toISOString();
-    const nextMarker: ExportMarker = {
-      schemaVersion: EXPORT_SCHEMA_VERSION,
+    const desiredPaths = desiredGeneratedFiles(targetDirectory, trackMap);
+    const removals =
+      marker?.schemaVersion === 1
+        ? [generatedPaths.contents, generatedPaths.analysis]
+        : previous
+          ? previousGeneratedFiles(targetDirectory, previous.trackMap).filter(
+              (path) => !desiredPaths.has(path),
+            )
+          : [];
+    const existingRemovals: string[] = [];
+    for (const path of removals) if (await pathExists(path)) existingRemovals.push(path);
+
+    const proposedMarker: LegacyDeviceExportMarker = {
+      schemaVersion: EXPORT_MARKER_SCHEMA_VERSION,
       format: "legacy-device-library",
-      generatedAt,
+      mediaId: previous?.mediaId ?? randomUUID(),
+      generationId:
+        !previous || pdbChanged || options.forceGeneration ? randomUUID() : previous.generationId,
+      generatedAt: (options.generatedAt ?? new Date()).toISOString(),
       tracks: trackIds.size,
       playlists: playlistCount,
+      trackMap,
+      importedHistories: options.importedHistories ?? previous?.importedHistories ?? [],
     };
-    await installStagedExport(stagingDirectory, targetDirectory, nextMarker);
+    const markerChanged = !sameMarkerState(previous, proposedMarker);
+    const changed = installs.length > 0 || existingRemovals.length > 0 || markerChanged;
+    const generatedAt = changed
+      ? proposedMarker.generatedAt
+      : (previous?.generatedAt ?? proposedMarker.generatedAt);
+    const nextMarker = { ...proposedMarker, generatedAt };
+    if (changed)
+      await installReconciledExport(
+        stagingDirectory,
+        targetDirectory,
+        nextMarker,
+        installs,
+        existingRemovals,
+      );
     return {
-      schemaVersion: EXPORT_SCHEMA_VERSION,
+      schemaVersion: EXPORT_RESULT_SCHEMA_VERSION,
       format: "legacy-device-library",
       databasePath: database.path,
       targetDirectory,
@@ -300,6 +488,10 @@ async function exportOpenDatabase(
       analysisFiles,
       bytesCopied,
       generatedAt,
+      changed,
+      tracksCopied,
+      tracksReused,
+      filesRemoved: existingRemovals.length,
     };
   } finally {
     await rm(stagingDirectory, { force: true, recursive: true });
@@ -549,77 +741,326 @@ async function validateTargetDirectory(path: string): Promise<string> {
   return resolved;
 }
 
-async function readExportMarker(path: string): Promise<ExportMarker | null> {
+async function readExportMarker(
+  path: string,
+): Promise<LegacyDeviceExportMarker | LegacyDeviceExportMarkerV1 | null> {
   try {
-    const value = JSON.parse(await readFile(path, "utf8")) as Partial<ExportMarker>;
-    if (
-      value.schemaVersion !== EXPORT_SCHEMA_VERSION ||
-      value.format !== "legacy-device-library" ||
-      typeof value.generatedAt !== "string" ||
-      !Number.isSafeInteger(value.tracks) ||
-      !Number.isSafeInteger(value.playlists)
-    )
-      throw new TypeError(`Invalid exporter ownership marker '${path}'`);
-    return value as ExportMarker;
+    const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+    return parseExportMarker(value, path);
   } catch (error) {
     if (isMissing(error)) return null;
     throw error;
   }
 }
 
-async function installStagedExport(
+/** Read and validate this exporter's durable state from a mounted media root. */
+export async function readLegacyDeviceExportMarker(
+  targetDirectory: string,
+): Promise<LegacyDeviceExportMarker | LegacyDeviceExportMarkerV1 | null> {
+  return readExportMarker(join(resolve(targetDirectory), EXPORT_MARKER));
+}
+
+/**
+ * Atomically checkpoint committed history receipts before replacing the PDB that contains them.
+ *
+ * This closes the database-commit/media-refresh crash window. The next sync can safely consume
+ * the same history without incrementing play counts again.
+ */
+export async function checkpointLegacyDeviceHistoryReceipts(
+  targetDirectory: string,
+  expected: LegacyDeviceExportMarker,
+  importedHistories: readonly LegacyDeviceHistoryReceipt[],
+): Promise<LegacyDeviceExportMarker> {
+  const root = resolve(targetDirectory);
+  const path = join(root, EXPORT_MARKER);
+  const current = await readExportMarker(path);
+  if (
+    !current ||
+    current.schemaVersion !== EXPORT_MARKER_SCHEMA_VERSION ||
+    current.mediaId !== expected.mediaId ||
+    current.generationId !== expected.generationId
+  )
+    throw new Error("USB export marker changed while histories were being imported");
+  const next: LegacyDeviceExportMarker = {
+    ...current,
+    importedHistories: [...importedHistories],
+  };
+  parseExportMarker(next, path);
+  if (sameMarkerState(current, next)) return current;
+  const temporary = join(root, `${EXPORT_MARKER}.${randomUUID()}.tmp`);
+  try {
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(next, null, 2)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, path);
+    await syncDirectory(root);
+    return next;
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+function parseExportMarker(
+  value: unknown,
+  path: string,
+): LegacyDeviceExportMarker | LegacyDeviceExportMarkerV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new TypeError(`Invalid exporter ownership marker '${path}'`);
+  const marker = value as {
+    schemaVersion?: unknown;
+    format?: unknown;
+    mediaId?: unknown;
+    generationId?: unknown;
+    generatedAt?: unknown;
+    tracks?: unknown;
+    playlists?: unknown;
+    trackMap?: unknown;
+    importedHistories?: unknown;
+  };
+  if (
+    marker.format !== "legacy-device-library" ||
+    typeof marker.generatedAt !== "string" ||
+    !Number.isSafeInteger(marker.tracks) ||
+    !Number.isSafeInteger(marker.playlists)
+  )
+    throw new TypeError(`Invalid exporter ownership marker '${path}'`);
+  if (marker.schemaVersion === 1) return marker as LegacyDeviceExportMarkerV1;
+  if (
+    marker.schemaVersion !== EXPORT_MARKER_SCHEMA_VERSION ||
+    typeof marker.mediaId !== "string" ||
+    !marker.mediaId.length ||
+    typeof marker.generationId !== "string" ||
+    !marker.generationId.length ||
+    !Array.isArray(marker.trackMap) ||
+    !Array.isArray(marker.importedHistories)
+  )
+    throw new TypeError(`Invalid exporter ownership marker '${path}'`);
+  validateTrackMappings(marker.trackMap);
+  for (const receipt of marker.importedHistories) {
+    if (
+      !receipt ||
+      typeof receipt !== "object" ||
+      typeof receipt.fingerprint !== "string" ||
+      typeof receipt.generationId !== "string" ||
+      !receipt.generationId.length ||
+      !Number.isSafeInteger(receipt.historyId) ||
+      typeof receipt.historyName !== "string" ||
+      typeof receipt.importedAt !== "string" ||
+      typeof receipt.playlistId !== "string" ||
+      typeof receipt.playlistName !== "string" ||
+      !Number.isSafeInteger(receipt.tracks)
+    )
+      throw new TypeError(`Invalid history receipt in exporter ownership marker '${path}'`);
+  }
+  return marker as LegacyDeviceExportMarker;
+}
+
+function validateTrackMappings(mappings: readonly LegacyDeviceTrackMapping[]): void {
+  const contentIds = new Set<string>();
+  const pdbIds = new Set<number>();
+  const paths = new Set<string>();
+  for (const mapping of mappings) {
+    if (
+      !mapping ||
+      typeof mapping !== "object" ||
+      typeof mapping.contentId !== "string" ||
+      !mapping.contentId.length ||
+      !Number.isSafeInteger(mapping.pdbId) ||
+      mapping.pdbId < 1 ||
+      mapping.pdbId > 0xffff_ffff ||
+      typeof mapping.usbAudioPath !== "string" ||
+      !/^\/Contents\/[0-9A-F]{8}\/[^/]+$/u.test(mapping.usbAudioPath) ||
+      !validSourceFingerprint(mapping.audio) ||
+      !mapping.analysis ||
+      typeof mapping.analysis !== "object"
+    )
+      throw new TypeError("Invalid track mapping in exporter ownership marker");
+    const pathId = Number.parseInt(mapping.usbAudioPath.split("/")[2]!, 16);
+    if (pathId !== mapping.pdbId)
+      throw new TypeError(
+        `Track mapping '${mapping.contentId}' path does not match DeviceSQL ID ${String(mapping.pdbId)}`,
+      );
+    if (contentIds.has(mapping.contentId))
+      throw new TypeError(
+        `Duplicate content ID '${mapping.contentId}' in exporter ownership marker`,
+      );
+    if (pdbIds.has(mapping.pdbId))
+      throw new TypeError(
+        `Duplicate DeviceSQL track ID ${String(mapping.pdbId)} in exporter ownership marker`,
+      );
+    if (paths.has(mapping.usbAudioPath))
+      throw new TypeError(
+        `Duplicate media path '${mapping.usbAudioPath}' in exporter ownership marker`,
+      );
+    contentIds.add(mapping.contentId);
+    pdbIds.add(mapping.pdbId);
+    paths.add(mapping.usbAudioPath);
+    for (const [type, fingerprint] of Object.entries(mapping.analysis)) {
+      if (
+        !["2EX", "DAT", "EXT"].includes(type) ||
+        !validSourceFingerprint(fingerprint) ||
+        !Number.isSafeInteger(fingerprint.outputSize) ||
+        fingerprint.outputSize < 0
+      )
+        throw new TypeError(`Invalid ${type} analysis mapping for content '${mapping.contentId}'`);
+    }
+  }
+}
+
+function validSourceFingerprint(value: unknown): value is ExportSourceFingerprint {
+  if (!value || typeof value !== "object") return false;
+  const fingerprint = value as Partial<ExportSourceFingerprint>;
+  return (
+    typeof fingerprint.path === "string" &&
+    fingerprint.path.length > 0 &&
+    Number.isSafeInteger(fingerprint.size) &&
+    (fingerprint.size ?? -1) >= 0 &&
+    typeof fingerprint.mtimeNs === "string" &&
+    /^\d+$/u.test(fingerprint.mtimeNs)
+  );
+}
+
+function sourceFingerprint(path: string, label: string): ExportSourceFingerprint {
+  const metadata = lstatSync(path, { bigint: true });
+  if (!metadata.isFile()) throw new TypeError(`${label} is not a regular file`);
+  const size = Number(metadata.size);
+  if (!Number.isSafeInteger(size) || size < 0)
+    throw new RangeError(`${label} has an unsupported byte size`);
+  return {
+    path: resolve(path),
+    size,
+    mtimeNs: metadata.mtimeNs.toString(),
+  };
+}
+
+function sameSource(left: ExportSourceFingerprint, right: ExportSourceFingerprint): boolean {
+  return left.path === right.path && left.size === right.size && left.mtimeNs === right.mtimeNs;
+}
+
+async function reusableFile(path: string, size: number): Promise<boolean> {
+  try {
+    const metadata = await lstat(path);
+    return !metadata.isSymbolicLink() && metadata.isFile() && metadata.size === size;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+async function fileEquals(path: string, expected: Buffer): Promise<boolean> {
+  try {
+    const actual = await readFile(path);
+    return actual.equals(expected);
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+function mediaPath(root: string, usbPath: string): string {
+  if (!usbPath.startsWith("/")) throw new TypeError(`Media path '${usbPath}' is not absolute`);
+  const normalizedRoot = resolve(root);
+  const target = resolve(normalizedRoot, `.${usbPath}`);
+  if (!target.startsWith(`${normalizedRoot}${sep}`))
+    throw new TypeError(`Media path '${usbPath}' escapes '${normalizedRoot}'`);
+  return target;
+}
+
+function analysisFilePath(root: string, pdbId: number, type: "2EX" | "DAT" | "EXT"): string {
+  const idHex = pdbId.toString(16).toUpperCase().padStart(8, "0");
+  const group = `P${String(pdbId % 1000).padStart(3, "0")}`;
+  return join(root, "PIONEER", "USBANLZ", group, idHex, `ANLZ0000.${type}`);
+}
+
+function desiredGeneratedFiles(
+  root: string,
+  mappings: readonly LegacyDeviceTrackMapping[],
+): Set<string> {
+  return new Set(previousGeneratedFiles(root, mappings));
+}
+
+function previousGeneratedFiles(
+  root: string,
+  mappings: readonly LegacyDeviceTrackMapping[],
+): string[] {
+  const paths: string[] = [];
+  for (const mapping of mappings) {
+    paths.push(mediaPath(root, mapping.usbAudioPath));
+    for (const type of Object.keys(mapping.analysis) as Array<"2EX" | "DAT" | "EXT">)
+      paths.push(analysisFilePath(root, mapping.pdbId, type));
+  }
+  return paths;
+}
+
+function sameMarkerState(
+  previous: LegacyDeviceExportMarker | undefined,
+  next: LegacyDeviceExportMarker,
+): boolean {
+  if (!previous) return false;
+  const withoutTimestamp = ({ generatedAt: _, ...value }: LegacyDeviceExportMarker) => value;
+  return JSON.stringify(withoutTimestamp(previous)) === JSON.stringify(withoutTimestamp(next));
+}
+
+async function installReconciledExport(
   stagingRoot: string,
   targetRoot: string,
-  marker: ExportMarker,
+  marker: LegacyDeviceExportMarker,
+  pendingInstalls: readonly { staged: string; target: string }[],
+  pendingRemovals: readonly string[],
 ): Promise<void> {
-  const staged = exportPaths(stagingRoot);
   const target = exportPaths(targetRoot);
-  const backupRoot = join(targetRoot, `.music-cdj-export-backup-${randomUUID()}`);
-  const backup = exportPaths(backupRoot);
-  const markerTemporary = `${target.marker}.${randomUUID()}.tmp`;
-  await mkdir(dirname(target.pdb), { recursive: true });
-  await mkdir(dirname(backup.pdb), { recursive: true });
-
-  const movedOld: Array<{ from: string; to: string }> = [];
+  const backupRoot = join(stagingRoot, ".rollback");
+  const stagedMarker = join(stagingRoot, EXPORT_MARKER);
+  await mkdir(backupRoot, { recursive: true });
+  await writeFile(stagedMarker, `${JSON.stringify(marker, null, 2)}\n`, { flag: "wx" });
+  const installs = [...pendingInstalls, { staged: stagedMarker, target: target.marker }];
+  const removals = [...new Set(pendingRemovals.map((path) => resolve(path)))];
+  const movedOld: Array<{ target: string; backup: string }> = [];
   const installed: string[] = [];
   try {
-    for (const [from, to] of [
-      [target.contents, backup.contents],
-      [target.analysis, backup.analysis],
-      [target.pdb, backup.pdb],
-    ] as const) {
-      if (!(await pathExists(from))) continue;
-      await mkdir(dirname(to), { recursive: true });
-      await rename(from, to);
-      movedOld.push({ from, to });
+    let backupIndex = 0;
+    for (const path of removals) {
+      assertOwnedTarget(targetRoot, path);
+      if (!(await pathExists(path))) continue;
+      const backup = join(backupRoot, String(backupIndex++));
+      await rename(path, backup);
+      movedOld.push({ target: path, backup });
     }
-    for (const [from, to] of [
-      [staged.contents, target.contents],
-      [staged.analysis, target.analysis],
-      [staged.pdb, target.pdb],
-    ] as const) {
-      await mkdir(dirname(to), { recursive: true });
-      await rename(from, to);
-      installed.push(to);
+    for (const { staged, target: destination } of installs) {
+      assertOwnedTarget(targetRoot, destination);
+      if (await pathExists(destination)) {
+        const backup = join(backupRoot, String(backupIndex++));
+        await rename(destination, backup);
+        movedOld.push({ target: destination, backup });
+      }
+      await mkdir(dirname(destination), { recursive: true });
+      await rename(staged, destination);
+      installed.push(destination);
     }
-    await writeFile(markerTemporary, `${JSON.stringify(marker, null, 2)}\n`, {
-      flag: "wx",
-    });
-    await rename(markerTemporary, target.marker);
-    await rm(backupRoot, { force: true, recursive: true });
   } catch (error) {
     for (const path of installed.reverse()) await rm(path, { force: true, recursive: true });
-    for (const { from, to } of movedOld.reverse()) {
-      if (await pathExists(to)) {
-        await mkdir(dirname(from), { recursive: true });
-        await rename(to, from);
+    for (const { target: destination, backup } of movedOld.reverse()) {
+      if (await pathExists(backup)) {
+        await mkdir(dirname(destination), { recursive: true });
+        await rename(backup, destination);
       }
     }
     throw error;
-  } finally {
-    await rm(markerTemporary, { force: true });
-    await rm(backupRoot, { force: true, recursive: true });
   }
+}
+
+function assertOwnedTarget(root: string, target: string): void {
+  const normalizedRoot = resolve(root);
+  const normalizedTarget = resolve(target);
+  if (
+    normalizedTarget === normalizedRoot ||
+    !normalizedTarget.startsWith(`${normalizedRoot}${sep}`)
+  )
+    throw new TypeError(`Refusing to reconcile path outside media root: '${normalizedTarget}'`);
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -630,6 +1071,22 @@ async function pathExists(path: string): Promise<boolean> {
     if (isMissing(error)) return false;
     throw error;
   }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, "r");
+    await handle.sync();
+  } catch (error) {
+    if (!["EINVAL", "ENOTSUP", "EISDIR", "EPERM"].includes(errorCode(error) ?? "")) throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error ? String(error.code) : undefined;
 }
 
 function isMissing(error: unknown): boolean {

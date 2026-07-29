@@ -1,7 +1,7 @@
 {
   "name": "@gakonst/cdj-usb",
   "version": "0.1.0",
-  "description": "CDJ-3000 legacy-media exporter and safe Linux USB mass-storage appliance controller",
+  "description": "Differential CDJ-3000 media synchronizer and safe Linux USB mass-storage appliance controller",
   "license": "MIT",
   "author": "Georgios Konstantopoulos",
   "repository": {

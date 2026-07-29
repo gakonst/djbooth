@@ -22,7 +22,7 @@ playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
 | [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
 | [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
 | [`@gakonst/djlink`](packages/djlink)                       | `djlink`            | Manifest-backed Pro DJ Link RemoteDB/NFS source and CDJ load control   |
-| [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | CDJ-3000 legacy-media export and read-only Linux USB gadget             |
+| [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | Differential CDJ-3000 media sync and read-only Linux USB gadget        |
 
 Package licenses remain package-local; see each package manifest for its terms.
 
@@ -54,14 +54,15 @@ YouTube / SoundCloud set
   -> tracks: bounded set extracts only for unavailable IDs
   -> rekordbox: automatic verified playlist membership in the normal encrypted database
   -> djlink: serve verified local audio/ANLZ and load/cue it on a connected CDJ
-  -> usb: compile SQLite into legacy export.pdb, copied audio, and rewritten ANLZ for front USB
+  -> usb: import CDJ histories, then differentially reconcile the legacy front-USB library
 ```
 
-The front-USB compiler keeps `master.db` as the source of truth and does not use Device Library
-Plus:
+The front-USB synchronizer keeps `master.db` authoritative and does not use Device Library Plus.
+It imports each unseen CDJ history as a dated `DJ Set` playlist, updates play counts exactly once,
+then copies only changed media and removes obsolete exporter-owned files:
 
 ```sh
-music usb export /mnt/cdj --database /path/to/master.db --format json
+music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording

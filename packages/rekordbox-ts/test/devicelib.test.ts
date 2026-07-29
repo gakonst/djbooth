@@ -11,6 +11,8 @@ import {
   exportLegacyDeviceLibrary,
   inspectLegacyDevicePdb,
   LegacyDevicePdbWriter,
+  readLegacyDeviceExportMarker,
+  syncLegacyDeviceLibrary,
 } from "../src/devicelib/index.js";
 import { MasterDatabase } from "../src/masterdb/index.js";
 
@@ -106,9 +108,38 @@ function exportFixture(): {
     INSERT INTO djmdPlaylist VALUES ('playlist', 1, 'Tonight', 0, 'folder', NULL, 0);
     INSERT INTO djmdSongPlaylist VALUES ('membership-1', 'playlist', '2', 1, 0);
     INSERT INTO djmdSongPlaylist VALUES ('membership-2', 'playlist', '1', 2, 0);
+    ALTER TABLE djmdPlaylist ADD COLUMN ImagePath TEXT;
+    ALTER TABLE djmdPlaylist ADD COLUMN UUID TEXT;
+    ALTER TABLE djmdSongPlaylist ADD COLUMN UUID TEXT;
+    CREATE TABLE agentRegistry (registry_id TEXT PRIMARY KEY, int_1 INTEGER);
+    INSERT INTO agentRegistry VALUES ('localUpdateCount', 0);
   `);
   database.close();
   return { audioPaths, databasePath, output, root };
+}
+
+async function writePlayedHistory(
+  output: string,
+  contentOrder: readonly string[],
+  name = "HISTORY 001",
+): Promise<void> {
+  const marker = await readLegacyDeviceExportMarker(output);
+  if (!marker || marker.schemaVersion !== 2) throw new Error("Expected a version 2 export marker");
+  const byContentId = new Map(marker.trackMap.map((mapping) => [mapping.contentId, mapping]));
+  const writer = new LegacyDevicePdbWriter();
+  for (const mapping of marker.trackMap)
+    writer.addTrack({
+      id: mapping.pdbId,
+      title: `Track ${mapping.contentId}`,
+      filePath: mapping.usbAudioPath,
+    });
+  const history = writer.createHistory(name);
+  for (const contentId of contentOrder) {
+    const mapping = byContentId.get(contentId);
+    if (!mapping) throw new Error(`Unknown fixture content '${contentId}'`);
+    writer.addToHistory(history, mapping.pdbId);
+  }
+  writeFileSync(join(output, "PIONEER", "rekordbox", "export.pdb"), writer.build());
 }
 
 describe("legacy Device Library PDB", () => {
@@ -186,6 +217,32 @@ describe("legacy Device Library PDB", () => {
     expect(() =>
       writer.addTrack({ title: "Unsupported", filePath: "/Contents/track.ogg" }),
     ).toThrow("does not support '.ogg'");
+  });
+
+  it("preserves explicit track IDs and parses ordered CDJ histories", () => {
+    const writer = new LegacyDevicePdbWriter();
+    writer.addTrack({
+      id: 42,
+      title: "First",
+      filePath: "/Contents/0000002A/first.mp3",
+      playCount: 7,
+    });
+    writer.addTrack({
+      id: 9,
+      title: "Second",
+      filePath: "/Contents/00000009/second.mp3",
+    });
+    const history = writer.createHistory("HISTORY 001", 6);
+    writer.addToHistory(history, 9);
+    writer.addToHistory(history, 42);
+    writer.addToHistory(history, 9);
+
+    const inspection = inspectLegacyDevicePdb(writer.build());
+    expect(inspection.tracks.map(({ id, playCount }) => ({ id, playCount }))).toEqual([
+      { id: 42, playCount: 7 },
+      { id: 9, playCount: 0 },
+    ]);
+    expect(inspection.histories).toEqual([{ id: 6, name: "HISTORY 001", trackIds: [9, 42, 9] }]);
   });
 });
 
@@ -278,5 +335,177 @@ describe("master.db to legacy Device Library export", () => {
       exportLegacyDeviceLibrary({ database, targetDirectory: fixture.output }),
     ).rejects.toThrow("disagrees with Rekordbox FileType 1");
     database.close();
+  });
+
+  it("differentially reuses stable media identities and removes deleted library tracks", async () => {
+    const fixture = exportFixture();
+    mkdirSync(fixture.output);
+    const first = await syncLegacyDeviceLibrary({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      now: new Date("2026-07-29T10:00:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(first.export).toMatchObject({
+      changed: true,
+      tracksCopied: 2,
+      tracksReused: 0,
+    });
+    const firstMarker = await readLegacyDeviceExportMarker(fixture.output);
+    expect(firstMarker?.schemaVersion).toBe(2);
+
+    const second = await syncLegacyDeviceLibrary({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      now: new Date("2026-07-29T10:05:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(second.export).toMatchObject({
+      changed: false,
+      tracksCopied: 0,
+      tracksReused: 2,
+      bytesCopied: 0,
+    });
+
+    let connection = new Database(fixture.databasePath);
+    connection.prepare("UPDATE djmdContent SET Title = 'Metadata only' WHERE ID = '1'").run();
+    connection.close();
+    const metadataOnly = await syncLegacyDeviceLibrary({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      now: new Date("2026-07-29T10:10:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(metadataOnly.export).toMatchObject({
+      changed: true,
+      tracksCopied: 0,
+      tracksReused: 2,
+      bytesCopied: 0,
+    });
+    const metadataMarker = await readLegacyDeviceExportMarker(fixture.output);
+    if (!firstMarker || firstMarker.schemaVersion !== 2)
+      throw new Error("Expected initial version 2 marker");
+    if (!metadataMarker || metadataMarker.schemaVersion !== 2)
+      throw new Error("Expected updated version 2 marker");
+    expect(metadataMarker.trackMap.map(({ contentId, pdbId }) => ({ contentId, pdbId }))).toEqual(
+      firstMarker.trackMap.map(({ contentId, pdbId }) => ({ contentId, pdbId })),
+    );
+
+    connection = new Database(fixture.databasePath);
+    connection.prepare("DELETE FROM djmdSongPlaylist WHERE ContentID = '2'").run();
+    connection.prepare("DELETE FROM djmdContent WHERE ID = '2'").run();
+    connection.close();
+    const removed = await syncLegacyDeviceLibrary({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      now: new Date("2026-07-29T10:15:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(removed.export).toMatchObject({
+      tracks: 1,
+      tracksCopied: 0,
+      tracksReused: 1,
+      filesRemoved: 4,
+    });
+    expect(existsSync(join(fixture.output, "Contents", "00000002", "two.flac"))).toBe(false);
+  });
+
+  it("imports a played history as a dated playlist and recovers idempotently after export failure", async () => {
+    const fixture = exportFixture();
+    mkdirSync(fixture.output);
+    const syncOptions = {
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      backupRoot: join(fixture.root, "backups"),
+      now: new Date("2026-07-29T12:00:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    } as const;
+    await syncLegacyDeviceLibrary(syncOptions);
+    await writePlayedHistory(fixture.output, ["2", "1", "2"]);
+
+    const secondAudio = readFileSync(fixture.audioPaths[1]);
+    rmSync(fixture.audioPaths[1]);
+    await expect(syncLegacyDeviceLibrary(syncOptions)).rejects.toThrow("two.flac");
+
+    let connection = new Database(fixture.databasePath);
+    expect(
+      connection
+        .prepare("SELECT Name FROM djmdPlaylist WHERE Name LIKE 'DJ Set %'")
+        .all()
+        .map((row) => (row as { Name: string }).Name),
+    ).toEqual(["DJ Set 2026-07-29"]);
+    expect(
+      connection
+        .prepare(
+          `SELECT sp.ContentID
+           FROM djmdSongPlaylist sp
+           JOIN djmdPlaylist p ON p.ID = sp.PlaylistID
+           WHERE p.Name = 'DJ Set 2026-07-29'
+           ORDER BY sp.TrackNo`,
+        )
+        .all()
+        .map((row) => (row as { ContentID: string }).ContentID),
+    ).toEqual(["2", "1", "2"]);
+    expect(
+      connection
+        .prepare("SELECT ID, DJPlayCount FROM djmdContent ORDER BY ID")
+        .all()
+        .map((row) => row as { ID: string; DJPlayCount: string }),
+    ).toEqual([
+      { ID: "1", DJPlayCount: "3" },
+      { ID: "2", DJPlayCount: "2" },
+    ]);
+    connection.close();
+
+    const checkpoint = await readLegacyDeviceExportMarker(fixture.output);
+    if (!checkpoint || checkpoint.schemaVersion !== 2)
+      throw new Error("Expected checkpointed version 2 marker");
+    expect(checkpoint.importedHistories).toHaveLength(1);
+    writeFileSync(
+      join(fixture.output, ".music-cdj-export.json"),
+      `${JSON.stringify({ ...checkpoint, importedHistories: [] }, null, 2)}\n`,
+    );
+
+    writeFileSync(fixture.audioPaths[1], secondAudio);
+    const recovered = await syncLegacyDeviceLibrary(syncOptions);
+    expect(recovered).toMatchObject({
+      historiesFound: 1,
+      historiesImported: 0,
+      historiesAlreadyImported: 1,
+      playCountIncrements: 0,
+    });
+    expect(inspectLegacyDevicePdb(readFileSync(recovered.export.pdbPath)).histories).toEqual([]);
+    expect(
+      inspectLegacyDevicePdb(readFileSync(recovered.export.pdbPath)).playlists.map(
+        ({ name }) => name,
+      ),
+    ).toContain("DJ Set 2026-07-29");
+
+    connection = new Database(fixture.databasePath);
+    expect(
+      connection
+        .prepare("SELECT ID, DJPlayCount FROM djmdContent ORDER BY ID")
+        .all()
+        .map((row) => row as { ID: string; DJPlayCount: string }),
+    ).toEqual([
+      { ID: "1", DJPlayCount: "3" },
+      { ID: "2", DJPlayCount: "2" },
+    ]);
+    expect(
+      connection
+        .prepare("SELECT COUNT(*) AS count FROM djmdPlaylist WHERE Name LIKE 'DJ Set %'")
+        .get(),
+    ).toEqual({ count: 1 });
+    connection.close();
   });
 });

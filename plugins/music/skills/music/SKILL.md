@@ -91,8 +91,9 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
   use Spotify APIs for DJ mixing, segueing, or overlapping playback.
 - Treat `music djlink load` as remote load/cue, not transport control. Keep deck PLAY physical;
   CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
-- Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb export` to compile the
-  normal SQLite library into legacy `export.pdb`, copied audio, and rewritten ANLZ; do not use Device
+- Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb sync --write` for the
+  normal day-to-day mounted-media workflow: import unseen histories into SQLite, then
+  differentially reconcile legacy `export.pdb`, audio, and rewritten ANLZ. Do not use Device
   Library Plus. Never change gadget media while configured, and require physical USB STOP/eject
   before `detach --confirm-host-ejected`.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
@@ -520,19 +521,25 @@ For a request to play Spotify on a deck, choose the legitimate path explicitly:
   analyze it, then serve that verified file. Spotify metadata may help identity matching but must
   not be described as the audio source.
 
-## 9. Export and expose front USB media
+## 9. Sync and expose front USB media
 
-Compile the normal Rekordbox SQLite library onto mounted FAT/exFAT media or a staging directory:
+Synchronize the normal Rekordbox SQLite library with mounted FAT/exFAT media or a staging
+directory:
 
 ```sh
-music usb export "$MEDIA_ROOT" --database "$MASTER_DB" --format json
+music usb sync "$MEDIA_ROOT" --database "$MASTER_DB" --write --format json
 ```
 
-This writes `PIONEER/rekordbox/export.pdb`, copies supported local audio beneath `Contents/`,
-copies DAT/EXT/2EX beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`, and materializes the
-playlist tree. SQLite remains authoritative and Device Library Plus is not involved. The exporter
-does not create an image. Use `--replace` only for a previous export carrying the music-ts ownership
-marker.
+Sync first imports every unseen nonempty CDJ history as a root-level `DJ Set YYYY-MM-DD` playlist,
+preserving order and duplicates and incrementing play counts exactly once. It then writes
+`PIONEER/rekordbox/export.pdb`, copies supported local audio beneath `Contents/`, copies DAT/EXT/2EX
+beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`, and materializes the complete active
+playlist tree. Later runs retain stable device IDs, reuse unchanged files, and remove obsolete
+exporter-owned files. SQLite remains authoritative and Device Library Plus is not involved. Sync
+does not create an image and requires `--write` because histories can mutate `master.db`.
+
+Use `music usb export` only for an outbound-only initial compile. It refuses to replace media that
+contains unimported history.
 
 The current low-level transport uses an immutable complete backing image. Use it only on a Linux
 board whose deck-facing connector exposes a USB device controller:

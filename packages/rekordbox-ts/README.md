@@ -85,19 +85,20 @@ Top-level command families:
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
 | `device`    | Query and mutate Device Library Plus `exportLibrary.db` files |
 
-The composed `music` CLI exposes the legacy CDJ-3000 compiler separately from the `device`
-Device Library Plus commands:
+The composed `music` CLI exposes legacy CDJ-3000 mounted-media synchronization separately from the
+`device` Device Library Plus commands:
 
 ```sh
-music usb export /mnt/cdj --database /path/to/master.db --format json
+music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
-The destination is a mounted FAT/exFAT root or a staging directory. The compiler writes
-`PIONEER/rekordbox/export.pdb`, copies supported audio beneath `Contents/`, copies DAT/EXT/2EX
-beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH` path, and materializes the active playlist
-tree. A later `--replace` is accepted only when the volume carries the ownership marker written by
-the first successful export. The source SQLite database is opened read-only and remains
-authoritative.
+The destination is a mounted FAT/exFAT root or a staging directory. Sync imports every unseen CDJ
+history as a dated `DJ Set` playlist with exact-once play-count updates, then differentially
+reconciles the complete active library. It writes `PIONEER/rekordbox/export.pdb`, copies supported
+audio beneath `Contents/`, copies DAT/EXT/2EX beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`
+path, and materializes the playlist tree. Later runs retain stable device IDs and copy only changed
+files. The source SQLite database remains authoritative. `music usb export` is retained for an
+outbound-only initial compile.
 
 Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 

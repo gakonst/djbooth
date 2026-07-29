@@ -13,6 +13,8 @@ const TABLE = {
   KEYS: 5,
   PLAYLIST_TREE: 7,
   PLAYLIST_ENTRIES: 8,
+  HISTORY_PLAYLISTS: 11,
+  HISTORY_ENTRIES: 12,
 } as const;
 
 const FILE_TYPE_BY_EXTENSION: Readonly<Record<string, number>> = {
@@ -26,6 +28,8 @@ const FILE_TYPE_BY_EXTENSION: Readonly<Record<string, number>> = {
 
 /** Metadata written into one legacy Device Library track row. */
 export type LegacyDeviceTrackInput = {
+  /** Stable positive DeviceSQL ID. Omit to allocate the next available ID. */
+  id?: number;
   title: string;
   filePath: string;
   filename?: string;
@@ -59,6 +63,7 @@ export type LegacyDeviceTrackInput = {
 export type LegacyDevicePdbTrack = {
   id: number;
   title: string;
+  filename: string;
   filePath: string;
   analyzePath: string;
   artist: string | null;
@@ -67,6 +72,7 @@ export type LegacyDevicePdbTrack = {
   key: string | null;
   tempo: number;
   duration: number;
+  playCount: number;
 };
 
 /** Parsed playlist fields used to verify a generated legacy Device Library. */
@@ -78,11 +84,19 @@ export type LegacyDevicePdbPlaylist = {
   trackIds: number[];
 };
 
+/** One CDJ-created play history and its ordered DeviceSQL track IDs. */
+export type LegacyDevicePdbHistory = {
+  id: number;
+  name: string;
+  trackIds: number[];
+};
+
 /** Bounded semantic inspection of a generated `export.pdb`. */
 export type LegacyDevicePdbInspection = {
   pageSize: number;
   tracks: LegacyDevicePdbTrack[];
   playlists: LegacyDevicePdbPlaylist[];
+  histories: LegacyDevicePdbHistory[];
 };
 
 function align4(value: number): number {
@@ -163,8 +177,13 @@ export class LegacyDevicePdbWriter {
   private readonly playlistFolders = new Map<number, boolean>();
   private readonly playlistSortOrders = new Map<number, number>();
   private readonly playlistEntryCounts = new Map<number, number>();
+  private readonly trackIds = new Set<number>();
+  private readonly historyIds = new Set<number>();
+  private readonly historyEntryCounts = new Map<number, number>();
   private trackCount = 0;
+  private nextTrackId = 0;
   private playlistCount = 0;
+  private nextHistoryId = 0;
   private finalized = false;
 
   constructor() {
@@ -247,7 +266,14 @@ export class LegacyDevicePdbWriter {
     const labelId = input.label
       ? this.getOrCreateNamed(TABLE.LABELS, input.label, this.labelIds)
       : 0;
-    const trackId = ++this.trackCount;
+    const trackId = input.id ?? this.nextAvailableTrackId();
+    requireUnsigned("track id", trackId, 4);
+    if (trackId === 0) throw new RangeError("Legacy Device Library track ID must be positive");
+    if (this.trackIds.has(trackId))
+      throw new Error(`Legacy Device Library track ID ${String(trackId)} already exists`);
+    this.trackIds.add(trackId);
+    this.trackCount++;
+    this.nextTrackId = Math.max(this.nextTrackId, trackId);
 
     const fixed = Buffer.alloc(0x5e);
     let offset = 0;
@@ -337,7 +363,7 @@ export class LegacyDevicePdbWriter {
     this.requireMutable();
     if (this.playlistFolders.get(playlistId) !== false)
       throw new RangeError(`Playlist ${String(playlistId)} is missing or is a folder`);
-    if (trackId < 1 || trackId > this.trackCount)
+    if (!this.trackIds.has(trackId))
       throw new RangeError(`Track ${String(trackId)} does not exist`);
     const position = entryIndex ?? (this.playlistEntryCounts.get(playlistId) ?? 0) + 1;
     requireUnsigned("entryIndex", position, 4);
@@ -349,6 +375,45 @@ export class LegacyDevicePdbWriter {
     this.playlistEntryCounts.set(
       playlistId,
       Math.max(position, this.playlistEntryCounts.get(playlistId) ?? 0),
+    );
+  }
+
+  /** Append a CDJ-style history playlist and return its DeviceSQL history ID. */
+  createHistory(name: string, id?: number): number {
+    this.requireMutable();
+    if (!name.length) throw new TypeError("Legacy Device Library history name is required");
+    const historyId = id ?? this.nextAvailableHistoryId();
+    requireUnsigned("history id", historyId, 4);
+    if (historyId === 0) throw new RangeError("Legacy Device Library history ID must be positive");
+    if (this.historyIds.has(historyId))
+      throw new Error(`Legacy Device Library history ID ${String(historyId)} already exists`);
+    const encoded = encodeDeviceSqlString(name);
+    const row = Buffer.alloc(4 + encoded.length);
+    row.writeUInt32LE(historyId, 0);
+    encoded.copy(row, 4);
+    this.appendRow(TABLE.HISTORY_PLAYLISTS, row, align4(row.length));
+    this.historyIds.add(historyId);
+    this.nextHistoryId = Math.max(this.nextHistoryId, historyId);
+    return historyId;
+  }
+
+  /** Append one ordered track occurrence to a CDJ-style history playlist. */
+  addToHistory(historyId: number, trackId: number, entryIndex?: number): void {
+    this.requireMutable();
+    if (!this.historyIds.has(historyId))
+      throw new RangeError(`History ${String(historyId)} does not exist`);
+    if (!this.trackIds.has(trackId))
+      throw new RangeError(`Track ${String(trackId)} does not exist`);
+    const position = entryIndex ?? (this.historyEntryCounts.get(historyId) ?? 0) + 1;
+    requireUnsigned("entryIndex", position, 4);
+    const row = Buffer.alloc(12);
+    row.writeUInt32LE(trackId, 0);
+    row.writeUInt32LE(historyId, 4);
+    row.writeUInt32LE(position, 8);
+    this.appendRow(TABLE.HISTORY_ENTRIES, row, row.length);
+    this.historyEntryCounts.set(
+      historyId,
+      Math.max(position, this.historyEntryCounts.get(historyId) ?? 0),
     );
   }
 
@@ -369,6 +434,18 @@ export class LegacyDevicePdbWriter {
 
   private requireMutable(): void {
     if (this.finalized) throw new Error("Legacy Device Library writer is already finalized");
+  }
+
+  private nextAvailableTrackId(): number {
+    do this.nextTrackId++;
+    while (this.trackIds.has(this.nextTrackId));
+    return this.nextTrackId;
+  }
+
+  private nextAvailableHistoryId(): number {
+    do this.nextHistoryId++;
+    while (this.historyIds.has(this.nextHistoryId));
+    return this.nextHistoryId;
   }
 
   private getOrCreateArtist(name: string): number {
@@ -697,6 +774,7 @@ export function inspectLegacyDevicePdb(data: Buffer): LegacyDevicePdbInspection 
     return {
       id: data.readUInt32LE(offset + 0x48),
       title: strings[17]!,
+      filename: strings[19]!,
       filePath: strings[20]!,
       analyzePath: strings[14]!,
       artist: artists.get(data.readUInt32LE(offset + 0x44)) ?? null,
@@ -705,6 +783,7 @@ export function inspectLegacyDevicePdb(data: Buffer): LegacyDevicePdbInspection 
       key: keys.get(data.readUInt32LE(offset + 0x20)) ?? null,
       tempo: data.readUInt32LE(offset + 0x38),
       duration: data.readUInt16LE(offset + 0x54),
+      playCount: data.readUInt16LE(offset + 0x4e),
     };
   });
   const memberships = new Map<number, Array<{ index: number; trackId: number }>>();
@@ -726,5 +805,24 @@ export function inspectLegacyDevicePdb(data: Buffer): LegacyDevicePdbInspection 
         .map(({ trackId }) => trackId),
     };
   });
-  return { pageSize, tracks, playlists };
+  const historyMemberships = new Map<number, Array<{ index: number; trackId: number }>>();
+  for (const offset of tableRows(data, TABLE.HISTORY_ENTRIES)) {
+    const historyId = data.readUInt32LE(offset + 4);
+    const entries = historyMemberships.get(historyId) ?? [];
+    entries.push({ index: data.readUInt32LE(offset + 8), trackId: data.readUInt32LE(offset) });
+    historyMemberships.set(historyId, entries);
+  }
+  const histories = tableRows(data, TABLE.HISTORY_PLAYLISTS).map(
+    (offset): LegacyDevicePdbHistory => {
+      const id = data.readUInt32LE(offset);
+      return {
+        id,
+        name: decodeDeviceSqlString(data, offset + 4),
+        trackIds: (historyMemberships.get(id) ?? [])
+          .sort((left, right) => left.index - right.index)
+          .map(({ trackId }) => trackId),
+      };
+    },
+  );
+  return { pageSize, tracks, playlists, histories };
 }

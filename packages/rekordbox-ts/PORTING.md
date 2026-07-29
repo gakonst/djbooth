@@ -24,9 +24,35 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Master database              | implemented    | `db ...`        | 5 tests      | complete                    |
 | Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete                    |
 | Device Library Plus          | implemented    | `device ...`    | 4 tests      | complete                    |
-| Legacy Device Library PDB    | implemented    | `music usb ...` | 6 tests      | hardware validation pending |
+| Legacy Device Library PDB    | implemented    | `music usb ...` | 9 tests      | hardware validation pending |
 
 ## Decisions
+
+### 2026-07-29 — Bidirectional, differential CDJ USB synchronization
+
+- Make `music usb sync <mounted-root> --write` the normal round-trip boundary. Import all unseen
+  legacy history tables before replacing `export.pdb`, create one root-level
+  `DJ Set YYYY-MM-DD` normal playlist per history, preserve ordered duplicate plays, increment
+  `DJPlayCount` once per imported history occurrence, then reconcile the complete active
+  master-library track and playlist set back to the USB.
+- Persist a versioned ownership marker with a stable media ID, per-generation ID, master content
+  ID to DeviceSQL track-ID mapping, stable `/Contents/...` path, source file fingerprints, ANLZ
+  output sizes, and imported-history receipts. Never guess track identity for histories on an
+  unowned or version-1 export.
+- Keep DeviceSQL track IDs and media paths stable across library additions and metadata changes.
+  Reuse unchanged audio and rewritten ANLZ files, atomically replace only changed files and
+  `export.pdb`, and remove only obsolete paths recorded in the previous ownership marker.
+- Treat a history import as one guarded master-database mutation: use the shared cross-process
+  lock, require Rekordbox and rekordboxAgent to be stopped, take a durable checksummed backup,
+  commit all playlists/memberships/play counts once, then reopen read-only for SQLite integrity,
+  foreign-key, exact playlist-order, and exact counter verification.
+- Derive a deterministic playlist UUID from media generation plus complete ordered history
+  content. This is the database-side idempotency receipt. Atomically checkpoint the corresponding
+  USB receipt before compiling histories out of the fresh PDB, so retries are exact even if the
+  database commit, marker checkpoint, and outbound media update are interrupted independently.
+- Keep the current configfs appliance LUN read-only. Mounted physical media can complete this
+  round trip now; accepting CDJ writes through the Orange Pi gadget requires a separate exclusive
+  writable-partition handoff and must never dual-mount the deck-owned filesystem.
 
 ### 2026-07-28 — SQLite-to-CDJ-3000 legacy Device Library compiler
 
