@@ -126,6 +126,7 @@ struct ReferenceTrace {
     peak_buffer_calculations: Vec<PeakBufferCalculationTrace>,
     beat_list_changes: Vec<BeatListChangeTrace>,
     analyzer_checkpoints: Vec<AnalyzerCheckpointTrace>,
+    section_checkpoints: Vec<SectionCheckpointTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -214,6 +215,13 @@ struct PeakInfoTrace {
 struct AnalyzerCheckpointTrace {
     stage: &'static str,
     beats: Vec<InternalBeatTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SectionCheckpointTrace {
+    stage: &'static str,
+    sections: Vec<InternalBeatTrace>,
 }
 
 #[derive(Debug, Serialize)]
@@ -321,7 +329,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 6,
+        schema_version: 7,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -1135,6 +1143,7 @@ unsafe extern "C" fn trace_checkpoint_minimum_run(
 
 unsafe extern "C" fn trace_checkpoint_tempo_family(bytes: usize) -> *mut c_void {
     record_analyzer_checkpoint("tempoFamily");
+    unsafe { record_caller_section_checkpoint("provisionalSections") };
     let function: AllocateBytes = unsafe { original(&MALLOC) };
     unsafe { function(bytes) }
 }
@@ -1145,6 +1154,7 @@ unsafe extern "C" fn trace_checkpoint_near_value(
     count: usize,
     stream: *mut libc::FILE,
 ) -> usize {
+    unsafe { record_caller_section_checkpoint("refinedSections") };
     unsafe { trace_checkpoint_fwrite("nearValue", pointer, size, count, stream) }
 }
 
@@ -1180,6 +1190,40 @@ fn record_analyzer_checkpoint(stage: &'static str) {
         )),
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe fn record_caller_section_checkpoint(stage: &'static str) {
+    if !trace_analyzer_stages_enabled() {
+        return;
+    }
+    let frame_pointer: usize;
+    unsafe {
+        std::arch::asm!(
+            "mov {frame_pointer}, rbp",
+            frame_pointer = out(reg) frame_pointer,
+            options(nostack, preserves_flags)
+        )
+    };
+    let wrapper_frame = unsafe { (frame_pointer as *const usize).read() };
+    let analyzer_frame = unsafe { (wrapper_frame as *const usize).read() };
+    let vector = analyzer_frame.wrapping_sub(0x100) as *const StdVector;
+    let snapshot = unsafe { snapshot_internal_beats(vector) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match snapshot {
+        Ok(sections) => trace
+            .section_checkpoints
+            .push(SectionCheckpointTrace { stage, sections }),
+        Err(error) => trace.warnings.push(format!(
+            "failed to snapshot BeatInfoAnalyzer {stage}: {error:#}"
+        )),
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn record_caller_section_checkpoint(_stage: &'static str) {}
 
 unsafe extern "C" fn trace_beat_info_seg_adjust(
     analyzer: *mut c_void,

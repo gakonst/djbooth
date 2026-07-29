@@ -31,7 +31,10 @@ pub use audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DETAIL_COLUMNS_PER_SECOND, DETAIL_FRAME_SAMPLES,
     DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
 };
-pub use beat_decoder::{BeatTempoSection, suppress_nearby_hypotheses};
+pub use beat_decoder::{
+    BeatTempoSection, ProvisionalTempoSection, build_provisional_tempo_sections,
+    suppress_nearby_hypotheses,
+};
 pub use beat_sensor::{
     BeatSensorAnalysis, BeatSensorCandidate, BeatSensorEvent, BeatSensorHypothesis,
     analyze_beat_sensor_events,

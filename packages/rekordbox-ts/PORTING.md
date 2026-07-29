@@ -1066,3 +1066,25 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `1,395/1,395`, `1,422/1,422`, `473/473`, `182/182`, and `332/332`.
   Remaining section-decoder work is the preceding section-anchor/period builder
   plus the already isolated phase and boundary adjustment stages.
+
+## Linked provisional tempo-section checkpoint (2026-07-28)
+
+- Extended the private reference tracer to schema v7 with snapshots of the
+  analyzer-local tempo-section vector before and after fine refinement. The
+  five-track corpus produces `1/1/2/4/1` provisional sections and
+  `1/1/2/3/1` refined sections; the fourth Rafael section is deliberately
+  merged during refinement.
+- Recovered provisional construction exactly. Every source hypothesis starts
+  an inclusive eight-second forward histogram, contributes one vote to its
+  rounded integer-BPM bin, and lower BPM wins count ties. Direct, double, or
+  half-time windows remain continuous within `min(4%, 20 ms)` of the preceding
+  window's winner.
+- A family change has a non-obvious split source: anchor position, period
+  ratio, generation, and detector band come from the first metrical-family
+  match, while period comes from the first exact integer-BPM-bin match. This
+  explains the previously anomalous Power and Get Up records.
+- Ported the builder as a linear sliding histogram. Replaying the native
+  hypothesis vectors reproduces every provisional section field on Science
+  Fiction, Luv Techniques, The Power (dub), Rafael, and Get Up Offa That Thing.
+  Remaining decoder work is fine `0.1 BPM` refinement/merge, per-section phase
+  synthesis, and the narrow boundary repairs.
