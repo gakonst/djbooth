@@ -1839,3 +1839,25 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   final adjustment. Full Rust replay matches all eight final native beat
   lists exactly. Production routing is now gated on dynamic-grid
   feature-window parity and upstream seed construction.
+
+## Native phrase window and intro/end checkpoint (2026-07-29)
+
+- Added schema-21 phrase-only probes for `BeatsSamplesCalcFX` and
+  `IntroEndJudge_main`. The first probe records all three stream lengths/rates,
+  the internal constant BPM/first-beat pair, and every generated one-based
+  boundary. The second records four feature inputs, two integer arrays, the
+  selected beat, and the success flag before and after the native call.
+- Corrected the recovered mixed-register ABI and the two scalar tail
+  arguments. Fresh Mapoch, Fire, and Uncle John's Band runs complete with no
+  warnings; DAT, EXT, and 2EX remain byte-identical to their frozen schema-20
+  outputs.
+- Native window parameters are `120.0/375 ms`, `153.6/105 ms`, and
+  `136.4/143 ms`. Fire's first PQTZ tempo is `153.59`; Uncle's is `137.02` and
+  later varies through `173.65`. Phrase analysis nevertheless uses the single
+  internal values above. The existing Rust boundary formula is exact; using
+  the first PQTZ tempo in the diagnostic was the remaining feature drift.
+- `IntroEndJudge_main` transforms seed arrays `[128]`, `[0]`, and `[0]` into
+  `[4]`, `[49,45,5,0]`, and `[35,35,15,7]`, selecting beats `4`, `5`, and
+  `35`. This isolates the remaining production gate to the inner intro/end
+  judge and the upstream constant-grid seed rather than the already exact
+  mood-2/3 judge and genre stages.

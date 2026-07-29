@@ -535,6 +535,21 @@ results back to beats. Production integration is now gated by upstream seed
 construction and dynamic-grid feature-window alignment rather than an
 unported genre stage.
 
+Schema-21 tracing closes the feature-window ambiguity. The linked
+`BeatsSamplesCalcFX` receives one constant BPM and first-beat offset even when
+the final PQTZ grid is dynamic, then builds all three one-based position arrays
+with `trunc(rate * firstBeatMs * 0.001 + 0.5)` and
+`trunc(period * i + start + 1.5)`. Mapoch uses `120.0/375 ms`, Fire uses
+`153.6/105 ms`, and Uncle John's Band uses `136.4/143 ms`; the latter two prove
+that the first quantized PQTZ BPM is not this input. The Rust position builder
+already matches the recovered formula. The same trace captures
+`IntroEndJudge_main` without changing DAT/EXT/2EX bytes: its four feature
+arrays, two integer candidate arrays, selected beat, and success flag. On the
+three references it emits intro candidates `[4]`, `[49,45,5,0]`, and
+`[35,35,15,7]`, selecting beats `4`, `5`, and `35`. The remaining production
+gate is the clean construction of this constant-tempo seed and the inner
+intro/end judge, not any downstream mood-2/3 stage.
+
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight
 boundary F1 improving from `0.5245/0.6348/0.6855` to

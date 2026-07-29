@@ -461,6 +461,23 @@ pub fn derive_native_phrase_bar_change_features(
     Ok(derive_native_phrase_change_features_unchecked(bars))
 }
 
+/// Build the three change-feature families consumed by the native mood-2/3 judge.
+///
+/// Low- and middle-peak inputs use complete four-beat averages with one guard
+/// bar. Low-level energy uses four-beat sums, a ceiling-sized output, and two
+/// guard bars. The differing tail rules are observable native behavior.
+pub fn derive_native_mood_23_feature_families(
+    features: &NativePhraseFeatureTrace,
+    feature_origin: usize,
+) -> Result<[NativePhraseChangeFeatures; 3]> {
+    let low_peak = derive_native_phrase_bar_change_features(&features.low_peak, feature_origin)?;
+    let middle_peak =
+        derive_native_phrase_bar_change_features(&features.middle_peak, feature_origin)?;
+    let low_level_bars = native_mood_23_low_level_bars(&features.low_level, feature_origin)?;
+    let low_level = derive_native_phrase_change_features_unchecked(low_level_bars);
+    Ok([low_peak, low_level, middle_peak])
+}
+
 /// Select boundary candidates from one native 22-value phrase-change window.
 ///
 /// The returned indices are absolute one-based bars. `[0]` is the native
@@ -1431,6 +1448,30 @@ fn native_ratio(numerator: f64, denominator: f64) -> f64 {
     numerator / native_nonzero(denominator)
 }
 
+fn native_mood_23_low_level_bars(values: &[f64], feature_origin: usize) -> Result<Vec<f64>> {
+    if feature_origin == 0 || feature_origin > values.len() {
+        bail!("native mood-2/3 low-level bars require a one-based origin within the input");
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native mood-2/3 low-level bars require finite input");
+    }
+    let available = values.len() - feature_origin + 1;
+    let bar_count = available.div_ceil(4);
+    if bar_count == 0 {
+        bail!("native mood-2/3 low-level bars require input");
+    }
+    let mut bars = vec![0.0; bar_count];
+    for (bar, slot) in bars
+        .iter_mut()
+        .take(bar_count.saturating_sub(2))
+        .enumerate()
+    {
+        let start = feature_origin - 1 + bar * 4;
+        *slot = values[start..start + 4].iter().sum();
+    }
+    Ok(bars)
+}
+
 fn derive_native_phrase_change_features_unchecked(
     mut normalized: Vec<f64>,
 ) -> NativePhraseChangeFeatures {
@@ -1864,6 +1905,39 @@ mod tests {
         assert_eq!(features.directional_ratio[2], 0.0);
         assert_eq!(features.symmetric_ratio[0], 0.0);
         assert_eq!(features.symmetric_ratio[2], 0.0);
+    }
+
+    #[test]
+    fn native_mood_23_feature_families_preserve_distinct_guard_rules() {
+        let values = (1..=14).map(f64::from).collect::<Vec<_>>();
+        let trace = NativePhraseFeatureTrace {
+            boundaries: PhraseBeatBoundaries {
+                high_pass_2: Vec::new(),
+                low_pass_8: Vec::new(),
+                low_pass_32: Vec::new(),
+            },
+            low_level: values.clone(),
+            middle_level: Vec::new(),
+            divided_low_level: Vec::new(),
+            divided_middle_level: Vec::new(),
+            low_peak: values.clone(),
+            low_peak_quarters: Vec::new(),
+            middle_peak: values,
+            all_level: Vec::new(),
+            all_power_quarter_energy: Vec::new(),
+            all_power_quarter_peak: Vec::new(),
+            high_peak_eighths: Vec::new(),
+        };
+
+        let [low_peak, low_level, middle_peak] =
+            derive_native_mood_23_feature_families(&trace, 2).expect("mood-2/3 families");
+
+        assert_eq!(low_peak.normalized.len(), 3);
+        assert_eq!(middle_peak.normalized, low_peak.normalized);
+        assert_eq!(low_level.normalized.len(), 4);
+        assert_eq!(low_level.normalized, [14.0 / 30.0, 1.0, 0.003, 0.0]);
+        assert_eq!(low_level.directional_ratio[2], 0.003);
+        assert_eq!(low_level.directional_ratio[3], 0.0);
     }
 
     #[test]

@@ -68,10 +68,10 @@ pub use phrase::{
 pub use phrase_frontend::{
     NativePhraseChangeFeatures, NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
     add_native_mood_23_genre_candidates, adjust_native_mood_23_phrase_candidates,
-    derive_native_phrase_bar_change_features, derive_native_phrase_change_features,
-    detect_native_mood_23_short_breaks, detect_native_mood_23_snare_fills,
-    detect_native_mood_23_sound_changes, detect_native_mood_23_vocal_entries,
-    extract_native_phrase_features, generate_phrase_multirate,
+    derive_native_mood_23_feature_families, derive_native_phrase_bar_change_features,
+    derive_native_phrase_change_features, detect_native_mood_23_short_breaks,
+    detect_native_mood_23_snare_fills, detect_native_mood_23_sound_changes,
+    detect_native_mood_23_vocal_entries, extract_native_phrase_features, generate_phrase_multirate,
     judge_native_mood_23_phrase_boundaries, judge_native_phrase_change_window,
 };
 pub use rhythm::{BeatAnalysis, analyze_beats};

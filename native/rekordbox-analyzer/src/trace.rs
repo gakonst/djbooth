@@ -41,6 +41,8 @@ const VERSE_HOOK_JUDGE_23_OFFSET: usize = 0x11dc800;
 const VERSE_HOOK_JUDGE_23_SUB_OFFSET: usize = 0x177a620;
 const VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x15d5ce0;
 const VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x1172de0;
+const BEATS_SAMPLES_CALC_FX_OFFSET: usize = 0x1162020;
+const INTRO_END_JUDGE_MAIN_OFFSET: usize = 0x11de150;
 const SHORT_BREAK_DETECTION_OFFSET: usize = 0x0f9f340;
 const SOUON_CHANGE_DET_OFFSET: usize = 0x15db3c0;
 const SNARE_FILLIN_DET_OFFSET: usize = 0x0f9fd30;
@@ -110,6 +112,8 @@ const CALL_VERSE_HOOK_JUDGE_23_SUB_1_OFFSET: usize = 0x11dd071;
 const CALL_VERSE_HOOK_JUDGE_23_SUB_2_OFFSET: usize = 0x11dd120;
 const CALL_VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x1790bc5;
 const CALL_VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x179083f;
+const CALL_BEATS_SAMPLES_CALC_FX_OFFSET: usize = 0x11e31e6;
+const CALL_INTRO_END_JUDGE_MAIN_OFFSET: usize = 0x1790783;
 const CALL_SHORT_BREAK_DETECTION_OFFSET: usize = 0x15d5de3;
 const CALL_SOUON_CHANGE_DET_OFFSET: usize = 0x15d5e11;
 const CALL_SNARE_FILLIN_DET_OFFSET: usize = 0x15d5e45;
@@ -322,6 +326,20 @@ type VerseHookAnaData23 = unsafe extern "C" fn(
     *mut c_void,
     *mut c_void,
 ) -> u8;
+type BeatsSamplesCalcFx =
+    unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, f64, f64, f64, i32) -> u8;
+type IntroEndJudgeMain = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut i32,
+    *mut i32,
+) -> u8;
 type ShortBreakDetection =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, i32, *mut c_void) -> u8;
 type SouonChangeDet = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> u8;
@@ -372,6 +390,8 @@ static VERSE_HOOK_JUDGE_23: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_JUDGE_23_SUB: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_ADD_GENRE_23: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_ANA_DATA_23: AtomicUsize = AtomicUsize::new(0);
+static BEATS_SAMPLES_CALC_FX: AtomicUsize = AtomicUsize::new(0);
+static INTRO_END_JUDGE_MAIN: AtomicUsize = AtomicUsize::new(0);
 static SHORT_BREAK_DETECTION: AtomicUsize = AtomicUsize::new(0);
 static SOUON_CHANGE_DET: AtomicUsize = AtomicUsize::new(0);
 static SNARE_FILLIN_DET: AtomicUsize = AtomicUsize::new(0);
@@ -422,6 +442,8 @@ struct ReferenceTrace {
     phrase_snare_peaks: Vec<PhraseSnarePeakTrace>,
     phrase_vocal_candidates: Vec<PhraseVocalCandidateTrace>,
     phrase_ana_data_23: Vec<PhraseAnaData23Trace>,
+    phrase_beat_windows: Vec<PhraseBeatWindowTrace>,
+    phrase_intro_end_judges: Vec<PhraseIntroEndJudgeTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -960,6 +982,32 @@ struct PhraseAnaData23Trace {
     result: u8,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseBeatWindowTrace {
+    stream_lengths: [f64; 3],
+    stream_rates: [f64; 3],
+    bpm: f64,
+    first_beat_ms: i32,
+    beat_count: i32,
+    positions: [Vec<i32>; 3],
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseIntroEndJudgeTrace {
+    feature_origin: i32,
+    inputs: [Vec<f64>; 4],
+    integer_arrays_before: [Vec<i32>; 2],
+    integer_arrays_after: [Vec<i32>; 2],
+    selected_beat_before: i32,
+    selected_beat_after: i32,
+    selection_flag_before: i32,
+    selection_flag_after: i32,
+    result: u8,
+}
+
 #[repr(C)]
 struct StdVector {
     begin: *const u8,
@@ -979,7 +1027,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 20,
+        schema_version: 21,
         requested_engine: requested_engine().to_string(),
         trace_scope: requested_trace_scope().to_string(),
         ..ReferenceTrace::default()
@@ -1201,6 +1249,8 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         &VERSE_HOOK_ANA_DATA_23,
         base + VERSE_HOOK_ANA_DATA_23_OFFSET,
     );
+    set_original(&BEATS_SAMPLES_CALC_FX, base + BEATS_SAMPLES_CALC_FX_OFFSET);
+    set_original(&INTRO_END_JUDGE_MAIN, base + INTRO_END_JUDGE_MAIN_OFFSET);
     set_original(&SHORT_BREAK_DETECTION, base + SHORT_BREAK_DETECTION_OFFSET);
     set_original(&SOUON_CHANGE_DET, base + SOUON_CHANGE_DET_OFFSET);
     set_original(&SNARE_FILLIN_DET, base + SNARE_FILLIN_DET_OFFSET);
@@ -1470,6 +1520,16 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
 #[cfg(target_arch = "x86_64")]
 unsafe fn patch_phrase_trace(base: usize) -> Result<()> {
     unsafe {
+        patch_relative_call(
+            base + CALL_BEATS_SAMPLES_CALC_FX_OFFSET,
+            base + BEATS_SAMPLES_CALC_FX_OFFSET,
+            trace_beats_samples_calc_fx as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_INTRO_END_JUDGE_MAIN_OFFSET,
+            base + INTRO_END_JUDGE_MAIN_OFFSET,
+            trace_intro_end_judge_main as usize,
+        )?;
         patch_relative_call(
             base + CALL_BREAK_FIND_OFFSET,
             base + BREAK_FIND_OFFSET,
@@ -4596,6 +4656,132 @@ unsafe extern "C" fn trace_verse_hook_ana_data_23(
         outputs,
         result,
     });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_beats_samples_calc_fx(
+    analyzer: *mut c_void,
+    stream_length_1: f64,
+    stream_rate_1: f64,
+    stream_length_2: f64,
+    stream_rate_2: f64,
+    stream_length_3: f64,
+    stream_rate_3: f64,
+    bpm: f64,
+    first_beat_ms: i32,
+) -> u8 {
+    let function: BeatsSamplesCalcFx = unsafe { original(&BEATS_SAMPLES_CALC_FX) };
+    let result = unsafe {
+        function(
+            analyzer,
+            stream_length_1,
+            stream_rate_1,
+            stream_length_2,
+            stream_rate_2,
+            stream_length_3,
+            stream_rate_3,
+            bpm,
+            first_beat_ms,
+        )
+    };
+
+    let mut failures = Vec::new();
+    let analyzer_bytes = analyzer.cast::<u8>();
+    let positions = [0x1110, 0x1130, 0x1150].map(|offset| {
+        snapshot_or_empty(
+            unsafe { snapshot_mat_i32(analyzer_bytes.add(offset).cast()) },
+            "phrase beat-window positions",
+            &mut failures,
+        )
+    });
+    let beat_count = unsafe { analyzer_bytes.add(0x1170).cast::<i32>().read_unaligned() };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_beat_windows.push(PhraseBeatWindowTrace {
+        stream_lengths: [stream_length_1, stream_length_2, stream_length_3],
+        stream_rates: [stream_rate_1, stream_rate_2, stream_rate_3],
+        bpm,
+        first_beat_ms,
+        beat_count,
+        positions,
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_intro_end_judge_main(
+    analyzer: *mut c_void,
+    input_1: *mut c_void,
+    input_2: *mut c_void,
+    input_3: *mut c_void,
+    feature_origin: i32,
+    input_4: *mut c_void,
+    integer_array_1: *mut c_void,
+    integer_array_2: *mut c_void,
+    selected_beat: *mut i32,
+    selection_flag: *mut i32,
+) -> u8 {
+    let input_snapshots = [
+        unsafe { snapshot_mat_f64(input_1) },
+        unsafe { snapshot_mat_f64(input_2) },
+        unsafe { snapshot_mat_f64(input_3) },
+        unsafe { snapshot_mat_f64(input_4) },
+    ];
+    let integer_snapshots_before = [unsafe { snapshot_mat_i32(integer_array_1) }, unsafe {
+        snapshot_mat_i32(integer_array_2)
+    }];
+    let selected_beat_before = unsafe { selected_beat.read_unaligned() };
+    let selection_flag_before = unsafe { selection_flag.read_unaligned() };
+
+    let function: IntroEndJudgeMain = unsafe { original(&INTRO_END_JUDGE_MAIN) };
+    let result = unsafe {
+        function(
+            analyzer,
+            input_1,
+            input_2,
+            input_3,
+            feature_origin,
+            input_4,
+            integer_array_1,
+            integer_array_2,
+            selected_beat,
+            selection_flag,
+        )
+    };
+
+    let integer_snapshots_after = [unsafe { snapshot_mat_i32(integer_array_1) }, unsafe {
+        snapshot_mat_i32(integer_array_2)
+    }];
+    let selected_beat_after = unsafe { selected_beat.read_unaligned() };
+    let selection_flag_after = unsafe { selection_flag.read_unaligned() };
+    let mut failures = Vec::new();
+    let inputs =
+        input_snapshots.map(|value| snapshot_or_empty(value, "intro-end input", &mut failures));
+    let integer_arrays_before = integer_snapshots_before
+        .map(|value| snapshot_or_empty(value, "intro-end integer input", &mut failures));
+    let integer_arrays_after = integer_snapshots_after
+        .map(|value| snapshot_or_empty(value, "intro-end integer output", &mut failures));
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace
+        .phrase_intro_end_judges
+        .push(PhraseIntroEndJudgeTrace {
+            feature_origin,
+            inputs,
+            integer_arrays_before,
+            integer_arrays_after,
+            selected_beat_before,
+            selected_beat_after,
+            selection_flag_before,
+            selection_flag_after,
+            result,
+        });
     result
 }
 
