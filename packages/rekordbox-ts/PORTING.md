@@ -1088,3 +1088,23 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   Fiction, Luv Techniques, The Power (dub), Rafael, and Get Up Offa That Thing.
   Remaining decoder work is fine `0.1 BPM` refinement/merge, per-section phase
   synthesis, and the narrow boundary repairs.
+
+## Linked fine tempo-section checkpoint (2026-07-28)
+
+- Extended the private tracer to schema v8 with the real coarse/fine histogram
+  winner, vote counts, source span, and repeated refinement passes for every
+  section. Five traces completed without warnings.
+- Each provisional span votes once per hypothesis into a 400-bin integer-BPM
+  histogram. Its winner constrains a 4,000-bin `0.1 BPM` histogram to
+  `[coarse - 1, coarse + 1) BPM`; strict-greater scans retain the lower bin on
+  ties. The refined period is exactly `float(600000.0 / tenthBpm)`.
+- Adjacent refined sections use the same direct/double/half compatibility and
+  `min(4%, 20 ms)` tolerance. A match removes the later section, then re-runs
+  the preceding section over its enlarged source span. Rafael therefore runs
+  five refinement passes for four provisional sections: `163.1` and `164.9`
+  merge, then the combined span is recomputed to `164.9 BPM` with 52 votes.
+- Ported refinement and iterative merge/recompute as clean Rust. Dynamic
+  winners are exactly `127.0`, `125.0`, `145.5 → 108.4`,
+  `116.6 → 108.6 → 163.1 → 164.9 → 164.9`, and `149.9 BPM` across the corpus.
+  Remaining section-decoder work is per-section pulse/phase synthesis,
+  downbeat numbering, and boundary repair.

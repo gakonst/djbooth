@@ -30,6 +30,7 @@ const BEAT_LIST_CHANGE_STAT_OFFSET: usize = 0x14e6910;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 const FWRITE_OFFSET: usize = 0x21dcd98;
 const MALLOC_OFFSET: usize = 0x21dc954;
+const EXP10_OFFSET: usize = 0x21dc9d2;
 
 const CALL_BA_CREATE_VARIED_44_OFFSET: usize = 0x1068a51;
 const CALL_BA_CREATE_CONST_44_OFFSET: usize = 0x1068a9a;
@@ -50,6 +51,7 @@ const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
 const CALL_CHECKPOINT_CONTINUOUS_REGION_OFFSET: usize = 0x138b51b;
 const CALL_CHECKPOINT_MINIMUM_RUN_OFFSET: usize = 0x138b7d8;
 const CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET: usize = 0x138c5ff;
+const CALL_REFINEMENT_EXP10_OFFSET: usize = 0x138ca54;
 const CALL_CHECKPOINT_NEAR_VALUE_OFFSET: usize = 0x138d14d;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
@@ -89,6 +91,7 @@ type PeakSensorPut = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type PeakBufferCalcBeat = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type BeatListChangeStat = unsafe extern "C" fn(*mut c_void, f32, i32, f32, *mut c_void);
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
+type Exp10 = unsafe extern "C" fn(f64) -> f64;
 
 static BA_CREATE_VARIED_48: AtomicUsize = AtomicUsize::new(0);
 static BA_CREATE_CONST_48: AtomicUsize = AtomicUsize::new(0);
@@ -112,6 +115,7 @@ static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
 static CURRENT_BEAT_INFO: AtomicUsize = AtomicUsize::new(0);
 static MALLOC: AtomicUsize = AtomicUsize::new(0);
+static EXP10: AtomicUsize = AtomicUsize::new(0);
 static LAST_BEAT_COUNT: AtomicI32 = AtomicI32::new(0);
 static TRACE: OnceLock<Mutex<ReferenceTrace>> = OnceLock::new();
 
@@ -127,6 +131,7 @@ struct ReferenceTrace {
     beat_list_changes: Vec<BeatListChangeTrace>,
     analyzer_checkpoints: Vec<AnalyzerCheckpointTrace>,
     section_checkpoints: Vec<SectionCheckpointTrace>,
+    refinement_checkpoints: Vec<RefinementCheckpointTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -222,6 +227,28 @@ struct AnalyzerCheckpointTrace {
 struct SectionCheckpointTrace {
     stage: &'static str,
     sections: Vec<InternalBeatTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RefinementCheckpointTrace {
+    section_index: usize,
+    section_length_frames: i32,
+    source_start_index: usize,
+    coarse_bpm: i32,
+    coarse_votes: i32,
+    fine_search_start: usize,
+    fine_search_end: usize,
+    fine_bpm_tenth: i32,
+    fine_votes: i32,
+    fine_histogram: Vec<HistogramBinTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistogramBinTrace {
+    bin: usize,
+    votes: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -329,7 +356,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 7,
+        schema_version: 8,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -390,6 +417,7 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     set_original(&PEAK_BUFFER_CALC_BEAT, base + PEAK_BUFFER_CALC_BEAT_OFFSET);
     set_original(&BEAT_LIST_CHANGE_STAT, base + BEAT_LIST_CHANGE_STAT_OFFSET);
     set_original(&MALLOC, base + MALLOC_OFFSET);
+    set_original(&EXP10, base + EXP10_OFFSET);
 
     unsafe {
         match requested_engine() {
@@ -502,6 +530,11 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET,
             base + MALLOC_OFFSET,
             trace_checkpoint_tempo_family as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_REFINEMENT_EXP10_OFFSET,
+            base + EXP10_OFFSET,
+            trace_refinement_exp10 as usize,
         )?;
         patch_relative_call(
             base + CALL_CHECKPOINT_NEAR_VALUE_OFFSET,
@@ -1146,6 +1179,86 @@ unsafe extern "C" fn trace_checkpoint_tempo_family(bytes: usize) -> *mut c_void 
     unsafe { record_caller_section_checkpoint("provisionalSections") };
     let function: AllocateBytes = unsafe { original(&MALLOC) };
     unsafe { function(bytes) }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe extern "C" fn trace_refinement_exp10(value: f64) -> f64 {
+    let frame_pointer: usize;
+    let coarse_histogram: usize;
+    let coarse_bpm: i32;
+    unsafe {
+        std::arch::asm!(
+            "mov {frame_pointer}, rbp",
+            "mov {coarse_histogram}, r14",
+            "mov {coarse_bpm:e}, r15d",
+            frame_pointer = out(reg) frame_pointer,
+            coarse_histogram = out(reg) coarse_histogram,
+            coarse_bpm = out(reg) coarse_bpm,
+            options(nostack, preserves_flags)
+        )
+    };
+    let analyzer_frame = unsafe { (frame_pointer as *const usize).read() };
+    let section_index =
+        unsafe { (analyzer_frame.wrapping_sub(0x60) as *const usize).read_unaligned() };
+    let section_length_frames =
+        unsafe { (analyzer_frame.wrapping_sub(0xb0) as *const i32).read_unaligned() };
+    let source_start_triple =
+        unsafe { (analyzer_frame.wrapping_sub(0x158) as *const usize).read_unaligned() };
+    let fine_histogram =
+        unsafe { (analyzer_frame.wrapping_sub(0x118) as *const *const i32).read_unaligned() };
+    let fine_search_start = ((coarse_bpm - 1) * 10).max(0) as usize;
+    let fine_search_end = ((coarse_bpm + 1) * 10).clamp(0, 4_000) as usize;
+    let fine_bins = unsafe {
+        std::slice::from_raw_parts(
+            fine_histogram.add(fine_search_start),
+            fine_search_end - fine_search_start,
+        )
+    };
+    let mut fine_bpm_tenth = -1;
+    let mut fine_votes = 0;
+    let mut fine_trace = Vec::new();
+    for (offset, &votes) in fine_bins.iter().enumerate() {
+        if votes > fine_votes {
+            fine_votes = votes;
+            fine_bpm_tenth = (fine_search_start + offset) as i32;
+        }
+        if votes > 0 {
+            fine_trace.push(HistogramBinTrace {
+                bin: fine_search_start + offset,
+                votes,
+            });
+        }
+    }
+    let coarse_votes = if (0..400).contains(&coarse_bpm) {
+        unsafe {
+            (coarse_histogram as *const i32)
+                .add(coarse_bpm as usize)
+                .read()
+        }
+    } else {
+        0
+    };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace
+        .refinement_checkpoints
+        .push(RefinementCheckpointTrace {
+            section_index,
+            section_length_frames,
+            source_start_index: source_start_triple / 3,
+            coarse_bpm,
+            coarse_votes,
+            fine_search_start,
+            fine_search_end,
+            fine_bpm_tenth,
+            fine_votes,
+            fine_histogram: fine_trace,
+        });
+    drop(trace);
+    let function: Exp10 = unsafe { original(&EXP10) };
+    unsafe { function(value) }
 }
 
 unsafe extern "C" fn trace_checkpoint_near_value(
