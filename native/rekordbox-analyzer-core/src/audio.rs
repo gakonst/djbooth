@@ -49,8 +49,8 @@ impl AudioSourceInfo {
 
     /// Zero source frames included in the native reader's advertised length.
     ///
-    /// Rekordbox's FLAC reader includes one maximum STREAMINFO block. Other
-    /// supported readers do not extend the decoded frame count.
+    /// Rekordbox's FLAC reader includes one maximum STREAMINFO block. Its
+    /// Core Audio MP3 reader can also advertise one absent CBR packet.
     pub fn reader_padding_frames(self) -> usize {
         self.reader_padding_frames
     }
@@ -655,15 +655,177 @@ fn invalid_bmff(message: &'static str) -> io::Error {
 }
 
 fn native_reader_padding_frames(reader: &mut (impl Read + Seek)) -> io::Result<usize> {
+    let result = (|| {
+        let end = reader.seek(SeekFrom::End(0))?;
+        let audio_offset = leading_id3v2_end(reader, end)?;
+        if let Some(prefix) = read_array::<12>(reader, audio_offset, end)?
+            && let Some(padding) = flac_reader_padding_from_prefix(prefix)
+        {
+            return Ok(padding);
+        }
+        Ok(lame_info_reader_padding(reader, audio_offset, end)?.unwrap_or_default())
+    })();
     reader.seek(SeekFrom::Start(0))?;
-    let mut prefix = [0_u8; 12];
-    let padding = match reader.read_exact(&mut prefix) {
-        Ok(()) => flac_reader_padding_from_prefix(prefix).unwrap_or_default(),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => 0,
-        Err(error) => return Err(error),
+    result
+}
+
+fn leading_id3v2_end(reader: &mut (impl Read + Seek), end: u64) -> io::Result<u64> {
+    let mut offset = 0_u64;
+    while let Some(header) = read_array::<10>(reader, offset, end)? {
+        if header[..3] != *b"ID3" || !(2..=4).contains(&header[3]) {
+            break;
+        }
+        if header[6..10].iter().any(|byte| byte & 0x80 != 0) {
+            break;
+        }
+        let size = header[6..10]
+            .iter()
+            .fold(0_u64, |value, byte| (value << 7) | u64::from(*byte));
+        let footer = u64::from(header[3] == 4 && header[5] & 0x10 != 0) * 10;
+        let Some(next) = offset
+            .checked_add(10)
+            .and_then(|value| value.checked_add(size))
+            .and_then(|value| value.checked_add(footer))
+        else {
+            break;
+        };
+        if next > end {
+            break;
+        }
+        offset = next;
+    }
+    Ok(offset)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeMp3Header {
+    bitrate: u32,
+    sample_rate: u32,
+    frame_len: u64,
+    xing_marker_offset: u64,
+}
+
+fn parse_native_mp3_header(bytes: [u8; 4]) -> Option<NativeMp3Header> {
+    let header = u32::from_be_bytes(bytes);
+    if header & 0xffe0_0000 != 0xffe0_0000 {
+        return None;
+    }
+    let version = (header >> 19) & 0x3;
+    let layer = (header >> 17) & 0x3;
+    let bitrate_index = ((header >> 12) & 0xf) as usize;
+    let sample_rate_index = ((header >> 10) & 0x3) as usize;
+    if version != 3
+        || layer != 1
+        || bitrate_index == 0
+        || bitrate_index == 15
+        || sample_rate_index == 3
+    {
+        return None;
+    }
+
+    let bitrate = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+    ][bitrate_index]
+        * 1_000;
+    let sample_rate = [44_100, 48_000, 32_000][sample_rate_index];
+    let padding = (header >> 9) & 1;
+    let channel_mode = (header >> 6) & 0x3;
+    let crc_bytes = u64::from(header & 0x0001_0000 == 0) * 2;
+    let side_info_bytes = if channel_mode == 3 { 17 } else { 32 };
+    Some(NativeMp3Header {
+        bitrate,
+        sample_rate,
+        frame_len: u64::from(144 * bitrate / sample_rate + padding),
+        xing_marker_offset: 4 + crc_bytes + side_info_bytes,
+    })
+}
+
+fn lame_info_reader_padding(
+    reader: &mut (impl Read + Seek),
+    audio_offset: u64,
+    end: u64,
+) -> io::Result<Option<usize>> {
+    let Some(header_bytes) = read_array::<4>(reader, audio_offset, end)? else {
+        return Ok(None);
     };
-    reader.seek(SeekFrom::Start(0))?;
-    Ok(padding)
+    let Some(header) = parse_native_mp3_header(header_bytes) else {
+        return Ok(None);
+    };
+    let Some(first_frame_end) = audio_offset.checked_add(header.frame_len) else {
+        return Ok(None);
+    };
+    if first_frame_end > end {
+        return Ok(None);
+    }
+    let Some(marker_offset) = audio_offset.checked_add(header.xing_marker_offset) else {
+        return Ok(None);
+    };
+    if read_array::<4>(reader, marker_offset, first_frame_end)? != Some(*b"Info") {
+        return Ok(None);
+    }
+    let Some(flags_offset) = marker_offset.checked_add(4) else {
+        return Ok(None);
+    };
+    let Some(flags) = read_u32(reader, flags_offset, first_frame_end)? else {
+        return Ok(None);
+    };
+    let Some(mut cursor) = flags_offset.checked_add(4) else {
+        return Ok(None);
+    };
+    let declared_packets = if flags & 0x1 != 0 {
+        let value = read_u32(reader, cursor, first_frame_end)?;
+        cursor += 4;
+        value
+    } else {
+        None
+    };
+    let stream_bytes = if flags & 0x2 != 0 {
+        let value = read_u32(reader, cursor, first_frame_end)?;
+        cursor += 4;
+        value
+    } else {
+        None
+    };
+    if flags & 0x4 != 0 {
+        cursor += 100;
+    }
+    if flags & 0x8 != 0 {
+        cursor += 4;
+    }
+    let Some(encoder) = read_array::<9>(reader, cursor, first_frame_end)? else {
+        return Ok(None);
+    };
+    if encoder[..4] != *b"LAME" {
+        return Ok(None);
+    }
+    let (Some(declared_packets), Some(stream_bytes)) = (declared_packets, stream_bytes) else {
+        return Ok(None);
+    };
+    let stream_bytes = u64::from(stream_bytes);
+    if stream_bytes < header.frame_len
+        || audio_offset
+            .checked_add(stream_bytes)
+            .is_none_or(|stream_end| stream_end > end)
+    {
+        return Ok(None);
+    }
+
+    // JUCE reads kExtAudioFileProperty_FileLengthFrames. For a LAME `Info`
+    // frame, Core Audio estimates that property from the CBR byte duration,
+    // then rounds the estimated packet count upward. The advertised last
+    // packet can consequently be absent; ExtAudioFileRead returns zeroes for
+    // it. Preserve the Float64 operation order, including the exact-boundary
+    // round-up observed in Core Audio.
+    let data_bytes = stream_bytes - header.frame_len;
+    let duration_seconds = data_bytes as f64 * 8.0 / f64::from(header.bitrate);
+    let estimated_packets =
+        (duration_seconds * f64::from(header.sample_rate) / 1_152.0).ceil() as u64;
+    let declared_packets = u64::from(declared_packets);
+    if estimated_packets > declared_packets + 1 {
+        return Ok(None);
+    }
+    let extra_packets = estimated_packets.saturating_sub(declared_packets);
+    Ok(usize::try_from(extra_packets * 1_152).ok())
 }
 
 fn flac_reader_padding_from_prefix(prefix: [u8; 12]) -> Option<usize> {
@@ -925,6 +1087,61 @@ mod tests {
         prefix[10..12].copy_from_slice(&4_096_u16.to_be_bytes());
 
         assert_eq!(flac_reader_padding_from_prefix(prefix), Some(4_096));
+    }
+
+    #[test]
+    fn native_reader_skips_id3v2_before_flac_streaminfo() {
+        let mut bytes = vec![0_u8; 10];
+        bytes[..3].copy_from_slice(b"ID3");
+        bytes[3] = 4;
+        bytes.extend_from_slice(b"fLaC");
+        bytes.extend_from_slice(&[0, 0, 0, 34]);
+        bytes.extend_from_slice(&1_024_u16.to_be_bytes());
+        bytes.extend_from_slice(&4_608_u16.to_be_bytes());
+        let mut reader = std::io::Cursor::new(bytes);
+
+        assert_eq!(
+            native_reader_padding_frames(&mut reader).expect("reader padding"),
+            4_608
+        );
+        assert_eq!(reader.position(), 0);
+    }
+
+    fn info_mp3(encoder: &[u8; 9], data_frame_len: usize) -> Vec<u8> {
+        let frame_len = 1_044;
+        let mut bytes = vec![0_u8; frame_len + data_frame_len];
+        bytes[..4].copy_from_slice(&[0xff, 0xfb, 0xe0, 0x00]);
+        let marker = 36;
+        bytes[marker..marker + 4].copy_from_slice(b"Info");
+        bytes[marker + 4..marker + 8].copy_from_slice(&3_u32.to_be_bytes());
+        bytes[marker + 8..marker + 12].copy_from_slice(&1_u32.to_be_bytes());
+        let stream_bytes = bytes.len() as u32;
+        bytes[marker + 12..marker + 16].copy_from_slice(&stream_bytes.to_be_bytes());
+        bytes[marker + 16..marker + 25].copy_from_slice(encoder);
+        bytes[frame_len..frame_len + 4].copy_from_slice(&[0xff, 0xfb, 0xe2, 0x00]);
+        bytes
+    }
+
+    #[test]
+    fn lame_info_reader_preserves_core_audio_absent_packet() {
+        let mut reader = std::io::Cursor::new(info_mp3(b"LAME3.99r", 1_045));
+
+        assert_eq!(
+            native_reader_padding_frames(&mut reader).expect("reader padding"),
+            1_152
+        );
+        assert_eq!(reader.position(), 0);
+    }
+
+    #[test]
+    fn non_lame_info_reader_uses_declared_packet_count() {
+        let mut reader = std::io::Cursor::new(info_mp3(b"Lavc61.19", 1_045));
+
+        assert_eq!(
+            native_reader_padding_frames(&mut reader).expect("reader padding"),
+            0
+        );
+        assert_eq!(reader.position(), 0);
     }
 
     #[test]

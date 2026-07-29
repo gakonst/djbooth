@@ -105,8 +105,8 @@ impl AnalysisSampleRateConverter {
     ///
     /// `reader_padding_frames` is measured at the source rate. Native FLAC
     /// readers advertise one maximum STREAMINFO block beyond the decoded
-    /// samples; other readers advertise no padding. The analysis reader then
-    /// exposes one fewer target frame than that advertised length.
+    /// samples; Core Audio can advertise one absent LAME/Info MP3 packet. The
+    /// analysis reader exposes one fewer target frame than that length.
     pub fn resample_mono_for_reader(
         &self,
         input: &[f32],
