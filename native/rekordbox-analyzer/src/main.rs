@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer::backend::diagnose_rekordbox_backend;
 use rekordbox_analyzer::rehost::{RehostOptions, bundle_rekordbox_templates, run_rehost};
-use rekordbox_analyzer::stems::run_stems_probe;
+use rekordbox_analyzer::stems::{run_stems_probe, run_stems_separation};
 use rekordbox_analyzer_core::{
     AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, compare_output_directories,
 };
@@ -96,6 +96,17 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Some("stems-reference") => {
+            let app_path = required_path(args.next(), "Rekordbox app path")?;
+            let audio_path = required_path(args.next(), "audio path")?;
+            let output_dir = required_path(args.next(), "output directory")?;
+            if args.next().is_some() {
+                bail!("stems-reference accepts Rekordbox app, audio, and output paths");
+            }
+            let result = run_stems_separation(&app_path, &audio_path, &output_dir)?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
         Some("diff") => {
             let reference_dir = required_path(args.next(), "reference output directory")?;
             let candidate_dir = required_path(args.next(), "candidate output directory")?;
@@ -182,7 +193,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|analyze-trace AUDIO OUTPUT_DIR TRACE_JSON [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|stems-probe REKORDBOX_APP [SAMPLE_COUNT]|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|analyze-trace AUDIO OUTPUT_DIR TRACE_JSON [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|stems-probe REKORDBOX_APP [SAMPLE_COUNT]|stems-reference REKORDBOX_APP AUDIO OUTPUT_DIR|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
         ),
     }
 }

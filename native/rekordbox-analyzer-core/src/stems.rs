@@ -17,6 +17,12 @@ pub const STEMS_FRAME_STRIDE: usize = 507;
 /// Number of new PCM samples advanced between inference windows.
 pub const STEMS_CHUNK_SAMPLES: usize = STEMS_FRAME_STRIDE * STEMS_HOP_SAMPLES;
 
+/// Leading and trailing PCM context retained around each streamed output chunk.
+pub const STEMS_CONTEXT_SAMPLES: usize = STEMS_FFT_SAMPLES;
+
+/// PCM samples supplied for one streamed inference chunk, including context.
+pub const STEMS_INPUT_WINDOW_SAMPLES: usize = STEMS_CHUNK_SAMPLES + 2 * STEMS_CONTEXT_SAMPLES;
+
 /// One native Spleeter inference window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StemsChunk {
@@ -99,6 +105,8 @@ mod tests {
 
     #[test]
     fn chunk_plan_uses_native_stride_and_short_tail() {
+        assert_eq!(STEMS_CHUNK_SAMPLES, 519_168);
+        assert_eq!(STEMS_INPUT_WINDOW_SAMPLES, 527_360);
         assert!(plan_stems_chunks(0).is_empty());
         assert_eq!(
             plan_stems_chunks(STEMS_CHUNK_SAMPLES + 1),

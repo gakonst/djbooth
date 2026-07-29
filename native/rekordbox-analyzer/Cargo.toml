@@ -9,6 +9,7 @@ publish = false
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
+hound = "3"
 libc = "0.2"
 plist = "1"
 rekordbox-analyzer-core = { path = "../rekordbox-analyzer-core" }

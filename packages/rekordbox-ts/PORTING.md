@@ -9,6 +9,7 @@ This file is the durable project journal: source pins, compatibility scope, deci
 - `Holzhaus/rekordcrate`: `e8574896b099d8b9e68b389a738e5872cdc8b5b2` (empty legacy Device Library scaffold and independent format reference)
 - `fragmede/rekordbox-pdb-rs`: `b9896c4e279f2ffd5a8eee1f05a7a0282fe44f35` (independent generated-output verification)
 - `Noelo-Lab/kuna`: `5834b3009cbcec3f3bddf1d5cafe50bb03e15474` (agent-oriented native decompiler used for Stems recovery)
+- `deezer/spleeter`: v1.4.0 `4stems.tar.gz`, SHA-256 `3adb4a50ad4eb18c7c4d65fcf4cf2367a07d48408a5eb7d03cd20067429dfaa8` (public model provenance check)
 
 The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
 
@@ -48,12 +49,34 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   4,096 leading zero samples, and reconstructed output is read after the same
   4,096-sample offset. Added clean-room chunk planning and source recombination
   primitives with focused tests.
+- Rekordbox initializes the wrapper as
+  `separatorInitialize(modelPath, 0, 0, parallelAnalyze)`. Its production path
+  is `separatorPreOperation` → repeated `separatorOperationAtIndex` →
+  `separatorPostOperation`; each indexed call accepts stereo input and emits
+  three stereo pairs in instrumental/vocals/drums order. The private reference
+  helper now exercises this production path and differentially checks it against
+  the exported `separatorOperationAtOnce` convenience path. All six 44,100-frame
+  synthetic outputs matched bit-for-bit.
 - A 44,100-frame differential probe completed successfully with all 264,600
   output samples finite. Summing all three outputs reproduced the two input
   channels within `2.97e-10/2.34e-10` RMS and `1.49e-8` peak error. Clean code
-  currently covers only the wrapper/DSP contract; the 150 MiB Rekordbox model
-  weights and TensorFlow runtime remain local proprietary oracle inputs and are
-  neither copied nor distributed.
+  currently covers only the wrapper/DSP contract; Rekordbox's bundled model and
+  TensorFlow runtime remain local oracle inputs and are neither copied nor
+  distributed.
+- Deezer's public v1.4.0 `4stems` release and Rekordbox contain byte-identical
+  checkpoint payloads: data SHA-256
+  `3823e0ef50835cca3907c386dc9667a6a9af77b40a20c3ab845a8d6c9592255d`
+  and index SHA-256
+  `99ea41b3ef9bfbc6a34520409427af5ba7a883173e57ea25d6c487584b891b18`.
+  Rekordbox therefore uses the stock public Spleeter weights behind its custom
+  streaming wrapper; no retrained AlphaTheta/Pioneer model was found.
+- Added `stems-reference REKORDBOX_APP AUDIO OUTPUT_DIR` to the private x86_64
+  helper. It decodes one track to stereo 44.1 kHz float PCM with ffmpeg, invokes
+  the recovered operation, refuses existing outputs, writes float WAV files for
+  instrumental/vocals/drums, and reports bounded hashes plus reconstruction
+  error. Deezer's 10.88-second Creative Commons demo completed with 479,832
+  frames in each output through the recovered production ABI. This full-memory
+  command is a differential oracle, not the final clean inference runtime.
 
 ### 2026-07-29 — Bidirectional, differential CDJ USB synchronization
 
