@@ -350,10 +350,12 @@ Six and eight native workers were effectively tied on AAC, while eight was faste
 AAC/FLAC check; twelve regressed from scheduling and cache pressure. This sets the single-track
 default to eight. The later exact PWV4/PWV5 and Dynamic finishing paths add real DSP work, so the
 old `9.46 s` 100-track number is no longer representative. With those paths enabled, the final
-8.55-hour corpus completes in `15.88–15.92 s` with 12 processes sharing 24 Rayon slots
-(`6.28–6.32 tracks/s`). Twelve slots measured `16.12–16.68 s`; 24 one-thread processes measured
-`16.20 s`; 4/6/8 processes with 12 slots measured `19.24/17.36/16.94 s`. The scheduler therefore
-keeps the 12-process cap and uses two slots per core on Apple Silicon.
+8.55-hour corpus completes in `14.62–14.78 s` with 12 processes sharing 24 Rayon slots
+(`6.79–6.86 tracks/s`). Twelve, sixteen, and thirty-two slots measured
+`15.06/15.68/15.29 s`; 10 and 16 processes with 24 slots measured `14.64/16.01 s`. The scheduler
+therefore keeps the 12-process cap and uses two slots per core on Apple Silicon. BeatSensor and
+PWV7 finite-follower NEON plus division-free resampling cut five-run process CPU by `9.0%`; all
+330 DAT/EXT/2EX files in the 110-track Dynamic replay remained byte-identical.
 
 The streamed and non-streamed implementations produced 300/300 identical DAT/EXT/2EX artifacts.
 The full 110-track beat-grid oracle retained exactly the same pass count and aggregate metrics.

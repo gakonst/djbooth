@@ -162,19 +162,27 @@ impl MonoPcm {
             usize::try_from(output_len).context("resampled PCM does not fit in memory")?;
         let last_index = self.samples.len() - 1;
         let mut output = Vec::with_capacity(output_len);
+        let source_step = usize::try_from(self.sample_rate / target_rate)
+            .expect("sample-rate quotient fits usize");
+        let target_rate_phase = u64::from(target_rate);
+        let remainder_step = u64::from(self.sample_rate % target_rate);
+        let mut source_position = 0usize;
+        let mut remainder = 0u64;
 
-        for output_index in 0..output_len {
-            let phase = (output_index as u128)
-                .checked_mul(source_rate)
-                .context("resampler phase overflow")?;
-            let source_index = usize::try_from(phase / target_rate_wide)
-                .context("resampler source index overflow")?
-                .min(last_index);
+        for _ in 0..output_len {
+            let source_index = source_position.min(last_index);
             let next_index = source_index.saturating_add(1).min(last_index);
-            let fraction = (phase % target_rate_wide) as f64 / f64::from(target_rate);
+            let fraction = remainder as f64 / f64::from(target_rate);
             let left = f64::from(self.samples[source_index]);
             let right = f64::from(self.samples[next_index]);
             output.push((left + (right - left) * fraction) as f32);
+
+            source_position += source_step;
+            remainder += remainder_step;
+            if remainder >= target_rate_phase {
+                remainder -= target_rate_phase;
+                source_position += 1;
+            }
         }
 
         Ok(Self {
@@ -826,6 +834,57 @@ mod tests {
 
         let restored = resampled.resample_linear(2).expect("downsample");
         assert_eq!(restored.samples(), pcm.samples());
+    }
+
+    #[test]
+    fn linear_resampler_phase_accumulator_is_reference_bit_exact() {
+        let samples = (0..1_003)
+            .map(|index| {
+                let phase = std::f32::consts::TAU * index as f32 / 1_003.0;
+                0.61 * (phase * 17.0).sin() + 0.29 * (phase * 113.0).sin()
+            })
+            .collect::<Vec<_>>();
+        for (source_rate, target_rate) in [
+            (32_000, 44_100),
+            (44_100, 48_000),
+            (48_000, 44_100),
+            (88_200, 44_100),
+            (96_000, 44_100),
+            (u32::MAX - 1, u32::MAX),
+        ] {
+            let actual = MonoPcm::new(source_rate, samples.clone())
+                .expect("PCM")
+                .resample_linear(target_rate)
+                .expect("resample");
+            let output_len = (samples.len() as u128 * u128::from(target_rate)
+                + u128::from(source_rate) / 2)
+                / u128::from(source_rate);
+            let expected = (0..usize::try_from(output_len).unwrap())
+                .map(|output_index| {
+                    let phase = output_index as u128 * u128::from(source_rate);
+                    let source_index = usize::try_from(phase / u128::from(target_rate))
+                        .unwrap()
+                        .min(samples.len() - 1);
+                    let next_index = (source_index + 1).min(samples.len() - 1);
+                    let fraction =
+                        (phase % u128::from(target_rate)) as f64 / f64::from(target_rate);
+                    let left = f64::from(samples[source_index]);
+                    let right = f64::from(samples[next_index]);
+                    (left + (right - left) * fraction) as f32
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual
+                    .samples()
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

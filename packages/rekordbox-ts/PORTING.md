@@ -25,6 +25,29 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-28 — second profile-guided analyzer performance closure
+
+- Reprofiled the fully recovered Auto analyzer with Samply 0.13.1 at 1 kHz. Across five
+  Science Fiction runs, process CPU fell from `9,873 ms` to `8,980 ms` (`9.0%`) while retaining
+  byte-identical DAT/EXT/2EX output.
+- Replaced ten heap-backed scalar BeatSensor stages with four bit-exact AArch64
+  two-lane biquad pairs plus the two dependent mid-band stages. The BeatSensor leaf fell from
+  `1,683 ms` to about `1,142 ms` across five runs.
+- PWV7 finite followers now evaluate two independent detail columns per NEON vector. Tracks with at
+  least four scheduling slots also split the ordered pairs across Rayon; one- and two-slot workers
+  avoid nested-parallel contention. The follower leaf fell from `587 ms` to `277 ms`.
+- Replaced per-output wide integer division in the 48-to-44.1 kHz linear path with an equivalent
+  quotient/remainder phase accumulator. Reference-formula tests cover five rate families, and the
+  sampled resampler cost fell from `450 ms` to `181 ms`.
+- Replayed all 110 valid Dynamic corpus tracks at two threads each and compared every DAT, EXT, and
+  2EX file against the frozen pre-optimization candidate: `330/330` files are byte-identical. Scalar
+  versus NEON unit tests also pin BeatSensor, PWV7 followers, and every existing waveform filter.
+- A paired ten-run Science Auto check retains the eight-thread default at a `793 ms` median
+  (`798 ms` at twelve). The 100-track, 8.55-hour Auto corpus now completes in `14.62–14.78 s`
+  (`6.79–6.86 tracks/s`), down from `15.88–15.92 s`. Twelve processes/24 slots remain optimal:
+  12/12 measured `15.06 s`, 12/16 `15.68 s`, 12/32 `15.29 s`, 10/24 `14.64 s`, and 16/24
+  `16.01 s`.
+
 ### 2026-07-28 — final Dynamic, waveform, and scheduling closure
 
 - Replayed 113 read-only corpus entries after the final input-boundary and waveform work. Three

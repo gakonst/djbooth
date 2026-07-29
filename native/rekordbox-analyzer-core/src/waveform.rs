@@ -1723,32 +1723,123 @@ fn three_band_detail(raw: &[[u16; 3]], count: usize, normalize: [u16; 3]) -> Vec
         THREE_BAND_MID_DECAY,
         THREE_BAND_HIGH_DECAY,
     ];
-    let mut result = Vec::with_capacity(count * 3);
+    let mut raw_indices = Vec::with_capacity(count);
     let mut phase = 0usize;
     for raw_index in 0..raw.len() {
         phase += count;
         if phase < raw.len() {
             continue;
         }
-        let envelope = std::array::from_fn::<_, 3, _>(|band| {
-            finite_peak_follower(raw, raw_index, band, histories[band], decays[band])
-        });
-        let entry = [
-            quantize_three_band(envelope[0] / THREE_BAND_LINEAR_DIVISOR * gains[0]),
-            quantize_three_band(envelope[1] / THREE_BAND_LINEAR_DIVISOR * gains[1]),
-            quantize_three_band(
-                THREE_BAND_COSINE_SCALE
-                    * (1.0 - (envelope[2] * std::f64::consts::PI / 32_768.0).cos())
-                    * gains[2],
-            ),
-        ];
-        while phase >= raw.len() && result.len() < count * 3 {
-            result.extend_from_slice(&entry);
+        while phase >= raw.len() && raw_indices.len() < count {
+            raw_indices.push(raw_index);
             phase -= raw.len();
         }
     }
+    #[cfg(target_arch = "aarch64")]
+    let entries = three_band_detail_entries(raw, &raw_indices, gains, histories, decays);
+    #[cfg(not(target_arch = "aarch64"))]
+    let entries = raw_indices
+        .into_iter()
+        .map(|raw_index| three_band_detail_entry(raw, raw_index, gains, histories, decays))
+        .collect::<Vec<_>>();
+    let mut result = entries.into_iter().flatten().collect::<Vec<_>>();
     result.resize(count * 3, 0);
     result
+}
+
+#[cfg(target_arch = "aarch64")]
+fn three_band_detail_entries(
+    raw: &[[u16; 3]],
+    raw_indices: &[usize],
+    gains: [f64; 3],
+    histories: [usize; 3],
+    decays: [f64; 3],
+) -> Vec<[u8; 3]> {
+    let mut entries = vec![[0; 3]; raw_indices.len()];
+    if rayon::current_num_threads() >= 4 {
+        entries
+            .par_chunks_mut(2)
+            .zip(raw_indices.par_chunks(2))
+            .for_each(|(output, ends)| {
+                three_band_detail_chunk(output, raw, ends, gains, histories, decays);
+            });
+    } else {
+        for (output, ends) in entries.chunks_mut(2).zip(raw_indices.chunks(2)) {
+            three_band_detail_chunk(output, raw, ends, gains, histories, decays);
+        }
+    }
+    entries
+}
+
+#[cfg(target_arch = "aarch64")]
+fn three_band_detail_chunk(
+    output: &mut [[u8; 3]],
+    raw: &[[u16; 3]],
+    ends: &[usize],
+    gains: [f64; 3],
+    histories: [usize; 3],
+    decays: [f64; 3],
+) {
+    if ends.len() == 1 {
+        output[0] = three_band_detail_entry(raw, ends[0], gains, histories, decays);
+        return;
+    }
+    let envelopes = std::array::from_fn::<_, 3, _>(|band| {
+        finite_peak_followers_pair(raw, [ends[0], ends[1]], band, histories[band], decays[band])
+    });
+    for lane in 0..2 {
+        output[lane] = pack_three_band_detail(
+            [envelopes[0][lane], envelopes[1][lane], envelopes[2][lane]],
+            gains,
+        );
+    }
+}
+
+fn three_band_detail_entry(
+    raw: &[[u16; 3]],
+    raw_index: usize,
+    gains: [f64; 3],
+    histories: [usize; 3],
+    decays: [f64; 3],
+) -> [u8; 3] {
+    let envelope = std::array::from_fn::<_, 3, _>(|band| {
+        finite_peak_follower(raw, raw_index, band, histories[band], decays[band])
+    });
+    pack_three_band_detail(envelope, gains)
+}
+
+fn pack_three_band_detail(envelope: [f64; 3], gains: [f64; 3]) -> [u8; 3] {
+    [
+        quantize_three_band(envelope[0] / THREE_BAND_LINEAR_DIVISOR * gains[0]),
+        quantize_three_band(envelope[1] / THREE_BAND_LINEAR_DIVISOR * gains[1]),
+        quantize_three_band(
+            THREE_BAND_COSINE_SCALE
+                * (1.0 - (envelope[2] * std::f64::consts::PI / 32_768.0).cos())
+                * gains[2],
+        ),
+    ]
+}
+
+#[cfg(target_arch = "aarch64")]
+fn finite_peak_followers_pair(
+    raw: &[[u16; 3]],
+    ends: [usize; 2],
+    band: usize,
+    history: usize,
+    decay: f64,
+) -> [f64; 2] {
+    if ends.iter().any(|end| *end < history) {
+        return ends.map(|end| finite_peak_follower(raw, end, band, history, decay));
+    }
+    let starts = ends.map(|end| end - history);
+    let mut state = load_f64x2(starts.map(|start| f64::from(raw[start][band])));
+    let decay = unsafe { vdupq_n_f64(decay) };
+    for offset in 0..=history {
+        let sample = load_f64x2(starts.map(|start| f64::from(raw[start + offset][band])));
+        let decayed = unsafe { vaddq_f64(sample, vmulq_f64(vsubq_f64(state, sample), decay)) };
+        state = unsafe { vmaxq_f64(sample, decayed) };
+    }
+    store_f64x2(state).map(|value| f64::from(value as f32))
 }
 
 fn finite_peak_follower(
@@ -2095,6 +2186,40 @@ mod tests {
             490.408_94_f32 as f64
         );
         assert_eq!(quantize_three_band(200.0), THREE_BAND_MAXIMUM);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_paired_three_band_followers_are_scalar_bit_exact() {
+        let raw = (0..1_024)
+            .map(|index| {
+                [
+                    ((index * 7_919 + 11) % 32_768) as u16,
+                    ((index * 4_099 + 23) % 32_768) as u16,
+                    ((index * 2_053 + 47) % 32_768) as u16,
+                ]
+            })
+            .collect::<Vec<_>>();
+        for (band, history, decay) in [
+            (0, THREE_BAND_LOW_HISTORY, THREE_BAND_LOW_DECAY),
+            (1, THREE_BAND_MID_HISTORY, THREE_BAND_MID_DECAY),
+            (2, THREE_BAND_HIGH_HISTORY, THREE_BAND_HIGH_DECAY),
+        ] {
+            for ends in [
+                [0, 1],
+                [history - 1, history],
+                [history, history + 1],
+                [history + 127, history + 509],
+            ] {
+                let paired = finite_peak_followers_pair(&raw, ends, band, history, decay);
+                for lane in 0..2 {
+                    assert_eq!(
+                        paired[lane].to_bits(),
+                        finite_peak_follower(&raw, ends[lane], band, history, decay).to_bits()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

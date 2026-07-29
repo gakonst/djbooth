@@ -1,5 +1,10 @@
 //! Causal multi-band peak front end used by the clean-room rhythm analyzer.
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::aarch64::{
+    float64x2_t, vaddq_f64, vdupq_n_f64, vgetq_lane_f64, vld1q_f64, vmulq_f64, vsubq_f64,
+};
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -121,7 +126,7 @@ pub fn analyze_beat_sensor_events(samples: &[f32], sample_rate: u32) -> Result<B
 
 struct BeatSensor {
     sample_rate: u32,
-    filters: [PassFilter; 4],
+    filters: BeatSensorFilterBank,
     low_onset: MovingAverageSubtractor,
     high_onset: MovingAverageSubtractor,
     detectors: [PeakDetector; BAND_COUNT],
@@ -135,24 +140,12 @@ struct BeatSensor {
 
 impl BeatSensor {
     fn new(sample_rate: u32) -> Self {
-        let sample_rate_f64 = f64::from(sample_rate);
-        let butterworth_q = f64::from(0.707_106_77_f32);
-        let low = Biquad::low_pass(283.0, sample_rate_f64, butterworth_q);
-        let wide = Biquad::wide_band_pass(150.0, sample_rate_f64, 1.5);
-        let mid_high = Biquad::high_pass(283.0, sample_rate_f64, butterworth_q);
-        let mid_low = Biquad::low_pass(7_900.0, sample_rate_f64, butterworth_q);
-        let high = Biquad::high_pass(7_900.0, sample_rate_f64, butterworth_q);
         let low_onset_samples = moving_average_samples(sample_rate, 0.001);
         let high_onset_samples = moving_average_samples(sample_rate, 0.0002);
 
         Self {
             sample_rate,
-            filters: [
-                PassFilter::new(vec![low; 2]),
-                PassFilter::new(vec![wide; 2]),
-                PassFilter::new(vec![mid_high, mid_low, mid_high, mid_low]),
-                PassFilter::new(vec![high; 2]),
-            ],
+            filters: BeatSensorFilterBank::new(sample_rate),
             low_onset: MovingAverageSubtractor::new(low_onset_samples),
             high_onset: MovingAverageSubtractor::new(high_onset_samples),
             detectors: std::array::from_fn(|_| PeakDetector::new(sample_rate)),
@@ -173,10 +166,7 @@ impl BeatSensor {
         selected_candidates: &mut Vec<BeatSensorCandidate>,
         beat_hypotheses: &mut Vec<BeatSensorHypothesis>,
     ) -> Result<()> {
-        let low = self.filters[0].put(sample).abs();
-        let wide = self.filters[1].put(sample).abs();
-        let mid = self.filters[2].put(sample).abs();
-        let high = self.filters[3].put(sample).abs();
+        let [low, wide, mid, high] = self.filters.process(sample).map(f32::abs);
         let low_onset = self.low_onset.put(low);
         let high_onset = self.high_onset.put(high);
         let values = [low, wide, mid, high, low_onset, high_onset];
@@ -321,6 +311,7 @@ impl Biquad {
         }
     }
 
+    #[inline(always)]
     fn put(&mut self, input: f64) -> f64 {
         let output = self.x2 * self.b2 + self.x1 * self.b1 + input * self.b0
             - (self.y2 * self.a2 + self.y1 * self.a1);
@@ -332,21 +323,155 @@ impl Biquad {
     }
 }
 
-struct PassFilter {
-    stages: Vec<Biquad>,
+#[cfg(any(not(target_arch = "aarch64"), test))]
+struct ScalarBeatSensorFilterBank {
+    low_one: Biquad,
+    low_two: Biquad,
+    wide_one: Biquad,
+    wide_two: Biquad,
+    mid_high_one: Biquad,
+    mid_low_one: Biquad,
+    mid_high_two: Biquad,
+    mid_low_two: Biquad,
+    high_one: Biquad,
+    high_two: Biquad,
 }
 
-impl PassFilter {
-    fn new(stages: Vec<Biquad>) -> Self {
-        Self { stages }
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarBeatSensorFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let sample_rate = f64::from(sample_rate);
+        let butterworth_q = f64::from(0.707_106_77_f32);
+        let low = Biquad::low_pass(283.0, sample_rate, butterworth_q);
+        let wide = Biquad::wide_band_pass(150.0, sample_rate, 1.5);
+        let mid_high = Biquad::high_pass(283.0, sample_rate, butterworth_q);
+        let mid_low = Biquad::low_pass(7_900.0, sample_rate, butterworth_q);
+        let high = Biquad::high_pass(7_900.0, sample_rate, butterworth_q);
+        Self {
+            low_one: low,
+            low_two: low,
+            wide_one: wide,
+            wide_two: wide,
+            mid_high_one: mid_high,
+            mid_low_one: mid_low,
+            mid_high_two: mid_high,
+            mid_low_two: mid_low,
+            high_one: high,
+            high_two: high,
+        }
     }
 
-    fn put(&mut self, input: f32) -> f32 {
-        let mut output = f64::from(input);
-        for stage in &mut self.stages {
-            output = stage.put(output);
+    #[inline(always)]
+    fn process(&mut self, sample: f32) -> [f32; 4] {
+        let sample = f64::from(sample);
+        let low = self.low_two.put(self.low_one.put(sample));
+        let wide = self.wide_two.put(self.wide_one.put(sample));
+        let mid = self.mid_low_two.put(
+            self.mid_high_two
+                .put(self.mid_low_one.put(self.mid_high_one.put(sample))),
+        );
+        let high = self.high_two.put(self.high_one.put(sample));
+        [low as f32, wide as f32, mid as f32, high as f32]
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type BeatSensorFilterBank = ScalarBeatSensorFilterBank;
+
+#[cfg(target_arch = "aarch64")]
+struct BiquadPair {
+    b0: float64x2_t,
+    b1: float64x2_t,
+    b2: float64x2_t,
+    a1: float64x2_t,
+    a2: float64x2_t,
+    x2: float64x2_t,
+    x1: float64x2_t,
+    y2: float64x2_t,
+    y1: float64x2_t,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BiquadPair {
+    fn new(left: Biquad, right: Biquad) -> Self {
+        let vector = |left, right| unsafe { vld1q_f64([left, right].as_ptr()) };
+        Self {
+            b0: vector(left.b0, right.b0),
+            b1: vector(left.b1, right.b1),
+            b2: vector(left.b2, right.b2),
+            a1: vector(left.a1, right.a1),
+            a2: vector(left.a2, right.a2),
+            x2: unsafe { vdupq_n_f64(0.0) },
+            x1: unsafe { vdupq_n_f64(0.0) },
+            y2: unsafe { vdupq_n_f64(0.0) },
+            y1: unsafe { vdupq_n_f64(0.0) },
         }
-        output as f32
+    }
+
+    #[inline(always)]
+    fn put(&mut self, input: float64x2_t) -> float64x2_t {
+        let feed_forward = unsafe {
+            vaddq_f64(
+                vaddq_f64(vmulq_f64(self.x2, self.b2), vmulq_f64(self.x1, self.b1)),
+                vmulq_f64(input, self.b0),
+            )
+        };
+        let feed_back =
+            unsafe { vaddq_f64(vmulq_f64(self.y2, self.a2), vmulq_f64(self.y1, self.a1)) };
+        let output = unsafe { vsubq_f64(feed_forward, feed_back) };
+        self.x2 = self.x1;
+        self.x1 = input;
+        self.y2 = self.y1;
+        self.y1 = output;
+        output
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+struct BeatSensorFilterBank {
+    low_wide_one: BiquadPair,
+    mid_high_one: BiquadPair,
+    low_wide_two: BiquadPair,
+    mid_high_two: BiquadPair,
+    mid_high_three: Biquad,
+    mid_low_four: Biquad,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BeatSensorFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let sample_rate = f64::from(sample_rate);
+        let butterworth_q = f64::from(0.707_106_77_f32);
+        let low = Biquad::low_pass(283.0, sample_rate, butterworth_q);
+        let wide = Biquad::wide_band_pass(150.0, sample_rate, 1.5);
+        let mid_high = Biquad::high_pass(283.0, sample_rate, butterworth_q);
+        let mid_low = Biquad::low_pass(7_900.0, sample_rate, butterworth_q);
+        let high = Biquad::high_pass(7_900.0, sample_rate, butterworth_q);
+        Self {
+            low_wide_one: BiquadPair::new(low, wide),
+            mid_high_one: BiquadPair::new(mid_high, high),
+            low_wide_two: BiquadPair::new(low, wide),
+            mid_high_two: BiquadPair::new(mid_low, high),
+            mid_high_three: mid_high,
+            mid_low_four: mid_low,
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f32) -> [f32; 4] {
+        let input = unsafe { vdupq_n_f64(f64::from(sample)) };
+        let low_wide = self.low_wide_two.put(self.low_wide_one.put(input));
+        let mid_high = self.mid_high_two.put(self.mid_high_one.put(input));
+        let mid = self.mid_low_four.put(
+            self.mid_high_three
+                .put(unsafe { vgetq_lane_f64::<0>(mid_high) }),
+        );
+        [
+            unsafe { vgetq_lane_f64::<0>(low_wide) } as f32,
+            unsafe { vgetq_lane_f64::<1>(low_wide) } as f32,
+            mid as f32,
+            unsafe { vgetq_lane_f64::<1>(mid_high) } as f32,
+        ]
     }
 }
 
@@ -873,6 +998,24 @@ mod tests {
         assert!((wide_48.b0 - 0.010_560_795_605_230_59).abs() < 1.0e-15);
         assert!((wide_48.a1 - -1.9784969611414083).abs() < 1.0e-15);
         assert!((wide_48.a2 - 0.978_878_408_789_538_8).abs() < 1.0e-15);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_filter_bank_is_scalar_bit_exact() {
+        for sample_rate in [44_100, 48_000] {
+            let mut scalar = ScalarBeatSensorFilterBank::new(sample_rate);
+            let mut simd = BeatSensorFilterBank::new(sample_rate);
+            for index in 0..sample_rate {
+                let phase = std::f32::consts::TAU * index as f32 / sample_rate as f32;
+                let sample = 0.55 * (phase * 83.0).sin()
+                    + 0.27 * (phase * 719.0).sin()
+                    + 0.12 * (phase * 4_117.0).sin();
+                for (scalar, simd) in scalar.process(sample).into_iter().zip(simd.process(sample)) {
+                    assert_eq!(scalar.to_bits(), simd.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

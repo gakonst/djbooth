@@ -406,7 +406,7 @@ deterministically across active processes, not a per-process multiplier; `--conc
 parallelism. On Apple Silicon, the default scheduling budget keeps two Rayon slots per core so
 independent Auto, waveform, and SRC branches remain runnable without adding extra analyzer
 processes. On the 12-core profiling host, 12 processes/24 slots analyzed the 100-track corpus in
-about 15.9 seconds; 24 processes were slower. Small default batches are capped at eight threads per
+about 14.7 seconds; 16 processes were slower. Small default batches are capped at eight threads per
 track. Lower either limit when analysis competes with live DJ software. Both limits accept explicit
 values through 64. Parallelize analysis only. Keep Rekordbox database installation
 stopped-Rekordbox, backed up, locked, and serialized through the workflow below.

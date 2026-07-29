@@ -193,20 +193,30 @@ eight and host parallelism, accepts `1..=64`, and reads the same budget from
 Thread counts 1, 2, 3, 4, 8, and 12 produced the same summary semantics and
 byte-identical DAT/EXT/2EX SHA-256 hashes for three real recordings plus one
 502-second recording. Five repeated 12-thread runs also retained those hashes.
-With every recovered path enabled, five Science Fiction Auto runs measured
-`0.875/0.875/0.887/0.890/0.990 s` on an Apple M2 Max. The same artifacts took
-about `1.00 s` before the final legacy/three-band NEON pass. Power Dynamic
-measured `1.31 s` at eight threads versus `2.27 s` at one, with identical
-DAT/EXT/2EX hashes.
+With every recovered path enabled, a paired ten-run Science Fiction Auto check
+measured a `0.793 s` median at eight threads and `0.798 s` at twelve on an
+Apple M2 Max. Power Dynamic previously measured `1.31 s` at eight threads
+versus `2.27 s` at one.
 
-The final 100-track, 8.55-hour Auto batch measured `15.88–15.92 s`
-(`6.28–6.32 tracks/s`) with 12 processes sharing 24 Rayon slots. Twelve slots
-measured `16.12–16.68 s`; 24 one-thread processes measured `16.20 s`;
-4/6/8 processes sharing 12 slots measured `19.24/17.36/16.94 s`. The
-TypeScript scheduler therefore caps process count to host parallelism and 12.
-On Apple Silicon it defaults to two scheduling slots per core, while small
-batches use at most eight threads per track. Explicit limits remain available
-through 64 when analysis must yield capacity to live DJ software.
+The second profile-guided pass packs the ten BeatSensor biquads into four
+two-lane NEON stages plus two dependent scalar stages, evaluates two PWV7
+finite followers per vector, and replaces per-sample linear-resampler division
+with an exact quotient/remainder phase accumulator. A five-run 1 kHz Samply
+profile moved total process CPU from `9,873 ms` to `8,980 ms`. BeatSensor fell
+from `1,683 ms` to about `1,142 ms`, PWV7 follower work from `587 ms` to
+`277 ms`, and linear resampling from `450 ms` to `181 ms`.
+
+The final 100-track, 8.55-hour Auto batch measured `14.62–14.78 s`
+(`6.79–6.86 tracks/s`) with 12 processes sharing 24 Rayon slots. Twelve,
+sixteen, and thirty-two slots measured `15.06/15.68/15.29 s`; 10 and 16
+processes sharing 24 slots measured `14.64/16.01 s`. The TypeScript scheduler
+therefore retains its host-bounded 12-process cap and two Apple-Silicon
+scheduling slots per core. Small batches still use at most eight threads per
+track, and explicit limits remain available through 64.
+
+All 110 valid Dynamic corpus tracks were replayed after this pass. Their
+DAT/EXT/2EX files are byte-identical to all 330 frozen pre-optimization
+artifacts, so beat-grid and waveform differential metrics are unchanged.
 
 ## Three-track differential
 
