@@ -25,6 +25,26 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — native PWV3 monochrome-detail closure
+
+- Recovered the independent `ZoomViewMaker` path instead of deriving monochrome detail from the
+  RGB waveform. It consumes the truncating signed-16-bit stereo midpoint, keeps native
+  44.1/48 kHz input, and emits exactly 150 columns per second from 294/320-sample frames.
+- Reproduced the continuous 150 Hz second-order Butterworth low-pass, raw and filtered peak
+  truncation, eight 1/8-width whiteness thresholds, track-global peak normalization, squared
+  height scale, and `(whiteness << 5) | height` packing. Silence correctly emits `0xe0`.
+- Tiga and Crystalised now match all `34,908` and `30,158` PWV3 height/whiteness entries
+  byte-for-byte. Science Fiction matches all `59,528` whiteness entries and all but two 1-LSB
+  height entries. Its complete PWV4 remains byte-exact.
+- A fresh 113-input Dynamic replay produced the expected 110 analyses and the same three
+  malformed-media failures. Median per-track PWV3 exact fraction and MAE are `100%` and `0` for
+  both components. Excluding the known mismatched Adam Ten source/reference pair, corpus-wide
+  exact fractions are `99.97246%` height and `99.96583%` whiteness; 58/109 and 61/109 tracks are
+  entirely byte-exact. Three source-reader boundaries retain `-4/-4/-15` entry-count deltas.
+- The replay preserves the frozen beat result: all 110 tracks remain above `0.99` F1, phase is
+  exact on 110/110, numbering is exact on 108/110, and mean p95 timing error is `0.834 ms`.
+  Nightly formatting and 125 unit tests plus one intentional diagnostic ignore pass.
+
 ### 2026-07-29 — native waveform-reader and PWV4 closure
 
 - Recovered the waveform reader's exact signed-16-bit stereo boundary. Each channel is multiplied

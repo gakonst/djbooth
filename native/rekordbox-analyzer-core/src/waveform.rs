@@ -47,6 +47,7 @@ const LEGACY_RAW_RATE: usize = 1_000;
 const LEGACY_RED_RADIUS: usize = 12;
 const LEGACY_GREEN_RADIUS: usize = 1;
 const COLOR_HEIGHT_SCALE: f64 = 2.932_745_123_302_746_6e-8;
+const MONOCHROME_DETAIL_RATE: usize = 150;
 #[cfg(all(target_arch = "aarch64", test))]
 const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
 #[cfg(all(target_arch = "aarch64", test))]
@@ -74,19 +75,34 @@ impl WaveformData {
     /// Preview arrays reduce those columns to their fixed protocol widths by
     /// taking maxima over exact integer-ratio ranges.
     pub fn generate(pcm: &MonoPcm) -> Result<Self> {
-        if !matches!(pcm.sample_rate(), 44_100 | 48_000) {
+        Self::generate_native(pcm, pcm)
+    }
+
+    pub(crate) fn generate_native(color_pcm: &MonoPcm, monochrome_pcm: &MonoPcm) -> Result<Self> {
+        if !matches!(color_pcm.sample_rate(), 44_100 | 48_000) {
             bail!(
                 "waveform generation requires 44100 or 48000 Hz PCM, received {} Hz",
-                pcm.sample_rate()
+                color_pcm.sample_rate()
             );
         }
+        if monochrome_pcm.sample_rate() != color_pcm.sample_rate()
+            || monochrome_pcm.len() != color_pcm.len()
+        {
+            bail!("color and monochrome waveform PCM must have matching rates and lengths");
+        }
 
-        let detail_features = extract_detail_features(pcm);
-        let legacy = LegacyWaveformAccumulator::from_pcm(pcm).finish(detail_features.len());
-        let three_band = ThreeBandAccumulator::from_pcm(pcm)
+        let detail_features = extract_detail_features(monochrome_pcm);
+        let monochrome_detail = MonochromeDetailAccumulator::from_pcm(monochrome_pcm).finish();
+        let legacy = LegacyWaveformAccumulator::from_pcm(color_pcm).finish(detail_features.len());
+        let three_band = ThreeBandAccumulator::from_pcm(color_pcm)
             .into_source()
             .finish(detail_features.len());
-        Ok(pack_waveforms(&detail_features, legacy, three_band))
+        Ok(pack_waveforms(
+            &detail_features,
+            monochrome_detail,
+            legacy,
+            three_band,
+        ))
     }
 
     /// Packed 400-byte `PWAV` entries.
@@ -192,6 +208,7 @@ impl WaveformData {
 
 fn pack_waveforms(
     detail_features: &[FrameFeatures],
+    monochrome_detail: Vec<u8>,
     legacy: LegacyWaveforms,
     three_band: ThreeBandWaveforms,
 ) -> WaveformData {
@@ -206,7 +223,7 @@ fn pack_waveforms(
             .iter()
             .map(|feature| waveform_height(feature.peak, 15))
             .collect(),
-        monochrome_detail: detail_features.iter().map(pack_monochrome).collect(),
+        monochrome_detail,
         color_preview: legacy.preview,
         color_detail: legacy.detail,
         three_band_preview: three_band.preview,
@@ -219,6 +236,169 @@ fn pack_waveforms(
 struct FrameFeatures {
     peak: f64,
     rms: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeZoomLowPass {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    x1: f64,
+    x2: f64,
+    y1: f64,
+    y2: f64,
+}
+
+impl NativeZoomLowPass {
+    fn new(sample_rate: u32) -> Self {
+        let k = (std::f64::consts::PI * 150.0 / f64::from(sample_rate)).tan();
+        let k_squared = k * k;
+        let normalization = 1.0 / (1.0 + std::f64::consts::SQRT_2 * k + k_squared);
+        Self {
+            b0: k_squared * normalization,
+            b1: 2.0 * k_squared * normalization,
+            b2: k_squared * normalization,
+            a1: 2.0 * (k_squared - 1.0) * normalization,
+            a2: (1.0 - std::f64::consts::SQRT_2 * k + k_squared) * normalization,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f64) -> f64 {
+        let output = self.b0 * sample + self.b1 * self.x1 + self.b2 * self.x2
+            - self.a1 * self.y1
+            - self.a2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = sample;
+        self.y2 = self.y1;
+        self.y1 = output;
+        output
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeZoomFrame {
+    peak: i16,
+    whiteness: u8,
+}
+
+struct MonochromeDetailAccumulator {
+    filter: NativeZoomLowPass,
+    frames: Vec<NativeZoomFrame>,
+    frame_samples: usize,
+    frame_count: usize,
+    frame_peak: i16,
+    frame_filtered_peak: i16,
+    global_peak: i16,
+}
+
+impl MonochromeDetailAccumulator {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            filter: NativeZoomLowPass::new(sample_rate),
+            frames: Vec::new(),
+            frame_samples: usize::try_from(sample_rate)
+                .expect("sample rate fits waveform arithmetic")
+                / MONOCHROME_DETAIL_RATE,
+            frame_count: 0,
+            frame_peak: 0,
+            frame_filtered_peak: 0,
+            global_peak: 0,
+        }
+    }
+
+    fn from_pcm(pcm: &MonoPcm) -> Self {
+        let mut accumulator = Self::new(pcm.sample_rate());
+        accumulator.push(pcm.samples());
+        accumulator
+    }
+
+    fn push(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            let sample = normalized_to_i16(sample);
+            let peak = saturating_i16_magnitude(sample);
+            self.frame_peak = self.frame_peak.max(peak);
+            self.global_peak = self.global_peak.max(peak);
+
+            let filtered = self.filter.process(f64::from(sample)).trunc() as i32;
+            let filtered_peak = filtered.unsigned_abs().min(i16::MAX as u32) as i16;
+            self.frame_filtered_peak = self.frame_filtered_peak.max(filtered_peak);
+            self.frame_count += 1;
+            if self.frame_count == self.frame_samples {
+                self.finish_frame();
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        if self.frame_count != 0 {
+            self.finish_frame();
+        }
+        let global_peak = i32::from(self.global_peak);
+        self.frames
+            .into_iter()
+            .map(|frame| {
+                let height = if global_peak == 0 {
+                    0
+                } else {
+                    let normalized =
+                        (f64::from(frame.peak) * 32_767.0 / f64::from(global_peak)) as i32;
+                    ((f64::from(normalized * normalized) * COLOR_HEIGHT_SCALE) as u8) & 0x1f
+                };
+                (frame.whiteness << 5) | height
+            })
+            .collect()
+    }
+
+    fn finish_frame(&mut self) {
+        self.frames.push(NativeZoomFrame {
+            peak: self.frame_peak,
+            whiteness: native_zoom_whiteness(self.frame_filtered_peak, self.frame_peak),
+        });
+        self.frame_count = 0;
+        self.frame_peak = 0;
+        self.frame_filtered_peak = 0;
+    }
+}
+
+fn normalized_to_i16(sample: f32) -> i16 {
+    (sample * 32_768.0)
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+        .trunc() as i16
+}
+
+fn saturating_i16_magnitude(sample: i16) -> i16 {
+    i32::from(sample).unsigned_abs().min(i16::MAX as u32) as i16
+}
+
+fn native_zoom_whiteness(filtered_peak: i16, peak: i16) -> u8 {
+    if peak == 0 {
+        return 7;
+    }
+    let ratio = f64::from(filtered_peak) / f64::from(peak);
+    if ratio >= 0.875 {
+        0
+    } else if ratio >= 0.75 {
+        1
+    } else if ratio >= 0.625 {
+        2
+    } else if ratio >= 0.5 {
+        3
+    } else if ratio >= 0.375 {
+        4
+    } else if ratio >= 0.25 {
+        5
+    } else if ratio >= 0.125 {
+        6
+    } else {
+        7
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1159,6 +1339,7 @@ fn extract_detail_feature_range(
 pub(crate) struct StreamingWaveformAccumulator {
     legacy: LegacyWaveformAccumulator,
     three_band: ThreeBandAccumulator,
+    monochrome: MonochromeDetailAccumulator,
     pending: Vec<f32>,
     features: Vec<FrameFeatures>,
 }
@@ -1168,18 +1349,23 @@ impl StreamingWaveformAccumulator {
         Self {
             legacy: LegacyWaveformAccumulator::new(ANALYSIS_SAMPLE_RATE),
             three_band: ThreeBandAccumulator::new(ANALYSIS_SAMPLE_RATE),
+            monochrome: MonochromeDetailAccumulator::new(ANALYSIS_SAMPLE_RATE),
             pending: Vec::with_capacity(DETAIL_FRAME_SAMPLES),
             features: Vec::new(),
         }
     }
 
-    pub(crate) fn push(&mut self, mut samples: &[f32]) {
-        self.legacy.push(samples);
-        self.three_band.push(samples);
+    pub(crate) fn push_native(&mut self, color_samples: &[f32], mut monochrome_samples: &[f32]) {
+        debug_assert_eq!(color_samples.len(), monochrome_samples.len());
+        self.legacy.push(color_samples);
+        self.three_band.push(color_samples);
+        self.monochrome.push(monochrome_samples);
         if !self.pending.is_empty() {
-            let consumed = (DETAIL_FRAME_SAMPLES - self.pending.len()).min(samples.len());
-            self.pending.extend_from_slice(&samples[..consumed]);
-            samples = &samples[consumed..];
+            let consumed =
+                (DETAIL_FRAME_SAMPLES - self.pending.len()).min(monochrome_samples.len());
+            self.pending
+                .extend_from_slice(&monochrome_samples[..consumed]);
+            monochrome_samples = &monochrome_samples[consumed..];
             if self.pending.len() == DETAIL_FRAME_SAMPLES {
                 self.features
                     .push(extract_detail_frame(&self.pending, DETAIL_FRAME_SAMPLES));
@@ -1187,12 +1373,17 @@ impl StreamingWaveformAccumulator {
             }
         }
 
-        let complete_len = samples.len() / DETAIL_FRAME_SAMPLES * DETAIL_FRAME_SAMPLES;
-        for frame in samples[..complete_len].chunks_exact(DETAIL_FRAME_SAMPLES) {
+        let complete_len = monochrome_samples.len() / DETAIL_FRAME_SAMPLES * DETAIL_FRAME_SAMPLES;
+        for frame in monochrome_samples[..complete_len].chunks_exact(DETAIL_FRAME_SAMPLES) {
             self.features
                 .push(extract_detail_frame(frame, DETAIL_FRAME_SAMPLES));
         }
-        self.pending.extend_from_slice(&samples[complete_len..]);
+        self.pending
+            .extend_from_slice(&monochrome_samples[complete_len..]);
+    }
+
+    pub(crate) fn push(&mut self, samples: &[f32]) {
+        self.push_native(samples, samples);
     }
 
     pub(crate) fn push_zeros(&mut self, mut count: usize) {
@@ -1209,9 +1400,10 @@ impl StreamingWaveformAccumulator {
             self.features
                 .push(extract_detail_frame(&self.pending, DETAIL_FRAME_SAMPLES));
         }
+        let monochrome_detail = self.monochrome.finish();
         let legacy = self.legacy.finish(self.features.len());
         let three_band = self.three_band.finish(self.features.len());
-        pack_waveforms(&self.features, legacy, three_band)
+        pack_waveforms(&self.features, monochrome_detail, legacy, three_band)
     }
 }
 
@@ -1845,17 +2037,34 @@ mod tests {
         let scalar = extract_detail_features_scalar(&pcm);
         let parallel = extract_detail_features(&pcm);
         assert_eq!(scalar.len(), parallel.len());
+        let monochrome = MonochromeDetailAccumulator::from_pcm(&pcm).finish();
         let legacy = LegacyWaveformAccumulator::from_pcm(&pcm).finish(scalar.len());
         let three_band = ThreeBandAccumulator::from_pcm(&pcm).finish(scalar.len());
         assert_eq!(
-            pack_waveforms(&scalar, legacy.clone(), three_band.clone()),
-            pack_waveforms(&parallel, legacy, three_band)
+            pack_waveforms(
+                &scalar,
+                monochrome.clone(),
+                legacy.clone(),
+                three_band.clone()
+            ),
+            pack_waveforms(&parallel, monochrome, legacy, three_band)
         );
     }
 
     #[test]
     fn height_uses_peak_power() {
         assert_eq!(waveform_height(0.5, 31), 8);
+    }
+
+    #[test]
+    fn native_zoom_whiteness_uses_eighth_width_low_pass_ratios() {
+        assert_eq!(native_zoom_whiteness(875, 1_000), 0);
+        assert_eq!(native_zoom_whiteness(874, 1_000), 1);
+        assert_eq!(native_zoom_whiteness(750, 1_000), 1);
+        assert_eq!(native_zoom_whiteness(749, 1_000), 2);
+        assert_eq!(native_zoom_whiteness(125, 1_000), 6);
+        assert_eq!(native_zoom_whiteness(124, 1_000), 7);
+        assert_eq!(native_zoom_whiteness(0, 0), 7);
     }
 
     #[test]
@@ -1950,13 +2159,19 @@ mod tests {
                 .iter()
                 .all(|value| *value == 0)
         );
+        assert!(
+            silent_waveforms
+                .monochrome_detail()
+                .iter()
+                .all(|value| *value == 0xe0)
+        );
 
         let mut samples = vec![0.0; DETAIL_FRAME_SAMPLES * 2];
         samples[0] = 1.0;
         let impulse = MonoPcm::new(ANALYSIS_SAMPLE_RATE, samples).expect("PCM");
         let impulse_waveforms = WaveformData::generate(&impulse).expect("impulse waveforms");
         assert_eq!(impulse_waveforms.monochrome_detail()[0] & 0x1f, 31);
-        assert_eq!(impulse_waveforms.monochrome_detail()[1], 0);
+        assert_eq!(impulse_waveforms.monochrome_detail()[1], 0xe0);
     }
 
     #[test]

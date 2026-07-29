@@ -236,11 +236,14 @@ insertions or deletions. Beat-number accuracy and F1 at both 70 and 100 ms are
 `1.0` for all three. Median/p95 absolute timestamp errors are respectively
 `3.088/8.905`, `6.196/27.056`, and `4.032/7.341` ms.
 
-Wall time was 0.52–0.98 seconds per track on the test machine. The detailed
-monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and 0.999; color
-detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986. Peak-power
-quantization also brought clean/reference `PWV3` means within 0.14, 0.34, and
-0.26 of one another.
+Wall time was 0.52–0.98 seconds per track on the test machine. The original
+detailed monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and
+0.999; color detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986.
+The later native `ZoomViewMaker` reconstruction replaced the PWV3 estimator.
+It uses a signed-16-bit stereo midpoint, 150 Hz low-pass ratio, eight
+whiteness thresholds, and globally normalized peak-squared height. Tiga and
+Crystalised are now completely byte-exact; Science Fiction differs in two
+1-LSB height entries and has exact whiteness.
 
 The RGB path was subsequently re-derived from native boundary traces,
 31 steady-frequency tones, amplitude ladders/ramps, and matched-PCM copies of
@@ -438,9 +441,9 @@ artifact was retained, so distributable output remains unchanged.
   exactly. Fresh Science Fiction `PWV7` low/mid/high correlations are
   `0.999989/0.999978/0.999944`; its complete PWV4 payload is byte-exact.
 - Source-decoder/framer detail-count boundaries, syncopated Normal meter
-  inference, PWAV/PWV2 and PWV3 whiteness, isolated source/oracle alignment
-  outliers, the two Dynamic survivor near-ties, phrase structure, and
-  unsupported MP3 seek variants remain high-value differential work.
+  inference, PWAV/PWV2, isolated source/oracle alignment outliers, the two
+  Dynamic survivor near-ties, phrase structure, and unsupported MP3 seek
+  variants remain high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.
