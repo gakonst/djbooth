@@ -119,9 +119,8 @@ platform codec dependency:
   mono signal. Key and Normal rhythm resample it to 44.1 kHz; Dynamic consumes
   source-rate PCM because its recovered detector measures positions in source
   frames. Waveforms follow the native reader instead: each stereo channel is
-  clamped and truncated through signed 16-bit PCM, nearly equal magnitudes
-  select the stronger channel (right wins ties), and materially different
-  channels are averaged. Native 44.1 and 48 kHz rates are retained. Other
+  rounded through signed 16-bit PCM and combined with an exact half-sum that
+  preserves half-LSB values. Native 44.1 and 48 kHz rates are retained. Other
   8–200 kHz inputs select 48 kHz for the 8 kHz family and 44.1 kHz otherwise,
   run each stereo channel separately through the recovered 29-tap Kaiser
   converter, then quantize and mix. WAV/other readers advertise the decoded
@@ -247,8 +246,8 @@ Crystalised are now completely byte-exact; Science Fiction differs in two
 
 The RGB path was subsequently re-derived from native boundary traces,
 31 steady-frequency tones, amplitude ladders/ramps, and matched-PCM copies of
-the same three recordings. Its input boundary is signed-16-bit quantized
-stereo, mixed with the native magnitude rule described above. `PWV4`'s first
+the same three recordings. Its input boundary is signed-16-bit rounded stereo
+with the native exact half-sum described above. `PWV4`'s first
 two lanes are the positive and negative source extrema. Its remaining lanes
 come directly from the native legacy bank: `LP400`, two-stage `LP200`,
 two-stage `HP200 → LP2000`, and two-stage `HP2000`. Per-millisecond band
@@ -440,10 +439,14 @@ artifact was retained, so distributable output remains unchanged.
   coefficients. Science Fiction matches the linked `[80, 172, 147]` values
   exactly. Fresh Science Fiction `PWV7` low/mid/high correlations are
   `0.999989/0.999978/0.999944`; its complete PWV4 payload is byte-exact.
+- `PWV2` is exact on all 162 synthetic preview fixtures and `PWAV` is exact on
+  151; the residual synthetic misses are height-only amplitude ramps/sweeps.
+  Across 106 aligned real sources, `PWAV` height/color exactness is
+  `99.9033%/99.8868%` and `PWV2` exactness is `99.9906%`.
 - Source-decoder/framer detail-count boundaries, syncopated Normal meter
-  inference, PWAV/PWV2, isolated source/oracle alignment outliers, the two
-  Dynamic survivor near-ties, phrase structure, and unsupported MP3 seek
-  variants remain high-value differential work.
+  inference, isolated source/oracle alignment outliers, the two Dynamic
+  survivor near-ties, phrase structure, and unsupported MP3 seek variants
+  remain high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.

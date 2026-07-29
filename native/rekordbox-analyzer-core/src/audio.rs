@@ -692,24 +692,15 @@ fn trim_leading_interleaved_frames<'a>(
     &interleaved[trim_frames * channels..]
 }
 
-/// Mix two `/ 32768`-normalized, signed-16-bit-quantized waveform channels.
+/// Average two channels after native signed-16-bit quantization.
 pub(crate) fn native_waveform_mono_pair(left: f32, right: f32) -> f32 {
-    let scale = 32_768.0 / 32_767.0;
-    let left = f64::from(left) * scale;
-    let right = f64::from(right) * scale;
-    let difference = (left.abs() - right.abs()).abs();
-    let mixed = if difference < 0.001 {
-        if right.abs() < left.abs() {
-            left
-        } else {
-            right
-        }
-    } else {
-        (left + right) * 0.5
-    };
-    // Rekordbox scales signed 16-bit PCM by 1 / 32767 without clipping, so
-    // -32768 intentionally survives as roughly -1.00003.
-    mixed as f32
+    let left = (left * 32_768.0)
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+        .round() as i16;
+    let right = (right * 32_768.0)
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+        .round() as i16;
+    ((f64::from(left) + f64::from(right)) * (0.5 / 32_768.0)) as f32
 }
 
 /// Average two signed-16-bit-quantized waveform channels with native truncation.
@@ -721,10 +712,7 @@ pub(crate) fn native_waveform_midpoint_pair(left: f32, right: f32) -> f32 {
 }
 
 fn native_waveform_mono_sample(frame: &[f32]) -> f32 {
-    native_waveform_mono_pair(
-        quantize_analysis_pcm(frame[0]),
-        quantize_analysis_pcm(*frame.get(1).unwrap_or(&frame[0])),
-    )
+    native_waveform_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
 }
 
 fn native_waveform_midpoint_sample(frame: &[f32]) -> f32 {
@@ -1051,27 +1039,24 @@ mod tests {
     }
 
     #[test]
-    fn native_waveform_mixer_preserves_nearly_equal_dominant_channel() {
+    fn native_waveform_mixer_preserves_half_lsb_channel_average() {
         let left = -32_767.0_f32 / 32_768.0;
         let right = -1.0_f32;
         let mixed = native_waveform_mono_sample(&[left, right]);
-        assert_eq!(mixed.to_bits(), (-32_768.0_f32 / 32_767.0).to_bits());
-        assert!(mixed < -1.0);
+        assert_eq!(mixed.to_bits(), (-65_535.0_f32 / 65_536.0).to_bits());
     }
 
     #[test]
     fn native_waveform_mixer_averages_materially_different_channels() {
         let mixed = native_waveform_mono_sample(&[0.75, -0.25]);
-        let scale = 32_768.0_f64 / 32_767.0;
-        let expected = ((0.75_f64 - 0.25) * 0.5 * scale) as f32;
-        assert_eq!(mixed.to_bits(), expected.to_bits());
+        assert_eq!(mixed.to_bits(), 0.25_f32.to_bits());
     }
 
     #[test]
     fn native_waveform_mixer_quantizes_each_channel_before_mixing() {
-        let below_one_lsb = 0.5_f32 / 32_768.0;
+        let below_half_lsb = 0.49_f32 / 32_768.0;
         assert_eq!(
-            native_waveform_mono_sample(&[below_one_lsb, 0.0]).to_bits(),
+            native_waveform_mono_sample(&[below_half_lsb, 0.0]).to_bits(),
             0.0_f32.to_bits()
         );
     }

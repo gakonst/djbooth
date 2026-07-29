@@ -1457,3 +1457,38 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   110-track replay has no regressions and improves mean p95 from `1.620` to
   `1.269 ms`. The later format-derived reader-length pass improves it again to
   `0.834 ms` and restores seven additional FLAC endpoints.
+
+## Native PWAV/PWV2 preview checkpoint (2026-07-29)
+
+- Extended the private differential tracer to cover `LoudView::analyzePeak`,
+  all five normal/dot peak-detector callsites, raw batch state, and final
+  preview arrays. The tracer remains a local oracle only; no Rekordbox/JUCE
+  code or runtime asset enters the clean crate or release.
+- Recovered the 75 Hz preview pipeline: one held terminal sample, native
+  signed-16 channel rounding and exact stereo half-sum, low-band double
+  150 Hz/Q0.9 band-pass, shared 7.9 kHz fourth-order TPT Linkwitz-Riley
+  crossover, double 283 Hz high-pass on the mid branch, three persistent peak
+  detectors, low-triggered raw batches, 400-column mapping, and the fixed
+  height/color tables. The legacy 100-column dots use the paired 900 detector
+  and native minimum level two.
+- Corrected two non-obvious state bugs. A delayed raw batch that remained
+  inside its current output column was being multiplied by the track
+  normalization twice. The color input also incorrectly selected a dominant
+  channel for nearly equal magnitudes; the native reader instead rounds each
+  channel to signed 16-bit and preserves the exact half-LSB stereo average.
+  On a traced AAC recording, 999/1,000 frame maxima and all 97 captured
+  high-band event frames now match the native implementation.
+- The 162-fixture tone/ramp/phase/stereo corpus now has exact `PWV2` on
+  162/162 fixtures. Complete `PWAV` is byte-exact on 151/162; aggregate height
+  and color exactness are `99.2701%` and `99.9877%`. The remaining 11 are
+  height-only amplitude-ramp/sweep threshold probes.
+- A fresh read-only 110-track replay gives aggregate `PWV2` exactness
+  `99.9909%`. Excluding one known source/reference mismatch and the three
+  known decoder-length outliers, `PWAV` height/color exactness is
+  `99.9033%/99.8868%`, with MAE `0.00325/0.00229` levels. Science Fiction is
+  byte-exact in both preview tags; Tiga is exact in `PWV2` and differs in only
+  two one-level `PWAV` height entries.
+- Removed the redundant generic per-frame feature accumulator from streaming
+  waveform generation. The native monochrome accumulator already supplies
+  the exact detail count, eliminating one full extra scan and its unbounded
+  feature vector.

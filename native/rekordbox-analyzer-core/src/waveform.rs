@@ -18,7 +18,9 @@ use rayon::prelude::*;
 use std::collections::VecDeque;
 
 use crate::anlz::{AnlzTag, CountedWaveform, build_waveform_tag};
-use crate::audio::{ANALYSIS_SAMPLE_RATE, DETAIL_FRAME_SAMPLES, MonoPcm};
+#[cfg(test)]
+use crate::audio::DETAIL_FRAME_SAMPLES;
+use crate::audio::{ANALYSIS_SAMPLE_RATE, MonoPcm};
 
 /// Fixed monochrome waveform preview width.
 pub const MONOCHROME_PREVIEW_COLUMNS: usize = 400;
@@ -48,11 +50,13 @@ const LEGACY_RED_RADIUS: usize = 12;
 const LEGACY_GREEN_RADIUS: usize = 1;
 const COLOR_HEIGHT_SCALE: f64 = 2.932_745_123_302_746_6e-8;
 const MONOCHROME_DETAIL_RATE: usize = 150;
+const NATIVE_LOUD_DECAY: f32 = f32::from_bits(0x3f7e_6baa);
+const NATIVE_LOUD_900_FLOOR: f32 = f32::from_bits(0x43a3_d70a);
 #[cfg(all(target_arch = "aarch64", test))]
 const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
 #[cfg(all(target_arch = "aarch64", test))]
 const COLOR_PREVIEW_BLUE_GAIN: f64 = 0.513;
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 const MIN_PARALLEL_CHUNK_FRAMES: usize = 3_000;
 
 /// All waveform entry arrays needed by DAT, EXT, and 2EX analysis files.
@@ -91,14 +95,15 @@ impl WaveformData {
             bail!("color and monochrome waveform PCM must have matching rates and lengths");
         }
 
-        let detail_features = extract_detail_features(monochrome_pcm);
         let monochrome_detail = MonochromeDetailAccumulator::from_pcm(monochrome_pcm).finish();
-        let legacy = LegacyWaveformAccumulator::from_pcm(color_pcm).finish(detail_features.len());
+        let detail_count = monochrome_detail.len();
+        let loud_preview = NativeLoudPreviewAccumulator::from_pcm(color_pcm).finish();
+        let legacy = LegacyWaveformAccumulator::from_pcm(color_pcm).finish(detail_count);
         let three_band = ThreeBandAccumulator::from_pcm(color_pcm)
             .into_source()
-            .finish(detail_features.len());
+            .finish(detail_count);
         Ok(pack_waveforms(
-            &detail_features,
+            loud_preview,
             monochrome_detail,
             legacy,
             three_band,
@@ -207,22 +212,14 @@ impl WaveformData {
 }
 
 fn pack_waveforms(
-    detail_features: &[FrameFeatures],
+    loud_preview: NativeLoudPreviewWaveforms,
     monochrome_detail: Vec<u8>,
     legacy: LegacyWaveforms,
     three_band: ThreeBandWaveforms,
 ) -> WaveformData {
-    let monochrome_preview_features = reduce_features(detail_features, MONOCHROME_PREVIEW_COLUMNS);
-    let tiny_preview_features = reduce_features(detail_features, TINY_PREVIEW_COLUMNS);
     WaveformData {
-        monochrome_preview: monochrome_preview_features
-            .iter()
-            .map(pack_monochrome)
-            .collect(),
-        tiny_preview: tiny_preview_features
-            .iter()
-            .map(|feature| waveform_height(feature.peak, 15))
-            .collect(),
+        monochrome_preview: loud_preview.monochrome,
+        tiny_preview: loud_preview.tiny,
         monochrome_detail,
         color_preview: legacy.preview,
         color_detail: legacy.detail,
@@ -232,6 +229,7 @@ fn pack_waveforms(
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
 struct FrameFeatures {
     peak: f64,
@@ -449,13 +447,645 @@ impl Biquad {
         }
     }
 
-    #[cfg(any(not(target_arch = "aarch64"), test))]
+    fn band_pass_at(cutoff_hz: f64, q: f64, sample_rate: u32) -> Self {
+        let omega = 2.0 * std::f64::consts::PI * cutoff_hz / f64::from(sample_rate);
+        let cosine = omega.cos();
+        let alpha = omega.sin() / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: alpha / a0,
+            b1: 0.0,
+            b2: -alpha / a0,
+            a1: -2.0 * cosine / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
     #[inline(always)]
     fn process(&mut self, sample: f64) -> f64 {
         let output = self.b0 * sample + self.z1;
         self.z1 = self.b1 * sample - self.a1 * output + self.z2;
         self.z2 = self.b2 * sample - self.a2 * output;
         output
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeLoudPreviewWaveforms {
+    monochrome: Vec<u8>,
+    tiny: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeLoudEvent {
+    frame: usize,
+    amplitude: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeLoudRawBatch {
+    frame: usize,
+    value: f32,
+    delayed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeLoudPeakDetector {
+    current: f32,
+    position: i64,
+    started: bool,
+}
+
+impl Default for NativeLoudPeakDetector {
+    fn default() -> Self {
+        Self {
+            current: 0.01,
+            position: 0,
+            started: false,
+        }
+    }
+}
+
+impl NativeLoudPeakDetector {
+    fn process_frame(
+        &mut self,
+        samples: &[f32],
+        sample_rate: u32,
+        band: usize,
+        frame: usize,
+        final_frame: bool,
+    ) -> (Vec<NativeLoudEvent>, bool) {
+        let multiplier = if band == 2 { 0.66_f32 } else { 0.75_f32 };
+        let start_samples = f64::from(sample_rate) * 0.32;
+        let decay_samples = f64::from(sample_rate) * 1.714;
+        let decay_step = (f64::from(sample_rate) * 0.011_609_977_324_263_039).trunc() as i64;
+        let mut events = Vec::new();
+        let mut low_trigger = false;
+        let mut decay_position = 0_i64;
+
+        for (index, &sample) in samples.iter().enumerate() {
+            self.position += 1;
+            if !self.started {
+                if f64::from(sample) > 0.01 {
+                    self.started = true;
+                    self.current = sample;
+                    self.position = 0;
+                    if band == 0 {
+                        low_trigger = true;
+                    }
+                }
+            } else {
+                let current = self.current;
+                let qualifies = if f64::from(current) > 0.01 {
+                    sample >= current * multiplier
+                } else {
+                    f64::from(sample) >= 0.01
+                };
+                if qualifies {
+                    if (self.position as f64) >= start_samples {
+                        events.push(NativeLoudEvent {
+                            frame,
+                            amplitude: current,
+                        });
+                        self.current = sample;
+                        self.position = 0;
+                        decay_position = 0;
+                        if band == 0 {
+                            low_trigger = true;
+                        }
+                    } else if sample > current {
+                        self.current = sample;
+                    }
+                } else if (self.position as f64) > decay_samples {
+                    decay_position += 1;
+                    if decay_position >= decay_step {
+                        self.current *= NATIVE_LOUD_DECAY;
+                        if f64::from(self.current) <= 0.01 {
+                            self.current = 0.01;
+                        }
+                        decay_position = 0;
+                    }
+                }
+            }
+
+            if final_frame && index + 1 == samples.len() {
+                events.push(NativeLoudEvent {
+                    frame,
+                    amplitude: self.current,
+                });
+            }
+        }
+        (events, low_trigger)
+    }
+
+    fn process_frame_900(
+        &mut self,
+        samples: &[f32],
+        sample_rate: u32,
+        band: usize,
+        frame: usize,
+        final_frame: bool,
+    ) -> Vec<NativeLoudEvent> {
+        let multiplier = if band == 2 { 0.66_f32 } else { 0.75_f32 };
+        let start_samples = f64::from(sample_rate) * 0.32;
+        let decay_samples = f64::from(sample_rate) * 1.714;
+        let decay_step = (f64::from(sample_rate) * 0.011_609_977_324_263_039).trunc() as i64;
+        let mut events = Vec::new();
+        let mut pooled = 0.0_f32;
+        let mut decay_position = 0_i64;
+
+        for (index, &sample) in samples.iter().enumerate() {
+            self.position += 1;
+            pooled = pooled.max(sample);
+            let final_sample = final_frame && index + 1 == samples.len();
+            if self.position & 3 != 0 && !final_sample {
+                continue;
+            }
+
+            if !self.started {
+                if pooled > NATIVE_LOUD_900_FLOOR {
+                    self.started = true;
+                    self.current = pooled;
+                    self.position = 0;
+                    events.push(NativeLoudEvent {
+                        frame,
+                        amplitude: pooled,
+                    });
+                }
+            } else {
+                let current = self.current;
+                let qualifies = if current > NATIVE_LOUD_900_FLOOR {
+                    pooled >= current * multiplier
+                } else {
+                    pooled >= NATIVE_LOUD_900_FLOOR
+                };
+                if qualifies {
+                    if (self.position as f64) >= start_samples {
+                        events.push(NativeLoudEvent {
+                            frame,
+                            amplitude: current,
+                        });
+                        self.current = pooled;
+                        self.position = 0;
+                        decay_position = 0;
+                    } else if pooled > current {
+                        self.current = pooled;
+                    }
+                } else if (self.position as f64) > decay_samples {
+                    decay_position += 4;
+                    if decay_position >= decay_step {
+                        self.current =
+                            (self.current * NATIVE_LOUD_DECAY).max(NATIVE_LOUD_900_FLOOR);
+                        decay_position = 0;
+                    }
+                }
+            }
+
+            if final_sample {
+                events.push(NativeLoudEvent {
+                    frame,
+                    amplitude: self.current,
+                });
+            }
+            pooled = 0.0;
+        }
+        events
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativeLoudFilterBank {
+    low: [Biquad; 2],
+    mid_high_pass: [Biquad; 2],
+    crossover: LinkwitzRiley4,
+}
+
+impl NativeLoudFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let low = Biquad::band_pass_at(150.0, 0.899_999_976, sample_rate);
+        let mid_high_pass = Biquad::new_at(283.0, 0.707_106_769, true, sample_rate);
+        Self {
+            low: [low; 2],
+            mid_high_pass: [mid_high_pass; 2],
+            crossover: LinkwitzRiley4::new(7_900.0, sample_rate),
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f32) -> [f32; 3] {
+        let (mid_source, high) = self.crossover.process_pair(sample);
+        [
+            process_loud_filter(&mut self.low, f64::from(sample)),
+            process_loud_filter(&mut self.mid_high_pass, f64::from(mid_source)),
+            f64::from(high),
+        ]
+        .map(|value| (value as f32).abs() * 32_768.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LinkwitzRiley4 {
+    g: f32,
+    root_two: f32,
+    h: f32,
+    state: [f32; 4],
+}
+
+impl LinkwitzRiley4 {
+    fn new(cutoff_hz: f32, sample_rate: u32) -> Self {
+        let g = (std::f64::consts::PI * f64::from(cutoff_hz) / f64::from(sample_rate)).tan() as f32;
+        let root_two = 2.0_f64.sqrt() as f32;
+        let h = (1.0 / (1.0 + f64::from(root_two * g + g * g))) as f32;
+        Self {
+            g,
+            root_two,
+            h,
+            state: [0.0; 4],
+        }
+    }
+
+    #[inline(always)]
+    fn process_pair(&mut self, input: f32) -> (f32, f32) {
+        let high = (input - (self.root_two + self.g) * self.state[0] - self.state[1]) * self.h;
+        let band = self.g * high + self.state[0];
+        self.state[0] = self.g * high + band;
+        let low = self.g * band + self.state[1];
+        self.state[1] = self.g * band + low;
+
+        let high_second = (low - (self.root_two + self.g) * self.state[2] - self.state[3]) * self.h;
+        let band_second = self.g * high_second + self.state[2];
+        self.state[2] = self.g * high_second + band_second;
+        let low_second = self.g * band_second + self.state[3];
+        self.state[3] = self.g * band_second + low_second;
+
+        (low_second, low - self.root_two * band + high - low_second)
+    }
+}
+
+#[inline(always)]
+fn process_loud_filter<const N: usize>(stages: &mut [Biquad; N], mut sample: f64) -> f64 {
+    for stage in stages {
+        sample = stage.process(sample);
+    }
+    sample
+}
+
+struct NativeLoudPreviewAccumulator {
+    sample_rate: u32,
+    frame_samples: usize,
+    filters: NativeLoudFilterBank,
+    normal_detectors: [NativeLoudPeakDetector; 3],
+    dot_detectors: [NativeLoudPeakDetector; 2],
+    pending_frame: Vec<f32>,
+    held_sample: Option<f32>,
+    processed_samples: usize,
+    processed_frames: usize,
+    raw_sum: f32,
+    raw_batch_frames: usize,
+    raw_batch_pending: bool,
+    raw_batches: Vec<NativeLoudRawBatch>,
+    normal_events: [Vec<NativeLoudEvent>; 3],
+    dot_events: [Vec<NativeLoudEvent>; 2],
+}
+
+impl NativeLoudPreviewAccumulator {
+    fn new(sample_rate: u32) -> Self {
+        let frame_samples =
+            usize::try_from(sample_rate).expect("sample rate fits waveform arithmetic") / 75;
+        Self {
+            sample_rate,
+            frame_samples,
+            filters: NativeLoudFilterBank::new(sample_rate),
+            normal_detectors: [NativeLoudPeakDetector::default(); 3],
+            dot_detectors: [NativeLoudPeakDetector::default(); 2],
+            pending_frame: Vec::with_capacity(frame_samples),
+            held_sample: None,
+            processed_samples: 0,
+            processed_frames: 0,
+            raw_sum: 0.0,
+            raw_batch_frames: 0,
+            raw_batch_pending: false,
+            raw_batches: Vec::new(),
+            normal_events: std::array::from_fn(|_| Vec::new()),
+            dot_events: std::array::from_fn(|_| Vec::new()),
+        }
+    }
+
+    fn from_pcm(pcm: &MonoPcm) -> Self {
+        let mut accumulator = Self::new(pcm.sample_rate());
+        accumulator.push(pcm.samples());
+        accumulator
+    }
+
+    fn push(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            if let Some(previous) = self.held_sample.replace(sample) {
+                self.push_effective_sample(previous);
+            }
+        }
+    }
+
+    fn push_effective_sample(&mut self, sample: f32) {
+        if self.pending_frame.len() == self.frame_samples {
+            self.process_pending_frame(false);
+        }
+        self.pending_frame.push(sample);
+        self.processed_samples += 1;
+    }
+
+    fn process_pending_frame(&mut self, final_frame: bool) {
+        if self.pending_frame.is_empty() {
+            return;
+        }
+        let frame = std::mem::replace(
+            &mut self.pending_frame,
+            Vec::with_capacity(self.frame_samples),
+        );
+        self.process_frame(&frame, final_frame);
+    }
+
+    fn process_frame(&mut self, samples: &[f32], final_frame: bool) {
+        self.processed_frames += 1;
+        let frame = self.processed_frames;
+        let mut raw = Vec::with_capacity(samples.len());
+        let mut bands: [Vec<f32>; 3] = std::array::from_fn(|_| Vec::with_capacity(samples.len()));
+        for &sample in samples {
+            raw.push(sample * 32_768.0);
+            let filtered = self.filters.process(sample);
+            for (output, value) in bands.iter_mut().zip(filtered) {
+                output.push(value);
+            }
+        }
+
+        let mut low_trigger = false;
+        for (band, samples) in bands.iter().enumerate() {
+            let (events, triggered) = self.normal_detectors[band].process_frame(
+                samples,
+                self.sample_rate,
+                band,
+                frame,
+                final_frame,
+            );
+            self.normal_events[band].extend(events);
+            low_trigger |= band == 0 && triggered;
+        }
+        for (band, samples) in bands.iter().enumerate().take(2) {
+            self.dot_events[band].extend(self.dot_detectors[band].process_frame_900(
+                samples,
+                self.sample_rate,
+                band,
+                frame,
+                final_frame,
+            ));
+        }
+
+        self.raw_sum += native_loud_frame_sum(&raw);
+        if self.raw_batch_frames > 7 || low_trigger || final_frame {
+            let divisor = ((self.raw_batch_frames + 1) * self.frame_samples) as f32;
+            self.raw_batches.push(NativeLoudRawBatch {
+                frame,
+                value: self.raw_sum / divisor,
+                delayed: self.raw_batch_pending,
+            });
+            self.raw_sum = 0.0;
+            self.raw_batch_frames = 0;
+            self.raw_batch_pending = low_trigger;
+        } else {
+            self.raw_batch_frames += 1;
+        }
+    }
+
+    fn finish(mut self) -> NativeLoudPreviewWaveforms {
+        self.held_sample = None;
+        self.process_pending_frame(true);
+        if self.processed_frames == 0 {
+            return NativeLoudPreviewWaveforms {
+                monochrome: vec![0xa2; MONOCHROME_PREVIEW_COLUMNS],
+                tiny: vec![1; TINY_PREVIEW_COLUMNS],
+            };
+        }
+
+        let raw = map_native_loud_raw(self.processed_frames, &self.raw_batches);
+        let bands = self
+            .normal_events
+            .each_ref()
+            .map(|events| map_native_loud_events(self.processed_frames, events));
+        let dots = self
+            .dot_events
+            .each_ref()
+            .map(|events| map_native_loud_dots(self.processed_samples, self.frame_samples, events));
+        NativeLoudPreviewWaveforms {
+            monochrome: pack_native_loud_preview(&raw, &bands),
+            tiny: dots[0]
+                .iter()
+                .copied()
+                .zip(dots[1])
+                .map(|(primary, secondary)| {
+                    native_loud_tiny_height(primary).max(if secondary > 0 { 2 } else { 1 })
+                })
+                .collect(),
+        }
+    }
+}
+
+fn native_loud_frame_sum(samples: &[f32]) -> f32 {
+    samples
+        .iter()
+        .copied()
+        .map(f32::abs)
+        .fold(0.0_f32, |sum, sample| sum + sample)
+}
+
+fn map_native_loud_raw(
+    frame_count: usize,
+    batches: &[NativeLoudRawBatch],
+) -> [f32; MONOCHROME_PREVIEW_COLUMNS] {
+    let mut output = [0.0_f32; MONOCHROME_PREVIEW_COLUMNS];
+    let inverse_frames = 1.0_f32 / frame_count as f32;
+    let mut output_index = 0usize;
+    let mut output_value = 0.0_f32;
+    let mut delayed_index = 0usize;
+    let mut batch_index = 0usize;
+
+    for frame in 1..=frame_count {
+        output[output_index] = output_value;
+        let target = if frame == frame_count {
+            MONOCHROME_PREVIEW_COLUMNS
+        } else {
+            ((frame as f32) * MONOCHROME_PREVIEW_COLUMNS as f32 * inverse_frames)
+                .trunc()
+                .clamp(0.0, (MONOCHROME_PREVIEW_COLUMNS - 1) as f32) as usize
+        };
+        if target > output_index {
+            output[output_index] = output_value * 15_000.0 * inverse_frames;
+            output[(output_index + 1)..target.min(MONOCHROME_PREVIEW_COLUMNS)].fill(0.0);
+            output_index = target;
+        }
+
+        while batches
+            .get(batch_index)
+            .is_some_and(|batch| batch.frame == frame)
+        {
+            let batch = batches[batch_index];
+            if output_index < MONOCHROME_PREVIEW_COLUMNS {
+                if batch.delayed {
+                    let value = if output_index == delayed_index {
+                        batch.value
+                    } else {
+                        batch.value * 15_000.0 * inverse_frames
+                    };
+                    output[delayed_index] += value;
+                } else {
+                    output[output_index] += batch.value;
+                    delayed_index = output_index;
+                }
+            }
+            batch_index += 1;
+        }
+        if output_index < MONOCHROME_PREVIEW_COLUMNS {
+            output_value = output[output_index];
+        }
+    }
+    output
+}
+
+fn map_native_loud_events(
+    frame_count: usize,
+    events: &[NativeLoudEvent],
+) -> [f32; MONOCHROME_PREVIEW_COLUMNS] {
+    let mut accumulators = [0_i64; MONOCHROME_PREVIEW_COLUMNS / 2];
+    let inverse_frames = 1.0_f32 / frame_count as f32;
+    for event in events {
+        let pair = ((event.frame as f32) * 200.0 * inverse_frames).trunc() as usize;
+        if let Some(accumulator) = accumulators.get_mut(pair) {
+            *accumulator += event.amplitude.trunc() as i64;
+        }
+    }
+    let mut output = [0.0_f32; MONOCHROME_PREVIEW_COLUMNS];
+    for (pair, accumulator) in accumulators.into_iter().enumerate() {
+        let value = accumulator as f32 * 7_500.0 * inverse_frames;
+        output[pair * 2] = value;
+        output[pair * 2 + 1] = value;
+    }
+    output
+}
+
+fn map_native_loud_dots(
+    sample_count: usize,
+    frame_samples: usize,
+    events: &[NativeLoudEvent],
+) -> [i64; TINY_PREVIEW_COLUMNS] {
+    let whole_frames = sample_count / frame_samples;
+    let step = if whole_frames >= TINY_PREVIEW_COLUMNS {
+        whole_frames / TINY_PREVIEW_COLUMNS
+    } else {
+        1
+    };
+    let mut accumulators = [0_i64; TINY_PREVIEW_COLUMNS];
+    for event in events {
+        if event.frame < 51 || event.frame > whole_frames {
+            continue;
+        }
+        let index = (event.frame / step).min(TINY_PREVIEW_COLUMNS - 1);
+        accumulators[index] += event.amplitude.trunc() as i64;
+    }
+    accumulators.map(|value| value.saturating_mul(75) / (step as i64 * 2))
+}
+
+fn pack_native_loud_preview(
+    raw: &[f32; MONOCHROME_PREVIEW_COLUMNS],
+    bands: &[[f32; MONOCHROME_PREVIEW_COLUMNS]; 3],
+) -> Vec<u8> {
+    (0..MONOCHROME_PREVIEW_COLUMNS)
+        .map(|index| {
+            let low = bands[0][index];
+            let mid = bands[1][index];
+            let high = bands[2][index];
+            let factor = (low * 0.75 * (1.0 / 32_768.0) + 0.25).min(1.0);
+            let height = native_loud_height(raw[index] * factor);
+            let low_level = native_loud_level(low * 0.5);
+            let mid_level = native_loud_level(mid * 0.25);
+            let high_level = native_loud_level(high);
+            let difference = mid_level - high_level;
+            let color = if low_level < 14 {
+                if difference < 4 { 5 } else { 4 }
+            } else if difference < 0 {
+                if low_level <= high_level { 3 } else { 2 }
+            } else if low_level <= mid_level {
+                1
+            } else {
+                0
+            };
+            (color << 5) | height
+        })
+        .collect()
+}
+
+fn native_loud_level(value: f32) -> i32 {
+    if value <= 0.0 {
+        return 0;
+    }
+    (20.0 * (f64::from(value) * 3.051_757_812_5e-5).log10() + 30.5).clamp(0.0, 30.0) as i32
+}
+
+fn native_loud_height(value: f32) -> u8 {
+    const THRESHOLDS: [f32; 23] = [
+        f32::from_bits(0x4746_6666),
+        39_321.6,
+        30_801.92,
+        25_886.72,
+        23_265.28,
+        21_299.2,
+        19_333.12,
+        17_367.04,
+        15_892.48,
+        14_909.44,
+        13_926.4,
+        12_943.36,
+        11_960.32,
+        10_977.28,
+        9_994.24,
+        9_011.2,
+        8_028.16,
+        7_045.12,
+        6_062.08,
+        5_079.04,
+        4_096.0,
+        3_112.96,
+        2_195.456,
+    ];
+
+    let value = value.max(0.0);
+    if value == 0.0 {
+        return 2;
+    }
+    for (index, threshold) in THRESHOLDS.into_iter().enumerate() {
+        if value >= threshold {
+            return 25 - index as u8;
+        }
+    }
+    2
+}
+
+fn native_loud_tiny_height(value: i64) -> u8 {
+    match value {
+        value if value > 0x50c2 => 15,
+        value if value > 0x4025 => 14,
+        value if value > 0x32f4 => 13,
+        value if value > 0x2879 => 12,
+        value if value > 0x2025 => 11,
+        value if value > 0x1989 => 10,
+        value if value > 0x1448 => 9,
+        value if value > 0x101c => 8,
+        value if value > 0x0ccb => 7,
+        value if value > 0x0a29 => 6,
+        value if value > 0x0812 => 5,
+        value if value > 0x0669 => 4,
+        value if value > 0x0517 => 3,
+        value if value > 0 => 2,
+        _ => 1,
     }
 }
 
@@ -1264,7 +1894,7 @@ fn store_f64x2(value: float64x2_t) -> [f64; 2] {
     values
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(test)]
 fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
     let frame_samples = detail_frame_samples(pcm.sample_rate());
     pcm.samples()
@@ -1273,10 +1903,12 @@ fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
         .collect()
 }
 
+#[cfg(test)]
 fn detail_frame_samples(sample_rate: u32) -> usize {
     usize::try_from(sample_rate).expect("sample rate fits waveform arithmetic") / 150
 }
 
+#[cfg(test)]
 fn extract_detail_frame(samples: &[f32], frame_samples: usize) -> FrameFeatures {
     let mut peak = 0.0_f64;
     let mut sum_square = 0.0_f64;
@@ -1292,12 +1924,12 @@ fn extract_detail_frame(samples: &[f32], frame_samples: usize) -> FrameFeatures 
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(all(not(target_arch = "aarch64"), test))]
 fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
     extract_detail_features_scalar(pcm)
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
     let frame_samples = detail_frame_samples(pcm.sample_rate());
     let frame_count = pcm.len().div_ceil(frame_samples);
@@ -1318,7 +1950,7 @@ fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
         .collect()
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 fn extract_detail_feature_range(
     pcm: &MonoPcm,
     frame_samples: usize,
@@ -1337,49 +1969,28 @@ fn extract_detail_feature_range(
 }
 
 pub(crate) struct StreamingWaveformAccumulator {
+    loud: NativeLoudPreviewAccumulator,
     legacy: LegacyWaveformAccumulator,
     three_band: ThreeBandAccumulator,
     monochrome: MonochromeDetailAccumulator,
-    pending: Vec<f32>,
-    features: Vec<FrameFeatures>,
 }
 
 impl StreamingWaveformAccumulator {
     pub(crate) fn new() -> Self {
         Self {
+            loud: NativeLoudPreviewAccumulator::new(ANALYSIS_SAMPLE_RATE),
             legacy: LegacyWaveformAccumulator::new(ANALYSIS_SAMPLE_RATE),
             three_band: ThreeBandAccumulator::new(ANALYSIS_SAMPLE_RATE),
             monochrome: MonochromeDetailAccumulator::new(ANALYSIS_SAMPLE_RATE),
-            pending: Vec::with_capacity(DETAIL_FRAME_SAMPLES),
-            features: Vec::new(),
         }
     }
 
-    pub(crate) fn push_native(&mut self, color_samples: &[f32], mut monochrome_samples: &[f32]) {
+    pub(crate) fn push_native(&mut self, color_samples: &[f32], monochrome_samples: &[f32]) {
         debug_assert_eq!(color_samples.len(), monochrome_samples.len());
+        self.loud.push(color_samples);
         self.legacy.push(color_samples);
         self.three_band.push(color_samples);
         self.monochrome.push(monochrome_samples);
-        if !self.pending.is_empty() {
-            let consumed =
-                (DETAIL_FRAME_SAMPLES - self.pending.len()).min(monochrome_samples.len());
-            self.pending
-                .extend_from_slice(&monochrome_samples[..consumed]);
-            monochrome_samples = &monochrome_samples[consumed..];
-            if self.pending.len() == DETAIL_FRAME_SAMPLES {
-                self.features
-                    .push(extract_detail_frame(&self.pending, DETAIL_FRAME_SAMPLES));
-                self.pending.clear();
-            }
-        }
-
-        let complete_len = monochrome_samples.len() / DETAIL_FRAME_SAMPLES * DETAIL_FRAME_SAMPLES;
-        for frame in monochrome_samples[..complete_len].chunks_exact(DETAIL_FRAME_SAMPLES) {
-            self.features
-                .push(extract_detail_frame(frame, DETAIL_FRAME_SAMPLES));
-        }
-        self.pending
-            .extend_from_slice(&monochrome_samples[complete_len..]);
     }
 
     pub(crate) fn push(&mut self, samples: &[f32]) {
@@ -1395,55 +2006,20 @@ impl StreamingWaveformAccumulator {
         }
     }
 
-    pub(crate) fn finish(mut self) -> WaveformData {
-        if !self.pending.is_empty() {
-            self.features
-                .push(extract_detail_frame(&self.pending, DETAIL_FRAME_SAMPLES));
-        }
+    pub(crate) fn finish(self) -> WaveformData {
         let monochrome_detail = self.monochrome.finish();
-        let legacy = self.legacy.finish(self.features.len());
-        let three_band = self.three_band.finish(self.features.len());
-        pack_waveforms(&self.features, monochrome_detail, legacy, three_band)
+        let detail_count = monochrome_detail.len();
+        let legacy = self.legacy.finish(detail_count);
+        let three_band = self.three_band.finish(detail_count);
+        pack_waveforms(self.loud.finish(), monochrome_detail, legacy, three_band)
     }
 }
 
-fn reduce_features(features: &[FrameFeatures], width: usize) -> Vec<FrameFeatures> {
-    if features.is_empty() {
-        return vec![FrameFeatures::default(); width];
-    }
-    (0..width)
-        .map(|column| {
-            let start = (column * features.len() / width).min(features.len() - 1);
-            let numerator = (column + 1)
-                .checked_mul(features.len())
-                .expect("waveform preview range fits usize");
-            let end = numerator.div_ceil(width).max(start + 1).min(features.len());
-            features[start..end].iter().copied().fold(
-                FrameFeatures::default(),
-                |result, feature| FrameFeatures {
-                    peak: result.peak.max(feature.peak),
-                    rms: result.rms.max(feature.rms),
-                },
-            )
-        })
-        .collect()
-}
-
+#[cfg(test)]
 fn waveform_height(amplitude: f64, maximum: u8) -> u8 {
     (amplitude.clamp(0.0, 1.0).powi(2) * f64::from(maximum))
         .round()
         .clamp(0.0, f64::from(maximum)) as u8
-}
-
-fn pack_monochrome(feature: &FrameFeatures) -> u8 {
-    let height = waveform_height(feature.peak, 31);
-    let density = if feature.peak > f64::EPSILON {
-        (feature.rms / feature.peak).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let whiteness = (density * 7.0).round() as u8;
-    (whiteness << 5) | height
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1821,8 +2397,8 @@ fn three_band_detail_chunk(
     let envelopes = std::array::from_fn::<_, 3, _>(|band| {
         finite_peak_followers_pair(raw, [ends[0], ends[1]], band, histories[band], decays[band])
     });
-    for lane in 0..2 {
-        output[lane] = pack_three_band_detail(
+    for (lane, entry) in output.iter_mut().enumerate().take(2) {
+        *entry = pack_three_band_detail(
             [envelopes[0][lane], envelopes[1][lane], envelopes[2][lane]],
             gains,
         );
@@ -1925,6 +2501,43 @@ mod tests {
             accumulator.push(chunk);
         }
         assert_eq!(accumulator.finish(), expected);
+    }
+
+    #[test]
+    fn delayed_loud_batches_are_scaled_once_within_or_across_columns() {
+        let same_column = map_native_loud_raw(
+            900,
+            &[
+                NativeLoudRawBatch {
+                    frame: 1,
+                    value: 2.0,
+                    delayed: false,
+                },
+                NativeLoudRawBatch {
+                    frame: 2,
+                    value: 3.0,
+                    delayed: true,
+                },
+            ],
+        );
+        let crossed_column = map_native_loud_raw(
+            900,
+            &[
+                NativeLoudRawBatch {
+                    frame: 1,
+                    value: 2.0,
+                    delayed: false,
+                },
+                NativeLoudRawBatch {
+                    frame: 3,
+                    value: 3.0,
+                    delayed: true,
+                },
+            ],
+        );
+        let expected = 5.0 * 15_000.0 / 900.0;
+        assert!((same_column[0] - expected).abs() < 0.000_01);
+        assert!((crossed_column[0] - expected).abs() < 0.000_01);
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -2038,16 +2651,17 @@ mod tests {
         let parallel = extract_detail_features(&pcm);
         assert_eq!(scalar.len(), parallel.len());
         let monochrome = MonochromeDetailAccumulator::from_pcm(&pcm).finish();
+        let loud = NativeLoudPreviewAccumulator::from_pcm(&pcm).finish();
         let legacy = LegacyWaveformAccumulator::from_pcm(&pcm).finish(scalar.len());
         let three_band = ThreeBandAccumulator::from_pcm(&pcm).finish(scalar.len());
         assert_eq!(
             pack_waveforms(
-                &scalar,
+                loud.clone(),
                 monochrome.clone(),
                 legacy.clone(),
                 three_band.clone()
             ),
-            pack_waveforms(&parallel, monochrome, legacy, three_band)
+            pack_waveforms(loud, monochrome, legacy, three_band)
         );
     }
 
@@ -2137,7 +2751,7 @@ mod tests {
     }
 
     #[test]
-    fn silence_is_zero_and_impulse_peak_lands_in_first_detail_column() {
+    fn silence_uses_native_preview_floor_and_impulse_lands_in_first_detail_column() {
         let silence =
             MonoPcm::new(ANALYSIS_SAMPLE_RATE, vec![0.0; DETAIL_FRAME_SAMPLES]).expect("PCM");
         let silent_waveforms = WaveformData::generate(&silence).expect("silent waveforms");
@@ -2145,7 +2759,7 @@ mod tests {
             silent_waveforms
                 .monochrome_preview()
                 .iter()
-                .all(|value| *value == 0)
+                .all(|value| *value == 0xa2)
         );
         assert!(
             silent_waveforms
