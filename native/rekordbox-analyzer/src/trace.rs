@@ -46,6 +46,8 @@ const SOUON_CHANGE_DET_OFFSET: usize = 0x15db3c0;
 const SNARE_FILLIN_DET_OFFSET: usize = 0x0f9fd30;
 const VOCAL_IN_DETECTION_OFFSET: usize = 0x148ccc0;
 const CANDIDATES_ADJUSTMENT_OFFSET: usize = 0x162bca0;
+const FIND_PEAKS_EX_OFFSET: usize = 0x10b44e0;
+const SORT_INT_DELETE_ZERO_OFFSET: usize = 0x1057430;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 const LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET: usize = 0x40d3bf8;
 const FWRITE_OFFSET: usize = 0x21dcd98;
@@ -113,6 +115,8 @@ const CALL_SOUON_CHANGE_DET_OFFSET: usize = 0x15d5e11;
 const CALL_SNARE_FILLIN_DET_OFFSET: usize = 0x15d5e45;
 const CALL_VOCAL_IN_DETECTION_OFFSET: usize = 0x15d5e7a;
 const CALL_CANDIDATES_ADJUSTMENT_OFFSET: usize = 0x15d5fa3;
+const CALL_SNARE_FIND_PEAKS_EX_OFFSET: usize = 0x0fa0033;
+const CALL_VOCAL_SORT_INT_DELETE_ZERO_OFFSET: usize = 0x148d25d;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -325,6 +329,15 @@ type SnareFillinDet = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, i32, *
 type VocalInDetection = unsafe extern "C" fn(*mut c_void, *mut c_void, i32, *mut c_void) -> u8;
 type CandidatesAdjustment =
     unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, i32, i32, *mut c_void) -> u8;
+type FindPeaksEx = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+) -> u8;
+type SortIntDeleteZero = unsafe extern "C" fn(*mut c_void, i32) -> *mut c_void;
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 type Exp10 = unsafe extern "C" fn(f64) -> f64;
 
@@ -364,6 +377,8 @@ static SOUON_CHANGE_DET: AtomicUsize = AtomicUsize::new(0);
 static SNARE_FILLIN_DET: AtomicUsize = AtomicUsize::new(0);
 static VOCAL_IN_DETECTION: AtomicUsize = AtomicUsize::new(0);
 static CANDIDATES_ADJUSTMENT: AtomicUsize = AtomicUsize::new(0);
+static FIND_PEAKS_EX: AtomicUsize = AtomicUsize::new(0);
+static SORT_INT_DELETE_ZERO: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
@@ -404,6 +419,8 @@ struct ReferenceTrace {
     phrase_judge_23_sub: Vec<PhraseJudge23SubTrace>,
     phrase_add_genre_23: Vec<PhraseAddGenre23Trace>,
     phrase_genre_23_stages: Vec<PhraseGenre23StageTrace>,
+    phrase_snare_peaks: Vec<PhraseSnarePeakTrace>,
+    phrase_vocal_candidates: Vec<PhraseVocalCandidateTrace>,
     phrase_ana_data_23: Vec<PhraseAnaData23Trace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
@@ -917,6 +934,24 @@ struct PhraseGenre23StageTrace {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PhraseSnarePeakTrace {
+    input: Vec<f64>,
+    values: Vec<f64>,
+    indices: Vec<i32>,
+    prominences: Vec<f64>,
+    widths: Vec<f64>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseVocalCandidateTrace {
+    before: Vec<i32>,
+    after: Vec<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PhraseAnaData23Trace {
     feature_origin: i32,
     inputs: [Vec<f64>; 4],
@@ -944,7 +979,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 18,
+        schema_version: 20,
         requested_engine: requested_engine().to_string(),
         trace_scope: requested_trace_scope().to_string(),
         ..ReferenceTrace::default()
@@ -1171,6 +1206,8 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     set_original(&SNARE_FILLIN_DET, base + SNARE_FILLIN_DET_OFFSET);
     set_original(&VOCAL_IN_DETECTION, base + VOCAL_IN_DETECTION_OFFSET);
     set_original(&CANDIDATES_ADJUSTMENT, base + CANDIDATES_ADJUSTMENT_OFFSET);
+    set_original(&FIND_PEAKS_EX, base + FIND_PEAKS_EX_OFFSET);
+    set_original(&SORT_INT_DELETE_ZERO, base + SORT_INT_DELETE_ZERO_OFFSET);
     set_original(&MALLOC, base + MALLOC_OFFSET);
     set_original(&EXP10, base + EXP10_OFFSET);
 
@@ -1522,6 +1559,16 @@ unsafe fn patch_phrase_trace(base: usize) -> Result<()> {
             base + CALL_CANDIDATES_ADJUSTMENT_OFFSET,
             base + CANDIDATES_ADJUSTMENT_OFFSET,
             trace_candidates_adjustment as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SNARE_FIND_PEAKS_EX_OFFSET,
+            base + FIND_PEAKS_EX_OFFSET,
+            trace_snare_find_peaks_ex as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VOCAL_SORT_INT_DELETE_ZERO_OFFSET,
+            base + SORT_INT_DELETE_ZERO_OFFSET,
+            trace_vocal_sort_int_delete_zero as usize,
         )
     }
 }
@@ -4057,6 +4104,73 @@ unsafe fn trace_verse_hook_judge_23_sub(
         output_candidates,
         result,
     });
+    result
+}
+
+unsafe extern "C" fn trace_snare_find_peaks_ex(
+    analyzer: *mut c_void,
+    input: *mut c_void,
+    values: *mut c_void,
+    indices: *mut c_void,
+    widths: *mut c_void,
+    prominences: *mut c_void,
+) -> u8 {
+    let input_snapshot = unsafe { snapshot_mat_f64(input) };
+    let function: FindPeaksEx = unsafe { original(&FIND_PEAKS_EX) };
+    let result = unsafe { function(analyzer, input, values, indices, widths, prominences) };
+    let values_snapshot = unsafe { snapshot_mat_f64(values) };
+    let indices_snapshot = unsafe { snapshot_mat_i32(indices) };
+    let widths_snapshot = unsafe { snapshot_mat_f64(widths) };
+    let prominences_snapshot = unsafe { snapshot_mat_f64(prominences) };
+
+    let mut failures = Vec::new();
+    let input = snapshot_or_empty(input_snapshot, "snare peak input", &mut failures);
+    let values = snapshot_or_empty(values_snapshot, "snare peak values", &mut failures);
+    let indices = snapshot_or_empty(indices_snapshot, "snare peak indices", &mut failures);
+    let prominences = snapshot_or_empty(
+        prominences_snapshot,
+        "snare peak prominences",
+        &mut failures,
+    );
+    let widths = snapshot_or_empty(widths_snapshot, "snare peak widths", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_snare_peaks.push(PhraseSnarePeakTrace {
+        input,
+        values,
+        indices,
+        prominences,
+        widths,
+        result,
+    });
+    result
+}
+
+unsafe extern "C" fn trace_vocal_sort_int_delete_zero(
+    candidates: *mut c_void,
+    ascending: i32,
+) -> *mut c_void {
+    let before_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let function: SortIntDeleteZero = unsafe { original(&SORT_INT_DELETE_ZERO) };
+    let result = unsafe { function(candidates, ascending) };
+    let after_snapshot = unsafe { snapshot_mat_i32(candidates) };
+
+    let mut failures = Vec::new();
+    let before = snapshot_or_empty(
+        before_snapshot,
+        "vocal candidates before sort",
+        &mut failures,
+    );
+    let after = snapshot_or_empty(after_snapshot, "vocal candidates after sort", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace
+        .phrase_vocal_candidates
+        .push(PhraseVocalCandidateTrace { before, after });
     result
 }
 

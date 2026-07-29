@@ -607,6 +607,146 @@ pub fn judge_native_mood_23_phrase_boundaries(
         .collect()
 }
 
+/// Detect native mood-2/3 short-break bars from two beat-synchronous features.
+///
+/// The linked `ShortBreakDetection` pass normalizes the first feature, derives
+/// adaptive falling-edge thresholds for both inputs, retains beat phases zero
+/// and three, and requires a greater-than-2.5 recovery within four beats.
+/// Returned values are one-based bars.
+pub fn detect_native_mood_23_short_breaks(
+    feature_a: &[f64],
+    feature_b: &[f64],
+) -> Result<Vec<i32>> {
+    if feature_a.len() != feature_b.len() {
+        bail!("native mood-2/3 short-break detection requires aligned features");
+    }
+    if feature_a
+        .iter()
+        .chain(feature_b)
+        .any(|value| !value.is_finite())
+    {
+        bail!("native mood-2/3 short-break detection requires finite input");
+    }
+    let feature_count = feature_a.len();
+    if feature_count < 21 {
+        return Ok(Vec::new());
+    }
+
+    let mut normalized_a = feature_a.to_vec();
+    let mut feature_b = feature_b.to_vec();
+    let maximum = normalized_a.iter().copied().reduce(f64::max).unwrap_or(0.0);
+    let scale = if maximum == 0.0 {
+        333.333_333_333_333_3
+    } else {
+        1.0 / maximum
+    };
+    for value in &mut normalized_a {
+        *value *= scale;
+    }
+
+    let mut ratios_a = vec![0.0; feature_count];
+    let mut ratios_b = vec![0.0; feature_count];
+    let mut falling_a = vec![0.0; feature_count];
+    let mut falling_b = vec![0.0; feature_count];
+    let mut non_falling_a = 0_usize;
+    let mut non_falling_b = 0_usize;
+    for index in 1..feature_count - 4 {
+        if normalized_a[index] == 0.0 {
+            normalized_a[index] = 0.003;
+        }
+        if normalized_a[index - 1] == 0.0 {
+            normalized_a[index - 1] = 0.003;
+        }
+        let ratio_a = normalized_a[index] / normalized_a[index - 1];
+        ratios_a[index] = ratio_a;
+        if ratio_a < 1.0 {
+            falling_a[index] = ratio_a;
+        } else {
+            non_falling_a += 1;
+        }
+
+        if feature_b[index] == 0.0 {
+            feature_b[index] = 0.003;
+        }
+        if feature_b[index - 1] == 0.0 {
+            feature_b[index - 1] = 0.003;
+        }
+        let ratio_b = feature_b[index] / feature_b[index - 1];
+        ratios_b[index] = ratio_b;
+        if ratio_b < 1.0 {
+            falling_b[index] = ratio_b;
+        } else {
+            non_falling_b += 1;
+        }
+    }
+
+    let mut threshold_a = if non_falling_a == 0 {
+        0.003
+    } else {
+        falling_a.iter().sum::<f64>() / non_falling_a as f64
+    } * 0.65;
+    let threshold_b = if non_falling_b == 0 {
+        0.00285
+    } else {
+        falling_b.iter().sum::<f64>() * 0.95 / non_falling_b as f64
+    };
+
+    let mut sorted_falling_a = falling_a
+        .iter()
+        .copied()
+        .filter(|ratio| *ratio != 0.0)
+        .collect::<Vec<_>>();
+    sorted_falling_a.sort_by(|left, right| {
+        left.partial_cmp(right)
+            .expect("validated finite short-break feature")
+    });
+    let low_ratio_count = sorted_falling_a
+        .iter()
+        .take_while(|ratio| **ratio > 0.0 && **ratio <= threshold_a)
+        .count();
+    if low_ratio_count >= 14 {
+        threshold_a = sorted_falling_a[12];
+    }
+
+    let mut beat_candidates = Vec::new();
+    for index in 16..feature_count - 4 {
+        if ratios_a[index] >= threshold_a || ratios_b[index] >= threshold_b {
+            continue;
+        }
+        let preceding_a = normalized_a[index - 1];
+        let preceding_b = feature_b[index - 1];
+        let twice_preceding_b = feature_b[index - 2];
+        let level_match = if preceding_a > 0.5 {
+            preceding_b > 0.2 || twice_preceding_b > 0.2
+        } else {
+            preceding_a > 0.2 && (preceding_b > 0.5 || twice_preceding_b > 0.5)
+        };
+        if level_match {
+            beat_candidates.push(index + 1);
+        }
+    }
+
+    beat_candidates.retain(|candidate| candidate % 4 == 0 || candidate % 4 == 3);
+    beat_candidates.retain(|candidate| {
+        let baseline = normalized_a[*candidate - 1];
+        let scale = if baseline == 0.0 {
+            333.333_333_333_333_3
+        } else {
+            1.0 / baseline
+        };
+        normalized_a[*candidate..*candidate + 4]
+            .iter()
+            .any(|value| *value * scale > 2.5)
+    });
+    beat_candidates
+        .into_iter()
+        .map(|candidate| {
+            i32::try_from(candidate.div_ceil(4) + 1)
+                .map_err(|_| anyhow::anyhow!("native phrase bar exceeds i32"))
+        })
+        .collect()
+}
+
 /// Detect native mood-2/3 sound-level changes from beat-synchronous features.
 ///
 /// The linked `SouonChangeDet` pass averages complete four-beat groups while
@@ -656,6 +796,300 @@ pub fn detect_native_mood_23_sound_changes(values: &[f64]) -> Result<Vec<i32>> {
         }
     }
     Ok(candidates)
+}
+
+/// Detect native mood-2/3 snare-fill bars from 32-value feature windows.
+///
+/// The linked `SnareFillinDet` pass finds rising-edge local maxima in each
+/// window, normalizes their summed heights, derives adaptive upper and lower
+/// ratio thresholds, and applies its asymmetric two-transition state machine.
+/// The final four windows are native guard bars and are not peak-scanned.
+pub fn detect_native_mood_23_snare_fills(values: &[f64]) -> Result<Vec<i32>> {
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native mood-2/3 snare-fill detection requires finite input");
+    }
+    let bar_count = values.len() / 32;
+    if bar_count < 6 {
+        return Ok(Vec::new());
+    }
+
+    let mut peak_sums = vec![0.0; bar_count];
+    for (bar, peak_sum) in peak_sums
+        .iter_mut()
+        .take(bar_count.saturating_sub(4))
+        .enumerate()
+    {
+        let window = &values[bar * 32..bar * 32 + 32];
+        let mut slope = 0_u8;
+        let mut peaks = Vec::new();
+        for index in 1..window.len() {
+            let next_slope = if window[index - 1] < window[index] {
+                1
+            } else {
+                if slope == 1 {
+                    peaks.push(window[index - 1]);
+                }
+                u8::from(window[index - 1] > window[index]) * 2
+            };
+            slope = next_slope;
+        }
+        *peak_sum = peaks.iter().sum();
+    }
+
+    let maximum = peak_sums.iter().copied().reduce(f64::max).unwrap_or(0.0);
+    let scale = if maximum == 0.0 {
+        333.333_333_333_333_3
+    } else {
+        1.0 / maximum
+    };
+    for peak_sum in &mut peak_sums {
+        *peak_sum *= scale;
+        if *peak_sum == 0.0 {
+            *peak_sum = 0.003;
+        }
+    }
+
+    let mut ratios = vec![0.0; bar_count];
+    for bar in 1..bar_count {
+        if peak_sums[bar - 1] != 0.0 {
+            ratios[bar] = peak_sums[bar] / peak_sums[bar - 1];
+        }
+    }
+    let mut above = ratios
+        .iter()
+        .map(|ratio| if *ratio >= 1.0 { *ratio } else { 0.0 })
+        .collect::<Vec<_>>();
+    let below = ratios
+        .iter()
+        .map(|ratio| {
+            if *ratio != 0.0 && *ratio < 1.0 {
+                *ratio
+            } else {
+                0.0
+            }
+        })
+        .collect::<Vec<_>>();
+    let above_count = above.iter().filter(|ratio| **ratio != 0.0).count();
+    let below_count = below.iter().filter(|ratio| **ratio != 0.0).count();
+    let mut upper = if above_count == 0 {
+        0.00345
+    } else {
+        above.iter().sum::<f64>() * 1.15 / above_count as f64
+    };
+    let lower = if below_count == 0 {
+        0.00255
+    } else {
+        below.iter().sum::<f64>() * 0.85 / below_count as f64
+    };
+
+    let quantile_count = bar_count / 16;
+    above.sort_by(|left, right| {
+        right
+            .partial_cmp(left)
+            .expect("validated finite snare-fill feature")
+    });
+    if quantile_count > 0
+        && let Some(quantile) = above.get(quantile_count - 1)
+    {
+        upper = upper.max(*quantile);
+    }
+    // Native copies the descending upper-ratio array over its lower-ratio
+    // scratch before the second sort. Its nominal lower quantile is therefore
+    // always above `lower`, leaving the mean-derived threshold unchanged.
+
+    let mut candidates = Vec::new();
+    let mut skip_next = false;
+    for bar in 2..bar_count.saturating_sub(3) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let previous_ratio = ratios[bar - 1];
+        let current_ratio = ratios[bar];
+        let next_ratio = ratios[bar + 1];
+        if !(previous_ratio > upper || previous_ratio < lower)
+            || !(next_ratio > 0.85 && next_ratio < 1.15)
+        {
+            continue;
+        }
+
+        let product = previous_ratio * current_ratio;
+        let mut candidate = None;
+        if previous_ratio < 1.0 && current_ratio > lower {
+            let preceding_level = peak_sums[bar - 2];
+            if (previous_ratio > 0.5 && preceding_level > 0.3)
+                || (previous_ratio <= 0.5 && preceding_level > 0.5)
+            {
+                candidate = Some(if product < 0.8 { bar } else { bar + 1 });
+            }
+        }
+        if candidate.is_none() && previous_ratio > 1.0 && current_ratio < upper {
+            let preceding_level = peak_sums[bar - 1];
+            let is_too_low = if previous_ratio >= 2.0 {
+                preceding_level <= 0.5
+            } else {
+                preceding_level <= 0.4
+            };
+            if !is_too_low {
+                candidate = Some(if product > 0.8 { bar } else { bar + 1 });
+            }
+        }
+        if let Some(candidate) = candidate {
+            candidates.push(
+                i32::try_from(candidate)
+                    .map_err(|_| anyhow::anyhow!("native phrase bar exceeds i32"))?,
+            );
+            skip_next = true;
+        }
+    }
+    Ok(candidates)
+}
+
+/// Detect native mood-2/3 vocal-entry bars from beat-synchronous features.
+///
+/// The linked `VocalInDetection` pass combines long binary silence runs with
+/// a low-density short-gap path gated by normalized level and adjacent
+/// four-beat sum ratios. Returned values are one-based bars.
+pub fn detect_native_mood_23_vocal_entries(values: &[f64]) -> Result<Vec<i32>> {
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native mood-2/3 vocal-entry detection requires finite input");
+    }
+    if values.len() < 5 {
+        return Ok(Vec::new());
+    }
+
+    let maximum = values.iter().copied().reduce(f64::max).unwrap_or(0.0);
+    let scale = if maximum == 0.0 {
+        333.333_333_333_333_3
+    } else {
+        1.0 / maximum
+    };
+    let normalized = values.iter().map(|value| value * scale).collect::<Vec<_>>();
+    let active_count = values.len() - 4;
+    let mut active = vec![0_i32; values.len()];
+    for (flag, value) in active.iter_mut().zip(&normalized).take(active_count) {
+        *flag = i32::from(*value > 0.0);
+    }
+
+    let bar_count = values.len() / 4;
+    let mut bar_sums = vec![0.0; bar_count];
+    for (bar, sum) in bar_sums
+        .iter_mut()
+        .take(bar_count.saturating_sub(1))
+        .enumerate()
+    {
+        let start = bar * 4;
+        *sum = (normalized[start] + normalized[start + 2])
+            + (normalized[start + 1] + normalized[start + 3]);
+    }
+    let mut bar_ratios = vec![0.0; bar_count];
+    for bar in 1..bar_count.saturating_sub(1) {
+        if bar_sums[bar - 1] != 0.0 {
+            bar_ratios[bar] = bar_sums[bar] / bar_sums[bar - 1];
+        }
+    }
+
+    let mut raw_candidates = Vec::new();
+    let mut long_gap_ready = false;
+    let mut zero_run = 0_i32;
+    for index in 0..active_count {
+        let flag = active[index];
+        let old_ready = long_gap_ready;
+        if flag == 0 {
+            long_gap_ready = true;
+        }
+        if zero_run <= 6 {
+            long_gap_ready = old_ready;
+        }
+        if flag == 1 && long_gap_ready {
+            if active[index..index + 3].iter().sum::<i32>() >= 2 {
+                raw_candidates.push(index + 1);
+            }
+            long_gap_ready = false;
+        }
+        zero_run += i32::from(flag == 0);
+        if flag == 1 && !long_gap_ready {
+            zero_run = 0;
+        }
+    }
+
+    let density = active.iter().take(active_count).sum::<i32>() as f64 / active_count as f64;
+    if density < 0.6 && values.len() >= 9 {
+        let mut short_gap_ready = false;
+        let mut long_gap_seen = false;
+        let mut zero_run = 0_i32;
+        for index in 0..values.len() - 8 {
+            let flag = active[index];
+            let mut next_zero_run = zero_run;
+            if flag == 0 {
+                next_zero_run += 1;
+                if zero_run <= 6 {
+                    if zero_run > 1 {
+                        short_gap_ready = true;
+                    }
+                } else {
+                    long_gap_seen = true;
+                    short_gap_ready = false;
+                }
+            }
+            if long_gap_seen && flag == 1 {
+                next_zero_run = 0;
+                long_gap_seen = false;
+            }
+            if flag == 1 && short_gap_ready {
+                if active[index..index + 3].iter().sum::<i32>() >= 3 && normalized[index] >= 0.7 {
+                    let bar = index / 4;
+                    if bar_ratios[bar] >= 1.8 || bar_ratios[bar + 1] >= 3.0 {
+                        raw_candidates.push(index + 1);
+                    }
+                }
+                short_gap_ready = false;
+            }
+            if flag == 1 && !(short_gap_ready || long_gap_seen) {
+                next_zero_run = 0;
+            }
+            zero_run = next_zero_run;
+        }
+    }
+
+    raw_candidates.sort_unstable();
+    raw_candidates
+        .into_iter()
+        .map(|candidate| {
+            i32::try_from(candidate / 4 + 1)
+                .map_err(|_| anyhow::anyhow!("native phrase bar exceeds i32"))
+        })
+        .collect()
+}
+
+/// Add all native mood-2/3 genre-stage candidates to judged beat boundaries.
+///
+/// This reproduces `VerseHookAdd_genre23`: short-break, sound-change,
+/// snare-fill, and vocal-entry candidates are merged as one sorted bar list
+/// before the linked candidate-adjustment pass converts them back to beats.
+#[allow(clippy::too_many_arguments)]
+pub fn add_native_mood_23_genre_candidates(
+    low_level: &[f64],
+    middle_level: &[f64],
+    high_level: &[f64],
+    phrase_feature: &[f64],
+    boundary_feature: &[f64],
+    judged_beats: &[i32],
+    feature_origin: i32,
+) -> Result<Vec<i32>> {
+    let bar_count = i32::try_from(low_level.len() / 4)
+        .map_err(|_| anyhow::anyhow!("native phrase bar count exceeds i32"))?;
+    if bar_count == 0 {
+        bail!("native mood-2/3 genre stages require at least four low-level features");
+    }
+
+    let mut detector_bars = detect_native_mood_23_short_breaks(low_level, middle_level)?;
+    detector_bars.extend(detect_native_mood_23_sound_changes(phrase_feature)?);
+    detector_bars.extend(detect_native_mood_23_snare_fills(high_level)?);
+    detector_bars.extend(detect_native_mood_23_vocal_entries(boundary_feature)?);
+    detector_bars.sort_unstable();
+    detector_bars.dedup();
+    adjust_native_mood_23_phrase_candidates(judged_beats, &detector_bars, feature_origin, bar_count)
 }
 
 /// Merge mood-2/3 detector bars into judged beat candidates.
@@ -1699,11 +2133,118 @@ mod tests {
     }
 
     #[test]
+    fn native_mood_23_short_break_matches_recovery_shape() {
+        let mut feature_a = (0..28)
+            .map(|index| if index % 2 == 0 { 1.0 } else { 0.2 })
+            .collect::<Vec<_>>();
+        feature_a[18] = 1.0;
+        feature_a[19] = 0.05;
+        feature_a[20] = 1.0;
+        let feature_b = feature_a.clone();
+
+        assert_eq!(
+            detect_native_mood_23_short_breaks(&feature_a, &feature_b)
+                .expect("short-break detection"),
+            [6]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_genre_stages_merge_short_breaks_into_beats() {
+        let mut low_level = (0..48)
+            .map(|index| if index % 2 == 0 { 1.0 } else { 0.2 })
+            .collect::<Vec<_>>();
+        low_level[18] = 1.0;
+        low_level[19] = 0.05;
+        low_level[20] = 1.0;
+        let middle_level = low_level.clone();
+
+        assert_eq!(
+            add_native_mood_23_genre_candidates(
+                &low_level,
+                &middle_level,
+                &[0.0; 48 * 8],
+                &[1.0; 48],
+                &[1.0; 48],
+                &[1],
+                1,
+            )
+            .expect("genre-stage candidates"),
+            [1, 21]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_snare_fill_preserves_overwritten_lower_quantile() {
+        let peak_sums = [
+            0.722_880_004_371,
+            0.525_629_025_458,
+            1.320_527_891_05,
+            0.454_934_663_93,
+            1.068_330_441_22,
+            0.780_820_367_973,
+            0.442_995_321_686,
+            1.013_791_362_12,
+            0.426_576_107_269,
+            0.884_945_544_307,
+            0.452_776_980_453,
+            0.470_511_681_988,
+            0.870_192_530_919,
+            1.825_919_807_01,
+            0.500_082_398_561,
+            0.600_608_081_667,
+            1.264_580_783_24,
+            2.281_219_913_19,
+            1.152_609_935_54,
+            0.826_693_227_384,
+            2.404_385_412_78,
+            0.433_776_624_092,
+            1.935_417_961_81,
+            0.678_714_971_252,
+            0.519_282_954_027,
+            0.494_576_857_155,
+            0.702_725_089_154,
+            1.790_198_081_18,
+        ];
+        let mut features = vec![0.0; 32 * 32];
+        for (bar, peak_sum) in peak_sums.into_iter().enumerate() {
+            features[bar * 32 + 1] = peak_sum;
+        }
+
+        assert_eq!(
+            detect_native_mood_23_snare_fills(&features).expect("snare fills"),
+            [24]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_vocal_entry_matches_long_and_short_gap_paths() {
+        let mut long_gap = vec![0.0; 40];
+        long_gap[8] = 1.0;
+        long_gap[9] = 1.0;
+        assert_eq!(
+            detect_native_mood_23_vocal_entries(&long_gap).expect("long-gap vocal entry"),
+            [3]
+        );
+
+        let mut short_gap = vec![0.0; 40];
+        short_gap[3..7].fill(1.0);
+        assert_eq!(
+            detect_native_mood_23_vocal_entries(&short_gap).expect("short-gap vocal entry"),
+            [2]
+        );
+    }
+
+    #[test]
     fn native_change_features_reject_invalid_inputs() {
         assert!(derive_native_phrase_change_features(&[f64::NAN]).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 8], 0).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 3], 1).is_err());
+        assert!(detect_native_mood_23_short_breaks(&[1.0], &[1.0, 2.0]).is_err());
+        assert!(detect_native_mood_23_short_breaks(&[f64::NAN], &[1.0]).is_err());
         assert!(detect_native_mood_23_sound_changes(&[f64::NAN]).is_err());
+        assert!(detect_native_mood_23_snare_fills(&[f64::NAN]).is_err());
+        assert!(detect_native_mood_23_vocal_entries(&[f64::NAN]).is_err());
         assert!(
             judge_native_phrase_change_window(
                 &NativePhraseChangeFeatures {

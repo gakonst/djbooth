@@ -510,17 +510,30 @@ feature arrays matches both mood-2 captures at `25/25` candidates and the
 mood-3 capture at `20/20`. The downstream `VerseHookAdd_genre23` insertion
 pass and its upstream seed construction still gate production integration.
 
-The downstream pass is now traced at each helper and partially ported.
+The downstream pass is now traced and ported at every helper.
 `detect_native_mood_23_sound_changes` reproduces `SouonChangeDet`: native
 four-beat accumulation order, its unpopulated guard bar, `0.003` zero floor,
 folded adjacent ratios, `1.8` spike gate, and `1.11` two-bar settling gate.
 Direct replay returns the exact captured mood-2 bars `[2, 225, 226]` and the
-empty mood-3 result. `adjust_native_mood_23_phrase_candidates` ports the final
-merge: consecutive detector runs retain their right edge, detector bars
-within one bar of an existing judged boundary are suppressed, the last four
-bars are excluded, and results map back to beats. It exactly expands the two
-captured judge outputs from `25→31` and `20→22` boundaries. Short-break,
-snare-fill, and vocal-in detection remain to be ported before production use.
+empty mood-3 result. `detect_native_mood_23_short_breaks` recovers both
+adaptive falling-edge thresholds, the native beat-phase filter, and the
+four-beat `>2.5` recovery test; two additional native references exercise
+positive results at bars 138 and 54. `detect_native_mood_23_snare_fills`
+matches all 32-sample peak windows and the downstream ratio state machine.
+The native routine overwrites its lower-quantile scratch with the upper-ratio
+array, so its lower threshold intentionally remains mean-derived.
+`detect_native_mood_23_vocal_entries` reproduces both long-silence and
+low-density short-gap paths.
+
+`add_native_mood_23_genre_candidates` composes all four detectors with
+`adjust_native_mood_23_phrase_candidates`. Direct Rust replay is exact at
+every detector and at the final beat list across eight native mood-2 traces,
+including positive and negative short-break cases. The final merge retains
+the right edge of consecutive detector runs, suppresses detector bars within
+one bar of an existing judged boundary, excludes the last four bars, and maps
+results back to beats. Production integration is now gated by upstream seed
+construction and dynamic-grid feature-window alignment rather than an
+unported genre stage.
 
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight

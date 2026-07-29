@@ -186,8 +186,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   windows, three-family deduplication, consecutive-run collapse, weighted
   score suppression, protected bars, and beat remapping. Full Rust replay from
   the nine captured feature arrays matches mood 2 at `25/25` twice and mood 3
-  at `20/20`. `VerseHookAdd_genre23` and upstream seed generation remain the
-  production gate.
+  at `20/20`.
+- Extended the phrase tracer through schema 20 with internal
+  `findpeaks_ex` and vocal-candidate sort probes. Ported
+  `ShortBreakDetection`, `SnareFillinDet`, and `VocalInDetection`, then
+  composed all four detector helpers as
+  `add_native_mood_23_genre_candidates`. Eight native mood-2 traces replay
+  exactly at every helper and at the final beat list. The positive
+  short-break fixtures emit bars 138 and 54. The snare port preserves the
+  native overwritten-lower-quantile scratch behavior. Upstream seed
+  generation and dynamic-grid feature-window parity now remain as the
+  production gates.
 - Added `REKORDBOX_ANALYZER_TRACE_SCOPE=phrase`. It installs only the six
   high-mood plus mood-2/3 phrase-stage hooks, leaving analyzer outputs byte-identical while
   reducing a representative trace from `32.8 MB` to `147 KB` (`223×`) and
@@ -1770,5 +1779,13 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `[2, 225, 226]` and the empty mood-3 result. The final
   `CandidatesAdjustment` port exactly expands the two judge outputs from
   `25→31` and `20→22` boundaries.
-- Production routing remains gated on the three remaining genre detectors,
-  dynamic-grid feature-window parity, and upstream seed construction.
+- Added schema-20 internal probes for `findpeaks_ex` and the vocal candidate
+  sort. Clean ports of `ShortBreakDetection`, `SnareFillinDet`, and
+  `VocalInDetection` now reproduce every stage across eight native mood-2
+  traces. Positive short-break references produce bars 138 and 54; all
+  negative cases remain empty. The snare implementation preserves the native
+  overwritten-lower-quantile scratch quirk.
+- `add_native_mood_23_genre_candidates` composes all detector stages and the
+  final adjustment. Full Rust replay matches all eight final native beat
+  lists exactly. Production routing is now gated on dynamic-grid
+  feature-window parity and upstream seed construction.
