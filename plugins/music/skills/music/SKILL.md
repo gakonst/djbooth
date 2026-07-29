@@ -387,9 +387,13 @@ manifest, and a cache from another mode must be recomputed. Rekordbox 6.8.2 refe
 must use the same explicit mode: Normal and Dynamic are different algorithms, not interchangeable
 quality levels.
 
-The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform/beat/key baselines.
+The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform, beat, key, seek,
+and non-empty song-structure baselines. Its PSSI path follows the recovered 44.1/48 kHz
+signed-16-bit 99%-left/1%-right reader contract, writes every known phrase field, exposes bounded
+per-phrase feature evidence, and includes clean `/2`, `/8`, and `/32` native-filter primitives.
 Do not claim whole-analyzer proprietary byte identity: the recovered Dynamic beat path can match
-reference timing while waveform, phrase, and finishing stages still have independent parity work.
+reference timing while exact multirate phrase-feature consumers, phrase boundaries/kinds/auxiliary
+fields, waveform normalization, and finishing stages still have independent parity work.
 For parity work, use `analyze beat-grid-diff` rather than raw file hashes. Require matching beat
 counts and labels for steady-tempo material, inspect median/p95/max timing error and drift, and retain
 the reported missing/extra beats, downbeat error, tempo changes, and F1 collars for held-out tracks.
