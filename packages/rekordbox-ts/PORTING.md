@@ -1108,3 +1108,43 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `116.6 → 108.6 → 163.1 → 164.9 → 164.9`, and `149.9 BPM` across the corpus.
   Remaining section-decoder work is per-section pulse/phase synthesis,
   downbeat numbering, and boundary repair.
+
+## Linked pulse/phase synthesis checkpoint (2026-07-28)
+
+- Extended the private tracer to schema v10 by wrapping all six native
+  `BeatInfoAnalyzer::findNearPos` callsites. The trace records one bounded
+  summary per search block rather than hundreds of thousands of individual
+  calls, including exact section bounds, candidate period, tolerance, trial
+  count, and strict-greatest winning trial.
+- Recovered section bounds exactly. A transition finds the last surviving
+  hypothesis at or before the next refined anchor, then uses the preceding
+  hypothesis plus `trunc(candidatePeriodFrames / 8)`. The result is clamped
+  between the adjacent refined anchors. The first section starts at frame zero
+  and the last ends at the native total-frame count.
+- Each section tests period corrections in `0, +1, -1, +2, -2 ms` order.
+  Every candidate sweeps four-, two-, and one-beat pulse spacings across one
+  complete pulse interval in fixed 96-source-frame phase steps. Predictions
+  recursively continue from the nearest snapped survivor. The nearest search
+  retains the earlier position on equal distance and contributes
+  `tolerance - absoluteError` per hit, where tolerance is
+  `max(sampleRate / 20, trunc(periodFrames / 8))`.
+- Pulse scores are compared as `fourBeatRaw * 4`, `twoBeatRaw * 2`, and
+  `oneBeatRaw`; all comparisons are strict, preserving the earlier phase,
+  wider pulse, and period correction on ties. A candidate exits early once
+  its normalized score exceeds
+  `tolerance * ((upper - lower) / 2) / periodFrames`. The stored origin is the
+  first snapped peak with whole periods removed relative to the section lower
+  bound; that quotient is the native `unknown10` field.
+- Ported the full search as clean Rust `adjust_tempo_section_phases`. A
+  182-survivor Rafael fixture reproduces all three linked descriptors exactly:
+  `6677 / 512.5798 / 16 / 128`,
+  `3717967 / 551.4862 / 16 / 16`, and
+  `13171054 / 361.85687 / 8 / 79`. The final section is the important close
+  case: its normalized two-beat score beats the four-beat candidate by only
+  716 points.
+- Static follow-through confirms no hidden mutation between fine refinement
+  and this stage. After phase synthesis, the linked analyzer constructs a
+  constant six-band millisecond correction table
+  `[-30, -20, -3, -3, -20, -3]`; later beat expansion applies it by detector
+  band. Remaining decoder work is expanded beat emission/downbeat numbering,
+  those per-band corrections, and the narrow inter-section gap repair.

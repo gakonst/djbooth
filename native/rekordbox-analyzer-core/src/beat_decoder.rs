@@ -73,6 +73,20 @@ impl RefinedTempoSection {
     }
 }
 
+/// One tempo section after linked pulse and phase adjustment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdjustedTempoSection {
+    /// Selected section origin in source frames.
+    pub origin_frame: u64,
+    /// Quarter-note period in milliseconds after the native ±2 ms search.
+    pub period_ms: f32,
+    /// Native pulse marker: 16, 8, or 4 for four-, two-, or one-beat spacing.
+    pub pulse_marker: u8,
+    /// Whole quarter-note periods removed from the selected peak.
+    pub period_offset: u32,
+}
+
 /// Build the linked analyzer's provisional tempo sections.
 ///
 /// Each source hypothesis starts an inclusive eight-second forward histogram.
@@ -282,6 +296,281 @@ pub fn refine_tempo_sections(
     }
 
     Ok(sections)
+}
+
+/// Select each refined section's pulse spacing, period correction, and phase.
+///
+/// The linked analyzer tests period corrections in `0, +1, -1, +2, -2`
+/// millisecond order. For each correction it sweeps four-, two-, and one-beat
+/// pulse spacings in 96-frame phase increments, recursively snapping every
+/// predicted pulse to the nearest surviving hypothesis. Scores are normalized
+/// by pulse spacing before strict-greater comparison, so earlier candidates
+/// retain ties.
+pub fn adjust_tempo_section_phases(
+    hypotheses: &[BeatSensorHypothesis],
+    sections: &[RefinedTempoSection],
+    sample_rate: u32,
+    total_frames: u64,
+) -> Result<Vec<AdjustedTempoSection>> {
+    validate_phase_inputs(hypotheses, sections, sample_rate, total_frames)?;
+    let mut adjusted = Vec::with_capacity(sections.len());
+    for section_index in 0..sections.len() {
+        let mut best = None;
+        'periods: for correction_ms in [0.0_f64, 1.0, -1.0, 2.0, -2.0] {
+            let period_ms = f64::from(sections[section_index].period_ms) + correction_ms;
+            let period_frames = f64::from(sample_rate) * 0.001 * period_ms;
+            let eighth_period = (period_frames * 0.125).trunc() as i64;
+            let (lower_frame, upper_frame) = linked_section_search_bounds(
+                hypotheses,
+                sections,
+                section_index,
+                eighth_period,
+                total_frames,
+            );
+            let tolerance_frames =
+                ((sample_rate / 20) as i32).max(eighth_period.try_into().unwrap_or(i32::MAX));
+            let confidence_threshold =
+                tolerance_frames as f64 * ((upper_frame - lower_frame) * 0.5) / period_frames;
+
+            for pulse_beats in [4_u8, 2, 1] {
+                if let Some(trial) = strongest_phase_trial(
+                    hypotheses,
+                    lower_frame,
+                    upper_frame,
+                    period_frames,
+                    tolerance_frames,
+                    pulse_beats,
+                ) {
+                    let normalized_score = trial.score * i64::from(pulse_beats);
+                    let replaces_best =
+                        best.as_ref().is_none_or(|current: &PhaseSectionCandidate| {
+                            normalized_score > current.normalized_score
+                        });
+                    if replaces_best {
+                        best = Some(PhaseSectionCandidate {
+                            first_hit: trial.first_hit,
+                            period_ms,
+                            period_frames,
+                            lower_frame,
+                            normalized_score,
+                            pulse_beats,
+                        });
+                    }
+                }
+                if best.as_ref().is_some_and(|candidate| {
+                    candidate.normalized_score as f64 > confidence_threshold
+                }) {
+                    break 'periods;
+                }
+            }
+        }
+
+        let candidate = best.ok_or_else(|| {
+            anyhow::anyhow!(
+                "tempo-section phase adjustment found no hypothesis for section {section_index}"
+            )
+        })?;
+        let period_offset = ((f64::from(candidate.first_hit) - candidate.lower_frame)
+            / candidate.period_frames)
+            .trunc() as i32;
+        let origin_frame = (f64::from(candidate.first_hit)
+            - f64::from(period_offset) * candidate.period_frames)
+            .trunc() as i64;
+        if origin_frame < 0 || period_offset < 0 {
+            bail!("tempo-section phase adjustment produced a negative descriptor");
+        }
+        adjusted.push(AdjustedTempoSection {
+            origin_frame: origin_frame as u64,
+            period_ms: candidate.period_ms as f32,
+            pulse_marker: candidate.pulse_beats * 4,
+            period_offset: period_offset as u32,
+        });
+    }
+    Ok(adjusted)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhaseTrial {
+    first_hit: i32,
+    score: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PhaseSectionCandidate {
+    first_hit: i32,
+    period_ms: f64,
+    period_frames: f64,
+    lower_frame: f64,
+    normalized_score: i64,
+    pulse_beats: u8,
+}
+
+fn validate_phase_inputs(
+    hypotheses: &[BeatSensorHypothesis],
+    sections: &[RefinedTempoSection],
+    sample_rate: u32,
+    total_frames: u64,
+) -> Result<()> {
+    if sample_rate == 0 {
+        bail!("tempo-section phase adjustment requires a non-zero sample rate");
+    }
+    if total_frames > i32::MAX as u64 {
+        bail!("tempo-section phase adjustment exceeds the linked frame range");
+    }
+    if hypotheses
+        .windows(2)
+        .any(|pair| pair[0].peak_frame > pair[1].peak_frame)
+    {
+        bail!("tempo-section phase adjustment requires frame-ordered hypotheses");
+    }
+    if hypotheses
+        .iter()
+        .any(|hypothesis| hypothesis.peak_frame > i32::MAX as u64)
+    {
+        bail!("tempo-section phase adjustment exceeds the linked hypothesis range");
+    }
+    if sections
+        .windows(2)
+        .any(|pair| pair[0].anchor_frame > pair[1].anchor_frame)
+    {
+        bail!("tempo-section phase adjustment requires frame-ordered sections");
+    }
+    for section in sections {
+        if !section.period_ms.is_finite() || section.period_ms <= 2.0 {
+            bail!("tempo-section phase adjustment requires periods above two milliseconds");
+        }
+        if section.anchor_frame > total_frames {
+            bail!("tempo-section phase adjustment has an anchor beyond the track");
+        }
+        let source_index =
+            hypotheses.partition_point(|hypothesis| hypothesis.peak_frame < section.anchor_frame);
+        if hypotheses
+            .get(source_index)
+            .is_none_or(|hypothesis| hypothesis.peak_frame != section.anchor_frame)
+        {
+            bail!(
+                "tempo-section phase anchor {} has no source hypothesis",
+                section.anchor_frame
+            );
+        }
+    }
+    if !sections.is_empty() && hypotheses.is_empty() {
+        bail!("tempo-section phase adjustment requires source hypotheses");
+    }
+    Ok(())
+}
+
+fn linked_section_search_bounds(
+    hypotheses: &[BeatSensorHypothesis],
+    sections: &[RefinedTempoSection],
+    section_index: usize,
+    eighth_period: i64,
+    total_frames: u64,
+) -> (f64, f64) {
+    let lower_frame = if section_index == 0 {
+        0
+    } else {
+        linked_section_boundary(
+            hypotheses,
+            sections[section_index].anchor_frame,
+            sections[section_index - 1].anchor_frame,
+            eighth_period,
+        )
+    };
+    let upper_frame = sections
+        .get(section_index + 1)
+        .map_or(total_frames, |next| {
+            linked_section_boundary(
+                hypotheses,
+                next.anchor_frame,
+                sections[section_index].anchor_frame,
+                eighth_period,
+            )
+        });
+    (lower_frame as f64, upper_frame as f64)
+}
+
+fn linked_section_boundary(
+    hypotheses: &[BeatSensorHypothesis],
+    anchor_frame: u64,
+    preceding_anchor: u64,
+    eighth_period: i64,
+) -> u64 {
+    let anchor_index =
+        hypotheses.partition_point(|hypothesis| hypothesis.peak_frame <= anchor_frame) - 1;
+    let candidate = if anchor_index == 0 {
+        hypotheses[0].peak_frame as i64 - eighth_period
+    } else {
+        hypotheses[anchor_index - 1].peak_frame as i64 + eighth_period
+    };
+    candidate
+        .max(preceding_anchor as i64)
+        .min(anchor_frame as i64)
+        .max(0) as u64
+}
+
+fn strongest_phase_trial(
+    hypotheses: &[BeatSensorHypothesis],
+    lower_frame: f64,
+    upper_frame: f64,
+    period_frames: f64,
+    tolerance_frames: i32,
+    pulse_beats: u8,
+) -> Option<PhaseTrial> {
+    let spacing_frames = period_frames * f64::from(pulse_beats);
+    let phase_end = (lower_frame + spacing_frames).min(upper_frame);
+    let mut phase_frame = lower_frame;
+    let mut best = None;
+    while phase_frame < phase_end {
+        let mut target_frame = phase_frame;
+        let mut score = 0_i64;
+        let mut first_hit = None;
+        while target_frame < upper_frame {
+            let target_position = target_frame.trunc() as i32;
+            if let Some(result_position) =
+                find_nearest_position(hypotheses, target_position, tolerance_frames)
+            {
+                let error = result_position.abs_diff(target_position) as i32;
+                score += i64::from(tolerance_frames - error);
+                first_hit.get_or_insert(result_position);
+                target_frame = f64::from(result_position) + spacing_frames;
+            } else {
+                target_frame += spacing_frames;
+            }
+        }
+        if let Some(first_hit) = first_hit {
+            let replaces_best = best
+                .as_ref()
+                .is_none_or(|current: &PhaseTrial| score > current.score);
+            if replaces_best {
+                best = Some(PhaseTrial { first_hit, score });
+            }
+        }
+        phase_frame += 96.0;
+    }
+    best
+}
+
+fn find_nearest_position(
+    hypotheses: &[BeatSensorHypothesis],
+    target_position: i32,
+    tolerance_frames: i32,
+) -> Option<i32> {
+    let insertion =
+        hypotheses.partition_point(|hypothesis| hypothesis.peak_frame <= target_position as u64);
+    let mut selected = insertion.checked_sub(1).and_then(|index| {
+        let position = hypotheses[index].peak_frame as i32;
+        (position.abs_diff(target_position) <= tolerance_frames as u32).then_some(position)
+    });
+    if let Some(successor) = hypotheses.get(insertion) {
+        let position = successor.peak_frame as i32;
+        let error = position.abs_diff(target_position);
+        let selected_error = selected.map_or(u32::MAX, |current| current.abs_diff(target_position));
+        if error <= tolerance_frames as u32 && error < selected_error {
+            selected = Some(position);
+        }
+    }
+    selected
 }
 
 /// Apply the linked analyzer's one-eighth-beat hypothesis suppression.
@@ -612,6 +901,165 @@ mod tests {
                 generation: 4,
                 band: 0,
             }]
+        );
+    }
+
+    #[test]
+    fn phase_bounds_use_the_peak_before_each_section_anchor() {
+        let hypotheses = [
+            hypothesis(1_000, 0x0103, 500.0),
+            hypothesis(2_000, 0x0203, 500.0),
+            hypothesis(3_000, 0x0303, 500.0),
+            hypothesis(4_000, 0x0403, 600.0),
+            hypothesis(5_000, 0x0503, 600.0),
+            hypothesis(6_000, 0x0603, 600.0),
+            hypothesis(7_000, 0x0703, 400.0),
+        ];
+        let sections = [
+            RefinedTempoSection {
+                anchor_frame: 1_000,
+                period_ms: 500.0,
+                generation: 4,
+                band: 0,
+            },
+            RefinedTempoSection {
+                anchor_frame: 4_000,
+                period_ms: 600.0,
+                generation: 4,
+                band: 0,
+            },
+            RefinedTempoSection {
+                anchor_frame: 7_000,
+                period_ms: 400.0,
+                generation: 4,
+                band: 0,
+            },
+        ];
+
+        assert_eq!(
+            linked_section_search_bounds(&hypotheses, &sections, 0, 62, 8_000),
+            (0.0, 3_062.0)
+        );
+        assert_eq!(
+            linked_section_search_bounds(&hypotheses, &sections, 1, 75, 8_000),
+            (3_075.0, 6_075.0)
+        );
+        assert_eq!(
+            linked_section_search_bounds(&hypotheses, &sections, 2, 50, 8_000),
+            (6_050.0, 8_000.0)
+        );
+    }
+
+    #[test]
+    fn phase_adjustment_snaps_a_steady_four_beat_pulse() {
+        let hypotheses = [
+            hypothesis(100, 0x0103, 500.0),
+            hypothesis(600, 0x0203, 500.0),
+            hypothesis(1_100, 0x0303, 500.0),
+            hypothesis(1_600, 0x0403, 500.0),
+            hypothesis(2_100, 0x0503, 500.0),
+        ];
+        let sections = [RefinedTempoSection {
+            anchor_frame: 100,
+            period_ms: 500.0,
+            generation: 4,
+            band: 0,
+        }];
+
+        let result = adjust_tempo_section_phases(&hypotheses, &sections, 1_000, 2_600).unwrap();
+
+        assert_eq!(
+            result,
+            vec![AdjustedTempoSection {
+                origin_frame: 100,
+                period_ms: 500.0,
+                pulse_marker: 16,
+                period_offset: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn phase_adjustment_matches_linked_rafael_sections() {
+        const FRAMES: &[u64] = &[
+            2_900_088, 2_991_072, 3_544_904, 3_579_072, 3_623_224, 3_651_760, 3_680_072, 3_714_000,
+            4_107_096, 4_131_280, 4_172_072, 4_190_904, 4_204_472, 4_215_560, 4_277_280, 4_314_416,
+            13_059_576, 13_084_600, 13_122_016, 13_159_744, 14_431_728, 14_448_184, 14_463_976,
+            14_495_432, 14_511_792, 14_528_080, 14_543_776, 14_551_184, 14_560_056, 14_575_464,
+            14_592_504, 14_598_216, 14_624_296, 14_640_192, 14_656_168, 14_687_448, 14_720_304,
+            14_736_096, 14_752_120, 14_754_304, 14_784_048, 14_815_664, 14_818_064, 14_832_128,
+            14_848_552, 14_880_560, 14_943_736, 15_344_712, 15_376_608, 15_407_520, 16_421_696,
+            16_485_288, 16_516_976, 16_549_072, 16_579_808, 18_929_064, 18_961_144, 18_993_184,
+            19_025_392, 19_027_632, 19_043_856, 19_056_464, 19_059_312, 19_089_472, 19_121_432,
+            19_153_456, 19_170_368, 19_185_464, 19_217_760, 19_234_056, 19_249_792, 19_251_888,
+            19_281_640, 19_284_184, 19_314_120, 19_345_720, 19_348_544, 19_378_176, 19_380_192,
+            19_394_368, 19_410_336, 19_412_472, 19_450_456, 19_474_256, 19_506_936, 19_522_808,
+            19_539_120, 19_554_992, 19_577_640, 19_587_008, 19_605_632, 19_625_184, 19_640_992,
+            19_651_552, 19_667_280, 19_672_792, 19_683_272, 19_688_904, 19_699_480, 19_715_944,
+            19_739_328, 19_763_464, 19_779_048, 19_795_760, 19_811_456, 19_827_432, 19_843_856,
+            19_859_584, 19_875_816, 19_892_112, 19_907_736, 19_923_664, 19_954_968, 19_987_752,
+            20_019_912, 20_052_872, 20_068_464, 20_084_432, 20_099_656, 20_115_528, 20_148_248,
+            20_182_120, 20_196_416, 20_212_016, 20_214_216, 20_244_048, 20_268_904, 20_276_160,
+            20_278_448, 20_292_760, 20_308_280, 20_310_904, 20_324_344, 20_339_920, 20_342_520,
+            20_372_400, 20_374_664, 20_388_696, 20_404_536, 20_406_688, 20_436_592, 20_501_328,
+            20_533_296, 20_564_832, 20_581_184, 20_597_688, 20_629_208, 20_660_864, 20_668_032,
+            20_701_288, 20_725_992, 20_757_864, 20_773_624, 20_789_760, 20_821_352, 20_853_816,
+            20_885_216, 20_887_848, 20_901_336, 20_918_112, 20_950_232, 21_013_968, 21_029_712,
+            21_046_368, 21_077_656, 21_081_216, 21_110_096, 21_126_376, 21_142_448, 21_158_616,
+            21_174_152, 21_206_400, 21_239_008, 21_270_552, 21_272_616, 21_302_248, 21_304_688,
+            21_334_736, 21_337_208, 21_366_272, 21_398_784, 21_431_280,
+        ];
+        let hypotheses = FRAMES
+            .iter()
+            .enumerate()
+            .map(|(index, &frame)| hypothesis(frame, index as u32, 500.0))
+            .collect::<Vec<_>>();
+        let sections = [
+            RefinedTempoSection {
+                anchor_frame: 2_900_088,
+                period_ms: 514.5798,
+                generation: 4,
+                band: 0,
+            },
+            RefinedTempoSection {
+                anchor_frame: 4_107_096,
+                period_ms: 552.4862,
+                generation: 4,
+                band: 0,
+            },
+            RefinedTempoSection {
+                anchor_frame: 14_431_728,
+                period_ms: 363.85687,
+                generation: 4,
+                band: 0,
+            },
+        ];
+
+        let result =
+            adjust_tempo_section_phases(&hypotheses, &sections, 44_100, 21_554_175).unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                AdjustedTempoSection {
+                    origin_frame: 6_677,
+                    period_ms: 512.5798,
+                    pulse_marker: 16,
+                    period_offset: 128,
+                },
+                AdjustedTempoSection {
+                    origin_frame: 3_717_967,
+                    period_ms: 551.4862,
+                    pulse_marker: 16,
+                    period_offset: 16,
+                },
+                AdjustedTempoSection {
+                    origin_frame: 13_171_054,
+                    period_ms: 361.85687,
+                    pulse_marker: 8,
+                    period_offset: 79,
+                },
+            ]
         );
     }
 }

@@ -23,6 +23,7 @@ const BEAT_INFO_ANALYZE_OFFSET: usize = 0x138a960;
 const BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x1390180;
 const BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x13914f0;
 const BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x13918d0;
+const BEAT_INFO_FIND_NEAR_POS_OFFSET: usize = 0x138a760;
 const BEAT_SENSOR_CREATE_OFFSET: usize = 0x1389ba0;
 const PEAK_SENSOR_PUT_OFFSET: usize = 0x14e7ac0;
 const PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x13894f0;
@@ -45,6 +46,12 @@ const CALL_BEAT_INFO_ANALYZE_OFFSET: usize = 0x14e6695;
 const CALL_BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x138d406;
 const CALL_BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x138f837;
 const CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x138f8f4;
+const CALL_SEG_FIND_NEAR_POS_0_OFFSET: usize = 0x139071b;
+const CALL_SEG_FIND_NEAR_POS_1_OFFSET: usize = 0x139092e;
+const CALL_SEG_FIND_NEAR_POS_2_OFFSET: usize = 0x1390b3d;
+const CALL_SEG_FIND_NEAR_POS_3_OFFSET: usize = 0x1390e31;
+const CALL_SEG_FIND_NEAR_POS_4_OFFSET: usize = 0x139103e;
+const CALL_SEG_FIND_NEAR_POS_5_OFFSET: usize = 0x13912b1;
 const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
 const CALL_PEAK_SENSOR_PUT_OFFSET: usize = 0x14e78ec;
 const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
@@ -86,6 +93,8 @@ type BeatInfoSegAdjust =
     unsafe extern "C" fn(*mut c_void, *mut BeatInfoAnalyzeInfo, *mut StdVector, i32);
 type BeatInfoGapCorrect = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32);
 type BeatInfoGapCorrectRange = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, i32);
+type BeatInfoFindNearPos =
+    unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, *mut i32) -> i32;
 type BeatSensorCreate = unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, i32) -> u64;
 type PeakSensorPut = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type PeakBufferCalcBeat = unsafe extern "C" fn(*mut c_void, f32) -> u8;
@@ -106,6 +115,7 @@ static BEAT_INFO_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_SEG_ADJUST: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT_RANGE: AtomicUsize = AtomicUsize::new(0);
+static BEAT_INFO_FIND_NEAR_POS: AtomicUsize = AtomicUsize::new(0);
 static BEAT_SENSOR_CREATE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_PUT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_CALC_BEAT: AtomicUsize = AtomicUsize::new(0);
@@ -132,6 +142,9 @@ struct ReferenceTrace {
     analyzer_checkpoints: Vec<AnalyzerCheckpointTrace>,
     section_checkpoints: Vec<SectionCheckpointTrace>,
     refinement_checkpoints: Vec<RefinementCheckpointTrace>,
+    phase_probe_blocks: Vec<PhaseProbeBlockTrace>,
+    #[serde(skip)]
+    phase_probe_accumulator: Option<PhaseProbeAccumulator>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -253,6 +266,46 @@ struct HistogramBinTrace {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PhaseProbeBlockTrace {
+    callsite: u8,
+    section_index: usize,
+    lower_frame: f64,
+    upper_frame: f64,
+    period_frames: f64,
+    tolerance_frames: i32,
+    trial_count: usize,
+    total_calls: usize,
+    total_hits: usize,
+    best_trial: Option<PhaseProbeTrialTrace>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhaseProbeTrialTrace {
+    start_target: i32,
+    last_target: i32,
+    score: i64,
+    calls: usize,
+    hits: usize,
+    first_hit: Option<i32>,
+}
+
+#[derive(Debug)]
+struct PhaseProbeAccumulator {
+    block: PhaseProbeBlockTrace,
+    current_trial: PhaseProbeTrialTrace,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegAdjustProbeContext {
+    section_index: usize,
+    lower_frame: f64,
+    upper_frame: f64,
+    period_frames: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BeatInfoAnalyzeTrace {
     info_value_00: i32,
     info_unknown_04: u32,
@@ -356,7 +409,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 8,
+        schema_version: 10,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -375,6 +428,7 @@ pub(crate) fn finish_reference_trace(
     let mut trace = trace()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.flush_phase_probe_block();
     trace.final_beat_grid = final_beat_grid;
     trace.stage_parity = stage_parity(&trace, &final_beats);
     trace.final_beats = final_beats;
@@ -389,6 +443,131 @@ pub(crate) fn finish_reference_trace(
 
 fn trace() -> &'static Mutex<ReferenceTrace> {
     TRACE.get_or_init(|| Mutex::new(ReferenceTrace::default()))
+}
+
+impl ReferenceTrace {
+    fn record_phase_probe(
+        &mut self,
+        callsite: u8,
+        context: SegAdjustProbeContext,
+        target_position: i32,
+        tolerance_frames: i32,
+        result_position: i32,
+    ) {
+        let continues_block = self
+            .phase_probe_accumulator
+            .as_ref()
+            .is_some_and(|accumulator| {
+                accumulator.block.callsite == callsite
+                    && accumulator.block.section_index == context.section_index
+                    && accumulator.block.lower_frame.to_bits() == context.lower_frame.to_bits()
+                    && accumulator.block.upper_frame.to_bits() == context.upper_frame.to_bits()
+                    && accumulator.block.period_frames.to_bits() == context.period_frames.to_bits()
+                    && accumulator.block.tolerance_frames == tolerance_frames
+            });
+        if !continues_block {
+            self.flush_phase_probe_block();
+            self.phase_probe_accumulator = Some(PhaseProbeAccumulator {
+                block: PhaseProbeBlockTrace {
+                    callsite,
+                    section_index: context.section_index,
+                    lower_frame: context.lower_frame,
+                    upper_frame: context.upper_frame,
+                    period_frames: context.period_frames,
+                    tolerance_frames,
+                    trial_count: 0,
+                    total_calls: 0,
+                    total_hits: 0,
+                    best_trial: None,
+                },
+                current_trial: PhaseProbeTrialTrace {
+                    start_target: target_position,
+                    last_target: target_position,
+                    score: 0,
+                    calls: 0,
+                    hits: 0,
+                    first_hit: None,
+                },
+            });
+        } else if self
+            .phase_probe_accumulator
+            .as_ref()
+            .is_some_and(|accumulator| {
+                target_position <= accumulator.current_trial.last_target
+                    || ((i64::from(target_position)
+                        - i64::from(accumulator.current_trial.last_target))
+                        as f64)
+                        < accumulator.block.period_frames * 0.5
+            })
+        {
+            self.finish_phase_probe_trial();
+            let accumulator = self
+                .phase_probe_accumulator
+                .as_mut()
+                .expect("the phase-probe block remains active");
+            accumulator.current_trial = PhaseProbeTrialTrace {
+                start_target: target_position,
+                last_target: target_position,
+                score: 0,
+                calls: 0,
+                hits: 0,
+                first_hit: None,
+            };
+        }
+
+        let accumulator = self
+            .phase_probe_accumulator
+            .as_mut()
+            .expect("a phase-probe block was initialized");
+        accumulator.current_trial.last_target = target_position;
+        accumulator.current_trial.calls += 1;
+        if result_position >= 0 {
+            accumulator.current_trial.hits += 1;
+            accumulator
+                .current_trial
+                .first_hit
+                .get_or_insert(result_position);
+            accumulator.current_trial.score +=
+                i64::from(tolerance_frames - result_position.abs_diff(target_position) as i32);
+        }
+    }
+
+    fn finish_phase_probe_trial(&mut self) {
+        let Some(accumulator) = self.phase_probe_accumulator.as_mut() else {
+            return;
+        };
+        let trial = accumulator.current_trial.clone();
+        accumulator.block.trial_count += 1;
+        accumulator.block.total_calls += trial.calls;
+        accumulator.block.total_hits += trial.hits;
+        let replaces_best = accumulator
+            .block
+            .best_trial
+            .as_ref()
+            .is_none_or(|best| trial.score > best.score);
+        if replaces_best {
+            accumulator.block.best_trial = Some(trial);
+        }
+    }
+
+    fn flush_phase_probe_block(&mut self) {
+        let Some(mut accumulator) = self.phase_probe_accumulator.take() else {
+            return;
+        };
+        let trial = accumulator.current_trial;
+        accumulator.block.trial_count += 1;
+        accumulator.block.total_calls += trial.calls;
+        accumulator.block.total_hits += trial.hits;
+        let replaces_best = accumulator
+            .block
+            .best_trial
+            .as_ref()
+            .is_none_or(|best| trial.score > best.score);
+        if replaces_best {
+            accumulator.block.best_trial = Some(trial);
+        }
+        self.phase_probe_blocks.push(accumulator.block);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -411,6 +590,10 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     set_original(
         &BEAT_INFO_GAP_CORRECT_RANGE,
         base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
+    );
+    set_original(
+        &BEAT_INFO_FIND_NEAR_POS,
+        base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
     );
     set_original(&BEAT_SENSOR_CREATE, base + BEAT_SENSOR_CREATE_OFFSET);
     set_original(&PEAK_SENSOR_PUT, base + PEAK_SENSOR_PUT_OFFSET);
@@ -500,6 +683,36 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
             base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
             trace_beat_info_gap_correct_range as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_0_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_1_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_2_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_2 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_3_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_3 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_4_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_4 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_5_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_5 as usize,
         )?;
         patch_relative_call(
             base + CALL_BEAT_SENSOR_CREATE_OFFSET,
@@ -1338,6 +1551,112 @@ unsafe fn record_caller_section_checkpoint(stage: &'static str) {
 #[cfg(not(target_arch = "x86_64"))]
 unsafe fn record_caller_section_checkpoint(_stage: &'static str) {}
 
+macro_rules! define_find_near_pos_probe {
+    ($name:ident, $callsite:literal) => {
+        #[inline(never)]
+        unsafe extern "C" fn $name(
+            analyzer: *mut c_void,
+            beats: *mut StdVector,
+            target_position: i32,
+            tolerance_frames: i32,
+            result_index: *mut i32,
+        ) -> i32 {
+            let context = unsafe { caller_seg_adjust_probe_context() };
+            unsafe {
+                trace_find_near_pos(
+                    $callsite,
+                    context,
+                    analyzer,
+                    beats,
+                    target_position,
+                    tolerance_frames,
+                    result_index,
+                )
+            }
+        }
+    };
+}
+
+define_find_near_pos_probe!(trace_find_near_pos_0, 0);
+define_find_near_pos_probe!(trace_find_near_pos_1, 1);
+define_find_near_pos_probe!(trace_find_near_pos_2, 2);
+define_find_near_pos_probe!(trace_find_near_pos_3, 3);
+define_find_near_pos_probe!(trace_find_near_pos_4, 4);
+define_find_near_pos_probe!(trace_find_near_pos_5, 5);
+
+unsafe fn trace_find_near_pos(
+    callsite: u8,
+    context: SegAdjustProbeContext,
+    analyzer: *mut c_void,
+    beats: *mut StdVector,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_index: *mut i32,
+) -> i32 {
+    let function: BeatInfoFindNearPos = unsafe { original(&BEAT_INFO_FIND_NEAR_POS) };
+    let result_position = unsafe {
+        function(
+            analyzer,
+            beats,
+            target_position,
+            tolerance_frames,
+            result_index,
+        )
+    };
+    if trace_analyzer_stages_enabled() {
+        let mut trace = trace()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        trace.record_phase_probe(
+            callsite,
+            context,
+            target_position,
+            tolerance_frames,
+            result_position,
+        );
+    }
+    result_position
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe fn caller_seg_adjust_probe_context() -> SegAdjustProbeContext {
+    let frame_pointer: usize;
+    unsafe {
+        std::arch::asm!(
+            "mov {frame_pointer}, rbp",
+            frame_pointer = out(reg) frame_pointer,
+            options(nostack, preserves_flags)
+        )
+    };
+    let wrapper_frame = unsafe { (frame_pointer as *const usize).read() };
+    let seg_adjust_frame = unsafe { (wrapper_frame as *const usize).read() };
+    SegAdjustProbeContext {
+        section_index: unsafe {
+            (seg_adjust_frame.wrapping_sub(0xe8) as *const usize).read_unaligned()
+        },
+        lower_frame: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x70) as *const f64).read_unaligned()
+        },
+        upper_frame: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x48) as *const f64).read_unaligned()
+        },
+        period_frames: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x38) as *const f64).read_unaligned()
+        },
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn caller_seg_adjust_probe_context() -> SegAdjustProbeContext {
+    SegAdjustProbeContext {
+        section_index: 0,
+        lower_frame: 0.0,
+        upper_frame: 0.0,
+        period_frames: 0.0,
+    }
+}
+
 unsafe extern "C" fn trace_beat_info_seg_adjust(
     analyzer: *mut c_void,
     info: *mut BeatInfoAnalyzeInfo,
@@ -1708,5 +2027,31 @@ mod tests {
         let mismatch = &parity.first_mismatches[0];
         assert_eq!(mismatch.converted_time_ms, 1_000);
         assert_eq!(mismatch.final_time_ms, 1_001);
+    }
+
+    #[test]
+    fn phase_probe_summary_groups_trials_without_serializing_each_call() {
+        let context = SegAdjustProbeContext {
+            section_index: 2,
+            lower_frame: 0.0,
+            upper_frame: 1_000.0,
+            period_frames: 500.0,
+        };
+        let mut trace = ReferenceTrace::default();
+        trace.record_phase_probe(3, context, 0, 62, -1);
+        trace.record_phase_probe(3, context, 500, 62, 500);
+        trace.record_phase_probe(3, context, 96, 62, 100);
+        trace.record_phase_probe(3, context, 596, 62, 600);
+        trace.flush_phase_probe_block();
+
+        assert_eq!(trace.phase_probe_blocks.len(), 1);
+        let block = &trace.phase_probe_blocks[0];
+        assert_eq!(block.trial_count, 2);
+        assert_eq!(block.total_calls, 4);
+        assert_eq!(block.total_hits, 3);
+        let best = block.best_trial.as_ref().expect("best phase trial");
+        assert_eq!(best.start_target, 96);
+        assert_eq!(best.score, 116);
+        assert_eq!(best.first_hit, Some(100));
     }
 }

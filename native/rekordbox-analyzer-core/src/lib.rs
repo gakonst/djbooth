@@ -32,8 +32,9 @@ pub use audio::{
     DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
 };
 pub use beat_decoder::{
-    BeatTempoSection, ProvisionalTempoSection, RefinedTempoSection,
-    build_provisional_tempo_sections, refine_tempo_sections, suppress_nearby_hypotheses,
+    AdjustedTempoSection, BeatTempoSection, ProvisionalTempoSection, RefinedTempoSection,
+    adjust_tempo_section_phases, build_provisional_tempo_sections, refine_tempo_sections,
+    suppress_nearby_hypotheses,
 };
 pub use beat_sensor::{
     BeatSensorAnalysis, BeatSensorCandidate, BeatSensorEvent, BeatSensorHypothesis,
