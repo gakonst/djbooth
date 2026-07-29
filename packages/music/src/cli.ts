@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
+import cdjUsbCli from "@gakonst/cdj-usb/cli";
 import djlinkCli from "@gakonst/djlink/cli";
 import rekordboxCli from "@gakonst/rekordbox/cli";
 import libraryCli from "@gakonst/rekordbox-library/cli";
@@ -25,6 +26,8 @@ export const MUSIC_VERSION = (
 export const MUSIC_MCP_TOOL_FILTER = {
   include: [
     "djlink_*",
+    "usb_doctor",
+    "usb_status",
     "tracks_*",
     "spots_auth_status",
     "spots_me",
@@ -69,11 +72,11 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
   const cli = Cli.create("music", {
     version: MUSIC_VERSION,
     description:
-      "One CLI for DJ-set resolution, acquisition/analysis/Rekordbox imports, Pro DJ Link deck serving, platform playlists, and library tools.",
-    hint: "Full set flow: music tracks import-set <url> --manifest <path> --write uses clean analysis automatically; then music djlink rekordbox <track> --player 3. DSP parity: music rekordbox analyze beat-grid-diff|waveform-diff <reference> <candidate>. For broken deck Search, preflight with music djlink search <query>; CDJ-3000 keyboard edits are RemoteDB 0x1500.",
+      "One CLI for DJ-set resolution, acquisition/analysis/Rekordbox imports, Pro DJ Link serving, front-USB appliances, platform playlists, and library tools.",
+    hint: "Full set flow: music tracks import-set <url> --manifest <path> --write uses clean analysis automatically. Use music djlink for rear Link Export, or music usb for a prepared read-only front USB image.",
     mcp: {
       instructions:
-        "For a request to find a DJ set's tracks, acquire them, analyze them, and create its Rekordbox playlist, use tracks_import-set once after the user explicitly approves the database write and any local source-set clipping. Do not manually sequence resolve/acquire/analyze/import when that command covers the request. It resumes durable state, preserves candidate and source provenance, auto-selects only safe deterministic Spotify acquisition primaries, runs the releasable clean-room analyzer by default, and performs at most two acquisition passes: individual sources first, then approved cue-bounded local-set recovery. Use --analysis-engine reference only for an explicit local parity investigation; it is never a release dependency. Compare clean and reference beat grids and waveforms with the rekordbox analyze beat-grid-diff and waveform-diff commands; use semantic timing/phase/downbeat/tempo/F1 and component count/correlation/MAE/bias metrics instead of raw ANLZ hashes. When the same request includes connected-CDJ loading after import, continue with one djlink_rekordbox call; do not wait for the user to restate doctor/start/devices/load. Use djlink_run only for an ad-hoc completed manifest not yet imported into master.db. If deck Search appears broken, run djlink_search first: it exercises the exact prewarmed matcher and RemoteDB row builder without changing deck or library state. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit 0x1500, while legacy Search may emit 0x1300. Per-keystroke reconnects mean server rejection; neither request means UI/source activation failed. DJ Link serves verified local recordings and ANLZ data; it never streams Spotify audio, and load does not claim remote PLAY. If discovery is empty, use djlink_probe for a known deck IP. Use official rekordbox Performance mode for licensed Spotify playback. Inspect before standalone downloads; require explicit acknowledgement for every database or account mutation.",
+        "For a request to find a DJ set's tracks, acquire them, analyze them, and create its Rekordbox playlist, use tracks_import-set once after the user explicitly approves the database write and any local source-set clipping. Do not manually sequence resolve/acquire/analyze/import when that command covers the request. It resumes durable state, preserves candidate and source provenance, auto-selects only safe deterministic Spotify acquisition primaries, runs the releasable clean-room analyzer by default, and performs at most two acquisition passes: individual sources first, then approved cue-bounded local-set recovery. Use --analysis-engine reference only for an explicit local parity investigation; it is never a release dependency. Compare clean and reference beat grids and waveforms with the rekordbox analyze beat-grid-diff and waveform-diff commands; use semantic timing/phase/downbeat/tempo/F1 and component count/correlation/MAE/bias metrics instead of raw ANLZ hashes. When the same request includes connected-CDJ loading after import, continue with one djlink_rekordbox call; do not wait for the user to restate doctor/start/devices/load. Use djlink_run only for an ad-hoc completed manifest not yet imported into master.db. If deck Search appears broken, run djlink_search first: it exercises the exact prewarmed matcher and RemoteDB row builder without changing deck or library state. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit 0x1500, while legacy Search may emit 0x1300. Per-keystroke reconnects mean server rejection; neither request means UI/source activation failed. DJ Link serves verified local recordings and ANLZ data; it never streams Spotify audio, and load does not claim remote PLAY. For front USB, use usb_doctor and usb_status for inspection. The appliance exposes only a prepared immutable image, refuses publication while configured, and requires physical USB STOP/eject before detach. It does not yet synthesize legacy export.pdb. If DJ Link discovery is empty, use djlink_probe for a known deck IP. Use official rekordbox Performance mode for licensed Spotify playback. Inspect before standalone downloads; require explicit acknowledgement for every database or account mutation.",
       tools: MUSIC_MCP_TOOL_FILTER,
     },
     sync: {
@@ -91,6 +94,8 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
         "compare clean and reference Rekordbox waveforms",
         "preflight a track search against the running DJ Link source",
         "show live DJ Link deck telemetry",
+        "check whether this Linux board supports a front USB appliance",
+        "show the active front-deck USB image",
         "create a playlist on Spotify",
         "create a playlist on SoundCloud",
         "search Soulseek for a track",
@@ -102,6 +107,7 @@ export function createMusicCli(): ReturnType<typeof Cli.create> {
     },
   });
 
+  cli.command(cdjUsbCli);
   cli.command(djlinkCli);
   cli.command(rekordboxCli);
   cli.command(libraryCli);

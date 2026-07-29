@@ -22,6 +22,7 @@ playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
 | [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
 | [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
 | [`@gakonst/djlink`](packages/djlink)                       | `djlink`            | Manifest-backed Pro DJ Link RemoteDB/NFS source and CDJ load control   |
+| [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | Read-only Linux USB gadget and immutable image lifecycle               |
 
 Package licenses remain package-local; see each package manifest for its terms.
 
@@ -39,6 +40,7 @@ import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
 import { RekordboxLibraryService } from "@gakonst/music/library";
 import { loadDjLinkTrack, startDjLink } from "@gakonst/music/djlink";
+import { attachCdjUsb, publishCdjUsbImage } from "@gakonst/music/usb";
 ```
 
 ## Pipeline
@@ -52,6 +54,7 @@ YouTube / SoundCloud set
   -> tracks: bounded set extracts only for unavailable IDs
   -> rekordbox: automatic verified playlist membership in the normal encrypted database
   -> djlink: serve verified local audio/ANLZ and load/cue it on a connected CDJ
+  -> usb: alternatively expose a prepared immutable image through the deck's front USB port
 ```
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording
@@ -101,6 +104,7 @@ pnpm slsk --help
 pnpm ytdlp --help
 pnpm rekordbox --help
 pnpm library --help
+pnpm usb --help
 ```
 
 Install the curated workflow skill plus Incur's typed command-group skills, or register the same
@@ -154,6 +158,7 @@ Package-scoped iteration remains available:
 pnpm --filter @gakonst/tracks test
 pnpm --filter @gakonst/ytdlp-ts build
 pnpm --filter @gakonst/rekordbox validate
+pnpm --filter @gakonst/cdj-usb validate
 ```
 
 Live Soulseek tests and direct Rekordbox mutations are not part of the default suite. Never commit

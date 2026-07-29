@@ -43,6 +43,10 @@ describe("music CLI", () => {
 
     expect(names).toEqual(
       expect.arrayContaining([
+        "usb attach",
+        "usb doctor",
+        "usb publish",
+        "usb status",
         "djlink devices",
         "djlink load",
         "djlink search",
@@ -94,6 +98,7 @@ describe("music CLI", () => {
 
     for (const command of [
       "library",
+      "usb",
       "djlink",
       "rekordbox",
       "slsk",
@@ -130,7 +135,8 @@ describe("music CLI", () => {
     expect(output).toContain("music-djlink");
     expect(output).toContain("music-library");
     expect(output).toContain("music-rekordbox");
+    expect(output).toContain("music-usb");
     expect(output).toContain("music-ytdlp-ts");
-    expect(output).toContain("9 skills");
+    expect(output).toContain("10 skills");
   });
 });

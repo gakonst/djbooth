@@ -35,6 +35,10 @@
       "types": "./dist/djlink.d.ts",
       "import": "./dist/djlink.js"
     },
+    "./usb": {
+      "types": "./dist/usb.d.ts",
+      "import": "./dist/usb.js"
+    },
     "./spots": {
       "types": "./dist/spots.d.ts",
       "import": "./dist/spots.js"
@@ -83,6 +87,7 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "0.4.2",
+    "@gakonst/cdj-usb": "workspace:*",
     "@gakonst/djlink": "workspace:*",
     "@gakonst/rekordbox": "workspace:*",
     "@gakonst/rekordbox-library": "workspace:*",

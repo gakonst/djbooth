@@ -20,7 +20,17 @@ entrypoint eagerly loads all libraries, including the Rekordbox library workbenc
 Use root namespaces when composing several packages:
 
 ```ts
-import { djlink, library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "@gakonst/music";
+import {
+  djlink,
+  library,
+  rekordbox,
+  slsk,
+  soundcloud,
+  spots,
+  tracks,
+  usb,
+  ytdlp,
+} from "@gakonst/music";
 
 const tracklist = await tracks.identify("https://youtu.be/example");
 const spotify = new spots.SpotifyClient({
@@ -36,6 +46,7 @@ const reference = new ytdlp.ReferenceClient();
 const database = new rekordbox.MasterDatabase({ unlock: false });
 const workbench = new library.RekordboxLibraryService({ writeEnabled: false });
 await djlink.doctorDjLink({ manifestPath: "./set/manifest.json" });
+await usb.doctorCdjUsb({ imagePath: "./rekordbox-usb.img" });
 ```
 
 Use subpaths for focused imports and smaller API surfaces:
@@ -49,11 +60,12 @@ import { ReferenceClient } from "@gakonst/music/ytdlp";
 import { MasterDatabase } from "@gakonst/music/rekordbox";
 import { LibraryMutationConflictError, RekordboxLibraryService } from "@gakonst/music/library";
 import { loadDjLinkTrack, startDjLink } from "@gakonst/music/djlink";
+import { attachCdjUsb, publishCdjUsbImage } from "@gakonst/music/usb";
 ```
 
 ## CLI
 
-The umbrella mounts the seven package-owned Incur CLI definitions directly. Every specialist command
+The umbrella mounts the package-owned Incur CLI definitions directly. Every specialist command
 and schema remains defined once, in its owning package; `music` adds only the common root and agent
 Skill.
 
@@ -81,6 +93,8 @@ music djlink search "Science Fiction" --mode track --format json
 music djlink run ./set/manifest.json 1 --player 3 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink stop --format json
+music usb doctor ./rekordbox-usb.img --format json
+sudo music usb run ./rekordbox-usb.img --format json
 ```
 
 `music tracks import-set` is the single local acquisition path: recordings land under
@@ -97,7 +111,7 @@ table, including direct track and child counts. Add `--json` for the same tree o
 IDs, parent links, path segments, pagination metadata, and explicit smart-playlist count errors.
 
 The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud`, `slsk`, `ytdlp`,
-`rekordbox`, `library`, and `djlink` Incur CLIs. Its MCP surface filters those commands to the
+`rekordbox`, `library`, `djlink`, and `usb` Incur CLIs. Its MCP surface filters those commands to the
 composable calls used for set resolution, metadata lookup, individual acquisition, analysis,
 normal Rekordbox database maintenance, and safe CDJ loading. Agents should prefer the mounted
 `tracks import-set` pipeline command for an approved resolve-download-analyze-playlist request,
@@ -119,6 +133,12 @@ metadata. Licensed Spotify playback belongs to
 rekordbox's official Performance-mode integration; streaming tracks cannot be LINK EXPORTed or
 served by `music djlink`. A successful `load` cues the selected deck and intentionally reports
 `playing: false`; press PLAY on the deck.
+
+`music usb` is the separate front-panel path for a self-powered Linux board. It imports a prepared
+block image into immutable generations and exposes the active generation as a read-only USB
+mass-storage gadget. Publication is forbidden while configured, and detach requires a physical
+USB STOP/eject confirmation. It currently owns transport and safe image swapping; it does not claim
+to generate the legacy `export.pdb` required by CDJ-3000-class Rekordbox exports.
 
 The platform playlist commands preserve track order and duplicate entries, default to private, and
 require a user OAuth login. They create playlists on the remote account and are marked destructive
@@ -179,6 +199,7 @@ const codeMode = await createMusicCodeMcpServer({
 - [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox database and file formats.
 - [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
 - [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink): Manifest-backed native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
+- [`@gakonst/cdj-usb`](https://github.com/gakonst/music-ts/tree/main/packages/cdj-usb): Linux USB mass-storage gadget and immutable front-deck image lifecycle.
 
 ## Development
 
