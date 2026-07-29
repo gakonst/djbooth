@@ -26,7 +26,7 @@ use crate::rhythm::{
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
     analyze_beats_from_streamed_features, normalize_spectral_flux,
 };
-use crate::waveform::{StreamingWaveformAccumulator, WaveformData};
+use crate::waveform::{StreamingWaveformAccumulator, WaveformData, extract_three_band_source};
 
 const OUTPUT_NAMES: [(&str, &str); 3] = [
     ("DAT", "ANLZ0000.DAT"),
@@ -183,6 +183,8 @@ pub fn analyze_audio_file_with_options(
         (decode_audio_file(path)?, None)
     };
     let source = decoded.source();
+    let source_three_band = (source.sample_rate() != ANALYSIS_SAMPLE_RATE)
+        .then(|| extract_three_band_source(decoded.mono()));
     let pcm = decoded.into_analysis_pcm()?;
     if pcm.is_empty() {
         bail!("decoded audio contains no PCM frames");
@@ -203,7 +205,7 @@ pub fn analyze_audio_file_with_options(
         rayon::join(
             || match streamed_waveforms {
                 Some(waveforms) => Ok(waveforms),
-                None => WaveformData::generate(&pcm),
+                None => WaveformData::generate_with_three_band_source(&pcm, source_three_band),
             },
             || {
                 rayon::join(
@@ -295,7 +297,7 @@ pub fn analyze_audio_file_with_options(
         preview_waveform: waveforms.pwv6(),
         color_config: WaveformColorConfig {
             unknown: 0,
-            data: [80, 100, 100],
+            data: waveforms.three_band_normalize(),
         },
     }
     .to_file()?;

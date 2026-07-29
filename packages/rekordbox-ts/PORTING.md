@@ -877,3 +877,53 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   mean F1 `0.878300`, and mean p95 `43.365 ms`. Codec SIMD versus the frozen
   scalar build changed 9/300 files only: maximum beat drift `0.174 ms` and one
   quantization level in each of two waveform values.
+
+## Linked analyzer stage-trace checkpoint (2026-07-28)
+
+- Added a private x86*64 callsite tracer around the local 6.8.2 reference
+  rehost. Every patch verifies the original opcode, relative target, branch
+  bytes, range, and page protection before installation. The trace records
+  selected `BA*\*` engine, streamed frames, raw beat list, constant-grid
+  adjustment input/output, final PQTZ, and semantic stage parity. It remains
+  outside the distributable clean-room crate.
+- Recovered four distinct beat engines: constant and variable tempo at 44.1
+  and 48 kHz. `BeatAnalyzeReq` byte zero selects the family. The existing
+  explicit reference workflow requests variable mode, while constant mode
+  alone runs `UnitBeatAdjust`.
+- A linked Science Fiction run selected 48 kHz variable mode and returned 839
+  raw beats. All 839 sample-frame positions, meter labels, and BPM-hundredths
+  matched final PQTZ after exact integer floor-millisecond conversion. This
+  pins tempo-family, local timing, and meter decisions inside the proprietary
+  `peakss::BeatInfoAnalyzer`, not the outer ANLZ writer.
+- Forcing the same input through constant mode exposed the isolated
+  postprocessor: `126.99882 → 126.99982 BPM`, `839 → 840` beats, one prepended
+  boundary beat, and a global `+376`-frame (`7.83 ms`) phase shift.
+  `UnitBeatAdjust` downsamples stereo by four, averages int16 channels, applies
+  2 kHz high-pass then absolute value then 1 kHz low-pass, searches a
+  `±50 ms` aggregate pulse basin, and refines a regular 70–180 BPM grid.
+
+## Linked three-band waveform parity checkpoint (2026-07-28)
+
+- Recovered the complete 6.8.2 PWV6/PWV7 path from the linked implementation.
+  Source-rate mono feeds Butterworth biquads at `LP300`,
+  `HP250 → LP1200`, and `HP3000 → LP9000`; each band is max-pooled into exact
+  1 ms buckets and truncated to signed-16 amplitude.
+- PWV6 uses 1,200 track-relative windows with different overlaps
+  (`duration/1000`, `2*duration/3000`, and `duration/3000`), balances total
+  band energy, then applies one shared peak constraint. The resulting
+  low/mid/high gains are serialized in PWVC. PWV7 reconstructs finite peak
+  histories of `300/200/100 ms` with `0.99/0.98/0.97` decay; low and mid are
+  linear while high uses `64 * (1 - cos(pi*x/32768))`.
+- Ported the verified path to clean Rust, preserving the decoded source sample
+  rate before the rhythm/key 44.1 kHz resample. On Science Fiction, PWVC now
+  matches exactly at `[80, 172, 147]`. PWV7 correlation is
+  `0.999989/0.999978/0.999944`, MAE is
+  `0.0144/0.0178/0.0220`, and `97.94–98.57%` of band bytes are exact. PWV6
+  MAE is `0.0042/0.0092/0.1092`.
+- A fresh 110-track read-only replay improved every PWV6 and PWV7 result
+  against the frozen baseline, with zero regressions. Median PWV7 correlation
+  is `0.999991/0.999977/0.999809`; median MAE is
+  `0.0123/0.0169/0.0474`. The two material detail outliers are an explicitly
+  mismatched reference/audio identity and one M4A with a seven-column decoder
+  duration difference. No proprietary code or oracle asset enters release
+  output.

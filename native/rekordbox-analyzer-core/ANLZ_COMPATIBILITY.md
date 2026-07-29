@@ -119,10 +119,11 @@ platform codec dependency:
   monochrome/RGB packing match the public ANLZ layouts. `PWV4` uses separate
   linear-amplitude preview filters and its inverse luminance byte; `PWV5`
   stores frame-RMS-normalized spectral hue independently from its height.
-  `PWV6` mean-reduces encoded `PWV7` detail into its exact 1,200-column preview
-  window, then applies corpus-gated low/mid preview calibration.
-  Local corpus and pure-tone probes establish that each three-band entry is
-  7-bit low/mid/high, despite older public notes describing a different order.
+  `PWV6` and `PWV7` use a clean-room port of the linked three-band path:
+  source-rate Butterworth filters, 1 ms peak buckets, track-relative preview
+  windows, per-track normalization, finite decay histories, and the native
+  nonlinear high-band transfer. Each entry is 7-bit low/mid/high, despite
+  older public notes describing a different order.
 - Rhythm analysis uses low- and body-band STFT spectral flux, bounded
   autocorrelation/harmonic scoring, hierarchical sub-frame tempo/phase
   refinement, FFT-center correction, a continuous non-snapping grid, and
@@ -243,8 +244,11 @@ steady low/mid/high medians of `50/4/0` at 40 Hz, `4/41/19` at 2 kHz, and
 mid/high/low at 8-bit scale to low/mid/high at 7-bit scale changed aligned
 three-track band correlations from `0.158..0.782` to `0.533..0.937` and reduced
 mean per-band absolute error from `31.58..48.12` bytes to `9.50..12.78` bytes.
-The native bands overlap and have a stateful envelope, so cutoff and
-normalization parity remain open rather than being guessed from these probes.
+Subsequent static and live stage tracing recovered the overlapping filters,
+stateful envelope, and normalization path. The clean implementation now uses
+`LP300`, `HP250 → LP1200`, and `HP3000 → LP9000` source-rate biquads, exact
+1 ms peak buckets, `300/200/100 ms` finite decay histories, and PWVC gains
+derived from the 1,200-column track preview.
 
 ## 110-track differential checkpoint
 
@@ -265,12 +269,14 @@ to `6.777`. An independent 77-fixture tone/level/transient corpus improved on
 73 fixtures; high-band mean reduction remained uncalibrated to preserve the
 four non-regression gates.
 
-The pass intentionally retained PWV3, PWV5, and PWV7 detail. PWV3 already has
-median correlation `0.99868` and weighted MAE `0.586`; PWV5 channel median
-correlations are `0.852/0.847/0.837`. A global PWV7 gain curve improved
-aggregate error but regressed ten real tracks, so the unresolved
-filter/envelope detector was not guessed. A narrower rhythm low band likewise
-fixed three tracks but regressed ten and was rejected.
+The original pass intentionally retained PWV3, PWV5, and PWV7 detail. PWV3
+already had median correlation `0.99868` and weighted MAE `0.586`; PWV5
+channel median correlations were `0.852/0.847/0.837`. The later linked-path
+reconstruction replaced the rejected global PWV7 gain guess. A fresh
+110-track replay improved all 110 PWV6 and PWV7 comparisons with no
+regressions; median PWV7 correlation is
+`0.999991/0.999977/0.999809` and median MAE is
+`0.0123/0.0169/0.0474`.
 
 ## Variable-tempo and syncopated-phase audit
 
@@ -341,16 +347,16 @@ artifact was retained, so distributable output remains unchanged.
   empty scaffolding instead of a proprietary phrase map.
 - Cue sections are emitted empty. Non-empty `PCOB`, `PCO2`, and obfuscated
   `PSSI` remain losslessly preservable by the format core.
-- `PWVC` uses the observed fixed configuration; its remaining semantics are
-  not claimed as DSP parity.
-- Variable-tempo tracking remains intentionally unimplemented. A global static
-  grid reaches 70/100 ms F1 of `0.579/0.641` on James Brown's “Ants,”
-  `0.683/0.725` on the live “Get Up,” and `0.315/0.451` on the strongly
-  variable Chopin heldout. The native grids contain 175, 72, and 21 local tempo
-  changes while the clean grid contains none. A barwise/local-tempo path needs
-  its own confidence gate and steady-track non-regression corpus before release.
-- Syncopated phase/meter post-adjustment and three-band
-  filter/envelope/normalization remain high-value differential work.
+- `PWVC` now stores the reconstructed per-track three-band normalization
+  coefficients. Science Fiction matches the linked `[80, 172, 147]` values
+  exactly.
+- Variable-tempo tracking uses a guarded barwise Viterbi path and a bounded
+  second-pass drift refinement. It materially improves the two James Brown
+  heldouts without activating across the frozen steady-track corpora, but
+  larger tempo-family errors and classical rubato remain open.
+- Syncopated meter/downbeat inference, source-decoder boundary parity, PWV7
+  operation-order edge cases, and phrase structure remain high-value
+  differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.
