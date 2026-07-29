@@ -25,6 +25,30 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — source-reader detail-count closure
+
+- Closed the three residual `PWV3`/`PWV5`/`PWV7` count mismatches without
+  track-specific metadata. The native analyzer uses JUCE's Core Audio reader;
+  JUCE copies `kExtAudioFileProperty_FileLengthFrames` directly into
+  `lengthInSamples`.
+- For MPEG-1 Layer III `Info` streams whose encoder field begins with `LAME`,
+  Core Audio computes the CBR duration as
+  `(XingBytes - InfoFrameBytes) * 8 / bitrate`, then rounds
+  `duration * sampleRate / 1,152` upward. On Rhythm In Motion and U So Fine
+  this advertises one nonexistent packet. Direct `AudioFileReadPacketData`
+  probes return zero packets at that final index, proving the waveform reader
+  sees 1,152 logical zero frames rather than decoded audio. Controlled
+  CRC-correct mutations from `LAME` to `Lavc`, and from `Info` to `Xing`,
+  remove the extra packet; revision, method, and music-length mutations do not.
+- FLAC preserves the previously recovered one-maximum-STREAMINFO-block
+  extension after safely skipping leading ID3v2 metadata. This recovers Little
+  Kitty's 4,608 logical zero frames.
+- Fresh real-file analysis now exactly matches all three detail counts:
+  `56,908`, `57,020`, and `51,868` entries in each of PWV3/PWV5/PWV7.
+  Tiga, Crystalised, and The Power remain exact at `34,908`, `30,158`, and
+  `48,747`. A 113-input replay matched counts on all 110 decodable references;
+  the remaining three retain their pre-existing malformed-media decode errors.
+
 ### 2026-07-29 — native MP3 length and PVBR closure
 
 - Recovered `FileReadMp3::FrameAnalyzer`, `checkXingVbri`, and `updateLength` from the linked
@@ -1372,10 +1396,10 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   gap repair, numbering, and track trim.
 - Corrected three trace-derived edge cases. `selectBand` uses
   `4 / (errorMs + 1.0)`, not the earlier `+0.5` interpretation. A terminal
-  tempo section with fewer than 32 beats uses its available quarter-step span.
-  Phase expansion also continues when near-value suppression removed the
-  original section anchor; the native implementation does not require that
-  anchor to survive.
+  tempo section with fewer than 32 beats uses its available span rounded up to
+  the native loop's whole-beat endpoint. Phase expansion also continues when
+  near-value suppression removed the original section anchor; the native
+  implementation does not require that anchor to survive.
 - The six difficult fixtures now produce usable Dynamic grids without failure.
   Rafael, I Got Ants In My Pants, and Get Up Offa That Thing match the
   reference beat timestamps exactly. Luv Techniques and Science Fiction have
@@ -1519,3 +1543,34 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   waveform generation. The native monochrome accumulator already supplies
   the exact detail count, eliminating one full extra scan and its unbounded
   feature vector.
+
+## Dynamic transition residual checkpoint (2026-07-29)
+
+- Captured fresh schema-15 native stage traces for Conga and Chopin, then
+  re-derived the residual transition path from the Rekordbox 6.8.2
+  `BeatInfoAnalyzer::analyze` control flow. Chopin's clean and native streams
+  are identical through near-value suppression, section refinement, and phase
+  adjustment; its first difference was the initial short-section grid fit.
+- The native expansion loop is unrolled by four quarter-steps and tests the
+  section boundary only after the complete beat. Its first out-of-section
+  whole-beat endpoint, rather than the last in-range quarter-step, supplies
+  both the fit span and corrected right position. The clean loop now preserves
+  that endpoint. Chopin moves from 691 to the exact 692 beats, with exact
+  labels and tempo changes, zero p95 error, and only `0.068 ms` maximum error
+  across three truncation-sensitive transition entries.
+- Conga's clean MP3 front end produces two extra near-transition survivors
+  (`1,468` versus native `1,466`) after two native-only BeatList callbacks
+  shift the generation timeline. Both extra survivors sit inside the
+  one-eighth-beat exclusion zone immediately before the next section anchor.
+  Section-bound construction now enforces that upstream survivor-spacing
+  invariant before applying the native one-eighth-beat offset. This is a
+  general transition guard, not a fitted track correction. All four clean
+  Conga phase descriptors then match native exactly; the result is the exact
+  867-beat count, F1 `1.0`, exact labels, and `0.862 ms` p95 error.
+- A fresh frozen 110-track Dynamic replay changed nine tracks and regressed
+  none. Eight missing terminal beats and Conga's extra transition beat were
+  corrected. Exact beat counts improve from `100/110` to `109/110`, exact
+  numbering from `108/110` to `110/110`, mean F1 from `0.999866028` to
+  `0.999985758`, and mean p95 error from `0.833718` to `0.677055 ms`.
+  All 110 remain at F1 `>= 0.99`; 109 are F1 `1.0`. The sole count residual is
+  the existing Funkytown source/reference mismatch.
