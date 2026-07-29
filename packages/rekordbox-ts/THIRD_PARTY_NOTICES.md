@@ -12,3 +12,21 @@ Mozilla Public License, version 2.0. The fixture is retained unchanged and its S
 runtime. The surrounding exporter implementation is original music-ts code.
 
 The MPL-2.0 text is available at <https://www.mozilla.org/MPL/2.0/>.
+
+## Optional MLX stems runtime
+
+The optional stems adapter installs `mlx-audio-separator` 0.1.5 from PyPI at runtime through the
+checked-in uv lockfile. `mlx-audio-separator` is Copyright (c) ssmall256 and contributors and is
+distributed under the MIT License. It incorporates MIT-licensed work from
+`nomadkaraoke/python-audio-separator`, `lucidrains/BS-RoFormer`, and
+`ZFTurbo/Music-Source-Separation-Training`. These Python packages are resolved into the user's uv
+environment and are not copied into this npm package.
+
+The adapter downloads `SYH99999/MelBandRoformer4StemFTLarge` revision
+`62371baf060e8205915b4e6e3f9459fc016b6dd1` from Hugging Face. Its model card declares the
+checkpoint Apache License 2.0. The 3,764,030,874-byte checkpoint is authenticated as SHA-256
+`590358e6abe3255d87d7173ca2e4005de082f14cbb466ea4c5ffedbcc3964506`. Model weights remain in the
+user's cache and are not redistributed with this project.
+
+The MIT and Apache-2.0 license texts are available at <https://opensource.org/license/mit> and
+<https://www.apache.org/licenses/LICENSE-2.0>.

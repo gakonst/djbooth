@@ -25,6 +25,7 @@
   },
   "files": [
     "dist",
+    "python",
     "PORTING.md",
     "THIRD_PARTY_NOTICES.md",
     "README.md",
@@ -69,6 +70,10 @@
     "./mysettings": {
       "types": "./dist/mysettings/index.d.ts",
       "default": "./dist/mysettings/index.js"
+    },
+    "./stems": {
+      "types": "./dist/stems/index.d.ts",
+      "default": "./dist/stems/index.js"
     },
     "./xml": {
       "types": "./dist/xml/index.d.ts",

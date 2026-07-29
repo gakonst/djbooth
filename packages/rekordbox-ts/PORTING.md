@@ -10,6 +10,8 @@ This file is the durable project journal: source pins, compatibility scope, deci
 - `fragmede/rekordbox-pdb-rs`: `b9896c4e279f2ffd5a8eee1f05a7a0282fe44f35` (independent generated-output verification)
 - `Noelo-Lab/kuna`: `5834b3009cbcec3f3bddf1d5cafe50bb03e15474` (agent-oriented native decompiler used for Stems recovery)
 - `deezer/spleeter`: v1.4.0 `4stems.tar.gz`, SHA-256 `3adb4a50ad4eb18c7c4d65fcf4cf2367a07d48408a5eb7d03cd20067429dfaa8` (public model provenance check)
+- `ssmall256/mlx-audio-separator`: PyPI 0.1.5, source commit `0ddc8cf5507906b52ac45a9cd9e6d26e881a93f8` (MLX-native separation and checkpoint conversion)
+- `SYH99999/MelBandRoformer4StemFTLarge`: `62371baf060e8205915b4e6e3f9459fc016b6dd1`, checkpoint SHA-256 `590358e6abe3255d87d7173ca2e4005de082f14cbb466ea4c5ffedbcc3964506` (Apache-2.0 four-source model)
 
 The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
 
@@ -29,6 +31,34 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Legacy Device Library PDB    | implemented    | `music usb ...` | 9 tests      | hardware validation pending |
 
 ## Decisions
+
+### 2026-07-29 — clean Apple Silicon Mel-Band-RoFormer stems backend
+
+- Added `stems doctor`, `stems setup`, and `stems separate` plus matching TypeScript exports. The
+  optional Python 3.12 environment is locked with uv and pins `mlx-audio-separator` 0.1.5. The npm
+  package ships only the adapter and lockfile; model/runtime artifacts remain in the user's cache.
+- Selected the public Apache-2.0 `MelBandRoformer4StemFTLarge` checkpoint: four 44.1 kHz stereo
+  outputs, 384-wide/8-layer Mel-Band-RoFormer, 4,096 FFT, and a published MUSDB18 average SDR of
+  8.9923 dB. The first setup authenticates the 3,764,030,874-byte checkpoint, then saves reusable
+  MLX safetensors (SHA-256 `9d2817f7f0f5b002a89dcc4d0d50b9469d3acb92fab2cdfd869523945a2d4f86`).
+  Inference itself does not execute PyTorch.
+- Restored the checkpoint's `skip_connection: true` transformer schedule in the adapter. The MLX
+  package supports multi-source output but omits that config flag and adds an untrained terminal
+  normalization; the patched forward follows the pinned ZFTurbo source and leaves checkpoint weight
+  naming/conversion unchanged.
+- Default output deliberately matches the recovered Rekordbox wrapper: `bass + other` becomes
+  instrumental, vocals pass through, and drums are derived from the mixture residual. The explicit
+  `four-stem` layout publishes drums/bass/other/vocals directly.
+- On the 12-core M2 Max/32 GB host, a one-second stereo float smoke test took 2.62 seconds on the
+  first warm-up and used 3.92 GB maximum resident memory. The 10.88-second Spleeter demo then took
+  1.49 seconds of measured model-load/inference/write time with 3.96 GB maximum resident memory.
+  All outputs were 44.1 kHz stereo float WAVs; Rekordbox-layout reconstruction measured
+  `8.35e-9` RMS and `5.96e-8` peak error on the music demo.
+- Compared all four one-second outputs against the original pinned PyTorch architecture and the
+  same checkpoint. Aggregate relative L2 error was `0.001046`, correlation was at least `0.9897`
+  per source, and the maximum absolute error was `7.84e-4`; the largest per-source relative error
+  belonged to a near-silent synthetic drums output. This is numerical backend parity, not a claim
+  of exact samples or Rekordbox/Spleeter model parity.
 
 ### 2026-07-29 — Rekordbox 6 Stems model-boundary recovery
 

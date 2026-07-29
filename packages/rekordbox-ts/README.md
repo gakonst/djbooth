@@ -19,6 +19,10 @@ policy, verification evidence, and implementation decisions are recorded in
 - pnpm 10
 - macOS, Windows, or Linux; automatic Rekordbox installation discovery is implemented for macOS and Windows
 
+The optional `stems` backend additionally requires an Apple Silicon Mac and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). Its Python and MLX dependencies are
+locked separately and do not affect database-only use.
+
 ```sh
 pnpm add --global --allow-build=better-sqlite3-multiple-ciphers @gakonst/rekordbox
 rekordbox --help
@@ -68,6 +72,8 @@ rekordbox device info --path /Volumes/USB/PIONEER/rekordbox/exportLibrary.db
 rekordbox anlz info ANLZ0000.DAT
 rekordbox analyze doctor
 rekordbox analyze track /Music/track.flac
+rekordbox stems doctor
+rekordbox stems separate /Music/track.flac /Music/track.stems
 rekordbox settings show MYSETTING.DAT
 rekordbox xml info collection.xml
 ```
@@ -80,6 +86,7 @@ Top-level command families:
 | `xml`       | Inspect and mutate collection tracks and playlists            |
 | `anlz`      | Scan, inspect, and mutate DAT/EXT/2EX analysis files          |
 | `analyze`   | Produce clean DAT/EXT/2EX analysis; optional macOS oracle     |
+| `stems`     | Run clean MLX Mel-Band-RoFormer separation on Apple Silicon   |
 | `settings`  | Read, update, and create all four My Settings binary formats  |
 | `smartlist` | Parse, construct, and compile smart playlists                 |
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
@@ -136,6 +143,30 @@ root.command(rekordboxCli);
 ```
 
 `runRekordboxCli()` remains available from the same subpath for standalone launchers.
+
+### MLX stems
+
+```sh
+# One-time 3.76 GB download, SHA-256 check, and PyTorch-to-MLX conversion
+rekordbox stems setup --format json
+
+# Rekordbox's three-source contract: instrumental, vocals, residual drums
+rekordbox stems separate track.flac track.stems --format json
+
+# Native model outputs: drums, bass, other, vocals
+rekordbox stems separate track.flac track.4stems --layout four-stem --format json
+```
+
+The backend pins `mlx-audio-separator` 0.1.5 and the Apache-2.0
+`SYH99999/MelBandRoformer4StemFTLarge` checkpoint at an immutable Hugging Face revision. Model
+artifacts stay in `~/Library/Caches/rekordbox-ts/stems`; they are never included in the npm package.
+Inference uses MLX on the Apple GPU. Initial conversion needs PyTorch only to deserialize the
+checkpoint; subsequent loads prefer the converted safetensors.
+
+The model predicts drums, bass, other, and vocals. Default output follows the recovered Rekordbox
+6 contract: `instrumental = bass + other`, vocals pass through, and drums are the exact mixture
+residual. Use `--layout four-stem` when separate bass and other files matter more than exact
+three-source reconstruction. Existing named WAVs are refused unless `--force` is explicit.
 
 ## TypeScript API
 

@@ -150,6 +150,7 @@ describe("CLI process boundary", () => {
     expect(llms.stdout).toContain("rekordbox db table");
     expect(llms.stdout).toContain("rekordbox db playlist list");
     expect(llms.stdout).toContain("rekordbox db playlist show");
+    expect(llms.stdout).toContain("rekordbox stems separate");
   }, 20_000);
 
   it("exports an import-safe CLI that composes as a child command", async () => {

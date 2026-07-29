@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+packages/rekordbox-ts/python/.venv/
+packages/rekordbox-ts/python/__pycache__/
 native/rekordbox-analyzer/target/
 native/rekordbox-analyzer-core/target/
 packages/rekordbox-ts/.rekordbox-analyzer/

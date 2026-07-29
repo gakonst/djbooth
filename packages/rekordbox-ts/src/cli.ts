@@ -28,8 +28,11 @@ import {
   DjmdContent,
   DjmdPlaylist,
   DjmdSongPlaylist,
+  diagnoseStems,
   readMySettingFile,
   RekordboxXml,
+  separateStems,
+  setupStems,
   SmartList,
   updateConfig,
   version,
@@ -309,6 +312,69 @@ analyzeCli.command("phrase-features", {
 });
 
 rekordboxCli.command(analyzeCli);
+
+const stemsCli = Cli.create("stems", {
+  description: "Separate local audio with MLX-native Mel-Band-RoFormer on Apple Silicon.",
+  hint: "The pinned Apache-2.0 four-source model downloads once (3.76 GB), converts to reusable safetensors, and runs inference on the Apple GPU. Rekordbox layout emits instrumental, vocals, and residual drums; four-stem emits drums, bass, other, and vocals.",
+});
+
+const stemsRuntimeOptions = z.object({
+  cacheDirectory: z.string().optional().describe("Persistent model cache override"),
+  uvBinary: z.string().optional().describe("uv executable override"),
+});
+
+stemsCli.command("doctor", {
+  description: "Inspect Apple Silicon, MLX, and local model readiness.",
+  options: stemsRuntimeOptions,
+  async run(c) {
+    return await diagnoseStems({
+      cacheDirectory: c.options.cacheDirectory,
+      uvBinary: c.options.uvBinary,
+    });
+  },
+});
+
+stemsCli.command("setup", {
+  description: "Download, authenticate, and convert the pinned four-stem model.",
+  options: stemsRuntimeOptions,
+  async run(c) {
+    return await setupStems({
+      cacheDirectory: c.options.cacheDirectory,
+      onLog(message) {
+        process.stderr.write(message);
+      },
+      uvBinary: c.options.uvBinary,
+    });
+  },
+});
+
+stemsCli.command("separate", {
+  description: "Create three Rekordbox-compatible stems or four native model stems.",
+  args: z.object({
+    audioPath: z.string().describe("Existing audio file"),
+    outputDirectory: z.string().describe("Stem WAV destination"),
+  }),
+  options: stemsRuntimeOptions.extend({
+    force: z.boolean().default(false).describe("Replace existing named stem WAV files"),
+    layout: z
+      .enum(["rekordbox", "four-stem"])
+      .default("rekordbox")
+      .describe("Rekordbox three-source contract, or model-native four sources"),
+  }),
+  async run(c) {
+    return await separateStems(c.args.audioPath, c.args.outputDirectory, {
+      cacheDirectory: c.options.cacheDirectory,
+      force: c.options.force,
+      layout: c.options.layout,
+      onLog(message) {
+        process.stderr.write(message);
+      },
+      uvBinary: c.options.uvBinary,
+    });
+  },
+});
+
+rekordboxCli.command(stemsCli);
 
 const configCli = Cli.create("config", {
   description: "Discover Rekordbox installations and library paths.",
