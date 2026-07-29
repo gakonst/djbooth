@@ -78,6 +78,8 @@ function downloadedManifest(withAnalysis = false): SetManifest {
         tempoBpm: 128.006827,
         key: "Bm",
         keySource: "rekordbox-notify-complete",
+        rhythmMode: "normal",
+        rhythmModeRequested: "auto",
         sourceMtimeMs: 1,
         sourceSize: 1,
       },
@@ -148,6 +150,8 @@ function analysisResult(cacheHit: boolean) {
     results: [
       {
         backend: "rekordbox-dlopen-rehost",
+        rhythmMode: "normal",
+        rhythmModeRequested: "auto",
         source: { path: mediaPath, mtimeMs: 1, size: 1 },
         summary: {
           beat_grid: null,
@@ -276,6 +280,7 @@ describe("runSetToRekordbox", () => {
         expect(options).toMatchObject({
           analyzerBinary: "/tmp/rekordbox-analyzer",
           engine: "clean",
+          rhythmMode: "auto",
           threads: 7,
         });
         return analysisResult(false);
@@ -325,6 +330,8 @@ describe("runSetToRekordbox", () => {
         summaryPath: resolve(analysisDirectory, "analysis.json"),
         tempoBpm: 128.006827,
         key: "Bm",
+        rhythmMode: "normal",
+        rhythmModeRequested: "auto",
       }),
     ]);
     expect(result.performance.peakConcurrency).toBe(1);

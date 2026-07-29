@@ -23,10 +23,14 @@ import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 const cleanHelperName = "rekordbox-analyzer";
 const referenceHelperName = "rekordbox-analyzer-reference";
 const analyzerThreadsEnvironment = "REKORDBOX_ANALYZER_THREADS";
+const analyzerRhythmModeEnvironment = "REKORDBOX_ANALYZER_RHYTHM_MODE";
 const maximumAnalyzerThreads = 64;
 
 /** Select the releasable clean-room DSP or the local proprietary parity oracle. */
 export type AnalyzerEngine = "clean" | "reference";
+
+/** Beat-grid policy matching Rekordbox's Normal and Dynamic analysis modes. */
+export type AnalyzerRhythmMode = "normal" | "dynamic" | "auto";
 
 /** Parsed beat-grid summary emitted by an analyzer engine. */
 export type RekordboxBeatGridSummary = {
@@ -50,6 +54,9 @@ export type RekordboxAnalysisResult = {
   contentId: number;
   nativeLog: string;
   outputs: Array<[string, number]>;
+  rhythmFallback?: string | null;
+  rhythmMode?: "normal" | "dynamic";
+  rhythmModeRequested?: AnalyzerRhythmMode;
   startResult: number;
   source: {
     mtimeMs: number;
@@ -218,6 +225,9 @@ const analysisResultSchema = z.object({
   contentId: z.number().int(),
   nativeLog: z.string(),
   outputs: z.array(z.tuple([z.string().min(1), z.number().int().min(0)])),
+  rhythmFallback: z.string().nullable().optional(),
+  rhythmMode: z.enum(["normal", "dynamic"]).optional(),
+  rhythmModeRequested: z.enum(["normal", "dynamic", "auto"]).optional(),
   source: z.object({
     mtimeMs: nonNegativeNumber,
     path: z.string().min(1),
@@ -340,20 +350,32 @@ export type AnalyzeTrackOptions = {
   outputDirectory?: string;
   rekordboxApp?: string;
   rekordboxCache?: string;
+  /** Normal for a static grid, Dynamic for tempo changes, or conservative Auto selection. */
+  rhythmMode?: AnalyzerRhythmMode;
   signal?: AbortSignal;
   /** Native CPU workers for one clean analyzer process. */
   threads?: number;
   timeoutMs?: number;
 };
 
-/** Default total native CPU budget shared across active analyzer processes. */
+const hostAnalyzerParallelism = Math.min(maximumAnalyzerThreads, availableParallelism());
+const defaultBatchThreadMultiplier =
+  process.platform === "darwin" && process.arch === "arm64" ? 2 : 1;
+
+/**
+ * Default native scheduling budget shared across active analyzer processes.
+ *
+ * Apple Silicon keeps two Rayon slots per core: measured Auto analysis benefits
+ * from overlapping independent DSP branches, while process concurrency remains
+ * bounded to physical host parallelism.
+ */
 export const DEFAULT_ANALYZER_THREAD_BUDGET = Math.min(
   maximumAnalyzerThreads,
-  availableParallelism(),
+  hostAnalyzerParallelism * defaultBatchThreadMultiplier,
 );
 
 /** CPU-adaptive default for process-isolated clean analyzer workers. */
-export const DEFAULT_ANALYZER_CONCURRENCY = Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET);
+export const DEFAULT_ANALYZER_CONCURRENCY = Math.min(12, hostAnalyzerParallelism);
 
 /** Measured single-track sweet spot before native parallelism regresses. */
 export const DEFAULT_ANALYZER_TRACK_THREADS = Math.min(8, DEFAULT_ANALYZER_THREAD_BUDGET);
@@ -672,14 +694,18 @@ export async function analyzeTracks(
     configuredConcurrency > 64
   )
     throw new TypeError("Analyzer concurrency must be an integer between 1 and 64");
+  const requested = audioPaths.length;
   const threadBudget = validateAnalyzerThreads(
-    options.threads ?? DEFAULT_ANALYZER_THREAD_BUDGET,
+    options.threads ??
+      Math.min(
+        DEFAULT_ANALYZER_THREAD_BUDGET,
+        Math.max(1, requested) * DEFAULT_ANALYZER_TRACK_THREADS,
+      ),
     "Analyzer thread budget",
   );
 
   const absolutePaths = audioPaths.map((audioPath) => resolve(audioPath));
   if (options.signal?.aborted) {
-    const requested = absolutePaths.length;
     throw new AnalyzeTracksCancelledError(abortError(options.signal), {
       analyzed: 0,
       cacheHits: 0,
@@ -900,6 +926,11 @@ function prepareAnalysis(
   if (engine === "reference" && process.platform !== "darwin") {
     throw new TypeError("The Rekordbox reference analyzer requires macOS");
   }
+  if (engine === "reference" && options.rhythmMode === "auto") {
+    throw new TypeError(
+      "The Rekordbox reference analyzer requires an explicit Normal or Dynamic rhythm mode",
+    );
+  }
   const analyzerBinary = getAnalyzerBinary(options.analyzerBinary, engine);
   if (!existsSync(analyzerBinary))
     throw new TypeError(
@@ -948,7 +979,7 @@ function prepareAnalysis(
         cached.source?.path === source.path &&
         cached.source.size === source.size &&
         cached.source.mtimeMs === source.mtimeMs &&
-        cachedResultMatchesEngine(cached, engine)
+        cachedResultMatchesEngine(cached, engine, options.rhythmMode ?? "normal")
       ) {
         validateAnalysisFiles(outputDirectory, source.path);
         return {
@@ -1008,6 +1039,19 @@ function assertDistinctAnalyzerTargets(sourcePath: string, targets: Array<string
 function cachedResultMatchesEngine(
   result: RekordboxAnalysisResult,
   engine: AnalyzerEngine,
+  rhythmMode: AnalyzerRhythmMode,
+): boolean {
+  if (!analysisBackendMatchesEngine(result, engine)) return false;
+  const cachedMode =
+    result.rhythmModeRequested ??
+    result.rhythmMode ??
+    (engine === "reference" ? "dynamic" : "normal");
+  return cachedMode === rhythmMode;
+}
+
+function analysisBackendMatchesEngine(
+  result: RekordboxAnalysisResult,
+  engine: AnalyzerEngine,
 ): boolean {
   return engine === "clean"
     ? result.backend.startsWith("clean-room-")
@@ -1017,11 +1061,12 @@ function cachedResultMatchesEngine(
 function analyzerEnvironment(
   engine: AnalyzerEngine,
   analyzerBinary: string,
-  options: Pick<AnalyzeTrackOptions, "rekordboxApp" | "rekordboxCache" | "threads">,
+  options: Pick<AnalyzeTrackOptions, "rekordboxApp" | "rekordboxCache" | "rhythmMode" | "threads">,
 ): NodeJS.ProcessEnv {
   const env = { ...process.env };
   env.REKORDBOX_ANALYZER_ENGINE = engine;
   env.REKORDBOX_ANALYZER_ROOT ??= dirname(dirname(analyzerBinary));
+  env[analyzerRhythmModeEnvironment] = options.rhythmMode ?? "normal";
   if (engine === "clean") {
     env[analyzerThreadsEnvironment] = String(options.threads ?? DEFAULT_ANALYZER_TRACK_THREADS);
   }
@@ -1392,7 +1437,7 @@ function persistAnalysisResult(
 }
 
 function assertAnalysisEngine(result: RekordboxAnalysisResult, engine: AnalyzerEngine): void {
-  if (!cachedResultMatchesEngine(result, engine)) {
+  if (!analysisBackendMatchesEngine(result, engine)) {
     throw new TypeError(`${engine} analyzer returned incompatible backend '${result.backend}'`);
   }
 }

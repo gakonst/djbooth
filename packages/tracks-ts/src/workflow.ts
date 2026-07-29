@@ -377,6 +377,7 @@ export async function runSetToRekordbox(
   const analyzerOptions = (concurrency: number, threads: number): AnalyzeTracksOptions => ({
     ...options.analysis,
     concurrency,
+    rhythmMode: options.analysis?.rhythmMode ?? "auto",
     threads,
     ...(options.signal ? { signal: options.signal } : {}),
     onProgress(progress) {
@@ -660,6 +661,8 @@ function toAnalysisArtifact(
     tempoBpm: result.summary.tempo_bpm,
     key: result.summary.key,
     keySource: result.summary.key_source,
+    ...(result.rhythmMode ? { rhythmMode: result.rhythmMode } : {}),
+    ...(result.rhythmModeRequested ? { rhythmModeRequested: result.rhythmModeRequested } : {}),
     sourceMtimeMs: result.source.mtimeMs,
     sourceSize: result.source.size,
   };

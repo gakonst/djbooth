@@ -242,6 +242,7 @@ proprietary DSP byte-for-byte.
 rekordbox analyze doctor --engine clean --format json
 rekordbox analyze track /Music/track.flac \
   --engine clean \
+  --rhythm-mode auto \
   --output-directory /Music/track.rekordbox \
   --threads 8 \
   --format json
@@ -249,6 +250,7 @@ rekordbox analyze tracks \
   --audio-path /Music/one.flac \
   --audio-path /Music/two.flac \
   --engine clean \
+  --rhythm-mode auto \
   --format json
 rekordbox analyze beat-grid-diff \
   /Music/reference.rekordbox \
@@ -269,14 +271,22 @@ components over the overlapping columns. It reports entry-count deltas, exact-va
 Pearson correlation, means, MAE, median/p95/max absolute error, and signed bias instead of conflating
 packed bitfields or differing tail lengths.
 
+`--rhythm-mode normal` emits a static grid for steady-tempo recordings. `dynamic` runs the recovered
+Rekordbox 6.8.2 variable-tempo path for live, rubato, and materially changing tempo. `auto` ignores
+isolated local-BPM outliers and selects Dynamic only when the central 90% tempo span reaches 0.75%;
+otherwise it selects Normal. The low-level API/CLI defaults to Normal; the one-shot Tracks workflows
+default to Auto. `analysis.json` records both requested and selected modes, and caches never cross
+mode boundaries. Compare a candidate only with a Rekordbox reference produced in the same mode.
+
 For `analyze track`, `--threads` is the native worker count for that one process. The default is
-the profiled eight-thread sweet spot. For `analyze tracks`, it is a total CPU budget, not a
-per-process multiplier. The clean batch runner defaults to the lower of 12 workers, available
-parallelism, the thread budget, and the uncached track count. It divides the budget deterministically
-across active workers: for example, `--concurrency 4 --threads 12` launches at most four clean
-analyzers with three native threads each. Explicit values remain available when analysis must leave
-capacity for live DJ software. The selected `threadBudget` and `workerThreadBudgets` are reported in
-structured output.
+the profiled eight-thread sweet spot. For `analyze tracks`, it is one total native scheduling
+budget, not a per-process multiplier. Process concurrency is bounded by host parallelism and 12.
+Apple Silicon defaults to two Rayon slots per core so independent DSP branches remain runnable,
+without launching more than one analyzer process per core. Small default batches use at most eight
+threads per track. The budget is divided deterministically: `--concurrency 4 --threads 12` launches
+at most four clean analyzers with three native threads each. Explicit values remain available when
+analysis must leave capacity for live DJ software. Structured output reports `threadBudget` and
+`workerThreadBudgets`.
 
 After closing Rekordbox and backing up the library, install the verified artifacts for an existing
 content row:
@@ -338,18 +348,20 @@ serial AAC decoder is now the critical path, with most DSP hidden underneath it.
 
 Six and eight native workers were effectively tied on AAC, while eight was fastest on the mixed
 AAC/FLAC check; twelve regressed from scheduling and cache pressure. This sets the single-track
-default to eight. Process isolation remains best for independent tracks: a cold 100-track,
-8.55-hour corpus completed in `9.46 s` at both 12 and 16 one-thread processes, `9.65 s` at 20,
-and `9.51 s` at 24. The profiled 12-process default is therefore retained and is `17.0%` faster
-than the earlier `11.402 s` median.
+default to eight. The later exact PWV4/PWV5 and Dynamic finishing paths add real DSP work, so the
+old `9.46 s` 100-track number is no longer representative. With those paths enabled, the final
+8.55-hour corpus completes in `15.88–15.92 s` with 12 processes sharing 24 Rayon slots
+(`6.28–6.32 tracks/s`). Twelve slots measured `16.12–16.68 s`; 24 one-thread processes measured
+`16.20 s`; 4/6/8 processes with 12 slots measured `19.24/17.36/16.94 s`. The scheduler therefore
+keeps the 12-process cap and uses two slots per core on Apple Silicon.
 
 The streamed and non-streamed implementations produced 300/300 identical DAT/EXT/2EX artifacts.
 The full 110-track beat-grid oracle retained exactly the same pass count and aggregate metrics.
 Enabling codec SIMD changed 9/300 files relative to the frozen scalar build: beat timestamps moved
 by at most `0.174 ms`, and only one quantization level changed in each of two waveform values.
-Both `--concurrency` and `--threads` still accept explicit values through 64, but values above the
-profiled defaults are overrides rather than expected speedups. Treat all numbers as host-specific;
-lower either limit when analysis competes with live DJ software.
+Both `--concurrency` and `--threads` still accept explicit values through 64. Extra scheduling
+slots helped modestly; extra processes did not. Treat all numbers as host-specific and lower either
+limit when analysis competes with live DJ software.
 
 Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains
@@ -357,6 +369,10 @@ reference-only so an old proprietary helper cannot be selected by the clean defa
 reference run, set `REKORDBOX_REFERENCE_ANALYZER_BINARY` or place
 `rekordbox-analyzer-reference` on `PATH`; that mode requires macOS, Rosetta on Apple Silicon, and
 `REKORDBOX_ANALYZER_APP` pointing to the user's compatible `rekordbox.app`.
+Pass the same explicit `--rhythm-mode normal` or `--rhythm-mode dynamic` to both engines for parity
+work. The local reference helper maps that option to Rekordbox's native constant/variable request
+flag and records it in `analysis.json`; reference `auto` is intentionally rejected because Auto is
+a clean-engine selection policy rather than a Rekordbox 6.8.2 analysis mode.
 
 Only the reference backend can reject otherwise valid Unicode-heavy source paths with
 `startAnalyze` status `-1`. The async wrapper retries only that exact reference failure through a

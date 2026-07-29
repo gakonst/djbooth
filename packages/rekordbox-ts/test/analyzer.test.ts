@@ -216,6 +216,9 @@ console.log(JSON.stringify({
   contentId: process.pid,
   nativeLog,
   outputs,
+  rhythmFallback: null,
+  rhythmMode: process.env.REKORDBOX_ANALYZER_RHYTHM_MODE === "dynamic" ? "dynamic" : "normal",
+  rhythmModeRequested: process.env.REKORDBOX_ANALYZER_RHYTHM_MODE ?? "normal",
   startResult: 0,
   summary: {
     beat_grid: null,
@@ -409,7 +412,10 @@ describe("Rekordbox analyzer wrapper", () => {
         firstProgress.push(progress.phase);
       },
     });
-    expect(DEFAULT_ANALYZER_CONCURRENCY).toBe(Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET));
+    expect(DEFAULT_ANALYZER_CONCURRENCY).toBeGreaterThan(0);
+    expect(DEFAULT_ANALYZER_CONCURRENCY).toBeLessThanOrEqual(
+      Math.min(12, DEFAULT_ANALYZER_THREAD_BUDGET),
+    );
     expect(DEFAULT_ANALYZER_TRACK_THREADS).toBe(Math.min(8, DEFAULT_ANALYZER_THREAD_BUDGET));
     expect(first.concurrency).toBe(2);
     expect(counterValue(doctorCounter)).toBe(1);
@@ -737,6 +743,41 @@ describe("Rekordbox analyzer wrapper", () => {
     expect(() => analyzeTrack(root, { analyzerBinary: process.execPath })).toThrow("is not a file");
   });
 
+  it("propagates rhythm mode and never reuses a grid analyzed in another mode", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const outputDirectory = join(root, "output");
+    const counter = join(root, "counter");
+    process.env.FAKE_ANALYZER_COUNTER = counter;
+    const options = { analyzerBinary: process.execPath, outputDirectory };
+
+    const normal = analyzeTrack(audioPath, { ...options, force: true });
+    expect(normal).toMatchObject({
+      rhythmMode: "normal",
+      rhythmModeRequested: "normal",
+    });
+    expect(analyzeTrack(audioPath, options).rhythmMode).toBe("normal");
+    expect(counterValue(counter)).toBe(1);
+
+    const dynamic = analyzeTrack(audioPath, { ...options, rhythmMode: "dynamic" });
+    expect(dynamic).toMatchObject({
+      rhythmMode: "dynamic",
+      rhythmModeRequested: "dynamic",
+    });
+    expect(counterValue(counter)).toBe(2);
+    expect(analyzeTrack(audioPath, { ...options, rhythmMode: "dynamic" }).rhythmMode).toBe(
+      "dynamic",
+    );
+    expect(counterValue(counter)).toBe(2);
+
+    const automatic = analyzeTrack(audioPath, { ...options, rhythmMode: "auto" });
+    expect(automatic.rhythmModeRequested).toBe("auto");
+    expect(counterValue(counter)).toBe(3);
+  });
+
   it("never reuses analysis artifacts across clean and reference engines", () => {
     installFakeAnalyzer();
     stubNativeRuntime();
@@ -757,6 +798,43 @@ describe("Rekordbox analyzer wrapper", () => {
     );
     expect(analyzeTrack(audioPath, options).backend).toBe("clean-room-test");
     expect(counterValue(counter)).toBe(3);
+  });
+
+  it("controls and isolates the local reference analyzer rhythm mode", () => {
+    installFakeAnalyzer();
+    stubNativeRuntime();
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-analyzer-"));
+    roots.push(root);
+    const audioPath = makeAudio(root);
+    const outputDirectory = join(root, "output");
+    const counter = join(root, "counter");
+    process.env.FAKE_ANALYZER_COUNTER = counter;
+    const options = {
+      analyzerBinary: process.execPath,
+      engine: "reference" as const,
+      outputDirectory,
+    };
+
+    expect(analyzeTrack(audioPath, { ...options, force: true })).toMatchObject({
+      rhythmMode: "normal",
+      rhythmModeRequested: "normal",
+    });
+    expect(counterValue(counter)).toBe(1);
+    expect(analyzeTrack(audioPath, options).rhythmMode).toBe("normal");
+    expect(counterValue(counter)).toBe(1);
+
+    expect(analyzeTrack(audioPath, { ...options, rhythmMode: "dynamic" })).toMatchObject({
+      rhythmMode: "dynamic",
+      rhythmModeRequested: "dynamic",
+    });
+    expect(counterValue(counter)).toBe(2);
+    expect(analyzeTrack(audioPath, { ...options, rhythmMode: "dynamic" }).rhythmMode).toBe(
+      "dynamic",
+    );
+    expect(counterValue(counter)).toBe(2);
+    expect(() => analyzeTrack(audioPath, { ...options, rhythmMode: "auto" })).toThrow(
+      "requires an explicit Normal or Dynamic",
+    );
   });
 
   it("keeps force replacement bounded and rejects output aliases to the input", () => {

@@ -288,11 +288,11 @@ Analysis defaults to the releasable clean-room Rust engine; no Rekordbox applica
 helper is required. `--analysis-engine reference` is reserved for an explicit local parity run and
 requires the separately supplied reference helper. `--analyzer-binary`, `--rekordbox-app`,
 `--rekordbox-cache`, `--analysis-timeout-ms`, and `--analysis-threads` are carried through the same
-one-shot command. `--analysis-threads` is the total native CPU budget for all overlapping analysis
-slots, not a per-process value. The workflow divides it deterministically across active slots, so
+one-shot command. `--analysis-threads` is the total native scheduling budget for all overlapping
+analysis slots, not a per-process value. The workflow divides it deterministically, so
 `--analysis-concurrency 4 --analysis-threads 12` gives each of four simultaneous clean analyzers
-three threads. Without an override, clean analysis uses up to 12 isolated processes, bounded by
-available parallelism, the thread budget, and the number of uncached tracks.
+host parallelism and the number of uncached tracks. Apple Silicon keeps two Rayon slots per core;
+small batches are capped at eight threads per track.
 
 With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
 individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
@@ -311,6 +311,7 @@ failed/cancelled counts for later performance study:
 ```sh
 tracks analyze-existing ./adam-ten/manifest.json \
   --engine clean \
+  --rhythm-mode auto \
   --progress always \
   --format json
 ```
@@ -319,6 +320,9 @@ tracks analyze-existing ./adam-ten/manifest.json \
 both `threadBudget` and `workerThreadBudgets`. The worker count is capped by
 that budget, preventing outer process concurrency from multiplying native
 parallelism. The CPU-adaptive default is inherited from `@gakonst/rekordbox`.
+`auto` keeps a Normal static grid unless robust local-tempo motion warrants Dynamic analysis.
+Use `--rhythm-mode dynamic` for known live or rubato material and `normal` for a deliberately static
+grid. Requested and selected modes are persisted with each artifact and participate in cache reuse.
 
 Once acquisition and analysis are complete, import that checkpoint without rerunning network
 stages. `--write` remains mandatory; the importer coordinates the database lock with the open
@@ -399,7 +403,7 @@ The boundary is deliberate:
   checkpointed failure becomes a cue-bounded source extract in a bounded second pass during the same
   invocation and stays on that recovery path on later warm runs.
 - Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
-  clean-room analysis uses at most four process slots sharing one available-CPU thread budget.
+  clean-room analysis uses up to 12 host-bounded processes sharing one native scheduling budget.
   Soulseek and native ytdlp candidate searches overlap while download priority remains
   deterministic. Explicit reference search stays deferred until native reports a safe capability
   gap. Clean-room analysis begins per artifact while remaining downloads continue.

@@ -91,10 +91,12 @@ rekordboxCli.command("status", {
 const analyzeCli = Cli.create("analyze", {
   description:
     "Produce clean-room DAT, EXT, and 2EX analysis files; optionally run a local oracle.",
+  hint: "Use --rhythm-mode auto when mode is unknown, dynamic for live/rubato tempo, and normal for a deliberate static grid. Reference parity requires the same explicit Normal or Dynamic mode on both sides.",
 });
 
 analyzeCli.command("track", {
   description: "Analyze one local audio file with releasable clean-room DSP by default.",
+  hint: "Low-level default is Normal. Select Auto for conservative mode detection; reference Auto is unsupported.",
   args: z.object({ audioPath: z.string().describe("Existing audio file") }),
   options: z.object({
     analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
@@ -106,6 +108,12 @@ analyzeCli.command("track", {
     outputDirectory: z.string().optional().describe("Artifact directory; defaults beside audio"),
     rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
     rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
+    rhythmMode: z
+      .enum(["normal", "dynamic", "auto"])
+      .default("normal")
+      .describe(
+        "Beat grid: Normal for steady tempo, Dynamic for changes, Auto for clean engine only",
+      ),
     timeoutMs: z
       .number()
       .int()
@@ -141,6 +149,7 @@ analyzeCli.command("track", {
 
 analyzeCli.command("tracks", {
   description: "Analyze local audio files with bounded isolated clean-room workers.",
+  hint: "One total scheduling budget is divided across workers. On Apple Silicon, the profiled default keeps two Rayon slots per core but never adds more than one analyzer process per core. Select one shared rhythm mode for this batch.",
   options: z.object({
     analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
     audioPath: z.array(z.string()).describe("Existing audio file; repeat for multiple tracks"),
@@ -160,6 +169,12 @@ analyzeCli.command("tracks", {
     force: z.boolean().default(false).describe("Replace existing analysis artifacts"),
     rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
     rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
+    rhythmMode: z
+      .enum(["normal", "dynamic", "auto"])
+      .default("normal")
+      .describe(
+        "Beat grid: Normal for steady tempo, Dynamic for changes, Auto for clean engine only",
+      ),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
     timeoutMs: z
       .number()
@@ -174,7 +189,7 @@ analyzeCli.command("tracks", {
       .max(64)
       .optional()
       .describe(
-        `Total native CPU budget shared across analyzer processes; defaults to available parallelism (${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here)`,
+        `Total native scheduling slots shared across analyzer processes; profiled default ${String(DEFAULT_ANALYZER_THREAD_BUDGET)} here`,
       ),
   }),
   async run(c) {
@@ -193,6 +208,7 @@ analyzeCli.command("tracks", {
         force: c.options.force,
         rekordboxApp: c.options.rekordboxApp,
         rekordboxCache: c.options.rekordboxCache,
+        rhythmMode: c.options.rhythmMode,
         signal: controller.signal,
         threads: c.options.threads,
         timeoutMs: c.options.timeoutMs,
