@@ -28,6 +28,8 @@ const PEAK_SENSOR_PUT_OFFSET: usize = 0x14e7ac0;
 const PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x13894f0;
 const BEAT_LIST_CHANGE_STAT_OFFSET: usize = 0x14e6910;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
+const FWRITE_OFFSET: usize = 0x21dcd98;
+const MALLOC_OFFSET: usize = 0x21dc954;
 
 const CALL_BA_CREATE_VARIED_44_OFFSET: usize = 0x1068a51;
 const CALL_BA_CREATE_CONST_44_OFFSET: usize = 0x1068a9a;
@@ -45,6 +47,10 @@ const CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x138f8f4;
 const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
 const CALL_PEAK_SENSOR_PUT_OFFSET: usize = 0x14e78ec;
 const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
+const CALL_CHECKPOINT_CONTINUOUS_REGION_OFFSET: usize = 0x138b51b;
+const CALL_CHECKPOINT_MINIMUM_RUN_OFFSET: usize = 0x138b7d8;
+const CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET: usize = 0x138c5ff;
+const CALL_CHECKPOINT_NEAR_VALUE_OFFSET: usize = 0x138d14d;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -56,6 +62,7 @@ const BEAT_SENSOR_PEAK_BYTES: usize = 0xa0;
 const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
 const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
+const ENV_TRACE_ANALYZER_STAGES: &str = "REKORDBOX_ANALYZER_TRACE_STAGES";
 
 type BaCreate = unsafe extern "C" fn(i32, i32, u8, u8, u8) -> *mut c_void;
 type BaSetSample = unsafe extern "C" fn(*mut c_void, *mut f32, *mut f32, i32);
@@ -81,6 +88,7 @@ type BeatSensorCreate = unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, i3
 type PeakSensorPut = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type PeakBufferCalcBeat = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type BeatListChangeStat = unsafe extern "C" fn(*mut c_void, f32, i32, f32, *mut c_void);
+type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 
 static BA_CREATE_VARIED_48: AtomicUsize = AtomicUsize::new(0);
 static BA_CREATE_CONST_48: AtomicUsize = AtomicUsize::new(0);
@@ -102,6 +110,8 @@ static BEAT_LIST_CHANGE_STAT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
+static CURRENT_BEAT_INFO: AtomicUsize = AtomicUsize::new(0);
+static MALLOC: AtomicUsize = AtomicUsize::new(0);
 static LAST_BEAT_COUNT: AtomicI32 = AtomicI32::new(0);
 static TRACE: OnceLock<Mutex<ReferenceTrace>> = OnceLock::new();
 
@@ -115,6 +125,7 @@ struct ReferenceTrace {
     peak_sensor_events: Vec<PeakSensorEventTrace>,
     peak_buffer_calculations: Vec<PeakBufferCalculationTrace>,
     beat_list_changes: Vec<BeatListChangeTrace>,
+    analyzer_checkpoints: Vec<AnalyzerCheckpointTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -196,6 +207,13 @@ struct PeakInfoTrace {
     position: i32,
     amplitude: f32,
     interval_ms: f32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalyzerCheckpointTrace {
+    stage: &'static str,
+    beats: Vec<InternalBeatTrace>,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,13 +321,14 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 5,
+        schema_version: 6,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
     PEAK_SENSOR_BASE.store(0, Ordering::Release);
     PEAK_BUFFER_BASE.store(0, Ordering::Release);
     PEAK_SENSOR_BAND_COUNT.store(0, Ordering::Release);
+    CURRENT_BEAT_INFO.store(0, Ordering::Release);
     LAST_BEAT_COUNT.store(0, Ordering::Release);
 }
 
@@ -362,6 +381,7 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     set_original(&PEAK_SENSOR_PUT, base + PEAK_SENSOR_PUT_OFFSET);
     set_original(&PEAK_BUFFER_CALC_BEAT, base + PEAK_BUFFER_CALC_BEAT_OFFSET);
     set_original(&BEAT_LIST_CHANGE_STAT, base + BEAT_LIST_CHANGE_STAT_OFFSET);
+    set_original(&MALLOC, base + MALLOC_OFFSET);
 
     unsafe {
         match requested_engine() {
@@ -460,6 +480,26 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + PEAK_BUFFER_CALC_BEAT_OFFSET,
             trace_peak_buffer_calc_beat as usize,
         )?;
+        patch_relative_call(
+            base + CALL_CHECKPOINT_CONTINUOUS_REGION_OFFSET,
+            base + FWRITE_OFFSET,
+            trace_checkpoint_continuous_region as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_CHECKPOINT_MINIMUM_RUN_OFFSET,
+            base + FWRITE_OFFSET,
+            trace_checkpoint_minimum_run as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET,
+            base + MALLOC_OFFSET,
+            trace_checkpoint_tempo_family as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_CHECKPOINT_NEAR_VALUE_OFFSET,
+            base + FWRITE_OFFSET,
+            trace_checkpoint_near_value as usize,
+        )?;
         patch_pointer(
             base + BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET,
             base + BEAT_LIST_CHANGE_STAT_OFFSET,
@@ -477,6 +517,12 @@ fn requested_engine() -> &'static str {
         Ok(_) => "invalid",
         Err(_) => "native",
     }
+}
+
+fn trace_analyzer_stages_enabled() -> bool {
+    std::env::var(ENV_TRACE_ANALYZER_STAGES).is_ok_and(|value| {
+        value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+    })
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -997,8 +1043,35 @@ unsafe extern "C" fn trace_beat_info_analyze(
 ) -> f32 {
     let info_before = unsafe { snapshot_beat_info_source(info) };
     let output_before = unsafe { snapshot_internal_beats(output) };
+    let mut debug_stream = std::ptr::null_mut();
+    let mut original_debug_stream = std::ptr::null_mut();
+    let debug_slot = if trace_analyzer_stages_enabled() && !analyzer.is_null() {
+        let slot = unsafe { analyzer.cast::<u8>().add(8).cast::<*mut libc::FILE>() };
+        original_debug_stream = unsafe { slot.read_unaligned() };
+        debug_stream = unsafe { libc::tmpfile() };
+        if debug_stream.is_null() {
+            let mut trace = trace()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            trace
+                .warnings
+                .push("failed to create BeatInfoAnalyzer checkpoint stream".to_string());
+            None
+        } else {
+            unsafe { slot.write_unaligned(debug_stream) };
+            Some(slot)
+        }
+    } else {
+        None
+    };
+    CURRENT_BEAT_INFO.store(info as usize, Ordering::Release);
     let function: BeatInfoAnalyze = unsafe { original(&BEAT_INFO_ANALYZE) };
     let bpm = unsafe { function(analyzer, info, output, arg3, arg4, arg5, arg6, arg7) };
+    CURRENT_BEAT_INFO.store(0, Ordering::Release);
+    if let Some(debug_slot) = debug_slot {
+        unsafe { debug_slot.write_unaligned(original_debug_stream) };
+        unsafe { libc::fclose(debug_stream) };
+    }
     let source_after = unsafe { snapshot_beat_info_source(info) };
     let output_after = unsafe { snapshot_internal_beats(output) };
 
@@ -1040,6 +1113,72 @@ unsafe extern "C" fn trace_beat_info_analyze(
         output_after,
     });
     bpm
+}
+
+unsafe extern "C" fn trace_checkpoint_continuous_region(
+    pointer: *const c_void,
+    size: usize,
+    count: usize,
+    stream: *mut libc::FILE,
+) -> usize {
+    unsafe { trace_checkpoint_fwrite("continuousRegion", pointer, size, count, stream) }
+}
+
+unsafe extern "C" fn trace_checkpoint_minimum_run(
+    pointer: *const c_void,
+    size: usize,
+    count: usize,
+    stream: *mut libc::FILE,
+) -> usize {
+    unsafe { trace_checkpoint_fwrite("minimumRun", pointer, size, count, stream) }
+}
+
+unsafe extern "C" fn trace_checkpoint_tempo_family(bytes: usize) -> *mut c_void {
+    record_analyzer_checkpoint("tempoFamily");
+    let function: AllocateBytes = unsafe { original(&MALLOC) };
+    unsafe { function(bytes) }
+}
+
+unsafe extern "C" fn trace_checkpoint_near_value(
+    pointer: *const c_void,
+    size: usize,
+    count: usize,
+    stream: *mut libc::FILE,
+) -> usize {
+    unsafe { trace_checkpoint_fwrite("nearValue", pointer, size, count, stream) }
+}
+
+unsafe fn trace_checkpoint_fwrite(
+    stage: &'static str,
+    pointer: *const c_void,
+    size: usize,
+    count: usize,
+    stream: *mut libc::FILE,
+) -> usize {
+    record_analyzer_checkpoint(stage);
+    unsafe { libc::fwrite(pointer, size, count, stream) }
+}
+
+fn record_analyzer_checkpoint(stage: &'static str) {
+    if !trace_analyzer_stages_enabled() {
+        return;
+    }
+    let info = CURRENT_BEAT_INFO.load(Ordering::Acquire) as *const BeatInfoAnalyzeInfo;
+    if info.is_null() {
+        return;
+    }
+    let snapshot = unsafe { snapshot_beat_info_source(info) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match snapshot {
+        Ok((_, _, beats)) => trace
+            .analyzer_checkpoints
+            .push(AnalyzerCheckpointTrace { stage, beats }),
+        Err(error) => trace.warnings.push(format!(
+            "failed to snapshot BeatInfoAnalyzer checkpoint {stage}: {error:#}"
+        )),
+    }
 }
 
 unsafe extern "C" fn trace_beat_info_seg_adjust(

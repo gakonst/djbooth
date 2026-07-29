@@ -1038,3 +1038,31 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   boundary for the 30 near-tie maxima, close the few `PeakBuffer` endpoint
   decisions, then feed the now-compatible pre-pruning vector into the recovered
   `BeatInfoAnalyzer` section decoder.
+
+## Linked BeatInfoAnalyzer pruning checkpoint (2026-07-28)
+
+- Extended the private reference tracer to schema v6 with exact snapshots after
+  the native continuous-region, minimum-run, tempo-family, and near-value
+  stages. Debug output is redirected to a temporary stream and never enters the
+  generated files. `Science Fiction` changes
+  `17,287 → 17,264 → 17,264 → 17,264 → 1,395`; the large collapse is therefore
+  the near-value stage, not tempo-family rejection.
+- Repeated the staged trace on four structurally different references.
+  `Luv Techniques` reaches `12,041 → 1,422`; `The Power (dub)`
+  `1,336 → 473`; `Rafael – ID` `907 → 182`; and
+  `Get Up Offa That Thing` `3,666 → 332`. The minimum-eight stage removes
+  `0/8/8/27` records respectively, while tempo-family rejection removes no
+  additional records on this five-track corpus.
+- Recovered the near-value algorithm exactly. For each tempo section, it uses a
+  strict one-eighth-beat source-frame window:
+  `trunc(float(sampleRate) * periodMs * 0.000125)`. Nearby hypotheses compete
+  by the low byte of their generation, which is the originating
+  `BeatListSignal` callback's `support + 2`; larger support replaces the current
+  hypothesis and ties retain the earlier one. The window recenters when a later
+  hypothesis wins.
+- Added the linear clean-room `suppress_nearby_hypotheses` primitive. Replaying
+  the linked pre-stage hypotheses and tempo sections reproduces every surviving
+  24-byte semantic record in exact order on all five traces:
+  `1,395/1,395`, `1,422/1,422`, `473/473`, `182/182`, and `332/332`.
+  Remaining section-decoder work is the preceding section-anchor/period builder
+  plus the already isolated phase and boundary adjustment stages.
