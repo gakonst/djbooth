@@ -43,10 +43,26 @@ export type RekordboxBeatGridSummary = {
   min_bpm: number;
 };
 
+/** Standardized clean-room feature evidence for one generated phrase. */
+export type RekordboxPhraseFeatureSummary = {
+  beat: number;
+  distance_from_previous: number;
+  duration_bars: number;
+  energy_delta_z: number;
+  energy_z: number;
+  high_band_z: number;
+  index: number;
+  low_band_z: number;
+  mid_band_z: number;
+  onset_z: number;
+  zero_crossing_z: number;
+};
+
 /** Bounded phrase entry emitted in an analyzer result summary. */
 export type RekordboxPhraseSummary = {
   b: boolean;
   beat: number;
+  features?: RekordboxPhraseFeatureSummary;
   fill_beat: number | null;
   index: number;
   k1: boolean;
@@ -246,6 +262,21 @@ const songStructureSchema = z.object({
       z.object({
         b: z.boolean(),
         beat: z.number().int().min(1).max(65_535),
+        features: z
+          .object({
+            beat: z.number().int().min(1).max(65_535),
+            distance_from_previous: nonNegativeNumber,
+            duration_bars: z.number().int().min(1),
+            energy_delta_z: finiteNumber,
+            energy_z: finiteNumber,
+            high_band_z: finiteNumber,
+            index: z.number().int().min(1).max(65_535),
+            low_band_z: finiteNumber,
+            mid_band_z: finiteNumber,
+            onset_z: finiteNumber,
+            zero_crossing_z: finiteNumber,
+          })
+          .optional(),
         fill_beat: z.number().int().min(1).max(65_535).nullable(),
         index: z.number().int().min(1).max(65_535),
         k1: z.boolean(),

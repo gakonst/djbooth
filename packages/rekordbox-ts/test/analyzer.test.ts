@@ -230,6 +230,19 @@ console.log(JSON.stringify({
       first_phrases: [{
         b: false,
         beat: 1,
+        features: {
+          beat: 1,
+          distance_from_previous: 0,
+          duration_bars: 8,
+          energy_delta_z: 0,
+          energy_z: -0.5,
+          high_band_z: -0.2,
+          index: 1,
+          low_band_z: 0.4,
+          mid_band_z: 0.1,
+          onset_z: -0.1,
+          zero_crossing_z: 0.2,
+        },
         fill_beat: null,
         index: 1,
         k1: false,
@@ -746,6 +759,7 @@ describe("Rekordbox analyzer wrapper", () => {
     const first = analyzeTrack(audioPath, { ...options, force: true });
     expect(first.summary.tempo_bpm).toBe(125);
     expect(first.summary.song_structure).toMatchObject({
+      first_phrases: [{ features: { duration_bars: 8, energy_z: -0.5 } }],
       input_mix: "left-0.99-right-0.01",
       mood: 1,
       phrase_count: 1,

@@ -90,6 +90,23 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
         first.summary.song_structure.first_phrases.len()
             <= first.summary.song_structure.phrase_count
     );
+    assert!(
+        first
+            .summary
+            .song_structure
+            .first_phrases
+            .iter()
+            .all(|phrase| {
+                phrase.features.index == phrase.index
+                    && phrase.features.beat == phrase.beat
+                    && phrase.features.duration_bars >= 1
+                    && phrase.features.energy_z.is_finite()
+                    && phrase.features.distance_from_previous.is_finite()
+            })
+    );
+    let analysis_log =
+        std::fs::read_to_string(&first.native_log).expect("read clean analyzer log");
+    assert!(analysis_log.contains("song_structure_phrase_features=["));
     assert_eq!(second.summary.key, first.summary.key);
     assert_eq!(
         second.summary.song_structure.first_phrases,

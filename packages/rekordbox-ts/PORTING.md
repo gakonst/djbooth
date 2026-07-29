@@ -117,13 +117,19 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   greater-than-one-standard-deviation energy drop; removing the unvalidated
   positive-delta Up override raised matched-label micro/macro agreement from
   `45.73%/45.61%` to `61.93%/61.59%`.
-- Recovered the exact linked `/8` phrase frontend: four zero-state
-  direct-form-II-transposed Butterworth sections, cutoff `Fs/20`, native
-  damping constants, source phase `7 mod 8`, and a 210-second cap. Rekordbox
-  feeds later feature extraction with synchronized `/2`, `/8`, and `/32`
-  streams. A full replay correctly rejected substituting only `/8` into the
-  independent bar model (`33.64%` mood accuracy, `0.3584` exact F1); the
-  recovered filter is a specification for the pending multirate feature port.
+- Recovered and implemented all three linked phrase frontend paths. Four
+  zero-state direct-form-II-transposed Butterworth sections feed each
+  decimator: high-pass `Fs/2` at `0.275Fs`, low-pass `Fs/8` at `0.05Fs`, and
+  low-pass `Fs/32` at `0.0125Fs`, with native damping constants and
+  `factor - 1` output phase. `generate_phrase_multirate` exposes the clean
+  primitive without changing production labels. A full replay correctly
+  rejected substituting only `/8` into the independent bar model (`33.64%`
+  mood accuracy, `0.3584` exact F1).
+- Added bounded per-phrase feature evidence: all at-most-38 records in the
+  clean log and the first twelve in `analysis.json`. Records include the six
+  standardized features, duration, energy delta, and transition distance.
+  Track-grouped validation improved mood-2/3 kind accuracy only
+  `29.55% → 31.96%`; deeper trees overfit, so no learned relabeler was shipped.
 - A valid committed-HEAD comparator measured initial phrase generation at
   `+56 ms/+0.29%` for 100 tracks. Samply placed representative phrase CPU at
   `0.35–0.74%`, almost all in the scalar feature scan. Phrase work now overlaps

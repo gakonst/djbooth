@@ -24,7 +24,7 @@ use crate::key::{
     RawChromaFeatures, analyze_key, analyze_key_from_raw,
 };
 use crate::linked_rhythm::analyze_linked_beats_with_reader_padding;
-use crate::phrase::{SongStructure, analyze_song_structure};
+use crate::phrase::{PhraseFeatureDiagnostics, SongStructure, analyze_song_structure};
 use crate::rhythm::{
     BeatAnalysis, FFT_SIZE as BEAT_FFT_SIZE, HOP_SIZE as BEAT_HOP_SIZE, OnsetEnvelopes,
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
@@ -178,7 +178,7 @@ pub struct OutputSummary {
 }
 
 /// Bounded song-structure summary for agent and CLI consumers.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct SongStructureSummary {
     pub end_beat: u16,
     pub first_phrases: Vec<PhraseSummary>,
@@ -189,10 +189,11 @@ pub struct SongStructureSummary {
 }
 
 /// One phrase in the bounded song-structure JSON summary.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PhraseSummary {
     pub b: bool,
     pub beat: u16,
+    pub features: PhraseFeatureDiagnostics,
     pub fill_beat: Option<u16>,
     pub index: u16,
     pub k1: bool,
@@ -1042,8 +1043,10 @@ pub fn analyze_to_directory_with_options(
         .as_deref()
         .unwrap_or("none")
         .replace(['\r', '\n'], " ");
+    let phrase_features_log =
+        serde_json::to_string(&generated.song_structure.diagnostics.phrase_features)?;
     let log = format!(
-        "backend=clean-room-rust-dsp\nrhythm_mode_requested={}\nrhythm_mode={}\nrhythm_fallback={rhythm_fallback_log}\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\nsong_structure_sample_rate={}\nsong_structure_input_mix=left-0.99-right-0.01\nsong_structure_mood={}\nsong_structure_phrases={}\nsong_structure_low_band_ratio={:.9}\nsong_structure_high_band_ratio={:.9}\nsong_structure_rhythmic_density={:.9}\nsong_structure_energy_deviation={:.9}\nsong_structure_adjacent_change_mean={:.9}\nsong_structure_adjacent_change_p90={:.9}\nsong_structure_long_change_mean={:.9}\nsong_structure_zero_crossing_rate={:.9}\n",
+        "backend=clean-room-rust-dsp\nrhythm_mode_requested={}\nrhythm_mode={}\nrhythm_fallback={rhythm_fallback_log}\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\nsong_structure_sample_rate={}\nsong_structure_input_mix=left-0.99-right-0.01\nsong_structure_mood={}\nsong_structure_phrases={}\nsong_structure_low_band_ratio={:.9}\nsong_structure_high_band_ratio={:.9}\nsong_structure_rhythmic_density={:.9}\nsong_structure_energy_deviation={:.9}\nsong_structure_adjacent_change_mean={:.9}\nsong_structure_adjacent_change_p90={:.9}\nsong_structure_long_change_mean={:.9}\nsong_structure_zero_crossing_rate={:.9}\nsong_structure_phrase_features={phrase_features_log}\n",
         generated.rhythm_mode_requested.as_str(),
         generated.rhythm_mode.as_str(),
         generated.source.sample_rate(),
@@ -1110,10 +1113,17 @@ fn summarize_song_structure(structure: &SongStructure) -> SongStructureSummary {
         first_phrases: structure
             .entries
             .iter()
+            .enumerate()
             .take(SUMMARY_PHRASES)
-            .map(|entry| PhraseSummary {
+            .map(|(index, entry)| PhraseSummary {
                 b: entry.transition_beats[1].is_some(),
                 beat: entry.beat,
+                features: structure
+                    .diagnostics
+                    .phrase_features
+                    .get(index)
+                    .copied()
+                    .unwrap_or_default(),
                 fill_beat: entry.fill_beat,
                 index: entry.index,
                 k1: entry.k1,

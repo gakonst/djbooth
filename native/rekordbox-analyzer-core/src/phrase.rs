@@ -8,6 +8,7 @@
 use std::f64::consts::PI;
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use crate::anlz::AnlzTag;
 use crate::rhythm::BeatAnalysis;
@@ -57,7 +58,7 @@ pub struct SongStructure {
 }
 
 /// Aggregate audio evidence behind one song-structure result.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SongStructureDiagnostics {
     pub low_band_ratio: f64,
     pub high_band_ratio: f64,
@@ -67,6 +68,24 @@ pub struct SongStructureDiagnostics {
     pub adjacent_change_p90: f64,
     pub long_change_mean: f64,
     pub zero_crossing_rate: f64,
+    /// At most 38 phrase-level feature records from the bounded decoder.
+    pub phrase_features: Vec<PhraseFeatureDiagnostics>,
+}
+
+/// Standardized feature evidence for one generated phrase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize)]
+pub struct PhraseFeatureDiagnostics {
+    pub index: u16,
+    pub beat: u16,
+    pub duration_bars: usize,
+    pub energy_z: f64,
+    pub low_band_z: f64,
+    pub mid_band_z: f64,
+    pub high_band_z: f64,
+    pub onset_z: f64,
+    pub zero_crossing_z: f64,
+    pub energy_delta_z: f64,
+    pub distance_from_previous: f64,
 }
 
 impl SongStructure {
@@ -231,10 +250,11 @@ pub fn analyze_song_structure(
     let features = standardize_features(&raw_features);
     let structured_bars = audible_bar_count(&features);
     let features = &features[..structured_bars];
-    let diagnostics = summarize_features(features);
-    let mood = classify_mood(diagnostics, beat.bpm);
+    let mut diagnostics = summarize_features(features);
+    let mood = classify_mood(&diagnostics, beat.bpm);
     let boundaries = select_phrase_boundaries(features, mood);
-    let entries = label_phrases(features, &bar_starts, &boundaries, mood);
+    let (entries, phrase_features) = label_phrases(features, &bar_starts, &boundaries, mood);
+    diagnostics.phrase_features = phrase_features;
     let end_index = bar_starts
         .get(structured_bars)
         .copied()
@@ -428,10 +448,11 @@ fn summarize_features(features: &[BarFeature]) -> SongStructureDiagnostics {
         adjacent_change_p90,
         long_change_mean,
         zero_crossing_rate: zero_crossing_rate / count,
+        phrase_features: Vec::new(),
     }
 }
 
-fn classify_mood(diagnostics: SongStructureDiagnostics, bpm: f64) -> u16 {
+fn classify_mood(diagnostics: &SongStructureDiagnostics, bpm: f64) -> u16 {
     let slow_anomaly = bpm < 117.0
         && diagnostics.adjacent_change_p90 > 2.0
         && (diagnostics.energy_deviation > 1.3 || diagnostics.rhythmic_density > 0.222);
@@ -569,7 +590,7 @@ fn label_phrases(
     bar_starts: &[usize],
     boundaries: &[usize],
     mood: u16,
-) -> Vec<PhraseEntry> {
+) -> (Vec<PhraseEntry>, Vec<PhraseFeatureDiagnostics>) {
     let phrase_features = boundaries
         .iter()
         .enumerate()
@@ -586,7 +607,37 @@ fn label_phrases(
     let median_energy = energies[energies.len() / 2];
     let high_energy = energies[energies.len() * 3 / 4];
 
-    boundaries
+    let phrase_diagnostics = boundaries
+        .iter()
+        .enumerate()
+        .map(|(index, boundary)| {
+            let previous = index.saturating_sub(1);
+            let feature = phrase_features[index];
+            let previous_feature = phrase_features[previous];
+            let next_boundary = boundaries.get(index + 1).copied().unwrap_or(features.len());
+            PhraseFeatureDiagnostics {
+                index: u16::try_from(index + 1).unwrap_or(u16::MAX),
+                beat: u16::try_from(
+                    bar_starts
+                        .get(*boundary)
+                        .copied()
+                        .unwrap_or_default()
+                        .saturating_add(1),
+                )
+                .unwrap_or(u16::MAX),
+                duration_bars: next_boundary.saturating_sub(*boundary),
+                energy_z: feature[0],
+                low_band_z: feature[1],
+                mid_band_z: feature[2],
+                high_band_z: feature[3],
+                onset_z: feature[4],
+                zero_crossing_z: feature[5],
+                energy_delta_z: feature[0] - previous_feature[0],
+                distance_from_previous: feature_distance(feature, previous_feature),
+            }
+        })
+        .collect::<Vec<_>>();
+    let entries = boundaries
         .iter()
         .enumerate()
         .map(|(index, boundary)| {
@@ -658,7 +709,8 @@ fn label_phrases(
                 fill_beat,
             }
         })
-        .collect()
+        .collect();
+    (entries, phrase_diagnostics)
 }
 
 fn mean_range(features: &[BarFeature], start: usize, end: usize) -> [f64; FEATURE_COUNT] {
@@ -834,7 +886,7 @@ mod tests {
     fn mood_classifier_separates_corrected_native_input_families() {
         assert_eq!(
             classify_mood(
-                SongStructureDiagnostics {
+                &SongStructureDiagnostics {
                     rhythmic_density: 0.19,
                     ..SongStructureDiagnostics::default()
                 },
@@ -844,7 +896,7 @@ mod tests {
         );
         assert_eq!(
             classify_mood(
-                SongStructureDiagnostics {
+                &SongStructureDiagnostics {
                     rhythmic_density: 0.224,
                     ..SongStructureDiagnostics::default()
                 },
@@ -854,7 +906,7 @@ mod tests {
         );
         assert_eq!(
             classify_mood(
-                SongStructureDiagnostics {
+                &SongStructureDiagnostics {
                     adjacent_change_p90: 2.1,
                     energy_deviation: 1.4,
                     rhythmic_density: 0.21,
@@ -866,7 +918,7 @@ mod tests {
         );
         assert_eq!(
             classify_mood(
-                SongStructureDiagnostics {
+                &SongStructureDiagnostics {
                     energy_deviation: 2.0,
                     rhythmic_density: 0.19,
                     ..SongStructureDiagnostics::default()
@@ -927,14 +979,14 @@ mod tests {
         let boundaries = [0, 1, 2, 3, 4, 5];
         let bar_starts = [0, 4, 8, 12, 16, 20];
 
-        let entries = label_phrases(&features, &bar_starts, &boundaries, 1);
+        let (entries, diagnostics) = label_phrases(&features, &bar_starts, &boundaries, 1);
 
         assert_eq!(
-            entries
-                .into_iter()
-                .map(|entry| entry.kind)
-                .collect::<Vec<_>>(),
+            entries.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
             [1, 5, 3, 2, 5, 6]
         );
+        assert_eq!(diagnostics.len(), entries.len());
+        assert_eq!(diagnostics[2].energy_delta_z, -1.2);
+        assert_eq!(diagnostics[3].duration_bars, 1);
     }
 }

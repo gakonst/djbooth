@@ -14,6 +14,7 @@ pub mod flac;
 pub mod key;
 pub mod linked_rhythm;
 pub mod phrase;
+pub mod phrase_frontend;
 pub mod rhythm;
 pub mod sample_rate_converter;
 pub mod unit_envelope;
@@ -59,7 +60,11 @@ pub use linked_rhythm::{
     LinkedRhythmAnalysis, analyze_linked_beats, analyze_linked_beats_with_reader_padding,
     analyze_linked_rhythm, analyze_linked_rhythm_with_reader_padding, decode_linked_rhythm,
 };
-pub use phrase::{PhraseEntry, SongStructure, SongStructureDiagnostics, analyze_song_structure};
+pub use phrase::{
+    PhraseEntry, PhraseFeatureDiagnostics, SongStructure, SongStructureDiagnostics,
+    analyze_song_structure,
+};
+pub use phrase_frontend::{PhraseMultiratePcm, generate_phrase_multirate};
 pub use rhythm::{BeatAnalysis, analyze_beats};
 pub use sample_rate_converter::{
     AnalysisSampleRateConverter, analysis_sample_rate, quantize_analysis_pcm,

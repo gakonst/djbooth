@@ -419,16 +419,26 @@ Labeling now reserves high-mood Down for a greater-than-one-standard-deviation
 phrase-energy drop; it no longer treats every low-energy phrase or ordinary
 positive fluctuation as a transition.
 
-Linked-analyzer inspection also recovered the next frontend checkpoint. Four
-zero-state direct-form-II-transposed Butterworth sections use damping constants
+Linked-analyzer inspection also recovered and cleanly implemented the
+multirate frontend. Every path cascades four zero-state
+direct-form-II-transposed Butterworth sections with damping constants
 `1.9615705608064609`, `1.6629392246050905`, `1.1111404660392046`, and
-`0.39018064403225661`, cutoff `Fs/20`, and emit source samples
-`7, 15, 23, ...` after decimation by eight, capped at 210 seconds. The native
-feature stage consumes synchronized `Fs/2`, `Fs/8`, and `Fs/32` streams. A
-complete replay rejected feeding only the recovered `Fs/8` stream into the
-independent six-feature model: mood accuracy fell to `33.64%` and exact
-boundary F1 to `0.3584`. The recovered frontend therefore remains a
-specification for the pending multirate feature port, not a false drop-in.
+`0.39018064403225661`. The `Fs/2` path is high-pass at `0.275Fs`; `Fs/8` and
+`Fs/32` are low-pass at `0.05Fs` and `0.0125Fs`. Decimators emit source index
+`factor - 1` and discard incomplete tails. `generate_phrase_multirate`
+exposes these deterministic primitives without routing production labels
+through an incomplete feature port. A complete replay rejected feeding only
+the recovered `Fs/8` stream into the independent six-feature model: mood
+accuracy fell to `33.64%` and exact boundary F1 to `0.3584`.
+
+The analyzer now emits at most 38 per-phrase feature diagnostics in
+`clean-room-analyzer.log`; the first twelve are nested into the bounded JSON
+summary. Each record carries six standardized features, duration, energy
+delta, and transition distance. Track-grouped validation showed that these
+independent features improve mood-2/3 label accuracy only from `29.55%` to
+`31.96%`; deeper trees overfit. No learned relabeler was accepted. The next
+parity step remains the native multirate feature consumers and boundary
+judges, not corpus memorization.
 
 An isolated committed-HEAD comparator measured the initial non-empty phrase
 stage at `+56 ms` (`+0.29%`) over 100 tracks. Samply attributed
