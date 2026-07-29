@@ -569,6 +569,21 @@ LTO/one codegen unit, and their combination were `2.44–3.41%` slower than the
 portable default on the same pinned workload, so release codegen remains
 portable.
 
+A 2026-07-29 Samply pass on the current exactness-heavy pipeline localized the
+largest controllable block to waveform generation. Native loud-preview scratch
+storage and detector events are now reused, pending samples are copied in
+batches, and the two independent AArch64 loud filters share one NEON pair.
+One-thread Auto batches also defer the unit-envelope phase until the linked
+candidate is actually Dynamic or Normal fails; multi-thread single-track
+analysis keeps the parallel path. The 100-track corpus still selects 97 Normal
+and three Dynamic tracks, and all 300 generated DAT/EXT/2EX files are
+byte-identical. Wall time fell from a stable `21.32–21.45 s` to `19.99 s`
+(`204.07 s` aggregate user CPU), about five tracks/second and `1,540x` real
+time. Twelve processes beat 16/20/24. Thin LTO remained within thermal noise;
+`target-cpu=native`, Reth-style fat LTO/one-CGU, representative-corpus PGO,
+and alternate allocators did not justify changing the portable system-allocator
+release.
+
 The recovered low-pass chain initially added about `104 ms` to a representative
 397-second track. A 1 kHz Samply profile localized `95 ms` of CPU to the
 eight-section `/32` filter. Its beat-independent envelope is now computed in

@@ -23,7 +23,11 @@ use crate::key::{
     FFT_SIZE as KEY_FFT_SIZE, HOP_SIZE as KEY_HOP_SIZE, KeyAnalysis, KeyFeaturePlan,
     RawChromaFeatures, analyze_key, analyze_key_from_raw,
 };
-use crate::linked_rhythm::analyze_linked_beats_with_reader_padding;
+use crate::linked_rhythm::{
+    LinkedRhythmAnalysis, analyze_linked_beats_with_reader_padding,
+    analyze_linked_rhythm_without_unit_envelope_with_reader_padding,
+    apply_linked_unit_envelope_with_reader_padding, linked_beat_analysis,
+};
 use crate::phrase::{
     PhraseFeatureDiagnostics, SongStructure, analyze_song_structure_with_native_low_levels,
 };
@@ -593,6 +597,82 @@ fn select_beat_analysis(inputs: BeatAnalysisInputs<'_>) -> Result<SelectedBeatAn
             mode,
             fallback: None,
         }),
+        RhythmMode::Auto if rayon::current_num_threads() == 1 => {
+            let (dynamic, normal) = rayon::join(
+                || {
+                    analyze_linked_rhythm_without_unit_envelope_with_reader_padding(
+                        source_samples,
+                        source_sample_rate,
+                        4,
+                        source_reader_padding_frames,
+                    )
+                    .and_then(|analysis| {
+                        let beat = linked_beat_analysis(&analysis)?;
+                        Ok((analysis, beat))
+                    })
+                },
+                legacy,
+            );
+            match (dynamic, normal) {
+                (Ok((mut analysis, candidate)), Ok(normal)) => {
+                    if !materially_dynamic(&candidate) {
+                        return Ok(SelectedBeatAnalysis {
+                            beat: normal,
+                            mode: RhythmMode::Normal,
+                            fallback: None,
+                        });
+                    }
+                    match finalize_lazy_dynamic(
+                        &mut analysis,
+                        source_samples,
+                        source_sample_rate,
+                        source_reader_padding_frames,
+                    ) {
+                        Ok(beat) => Ok(SelectedBeatAnalysis {
+                            beat,
+                            mode: RhythmMode::Dynamic,
+                            fallback: None,
+                        }),
+                        Err(error) => Ok(SelectedBeatAnalysis {
+                            beat: normal,
+                            mode: RhythmMode::Normal,
+                            fallback: Some(format!("dynamic rhythm failed: {error:#}")),
+                        }),
+                    }
+                }
+                (Ok((mut analysis, _)), Err(normal_error)) => {
+                    match finalize_lazy_dynamic(
+                        &mut analysis,
+                        source_samples,
+                        source_sample_rate,
+                        source_reader_padding_frames,
+                    ) {
+                        Ok(beat) => Ok(SelectedBeatAnalysis {
+                            beat,
+                            mode: RhythmMode::Dynamic,
+                            fallback: Some(format!("normal rhythm failed: {normal_error:#}")),
+                        }),
+                        Err(dynamic_error) => Err(normal_error).with_context(|| {
+                            format!(
+                                "dynamic rhythm failed: {dynamic_error:#}; normal rhythm fallback also failed"
+                            )
+                        }),
+                    }
+                }
+                (Err(error), Ok(beat)) => Ok(SelectedBeatAnalysis {
+                    beat,
+                    mode: RhythmMode::Normal,
+                    fallback: Some(format!("dynamic rhythm failed: {error:#}")),
+                }),
+                (Err(dynamic_error), Err(normal_error)) => {
+                    Err(normal_error).with_context(|| {
+                        format!(
+                            "dynamic rhythm failed: {dynamic_error:#}; normal rhythm fallback also failed"
+                        )
+                    })
+                }
+            }
+        }
         RhythmMode::Auto => {
             let (dynamic, normal) = rayon::join(
                 || {
@@ -635,6 +715,21 @@ fn select_beat_analysis(inputs: BeatAnalysisInputs<'_>) -> Result<SelectedBeatAn
             }
         }
     }
+}
+
+fn finalize_lazy_dynamic(
+    analysis: &mut LinkedRhythmAnalysis,
+    samples: &[f32],
+    sample_rate: u32,
+    reader_padding_frames: usize,
+) -> Result<BeatAnalysis> {
+    apply_linked_unit_envelope_with_reader_padding(
+        analysis,
+        samples,
+        sample_rate,
+        reader_padding_frames,
+    )?;
+    linked_beat_analysis(analysis)
 }
 
 /// Robust p05-p95 local-tempo spread used by the clean Auto policy.

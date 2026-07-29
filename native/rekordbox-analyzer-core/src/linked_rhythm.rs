@@ -1,5 +1,7 @@
 //! Complete linked-analyzer rhythm orchestration.
 
+use std::borrow::Cow;
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
@@ -85,31 +87,63 @@ fn analyze_linked_rhythm_impl(
     meter: u8,
     reader_padding_frames: Option<usize>,
 ) -> Result<LinkedRhythmAnalysis> {
-    let target_rate = analysis_sample_rate(sample_rate)?;
-    let mut prepared;
-    let samples = match (target_rate == sample_rate, reader_padding_frames) {
-        (true, None) => samples,
-        (same_rate, padding) => {
-            let converter = AnalysisSampleRateConverter::new(sample_rate, target_rate)?;
-            prepared = match padding {
-                Some(padding) => converter.resample_mono_for_reader(samples, padding)?,
-                None => converter.resample_mono(samples)?,
-            };
-            if !same_rate {
-                prepared.iter_mut().for_each(|sample| {
-                    *sample = quantize_analysis_pcm(*sample);
-                });
-            }
-            &prepared
-        }
-    };
+    let (samples, target_rate) =
+        prepare_linked_samples(samples, sample_rate, reader_padding_frames)?;
     let (beat_sensor, unit_envelope) = rayon::join(
-        || analyze_beat_sensor_events(samples, target_rate),
-        || extract_unit_envelope_feature(samples, target_rate),
+        || analyze_beat_sensor_events(&samples, target_rate),
+        || extract_unit_envelope_feature(&samples, target_rate),
     );
     let mut analysis = decode_linked_rhythm(beat_sensor?, meter)?;
     apply_unit_envelope_phase(&mut analysis, &unit_envelope?)?;
     Ok(analysis)
+}
+
+pub(crate) fn analyze_linked_rhythm_without_unit_envelope_with_reader_padding(
+    samples: &[f32],
+    sample_rate: u32,
+    meter: u8,
+    reader_padding_frames: usize,
+) -> Result<LinkedRhythmAnalysis> {
+    let (samples, target_rate) =
+        prepare_linked_samples(samples, sample_rate, Some(reader_padding_frames))?;
+    decode_linked_rhythm(analyze_beat_sensor_events(&samples, target_rate)?, meter)
+}
+
+pub(crate) fn apply_linked_unit_envelope_with_reader_padding(
+    analysis: &mut LinkedRhythmAnalysis,
+    samples: &[f32],
+    sample_rate: u32,
+    reader_padding_frames: usize,
+) -> Result<()> {
+    let (samples, target_rate) =
+        prepare_linked_samples(samples, sample_rate, Some(reader_padding_frames))?;
+    if target_rate != analysis.sample_rate {
+        bail!("linked unit-envelope sample rate does not match the rhythm analysis");
+    }
+    let feature = extract_unit_envelope_feature(&samples, target_rate)?;
+    apply_unit_envelope_phase(analysis, &feature)
+}
+
+fn prepare_linked_samples<'a>(
+    samples: &'a [f32],
+    sample_rate: u32,
+    reader_padding_frames: Option<usize>,
+) -> Result<(Cow<'a, [f32]>, u32)> {
+    let target_rate = analysis_sample_rate(sample_rate)?;
+    if target_rate == sample_rate && reader_padding_frames.is_none() {
+        return Ok((Cow::Borrowed(samples), target_rate));
+    }
+    let converter = AnalysisSampleRateConverter::new(sample_rate, target_rate)?;
+    let mut prepared = match reader_padding_frames {
+        Some(padding) => converter.resample_mono_for_reader(samples, padding)?,
+        None => converter.resample_mono(samples)?,
+    };
+    if target_rate != sample_rate {
+        prepared
+            .iter_mut()
+            .for_each(|sample| *sample = quantize_analysis_pcm(*sample));
+    }
+    Ok((Cow::Owned(prepared), target_rate))
 }
 
 /// Analyze source-rate mono PCM into the production beat-analysis contract.
@@ -232,7 +266,7 @@ fn apply_unit_envelope_phase(
     Ok(())
 }
 
-fn linked_beat_analysis(analysis: &LinkedRhythmAnalysis) -> Result<BeatAnalysis> {
+pub(crate) fn linked_beat_analysis(analysis: &LinkedRhythmAnalysis) -> Result<BeatAnalysis> {
     if analysis.beats.len() < 4 {
         bail!("linked rhythm analysis produced too few beats");
     }

@@ -1861,3 +1861,28 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `35`. This isolates the remaining production gate to the inner intro/end
   judge and the upstream constant-grid seed rather than the already exact
   mood-2/3 judge and genre stages.
+
+## Exact waveform and Auto batch performance pass (2026-07-29)
+
+- Reprofiled the current exactness-heavy analyzer with Samply 0.13.1 at 1 kHz.
+  Waveform generation was the largest controllable block: native loud preview,
+  legacy RGB, monochrome detail, and three-band accumulation. The native loud
+  path now reuses frame/band storage, appends detector events directly, batches
+  pending input copies, and evaluates its two independent `f64` filters in one
+  AArch64 NEON pair. A scalar-vs-NEON bit-exact test covers 44,100 samples.
+- One-thread Auto analysis now decodes the linked tempo candidate before
+  computing the unit-envelope phase. The phase pass runs only when Dynamic is
+  selected or Normal fails; multi-thread single-track analysis retains the
+  original parallel schedule. The 100-track corpus still selects 97 Normal and
+  three Dynamic tracks, with 300/300 DAT/EXT/2EX files byte-identical.
+- On the M2 Max 100-track, 8.55-hour corpus, the pre-pass portable release was
+  stable at `21.32–21.45 s` wall and `214.51–222.98 s` user CPU. The exact
+  post-pass run completed in `19.99 s` and `204.07 s` user CPU: about five
+  tracks/second, `1,540x` real time, and a `6.5–6.7%` reduction. Twelve
+  one-thread processes remain optimal; 16/20/24 measured
+  `21.70/22.79/22.89 s`.
+- Re-tested Reth-style codegen variants. Thin LTO remained inside thermal
+  noise; `target-cpu=native` (resolved to `apple-m2`) and fat LTO with one
+  codegen unit regressed. A representative-corpus PGO build was byte-identical
+  but did not produce a stable win. Samply still shows no allocator hotspot,
+  so portable release codegen and the system allocator remain the defaults.

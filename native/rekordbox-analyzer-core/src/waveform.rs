@@ -463,6 +463,7 @@ impl Biquad {
         }
     }
 
+    #[cfg_attr(target_arch = "aarch64", allow(dead_code))]
     #[inline(always)]
     fn process(&mut self, sample: f64) -> f64 {
         let output = self.b0 * sample + self.z1;
@@ -516,12 +517,12 @@ impl NativeLoudPeakDetector {
         band: usize,
         frame: usize,
         final_frame: bool,
-    ) -> (Vec<NativeLoudEvent>, bool) {
+        events: &mut Vec<NativeLoudEvent>,
+    ) -> bool {
         let multiplier = if band == 2 { 0.66_f32 } else { 0.75_f32 };
         let start_samples = f64::from(sample_rate) * 0.32;
         let decay_samples = f64::from(sample_rate) * 1.714;
         let decay_step = (f64::from(sample_rate) * 0.011_609_977_324_263_039).trunc() as i64;
-        let mut events = Vec::new();
         let mut low_trigger = false;
         let mut decay_position = 0_i64;
 
@@ -577,7 +578,7 @@ impl NativeLoudPeakDetector {
                 });
             }
         }
-        (events, low_trigger)
+        low_trigger
     }
 
     fn process_frame_900(
@@ -587,12 +588,12 @@ impl NativeLoudPeakDetector {
         band: usize,
         frame: usize,
         final_frame: bool,
-    ) -> Vec<NativeLoudEvent> {
+        events: &mut Vec<NativeLoudEvent>,
+    ) {
         let multiplier = if band == 2 { 0.66_f32 } else { 0.75_f32 };
         let start_samples = f64::from(sample_rate) * 0.32;
         let decay_samples = f64::from(sample_rate) * 1.714;
         let decay_step = (f64::from(sample_rate) * 0.011_609_977_324_263_039).trunc() as i64;
-        let mut events = Vec::new();
         let mut pooled = 0.0_f32;
         let mut decay_position = 0_i64;
 
@@ -651,18 +652,19 @@ impl NativeLoudPeakDetector {
             }
             pooled = 0.0;
         }
-        events
     }
 }
 
+#[cfg(any(not(target_arch = "aarch64"), test))]
 #[derive(Debug, Clone, Copy)]
-struct NativeLoudFilterBank {
+struct ScalarNativeLoudFilterBank {
     low: [Biquad; 2],
     mid_high_pass: [Biquad; 2],
     crossover: LinkwitzRiley4,
 }
 
-impl NativeLoudFilterBank {
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarNativeLoudFilterBank {
     fn new(sample_rate: u32) -> Self {
         let low = Biquad::band_pass_at(150.0, 0.899_999_976, sample_rate);
         let mid_high_pass = Biquad::new_at(283.0, 0.707_106_769, true, sample_rate);
@@ -682,6 +684,39 @@ impl NativeLoudFilterBank {
             f64::from(high),
         ]
         .map(|value| (value as f32).abs() * 32_768.0)
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type NativeLoudFilterBank = ScalarNativeLoudFilterBank;
+
+#[cfg(target_arch = "aarch64")]
+struct NativeLoudFilterBank {
+    low_mid: [BiquadPair; 2],
+    crossover: LinkwitzRiley4,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl NativeLoudFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let low = Biquad::band_pass_at(150.0, 0.899_999_976, sample_rate);
+        let mid_high_pass = Biquad::new_at(283.0, 0.707_106_769, true, sample_rate);
+        Self {
+            low_mid: [
+                BiquadPair::new(low, mid_high_pass),
+                BiquadPair::new(low, mid_high_pass),
+            ],
+            crossover: LinkwitzRiley4::new(7_900.0, sample_rate),
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f32) -> [f32; 3] {
+        let (mid_source, high) = self.crossover.process_pair(sample);
+        let input = load_f64x2([f64::from(sample), f64::from(mid_source)]);
+        let first = self.low_mid[0].process(input);
+        let [low, mid] = store_f64x2(self.low_mid[1].process(first));
+        [low as f32, mid as f32, high].map(|value| value.abs() * 32_768.0)
     }
 }
 
@@ -724,6 +759,7 @@ impl LinkwitzRiley4 {
     }
 }
 
+#[cfg(any(not(target_arch = "aarch64"), test))]
 #[inline(always)]
 fn process_loud_filter<const N: usize>(stages: &mut [Biquad; N], mut sample: f64) -> f64 {
     for stage in stages {
@@ -739,6 +775,8 @@ struct NativeLoudPreviewAccumulator {
     normal_detectors: [NativeLoudPeakDetector; 3],
     dot_detectors: [NativeLoudPeakDetector; 2],
     pending_frame: Vec<f32>,
+    raw_scratch: Vec<f32>,
+    band_scratch: [Vec<f32>; 3],
     held_sample: Option<f32>,
     processed_samples: usize,
     processed_frames: usize,
@@ -761,6 +799,8 @@ impl NativeLoudPreviewAccumulator {
             normal_detectors: [NativeLoudPeakDetector::default(); 3],
             dot_detectors: [NativeLoudPeakDetector::default(); 2],
             pending_frame: Vec::with_capacity(frame_samples),
+            raw_scratch: Vec::with_capacity(frame_samples),
+            band_scratch: std::array::from_fn(|_| Vec::with_capacity(frame_samples)),
             held_sample: None,
             processed_samples: 0,
             processed_frames: 0,
@@ -779,69 +819,81 @@ impl NativeLoudPreviewAccumulator {
         accumulator
     }
 
-    fn push(&mut self, samples: &[f32]) {
-        for &sample in samples {
-            if let Some(previous) = self.held_sample.replace(sample) {
-                self.push_effective_sample(previous);
-            }
+    fn push(&mut self, mut samples: &[f32]) {
+        if samples.is_empty() {
+            return;
         }
+        if let Some(previous) = self.held_sample.take() {
+            self.push_effective_samples(std::slice::from_ref(&previous));
+        }
+        let (&last, preceding) = samples.split_last().expect("non-empty loud sample chunk");
+        samples = preceding;
+        self.push_effective_samples(samples);
+        self.held_sample = Some(last);
     }
 
-    fn push_effective_sample(&mut self, sample: f32) {
-        if self.pending_frame.len() == self.frame_samples {
-            self.process_pending_frame(false);
+    fn push_effective_samples(&mut self, mut samples: &[f32]) {
+        while !samples.is_empty() {
+            if self.pending_frame.len() == self.frame_samples {
+                self.process_pending_frame(false);
+            }
+            let available = self.frame_samples - self.pending_frame.len();
+            let take = available.min(samples.len());
+            self.pending_frame.extend_from_slice(&samples[..take]);
+            self.processed_samples += take;
+            samples = &samples[take..];
         }
-        self.pending_frame.push(sample);
-        self.processed_samples += 1;
     }
 
     fn process_pending_frame(&mut self, final_frame: bool) {
         if self.pending_frame.is_empty() {
             return;
         }
-        let frame = std::mem::replace(
-            &mut self.pending_frame,
-            Vec::with_capacity(self.frame_samples),
-        );
+        let mut frame = std::mem::take(&mut self.pending_frame);
         self.process_frame(&frame, final_frame);
+        frame.clear();
+        self.pending_frame = frame;
     }
 
     fn process_frame(&mut self, samples: &[f32], final_frame: bool) {
         self.processed_frames += 1;
         let frame = self.processed_frames;
-        let mut raw = Vec::with_capacity(samples.len());
-        let mut bands: [Vec<f32>; 3] = std::array::from_fn(|_| Vec::with_capacity(samples.len()));
+        self.raw_scratch.clear();
+        for band in &mut self.band_scratch {
+            band.clear();
+        }
         for &sample in samples {
-            raw.push(sample * 32_768.0);
+            self.raw_scratch.push(sample * 32_768.0);
             let filtered = self.filters.process(sample);
-            for (output, value) in bands.iter_mut().zip(filtered) {
+            for (output, value) in self.band_scratch.iter_mut().zip(filtered) {
                 output.push(value);
             }
         }
 
         let mut low_trigger = false;
-        for (band, samples) in bands.iter().enumerate() {
-            let (events, triggered) = self.normal_detectors[band].process_frame(
+        for (band, samples) in self.band_scratch.iter().enumerate() {
+            let triggered = self.normal_detectors[band].process_frame(
                 samples,
                 self.sample_rate,
                 band,
                 frame,
                 final_frame,
+                &mut self.normal_events[band],
             );
-            self.normal_events[band].extend(events);
             low_trigger |= band == 0 && triggered;
         }
-        for (band, samples) in bands.iter().enumerate().take(2) {
-            self.dot_events[band].extend(self.dot_detectors[band].process_frame_900(
+        for (band, samples) in self.band_scratch.iter().enumerate().take(2) {
+            self.dot_detectors[band].process_frame_900(
                 samples,
                 self.sample_rate,
                 band,
                 frame,
                 final_frame,
-            ));
+                &mut self.dot_events[band],
+            );
         }
 
-        self.raw_sum += native_loud_frame_sum(&raw);
+        self.raw_sum += native_loud_frame_sum(&self.raw_scratch);
         if self.raw_batch_frames > 7 || low_trigger || final_frame {
             let divisor = ((self.raw_batch_frames + 1) * self.frame_samples) as f32;
             self.raw_batches.push(NativeLoudRawBatch {
@@ -2562,6 +2614,25 @@ mod tests {
                 (scalar.detail_green, simd.detail_green),
                 (scalar.detail_blue, simd.detail_blue),
             ] {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_native_loud_filter_bank_is_scalar_bit_exact() {
+        let mut scalar_filters = ScalarNativeLoudFilterBank::new(ANALYSIS_SAMPLE_RATE);
+        let mut simd_filters = NativeLoudFilterBank::new(ANALYSIS_SAMPLE_RATE);
+
+        for index in 0..44_100 {
+            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+            let sample = (0.55 * (phase * 83.0).sin()
+                + 0.27 * (phase * 719.0).sin()
+                + 0.12 * (phase * 4_117.0).sin()) as f32;
+            let scalar = scalar_filters.process(sample);
+            let simd = simd_filters.process(sample);
+            for (scalar, simd) in scalar.into_iter().zip(simd) {
                 assert_eq!(scalar.to_bits(), simd.to_bits());
             }
         }

@@ -3,7 +3,7 @@ use std::process::Command;
 
 use rekordbox_analyzer_core::{
     ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
-    DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, WaveformData,
+    DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, RhythmMode, WaveformData,
     analyze_to_directory_with_options, build_flac_pvb2, compare_beat_grids, compare_waveforms,
     decode_audio_file,
 };
@@ -62,14 +62,18 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
         &fixture,
         &first_directory,
         None,
-        AnalysisOptions::new(1).expect("scalar options"),
+        AnalysisOptions::new(1)
+            .expect("scalar options")
+            .with_rhythm_mode(RhythmMode::Auto),
     )
     .expect("first full analysis");
     let second = analyze_to_directory_with_options(
         &fixture,
         &second_directory,
         None,
-        AnalysisOptions::new(3).expect("parallel options"),
+        AnalysisOptions::new(3)
+            .expect("parallel options")
+            .with_rhythm_mode(RhythmMode::Auto),
     )
     .expect("second full analysis");
 
@@ -104,8 +108,7 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
                     && phrase.features.distance_from_previous.is_finite()
             })
     );
-    let analysis_log =
-        std::fs::read_to_string(&first.native_log).expect("read clean analyzer log");
+    let analysis_log = std::fs::read_to_string(&first.native_log).expect("read clean analyzer log");
     assert!(analysis_log.contains("song_structure_phrase_features=["));
     assert_eq!(second.summary.key, first.summary.key);
     assert_eq!(
