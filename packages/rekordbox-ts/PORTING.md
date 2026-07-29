@@ -151,6 +151,26 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   standardized features, duration, energy delta, and transition distance.
   Track-grouped validation improved mood-2/3 kind accuracy only
   `29.55% → 31.96%`; deeper trees overfit, so no learned relabeler was shipped.
+- Extended the private x86_64 reference tracer to schema 16 across the native
+  high-mood boundary chain: `VerseHookJudge_LowPeak`, `BreakFind`,
+  `BigChangeFind`, `IrregularJudge`, `VerseHookJudge_All`, and
+  `CandidateAdjust`. Bounded snapshots retain every input feature family,
+  marker array, intermediate scalar/span, seed list, merged list, and adjusted
+  list. Runtime traces corrected decompiler-only assumptions: the seed-offset
+  priority is `32, 64, 16, 96, 48, 80`; the shared integer is the one-based
+  feature origin; and `CandidateAdjust` consumes four-way-expanded
+  `allLevel`/`lowLevel` bars before excluding the last four bars.
+- A ten-track high-mood audit exercised zero and nonzero `BigChangeFind`
+  outputs and attributed every inserted candidate through the full chain.
+  The first fixture moved from eight low-peak seeds to eleven judge candidates
+  and ten adjusted candidates. Mood 2/3 bypass this chain and remain a
+  separate `VerseHookJudge23` recovery target; no incomplete native judge was
+  routed into production.
+- Added `REKORDBOX_ANALYZER_TRACE_SCOPE=phrase`. It installs only the six
+  phrase-stage callsite hooks, leaving analyzer outputs byte-identical while
+  reducing a representative trace from `32.8 MB` to `147 KB` (`223×`) and
+  eliminating unrelated trace warnings. Full tracing remains the default.
+  Repeated capacity warnings in the full tracer are now deduplicated.
 - A valid committed-HEAD comparator measured initial phrase generation at
   `+56 ms/+0.29%` for 100 tracks. Samply placed representative phrase CPU at
   `0.35–0.74%`, almost all in the scalar feature scan. Phrase work now overlaps

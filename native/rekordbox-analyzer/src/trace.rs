@@ -31,6 +31,12 @@ const LOUD_VIEW_ANALYZE_PEAK_OFFSET: usize = 0x148a270;
 const LOUD_VIEW_PEAK_DETECT_OFFSET: usize = 0x148c4c0;
 const LOUD_VIEW_PEAK_DETECT_900_OFFSET: usize = 0x148c7d0;
 const BEAT_LIST_CHANGE_STAT_OFFSET: usize = 0x14e6910;
+const CANDIDATE_ADJUST_OFFSET: usize = 0x13f2440;
+const BREAK_FIND_OFFSET: usize = 0x15a7c40;
+const BIG_CHANGE_FIND_OFFSET: usize = 0x11fd450;
+const IRREGULAR_JUDGE_OFFSET: usize = 0x17e7a00;
+const VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET: usize = 0x122e740;
+const VERSE_HOOK_JUDGE_ALL_OFFSET: usize = 0x162e970;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 const LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET: usize = 0x40d3bf8;
 const FWRITE_OFFSET: usize = 0x21dcd98;
@@ -80,6 +86,12 @@ const CALL_CHECKPOINT_MINIMUM_RUN_OFFSET: usize = 0x138b7d8;
 const CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET: usize = 0x138c5ff;
 const CALL_REFINEMENT_EXP10_OFFSET: usize = 0x138ca54;
 const CALL_CHECKPOINT_NEAR_VALUE_OFFSET: usize = 0x138d14d;
+const CALL_BREAK_FIND_OFFSET: usize = 0x1791008;
+const CALL_BIG_CHANGE_FIND_OFFSET: usize = 0x1791087;
+const CALL_IRREGULAR_JUDGE_OFFSET: usize = 0x1791164;
+const CALL_VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET: usize = 0x1790898;
+const CALL_VERSE_HOOK_JUDGE_ALL_OFFSET: usize = 0x179135a;
+const CALL_CANDIDATE_ADJUST_OFFSET: usize = 0x179138a;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -92,8 +104,10 @@ const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
 const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
 const MAX_TRACE_LOUD_PEAK_CALLS: usize = 20_000;
 const MAX_TRACE_GRID_SNAP_PROBES: usize = 65_536;
+const MAX_TRACE_PHRASE_VALUES: usize = 100_000;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 const ENV_TRACE_ANALYZER_STAGES: &str = "REKORDBOX_ANALYZER_TRACE_STAGES";
+const ENV_TRACE_SCOPE: &str = "REKORDBOX_ANALYZER_TRACE_SCOPE";
 
 type BaCreate = unsafe extern "C" fn(i32, i32, u8, u8, u8) -> *mut c_void;
 type BaSetSample = unsafe extern "C" fn(*mut c_void, *mut f32, *mut f32, i32);
@@ -147,6 +161,86 @@ type LoudViewPeakDetect900 = unsafe extern "C" fn(
     *mut i32,
 ) -> i64;
 type BeatListChangeStat = unsafe extern "C" fn(*mut c_void, f32, i32, f32, *mut c_void);
+type CandidateAdjust = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+) -> u8;
+type BreakFind = unsafe extern "C" fn(
+    *mut c_void,
+    i32,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut i32,
+    *mut i32,
+    *mut i32,
+) -> u8;
+type BigChangeFind = unsafe extern "C" fn(
+    *mut c_void,
+    i32,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut i32,
+    *mut i32,
+    *mut i32,
+    *mut i32,
+) -> u8;
+type IrregularJudge = unsafe extern "C" fn(
+    *mut c_void,
+    i32,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    *mut c_void,
+    i32,
+    *mut i32,
+    *mut c_void,
+) -> u8;
+type VerseHookJudgeLowPeak = unsafe extern "C" fn(
+    *mut c_void,
+    i32,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut i32,
+    *mut c_void,
+) -> u8;
+type VerseHookJudgeAll = unsafe extern "C" fn(
+    *mut c_void,
+    i32,
+    *mut c_void,
+    i32,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+) -> u8;
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 type Exp10 = unsafe extern "C" fn(f64) -> f64;
 
@@ -171,6 +265,12 @@ static LOUD_VIEW_ANALYZE_PEAK: AtomicUsize = AtomicUsize::new(0);
 static LOUD_VIEW_PEAK_DETECT: AtomicUsize = AtomicUsize::new(0);
 static LOUD_VIEW_PEAK_DETECT_900: AtomicUsize = AtomicUsize::new(0);
 static BEAT_LIST_CHANGE_STAT: AtomicUsize = AtomicUsize::new(0);
+static CANDIDATE_ADJUST: AtomicUsize = AtomicUsize::new(0);
+static BREAK_FIND: AtomicUsize = AtomicUsize::new(0);
+static BIG_CHANGE_FIND: AtomicUsize = AtomicUsize::new(0);
+static IRREGULAR_JUDGE: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_JUDGE_LOW_PEAK: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_JUDGE_ALL: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
@@ -185,6 +285,7 @@ static TRACE: OnceLock<Mutex<ReferenceTrace>> = OnceLock::new();
 struct ReferenceTrace {
     schema_version: u32,
     requested_engine: String,
+    trace_scope: String,
     engine_creates: Vec<EngineCreateTrace>,
     beat_sensor_creates: Vec<BeatSensorCreateTrace>,
     peak_sensor_events: Vec<PeakSensorEventTrace>,
@@ -200,6 +301,12 @@ struct ReferenceTrace {
     #[serde(skip)]
     phase_probe_accumulator: Option<PhaseProbeAccumulator>,
     grid_snap_probes: Vec<GridSnapProbeTrace>,
+    phrase_candidate_adjustments: Vec<PhraseCandidateAdjustmentTrace>,
+    phrase_break_find: Vec<PhraseBreakFindTrace>,
+    phrase_big_change_find: Vec<PhraseBigChangeFindTrace>,
+    phrase_irregular_judge: Vec<PhraseIrregularJudgeTrace>,
+    phrase_low_peak_seeds: Vec<PhraseLowPeakSeedTrace>,
+    phrase_judge_all: Vec<PhraseJudgeAllTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -561,6 +668,92 @@ struct StageMismatchTrace {
     final_bpm_hundredths: u16,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseCandidateAdjustmentTrace {
+    feature_origin: i32,
+    candidates: Vec<i32>,
+    level_feature: Vec<f64>,
+    peak_feature: Vec<f64>,
+    adjusted: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseBreakFindTrace {
+    candidate_count: i32,
+    candidates: Vec<i32>,
+    feature_origin: i32,
+    low_level: Vec<f64>,
+    middle_level: Vec<f64>,
+    all_level: Vec<f64>,
+    output_a: i32,
+    output_b: i32,
+    output_flag: i32,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseBigChangeFindTrace {
+    candidate_count: i32,
+    candidates: Vec<i32>,
+    feature_origin: i32,
+    low_level: Vec<f64>,
+    middle_level: Vec<f64>,
+    all_level: Vec<f64>,
+    intro_end_feature: Vec<f64>,
+    secure_points: Vec<f64>,
+    outputs: [i32; 4],
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseIrregularJudgeTrace {
+    start_beat: i32,
+    candidate_count: i32,
+    candidates: Vec<i32>,
+    feature_origin: i32,
+    evidence: [i32; 8],
+    output_last_index: i32,
+    output_candidates: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseLowPeakSeedTrace {
+    start_beat: i32,
+    feature_origin: i32,
+    low_peak: Vec<f64>,
+    markers: Vec<u8>,
+    candidate_count: i32,
+    candidates: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseJudgeAllTrace {
+    irregular_last_index: i32,
+    irregular_candidates: Vec<i32>,
+    start_beat: i32,
+    feature_origin: i32,
+    low_peak: Vec<f64>,
+    marker_a: Vec<u8>,
+    marker_b: Vec<u8>,
+    marker_c: Vec<u8>,
+    secure_points: Vec<f64>,
+    low_level: Vec<f64>,
+    verse_hook_feature: Vec<f64>,
+    intro_end_feature: Vec<f64>,
+    all_level: Vec<f64>,
+    candidates: Vec<i32>,
+    result: u8,
+}
+
 #[repr(C)]
 struct StdVector {
     begin: *const u8,
@@ -580,8 +773,9 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 15,
+        schema_version: 16,
         requested_engine: requested_engine().to_string(),
+        trace_scope: requested_trace_scope().to_string(),
         ..ReferenceTrace::default()
     };
     PEAK_SENSOR_BASE.store(0, Ordering::Release);
@@ -779,8 +973,26 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         base + LOUD_VIEW_PEAK_DETECT_900_OFFSET,
     );
     set_original(&BEAT_LIST_CHANGE_STAT, base + BEAT_LIST_CHANGE_STAT_OFFSET);
+    set_original(&CANDIDATE_ADJUST, base + CANDIDATE_ADJUST_OFFSET);
+    set_original(&BREAK_FIND, base + BREAK_FIND_OFFSET);
+    set_original(&BIG_CHANGE_FIND, base + BIG_CHANGE_FIND_OFFSET);
+    set_original(&IRREGULAR_JUDGE, base + IRREGULAR_JUDGE_OFFSET);
+    set_original(
+        &VERSE_HOOK_JUDGE_LOW_PEAK,
+        base + VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET,
+    );
+    set_original(&VERSE_HOOK_JUDGE_ALL, base + VERSE_HOOK_JUDGE_ALL_OFFSET);
     set_original(&MALLOC, base + MALLOC_OFFSET);
     set_original(&EXP10, base + EXP10_OFFSET);
+
+    match requested_trace_scope() {
+        "phrase" => {
+            unsafe { patch_phrase_trace(base)? };
+            return Ok(());
+        }
+        "full" => {}
+        _ => bail!("{ENV_TRACE_SCOPE} must be full or phrase"),
+    }
 
     unsafe {
         match requested_engine() {
@@ -1014,6 +1226,7 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + FWRITE_OFFSET,
             trace_checkpoint_near_value as usize,
         )?;
+        patch_phrase_trace(base)?;
         patch_pointer(
             base + BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET,
             base + BEAT_LIST_CHANGE_STAT_OFFSET,
@@ -1028,6 +1241,42 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_arch = "x86_64")]
+unsafe fn patch_phrase_trace(base: usize) -> Result<()> {
+    unsafe {
+        patch_relative_call(
+            base + CALL_BREAK_FIND_OFFSET,
+            base + BREAK_FIND_OFFSET,
+            trace_break_find as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_BIG_CHANGE_FIND_OFFSET,
+            base + BIG_CHANGE_FIND_OFFSET,
+            trace_big_change_find as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_IRREGULAR_JUDGE_OFFSET,
+            base + IRREGULAR_JUDGE_OFFSET,
+            trace_irregular_judge as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET,
+            base + VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET,
+            trace_verse_hook_judge_low_peak as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_ALL_OFFSET,
+            base + VERSE_HOOK_JUDGE_ALL_OFFSET,
+            trace_verse_hook_judge_all as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_CANDIDATE_ADJUST_OFFSET,
+            base + CANDIDATE_ADJUST_OFFSET,
+            trace_candidate_adjust as usize,
+        )
+    }
+}
+
 fn requested_engine() -> &'static str {
     match std::env::var(ENV_TRACE_ENGINE) {
         Ok(value) if value.eq_ignore_ascii_case("constant") => "constant",
@@ -1035,6 +1284,20 @@ fn requested_engine() -> &'static str {
         Ok(value) if value.eq_ignore_ascii_case("native") || value.is_empty() => "native",
         Ok(_) => "invalid",
         Err(_) => "native",
+    }
+}
+
+fn requested_trace_scope() -> &'static str {
+    let value = std::env::var(ENV_TRACE_SCOPE).ok();
+    parse_trace_scope(value.as_deref())
+}
+
+fn parse_trace_scope(value: Option<&str>) -> &'static str {
+    match value {
+        Some(value) if value.eq_ignore_ascii_case("phrase") => "phrase",
+        Some(value) if value.eq_ignore_ascii_case("full") || value.is_empty() => "full",
+        Some(_) => "invalid",
+        None => "full",
     }
 }
 
@@ -1236,11 +1499,8 @@ unsafe extern "C" fn trace_peak_sensor_put(sensor: *mut c_void, input: f32) -> u
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if trace.peak_sensor_events.len() >= MAX_TRACE_PEAK_EVENTS {
-        if trace.peak_sensor_events.len() == MAX_TRACE_PEAK_EVENTS {
-            trace
-                .warnings
-                .push("peak-sensor event trace reached its bound".to_string());
-        }
+        const WARNING: &str = "peak-sensor event trace reached its bound";
+        push_warning_once(&mut trace.warnings, WARNING);
         return result;
     }
     let mut failures = Vec::new();
@@ -1558,11 +1818,8 @@ unsafe fn record_loud_view_peak_call(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if trace.loud_view_peak_calls.len() >= MAX_TRACE_LOUD_PEAK_CALLS {
-        if trace.loud_view_peak_calls.len() == MAX_TRACE_LOUD_PEAK_CALLS {
-            trace
-                .warnings
-                .push("LoudViewMaker peak-call trace reached its bound".to_string());
-        }
+        const WARNING: &str = "LoudViewMaker peak-call trace reached its bound";
+        push_warning_once(&mut trace.warnings, WARNING);
         return;
     }
     trace.loud_view_peak_calls.push(LoudViewPeakCallTrace {
@@ -1687,11 +1944,8 @@ unsafe extern "C" fn trace_peak_buffer_calc_beat(buffer: *mut c_void, interval_m
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if trace.peak_buffer_calculations.len() >= MAX_TRACE_PEAK_EVENTS {
-        if trace.peak_buffer_calculations.len() == MAX_TRACE_PEAK_EVENTS {
-            trace
-                .warnings
-                .push("peak-buffer calculation trace reached its bound".to_string());
-        }
+        const WARNING: &str = "peak-buffer calculation trace reached its bound";
+        push_warning_once(&mut trace.warnings, WARNING);
         return result;
     }
     let mut failures = Vec::new();
@@ -1732,11 +1986,8 @@ unsafe extern "C" fn trace_beat_list_change_stat(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if trace.beat_list_changes.len() >= MAX_TRACE_PEAK_EVENTS {
-        if trace.beat_list_changes.len() == MAX_TRACE_PEAK_EVENTS {
-            trace
-                .warnings
-                .push("beat-list change trace reached its bound".to_string());
-        }
+        const WARNING: &str = "beat-list change trace reached its bound";
+        push_warning_once(&mut trace.warnings, WARNING);
         return;
     }
     let mut failures = Vec::new();
@@ -2509,11 +2760,7 @@ fn record_beat_stage(
     }
 }
 
-fn snapshot_or_empty(
-    result: Result<Vec<InternalBeatTrace>>,
-    label: &str,
-    failures: &mut Vec<String>,
-) -> Vec<InternalBeatTrace> {
+fn snapshot_or_empty<T>(result: Result<Vec<T>>, label: &str, failures: &mut Vec<String>) -> Vec<T> {
     match result {
         Ok(beats) => beats,
         Err(error) => {
@@ -2534,6 +2781,12 @@ fn snapshot_words_or_empty(
             failures.push(format!("failed to snapshot {label}: {error:#}"));
             Vec::new()
         }
+    }
+}
+
+fn push_warning_once(warnings: &mut Vec<String>, warning: &str) {
+    if !warnings.iter().any(|existing| existing == warning) {
+        warnings.push(warning.to_string());
     }
 }
 
@@ -2765,6 +3018,487 @@ unsafe extern "C" fn trace_unit_beat_adjust_analyze(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_break_find(
+    analyzer: *mut c_void,
+    candidate_count: i32,
+    candidates: *mut c_void,
+    feature_origin: i32,
+    low_level: *mut c_void,
+    middle_level: *mut c_void,
+    all_level: *mut c_void,
+    output_a: *mut i32,
+    output_b: *mut i32,
+    output_flag: *mut i32,
+) -> u8 {
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let low_level_snapshot = unsafe { snapshot_mat_f64(low_level) };
+    let middle_level_snapshot = unsafe { snapshot_mat_f64(middle_level) };
+    let all_level_snapshot = unsafe { snapshot_mat_f64(all_level) };
+    let function: BreakFind = unsafe { original(&BREAK_FIND) };
+    let result = unsafe {
+        function(
+            analyzer,
+            candidate_count,
+            candidates,
+            feature_origin,
+            low_level,
+            middle_level,
+            all_level,
+            output_a,
+            output_b,
+            output_flag,
+        )
+    };
+
+    let mut failures = Vec::new();
+    let mut candidates = snapshot_or_empty(candidates_snapshot, "break candidates", &mut failures);
+    candidates.truncate(usize::try_from(candidate_count).unwrap_or_default());
+    let low_level = snapshot_or_empty(low_level_snapshot, "break low level", &mut failures);
+    let middle_level =
+        snapshot_or_empty(middle_level_snapshot, "break middle level", &mut failures);
+    let all_level = snapshot_or_empty(all_level_snapshot, "break all level", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_break_find.push(PhraseBreakFindTrace {
+        candidate_count,
+        candidates,
+        feature_origin,
+        low_level,
+        middle_level,
+        all_level,
+        output_a: unsafe { trace_i32(output_a) },
+        output_b: unsafe { trace_i32(output_b) },
+        output_flag: unsafe { trace_i32(output_flag) },
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_big_change_find(
+    analyzer: *mut c_void,
+    candidate_count: i32,
+    candidates: *mut c_void,
+    feature_origin: i32,
+    low_level: *mut c_void,
+    middle_level: *mut c_void,
+    all_level: *mut c_void,
+    intro_end_feature: *mut c_void,
+    secure_points: *mut c_void,
+    output_a: *mut i32,
+    output_b: *mut i32,
+    output_c: *mut i32,
+    output_d: *mut i32,
+) -> u8 {
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let low_level_snapshot = unsafe { snapshot_mat_f64(low_level) };
+    let middle_level_snapshot = unsafe { snapshot_mat_f64(middle_level) };
+    let all_level_snapshot = unsafe { snapshot_mat_f64(all_level) };
+    let intro_end_snapshot = unsafe { snapshot_mat_f64(intro_end_feature) };
+    let secure_points_snapshot = unsafe { snapshot_mat_f64(secure_points) };
+    let function: BigChangeFind = unsafe { original(&BIG_CHANGE_FIND) };
+    let result = unsafe {
+        function(
+            analyzer,
+            candidate_count,
+            candidates,
+            feature_origin,
+            low_level,
+            middle_level,
+            all_level,
+            intro_end_feature,
+            secure_points,
+            output_a,
+            output_b,
+            output_c,
+            output_d,
+        )
+    };
+
+    let mut failures = Vec::new();
+    let mut candidates =
+        snapshot_or_empty(candidates_snapshot, "big-change candidates", &mut failures);
+    candidates.truncate(usize::try_from(candidate_count).unwrap_or_default());
+    let low_level = snapshot_or_empty(low_level_snapshot, "big-change low level", &mut failures);
+    let middle_level = snapshot_or_empty(
+        middle_level_snapshot,
+        "big-change middle level",
+        &mut failures,
+    );
+    let all_level = snapshot_or_empty(all_level_snapshot, "big-change all level", &mut failures);
+    let intro_end_feature = snapshot_or_empty(
+        intro_end_snapshot,
+        "big-change intro-end feature",
+        &mut failures,
+    );
+    let secure_points = snapshot_or_empty(
+        secure_points_snapshot,
+        "big-change secure points",
+        &mut failures,
+    );
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_big_change_find.push(PhraseBigChangeFindTrace {
+        candidate_count,
+        candidates,
+        feature_origin,
+        low_level,
+        middle_level,
+        all_level,
+        intro_end_feature,
+        secure_points,
+        outputs: unsafe {
+            [
+                trace_i32(output_a),
+                trace_i32(output_b),
+                trace_i32(output_c),
+                trace_i32(output_d),
+            ]
+        },
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_irregular_judge(
+    analyzer: *mut c_void,
+    start_beat: i32,
+    candidate_count: i32,
+    candidates: *mut c_void,
+    low_peak: *mut c_void,
+    feature_origin: i32,
+    evidence_a: i32,
+    evidence_b: i32,
+    evidence_c: i32,
+    evidence_d: i32,
+    evidence_e: i32,
+    evidence_f: i32,
+    evidence_g: i32,
+    markers: *mut c_void,
+    evidence_h: i32,
+    output_last_index: *mut i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let function: IrregularJudge = unsafe { original(&IRREGULAR_JUDGE) };
+    let result = unsafe {
+        function(
+            analyzer,
+            start_beat,
+            candidate_count,
+            candidates,
+            low_peak,
+            feature_origin,
+            evidence_a,
+            evidence_b,
+            evidence_c,
+            evidence_d,
+            evidence_e,
+            evidence_f,
+            evidence_g,
+            markers,
+            evidence_h,
+            output_last_index,
+            output_candidates,
+        )
+    };
+    let output_last_index = unsafe { trace_i32(output_last_index) };
+    let output_candidates_snapshot = unsafe { snapshot_mat_i32(output_candidates) };
+
+    let mut failures = Vec::new();
+    let mut candidates =
+        snapshot_or_empty(candidates_snapshot, "irregular candidates", &mut failures);
+    candidates.truncate(usize::try_from(candidate_count).unwrap_or_default());
+    let mut output_candidates = snapshot_or_empty(
+        output_candidates_snapshot,
+        "irregular output candidates",
+        &mut failures,
+    );
+    output_candidates
+        .truncate(usize::try_from(output_last_index.saturating_add(1)).unwrap_or_default());
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace
+        .phrase_irregular_judge
+        .push(PhraseIrregularJudgeTrace {
+            start_beat,
+            candidate_count,
+            candidates,
+            feature_origin,
+            evidence: [
+                evidence_a, evidence_b, evidence_c, evidence_d, evidence_e, evidence_f, evidence_g,
+                evidence_h,
+            ],
+            output_last_index,
+            output_candidates,
+            result,
+        });
+    result
+}
+
+unsafe extern "C" fn trace_candidate_adjust(
+    analyzer: *mut c_void,
+    candidates: *mut c_void,
+    feature_origin: i32,
+    level_feature: *mut c_void,
+    peak_feature: *mut c_void,
+    adjusted: *mut c_void,
+) -> u8 {
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let level_snapshot = unsafe { snapshot_mat_f64(level_feature) };
+    let peak_snapshot = unsafe { snapshot_mat_f64(peak_feature) };
+    let function: CandidateAdjust = unsafe { original(&CANDIDATE_ADJUST) };
+    let result = unsafe {
+        function(
+            analyzer,
+            candidates,
+            feature_origin,
+            level_feature,
+            peak_feature,
+            adjusted,
+        )
+    };
+    let adjusted_snapshot = unsafe { snapshot_mat_i32(adjusted) };
+
+    let mut failures = Vec::new();
+    let candidates = snapshot_or_empty(candidates_snapshot, "phrase candidates", &mut failures);
+    let level_feature = snapshot_or_empty(level_snapshot, "phrase level feature", &mut failures);
+    let peak_feature = snapshot_or_empty(peak_snapshot, "phrase peak feature", &mut failures);
+    let adjusted = snapshot_or_empty(
+        adjusted_snapshot,
+        "adjusted phrase candidates",
+        &mut failures,
+    );
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace
+        .phrase_candidate_adjustments
+        .push(PhraseCandidateAdjustmentTrace {
+            feature_origin,
+            candidates,
+            level_feature,
+            peak_feature,
+            adjusted,
+            result,
+        });
+    result
+}
+
+unsafe fn trace_i32(pointer: *const i32) -> i32 {
+    if pointer.is_null() {
+        i32::MIN
+    } else {
+        unsafe { pointer.read_unaligned() }
+    }
+}
+
+unsafe extern "C" fn trace_verse_hook_judge_low_peak(
+    analyzer: *mut c_void,
+    start_beat: i32,
+    low_peak: *mut c_void,
+    feature_origin: i32,
+    markers: *mut c_void,
+    candidate_count: *mut i32,
+    candidates: *mut c_void,
+) -> u8 {
+    let low_peak_snapshot = unsafe { snapshot_mat_f64(low_peak) };
+    let markers_snapshot = unsafe { snapshot_mat_u8(markers) };
+    let function: VerseHookJudgeLowPeak = unsafe { original(&VERSE_HOOK_JUDGE_LOW_PEAK) };
+    let result = unsafe {
+        function(
+            analyzer,
+            start_beat,
+            low_peak,
+            feature_origin,
+            markers,
+            candidate_count,
+            candidates,
+        )
+    };
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let candidate_count = if candidate_count.is_null() {
+        -1
+    } else {
+        unsafe { candidate_count.read_unaligned() }
+    };
+
+    let mut failures = Vec::new();
+    let low_peak = snapshot_or_empty(low_peak_snapshot, "phrase low peak", &mut failures);
+    let markers = snapshot_or_empty(markers_snapshot, "phrase low-peak markers", &mut failures);
+    let mut candidates = snapshot_or_empty(
+        candidates_snapshot,
+        "phrase low-peak candidates",
+        &mut failures,
+    );
+    candidates.truncate(usize::try_from(candidate_count).unwrap_or_default());
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_low_peak_seeds.push(PhraseLowPeakSeedTrace {
+        start_beat,
+        feature_origin,
+        low_peak,
+        markers,
+        candidate_count,
+        candidates,
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_verse_hook_judge_all(
+    analyzer: *mut c_void,
+    irregular_last_index: i32,
+    irregular_candidates: *mut c_void,
+    start_beat: i32,
+    feature_origin: i32,
+    low_peak: *mut c_void,
+    marker_a: *mut c_void,
+    marker_b: *mut c_void,
+    marker_c: *mut c_void,
+    secure_points: *mut c_void,
+    low_level: *mut c_void,
+    verse_hook_feature: *mut c_void,
+    intro_end_feature: *mut c_void,
+    all_level: *mut c_void,
+    candidates: *mut c_void,
+) -> u8 {
+    let irregular_candidates_snapshot = unsafe { snapshot_mat_i32(irregular_candidates) };
+    let low_peak_snapshot = unsafe { snapshot_mat_f64(low_peak) };
+    let marker_a_snapshot = unsafe { snapshot_mat_u8(marker_a) };
+    let marker_b_snapshot = unsafe { snapshot_mat_u8(marker_b) };
+    let marker_c_snapshot = unsafe { snapshot_mat_u8(marker_c) };
+    let secure_points_snapshot = unsafe { snapshot_mat_f64(secure_points) };
+    let low_level_snapshot = unsafe { snapshot_mat_f64(low_level) };
+    let verse_hook_feature_snapshot = unsafe { snapshot_mat_f64(verse_hook_feature) };
+    let intro_end_feature_snapshot = unsafe { snapshot_mat_f64(intro_end_feature) };
+    let all_level_snapshot = unsafe { snapshot_mat_f64(all_level) };
+    let function: VerseHookJudgeAll = unsafe { original(&VERSE_HOOK_JUDGE_ALL) };
+    let result = unsafe {
+        function(
+            analyzer,
+            irregular_last_index,
+            irregular_candidates,
+            start_beat,
+            feature_origin,
+            low_peak,
+            marker_a,
+            marker_b,
+            marker_c,
+            secure_points,
+            low_level,
+            verse_hook_feature,
+            intro_end_feature,
+            all_level,
+            candidates,
+        )
+    };
+    let candidates_snapshot = unsafe { snapshot_mat_i32(candidates) };
+
+    let mut failures = Vec::new();
+    let irregular_candidates = snapshot_or_empty(
+        irregular_candidates_snapshot,
+        "irregular phrase candidates",
+        &mut failures,
+    );
+    let low_peak = snapshot_or_empty(low_peak_snapshot, "phrase low peak", &mut failures);
+    let marker_a = snapshot_or_empty(marker_a_snapshot, "phrase marker A", &mut failures);
+    let marker_b = snapshot_or_empty(marker_b_snapshot, "phrase marker B", &mut failures);
+    let marker_c = snapshot_or_empty(marker_c_snapshot, "phrase marker C", &mut failures);
+    let secure_points = snapshot_or_empty(
+        secure_points_snapshot,
+        "phrase secure-point feature",
+        &mut failures,
+    );
+    let low_level = snapshot_or_empty(low_level_snapshot, "phrase low level", &mut failures);
+    let verse_hook_feature = snapshot_or_empty(
+        verse_hook_feature_snapshot,
+        "phrase verse-hook feature",
+        &mut failures,
+    );
+    let intro_end_feature = snapshot_or_empty(
+        intro_end_feature_snapshot,
+        "phrase intro-end feature",
+        &mut failures,
+    );
+    let all_level = snapshot_or_empty(all_level_snapshot, "phrase all level", &mut failures);
+    let candidates = snapshot_or_empty(candidates_snapshot, "all phrase candidates", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_judge_all.push(PhraseJudgeAllTrace {
+        irregular_last_index,
+        irregular_candidates,
+        start_beat,
+        feature_origin,
+        low_peak,
+        marker_a,
+        marker_b,
+        marker_c,
+        secure_points,
+        low_level,
+        verse_hook_feature,
+        intro_end_feature,
+        all_level,
+        candidates,
+        result,
+    });
+    result
+}
+
+unsafe fn snapshot_mat_i32(array: *const c_void) -> Result<Vec<i32>> {
+    let (data, length) = unsafe { mat_array_storage(array)? };
+    let data = data.cast::<i32>();
+    Ok((0..length)
+        .map(|index| unsafe { data.add(index).read_unaligned() })
+        .collect())
+}
+
+unsafe fn snapshot_mat_f64(array: *const c_void) -> Result<Vec<f64>> {
+    let (data, length) = unsafe { mat_array_storage(array)? };
+    let data = data.cast::<f64>();
+    Ok((0..length)
+        .map(|index| unsafe { data.add(index).read_unaligned() })
+        .collect())
+}
+
+unsafe fn snapshot_mat_u8(array: *const c_void) -> Result<Vec<u8>> {
+    let (data, length) = unsafe { mat_array_storage(array)? };
+    Ok((0..length)
+        .map(|index| unsafe { data.add(index).read_unaligned() })
+        .collect())
+}
+
+unsafe fn mat_array_storage(array: *const c_void) -> Result<(*const u8, usize)> {
+    if array.is_null() {
+        bail!("null MatArray");
+    }
+    let array = array.cast::<u8>();
+    let length = unsafe { read_i32_at(array, 0x18) };
+    let length = usize::try_from(length).context("negative MatArray length")?;
+    if length > MAX_TRACE_PHRASE_VALUES {
+        bail!("MatArray length {length} exceeds trace bound");
+    }
+    let data = unsafe { read_pointer_at(array, 0) };
+    if length > 0 && data.is_null() {
+        bail!("null MatArray storage for {length} values");
+    }
+    Ok((data, length))
+}
+
 unsafe fn snapshot_internal_beats(vector: *const StdVector) -> Result<Vec<InternalBeatTrace>> {
     if vector.is_null() {
         bail!("null beat vector");
@@ -2907,5 +3641,24 @@ mod tests {
         assert_eq!(best.start_target, 96);
         assert_eq!(best.score, 116);
         assert_eq!(best.first_hit, Some(100));
+    }
+
+    #[test]
+    fn phrase_trace_scope_is_explicit_and_fail_closed() {
+        assert_eq!(parse_trace_scope(None), "full");
+        assert_eq!(parse_trace_scope(Some("")), "full");
+        assert_eq!(parse_trace_scope(Some("FULL")), "full");
+        assert_eq!(parse_trace_scope(Some("phrase")), "phrase");
+        assert_eq!(parse_trace_scope(Some("PHRASE")), "phrase");
+        assert_eq!(parse_trace_scope(Some("everything")), "invalid");
+    }
+
+    #[test]
+    fn bounded_trace_warnings_are_recorded_once() {
+        let mut warnings = Vec::new();
+        push_warning_once(&mut warnings, "bounded");
+        push_warning_once(&mut warnings, "bounded");
+        push_warning_once(&mut warnings, "other");
+        assert_eq!(warnings, ["bounded", "other"]);
     }
 }

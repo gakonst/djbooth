@@ -459,6 +459,17 @@ independent features improve mood-2/3 label accuracy only from `29.55%` to
 parity step remains the exact native boundary and phrase-kind judges, not
 corpus memorization.
 
+The private reference tracer now captures the complete high-mood boundary
+chain from low-peak seeds through break/big-change/irregular evidence,
+`VerseHookJudge_All`, and final candidate adjustment. A phrase-only trace
+scope keeps these bounded arrays and scalars while omitting unrelated
+rhythm/waveform instrumentation; on a representative track it reduced JSON
+from `32.8 MB` to `147 KB` without changing DAT, EXT, or 2EX bytes. These
+runtime traces establish the exact candidate transformations, but remain
+differential evidence only. Mood 2/3 use the separate native
+`VerseHookJudge23` path, and neither incomplete judge is linked into the
+clean-room release.
+
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight
 boundary F1 improving from `0.5245/0.6348/0.6855` to
