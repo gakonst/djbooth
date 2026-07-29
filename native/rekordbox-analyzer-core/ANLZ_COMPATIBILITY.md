@@ -467,8 +467,27 @@ rhythm/waveform instrumentation; on a representative track it reduced JSON
 from `32.8 MB` to `147 KB` without changing DAT, EXT, or 2EX bytes. These
 runtime traces establish the exact candidate transformations, but remain
 differential evidence only. Mood 2/3 use the separate native
-`VerseHookJudge23` path, and neither incomplete judge is linked into the
-clean-room release.
+`VerseHookJudge23` path.
+
+The phrase-only tracer now covers that mood-2/3 branch as well:
+`VerseHookAnaData23`, both top-level judge call sites, all three
+`VerseHookJudge23Sub` calls, and `VerseHookAdd_genre23`. Hardware runs on one
+mood-2 and one mood-3 reference produced no trace warnings and byte-identical
+DAT/EXT/2EX output. The judge advances by 16 bars, evaluates overlapping
+22-value windows through three sub-judges, merges their candidates, then lets
+the genre pass insert additional boundaries. On the two audited tracks the
+judge emitted 25 and 20 boundaries; the genre pass expanded those to 31 and
+22.
+
+`VerseHookAnaData23` is also ported as clean change-feature primitives. Each
+feature group is max-normalized except for its guard tail, exact zeros used by
+ratios become `0.003`, and adjacent values produce both `next/current` and
+`max(r, 1/r)`. One input is first averaged in four-beat groups. Replaying the
+Rust formula against the hardware trace is exact for three groups and within
+`3.3e-16` for the averaged group. The port remains diagnostic until the
+remaining upstream input identities and downstream candidate-suppression
+rules are fully mapped; production boundaries do not consume an incomplete
+judge.
 
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight

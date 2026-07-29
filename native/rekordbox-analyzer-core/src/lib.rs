@@ -65,7 +65,8 @@ pub use phrase::{
     analyze_song_structure,
 };
 pub use phrase_frontend::{
-    NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
+    NativePhraseChangeFeatures, NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
+    derive_native_phrase_bar_change_features, derive_native_phrase_change_features,
     extract_native_phrase_features, generate_phrase_multirate,
 };
 pub use rhythm::{BeatAnalysis, analyze_beats};

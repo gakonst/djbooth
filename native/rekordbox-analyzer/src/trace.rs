@@ -37,6 +37,10 @@ const BIG_CHANGE_FIND_OFFSET: usize = 0x11fd450;
 const IRREGULAR_JUDGE_OFFSET: usize = 0x17e7a00;
 const VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET: usize = 0x122e740;
 const VERSE_HOOK_JUDGE_ALL_OFFSET: usize = 0x162e970;
+const VERSE_HOOK_JUDGE_23_OFFSET: usize = 0x11dc800;
+const VERSE_HOOK_JUDGE_23_SUB_OFFSET: usize = 0x177a620;
+const VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x15d5ce0;
+const VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x1172de0;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 const LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET: usize = 0x40d3bf8;
 const FWRITE_OFFSET: usize = 0x21dcd98;
@@ -92,6 +96,13 @@ const CALL_IRREGULAR_JUDGE_OFFSET: usize = 0x1791164;
 const CALL_VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET: usize = 0x1790898;
 const CALL_VERSE_HOOK_JUDGE_ALL_OFFSET: usize = 0x179135a;
 const CALL_CANDIDATE_ADJUST_OFFSET: usize = 0x179138a;
+const CALL_VERSE_HOOK_JUDGE_23_0_OFFSET: usize = 0x1790b7a;
+const CALL_VERSE_HOOK_JUDGE_23_1_OFFSET: usize = 0x17914ea;
+const CALL_VERSE_HOOK_JUDGE_23_SUB_0_OFFSET: usize = 0x11dcf9d;
+const CALL_VERSE_HOOK_JUDGE_23_SUB_1_OFFSET: usize = 0x11dd071;
+const CALL_VERSE_HOOK_JUDGE_23_SUB_2_OFFSET: usize = 0x11dd120;
+const CALL_VERSE_HOOK_ADD_GENRE_23_OFFSET: usize = 0x1790bc5;
+const CALL_VERSE_HOOK_ANA_DATA_23_OFFSET: usize = 0x179083f;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -241,6 +252,62 @@ type VerseHookJudgeAll = unsafe extern "C" fn(
     *mut c_void,
     *mut c_void,
 ) -> u8;
+type VerseHookJudge23 = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    i32,
+    i32,
+    *mut c_void,
+) -> u8;
+type VerseHookJudge23Sub = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    *mut c_void,
+) -> u8;
+type VerseHookAddGenre23 = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    *mut c_void,
+) -> u8;
+type VerseHookAnaData23 = unsafe extern "C" fn(
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    i32,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+) -> u8;
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 type Exp10 = unsafe extern "C" fn(f64) -> f64;
 
@@ -271,6 +338,10 @@ static BIG_CHANGE_FIND: AtomicUsize = AtomicUsize::new(0);
 static IRREGULAR_JUDGE: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_JUDGE_LOW_PEAK: AtomicUsize = AtomicUsize::new(0);
 static VERSE_HOOK_JUDGE_ALL: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_JUDGE_23: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_JUDGE_23_SUB: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_ADD_GENRE_23: AtomicUsize = AtomicUsize::new(0);
+static VERSE_HOOK_ANA_DATA_23: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
@@ -307,6 +378,10 @@ struct ReferenceTrace {
     phrase_irregular_judge: Vec<PhraseIrregularJudgeTrace>,
     phrase_low_peak_seeds: Vec<PhraseLowPeakSeedTrace>,
     phrase_judge_all: Vec<PhraseJudgeAllTrace>,
+    phrase_judge_23: Vec<PhraseJudge23Trace>,
+    phrase_judge_23_sub: Vec<PhraseJudge23SubTrace>,
+    phrase_add_genre_23: Vec<PhraseAddGenre23Trace>,
+    phrase_ana_data_23: Vec<PhraseAnaData23Trace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -754,6 +829,61 @@ struct PhraseJudgeAllTrace {
     result: u8,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseJudge23Trace {
+    call_site: u8,
+    primary_features: [Vec<f64>; 3],
+    secondary_features: [Vec<f64>; 3],
+    tertiary_features: [Vec<f64>; 3],
+    input_candidates: Vec<i32>,
+    anchor_beat: i32,
+    feature_origin: i32,
+    genre: i32,
+    output_before: Vec<i32>,
+    output_candidates: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseJudge23SubTrace {
+    call_site: u8,
+    primary_feature: Vec<f64>,
+    secondary_feature: Vec<f64>,
+    tertiary_feature: Vec<f64>,
+    start_bar: i32,
+    output_before: Vec<i32>,
+    output_candidates: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseAddGenre23Trace {
+    low_level: Vec<f64>,
+    middle_level: Vec<f64>,
+    high_level: Vec<f64>,
+    boundary_feature: Vec<f64>,
+    phrase_feature: Vec<f64>,
+    candidates_before: Vec<i32>,
+    feature_origin: i32,
+    output_before: Vec<i32>,
+    candidates_after: Vec<i32>,
+    output_after: Vec<i32>,
+    result: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhraseAnaData23Trace {
+    feature_origin: i32,
+    inputs: [Vec<f64>; 4],
+    outputs_before: [Vec<f64>; 12],
+    outputs: [Vec<f64>; 12],
+    result: u8,
+}
+
 #[repr(C)]
 struct StdVector {
     begin: *const u8,
@@ -773,7 +903,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 16,
+        schema_version: 17,
         requested_engine: requested_engine().to_string(),
         trace_scope: requested_trace_scope().to_string(),
         ..ReferenceTrace::default()
@@ -982,6 +1112,19 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         base + VERSE_HOOK_JUDGE_LOW_PEAK_OFFSET,
     );
     set_original(&VERSE_HOOK_JUDGE_ALL, base + VERSE_HOOK_JUDGE_ALL_OFFSET);
+    set_original(&VERSE_HOOK_JUDGE_23, base + VERSE_HOOK_JUDGE_23_OFFSET);
+    set_original(
+        &VERSE_HOOK_JUDGE_23_SUB,
+        base + VERSE_HOOK_JUDGE_23_SUB_OFFSET,
+    );
+    set_original(
+        &VERSE_HOOK_ADD_GENRE_23,
+        base + VERSE_HOOK_ADD_GENRE_23_OFFSET,
+    );
+    set_original(
+        &VERSE_HOOK_ANA_DATA_23,
+        base + VERSE_HOOK_ANA_DATA_23_OFFSET,
+    );
     set_original(&MALLOC, base + MALLOC_OFFSET);
     set_original(&EXP10, base + EXP10_OFFSET);
 
@@ -1273,6 +1416,41 @@ unsafe fn patch_phrase_trace(base: usize) -> Result<()> {
             base + CALL_CANDIDATE_ADJUST_OFFSET,
             base + CANDIDATE_ADJUST_OFFSET,
             trace_candidate_adjust as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_23_0_OFFSET,
+            base + VERSE_HOOK_JUDGE_23_OFFSET,
+            trace_verse_hook_judge_23_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_23_1_OFFSET,
+            base + VERSE_HOOK_JUDGE_23_OFFSET,
+            trace_verse_hook_judge_23_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_23_SUB_0_OFFSET,
+            base + VERSE_HOOK_JUDGE_23_SUB_OFFSET,
+            trace_verse_hook_judge_23_sub_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_23_SUB_1_OFFSET,
+            base + VERSE_HOOK_JUDGE_23_SUB_OFFSET,
+            trace_verse_hook_judge_23_sub_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_JUDGE_23_SUB_2_OFFSET,
+            base + VERSE_HOOK_JUDGE_23_SUB_OFFSET,
+            trace_verse_hook_judge_23_sub_2 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_ADD_GENRE_23_OFFSET,
+            base + VERSE_HOOK_ADD_GENRE_23_OFFSET,
+            trace_verse_hook_add_genre_23 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_VERSE_HOOK_ANA_DATA_23_OFFSET,
+            base + VERSE_HOOK_ANA_DATA_23_OFFSET,
+            trace_verse_hook_ana_data_23 as usize,
         )
     }
 }
@@ -3454,6 +3632,546 @@ unsafe extern "C" fn trace_verse_hook_judge_all(
         intro_end_feature,
         all_level,
         candidates,
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_verse_hook_judge_23_0(
+    analyzer: *mut c_void,
+    feature_1: *mut c_void,
+    feature_2: *mut c_void,
+    feature_3: *mut c_void,
+    feature_4: *mut c_void,
+    feature_5: *mut c_void,
+    feature_6: *mut c_void,
+    feature_7: *mut c_void,
+    feature_8: *mut c_void,
+    feature_9: *mut c_void,
+    input_candidates: *mut c_void,
+    anchor_beat: i32,
+    feature_origin: i32,
+    genre: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    unsafe {
+        trace_verse_hook_judge_23(
+            0,
+            analyzer,
+            feature_1,
+            feature_2,
+            feature_3,
+            feature_4,
+            feature_5,
+            feature_6,
+            feature_7,
+            feature_8,
+            feature_9,
+            input_candidates,
+            anchor_beat,
+            feature_origin,
+            genre,
+            output_candidates,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_verse_hook_judge_23_1(
+    analyzer: *mut c_void,
+    feature_1: *mut c_void,
+    feature_2: *mut c_void,
+    feature_3: *mut c_void,
+    feature_4: *mut c_void,
+    feature_5: *mut c_void,
+    feature_6: *mut c_void,
+    feature_7: *mut c_void,
+    feature_8: *mut c_void,
+    feature_9: *mut c_void,
+    input_candidates: *mut c_void,
+    anchor_beat: i32,
+    feature_origin: i32,
+    genre: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    unsafe {
+        trace_verse_hook_judge_23(
+            1,
+            analyzer,
+            feature_1,
+            feature_2,
+            feature_3,
+            feature_4,
+            feature_5,
+            feature_6,
+            feature_7,
+            feature_8,
+            feature_9,
+            input_candidates,
+            anchor_beat,
+            feature_origin,
+            genre,
+            output_candidates,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn trace_verse_hook_judge_23(
+    call_site: u8,
+    analyzer: *mut c_void,
+    feature_1: *mut c_void,
+    feature_2: *mut c_void,
+    feature_3: *mut c_void,
+    feature_4: *mut c_void,
+    feature_5: *mut c_void,
+    feature_6: *mut c_void,
+    feature_7: *mut c_void,
+    feature_8: *mut c_void,
+    feature_9: *mut c_void,
+    input_candidates: *mut c_void,
+    anchor_beat: i32,
+    feature_origin: i32,
+    genre: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    let feature_1_snapshot = unsafe { snapshot_mat_f64(feature_1) };
+    let feature_2_snapshot = unsafe { snapshot_mat_f64(feature_2) };
+    let feature_3_snapshot = unsafe { snapshot_mat_f64(feature_3) };
+    let feature_4_snapshot = unsafe { snapshot_mat_f64(feature_4) };
+    let feature_5_snapshot = unsafe { snapshot_mat_f64(feature_5) };
+    let feature_6_snapshot = unsafe { snapshot_mat_f64(feature_6) };
+    let feature_7_snapshot = unsafe { snapshot_mat_f64(feature_7) };
+    let feature_8_snapshot = unsafe { snapshot_mat_f64(feature_8) };
+    let feature_9_snapshot = unsafe { snapshot_mat_f64(feature_9) };
+    let input_candidates_snapshot = unsafe { snapshot_mat_i32(input_candidates) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output_candidates) };
+    let function: VerseHookJudge23 = unsafe { original(&VERSE_HOOK_JUDGE_23) };
+    let result = unsafe {
+        function(
+            analyzer,
+            feature_1,
+            feature_2,
+            feature_3,
+            feature_4,
+            feature_5,
+            feature_6,
+            feature_7,
+            feature_8,
+            feature_9,
+            input_candidates,
+            anchor_beat,
+            feature_origin,
+            genre,
+            output_candidates,
+        )
+    };
+    let output_candidates_snapshot = unsafe { snapshot_mat_i32(output_candidates) };
+
+    let mut failures = Vec::new();
+    let primary_features = [
+        snapshot_or_empty(
+            feature_1_snapshot,
+            "judge23 primary feature A",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_4_snapshot,
+            "judge23 primary feature B",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_7_snapshot,
+            "judge23 primary feature C",
+            &mut failures,
+        ),
+    ];
+    let secondary_features = [
+        snapshot_or_empty(
+            feature_2_snapshot,
+            "judge23 secondary feature A",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_5_snapshot,
+            "judge23 secondary feature B",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_8_snapshot,
+            "judge23 secondary feature C",
+            &mut failures,
+        ),
+    ];
+    let tertiary_features = [
+        snapshot_or_empty(
+            feature_3_snapshot,
+            "judge23 tertiary feature A",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_6_snapshot,
+            "judge23 tertiary feature B",
+            &mut failures,
+        ),
+        snapshot_or_empty(
+            feature_9_snapshot,
+            "judge23 tertiary feature C",
+            &mut failures,
+        ),
+    ];
+    let input_candidates = snapshot_or_empty(
+        input_candidates_snapshot,
+        "judge23 input candidates",
+        &mut failures,
+    );
+    let output_before = snapshot_or_empty(
+        output_before_snapshot,
+        "judge23 output before",
+        &mut failures,
+    );
+    let output_candidates = snapshot_or_empty(
+        output_candidates_snapshot,
+        "judge23 output candidates",
+        &mut failures,
+    );
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_judge_23.push(PhraseJudge23Trace {
+        call_site,
+        primary_features,
+        secondary_features,
+        tertiary_features,
+        input_candidates,
+        anchor_beat,
+        feature_origin,
+        genre,
+        output_before,
+        output_candidates,
+        result,
+    });
+    result
+}
+
+unsafe extern "C" fn trace_verse_hook_judge_23_sub_0(
+    analyzer: *mut c_void,
+    primary_feature: *mut c_void,
+    secondary_feature: *mut c_void,
+    tertiary_feature: *mut c_void,
+    start_bar: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    unsafe {
+        trace_verse_hook_judge_23_sub(
+            0,
+            analyzer,
+            primary_feature,
+            secondary_feature,
+            tertiary_feature,
+            start_bar,
+            output_candidates,
+        )
+    }
+}
+
+unsafe extern "C" fn trace_verse_hook_judge_23_sub_1(
+    analyzer: *mut c_void,
+    primary_feature: *mut c_void,
+    secondary_feature: *mut c_void,
+    tertiary_feature: *mut c_void,
+    start_bar: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    unsafe {
+        trace_verse_hook_judge_23_sub(
+            1,
+            analyzer,
+            primary_feature,
+            secondary_feature,
+            tertiary_feature,
+            start_bar,
+            output_candidates,
+        )
+    }
+}
+
+unsafe extern "C" fn trace_verse_hook_judge_23_sub_2(
+    analyzer: *mut c_void,
+    primary_feature: *mut c_void,
+    secondary_feature: *mut c_void,
+    tertiary_feature: *mut c_void,
+    start_bar: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    unsafe {
+        trace_verse_hook_judge_23_sub(
+            2,
+            analyzer,
+            primary_feature,
+            secondary_feature,
+            tertiary_feature,
+            start_bar,
+            output_candidates,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn trace_verse_hook_judge_23_sub(
+    call_site: u8,
+    analyzer: *mut c_void,
+    primary_feature: *mut c_void,
+    secondary_feature: *mut c_void,
+    tertiary_feature: *mut c_void,
+    start_bar: i32,
+    output_candidates: *mut c_void,
+) -> u8 {
+    let primary_snapshot = unsafe { snapshot_mat_f64(primary_feature) };
+    let secondary_snapshot = unsafe { snapshot_mat_f64(secondary_feature) };
+    let tertiary_snapshot = unsafe { snapshot_mat_f64(tertiary_feature) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output_candidates) };
+    let function: VerseHookJudge23Sub = unsafe { original(&VERSE_HOOK_JUDGE_23_SUB) };
+    let result = unsafe {
+        function(
+            analyzer,
+            primary_feature,
+            secondary_feature,
+            tertiary_feature,
+            start_bar,
+            output_candidates,
+        )
+    };
+    let output_candidates_snapshot = unsafe { snapshot_mat_i32(output_candidates) };
+
+    let mut failures = Vec::new();
+    let primary_feature = snapshot_or_empty(
+        primary_snapshot,
+        "judge23 sub primary feature",
+        &mut failures,
+    );
+    let secondary_feature = snapshot_or_empty(
+        secondary_snapshot,
+        "judge23 sub secondary feature",
+        &mut failures,
+    );
+    let tertiary_feature = snapshot_or_empty(
+        tertiary_snapshot,
+        "judge23 sub tertiary feature",
+        &mut failures,
+    );
+    let output_before = snapshot_or_empty(
+        output_before_snapshot,
+        "judge23 sub output before",
+        &mut failures,
+    );
+    let output_candidates = snapshot_or_empty(
+        output_candidates_snapshot,
+        "judge23 sub output candidates",
+        &mut failures,
+    );
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_judge_23_sub.push(PhraseJudge23SubTrace {
+        call_site,
+        primary_feature,
+        secondary_feature,
+        tertiary_feature,
+        start_bar,
+        output_before,
+        output_candidates,
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_verse_hook_add_genre_23(
+    analyzer: *mut c_void,
+    low_level: *mut c_void,
+    middle_level: *mut c_void,
+    high_level: *mut c_void,
+    boundary_feature: *mut c_void,
+    phrase_feature: *mut c_void,
+    candidates: *mut c_void,
+    feature_origin: i32,
+    output: *mut c_void,
+) -> u8 {
+    let low_level_snapshot = unsafe { snapshot_mat_f64(low_level) };
+    let middle_level_snapshot = unsafe { snapshot_mat_f64(middle_level) };
+    let high_level_snapshot = unsafe { snapshot_mat_f64(high_level) };
+    let boundary_feature_snapshot = unsafe { snapshot_mat_f64(boundary_feature) };
+    let phrase_feature_snapshot = unsafe { snapshot_mat_f64(phrase_feature) };
+    let candidates_before_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let output_before_snapshot = unsafe { snapshot_mat_i32(output) };
+    let function: VerseHookAddGenre23 = unsafe { original(&VERSE_HOOK_ADD_GENRE_23) };
+    let result = unsafe {
+        function(
+            analyzer,
+            low_level,
+            middle_level,
+            high_level,
+            boundary_feature,
+            phrase_feature,
+            candidates,
+            feature_origin,
+            output,
+        )
+    };
+    let candidates_after_snapshot = unsafe { snapshot_mat_i32(candidates) };
+    let output_after_snapshot = unsafe { snapshot_mat_i32(output) };
+
+    let mut failures = Vec::new();
+    let low_level = snapshot_or_empty(low_level_snapshot, "genre23 low level", &mut failures);
+    let middle_level =
+        snapshot_or_empty(middle_level_snapshot, "genre23 middle level", &mut failures);
+    let high_level = snapshot_or_empty(high_level_snapshot, "genre23 high level", &mut failures);
+    let boundary_feature = snapshot_or_empty(
+        boundary_feature_snapshot,
+        "genre23 boundary feature",
+        &mut failures,
+    );
+    let phrase_feature = snapshot_or_empty(
+        phrase_feature_snapshot,
+        "genre23 phrase feature",
+        &mut failures,
+    );
+    let candidates_before = snapshot_or_empty(
+        candidates_before_snapshot,
+        "genre23 candidates before",
+        &mut failures,
+    );
+    let output_before = snapshot_or_empty(
+        output_before_snapshot,
+        "genre23 output before",
+        &mut failures,
+    );
+    let candidates_after = snapshot_or_empty(
+        candidates_after_snapshot,
+        "genre23 candidates after",
+        &mut failures,
+    );
+    let output_after =
+        snapshot_or_empty(output_after_snapshot, "genre23 output after", &mut failures);
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_add_genre_23.push(PhraseAddGenre23Trace {
+        low_level,
+        middle_level,
+        high_level,
+        boundary_feature,
+        phrase_feature,
+        candidates_before,
+        feature_origin,
+        output_before,
+        candidates_after,
+        output_after,
+        result,
+    });
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "C" fn trace_verse_hook_ana_data_23(
+    analyzer: *mut c_void,
+    input_1: *mut c_void,
+    input_2: *mut c_void,
+    input_3: *mut c_void,
+    input_4: *mut c_void,
+    feature_origin: i32,
+    output_1: *mut c_void,
+    output_2: *mut c_void,
+    output_3: *mut c_void,
+    output_4: *mut c_void,
+    output_5: *mut c_void,
+    output_6: *mut c_void,
+    output_7: *mut c_void,
+    output_8: *mut c_void,
+    output_9: *mut c_void,
+    output_10: *mut c_void,
+    output_11: *mut c_void,
+    output_12: *mut c_void,
+) -> u8 {
+    let input_snapshots = [
+        unsafe { snapshot_mat_f64(input_1) },
+        unsafe { snapshot_mat_f64(input_2) },
+        unsafe { snapshot_mat_f64(input_3) },
+        unsafe { snapshot_mat_f64(input_4) },
+    ];
+    let output_snapshots_before = [
+        unsafe { snapshot_mat_f64(output_1) },
+        unsafe { snapshot_mat_f64(output_2) },
+        unsafe { snapshot_mat_f64(output_3) },
+        unsafe { snapshot_mat_f64(output_4) },
+        unsafe { snapshot_mat_f64(output_5) },
+        unsafe { snapshot_mat_f64(output_6) },
+        unsafe { snapshot_mat_f64(output_7) },
+        unsafe { snapshot_mat_f64(output_8) },
+        unsafe { snapshot_mat_f64(output_9) },
+        unsafe { snapshot_mat_f64(output_10) },
+        unsafe { snapshot_mat_f64(output_11) },
+        unsafe { snapshot_mat_f64(output_12) },
+    ];
+    let function: VerseHookAnaData23 = unsafe { original(&VERSE_HOOK_ANA_DATA_23) };
+    let result = unsafe {
+        function(
+            analyzer,
+            input_1,
+            input_2,
+            input_3,
+            input_4,
+            feature_origin,
+            output_1,
+            output_2,
+            output_3,
+            output_4,
+            output_5,
+            output_6,
+            output_7,
+            output_8,
+            output_9,
+            output_10,
+            output_11,
+            output_12,
+        )
+    };
+    let output_snapshots = [
+        unsafe { snapshot_mat_f64(output_1) },
+        unsafe { snapshot_mat_f64(output_2) },
+        unsafe { snapshot_mat_f64(output_3) },
+        unsafe { snapshot_mat_f64(output_4) },
+        unsafe { snapshot_mat_f64(output_5) },
+        unsafe { snapshot_mat_f64(output_6) },
+        unsafe { snapshot_mat_f64(output_7) },
+        unsafe { snapshot_mat_f64(output_8) },
+        unsafe { snapshot_mat_f64(output_9) },
+        unsafe { snapshot_mat_f64(output_10) },
+        unsafe { snapshot_mat_f64(output_11) },
+        unsafe { snapshot_mat_f64(output_12) },
+    ];
+
+    let mut failures = Vec::new();
+    let inputs = input_snapshots
+        .map(|snapshot| snapshot_or_empty(snapshot, "analysis23 input", &mut failures));
+    let outputs_before = output_snapshots_before
+        .map(|snapshot| snapshot_or_empty(snapshot, "analysis23 output before", &mut failures));
+    let outputs = output_snapshots
+        .map(|snapshot| snapshot_or_empty(snapshot, "analysis23 output", &mut failures));
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.warnings.extend(failures);
+    trace.phrase_ana_data_23.push(PhraseAnaData23Trace {
+        feature_origin,
+        inputs,
+        outputs_before,
+        outputs,
         result,
     });
     result

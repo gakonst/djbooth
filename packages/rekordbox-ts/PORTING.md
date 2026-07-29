@@ -163,11 +163,21 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - A ten-track high-mood audit exercised zero and nonzero `BigChangeFind`
   outputs and attributed every inserted candidate through the full chain.
   The first fixture moved from eight low-peak seeds to eleven judge candidates
-  and ten adjusted candidates. Mood 2/3 bypass this chain and remain a
-  separate `VerseHookJudge23` recovery target; no incomplete native judge was
-  routed into production.
+  and ten adjusted candidates. Mood 2/3 bypass this chain.
+- Extended schema 17 over the separate mood-2/3 chain:
+  `VerseHookAnaData23`, both `VerseHookJudge23` callsites, all three sub-judge
+  calls, and `VerseHookAdd_genre23`. Live mood-2 and mood-3 traces had zero
+  warnings and byte-identical DAT/EXT/2EX. The judge scans overlapping
+  22-value windows every 16 bars; the audited judge/add stages expanded
+  `25 → 31` and `20 → 22` boundaries.
+- Ported the exact `VerseHookAnaData23` change-feature primitive. Four-beat
+  averaging, guard-tail normalization, `0.003` ratio substitution,
+  directional `next/current`, and symmetric `max(r, 1/r)` replay three native
+  groups exactly and the averaged group within `3.3e-16`. The primitive is
+  diagnostic pending the remaining input identities and candidate suppression;
+  no partial judge is routed into production.
 - Added `REKORDBOX_ANALYZER_TRACE_SCOPE=phrase`. It installs only the six
-  phrase-stage callsite hooks, leaving analyzer outputs byte-identical while
+  high-mood plus mood-2/3 phrase-stage hooks, leaving analyzer outputs byte-identical while
   reducing a representative trace from `32.8 MB` to `147 KB` (`223×`) and
   eliminating unrelated trace warnings. Full tracing remains the default.
   Repeated capacity warnings in the full tracer are now deduplicated.

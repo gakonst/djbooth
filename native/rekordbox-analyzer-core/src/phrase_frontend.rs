@@ -74,6 +74,17 @@ pub struct NativePhraseFeatureTrace {
     pub high_peak_eighths: Vec<[f64; 8]>,
 }
 
+/// One normalized native phrase feature and its two adjacent-change views.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativePhraseChangeFeatures {
+    /// Max-normalized values after native zero substitution at ratio sites.
+    pub normalized: Vec<f64>,
+    /// Adjacent ratio folded above one with `max(r, 1 / r)`.
+    pub symmetric_ratio: Vec<f64>,
+    /// Directed adjacent ratio `next / current`.
+    pub directional_ratio: Vec<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NativePhraseLowLevelTrace {
     pub low_level: Vec<f64>,
@@ -414,6 +425,74 @@ pub fn extract_native_phrase_features(
         all_power_quarter_peak,
         high_peak_eighths,
     })
+}
+
+/// Reproduce the native phrase judge's normalization and adjacent ratios.
+pub fn derive_native_phrase_change_features(values: &[f64]) -> Result<NativePhraseChangeFeatures> {
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native phrase change features require finite input");
+    }
+    Ok(derive_native_phrase_change_features_unchecked(
+        values.to_vec(),
+    ))
+}
+
+/// Average four-beat input into bars before deriving native change features.
+pub fn derive_native_phrase_bar_change_features(
+    values: &[f64],
+    feature_origin: usize,
+) -> Result<NativePhraseChangeFeatures> {
+    if feature_origin == 0 || feature_origin > values.len() {
+        bail!("native phrase bar features require a one-based origin within the input");
+    }
+    if values.iter().any(|value| !value.is_finite()) {
+        bail!("native phrase bar features require finite input");
+    }
+    let bar_count = (values.len() - feature_origin + 1) / 4;
+    if bar_count == 0 {
+        bail!("native phrase bar features require one complete four-beat group");
+    }
+    let mut bars = vec![0.0; bar_count];
+    let populated = bar_count.saturating_sub(1).max(1).min(bar_count);
+    for (bar, slot) in bars.iter_mut().take(populated).enumerate() {
+        let start = feature_origin - 1 + bar * 4;
+        *slot = values[start..start + 4].iter().sum::<f64>() * 0.25;
+    }
+    Ok(derive_native_phrase_change_features_unchecked(bars))
+}
+
+fn derive_native_phrase_change_features_unchecked(
+    mut normalized: Vec<f64>,
+) -> NativePhraseChangeFeatures {
+    let maximum = normalized.iter().copied().fold(0.0_f64, f64::max);
+    let scale = if maximum == 0.0 {
+        333.333_333_333_333_3
+    } else {
+        maximum.recip()
+    };
+    let normalized_count = normalized.len().saturating_sub(1);
+    for value in normalized.iter_mut().take(normalized_count) {
+        *value *= scale;
+    }
+
+    let mut symmetric_ratio = vec![0.0; normalized.len()];
+    let mut directional_ratio = vec![0.0; normalized.len()];
+    for index in 0..normalized.len().saturating_sub(2) {
+        if normalized[index] == 0.0 {
+            normalized[index] = 0.003;
+        }
+        if normalized[index + 1] == 0.0 {
+            normalized[index + 1] = 0.003;
+        }
+        let ratio = normalized[index + 1] / normalized[index];
+        directional_ratio[index + 1] = ratio;
+        symmetric_ratio[index + 1] = if ratio < 1.0 { ratio.recip() } else { ratio };
+    }
+    NativePhraseChangeFeatures {
+        normalized,
+        symmetric_ratio,
+        directional_ratio,
+    }
 }
 
 #[cfg(test)]
@@ -788,5 +867,39 @@ mod tests {
     fn native_feature_validation_rejects_invalid_timing_inputs() {
         assert!(extract_native_phrase_features(&[0.0; 44_100], 44_100, 0.0, 0.0).is_err());
         assert!(extract_native_phrase_features(&[0.0; 44_100], 44_100, 120.0, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn native_change_features_preserve_tail_and_fold_adjacent_ratios() {
+        let features =
+            derive_native_phrase_change_features(&[2.0, 4.0, 0.0, 8.0]).expect("changes");
+
+        assert_eq!(features.normalized, [0.25, 0.5, 0.003, 8.0]);
+        assert_eq!(features.directional_ratio, [0.0, 2.0, 0.006, 0.0]);
+        assert_eq!(
+            features.symmetric_ratio,
+            [0.0, 2.0, 166.666_666_666_666_66, 0.0]
+        );
+    }
+
+    #[test]
+    fn native_bar_change_features_average_four_beats_and_leave_guard_bar() {
+        let values = (1..=12).map(f64::from).collect::<Vec<_>>();
+        let features = derive_native_phrase_bar_change_features(&values, 1).expect("bar changes");
+
+        assert_eq!(features.normalized, [2.5 / 6.5, 1.0, 0.0]);
+        assert!((features.directional_ratio[1] - 2.6).abs() < f64::EPSILON * 4.0);
+        assert!((features.symmetric_ratio[1] - 2.6).abs() < f64::EPSILON * 4.0);
+        assert_eq!(features.directional_ratio[0], 0.0);
+        assert_eq!(features.directional_ratio[2], 0.0);
+        assert_eq!(features.symmetric_ratio[0], 0.0);
+        assert_eq!(features.symmetric_ratio[2], 0.0);
+    }
+
+    #[test]
+    fn native_change_features_reject_invalid_inputs() {
+        assert!(derive_native_phrase_change_features(&[f64::NAN]).is_err());
+        assert!(derive_native_phrase_bar_change_features(&[1.0; 8], 0).is_err());
+        assert!(derive_native_phrase_bar_change_features(&[1.0; 3], 1).is_err());
     }
 }
