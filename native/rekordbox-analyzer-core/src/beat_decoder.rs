@@ -483,7 +483,8 @@ pub fn refine_tempo_sections(
 /// pulse spacings in 96-frame phase increments, recursively snapping every
 /// predicted pulse to the nearest surviving hypothesis. Scores are normalized
 /// by pulse spacing before strict-greater comparison, so earlier candidates
-/// retain ties.
+/// retain ties. Section bounds enforce the upstream one-eighth-beat survivor
+/// guard before applying the matching one-eighth-beat boundary offset.
 pub fn adjust_tempo_section_phases(
     hypotheses: &[BeatSensorHypothesis],
     sections: &[RefinedTempoSection],
@@ -619,18 +620,27 @@ pub fn expand_tempo_sections(
         let mut prediction = f64::from(anchor_position);
         let mut step = 0_usize;
         while prediction < section_end as f64 {
-            step += 1;
-            prediction += quarter_period;
-            let mut band = None;
-            if step.is_multiple_of(pulse_steps)
-                && let Some((source_index, source_position)) =
-                    find_nearest_hypothesis(hypotheses, prediction.trunc() as i32, tolerance_frames)
-            {
-                prediction = f64::from(source_position);
-                band = Some(hypotheses[source_index].band);
+            // The native loop is unrolled four quarter-steps at a time and
+            // tests the section boundary only after the whole beat. Preserve
+            // that first block endpoint beyond the boundary: short-section
+            // fitting uses its rounded step count and corrected position.
+            for _ in 0..QUARTER_STEPS_PER_BEAT {
+                step += 1;
+                prediction += quarter_period;
+                let mut band = None;
+                if step.is_multiple_of(pulse_steps)
+                    && let Some((source_index, source_position)) = find_nearest_hypothesis(
+                        hypotheses,
+                        prediction.trunc() as i32,
+                        tolerance_frames,
+                    )
+                {
+                    prediction = f64::from(source_position);
+                    band = Some(hypotheses[source_index].band);
+                }
+                predicted_positions.push(prediction);
+                predicted_bands.push(band);
             }
-            predicted_positions.push(prediction);
-            predicted_bands.push(band);
         }
 
         let available_steps = predicted_positions.len() - 1;
@@ -1003,17 +1013,18 @@ fn linked_section_boundary(
     preceding_anchor: u64,
     eighth_period: i64,
 ) -> u64 {
-    let anchor_index =
-        hypotheses.partition_point(|hypothesis| hypothesis.peak_frame <= anchor_frame) - 1;
-    let candidate = if anchor_index == 0 {
-        hypotheses[0].peak_frame as i64 - eighth_period
+    let eighth_period = u64::try_from(eighth_period).unwrap_or(0);
+    let predecessor_limit = anchor_frame.saturating_sub(eighth_period);
+    let predecessor_end =
+        hypotheses.partition_point(|hypothesis| hypothesis.peak_frame <= predecessor_limit);
+    let candidate = if predecessor_end == 0 {
+        hypotheses[0].peak_frame.saturating_sub(eighth_period)
     } else {
-        hypotheses[anchor_index - 1].peak_frame as i64 + eighth_period
+        hypotheses[predecessor_end - 1]
+            .peak_frame
+            .saturating_add(eighth_period)
     };
-    candidate
-        .max(preceding_anchor as i64)
-        .min(anchor_frame as i64)
-        .max(0) as u64
+    candidate.max(preceding_anchor).min(anchor_frame)
 }
 
 fn strongest_phase_trial(
@@ -1614,6 +1625,21 @@ mod tests {
     }
 
     #[test]
+    fn phase_boundary_skips_a_predecessor_inside_the_eighth_beat_guard() {
+        let hypotheses = [
+            hypothesis(1_000, 0x0103, 500.0),
+            hypothesis(3_000, 0x0203, 500.0),
+            hypothesis(3_950, 0x0303, 500.0),
+            hypothesis(4_000, 0x0403, 600.0),
+        ];
+
+        assert_eq!(
+            linked_section_boundary(&hypotheses, 4_000, 1_000, 100),
+            3_100
+        );
+    }
+
+    #[test]
     fn phase_adjustment_snaps_a_steady_four_beat_pulse() {
         let hypotheses = [
             hypothesis(100, 0x0103, 500.0),
@@ -1692,6 +1718,32 @@ mod tests {
             expanded
                 .iter()
                 .all(|beat| (beat.period_ms - 500.0).abs() < f32::EPSILON)
+        );
+    }
+
+    #[test]
+    fn expansion_rounds_a_short_fit_to_a_whole_beat_endpoint() {
+        let sections = [AdjustedTempoSection {
+            origin_frame: 100,
+            period_ms: 500.0,
+            pulse_marker: 16,
+            period_offset: 0,
+        }];
+
+        let expanded =
+            expand_tempo_sections(&[hypothesis(100, 0, 500.0)], &sections, 1_000, 900).unwrap();
+
+        assert_eq!(
+            expanded
+                .iter()
+                .map(|beat| beat.position_frame)
+                .collect::<Vec<_>>(),
+            [70, 583]
+        );
+        assert!(
+            expanded
+                .iter()
+                .all(|beat| (beat.period_ms - 513.5).abs() < f32::EPSILON)
         );
     }
 
