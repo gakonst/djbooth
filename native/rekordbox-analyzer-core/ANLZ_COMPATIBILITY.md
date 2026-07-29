@@ -542,7 +542,17 @@ with `trunc(rate * firstBeatMs * 0.001 + 0.5)` and
 `trunc(period * i + start + 1.5)`. Mapoch uses `120.0/375 ms`, Fire uses
 `153.6/105 ms`, and Uncle John's Band uses `136.4/143 ms`; the latter two prove
 that the first quantized PQTZ BPM is not this input. The Rust position builder
-already matches the recovered formula. The same trace captures
+already matches the recovered formula. Production now supplies the global
+`BeatAnalysis.bpm` and the first integer `PQTZ.time_ms` exactly; it neither
+adds the `PQT2` microsecond residual nor substitutes the first entry's local
+BPM. A repeated 120-track replay completed without failures and retained
+exact/within-four/within-eight F1 of `0.6182/0.6842/0.7137`, because the removed
+sub-millisecond residual did not cross a final phrase decision in that cohort.
+Mapoch and Fire have exact clean seeds. Uncle remains an upstream Dynamic-grid
+miss (`134.77 BPM @ 411 ms` clean versus `137.02 BPM @ 143 ms` native), while
+the clean global phrase BPM is already the exact native `136.4`.
+
+The same trace captures
 `IntroEndJudge_main` without changing DAT/EXT/2EX bytes: its four feature
 arrays, two integer candidate arrays, selected beat, and success flag. On the
 three references it emits intro candidates `[4]`, `[49,45,5,0]`, and

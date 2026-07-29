@@ -1856,6 +1856,18 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   later varies through `173.65`. Phrase analysis nevertheless uses the single
   internal values above. The existing Rust boundary formula is exact; using
   the first PQTZ tempo in the diagnostic was the remaining feature drift.
+- Confirmed the production seed boundary: the BPM is `BeatAnalysis.bpm`, while
+  the offset is the first integer `PQTZ.time_ms`. Native does not add the
+  `PQT2` microsecond residual or substitute the first beat's local BPM. The
+  clean phrase frontend now follows that rule. A fresh 120-track replay
+  completed without failures and retained
+  `0.6182/0.6842/0.7137` exact/four/eight-beat F1; the removed residual was too
+  small to change a final PSSI decision in that cohort.
+- Mapoch and Fire now supply the exact native seed from their clean grids.
+  Uncle remains upstream: native starts `137.02 BPM @ 143 ms`, while the clean
+  Dynamic grid starts `134.77 BPM @ 411 ms`, despite matching the native
+  `136.4` global phrase BPM. This is a BeatSensor/section-grid input mismatch,
+  not a phrase-window recovery rule.
 - `IntroEndJudge_main` transforms seed arrays `[128]`, `[0]`, and `[0]` into
   `[4]`, `[49,45,5,0]`, and `[35,35,15,7]`, selecting beats `4`, `5`, and
   `35`. This isolates the remaining production gate to the inner intro/end

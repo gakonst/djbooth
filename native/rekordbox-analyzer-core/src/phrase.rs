@@ -496,18 +496,8 @@ fn native_boundary_novelty(
     bar_starts: &[usize],
     bar_count: usize,
 ) -> Result<Vec<f64>> {
-    let first = beat
-        .beats
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("song-structure analysis requires a beat grid"))?;
-    let first_beat_ms = f64::from(first.time_ms)
-        + f64::from(
-            beat.beat_time_residuals_us
-                .first()
-                .copied()
-                .unwrap_or_default(),
-        ) / 1_000.0;
-    let trace = reduce_native_phrase_low_levels(envelope, beat.bpm, first_beat_ms)?;
+    let (bpm, first_beat_ms) = native_phrase_window_seed(beat)?;
+    let trace = reduce_native_phrase_low_levels(envelope, bpm, first_beat_ms)?;
     let mut raw = Vec::with_capacity(bar_count);
     for bar in 0..bar_count {
         let start = bar_starts.get(bar).copied().unwrap_or_default();
@@ -577,6 +567,14 @@ fn native_boundary_novelty(
             (((after[0] - before[0]).powi(2) + (after[1] - before[1]).powi(2)) * 0.5).sqrt();
     }
     Ok(novelty)
+}
+
+fn native_phrase_window_seed(beat: &BeatAnalysis) -> Result<(f64, f64)> {
+    let first = beat
+        .beats
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("song-structure analysis requires a beat grid"))?;
+    Ok((beat.bpm, f64::from(first.time_ms)))
 }
 
 fn select_phrase_boundaries(
@@ -879,6 +877,17 @@ mod tests {
                 section_gain * (2.0 * std::f32::consts::PI * 110.0 * time).sin()
             })
             .collect()
+    }
+
+    #[test]
+    fn native_phrase_window_seed_uses_global_bpm_and_integer_pqtz_time() {
+        let mut beat = synthetic_beat(16);
+        beat.bpm = 136.4;
+        beat.beats[0].bpm_hundredths = 13_702;
+        beat.beats[0].time_ms = 143;
+        beat.beat_time_residuals_us[0] = 270;
+
+        assert_eq!(native_phrase_window_seed(&beat).unwrap(), (136.4, 143.0));
     }
 
     #[test]
