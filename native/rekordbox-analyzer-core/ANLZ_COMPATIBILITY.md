@@ -484,10 +484,11 @@ feature group is max-normalized except for its guard tail, exact zeros used by
 ratios become `0.003`, and adjacent values produce both `next/current` and
 `max(r, 1/r)`. One input is first averaged in four-beat groups. Replaying the
 Rust formula against the hardware trace is exact for three groups and within
-`3.3e-16` for the averaged group. The port remains diagnostic until the
-remaining upstream input identities and downstream candidate-suppression
-rules are fully mapped; production boundaries do not consume an incomplete
-judge.
+`3.3e-16` for the averaged group. The traced producer inputs identify the
+three judge families as bar-aligned `lowPeak`, `lowLevel`, and `middlePeak`;
+the constant gain on `middlePeak` cancels during normalization. Dynamic-grid
+window parity and the upstream seed candidates remain under investigation, so
+production boundaries do not consume the native judge yet.
 
 `VerseHookJudge23Sub` is now ported as
 `judge_native_phrase_change_window`. The clean implementation reproduces the
@@ -497,8 +498,17 @@ tests, absolute bar mapping, and the native three-zero result cleanup limit.
 It matches all `114/114` captured sub-judge calls across two mood-2 runs and
 one mood-3 run, including windows where an otherwise valid candidate is
 discarded because too many earlier ranked slots were rejected. This primitive
-also remains diagnostic until the top-level three-family merge and genre pass
-are fully replayed.
+feeds the recovered top-level mood-2/3 judge.
+
+`judge_native_mood_23_phrase_boundaries` now ports the complete
+`VerseHookJudge23` wrapper: beat-to-bar seed cleanup, 22-bar windows every 16
+bars, three-family merge, duplicate removal, consecutive-run collapse,
+candidate scoring, fixed bar protection, and beat remapping. Native constants
+include score weights `1.05/0.9/0.25`, zero floor `0.003`, adjacent ratio
+`1.07`, and suppression ceiling `1.6`. Direct Rust replay from all nine traced
+feature arrays matches both mood-2 captures at `25/25` candidates and the
+mood-3 capture at `20/20`. The downstream `VerseHookAdd_genre23` insertion
+pass and its upstream seed construction still gate production integration.
 
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight

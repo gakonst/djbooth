@@ -475,6 +475,144 @@ pub fn judge_native_phrase_change_window(
     let primary = &features.normalized;
     let secondary = &features.symmetric_ratio;
     let tertiary = &features.directional_ratio;
+    validate_native_phrase_change_window(primary, secondary, tertiary, start_bar)?;
+    judge_native_phrase_change_window_unchecked(primary, secondary, tertiary, start_bar)
+}
+
+/// Select mood-2/3 phrase boundaries from the three native feature families.
+///
+/// Input and output candidates are one-based beat positions. `feature_origin`
+/// is the beat represented by feature bar one. Native mode `1` keeps only the
+/// middle feature family; other observed modes merge all three.
+pub fn judge_native_mood_23_phrase_boundaries(
+    feature_families: &[NativePhraseChangeFeatures; 3],
+    input_candidates: &[i32],
+    anchor_beat: i32,
+    feature_origin: i32,
+    genre: i32,
+) -> Result<Vec<i32>> {
+    if input_candidates.is_empty() {
+        bail!("native mood-2/3 phrase judge requires an input candidate");
+    }
+    let feature_count = feature_families
+        .iter()
+        .map(|features| features.normalized.len())
+        .min()
+        .unwrap_or_default();
+    if feature_count < 10 {
+        bail!("native mood-2/3 phrase judge requires at least ten feature bars");
+    }
+    let feature_count_i32 = i32::try_from(feature_count)
+        .map_err(|_| anyhow::anyhow!("native phrase feature count exceeds i32"))?;
+    for features in feature_families {
+        if features.symmetric_ratio.len() < feature_count
+            || features.directional_ratio.len() < feature_count
+        {
+            bail!("native mood-2/3 phrase judge requires aligned feature families");
+        }
+        if features
+            .normalized
+            .iter()
+            .take(feature_count)
+            .chain(features.symmetric_ratio.iter().take(feature_count))
+            .chain(features.directional_ratio.iter().take(feature_count))
+            .any(|value| !value.is_finite())
+        {
+            bail!("native mood-2/3 phrase judge requires finite features");
+        }
+    }
+
+    let protected_bar = native_phrase_beat_to_bar(anchor_beat, feature_origin)?;
+    let mut output = native_initial_phrase_bars(
+        input_candidates,
+        feature_origin,
+        feature_count_i32,
+        protected_bar,
+    )?;
+    let last_initial = output.last().copied().unwrap_or_default();
+    let first_window_bar = if last_initial >= 4 {
+        last_initial
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("native phrase window start overflow"))?
+    } else {
+        4
+    };
+    let mut window_end = first_window_bar.saturating_add(18).min(feature_count_i32);
+    let mut start_bar = first_window_bar - 3;
+    if start_bar > window_end {
+        start_bar = feature_count_i32;
+    }
+
+    let mut family_candidates: [Vec<i32>; 3] = std::array::from_fn(|_| vec![0]);
+    if feature_count_i32 - first_window_bar >= -15 {
+        loop {
+            let start = usize::try_from(start_bar - 1)
+                .map_err(|_| anyhow::anyhow!("native phrase window starts before bar one"))?;
+            let end = usize::try_from(window_end)
+                .map_err(|_| anyhow::anyhow!("native phrase window end is negative"))?;
+            if start >= end || end > feature_count {
+                bail!("native phrase judge produced an invalid feature window");
+            }
+            for (family, candidates) in feature_families.iter().zip(&mut family_candidates) {
+                candidates.extend(judge_native_phrase_change_window_unchecked(
+                    &family.normalized[start..end],
+                    &family.symmetric_ratio[start..end],
+                    &family.directional_ratio[start..end],
+                    start_bar,
+                )?);
+            }
+            if feature_count_i32 - window_end < 10 {
+                break;
+            }
+            window_end = window_end.saturating_add(16).min(feature_count_i32 - 1);
+            start_bar = start_bar
+                .checked_add(16)
+                .ok_or_else(|| anyhow::anyhow!("native phrase window start overflow"))?;
+        }
+    }
+    if genre == 1 {
+        family_candidates[0] = vec![0];
+        family_candidates[2] = vec![0];
+    }
+
+    let mut merged = family_candidates
+        .into_iter()
+        .flatten()
+        .filter(|candidate| *candidate > 0)
+        .collect::<Vec<_>>();
+    merged.sort_unstable();
+    merged.dedup();
+    output.extend(merged);
+    collapse_native_consecutive_runs(&mut output);
+    if output.first() != Some(&1) {
+        output.insert(0, 1);
+    }
+
+    let scores = output
+        .iter()
+        .map(|candidate| {
+            native_mood_23_candidate_score(feature_families, *candidate)
+                .ok_or_else(|| anyhow::anyhow!("native phrase candidate is outside its features"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    suppress_native_adjacent_candidates(&mut output, &scores, protected_bar);
+    output
+        .into_iter()
+        .map(|bar| {
+            bar.checked_mul(4)
+                .and_then(|beat| beat.checked_add(feature_origin))
+                .and_then(|beat| beat.checked_sub(4))
+                .ok_or_else(|| anyhow::anyhow!("native phrase beat position overflow"))
+        })
+        .collect()
+}
+
+fn validate_native_phrase_change_window(
+    primary: &[f64],
+    secondary: &[f64],
+    tertiary: &[f64],
+    start_bar: i32,
+) -> Result<()> {
     let value_count = primary.len();
     if value_count < 10 {
         bail!("native phrase change judge requires at least ten values");
@@ -493,7 +631,16 @@ pub fn judge_native_phrase_change_window(
     if start_bar <= 0 {
         bail!("native phrase change judge requires a positive one-based start bar");
     }
+    Ok(())
+}
 
+fn judge_native_phrase_change_window_unchecked(
+    primary: &[f64],
+    secondary: &[f64],
+    tertiary: &[f64],
+    start_bar: i32,
+) -> Result<Vec<i32>> {
+    let value_count = primary.len();
     let ranked_count = value_count - 6;
     let mut average = secondary[3..value_count - 3].iter().sum::<f64>() / ranked_count as f64;
     if average == 0.0 {
@@ -617,6 +764,127 @@ pub fn judge_native_phrase_change_window(
     }
     slots.drain(..rejected_prefix);
     Ok(slots)
+}
+
+fn native_phrase_beat_to_bar(beat: i32, feature_origin: i32) -> Result<i32> {
+    let relative = beat
+        .checked_sub(feature_origin)
+        .ok_or_else(|| anyhow::anyhow!("native phrase beat offset overflow"))?;
+    Ok((f64::from(relative) * 0.25 + 1.5).trunc() as i32)
+}
+
+fn native_initial_phrase_bars(
+    input_candidates: &[i32],
+    feature_origin: i32,
+    feature_count: i32,
+    protected_bar: i32,
+) -> Result<Vec<i32>> {
+    let mut sorted = input_candidates
+        .iter()
+        .map(|candidate| {
+            native_phrase_beat_to_bar(*candidate, feature_origin)
+                .map(|bar| if bar > feature_count { 0 } else { bar })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sorted.sort_unstable();
+    let mut candidates = sorted.clone();
+    for index in 0..sorted.len().saturating_sub(1) {
+        if sorted[index] == sorted[index + 1] {
+            candidates[index] = 0;
+        }
+    }
+    candidates.sort_unstable();
+
+    let mut zero_budget = 4;
+    while candidates.first().is_some_and(|candidate| *candidate <= 0) {
+        candidates.remove(0);
+        zero_budget -= 1;
+        if zero_budget == 0 {
+            candidates = vec![0];
+            break;
+        }
+    }
+    if candidates.is_empty() || candidates.iter().copied().sum::<i32>() == 0 {
+        candidates = vec![0];
+    }
+    if zero_budget >= 2
+        && candidates
+            .first()
+            .is_some_and(|candidate| protected_bar - candidate == 1)
+    {
+        candidates.remove(0);
+    }
+    if candidates.is_empty() {
+        candidates.push(0);
+    }
+    Ok(candidates)
+}
+
+fn collapse_native_consecutive_runs(candidates: &mut Vec<i32>) {
+    let original = candidates.clone();
+    for index in 0..original.len().saturating_sub(1) {
+        if original[index] != 0 && original[index].checked_add(1) == Some(original[index + 1]) {
+            candidates[index] = 0;
+        }
+    }
+    candidates.retain(|candidate| *candidate > 0);
+    candidates.sort_unstable();
+}
+
+fn native_mood_23_candidate_score(
+    feature_families: &[NativePhraseChangeFeatures; 3],
+    candidate: i32,
+) -> Option<f64> {
+    let index = usize::try_from(candidate.checked_sub(1)?).ok()?;
+    let middle = feature_families[1].symmetric_ratio.get(index)?;
+    let first = feature_families[0].symmetric_ratio.get(index)?;
+    let third = feature_families[2].symmetric_ratio.get(index)?;
+    let mut score = (middle + first) * 1.05 + third * 0.9;
+    if candidate > 2 {
+        score += feature_families[1]
+            .symmetric_ratio
+            .get(index.checked_sub(1)?)?;
+        score *= 0.25;
+    } else {
+        score /= 3.0;
+        if candidate == 1 {
+            score = 0.0;
+        }
+    }
+    Some(score)
+}
+
+fn suppress_native_adjacent_candidates(
+    candidates: &mut Vec<i32>,
+    scores: &[f64],
+    protected_bar: i32,
+) {
+    if candidates.len() < 3 {
+        return;
+    }
+    let mut keep = candidates.clone();
+    for index in 1..candidates.len() - 1 {
+        let current_score = native_nonzero(scores[index]);
+        let next_score = native_nonzero(scores[index + 1]);
+        let ratio = (next_score / current_score).max(current_score / next_score);
+        if ratio < 1.07 || candidates[index + 1] - candidates[index] > 3 {
+            continue;
+        }
+        let loser = if next_score > current_score {
+            index
+        } else {
+            index + 1
+        };
+        let loser_bar = keep[loser];
+        if loser_bar != 5 && loser_bar != 9 && loser_bar != protected_bar && scores[loser] < 1.6 {
+            keep[loser] = 0;
+        }
+    }
+    *candidates = candidates
+        .iter()
+        .zip(keep)
+        .filter_map(|(candidate, keep)| (keep != 0).then_some(*candidate))
+        .collect();
 }
 
 fn native_nonzero(value: f64) -> f64 {
@@ -1225,6 +1493,46 @@ mod tests {
         assert_eq!(
             judge_native_phrase_change_window(&features, 49).expect("judge"),
             [0]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_initial_candidates_match_duplicate_cleanup() {
+        assert_eq!(
+            native_initial_phrase_bars(&[17, 17, 17, 13], 1, 157, 5).expect("initial candidates"),
+            [5]
+        );
+    }
+
+    #[test]
+    fn native_mood_23_merge_keeps_last_bar_in_consecutive_runs() {
+        let mut candidates = vec![1, 5, 6, 7, 10, 11];
+        collapse_native_consecutive_runs(&mut candidates);
+        assert_eq!(candidates, [1, 7, 11]);
+    }
+
+    #[test]
+    fn native_mood_23_score_filter_honors_fixed_bar_protection() {
+        let mut candidates = vec![1, 5, 7, 9];
+        suppress_native_adjacent_candidates(&mut candidates, &[0.0, 1.0, 2.0, 0.5], 20);
+        assert_eq!(candidates, [1, 5, 7, 9]);
+
+        let mut candidates = vec![1, 4, 6, 8];
+        suppress_native_adjacent_candidates(&mut candidates, &[0.0, 1.0, 2.0, 0.5], 20);
+        assert_eq!(candidates, [1, 6]);
+    }
+
+    #[test]
+    fn native_mood_23_judge_is_deterministic_for_flat_feature_families() {
+        let features = std::array::from_fn(|_| NativePhraseChangeFeatures {
+            normalized: vec![1.0; 32],
+            symmetric_ratio: vec![1.0; 32],
+            directional_ratio: vec![1.0; 32],
+        });
+        assert_eq!(
+            judge_native_mood_23_phrase_boundaries(&features, &[4], 4, 4, 2)
+                .expect("mood-2/3 judge"),
+            [4, 16, 80]
         );
     }
 

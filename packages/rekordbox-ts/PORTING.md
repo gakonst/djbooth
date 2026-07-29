@@ -173,16 +173,21 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Ported the exact `VerseHookAnaData23` change-feature primitive. Four-beat
   averaging, guard-tail normalization, `0.003` ratio substitution,
   directional `next/current`, and symmetric `max(r, 1/r)` replay three native
-  groups exactly and the averaged group within `3.3e-16`. The primitive is
-  diagnostic pending the remaining input identities and candidate suppression;
-  no partial judge is routed into production.
+  groups exactly and the averaged group within `3.3e-16`. Producer traces map
+  the judge families to bar-aligned `lowPeak`, `lowLevel`, and `middlePeak`;
+  dynamic-grid window parity and seed construction remain gated.
 - Ported `VerseHookJudge23Sub` as
   `judge_native_phrase_change_window`. Stable ranking, adjacent-pulse
   suppression, adaptive mean thresholds, primary-maximum handling, future
   windows, absolute bar mapping, and the native three-zero cleanup limit match
-  `114/114` captured calls from two mood-2 runs and one mood-3 run. The
-  top-level three-family merge and genre insertion remain gated; production
-  still does not route through a partial native judge.
+  `114/114` captured calls from two mood-2 runs and one mood-3 run.
+- Ported the complete top-level `VerseHookJudge23` wrapper as
+  `judge_native_mood_23_phrase_boundaries`: native seed cleanup, overlapping
+  windows, three-family deduplication, consecutive-run collapse, weighted
+  score suppression, protected bars, and beat remapping. Full Rust replay from
+  the nine captured feature arrays matches mood 2 at `25/25` twice and mood 3
+  at `20/20`. `VerseHookAdd_genre23` and upstream seed generation remain the
+  production gate.
 - Added `REKORDBOX_ANALYZER_TRACE_SCOPE=phrase`. It installs only the six
   high-mood plus mood-2/3 phrase-stage hooks, leaving analyzer outputs byte-identical while
   reducing a representative trace from `32.8 MB` to `147 KB` (`223×`) and

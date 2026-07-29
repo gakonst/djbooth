@@ -67,7 +67,8 @@ pub use phrase::{
 pub use phrase_frontend::{
     NativePhraseChangeFeatures, NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
     derive_native_phrase_bar_change_features, derive_native_phrase_change_features,
-    extract_native_phrase_features, generate_phrase_multirate, judge_native_phrase_change_window,
+    extract_native_phrase_features, generate_phrase_multirate,
+    judge_native_mood_23_phrase_boundaries, judge_native_phrase_change_window,
 };
 pub use rhythm::{BeatAnalysis, analyze_beats};
 pub use sample_rate_converter::{
