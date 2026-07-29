@@ -1,10 +1,11 @@
 //! Deterministic, redistributable audio decode and analysis framing.
 
 use std::fs::File;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use symphonia::core::codecs::audio::AudioDecoderOptions;
+use symphonia::core::codecs::audio::{AudioDecoderOptions, well_known::CODEC_ID_AAC};
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
@@ -19,12 +20,13 @@ pub const DETAIL_COLUMNS_PER_SECOND: usize = 150;
 /// Samples in one detailed waveform column at [`ANALYSIS_SAMPLE_RATE`].
 pub const DETAIL_FRAME_SAMPLES: usize = ANALYSIS_SAMPLE_RATE as usize / DETAIL_COLUMNS_PER_SECOND;
 
-/// Source properties retained after decoding to mono.
+/// Source properties retained after decoding to presented mono PCM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioSourceInfo {
     sample_rate: u32,
     channels: usize,
     decoded_frames: usize,
+    reader_padding_frames: usize,
 }
 
 impl AudioSourceInfo {
@@ -38,9 +40,17 @@ impl AudioSourceInfo {
         self.channels
     }
 
-    /// Number of decoded source frames.
+    /// Number of decoded source frames after container priming is discarded.
     pub fn decoded_frames(self) -> usize {
         self.decoded_frames
+    }
+
+    /// Zero source frames included in the native reader's advertised length.
+    ///
+    /// Rekordbox's FLAC reader includes one maximum STREAMINFO block. Other
+    /// supported readers do not extend the decoded frame count.
+    pub fn reader_padding_frames(self) -> usize {
+        self.reader_padding_frames
     }
 }
 
@@ -348,6 +358,293 @@ impl<'a> Iterator for PcmFrames<'a> {
 
 impl ExactSizeIterator for PcmFrames<'_> {}
 
+// Core Audio's AAC-LC decoder contributes 512 frames of transform delay on
+// top of an ISO BMFF edit-list media start. Apple documents the resulting
+// common AAC priming total as 2,112 frames:
+// <https://developer.apple.com/documentation/audiotoolbox/audiofilepackettableinfo>.
+const CORE_AUDIO_AAC_DECODER_DELAY_FRAMES: u64 = 512;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IsoBox {
+    kind: [u8; 4],
+    payload_start: u64,
+    end: u64,
+}
+
+fn dash_aac_priming_frames(path: &Path, track_id: u32) -> Option<usize> {
+    // Symphonia 0.6 does not project fragmented DASH edit lists into packet
+    // trims. Keep this brand-specific: ordinary M4A edit-list media times use
+    // different backend semantics and already align without this adjustment.
+    let mut file = File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+    let media_time = dash_edit_media_time(&mut file, file_len, track_id)
+        .ok()
+        .flatten()?;
+    usize::try_from(media_time.checked_add(CORE_AUDIO_AAC_DECODER_DELAY_FRAMES)?).ok()
+}
+
+fn dash_edit_media_time(
+    reader: &mut (impl Read + Seek),
+    file_len: u64,
+    track_id: u32,
+) -> io::Result<Option<u64>> {
+    let mut cursor = 0;
+    let mut is_dash = false;
+    let mut moov = None;
+    while let Some(atom) = next_iso_box(reader, &mut cursor, file_len)? {
+        match &atom.kind {
+            b"ftyp" => {
+                is_dash = read_fourcc(reader, atom.payload_start, atom.end)? == Some(*b"dash");
+            }
+            b"moov" => moov = Some(atom),
+            _ => {}
+        }
+    }
+    if !is_dash {
+        return Ok(None);
+    }
+
+    let Some(moov) = moov else {
+        return Ok(None);
+    };
+    let mut cursor = moov.payload_start;
+    while let Some(atom) = next_iso_box(reader, &mut cursor, moov.end)? {
+        if atom.kind != *b"trak" || track_id_from_trak(reader, atom)? != Some(track_id) {
+            continue;
+        }
+        return edit_media_time_from_trak(reader, atom);
+    }
+    Ok(None)
+}
+
+fn track_id_from_trak(reader: &mut (impl Read + Seek), trak: IsoBox) -> io::Result<Option<u32>> {
+    let mut cursor = trak.payload_start;
+    while let Some(atom) = next_iso_box(reader, &mut cursor, trak.end)? {
+        if atom.kind != *b"tkhd" {
+            continue;
+        }
+        let Some(version) = read_u8(reader, atom.payload_start, atom.end)? else {
+            return Ok(None);
+        };
+        let offset = match version {
+            0 => 12,
+            1 => 20,
+            _ => return Ok(None),
+        };
+        let offset = atom
+            .payload_start
+            .checked_add(offset)
+            .ok_or_else(|| invalid_bmff("tkhd track ID offset overflow"))?;
+        return read_u32(reader, offset, atom.end);
+    }
+    Ok(None)
+}
+
+fn edit_media_time_from_trak(
+    reader: &mut (impl Read + Seek),
+    trak: IsoBox,
+) -> io::Result<Option<u64>> {
+    let mut cursor = trak.payload_start;
+    while let Some(atom) = next_iso_box(reader, &mut cursor, trak.end)? {
+        if atom.kind != *b"edts" {
+            continue;
+        }
+        let mut edit_cursor = atom.payload_start;
+        while let Some(edit) = next_iso_box(reader, &mut edit_cursor, atom.end)? {
+            if edit.kind == *b"elst" {
+                return positive_media_time_from_elst(reader, edit);
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn positive_media_time_from_elst(
+    reader: &mut (impl Read + Seek),
+    elst: IsoBox,
+) -> io::Result<Option<u64>> {
+    let Some(version) = read_u8(reader, elst.payload_start, elst.end)? else {
+        return Ok(None);
+    };
+    let entry_count_offset = elst
+        .payload_start
+        .checked_add(4)
+        .ok_or_else(|| invalid_bmff("elst entry count offset overflow"))?;
+    let Some(entry_count) = read_u32(reader, entry_count_offset, elst.end)? else {
+        return Ok(None);
+    };
+    let (entry_size, media_time_offset) = match version {
+        0 => (12_u64, 4_u64),
+        1 => (20_u64, 8_u64),
+        _ => return Ok(None),
+    };
+    let entries_start = elst
+        .payload_start
+        .checked_add(8)
+        .ok_or_else(|| invalid_bmff("elst entry offset overflow"))?;
+    let entries_size = u64::from(entry_count)
+        .checked_mul(entry_size)
+        .ok_or_else(|| invalid_bmff("elst entry count overflow"))?;
+    if entries_start
+        .checked_add(entries_size)
+        .is_none_or(|end| end > elst.end)
+    {
+        return Err(invalid_bmff("elst entries exceed their box"));
+    }
+
+    for index in 0..u64::from(entry_count) {
+        let entry_start = entries_start + index * entry_size;
+        let offset = entry_start
+            .checked_add(media_time_offset)
+            .ok_or_else(|| invalid_bmff("elst media time offset overflow"))?;
+        let media_time = match version {
+            0 => i64::from(read_i32(reader, offset, elst.end)?.expect("validated elst entry")),
+            1 => read_i64(reader, offset, elst.end)?.expect("validated elst entry"),
+            _ => unreachable!(),
+        };
+        if media_time > 0 {
+            return Ok(Some(media_time as u64));
+        }
+    }
+    Ok(None)
+}
+
+fn next_iso_box(
+    reader: &mut (impl Read + Seek),
+    cursor: &mut u64,
+    parent_end: u64,
+) -> io::Result<Option<IsoBox>> {
+    if *cursor == parent_end {
+        return Ok(None);
+    }
+    if *cursor > parent_end || parent_end - *cursor < 8 {
+        return Err(invalid_bmff("incomplete ISO BMFF box header"));
+    }
+
+    reader.seek(SeekFrom::Start(*cursor))?;
+    let mut header = [0_u8; 8];
+    reader.read_exact(&mut header)?;
+    let size32 = u32::from_be_bytes(header[..4].try_into().expect("four bytes"));
+    let kind = header[4..].try_into().expect("four bytes");
+    let mut header_len = 8_u64;
+    let size = match size32 {
+        0 => parent_end - *cursor,
+        1 => {
+            if parent_end - *cursor < 16 {
+                return Err(invalid_bmff("incomplete extended ISO BMFF box header"));
+            }
+            let mut extended = [0_u8; 8];
+            reader.read_exact(&mut extended)?;
+            header_len = 16;
+            u64::from_be_bytes(extended)
+        }
+        size => u64::from(size),
+    };
+    if kind == *b"uuid" {
+        header_len = header_len
+            .checked_add(16)
+            .ok_or_else(|| invalid_bmff("UUID box header overflow"))?;
+    }
+    if size < header_len {
+        return Err(invalid_bmff("ISO BMFF box is shorter than its header"));
+    }
+    let end = cursor
+        .checked_add(size)
+        .ok_or_else(|| invalid_bmff("ISO BMFF box size overflow"))?;
+    if end > parent_end {
+        return Err(invalid_bmff("ISO BMFF box exceeds its parent"));
+    }
+    let payload_start = cursor
+        .checked_add(header_len)
+        .ok_or_else(|| invalid_bmff("ISO BMFF payload offset overflow"))?;
+    *cursor = end;
+    Ok(Some(IsoBox {
+        kind,
+        payload_start,
+        end,
+    }))
+}
+
+fn read_fourcc(
+    reader: &mut (impl Read + Seek),
+    offset: u64,
+    end: u64,
+) -> io::Result<Option<[u8; 4]>> {
+    read_array::<4>(reader, offset, end)
+}
+
+fn read_u8(reader: &mut (impl Read + Seek), offset: u64, end: u64) -> io::Result<Option<u8>> {
+    Ok(read_array::<1>(reader, offset, end)?.map(|bytes| bytes[0]))
+}
+
+fn read_u32(reader: &mut (impl Read + Seek), offset: u64, end: u64) -> io::Result<Option<u32>> {
+    Ok(read_array::<4>(reader, offset, end)?.map(u32::from_be_bytes))
+}
+
+fn read_i32(reader: &mut (impl Read + Seek), offset: u64, end: u64) -> io::Result<Option<i32>> {
+    Ok(read_array::<4>(reader, offset, end)?.map(i32::from_be_bytes))
+}
+
+fn read_i64(reader: &mut (impl Read + Seek), offset: u64, end: u64) -> io::Result<Option<i64>> {
+    Ok(read_array::<8>(reader, offset, end)?.map(i64::from_be_bytes))
+}
+
+fn read_array<const N: usize>(
+    reader: &mut (impl Read + Seek),
+    offset: u64,
+    end: u64,
+) -> io::Result<Option<[u8; N]>> {
+    if offset.checked_add(N as u64).is_none_or(|value| value > end) {
+        return Ok(None);
+    }
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut bytes = [0_u8; N];
+    reader.read_exact(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+fn invalid_bmff(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn native_reader_padding_frames(reader: &mut (impl Read + Seek)) -> io::Result<usize> {
+    reader.seek(SeekFrom::Start(0))?;
+    let mut prefix = [0_u8; 12];
+    let padding = match reader.read_exact(&mut prefix) {
+        Ok(()) => flac_reader_padding_from_prefix(prefix).unwrap_or_default(),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => 0,
+        Err(error) => return Err(error),
+    };
+    reader.seek(SeekFrom::Start(0))?;
+    Ok(padding)
+}
+
+fn flac_reader_padding_from_prefix(prefix: [u8; 12]) -> Option<usize> {
+    if prefix[..4] != *b"fLaC" || prefix[4] & 0x7f != 0 {
+        return None;
+    }
+    let metadata_len = u32::from_be_bytes([0, prefix[5], prefix[6], prefix[7]]);
+    if metadata_len != 34 {
+        return None;
+    }
+    let min_block_samples = u16::from_be_bytes([prefix[8], prefix[9]]);
+    let max_block_samples = u16::from_be_bytes([prefix[10], prefix[11]]);
+    if min_block_samples < 16 || max_block_samples < min_block_samples {
+        return None;
+    }
+    Some(usize::from(max_block_samples))
+}
+
+fn trim_leading_interleaved_frames<'a>(
+    interleaved: &'a [f32],
+    channels: usize,
+    remaining_trim_frames: &mut usize,
+) -> &'a [f32] {
+    let trim_frames = (*remaining_trim_frames).min(interleaved.len() / channels);
+    *remaining_trim_frames -= trim_frames;
+    &interleaved[trim_frames * channels..]
+}
+
 /// Decode a local audio file to equal-weight mono PCM with Symphonia codecs.
 ///
 /// Decoder errors fail the operation rather than silently dropping packets. All
@@ -366,8 +663,10 @@ pub(crate) fn decode_audio_file_with_progress(
         bail!("decode progress interval must be nonzero");
     }
     let path = path.as_ref();
-    let file = File::open(path)
+    let mut file = File::open(path)
         .with_context(|| format!("failed to open audio file {}", path.display()))?;
+    let reader_padding_frames = native_reader_padding_frames(&mut file)
+        .with_context(|| format!("failed to inspect audio file {}", path.display()))?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|value| value.to_str()) {
@@ -395,6 +694,11 @@ pub(crate) fn decode_audio_file_with_progress(
         .num_frames
         .and_then(|frames| usize::try_from(frames).ok())
         .unwrap_or_default();
+    let mut remaining_leading_trim = if codec_params.codec == CODEC_ID_AAC {
+        dash_aac_priming_frames(path, track_id).unwrap_or_default()
+    } else {
+        0
+    };
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
         .context("failed to create audio decoder")?;
@@ -440,8 +744,10 @@ pub(crate) fn decode_audio_file_with_progress(
         if !interleaved.len().is_multiple_of(channels) {
             bail!("decoder returned an incomplete interleaved audio frame");
         }
-        mono.reserve(interleaved.len() / channels);
-        for frame in interleaved.chunks_exact(channels) {
+        let presented =
+            trim_leading_interleaved_frames(&interleaved, channels, &mut remaining_leading_trim);
+        mono.reserve(presented.len() / channels);
+        for frame in presented.chunks_exact(channels) {
             let sum = frame.iter().try_fold(0.0_f64, |sum, sample| {
                 if sample.is_finite() {
                     Ok(sum + f64::from(*sample))
@@ -459,6 +765,9 @@ pub(crate) fn decode_audio_file_with_progress(
 
     let sample_rate = decoded_sample_rate.context("audio decoder produced no sample buffers")?;
     let channels = decoded_channels.context("audio decoder produced no channel layout")?;
+    if remaining_leading_trim != 0 {
+        bail!("AAC priming exceeds decoded audio by {remaining_leading_trim} source frames");
+    }
     progress(sample_rate, &mono, true)?;
     let decoded_frames = mono.len();
     Ok(DecodedAudio {
@@ -466,6 +775,7 @@ pub(crate) fn decode_audio_file_with_progress(
             sample_rate,
             channels,
             decoded_frames,
+            reader_padding_frames,
         },
         // Every decoded sample was checked and clamped while mixing above.
         mono: MonoPcm {
@@ -478,6 +788,34 @@ pub(crate) fn decode_audio_file_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flac_reader_padding_is_streaminfo_maximum_block_size() {
+        let mut prefix = [0_u8; 12];
+        prefix[..4].copy_from_slice(b"fLaC");
+        prefix[4] = 0;
+        prefix[7] = 34;
+        prefix[8..10].copy_from_slice(&1_024_u16.to_be_bytes());
+        prefix[10..12].copy_from_slice(&4_096_u16.to_be_bytes());
+
+        assert_eq!(flac_reader_padding_from_prefix(prefix), Some(4_096));
+    }
+
+    #[test]
+    fn non_flac_reader_has_no_advertised_padding() {
+        assert_eq!(flac_reader_padding_from_prefix([0_u8; 12]), None);
+    }
+
+    #[test]
+    fn invalid_flac_block_range_has_no_advertised_padding() {
+        let mut prefix = [0_u8; 12];
+        prefix[..4].copy_from_slice(b"fLaC");
+        prefix[7] = 34;
+        prefix[8..10].copy_from_slice(&4_096_u16.to_be_bytes());
+        prefix[10..12].copy_from_slice(&1_024_u16.to_be_bytes());
+
+        assert_eq!(flac_reader_padding_from_prefix(prefix), None);
+    }
 
     #[test]
     fn linear_resampler_uses_integer_phase_and_rounded_length() {
@@ -513,5 +851,99 @@ mod tests {
                 .samples(),
             &[-1.0, 1.0]
         );
+    }
+
+    #[test]
+    fn dash_aac_edit_list_recovers_core_audio_priming() {
+        let mut tkhd = vec![0; 16];
+        tkhd[12..16].copy_from_slice(&7_u32.to_be_bytes());
+        let mut elst = vec![0; 20];
+        elst[4..8].copy_from_slice(&1_u32.to_be_bytes());
+        elst[8..12].copy_from_slice(&16_726_836_u32.to_be_bytes());
+        elst[12..16].copy_from_slice(&1_600_i32.to_be_bytes());
+        elst[16..18].copy_from_slice(&1_i16.to_be_bytes());
+
+        let trak = iso_box(
+            *b"trak",
+            [
+                iso_box(*b"tkhd", tkhd),
+                iso_box(*b"edts", iso_box(*b"elst", elst)),
+            ]
+            .concat(),
+        );
+        let bytes = [
+            iso_box(
+                *b"ftyp",
+                [b"dash".as_slice(), &[0; 4], b"iso6mp41"].concat(),
+            ),
+            iso_box(*b"moov", trak),
+        ]
+        .concat();
+        let mut cursor = std::io::Cursor::new(&bytes);
+
+        let media_time = dash_edit_media_time(&mut cursor, bytes.len() as u64, 7).unwrap();
+
+        assert_eq!(media_time, Some(1_600));
+        assert_eq!(
+            media_time
+                .unwrap()
+                .checked_add(CORE_AUDIO_AAC_DECODER_DELAY_FRAMES),
+            Some(2_112)
+        );
+    }
+
+    #[test]
+    fn ordinary_m4a_edit_list_does_not_enable_dash_priming() {
+        let mut tkhd = vec![0; 16];
+        tkhd[12..16].copy_from_slice(&1_u32.to_be_bytes());
+        let mut elst = vec![0; 20];
+        elst[4..8].copy_from_slice(&1_u32.to_be_bytes());
+        elst[8..12].copy_from_slice(&4_096_u32.to_be_bytes());
+        elst[12..16].copy_from_slice(&1_600_i32.to_be_bytes());
+        let trak = iso_box(
+            *b"trak",
+            [
+                iso_box(*b"tkhd", tkhd),
+                iso_box(*b"edts", iso_box(*b"elst", elst)),
+            ]
+            .concat(),
+        );
+        let bytes = [
+            iso_box(*b"ftyp", [b"M4A ".as_slice(), &[0; 4], b"isom"].concat()),
+            iso_box(*b"moov", trak),
+        ]
+        .concat();
+        let mut cursor = std::io::Cursor::new(&bytes);
+
+        assert_eq!(
+            dash_edit_media_time(&mut cursor, bytes.len() as u64, 1).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn leading_frame_trim_spans_decoder_packets_without_splitting_channels() {
+        let mut remaining = 5;
+        let first = trim_leading_interleaved_frames(&[1.0; 6], 2, &mut remaining);
+        assert!(first.is_empty());
+        assert_eq!(remaining, 2);
+
+        let second =
+            trim_leading_interleaved_frames(&[2.0, 3.0, 4.0, 5.0, 6.0, 7.0], 2, &mut remaining);
+        assert_eq!(second, &[6.0, 7.0]);
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn malformed_iso_box_fails_closed() {
+        let bytes = [0, 0, 0, 4, b'f', b't', b'y', b'p'];
+        let mut cursor = std::io::Cursor::new(bytes);
+        assert!(dash_edit_media_time(&mut cursor, bytes.len() as u64, 1).is_err());
+    }
+
+    fn iso_box(kind: [u8; 4], payload: impl AsRef<[u8]>) -> Vec<u8> {
+        let payload = payload.as_ref();
+        let size = u32::try_from(payload.len() + 8).unwrap();
+        [size.to_be_bytes().as_slice(), &kind, payload].concat()
     }
 }

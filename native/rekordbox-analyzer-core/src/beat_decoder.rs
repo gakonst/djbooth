@@ -633,19 +633,21 @@ pub fn expand_tempo_sections(
             predicted_bands.push(band);
         }
 
-        if predicted_positions.len() <= WINDOW_STEPS
-            || predicted_positions[WINDOW_STEPS] >= section_end as f64
-        {
-            bail!(
-                "tempo-section expansion requires a full {WINDOW_BEATS}-beat fit window in section {section_index}"
-            );
+        let available_steps = predicted_positions.len() - 1;
+        if available_steps < QUARTER_STEPS_PER_BEAT {
+            continue;
         }
+        let fit_step = available_steps.min(WINDOW_STEPS);
         let corrected_right = corrected_prediction(
-            predicted_positions[WINDOW_STEPS],
-            predicted_bands[WINDOW_STEPS],
+            predicted_positions[fit_step],
+            predicted_bands[fit_step],
             correction_scale,
         );
-        let first_fit = (corrected_right - corrected_anchor) / WINDOW_BEATS as f64;
+        let first_fit = if fit_step == WINDOW_STEPS {
+            (corrected_right - corrected_anchor) / WINDOW_BEATS as f64
+        } else {
+            (corrected_right - corrected_anchor) * QUARTER_STEPS_PER_BEAT as f64 / fit_step as f64
+        };
         if !first_fit.is_finite() || first_fit <= 0.0 {
             bail!("tempo-section expansion produced an invalid initial fit");
         }
@@ -957,17 +959,6 @@ fn validate_phase_inputs(
         }
         if section.anchor_frame > total_frames {
             bail!("tempo-section phase adjustment has an anchor beyond the track");
-        }
-        let source_index =
-            hypotheses.partition_point(|hypothesis| hypothesis.peak_frame < section.anchor_frame);
-        if hypotheses
-            .get(source_index)
-            .is_none_or(|hypothesis| hypothesis.peak_frame != section.anchor_frame)
-        {
-            bail!(
-                "tempo-section phase anchor {} has no source hypothesis",
-                section.anchor_frame
-            );
         }
     }
     if !sections.is_empty() && hypotheses.is_empty() {
@@ -1306,7 +1297,7 @@ mod tests {
     fn discontinuous_pruning_backfills_only_compatible_generations() {
         let hypotheses = [
             hypothesis(100, (2 << 8) | 3, 500.0),
-            hypothesis(200, (0 << 8) | 3, 500.0),
+            hypothesis(200, 3, 500.0),
             hypothesis(300, (1 << 8) | 3, 700.0),
             hypothesis(400, (3 << 8) | 3, 500.0),
             hypothesis(500, (4 << 8) | 3, 500.0),
@@ -1648,6 +1639,59 @@ mod tests {
                 pulse_marker: 16,
                 period_offset: 0,
             }]
+        );
+    }
+
+    #[test]
+    fn phase_adjustment_accepts_an_anchor_removed_by_near_suppression() {
+        let hypotheses = [
+            hypothesis(120, 0x0103, 500.0),
+            hypothesis(620, 0x0203, 500.0),
+            hypothesis(1_120, 0x0303, 500.0),
+            hypothesis(1_620, 0x0403, 500.0),
+            hypothesis(2_120, 0x0503, 500.0),
+        ];
+        let sections = [RefinedTempoSection {
+            anchor_frame: 100,
+            period_ms: 500.0,
+            generation: 4,
+            band: 0,
+        }];
+
+        let result = adjust_tempo_section_phases(&hypotheses, &sections, 1_000, 2_620).unwrap();
+
+        assert_eq!(
+            result,
+            vec![AdjustedTempoSection {
+                origin_frame: 120,
+                period_ms: 500.0,
+                pulse_marker: 16,
+                period_offset: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn expansion_fits_a_terminal_section_shorter_than_32_beats() {
+        let hypotheses = (0..=5)
+            .map(|index| hypothesis(100 + index * 2_000, index as u32, 500.0))
+            .collect::<Vec<_>>();
+        let sections = [AdjustedTempoSection {
+            origin_frame: 100,
+            period_ms: 500.0,
+            pulse_marker: 16,
+            period_offset: 0,
+        }];
+
+        let expanded = expand_tempo_sections(&hypotheses, &sections, 1_000, 10_100).unwrap();
+
+        assert_eq!(expanded.len(), 21);
+        assert_eq!(expanded.first().unwrap().position_frame, 70);
+        assert_eq!(expanded.last().unwrap().position_frame, 10_070);
+        assert!(
+            expanded
+                .iter()
+                .all(|beat| (beat.period_ms - 500.0).abs() < f32::EPSILON)
         );
     }
 

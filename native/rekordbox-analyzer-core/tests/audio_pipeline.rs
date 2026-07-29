@@ -4,7 +4,8 @@ use std::process::Command;
 use rekordbox_analyzer_core::{
     ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
     DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, WaveformData,
-    analyze_to_directory_with_options, compare_beat_grids, compare_waveforms, decode_audio_file,
+    analyze_to_directory_with_options, build_flac_pvb2, compare_beat_grids, compare_waveforms,
+    decode_audio_file,
 };
 use tempfile::tempdir;
 
@@ -251,6 +252,31 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
             .contains("exists but is not a regular file")
     );
     assert!(directory_output.is_dir());
+}
+
+#[test]
+fn configured_read_only_flac_fixture_matches_reference_pvb2() {
+    let (Ok(audio_path), Ok(reference_ext_path)) = (
+        std::env::var("REKORDBOX_FLAC_PVB2_FIXTURE"),
+        std::env::var("REKORDBOX_FLAC_PVB2_REFERENCE_EXT"),
+    ) else {
+        return;
+    };
+    let audio = std::fs::read(&audio_path).expect("read configured FLAC fixture");
+    let generated = build_flac_pvb2(&audio).expect("build fixture PVB2");
+    let reference_file =
+        AnlzFile::read(Path::new(&reference_ext_path)).expect("read configured reference EXT");
+    let reference = reference_file
+        .tags()
+        .iter()
+        .find(|tag| tag.kind() == *b"PVB2")
+        .expect("reference EXT PVB2");
+    assert_eq!(generated.raw(), reference.raw());
+    assert_eq!(
+        build_flac_pvb2(&audio).expect("rebuild fixture PVB2").raw(),
+        generated.raw(),
+        "configured FLAC indexing must be deterministic"
+    );
 }
 
 #[test]

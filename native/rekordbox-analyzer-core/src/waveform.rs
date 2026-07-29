@@ -4,15 +4,18 @@
 //! splits and quantizers are clean-room implementations derived from public
 //! format documentation, synthetic probes, and static differential analysis.
 
+#[cfg(all(target_arch = "aarch64", test))]
+use core::arch::aarch64::vuzp1q_f64;
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::{
-    float64x2_t, vabsq_f64, vaddq_f64, vdupq_n_f64, vextq_f64, vld1q_f64, vmaxq_f64, vmulq_f64,
-    vst1q_f64, vsubq_f64, vuzp1q_f64, vuzp2q_f64,
+    float64x2_t, vabsq_f64, vaddq_f64, vdupq_n_f64, vextq_f64, vgetq_lane_f64, vld1q_f64,
+    vmaxq_f64, vmulq_f64, vst1q_f64, vsubq_f64, vuzp2q_f64,
 };
 
 use anyhow::{Result, bail};
 #[cfg(target_arch = "aarch64")]
 use rayon::prelude::*;
+use std::collections::VecDeque;
 
 use crate::anlz::{AnlzTag, CountedWaveform, build_waveform_tag};
 use crate::audio::{ANALYSIS_SAMPLE_RATE, DETAIL_FRAME_SAMPLES, MonoPcm};
@@ -40,14 +43,10 @@ const THREE_BAND_MID_DECAY: f64 = 0.98;
 const THREE_BAND_HIGH_DECAY: f64 = 0.97;
 const THREE_BAND_LINEAR_DIVISOR: f64 = 256.0;
 const THREE_BAND_COSINE_SCALE: f64 = 64.0;
-// PWV4 and PWV5 are distinct representations. PWV4 stores absolute linear
-// band peaks; PWV5 stores amplitude-invariant spectral hue beside a separate
-// height. These gains are bounded fits against pure-tone and matched-PCM
-// Rekordbox 6.8.2 outputs.
-const COLOR_DETAIL_RED_GAIN: f64 = 1.18;
-const COLOR_DETAIL_GREEN_GAIN: f64 = 0.95;
-const COLOR_DETAIL_BLUE_GAIN: f64 = 0.95;
-const COLOR_DETAIL_BLUE_EXPONENT: f64 = 0.60;
+const LEGACY_RAW_RATE: usize = 1_000;
+const LEGACY_RED_RADIUS: usize = 12;
+const LEGACY_GREEN_RADIUS: usize = 1;
+const COLOR_HEIGHT_SCALE: f64 = 2.932_745_123_302_746_6e-8;
 const COLOR_PREVIEW_GREEN_GAIN: f64 = 0.87;
 const COLOR_PREVIEW_BLUE_GAIN: f64 = 0.513;
 #[cfg(target_arch = "aarch64")]
@@ -90,10 +89,11 @@ impl WaveformData {
         }
 
         let detail_features = extract_detail_features(pcm);
+        let legacy = LegacyWaveformAccumulator::from_pcm(pcm).finish(detail_features.len());
         let three_band = source
             .unwrap_or_else(|| ThreeBandAccumulator::from_pcm(pcm).into_source())
             .finish(detail_features.len());
-        Ok(pack_waveforms(&detail_features, three_band))
+        Ok(pack_waveforms(&detail_features, legacy, three_band))
     }
 
     /// Packed 400-byte `PWAV` entries.
@@ -199,15 +199,21 @@ impl WaveformData {
 
 fn pack_waveforms(
     detail_features: &[FrameFeatures],
+    legacy: LegacyWaveforms,
     three_band: ThreeBandWaveforms,
 ) -> WaveformData {
-    let detail_peak = detail_features
-        .iter()
-        .map(|feature| feature.peak)
-        .fold(0.0_f64, f64::max);
     let monochrome_preview_features = reduce_features(detail_features, MONOCHROME_PREVIEW_COLUMNS);
     let tiny_preview_features = reduce_features(detail_features, TINY_PREVIEW_COLUMNS);
     let color_preview_features = reduce_features(detail_features, COLOR_PREVIEW_COLUMNS);
+    let mut color_preview = legacy.preview;
+    // The signed native dominance weighting of the legacy green/blue lanes is
+    // not yet parity-closed. Preserve the measured fitted lanes while using
+    // the native reducer for source polarity, bottom, and red.
+    for (index, feature) in color_preview_features.iter().enumerate() {
+        let fitted = pack_color_preview(feature);
+        color_preview[index * 6 + 4] = fitted[4];
+        color_preview[index * 6 + 5] = fitted[5];
+    }
     WaveformData {
         monochrome_preview: monochrome_preview_features
             .iter()
@@ -218,14 +224,8 @@ fn pack_waveforms(
             .map(|feature| waveform_height(feature.peak, 15))
             .collect(),
         monochrome_detail: detail_features.iter().map(pack_monochrome).collect(),
-        color_preview: color_preview_features
-            .iter()
-            .flat_map(pack_color_preview)
-            .collect(),
-        color_detail: detail_features
-            .iter()
-            .flat_map(|feature| pack_color_detail(feature, detail_peak).to_be_bytes())
-            .collect(),
+        color_preview,
+        color_detail: legacy.detail,
         three_band_preview: three_band.preview,
         three_band_detail: three_band.detail,
         three_band_normalize: three_band.normalize,
@@ -290,6 +290,7 @@ impl Biquad {
         }
     }
 
+    #[cfg(any(not(target_arch = "aarch64"), test))]
     #[inline(always)]
     fn process(&mut self, sample: f64) -> f64 {
         let output = self.b0 * sample + self.z1;
@@ -297,6 +298,472 @@ impl Biquad {
         self.z2 = self.b2 * sample - self.a2 * output;
         output
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyRawWaveform {
+    source_positive: i16,
+    source_negative: i16,
+    bottom: u16,
+    whole_red: u16,
+    whole_green: u16,
+    whole_blue: u16,
+    color_red: u16,
+    color_green: u16,
+    color_blue: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LegacyWaveforms {
+    preview: Vec<u8>,
+    detail: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyBucket {
+    source_positive: f64,
+    source_negative: f64,
+    bottom: f64,
+    whole_bands: [f64; 3],
+    whole_dominance: [usize; 3],
+    color_bands: [f64; 3],
+    sample_count: usize,
+}
+
+impl Default for LegacyBucket {
+    fn default() -> Self {
+        Self {
+            source_positive: f64::NEG_INFINITY,
+            source_negative: f64::INFINITY,
+            bottom: 0.0,
+            whole_bands: [0.0; 3],
+            whole_dominance: [0; 3],
+            color_bands: [0.0; 3],
+            sample_count: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyFilterOutput {
+    bottom: f64,
+    whole: [f64; 3],
+    color: [f64; 3],
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+struct ScalarLegacyFilterBank {
+    whole_bottom: Biquad,
+    whole_red_one: Biquad,
+    whole_red_two: Biquad,
+    whole_green_high_one: Biquad,
+    whole_green_high_two: Biquad,
+    whole_green_low_one: Biquad,
+    whole_green_low_two: Biquad,
+    whole_blue_one: Biquad,
+    whole_blue_two: Biquad,
+    color_red: Biquad,
+    color_green_high: Biquad,
+    color_green_low: Biquad,
+    color_blue: Biquad,
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarLegacyFilterBank {
+    fn new() -> Self {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        let low = |cutoff| Biquad::new_at(cutoff, q, false, ANALYSIS_SAMPLE_RATE);
+        let high = |cutoff| Biquad::new_at(cutoff, q, true, ANALYSIS_SAMPLE_RATE);
+        Self {
+            whole_bottom: low(400.0),
+            whole_red_one: low(200.0),
+            whole_red_two: low(200.0),
+            whole_green_high_one: high(200.0),
+            whole_green_high_two: high(200.0),
+            whole_green_low_one: low(2_000.0),
+            whole_green_low_two: low(2_000.0),
+            whole_blue_one: high(2_000.0),
+            whole_blue_two: high(2_000.0),
+            color_red: low(100.0),
+            color_green_high: high(300.0),
+            color_green_low: low(3_000.0),
+            color_blue: high(1_500.0),
+        }
+    }
+
+    fn process(&mut self, sample: f64) -> LegacyFilterOutput {
+        let bottom = self.whole_bottom.process(sample);
+        let whole_red = self
+            .whole_red_two
+            .process(self.whole_red_one.process(sample));
+        let whole_green = self.whole_green_low_two.process(
+            self.whole_green_low_one.process(
+                self.whole_green_high_two
+                    .process(self.whole_green_high_one.process(sample)),
+            ),
+        );
+        let whole_blue = self
+            .whole_blue_two
+            .process(self.whole_blue_one.process(sample));
+        let color_red = self.color_red.process(sample);
+        let color_green = self
+            .color_green_low
+            .process(self.color_green_high.process(sample));
+        let color_blue = self.color_blue.process(sample);
+        LegacyFilterOutput {
+            bottom,
+            whole: [whole_red, whole_green, whole_blue],
+            color: [color_red, color_green, color_blue],
+        }
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type LegacyFilterBank = ScalarLegacyFilterBank;
+
+struct LegacyWaveformAccumulator {
+    filters: LegacyFilterBank,
+    raw: Vec<LegacyRawWaveform>,
+    bucket: LegacyBucket,
+    sample_count: usize,
+    next_boundary: usize,
+}
+
+impl LegacyWaveformAccumulator {
+    fn new() -> Self {
+        Self {
+            filters: LegacyFilterBank::new(),
+            raw: Vec::new(),
+            bucket: LegacyBucket::default(),
+            sample_count: 0,
+            next_boundary: usize::try_from(ANALYSIS_SAMPLE_RATE)
+                .expect("sample rate fits waveform arithmetic")
+                .div_ceil(LEGACY_RAW_RATE),
+        }
+    }
+
+    fn from_pcm(pcm: &MonoPcm) -> Self {
+        let mut accumulator = Self::new();
+        accumulator.push(pcm.samples());
+        accumulator
+    }
+
+    fn push(&mut self, samples: &[f32]) {
+        for &sample in samples {
+            let sample = f64::from(sample);
+            let filtered = self.filters.process(sample);
+
+            self.bucket.source_positive = self.bucket.source_positive.max(sample);
+            self.bucket.source_negative = self.bucket.source_negative.min(sample);
+            self.bucket.bottom = self.bucket.bottom.max(filtered.bottom.abs());
+            for (peak, value) in self.bucket.whole_bands.iter_mut().zip(filtered.whole) {
+                *peak = peak.max(value.abs());
+            }
+            let dominant = if filtered.whole[0] >= filtered.whole[1]
+                && filtered.whole[0] >= filtered.whole[2]
+            {
+                0
+            } else if filtered.whole[2] >= filtered.whole[1] {
+                2
+            } else {
+                1
+            };
+            self.bucket.whole_dominance[dominant] += 1;
+            for (peak, value) in self.bucket.color_bands.iter_mut().zip(filtered.color) {
+                *peak = peak.max(value.abs());
+            }
+            self.bucket.sample_count += 1;
+            self.sample_count += 1;
+            if self.sample_count == self.next_boundary {
+                self.finish_bucket();
+            }
+        }
+    }
+
+    fn finish(mut self, detail_count: usize) -> LegacyWaveforms {
+        if self.bucket.sample_count != 0 {
+            self.finish_bucket();
+        }
+        build_legacy_waveforms(&self.raw, detail_count)
+    }
+
+    fn finish_bucket(&mut self) {
+        let count = self.bucket.sample_count as f64;
+        let whole: [u16; 3] = std::array::from_fn(|band| {
+            quantize_raw_band(
+                self.bucket.whole_bands[band] * self.bucket.whole_dominance[band] as f64 / count,
+            )
+        });
+        self.raw.push(LegacyRawWaveform {
+            source_positive: quantize_signed_sample(self.bucket.source_positive),
+            source_negative: quantize_signed_sample(self.bucket.source_negative),
+            bottom: quantize_raw_band(self.bucket.bottom),
+            whole_red: whole[0],
+            whole_green: whole[1],
+            whole_blue: whole[2],
+            color_red: quantize_raw_band(self.bucket.color_bands[0]),
+            color_green: quantize_raw_band(self.bucket.color_bands[1]),
+            color_blue: quantize_raw_band(self.bucket.color_bands[2]),
+        });
+        self.bucket = LegacyBucket::default();
+        self.next_boundary = (self.raw.len() + 1)
+            .checked_mul(
+                usize::try_from(ANALYSIS_SAMPLE_RATE)
+                    .expect("sample rate fits waveform arithmetic"),
+            )
+            .expect("legacy waveform boundary overflow")
+            .div_ceil(LEGACY_RAW_RATE);
+    }
+}
+
+fn quantize_signed_sample(sample: f64) -> i16 {
+    if sample >= 1.0 {
+        i16::MAX
+    } else if sample < -1.0 {
+        i16::MIN
+    } else {
+        (sample * 32_768.0) as i16
+    }
+}
+
+fn centered_max(values: &[u16], radius: usize) -> Vec<u16> {
+    let mut result = Vec::with_capacity(values.len());
+    let mut candidates = VecDeque::with_capacity(radius * 2 + 1);
+    let mut added = 0usize;
+    for index in 0..values.len() {
+        let end = (index + radius + 1).min(values.len());
+        while added < end {
+            while candidates
+                .back()
+                .is_some_and(|&candidate| values[candidate] <= values[added])
+            {
+                candidates.pop_back();
+            }
+            candidates.push_back(added);
+            added += 1;
+        }
+        let start = index.saturating_sub(radius);
+        while candidates
+            .front()
+            .is_some_and(|&candidate| candidate < start)
+        {
+            candidates.pop_front();
+        }
+        result.push(
+            candidates
+                .front()
+                .map(|&candidate| values[candidate])
+                .unwrap_or(0),
+        );
+    }
+    result
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyPreviewReduction {
+    source_positive: i16,
+    source_negative: i16,
+    bottom: u16,
+    red: u16,
+    green: u16,
+    blue: u16,
+}
+
+impl Default for LegacyPreviewReduction {
+    fn default() -> Self {
+        Self {
+            source_positive: i16::MIN,
+            source_negative: i16::MAX,
+            bottom: 0,
+            red: 0,
+            green: 0,
+            blue: 0,
+        }
+    }
+}
+
+impl LegacyPreviewReduction {
+    fn add(&mut self, raw: LegacyRawWaveform, red: u16, green: u16) {
+        self.source_positive = self.source_positive.max(raw.source_positive);
+        self.source_negative = self.source_negative.min(raw.source_negative);
+        self.bottom = self.bottom.max(raw.bottom);
+        self.red = self.red.max(red);
+        self.green = self.green.max(green);
+        self.blue = self.blue.max(raw.whole_blue);
+    }
+
+    fn packed(self) -> [u8; 6] {
+        [
+            legacy_preview_byte(i32::from(self.source_positive)),
+            legacy_preview_byte(i32::from(self.source_negative)),
+            legacy_preview_byte(i32::from(self.bottom)),
+            legacy_preview_byte(i32::from(self.red)),
+            legacy_preview_byte(i32::from(self.green)),
+            legacy_preview_byte(i32::from(self.blue)),
+        ]
+    }
+}
+
+fn legacy_preview_byte(value: i32) -> u8 {
+    ((value as f32 * (1.0 / 256.0)) as i32) as u8
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyColorReduction {
+    source_positive: i16,
+    source_negative: i16,
+    red: u16,
+    green: u16,
+    blue: u16,
+}
+
+impl Default for LegacyColorReduction {
+    fn default() -> Self {
+        Self {
+            source_positive: i16::MIN,
+            source_negative: i16::MAX,
+            red: 0,
+            green: 0,
+            blue: 0,
+        }
+    }
+}
+
+impl LegacyColorReduction {
+    fn add(&mut self, raw: LegacyRawWaveform, red: u16, green: u16) {
+        self.source_positive = self.source_positive.max(raw.source_positive);
+        self.source_negative = self.source_negative.min(raw.source_negative);
+        self.red = self.red.max(red);
+        self.green = self.green.max(green);
+        self.blue = self.blue.max(raw.color_blue);
+    }
+
+    fn peak(self) -> i32 {
+        i32::from(self.source_positive)
+            .abs()
+            .max(i32::from(self.source_negative).abs())
+    }
+}
+
+fn build_legacy_waveforms(raw: &[LegacyRawWaveform], detail_count: usize) -> LegacyWaveforms {
+    if raw.is_empty() {
+        return LegacyWaveforms {
+            preview: vec![0; COLOR_PREVIEW_COLUMNS * 6],
+            detail: vec![0; detail_count * 2],
+        };
+    }
+
+    let whole_red = centered_max(
+        &raw.iter().map(|entry| entry.whole_red).collect::<Vec<_>>(),
+        LEGACY_RED_RADIUS,
+    );
+    let whole_green = centered_max(
+        &raw.iter()
+            .map(|entry| entry.whole_green)
+            .collect::<Vec<_>>(),
+        LEGACY_GREEN_RADIUS,
+    );
+    let color_red = centered_max(
+        &raw.iter().map(|entry| entry.color_red).collect::<Vec<_>>(),
+        LEGACY_RED_RADIUS,
+    );
+    let color_green = centered_max(
+        &raw.iter()
+            .map(|entry| entry.color_green)
+            .collect::<Vec<_>>(),
+        LEGACY_GREEN_RADIUS,
+    );
+
+    let mut preview = Vec::with_capacity(COLOR_PREVIEW_COLUMNS * 6);
+    let mut preview_phase = 0usize;
+    let mut preview_reduction = LegacyPreviewReduction::default();
+    for (index, &entry) in raw.iter().enumerate() {
+        preview_reduction.add(entry, whole_red[index], whole_green[index]);
+        preview_phase += COLOR_PREVIEW_COLUMNS;
+        if preview_phase >= raw.len() {
+            let packed = preview_reduction.packed();
+            while preview_phase >= raw.len() && preview.len() / 6 < COLOR_PREVIEW_COLUMNS {
+                preview.extend_from_slice(&packed);
+                preview_phase -= raw.len();
+            }
+            preview_reduction = LegacyPreviewReduction::default();
+        }
+    }
+
+    let mut reduced = Vec::with_capacity(detail_count);
+    let mut detail_phase = 0usize;
+    let mut detail_reduction = LegacyColorReduction::default();
+    for (index, &entry) in raw.iter().enumerate() {
+        detail_reduction.add(entry, color_red[index], color_green[index]);
+        detail_phase += detail_count;
+        if detail_phase >= raw.len() {
+            while detail_phase >= raw.len() && reduced.len() < detail_count {
+                reduced.push(detail_reduction);
+                detail_phase -= raw.len();
+            }
+            detail_reduction = LegacyColorReduction::default();
+        }
+    }
+
+    let global_peak = raw
+        .iter()
+        .map(|entry| {
+            i32::from(entry.source_positive)
+                .abs()
+                .max(i32::from(entry.source_negative).abs())
+        })
+        .max()
+        .unwrap_or(0);
+    let mut detail = Vec::with_capacity(detail_count * 2);
+    for entry in reduced {
+        let [red, green, blue] = native_color(entry.red, entry.green, entry.blue);
+        let height = if global_peak > 0 {
+            let normalized = (f64::from(entry.peak()) * 32_767.0 / f64::from(global_peak)) as i32;
+            ((f64::from(normalized * normalized) * COLOR_HEIGHT_SCALE) as u8) & 0x1f
+        } else {
+            0
+        };
+        let packed = (u16::from(red) << 13)
+            | (u16::from(green) << 10)
+            | (u16::from(blue) << 7)
+            | (u16::from(height) << 2);
+        detail.extend_from_slice(&packed.to_be_bytes());
+    }
+
+    LegacyWaveforms { preview, detail }
+}
+
+fn native_color(red: u16, green: u16, blue: u16) -> [u8; 3] {
+    let red = red as f32;
+    let green = green as f32;
+    let blue = blue as f32;
+    let maximum = red.max(green).max(blue);
+    let (mut red, mut green, mut blue) = if maximum == 0.0 {
+        (255.0, 255.0, 255.0)
+    } else {
+        let scale = 255.0 / maximum;
+        let mut red = red * scale;
+        let mut green = green * scale;
+        let mut blue = (blue * scale).clamp(0.0, 255.0);
+        if blue < 64.0 {
+            let correction = red * green * (1.0 / 765.0) * (1.0 - blue / 64.0);
+            red -= correction;
+            green -= correction;
+        }
+        green *= 1.0 - 0.002_343_75 * blue.max(red).min(128.0);
+        blue *= 1.3;
+        (red, green, blue)
+    };
+    red = red.clamp(0.0, 255.0);
+    green = green.clamp(0.0, 255.0);
+    blue = blue.clamp(0.0, 255.0);
+    let bytes = [red as u8, green as u8, blue as u8];
+    let mut levels = bytes.map(|value| value >> 5);
+    if levels == [0; 3] {
+        let maximum = bytes.into_iter().max().unwrap_or(0);
+        levels = bytes.map(|value| u8::from(value == maximum));
+    }
+    levels
 }
 
 #[derive(Debug, Clone)]
@@ -337,7 +804,7 @@ impl<const STAGES: usize> Butterworth<STAGES> {
     }
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(all(test, target_arch = "aarch64"))]
 #[derive(Debug, Clone)]
 struct ScalarColorBandSplitter {
     preview_bottom: Butterworth<1>,
@@ -351,7 +818,7 @@ struct ScalarColorBandSplitter {
     detail_blue: Butterworth<2>,
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(all(test, target_arch = "aarch64"))]
 impl Default for ScalarColorBandSplitter {
     fn default() -> Self {
         Self {
@@ -368,7 +835,7 @@ impl Default for ScalarColorBandSplitter {
     }
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(all(test, target_arch = "aarch64"))]
 #[derive(Debug, Clone, Copy)]
 struct ColorBands {
     preview_bottom: f64,
@@ -380,7 +847,7 @@ struct ColorBands {
     detail_blue: f64,
 }
 
-#[cfg(any(not(target_arch = "aarch64"), test))]
+#[cfg(all(test, target_arch = "aarch64"))]
 impl ScalarColorBandSplitter {
     fn process(&mut self, sample: f64) -> ColorBands {
         let preview_green = self
@@ -401,8 +868,33 @@ impl ScalarColorBandSplitter {
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
-type ColorBandSplitter = ScalarColorBandSplitter;
+#[cfg(any(not(target_arch = "aarch64"), test))]
+struct ScalarFittedPreviewSplitter {
+    green_high: Butterworth<2>,
+    green_low: Butterworth<1>,
+    blue: Butterworth<3>,
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl Default for ScalarFittedPreviewSplitter {
+    fn default() -> Self {
+        Self {
+            green_high: Butterworth::high_pass(230.0),
+            green_low: Butterworth::low_pass(900.0),
+            blue: Butterworth::high_pass(2_500.0),
+        }
+    }
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarFittedPreviewSplitter {
+    fn process(&mut self, sample: f64) -> [f64; 2] {
+        [
+            self.green_low.process(self.green_high.process(sample)) * COLOR_PREVIEW_GREEN_GAIN,
+            self.blue.process(sample) * COLOR_PREVIEW_BLUE_GAIN,
+        ]
+    }
+}
 
 #[cfg(target_arch = "aarch64")]
 struct BiquadPair {
@@ -446,6 +938,108 @@ impl BiquadPair {
 }
 
 #[cfg(target_arch = "aarch64")]
+struct LegacyFilterBank {
+    bottom_red_one: BiquadPair,
+    green_one_blue_one: BiquadPair,
+    color_red_green_one: BiquadPair,
+    red_two_green_two: BiquadPair,
+    blue_two_color_green: BiquadPair,
+    green_three_color_blue: BiquadPair,
+    green_four: BiquadPair,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl LegacyFilterBank {
+    fn new() -> Self {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        let low = |cutoff| Biquad::new_at(cutoff, q, false, ANALYSIS_SAMPLE_RATE);
+        let high = |cutoff| Biquad::new_at(cutoff, q, true, ANALYSIS_SAMPLE_RATE);
+        Self {
+            bottom_red_one: BiquadPair::new(low(400.0), low(200.0)),
+            green_one_blue_one: BiquadPair::new(high(200.0), high(2_000.0)),
+            color_red_green_one: BiquadPair::new(low(100.0), high(300.0)),
+            red_two_green_two: BiquadPair::new(low(200.0), high(200.0)),
+            blue_two_color_green: BiquadPair::new(high(2_000.0), low(3_000.0)),
+            green_three_color_blue: BiquadPair::new(low(2_000.0), high(1_500.0)),
+            green_four: BiquadPair::new(low(2_000.0), Biquad::default()),
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f64) -> LegacyFilterOutput {
+        let input = unsafe { vdupq_n_f64(sample) };
+        let bottom_red_one = self.bottom_red_one.process(input);
+        let green_one_blue_one = self.green_one_blue_one.process(input);
+        let color_red_green_one = self.color_red_green_one.process(input);
+        let red_two_green_two = self
+            .red_two_green_two
+            .process(unsafe { vextq_f64::<1>(bottom_red_one, green_one_blue_one) });
+        let blue_two_color_green = self
+            .blue_two_color_green
+            .process(unsafe { vuzp2q_f64(green_one_blue_one, color_red_green_one) });
+        let green_three_color_blue = self
+            .green_three_color_blue
+            .process(unsafe { vextq_f64::<1>(red_two_green_two, input) });
+        let green_four = self.green_four.process(green_three_color_blue);
+
+        LegacyFilterOutput {
+            bottom: unsafe { vgetq_lane_f64::<0>(bottom_red_one) },
+            whole: [
+                unsafe { vgetq_lane_f64::<0>(red_two_green_two) },
+                unsafe { vgetq_lane_f64::<0>(green_four) },
+                unsafe { vgetq_lane_f64::<0>(blue_two_color_green) },
+            ],
+            color: [
+                unsafe { vgetq_lane_f64::<0>(color_red_green_one) },
+                unsafe { vgetq_lane_f64::<1>(blue_two_color_green) },
+                unsafe { vgetq_lane_f64::<1>(green_three_color_blue) },
+            ],
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+struct FittedPreviewSplitter {
+    stages: [BiquadPair; 3],
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Default for FittedPreviewSplitter {
+    fn default() -> Self {
+        let [green_high_zero, green_high_one] = Butterworth::<2>::high_pass(230.0).stages;
+        let [green_low] = Butterworth::<1>::low_pass(900.0).stages;
+        let [blue_zero, blue_one, blue_two] = Butterworth::<3>::high_pass(2_500.0).stages;
+        Self {
+            stages: [
+                BiquadPair::new(green_high_zero, blue_zero),
+                BiquadPair::new(green_high_one, blue_one),
+                BiquadPair::new(green_low, blue_two),
+            ],
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl FittedPreviewSplitter {
+    #[inline(always)]
+    fn process(&mut self, sample: f64) -> float64x2_t {
+        let mut output = unsafe { vdupq_n_f64(sample) };
+        for stage in &mut self.stages {
+            output = stage.process(output);
+        }
+        unsafe {
+            vmulq_f64(
+                output,
+                load_f64x2([COLOR_PREVIEW_GREEN_GAIN, COLOR_PREVIEW_BLUE_GAIN]),
+            )
+        }
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type FittedPreviewSplitter = ScalarFittedPreviewSplitter;
+
+#[cfg(all(target_arch = "aarch64", test))]
 struct ColorBandSplitter {
     stage_zero: [BiquadPair; 4],
     stage_one: [BiquadPair; 3],
@@ -453,7 +1047,7 @@ struct ColorBandSplitter {
     green_low_passes: BiquadPair,
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 struct ColorBandVectors {
     preview_bottom_red: float64x2_t,
     preview_green_blue: float64x2_t,
@@ -461,7 +1055,7 @@ struct ColorBandVectors {
     detail_blue: float64x2_t,
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 impl Default for ColorBandSplitter {
     fn default() -> Self {
         let [preview_bottom] = Butterworth::<1>::low_pass(400.0).stages;
@@ -494,7 +1088,7 @@ impl Default for ColorBandSplitter {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", test))]
 impl ColorBandSplitter {
     #[inline(always)]
     fn process_vectors(&mut self, sample: f64) -> ColorBandVectors {
@@ -573,7 +1167,7 @@ fn store_f64x2(value: float64x2_t) -> [f64; 2] {
 
 #[cfg(any(not(target_arch = "aarch64"), test))]
 fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
-    let mut color_splitter = ScalarColorBandSplitter::default();
+    let mut color_splitter = ScalarFittedPreviewSplitter::default();
     pcm.detail_frames()
         .map(|frame| extract_detail_frame_scalar(frame.valid_samples(), &mut color_splitter))
         .collect()
@@ -582,41 +1176,27 @@ fn extract_detail_features_scalar(pcm: &MonoPcm) -> Vec<FrameFeatures> {
 #[cfg(any(not(target_arch = "aarch64"), test))]
 fn extract_detail_frame_scalar(
     samples: &[f32],
-    color_splitter: &mut ScalarColorBandSplitter,
+    color_splitter: &mut ScalarFittedPreviewSplitter,
 ) -> FrameFeatures {
     let mut peak = 0.0_f64;
     let mut sum_square = 0.0_f64;
-    let mut color_preview_bottom = 0.0_f64;
-    let mut color_preview_red = 0.0_f64;
     let mut color_preview_green = 0.0_f64;
     let mut color_preview_blue = 0.0_f64;
-    let mut color_detail_red_square = 0.0_f64;
-    let mut color_detail_green_square = 0.0_f64;
-    let mut color_detail_blue_square = 0.0_f64;
     for sample in samples {
         let sample = f64::from(*sample);
         peak = peak.max(sample.abs());
         sum_square += sample * sample;
         let color = color_splitter.process(sample);
-        color_preview_bottom = color_preview_bottom.max(color.preview_bottom.abs());
-        color_preview_red = color_preview_red.max(color.preview_red.abs());
-        color_preview_green = color_preview_green.max(color.preview_green.abs());
-        color_preview_blue = color_preview_blue.max(color.preview_blue.abs());
-        color_detail_red_square += color.detail_red * color.detail_red;
-        color_detail_green_square += color.detail_green * color.detail_green;
-        color_detail_blue_square += color.detail_blue * color.detail_blue;
+        color_preview_green = color_preview_green.max(color[0].abs());
+        color_preview_blue = color_preview_blue.max(color[1].abs());
     }
     let denominator = DETAIL_FRAME_SAMPLES as f64;
     FrameFeatures {
         peak,
         rms: (sum_square / denominator).sqrt(),
-        color_preview_bottom,
-        color_preview_red,
         color_preview_green,
         color_preview_blue,
-        color_detail_red: (color_detail_red_square / denominator).sqrt(),
-        color_detail_green: (color_detail_green_square / denominator).sqrt(),
-        color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
+        ..FrameFeatures::default()
     }
 }
 
@@ -626,7 +1206,10 @@ fn extract_detail_features(pcm: &MonoPcm) -> Vec<FrameFeatures> {
 }
 
 #[cfg(not(target_arch = "aarch64"))]
-fn extract_detail_frame(samples: &[f32], color_splitter: &mut ColorBandSplitter) -> FrameFeatures {
+fn extract_detail_frame(
+    samples: &[f32],
+    color_splitter: &mut FittedPreviewSplitter,
+) -> FrameFeatures {
     extract_detail_frame_scalar(samples, color_splitter)
 }
 
@@ -655,7 +1238,7 @@ fn extract_detail_feature_range(
     pcm: &MonoPcm,
     range: std::ops::Range<usize>,
 ) -> Vec<FrameFeatures> {
-    let mut color_splitter = ColorBandSplitter::default();
+    let mut color_splitter = FittedPreviewSplitter::default();
     let warm_start = range.start.saturating_sub(FILTER_PREROLL_FRAMES);
     let mut features = Vec::with_capacity(range.len());
     for frame_index in warm_start..range.end {
@@ -671,64 +1254,34 @@ fn extract_detail_feature_range(
 
 #[cfg(target_arch = "aarch64")]
 #[inline]
-fn extract_detail_frame(samples: &[f32], color_splitter: &mut ColorBandSplitter) -> FrameFeatures {
+fn extract_detail_frame(
+    samples: &[f32],
+    color_splitter: &mut FittedPreviewSplitter,
+) -> FrameFeatures {
     let mut peak = 0.0_f64;
     let mut sum_square = 0.0_f64;
-    let mut color_preview_bottom_red = unsafe { vdupq_n_f64(0.0) };
     let mut color_preview_green_blue = unsafe { vdupq_n_f64(0.0) };
-    let mut color_detail_red_green_square = unsafe { vdupq_n_f64(0.0) };
-    let mut color_detail_blue_square = unsafe { vdupq_n_f64(0.0) };
     for sample in samples {
         let sample = f64::from(*sample);
         peak = peak.max(sample.abs());
-        let color = color_splitter.process_vectors(sample);
-        color_preview_bottom_red = unsafe {
-            vmaxq_f64(
-                color_preview_bottom_red,
-                vabsq_f64(color.preview_bottom_red),
-            )
-        };
-        color_preview_green_blue = unsafe {
-            vmaxq_f64(
-                color_preview_green_blue,
-                vabsq_f64(color.preview_green_blue),
-            )
-        };
-        color_detail_red_green_square = unsafe {
-            vaddq_f64(
-                color_detail_red_green_square,
-                vmulq_f64(color.detail_red_green, color.detail_red_green),
-            )
-        };
-        color_detail_blue_square = unsafe {
-            vaddq_f64(
-                color_detail_blue_square,
-                vmulq_f64(color.detail_blue, color.detail_blue),
-            )
-        };
+        let color = color_splitter.process(sample);
+        color_preview_green_blue = unsafe { vmaxq_f64(color_preview_green_blue, vabsq_f64(color)) };
         sum_square += sample * sample;
     }
-    let [color_preview_bottom, color_preview_red] = store_f64x2(color_preview_bottom_red);
     let [color_preview_green, color_preview_blue] = store_f64x2(color_preview_green_blue);
-    let [color_detail_red_square, color_detail_green_square] =
-        store_f64x2(color_detail_red_green_square);
-    let [color_detail_blue_square, _] = store_f64x2(color_detail_blue_square);
     let denominator = DETAIL_FRAME_SAMPLES as f64;
     FrameFeatures {
         peak,
         rms: (sum_square / denominator).sqrt(),
-        color_preview_bottom,
-        color_preview_red,
         color_preview_green,
         color_preview_blue,
-        color_detail_red: (color_detail_red_square / denominator).sqrt(),
-        color_detail_green: (color_detail_green_square / denominator).sqrt(),
-        color_detail_blue: (color_detail_blue_square / denominator).sqrt(),
+        ..FrameFeatures::default()
     }
 }
 
 pub(crate) struct StreamingWaveformAccumulator {
-    color_splitter: ColorBandSplitter,
+    color_splitter: FittedPreviewSplitter,
+    legacy: LegacyWaveformAccumulator,
     three_band: ThreeBandAccumulator,
     pending: Vec<f32>,
     features: Vec<FrameFeatures>,
@@ -737,7 +1290,8 @@ pub(crate) struct StreamingWaveformAccumulator {
 impl StreamingWaveformAccumulator {
     pub(crate) fn new() -> Self {
         Self {
-            color_splitter: ColorBandSplitter::default(),
+            color_splitter: FittedPreviewSplitter::default(),
+            legacy: LegacyWaveformAccumulator::new(),
             three_band: ThreeBandAccumulator::new(ANALYSIS_SAMPLE_RATE),
             pending: Vec::with_capacity(DETAIL_FRAME_SAMPLES),
             features: Vec::new(),
@@ -745,6 +1299,7 @@ impl StreamingWaveformAccumulator {
     }
 
     pub(crate) fn push(&mut self, mut samples: &[f32]) {
+        self.legacy.push(samples);
         self.three_band.push(samples);
         if !self.pending.is_empty() {
             let consumed = (DETAIL_FRAME_SAMPLES - self.pending.len()).min(samples.len());
@@ -774,8 +1329,9 @@ impl StreamingWaveformAccumulator {
                 &mut self.color_splitter,
             ));
         }
+        let legacy = self.legacy.finish(self.features.len());
         let three_band = self.three_band.finish(self.features.len());
-        pack_waveforms(&self.features, three_band)
+        pack_waveforms(&self.features, legacy, three_band)
     }
 }
 
@@ -852,39 +1408,6 @@ fn pack_color_preview(feature: &FrameFeatures) -> [u8; 6] {
     ]
 }
 
-fn pack_color_detail(feature: &FrameFeatures, detail_peak: f64) -> u16 {
-    let [red, green, blue] = if feature.rms > f64::EPSILON {
-        [
-            linear_level(
-                COLOR_DETAIL_RED_GAIN * feature.color_detail_red / feature.rms,
-                7,
-            ),
-            linear_level(
-                COLOR_DETAIL_GREEN_GAIN * feature.color_detail_green / feature.rms,
-                7,
-            ),
-            linear_level(
-                (COLOR_DETAIL_BLUE_GAIN * feature.color_detail_blue / feature.rms)
-                    .clamp(0.0, 1.0)
-                    .powf(COLOR_DETAIL_BLUE_EXPONENT),
-                7,
-            ),
-        ]
-    } else {
-        [0; 3]
-    };
-    let normalized_peak = if detail_peak > f64::EPSILON {
-        feature.peak / detail_peak
-    } else {
-        0.0
-    };
-    let height = waveform_height(normalized_peak, 31);
-    (u16::from(red) << 13)
-        | (u16::from(green) << 10)
-        | (u16::from(blue) << 7)
-        | (u16::from(height) << 2)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ThreeBandWaveforms {
     preview: Vec<u8>,
@@ -892,13 +1415,88 @@ struct ThreeBandWaveforms {
     normalize: [u16; 3],
 }
 
-struct ThreeBandAccumulator {
-    sample_rate: u32,
+#[cfg(any(not(target_arch = "aarch64"), test))]
+struct ScalarThreeBandFilterBank {
     low_pass: Biquad,
     mid_high_pass: Biquad,
     mid_low_pass: Biquad,
     high_high_pass: Biquad,
     high_low_pass: Biquad,
+}
+
+#[cfg(any(not(target_arch = "aarch64"), test))]
+impl ScalarThreeBandFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        Self {
+            low_pass: Biquad::new_at(300.0, q, false, sample_rate),
+            mid_high_pass: Biquad::new_at(250.0, q, true, sample_rate),
+            mid_low_pass: Biquad::new_at(1_200.0, q, false, sample_rate),
+            high_high_pass: Biquad::new_at(3_000.0, q, true, sample_rate),
+            high_low_pass: Biquad::new_at(9_000.0, q, false, sample_rate),
+        }
+    }
+
+    fn process(&mut self, sample: f64) -> [f64; 3] {
+        [
+            self.low_pass.process(sample),
+            self.mid_low_pass
+                .process(self.mid_high_pass.process(sample)),
+            self.high_low_pass
+                .process(self.high_high_pass.process(sample)),
+        ]
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+struct ThreeBandFilterBank {
+    low_mid_one: BiquadPair,
+    high_one: BiquadPair,
+    mid_high_two: BiquadPair,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl ThreeBandFilterBank {
+    fn new(sample_rate: u32) -> Self {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        Self {
+            low_mid_one: BiquadPair::new(
+                Biquad::new_at(300.0, q, false, sample_rate),
+                Biquad::new_at(250.0, q, true, sample_rate),
+            ),
+            high_one: BiquadPair::new(
+                Biquad::new_at(3_000.0, q, true, sample_rate),
+                Biquad::default(),
+            ),
+            mid_high_two: BiquadPair::new(
+                Biquad::new_at(1_200.0, q, false, sample_rate),
+                Biquad::new_at(9_000.0, q, false, sample_rate),
+            ),
+        }
+    }
+
+    #[inline(always)]
+    fn process(&mut self, sample: f64) -> [f64; 3] {
+        let input = unsafe { vdupq_n_f64(sample) };
+        let low_mid_one = self.low_mid_one.process(input);
+        let high_one = self.high_one.process(input);
+        let mid_high_two = self
+            .mid_high_two
+            .process(unsafe { vextq_f64::<1>(low_mid_one, high_one) });
+        [
+            unsafe { vgetq_lane_f64::<0>(low_mid_one) },
+            unsafe { vgetq_lane_f64::<0>(mid_high_two) },
+            unsafe { vgetq_lane_f64::<1>(mid_high_two) },
+        ]
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+type ThreeBandFilterBank = ScalarThreeBandFilterBank;
+
+struct ThreeBandAccumulator {
+    sample_rate: u32,
+    filters: ThreeBandFilterBank,
     raw: Vec<[u16; 3]>,
     bucket_peak: [f64; 3],
     bucket_has_samples: bool,
@@ -909,14 +1507,9 @@ struct ThreeBandAccumulator {
 impl ThreeBandAccumulator {
     fn new(sample_rate: u32) -> Self {
         debug_assert!(sample_rate >= THREE_BAND_RAW_RATE as u32);
-        let q = std::f64::consts::FRAC_1_SQRT_2;
         Self {
             sample_rate,
-            low_pass: Biquad::new_at(300.0, q, false, sample_rate),
-            mid_high_pass: Biquad::new_at(250.0, q, true, sample_rate),
-            mid_low_pass: Biquad::new_at(1_200.0, q, false, sample_rate),
-            high_high_pass: Biquad::new_at(3_000.0, q, true, sample_rate),
-            high_low_pass: Biquad::new_at(9_000.0, q, false, sample_rate),
+            filters: ThreeBandFilterBank::new(sample_rate),
             raw: Vec::new(),
             bucket_peak: [0.0; 3],
             bucket_has_samples: false,
@@ -936,14 +1529,11 @@ impl ThreeBandAccumulator {
     fn push(&mut self, samples: &[f32]) {
         for &sample in samples {
             let sample = f64::from(sample);
-            let low = self.low_pass.process(sample);
-            let mid = self
-                .mid_low_pass
-                .process(self.mid_high_pass.process(sample));
-            let high = self
-                .high_low_pass
-                .process(self.high_high_pass.process(sample));
-            for (peak, value) in self.bucket_peak.iter_mut().zip([low, mid, high]) {
+            for (peak, value) in self
+                .bucket_peak
+                .iter_mut()
+                .zip(self.filters.process(sample))
+            {
                 *peak = peak.max(value.abs());
             }
             self.bucket_has_samples = true;
@@ -1241,6 +1831,52 @@ mod tests {
 
     #[cfg(target_arch = "aarch64")]
     #[test]
+    fn aarch64_legacy_filter_bank_is_scalar_bit_exact() {
+        let mut scalar_filters = ScalarLegacyFilterBank::new();
+        let mut simd_filters = LegacyFilterBank::new();
+
+        for index in 0..44_100 {
+            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+            let sample = 0.55 * (phase * 83.0).sin()
+                + 0.27 * (phase * 719.0).sin()
+                + 0.12 * (phase * 4_117.0).sin();
+            let scalar = scalar_filters.process(sample);
+            let simd = simd_filters.process(sample);
+            for (scalar, simd) in [
+                (scalar.bottom, simd.bottom),
+                (scalar.whole[0], simd.whole[0]),
+                (scalar.whole[1], simd.whole[1]),
+                (scalar.whole[2], simd.whole[2]),
+                (scalar.color[0], simd.color[0]),
+                (scalar.color[1], simd.color[1]),
+                (scalar.color[2], simd.color[2]),
+            ] {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_three_band_filter_bank_is_scalar_bit_exact() {
+        let mut scalar_filters = ScalarThreeBandFilterBank::new(ANALYSIS_SAMPLE_RATE);
+        let mut simd_filters = ThreeBandFilterBank::new(ANALYSIS_SAMPLE_RATE);
+
+        for index in 0..44_100 {
+            let phase = std::f64::consts::TAU * index as f64 / 44_100.0;
+            let sample = 0.55 * (phase * 83.0).sin()
+                + 0.27 * (phase * 719.0).sin()
+                + 0.12 * (phase * 4_117.0).sin();
+            let scalar = scalar_filters.process(sample);
+            let simd = simd_filters.process(sample);
+            for (scalar, simd) in scalar.into_iter().zip(simd) {
+                assert_eq!(scalar.to_bits(), simd.to_bits());
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
     fn aarch64_simd_feature_accumulation_is_scalar_bit_exact() {
         let samples = (0..44_100)
             .map(|index| {
@@ -1258,13 +1894,8 @@ mod tests {
             for (scalar, simd) in [
                 (scalar.peak, simd.peak),
                 (scalar.rms, simd.rms),
-                (scalar.color_preview_bottom, simd.color_preview_bottom),
-                (scalar.color_preview_red, simd.color_preview_red),
                 (scalar.color_preview_green, simd.color_preview_green),
                 (scalar.color_preview_blue, simd.color_preview_blue),
-                (scalar.color_detail_red, simd.color_detail_red),
-                (scalar.color_detail_green, simd.color_detail_green),
-                (scalar.color_detail_blue, simd.color_detail_blue),
             ] {
                 assert_eq!(scalar.to_bits(), simd.to_bits());
             }
@@ -1286,10 +1917,11 @@ mod tests {
         let scalar = extract_detail_features_scalar(&pcm);
         let parallel = extract_detail_features(&pcm);
         assert_eq!(scalar.len(), parallel.len());
+        let legacy = LegacyWaveformAccumulator::from_pcm(&pcm).finish(scalar.len());
         let three_band = ThreeBandAccumulator::from_pcm(&pcm).finish(scalar.len());
         assert_eq!(
-            pack_waveforms(&scalar, three_band.clone()),
-            pack_waveforms(&parallel, three_band)
+            pack_waveforms(&scalar, legacy.clone(), three_band.clone()),
+            pack_waveforms(&parallel, legacy, three_band)
         );
     }
 
@@ -1320,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn color_detail_matches_reference_tone_hues_and_normalizes_track_peak() {
+    fn color_detail_preserves_native_tone_hue_families_and_normalizes_track_peak() {
         fn analyze_tone(frequency_hz: f64, amplitude: f32) -> [u8; 4] {
             let samples = (0..ANALYSIS_SAMPLE_RATE as usize * 2)
                 .map(|index| {
@@ -1347,7 +1979,9 @@ mod tests {
 
         for amplitude in [0.5, 0.000_5] {
             assert_eq!(analyze_tone(80.0, amplitude), [7, 0, 0, 31]);
-            assert_eq!(analyze_tone(500.0, amplitude), [0, 7, 1, 31]);
+            let middle = analyze_tone(500.0, amplitude);
+            assert_eq!([middle[0], middle[1], middle[3]], [0, 7, 31]);
+            assert!(middle[2] <= 1);
             assert_eq!(analyze_tone(4_000.0, amplitude), [0, 2, 7, 31]);
         }
     }

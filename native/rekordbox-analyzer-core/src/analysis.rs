@@ -17,10 +17,12 @@ use crate::audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, decode_audio_file,
     decode_audio_file_with_progress,
 };
+use crate::flac::build_flac_pvb2;
 use crate::key::{
     FFT_SIZE as KEY_FFT_SIZE, HOP_SIZE as KEY_HOP_SIZE, KeyAnalysis, KeyFeaturePlan,
     RawChromaFeatures, analyze_key, analyze_key_from_raw,
 };
+use crate::linked_rhythm::analyze_linked_beats_with_reader_padding;
 use crate::rhythm::{
     BeatAnalysis, FFT_SIZE as BEAT_FFT_SIZE, HOP_SIZE as BEAT_HOP_SIZE, OnsetEnvelopes,
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
@@ -41,10 +43,34 @@ pub const DEFAULT_ANALYZER_THREADS: usize = 8;
 pub const MAX_ANALYZER_THREADS: usize = 64;
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Rekordbox-compatible beat-grid analysis policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RhythmMode {
+    /// Static grid for recordings with a relatively consistent tempo.
+    Normal,
+    /// Per-beat variable-tempo grid recovered from Rekordbox 6.8.2.
+    Dynamic,
+    /// Conservatively select Dynamic only when the decoded tempo spread is material.
+    Auto,
+}
+
+impl RhythmMode {
+    /// Stable CLI and log representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Dynamic => "dynamic",
+            Self::Auto => "auto",
+        }
+    }
+}
+
 /// Bounded native CPU budget for one track analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnalysisOptions {
     threads: usize,
+    rhythm_mode: RhythmMode,
 }
 
 impl AnalysisOptions {
@@ -55,7 +81,10 @@ impl AnalysisOptions {
                 "analyzer threads must be between 1 and {MAX_ANALYZER_THREADS}, received {threads}"
             );
         }
-        Ok(Self { threads })
+        Ok(Self {
+            threads,
+            rhythm_mode: RhythmMode::Normal,
+        })
     }
 
     /// Use the profiled default, bounded by the host's available parallelism.
@@ -65,12 +94,26 @@ impl AnalysisOptions {
                 .map(usize::from)
                 .unwrap_or(1)
                 .clamp(1, DEFAULT_ANALYZER_THREADS),
+            rhythm_mode: RhythmMode::Normal,
         }
     }
 
     /// Native workers available to this analysis.
     pub fn threads(self) -> usize {
         self.threads
+    }
+
+    /// Select the beat-grid mode without changing the CPU budget.
+    #[must_use]
+    pub const fn with_rhythm_mode(mut self, rhythm_mode: RhythmMode) -> Self {
+        self.rhythm_mode = rhythm_mode;
+        self
+    }
+
+    /// Requested beat-grid mode.
+    #[must_use]
+    pub const fn rhythm_mode(self) -> RhythmMode {
+        self.rhythm_mode
     }
 }
 
@@ -90,6 +133,9 @@ pub struct GeneratedAnalysis {
     pub key: KeyAnalysis,
     pub source: AudioSourceInfo,
     pub duration_seconds: f64,
+    pub rhythm_mode_requested: RhythmMode,
+    pub rhythm_mode: RhythmMode,
+    pub rhythm_fallback: Option<String>,
 }
 
 /// JSON shape accepted by the existing `@gakonst/rekordbox` analyzer wrapper.
@@ -105,6 +151,9 @@ pub struct AnalyzerOutput {
     pub content_id: i64,
     pub native_log: String,
     pub outputs: Vec<(String, u64)>,
+    pub rhythm_fallback: Option<String>,
+    pub rhythm_mode: String,
+    pub rhythm_mode_requested: String,
     pub start_result: i32,
     pub summary: OutputSummary,
     pub timings: AnalyzerTimings,
@@ -177,15 +226,33 @@ pub fn analyze_audio_file_with_options(
         .thread_name(|index| format!("rekordbox-analyzer-{index}"))
         .build()
         .context("failed to create analyzer worker pool")?;
-    let (decoded, streamed_features) = if options.threads() > 1 {
-        decode_with_streaming_features(path, &pool)?
+    let ((decoded, streamed_features), seek_tables) = if options.threads() > 1 {
+        let (decoded, seek_tables) = pool.install(|| {
+            rayon::join(
+                || decode_with_streaming_features(path, &pool),
+                || -> Result<_> { Ok((build_vbr_index(path)?, build_flac_vbr_2(path)?)) },
+            )
+        });
+        (decoded?, seek_tables?)
     } else {
-        (decode_audio_file(path)?, None)
+        (
+            (decode_audio_file(path)?, None),
+            (build_vbr_index(path)?, build_flac_vbr_2(path)?),
+        )
     };
     let source = decoded.source();
-    let source_three_band = (source.sample_rate() != ANALYSIS_SAMPLE_RATE)
-        .then(|| extract_three_band_source(decoded.mono()));
-    let pcm = decoded.into_analysis_pcm()?;
+    let (source_three_band, resampled_pcm) = if source.sample_rate() != ANALYSIS_SAMPLE_RATE {
+        let (three_band, resampled) = pool.install(|| {
+            rayon::join(
+                || extract_three_band_source(decoded.mono()),
+                || decoded.mono().resample_linear(ANALYSIS_SAMPLE_RATE),
+            )
+        });
+        (Some(three_band), Some(resampled?))
+    } else {
+        (None, None)
+    };
+    let pcm = resampled_pcm.as_ref().unwrap_or_else(|| decoded.mono());
     if pcm.is_empty() {
         bail!("decoded audio contains no PCM frames");
     }
@@ -205,18 +272,21 @@ pub fn analyze_audio_file_with_options(
         rayon::join(
             || match streamed_waveforms {
                 Some(waveforms) => Ok(waveforms),
-                None => WaveformData::generate_with_three_band_source(&pcm, source_three_band),
+                None => WaveformData::generate_with_three_band_source(pcm, source_three_band),
             },
             || {
                 rayon::join(
-                    || match (streamed_onset, streamed_time_domain) {
-                        (Some(onset), Some(time_domain)) => analyze_beats_from_streamed_features(
-                            pcm.samples(),
-                            pcm.sample_rate(),
-                            onset,
-                            time_domain,
-                        ),
-                        _ => analyze_beats(pcm.samples(), pcm.sample_rate()),
+                    || {
+                        select_beat_analysis(BeatAnalysisInputs {
+                            mode: options.rhythm_mode(),
+                            source_samples: decoded.mono().samples(),
+                            source_sample_rate: decoded.mono().sample_rate(),
+                            source_reader_padding_frames: decoded.source().reader_padding_frames(),
+                            analysis_samples: pcm.samples(),
+                            analysis_sample_rate: pcm.sample_rate(),
+                            streamed_onset,
+                            streamed_time_domain,
+                        })
                     },
                     || match streamed_key {
                         Some(raw) => analyze_key_from_raw(raw, pcm.sample_rate()),
@@ -227,15 +297,19 @@ pub fn analyze_audio_file_with_options(
         )
     });
     let waveforms = waveforms?;
-    let beat = beat?;
+    let SelectedBeatAnalysis {
+        beat,
+        mode: rhythm_mode,
+        fallback: rhythm_fallback,
+    } = beat?;
     let key = key?;
+    let ((vbr_index, vbr_trailer_unknown), vbr_2) = seek_tables;
     let anlz_path = format!(
         "?/{}",
         path.file_name()
             .and_then(|value| value.to_str())
             .context("audio filename is not valid Unicode")?
     );
-    let (vbr_index, vbr_trailer_unknown) = build_vbr_index(path)?;
     let hot_cues = build_empty_cue_tag(1)?;
     let memory_cues = build_empty_cue_tag(0)?;
 
@@ -278,7 +352,7 @@ pub fn analyze_audio_file_with_options(
             .map(|residual| residual.to_be_bytes())
             .collect(),
     };
-    let ext = AnlzFile::from_tags(vec![
+    let mut ext_tags = vec![
         build_path_tag(&anlz_path)?,
         waveforms.pwv3().to_tag()?,
         hot_cues,
@@ -288,8 +362,10 @@ pub fn analyze_audio_file_with_options(
         extended_grid.to_tag()?,
         waveforms.pwv5().to_tag()?,
         waveforms.pwv4().to_tag()?,
-        build_empty_song_structure_tag()?,
-    ])?;
+    ];
+    ext_tags.extend(vbr_2);
+    ext_tags.push(build_empty_song_structure_tag()?);
+    let ext = AnlzFile::from_tags(ext_tags)?;
 
     let two_ex = ThreeBandAnalysis {
         path: anlz_path,
@@ -310,7 +386,129 @@ pub fn analyze_audio_file_with_options(
         key,
         source,
         duration_seconds: pcm.duration_seconds(),
+        rhythm_mode_requested: options.rhythm_mode(),
+        rhythm_mode,
+        rhythm_fallback,
     })
+}
+
+struct SelectedBeatAnalysis {
+    beat: BeatAnalysis,
+    mode: RhythmMode,
+    fallback: Option<String>,
+}
+
+struct BeatAnalysisInputs<'a> {
+    mode: RhythmMode,
+    source_samples: &'a [f32],
+    source_sample_rate: u32,
+    source_reader_padding_frames: usize,
+    analysis_samples: &'a [f32],
+    analysis_sample_rate: u32,
+    streamed_onset: Option<OnsetEnvelopes>,
+    streamed_time_domain: Option<TimeDomainEnvelopes>,
+}
+
+fn select_beat_analysis(inputs: BeatAnalysisInputs<'_>) -> Result<SelectedBeatAnalysis> {
+    let BeatAnalysisInputs {
+        mode,
+        source_samples,
+        source_sample_rate,
+        source_reader_padding_frames,
+        analysis_samples,
+        analysis_sample_rate,
+        streamed_onset,
+        streamed_time_domain,
+    } = inputs;
+    let legacy = || match (streamed_onset, streamed_time_domain) {
+        (Some(onset), Some(time_domain)) => analyze_beats_from_streamed_features(
+            analysis_samples,
+            analysis_sample_rate,
+            onset,
+            time_domain,
+        ),
+        _ => analyze_beats(analysis_samples, analysis_sample_rate),
+    };
+    match mode {
+        RhythmMode::Normal => Ok(SelectedBeatAnalysis {
+            beat: legacy()?,
+            mode,
+            fallback: None,
+        }),
+        RhythmMode::Dynamic => Ok(SelectedBeatAnalysis {
+            beat: analyze_linked_beats_with_reader_padding(
+                source_samples,
+                source_sample_rate,
+                source_reader_padding_frames,
+            )?,
+            mode,
+            fallback: None,
+        }),
+        RhythmMode::Auto => {
+            let (dynamic, normal) = rayon::join(
+                || {
+                    analyze_linked_beats_with_reader_padding(
+                        source_samples,
+                        source_sample_rate,
+                        source_reader_padding_frames,
+                    )
+                },
+                legacy,
+            );
+            match (dynamic, normal) {
+                (Ok(beat), _) if materially_dynamic(&beat) => Ok(SelectedBeatAnalysis {
+                    beat,
+                    mode: RhythmMode::Dynamic,
+                    fallback: None,
+                }),
+                (Ok(_), Ok(beat)) => Ok(SelectedBeatAnalysis {
+                    beat,
+                    mode: RhythmMode::Normal,
+                    fallback: None,
+                }),
+                (Ok(dynamic_beat), Err(error)) => Ok(SelectedBeatAnalysis {
+                    beat: dynamic_beat,
+                    mode: RhythmMode::Dynamic,
+                    fallback: Some(format!("normal rhythm failed: {error:#}")),
+                }),
+                (Err(error), Ok(beat)) => Ok(SelectedBeatAnalysis {
+                    beat,
+                    mode: RhythmMode::Normal,
+                    fallback: Some(format!("dynamic rhythm failed: {error:#}")),
+                }),
+                (Err(dynamic_error), Err(normal_error)) => {
+                    Err(normal_error).with_context(|| {
+                        format!(
+                            "dynamic rhythm failed: {dynamic_error:#}; normal rhythm fallback also failed"
+                        )
+                    })
+                }
+            }
+        }
+    }
+}
+
+/// Robust p05-p95 local-tempo spread used by the clean Auto policy.
+///
+/// Rekordbox 6.8.2 exposes explicit Normal and Dynamic modes. Auto is a clean
+/// convenience policy: retain a static grid unless 90% of the recovered local
+/// tempi span at least 0.75% of the median tempo.
+fn materially_dynamic(beat: &BeatAnalysis) -> bool {
+    const MIN_RELATIVE_SPREAD: f64 = 0.0075;
+    if beat.beats.len() < 20 {
+        return false;
+    }
+    let mut bpms = beat
+        .beats
+        .iter()
+        .map(|entry| f64::from(entry.bpm_hundredths))
+        .collect::<Vec<_>>();
+    bpms.sort_unstable_by(f64::total_cmp);
+    let last = bpms.len() - 1;
+    let low = bpms[last * 5 / 100];
+    let median = bpms[last / 2];
+    let high = bpms[last * 95 / 100];
+    median > 0.0 && (high - low) / median >= MIN_RELATIVE_SPREAD
 }
 
 struct StreamedFeatures {
@@ -674,8 +872,15 @@ pub fn analyze_to_directory_with_options(
     let summarize_ms = summarize_started.elapsed().as_secs_f64() * 1_000.0;
     let total_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
+    let rhythm_fallback_log = generated
+        .rhythm_fallback
+        .as_deref()
+        .unwrap_or("none")
+        .replace(['\r', '\n'], " ");
     let log = format!(
-        "backend=clean-room-rust-dsp\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\n",
+        "backend=clean-room-rust-dsp\nrhythm_mode_requested={}\nrhythm_mode={}\nrhythm_fallback={rhythm_fallback_log}\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\n",
+        generated.rhythm_mode_requested.as_str(),
+        generated.rhythm_mode.as_str(),
         generated.source.sample_rate(),
         generated.source.channels(),
         generated.duration_seconds,
@@ -699,6 +904,9 @@ pub fn analyze_to_directory_with_options(
         content_id: i64::from(std::process::id()),
         native_log: log_path.display().to_string(),
         outputs,
+        rhythm_fallback: generated.rhythm_fallback,
+        rhythm_mode: generated.rhythm_mode.as_str().to_string(),
+        rhythm_mode_requested: generated.rhythm_mode_requested.as_str().to_string(),
         start_result: 0,
         summary: OutputSummary {
             beat_grid,
@@ -851,6 +1059,21 @@ fn build_vbr_index(path: &Path) -> Result<(Vec<u32>, u32)> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read MP3 {}", path.display()))?;
     build_xing_vbr_index(&bytes)
+}
+
+fn build_flac_vbr_2(path: &Path) -> Result<Option<AnlzTag>> {
+    let is_flac = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("flac"));
+    if !is_flac {
+        return Ok(None);
+    }
+    let bytes =
+        std::fs::read(path).with_context(|| format!("failed to read FLAC {}", path.display()))?;
+    // PVB2 is optional. A FLAC shape outside the strictly validated native
+    // frame chain is safer to omit than to index with guessed byte offsets.
+    Ok(build_flac_pvb2(&bytes).ok())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1125,6 +1348,36 @@ mod tests {
         assert!(AnalysisOptions::new(MAX_ANALYZER_THREADS).is_ok());
         assert!(AnalysisOptions::new(0).is_err());
         assert!(AnalysisOptions::new(MAX_ANALYZER_THREADS + 1).is_err());
+        assert_eq!(
+            AnalysisOptions::automatic().rhythm_mode(),
+            RhythmMode::Normal
+        );
+    }
+
+    #[test]
+    fn automatic_rhythm_policy_requires_robust_local_tempo_motion() {
+        let beats = |bpms: Vec<u16>| BeatAnalysis {
+            bpm: 120.0,
+            confidence: 1.0,
+            beat_time_residuals_us: vec![0; bpms.len()],
+            beats: bpms
+                .into_iter()
+                .enumerate()
+                .map(|(index, bpm_hundredths)| crate::anlz::BeatGridEntry {
+                    beat: (index % 4 + 1) as u16,
+                    bpm_hundredths,
+                    time_ms: index as u32 * 500,
+                })
+                .collect(),
+        };
+
+        assert!(!materially_dynamic(&beats(vec![12_000; 100])));
+        let mut jitter = vec![12_000; 100];
+        jitter[0] = 9_000;
+        jitter[99] = 18_000;
+        assert!(!materially_dynamic(&beats(jitter)));
+        let drift = (0..100).map(|index| 11_900 + index * 2).collect::<Vec<_>>();
+        assert!(materially_dynamic(&beats(drift)));
     }
 
     #[test]

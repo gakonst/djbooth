@@ -136,7 +136,7 @@ struct BeatSensor {
 impl BeatSensor {
     fn new(sample_rate: u32) -> Self {
         let sample_rate_f64 = f64::from(sample_rate);
-        let butterworth_q = f64::from(0.707106769_f32);
+        let butterworth_q = f64::from(0.707_106_77_f32);
         let low = Biquad::low_pass(283.0, sample_rate_f64, butterworth_q);
         let wide = Biquad::wide_band_pass(150.0, sample_rate_f64, 1.5);
         let mid_high = Biquad::high_pass(283.0, sample_rate_f64, butterworth_q);
@@ -367,6 +367,8 @@ impl MovingAverageSubtractor {
         }
     }
 
+    // Preserve the recovered native operand order; `+=` reverses the addends.
+    #[allow(clippy::assign_op_pattern)]
     fn put(&mut self, sample: f32) -> f32 {
         self.sum = (sample - self.values[self.index]) + self.sum;
         self.values[self.index] = sample;
@@ -681,7 +683,7 @@ impl BandSelector {
             let Some(histogram) = self.histogram.get_mut(bin as usize) else {
                 continue;
             };
-            let weight = (4.0 / (candidate.error_ms + 0.5)).trunc() as i32;
+            let weight = (4.0 / (candidate.error_ms + 1.0)).trunc() as i32;
             *histogram += weight.max(1);
             self.minimum_bin = self.minimum_bin.min(bin);
             self.maximum_bin = self.maximum_bin.max(bin);
@@ -861,16 +863,16 @@ mod tests {
 
     #[test]
     fn linked_filter_coefficients_match_runtime_snapshots() {
-        let low_44 = Biquad::low_pass(283.0, 44_100.0, f64::from(0.707106769_f32));
+        let low_44 = Biquad::low_pass(283.0, 44_100.0, f64::from(0.707_106_77_f32));
         assert!((low_44.b0 - 0.00039512172754532175).abs() < 1.0e-16);
-        assert!((low_44.b1 - 0.00079024345509064349).abs() < 1.0e-16);
-        assert!((low_44.a1 - -1.9429927712041899).abs() < 1.0e-15);
-        assert!((low_44.a2 - 0.94457325811437109).abs() < 1.0e-15);
+        assert!((low_44.b1 - 0.000_790_243_455_090_643_5).abs() < 1.0e-16);
+        assert!((low_44.a1 - -1.942_992_771_204_19).abs() < 1.0e-15);
+        assert!((low_44.a2 - 0.944_573_258_114_371_1).abs() < 1.0e-15);
 
         let wide_48 = Biquad::wide_band_pass(150.0, 48_000.0, 1.5);
-        assert!((wide_48.b0 - 0.010560795605230589).abs() < 1.0e-15);
+        assert!((wide_48.b0 - 0.010_560_795_605_230_59).abs() < 1.0e-15);
         assert!((wide_48.a1 - -1.9784969611414083).abs() < 1.0e-15);
-        assert!((wide_48.a2 - 0.97887840878953880).abs() < 1.0e-15);
+        assert!((wide_48.a2 - 0.978_878_408_789_538_8).abs() < 1.0e-15);
     }
 
     #[test]
@@ -1022,5 +1024,24 @@ mod tests {
         pending[2] = Some(candidate);
         assert_eq!(selector.select_band(&mut pending), Some(2));
         assert_eq!(pending[2], Some(candidate));
+    }
+
+    #[test]
+    fn linked_band_selector_biases_vote_weight_by_one_millisecond() {
+        let mut selector = BandSelector::default();
+        let candidate = PeakPeriodCandidate {
+            interval_ms: 472.0,
+            period_ms: 472.0,
+            error_ms: 1.1,
+            support: 3,
+        };
+        for vote in 0..2 {
+            let mut pending = [None; BAND_COUNT];
+            pending[vote] = Some(candidate);
+            assert_eq!(selector.select_band(&mut pending), None);
+        }
+        let mut pending = [None; BAND_COUNT];
+        pending[2] = Some(candidate);
+        assert_eq!(selector.select_band(&mut pending), Some(2));
     }
 }

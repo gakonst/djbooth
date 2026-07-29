@@ -1,14 +1,6 @@
-mod beat_decoder {
-    pub use rekordbox_analyzer_core::ExpandedBeat;
-}
-
-#[path = "../src/unit_envelope.rs"]
-mod unit_envelope;
-
-use beat_decoder::ExpandedBeat;
-use unit_envelope::{
-    UnitEnvelopeAdjustment, UnitEnvelopeNumbering, apply_unit_envelope_adjustment,
-    select_unit_envelope_phase,
+use rekordbox_analyzer_core::{
+    ExpandedBeat, UnitEnvelopeAdjustment, UnitEnvelopeNumbering, apply_unit_envelope_adjustment,
+    extract_unit_envelope_feature, select_unit_envelope_phase,
 };
 
 #[derive(Clone, Copy)]
@@ -186,6 +178,16 @@ fn phase_selection_keeps_the_earliest_tie_and_exposes_fallback() {
             .unwrap();
     assert_eq!(phase.score_index, 1);
     assert!(select_unit_envelope_phase([0.0; 4], UnitEnvelopeNumbering::GridAligned).is_none());
+}
+
+#[test]
+fn extraction_is_grid_independent_and_caps_high_sample_rates() {
+    let feature = extract_unit_envelope_feature(&[0.0; 256], 96_000).unwrap();
+
+    assert_eq!(feature.source_sample_rate(), 96_000);
+    assert_eq!(feature.scoring_sample_rate(), 48_000);
+    assert_eq!(feature.envelope_len(), 1);
+    assert_eq!(feature.strong_peak_count(), 0);
 }
 
 #[test]
