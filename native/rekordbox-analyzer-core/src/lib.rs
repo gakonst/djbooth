@@ -37,6 +37,7 @@ pub use anlz::{
 pub use audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DETAIL_COLUMNS_PER_SECOND, DETAIL_FRAME_SAMPLES,
     DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
+    decode_audio_file_with_channels,
 };
 pub use beat_decoder::{
     AdjustedTempoSection, BeatTempoSection, ExpandedBeat, ProvisionalTempoSection,

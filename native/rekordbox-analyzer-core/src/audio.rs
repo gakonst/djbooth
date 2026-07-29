@@ -63,9 +63,9 @@ impl AudioSourceInfo {
 pub struct DecodedAudio {
     source: AudioSourceInfo,
     mono: MonoPcm,
+    rhythm_mono: MonoPcm,
     phrase_mono: MonoPcm,
     waveform_mono: MonoPcm,
-    waveform_midpoint: MonoPcm,
     waveform_stereo: Option<[MonoPcm; 2]>,
 }
 
@@ -80,6 +80,11 @@ impl DecodedAudio {
         &self.mono
     }
 
+    /// Signed-16-quantized stereo midpoint consumed by native rhythm analysis.
+    pub fn rhythm_mono(&self) -> &MonoPcm {
+        &self.rhythm_mono
+    }
+
     /// Native signed-16-bit 99% left/1% right signal used by phrase analysis.
     pub(crate) fn phrase_mono(&self) -> &MonoPcm {
         &self.phrase_mono
@@ -90,13 +95,13 @@ impl DecodedAudio {
         &self.waveform_mono
     }
 
-    /// Native signed-16-bit stereo midpoint used by monochrome waveforms.
-    pub(crate) fn waveform_midpoint(&self) -> &MonoPcm {
-        &self.waveform_midpoint
-    }
-
     /// Unmixed channels retained when the native waveform reader converts rates.
     pub(crate) fn waveform_stereo(&self) -> Option<&[MonoPcm; 2]> {
+        self.waveform_stereo.as_ref()
+    }
+
+    /// Unmixed source channels when explicitly retained during decoding.
+    pub fn stereo(&self) -> Option<&[MonoPcm; 2]> {
         self.waveform_stereo.as_ref()
     }
 
@@ -917,11 +922,24 @@ pub(crate) fn native_waveform_mono_pair(left: f32, right: f32) -> f32 {
     ((f64::from(left) + f64::from(right)) * (0.5 / 32_768.0)) as f32
 }
 
+/// Average two channels after native signed-16-bit truncation.
+pub(crate) fn native_rhythm_mono_pair(left: f32, right: f32) -> f32 {
+    let left = f64::from(quantize_analysis_pcm(left));
+    let right = f64::from(quantize_analysis_pcm(right));
+    ((left + right) * 0.5) as f32
+}
+
 /// Average two signed-16-bit-quantized waveform channels with native truncation.
 pub(crate) fn native_waveform_midpoint_pair(left: f32, right: f32) -> f32 {
     let left = (left * 32_768.0).trunc() as i16;
     let right = (right * 32_768.0).trunc() as i16;
     let midpoint = ((f64::from(left) + f64::from(right)) * 0.5).trunc() as i16;
+    f32::from(midpoint) / 32_768.0
+}
+
+/// Truncate the half-LSB-preserving rhythm midpoint for monochrome waveforms.
+pub(crate) fn native_waveform_midpoint_from_rhythm(sample: f32) -> f32 {
+    let midpoint = (sample * 32_768.0).trunc() as i16;
     f32::from(midpoint) / 32_768.0
 }
 
@@ -936,15 +954,12 @@ fn native_waveform_mono_sample(frame: &[f32]) -> f32 {
     native_waveform_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
 }
 
-fn native_phrase_mono_sample(frame: &[f32]) -> f32 {
-    native_phrase_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
+fn native_rhythm_mono_sample(frame: &[f32]) -> f32 {
+    native_rhythm_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
 }
 
-fn native_waveform_midpoint_sample(frame: &[f32]) -> f32 {
-    native_waveform_midpoint_pair(
-        quantize_analysis_pcm(frame[0]),
-        quantize_analysis_pcm(*frame.get(1).unwrap_or(&frame[0])),
-    )
+fn native_phrase_mono_sample(frame: &[f32]) -> f32 {
+    native_phrase_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
 }
 
 /// Decode a local audio file to equal-weight mono PCM with Symphonia codecs.
@@ -953,11 +968,25 @@ fn native_waveform_midpoint_sample(frame: &[f32]) -> f32 {
 /// selected Symphonia features are pure Rust and redistributable. Architecture-
 /// appropriate SIMD kernels accelerate codec transforms.
 pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
-    decode_audio_file_with_progress(path, usize::MAX, |_, _, _, _, _, _| Ok(()))
+    decode_audio_file_impl(path, false, usize::MAX, |_, _, _, _, _, _| Ok(()))
+}
+
+/// Decode audio while retaining the first two unmixed channels for diagnostics.
+pub fn decode_audio_file_with_channels(path: impl AsRef<Path>) -> Result<DecodedAudio> {
+    decode_audio_file_impl(path, true, usize::MAX, |_, _, _, _, _, _| Ok(()))
 }
 
 pub(crate) fn decode_audio_file_with_progress(
     path: impl AsRef<Path>,
+    progress_interval_frames: usize,
+    progress: impl FnMut(u32, &[f32], &[f32], &[f32], bool, usize) -> Result<()>,
+) -> Result<DecodedAudio> {
+    decode_audio_file_impl(path, false, progress_interval_frames, progress)
+}
+
+fn decode_audio_file_impl(
+    path: impl AsRef<Path>,
+    retain_channels: bool,
     progress_interval_frames: usize,
     mut progress: impl FnMut(u32, &[f32], &[f32], &[f32], bool, usize) -> Result<()>,
 ) -> Result<DecodedAudio> {
@@ -1009,9 +1038,9 @@ pub(crate) fn decode_audio_file_with_progress(
     let mut decoded_channels = None;
     let mut interleaved = Vec::<f32>::new();
     let mut mono = Vec::<f32>::with_capacity(expected_frames);
+    let mut rhythm_mono = Vec::<f32>::with_capacity(expected_frames);
     let mut phrase_mono = Vec::<f32>::with_capacity(expected_frames);
     let mut waveform_mono = Vec::<f32>::with_capacity(expected_frames);
-    let mut waveform_midpoint = Vec::<f32>::with_capacity(expected_frames);
     let mut waveform_stereo = None::<[Vec<f32>; 2]>;
     let mut next_progress = progress_interval_frames;
 
@@ -1044,7 +1073,8 @@ pub(crate) fn decode_audio_file_with_progress(
             None => decoded_channels = Some(channels),
             _ => {}
         }
-        if waveform_stereo.is_none() && !matches!(sample_rate, 44_100 | 48_000) {
+        if waveform_stereo.is_none() && (retain_channels || !matches!(sample_rate, 44_100 | 48_000))
+        {
             waveform_stereo = Some([
                 Vec::with_capacity(expected_frames),
                 Vec::with_capacity(expected_frames),
@@ -1068,9 +1098,9 @@ pub(crate) fn decode_audio_file_with_progress(
                 }
             })?;
             mono.push((sum / channels as f64).clamp(-1.0, 1.0) as f32);
+            rhythm_mono.push(native_rhythm_mono_sample(frame));
             phrase_mono.push(native_phrase_mono_sample(frame));
             waveform_mono.push(native_waveform_mono_sample(frame));
-            waveform_midpoint.push(native_waveform_midpoint_sample(frame));
             if let Some([left, right]) = waveform_stereo.as_mut() {
                 left.push(frame[0]);
                 right.push(*frame.get(1).unwrap_or(&frame[0]));
@@ -1081,7 +1111,7 @@ pub(crate) fn decode_audio_file_with_progress(
                 sample_rate,
                 &mono,
                 &waveform_mono,
-                &waveform_midpoint,
+                &rhythm_mono,
                 false,
                 reader_padding_frames,
             )?;
@@ -1098,7 +1128,7 @@ pub(crate) fn decode_audio_file_with_progress(
         sample_rate,
         &mono,
         &waveform_mono,
-        &waveform_midpoint,
+        &rhythm_mono,
         true,
         reader_padding_frames,
     )?;
@@ -1115,6 +1145,10 @@ pub(crate) fn decode_audio_file_with_progress(
             sample_rate,
             samples: mono,
         },
+        rhythm_mono: MonoPcm {
+            sample_rate,
+            samples: rhythm_mono,
+        },
         phrase_mono: MonoPcm {
             sample_rate,
             samples: phrase_mono,
@@ -1122,10 +1156,6 @@ pub(crate) fn decode_audio_file_with_progress(
         waveform_mono: MonoPcm {
             sample_rate,
             samples: waveform_mono,
-        },
-        waveform_midpoint: MonoPcm {
-            sample_rate,
-            samples: waveform_midpoint,
         },
         waveform_stereo: waveform_stereo.map(|[left, right]| {
             [
@@ -1348,6 +1378,18 @@ mod tests {
     }
 
     #[test]
+    fn native_rhythm_mixer_truncates_each_channel_before_mixing() {
+        assert_eq!(
+            native_rhythm_mono_pair(1.9 / 32_768.0, -0.9 / 32_768.0).to_bits(),
+            (0.5_f32 / 32_768.0).to_bits()
+        );
+        assert_eq!(
+            native_rhythm_mono_pair(-1.9 / 32_768.0, 0.9 / 32_768.0).to_bits(),
+            (-0.5_f32 / 32_768.0).to_bits()
+        );
+    }
+
+    #[test]
     fn native_waveform_midpoint_averages_signed_sixteen_bit_channels() {
         assert_eq!(
             native_waveform_midpoint_pair(0.75, -0.25).to_bits(),
@@ -1394,9 +1436,9 @@ mod tests {
                 reader_padding_frames: 0,
             },
             mono: MonoPcm::new(source_rate, vec![0.25; 64]).expect("mono"),
+            rhythm_mono: MonoPcm::new(source_rate, vec![0.25; 64]).expect("rhythm"),
             phrase_mono: MonoPcm::new(source_rate, vec![0.74; 64]).expect("phrase"),
             waveform_mono: MonoPcm::new(source_rate, vec![0.25; 64]).expect("waveform"),
-            waveform_midpoint: MonoPcm::new(source_rate, vec![0.25; 64]).expect("midpoint"),
             waveform_stereo: Some([left, right]),
         };
 

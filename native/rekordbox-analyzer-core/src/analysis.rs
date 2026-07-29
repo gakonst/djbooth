@@ -15,8 +15,8 @@ use crate::anlz::{
 };
 use crate::audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, MonoPcm, decode_audio_file,
-    decode_audio_file_with_progress, native_phrase_mono_pair, native_waveform_midpoint_pair,
-    native_waveform_mono_pair,
+    decode_audio_file_with_progress, native_phrase_mono_pair, native_waveform_midpoint_from_rhythm,
+    native_waveform_midpoint_pair, native_waveform_mono_pair,
 };
 use crate::flac::build_flac_pvb2;
 use crate::key::{
@@ -340,8 +340,8 @@ pub fn analyze_audio_file_with_options(
                             || {
                                 select_beat_analysis(BeatAnalysisInputs {
                                     mode: options.rhythm_mode(),
-                                    source_samples: decoded.mono().samples(),
-                                    source_sample_rate: decoded.mono().sample_rate(),
+                                    source_samples: decoded.rhythm_mono().samples(),
+                                    source_sample_rate: decoded.rhythm_mono().sample_rate(),
                                     source_reader_padding_frames: decoded
                                         .source()
                                         .reader_padding_frames(),
@@ -475,10 +475,17 @@ fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<ReaderPcms> {
     let source = decoded.source();
     let target_rate = analysis_sample_rate(source.sample_rate())?;
     if source.sample_rate() == target_rate && source.reader_padding_frames() == 0 {
+        let monochrome = decoded
+            .rhythm_mono()
+            .samples()
+            .iter()
+            .copied()
+            .map(native_waveform_midpoint_from_rhythm)
+            .collect();
         return Ok(ReaderPcms {
             waveforms: [
                 decoded.waveform_mono().clone(),
-                decoded.waveform_midpoint().clone(),
+                MonoPcm::new_native_waveform(target_rate, monochrome)?,
             ],
             phrase: None,
         });
@@ -512,6 +519,13 @@ fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<ReaderPcms> {
             phrase: Some(MonoPcm::new(target_rate, phrase)?),
         });
     }
+    let monochrome = decoded
+        .rhythm_mono()
+        .samples()
+        .iter()
+        .copied()
+        .map(native_waveform_midpoint_from_rhythm)
+        .collect::<Vec<_>>();
     let ((color, monochrome), phrase) = rayon::join(
         || {
             rayon::join(
@@ -521,12 +535,7 @@ fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<ReaderPcms> {
                         source.reader_padding_frames(),
                     )
                 },
-                || {
-                    converter.resample_mono_for_reader(
-                        decoded.waveform_midpoint().samples(),
-                        source.reader_padding_frames(),
-                    )
-                },
+                || converter.resample_mono_for_reader(&monochrome, source.reader_padding_frames()),
             )
         },
         || {
@@ -814,7 +823,7 @@ fn decode_with_streaming_features(
                 |sample_rate,
                  samples,
                  waveform_samples,
-                 waveform_midpoint_samples,
+                 rhythm_samples,
                  complete,
                  reader_padding_frames| {
                     if sample_rate != ANALYSIS_SAMPLE_RATE {
@@ -924,10 +933,12 @@ fn decode_with_streaming_features(
                     let color = Arc::<[f32]>::from(
                         &waveform_samples[next_stream_sample..waveform_samples.len()],
                     );
-                    let monochrome = Arc::<[f32]>::from(
-                        &waveform_midpoint_samples
-                            [next_stream_sample..waveform_midpoint_samples.len()],
-                    );
+                    let monochrome = rhythm_samples[next_stream_sample..rhythm_samples.len()]
+                        .iter()
+                        .copied()
+                        .map(native_waveform_midpoint_from_rhythm)
+                        .collect::<Vec<_>>()
+                        .into();
                     waveform_sender
                         .send(StreamedWaveformMessage::Samples { color, monochrome })
                         .context("streaming waveform worker disconnected")?;

@@ -190,6 +190,8 @@ impl BeatSensor {
                         .records
                         .last()
                         .expect("accepted candidate requires a peak");
+                    let candidate =
+                        native_startup_candidate(*candidate, self.peak_buffers[band].records.len());
                     selected_candidates.push(BeatSensorCandidate {
                         band: band as u8,
                         peak_frame: peak.peak_frame,
@@ -199,7 +201,7 @@ impl BeatSensor {
                         support: candidate.support,
                     });
                     self.signal.change_stat(
-                        *candidate,
+                        candidate,
                         &self.peak_buffers[band],
                         beat_hypotheses,
                     )?;
@@ -651,6 +653,18 @@ struct PeakPeriodCandidate {
     support: u32,
 }
 
+fn native_startup_candidate(
+    mut candidate: PeakPeriodCandidate,
+    stored_peak_count: usize,
+) -> PeakPeriodCandidate {
+    if candidate.support == 3 && stored_peak_count == 5 {
+        // The native fixed history counts the current interval in its first
+        // full four-period startup window.
+        candidate.support += 1;
+    }
+    candidate
+}
+
 struct PeakBuffer {
     band: u8,
     records: Vec<PeakInfo>,
@@ -908,8 +922,16 @@ impl BeatListSignal {
             .wrapping_add(candidate.support)
             .wrapping_add(2);
         let generation = self.generation;
+        let missing_records = record_count.saturating_sub(peak_buffer.records.len());
         let first = peak_buffer.records.len().saturating_sub(record_count);
-        for peak in &peak_buffer.records[first..] {
+        let zero_record = PeakInfo {
+            peak_frame: 0,
+            _amplitude: 0.0,
+            interval_ms: 0.0,
+        };
+        let records = std::iter::repeat_n(zero_record, missing_records)
+            .chain(peak_buffer.records[first..].iter().copied());
+        for peak in records {
             if hypotheses.len() >= MAX_EVENTS {
                 bail!("beat sensor hypothesis count exceeds {MAX_EVENTS}");
             }
@@ -1049,6 +1071,50 @@ mod tests {
                 detected_frame: 32,
                 amplitude: 0.75,
             })
+        );
+    }
+
+    #[test]
+    fn startup_history_includes_the_zero_initialized_predecessor() {
+        let mut buffer = PeakBuffer::new(1);
+        buffer.records = (0..5)
+            .map(|index| PeakInfo {
+                peak_frame: 100 + index * 500,
+                _amplitude: 0.5,
+                interval_ms: if index == 0 { 0.0 } else { 500.0 },
+            })
+            .collect();
+        let candidate = native_startup_candidate(
+            PeakPeriodCandidate {
+                interval_ms: 500.0,
+                period_ms: 500.0,
+                error_ms: 0.0,
+                support: 3,
+            },
+            buffer.records.len(),
+        );
+        let mut signal = BeatListSignal::default();
+        let mut hypotheses = Vec::new();
+
+        signal
+            .change_stat(candidate, &buffer, &mut hypotheses)
+            .expect("startup history");
+
+        assert_eq!(candidate.support, 4);
+        assert_eq!(hypotheses.len(), 6);
+        assert_eq!(hypotheses[0].peak_frame, 0);
+        assert_eq!(hypotheses[0].generation, 6);
+        assert_eq!(hypotheses[0].band, 1);
+        assert_eq!(
+            native_startup_candidate(
+                PeakPeriodCandidate {
+                    support: 3,
+                    ..candidate
+                },
+                6,
+            )
+            .support,
+            3
         );
     }
 

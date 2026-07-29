@@ -5,13 +5,15 @@
 //! and one-beat boundary repair.
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::beat_decoder::ExpandedBeat;
 
 const BAR_BEATS: u8 = 4;
 
 /// Native numbering branch used after selecting the strongest phase bucket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UnitEnvelopeNumbering {
     /// The ordinary path: the selected bucket is beat one.
     GridAligned,
@@ -21,7 +23,8 @@ pub enum UnitEnvelopeNumbering {
 }
 
 /// Selected four-way phase and the resulting first beat number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnitEnvelopePhase {
     /// Zero-based winning score bucket.
     pub score_index: u8,
@@ -54,7 +57,8 @@ pub struct UnitEnvelopeAdjustmentReport {
 }
 
 /// Bounded output of the variable-tempo envelope scorer.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UnitEnvelopeScoring {
     /// Weighted low-frequency onset energy for each bar phase.
     pub phase_scores: [f64; BAR_BEATS as usize],
@@ -102,6 +106,18 @@ impl UnitEnvelopeFeature {
     #[must_use]
     pub const fn strong_peak_count(&self) -> usize {
         self.strong_peaks.len()
+    }
+
+    /// Mean-thresholded peak indexes in the 128-frame envelope.
+    #[must_use]
+    pub fn strong_peaks(&self) -> &[usize] {
+        &self.strong_peaks
+    }
+
+    /// Signed native envelope samples.
+    #[must_use]
+    pub fn envelope(&self) -> &[i16] {
+        &self.envelope
     }
 }
 
@@ -440,7 +456,7 @@ fn strong_envelope_peaks(envelope: &[i16]) -> Vec<usize> {
             peak_index = index;
             peak = sample;
         }
-        if !rising || sample == 0 || f64::from(peak) / f64::from(sample) <= 1.5 {
+        if !rising || (sample != 0 && f64::from(peak) / f64::from(sample) <= 1.5) {
             continue;
         }
 
@@ -759,6 +775,11 @@ impl FirstOrderHighPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_confirmation_emits_the_pending_positive_peak() {
+        assert_eq!(strong_envelope_peaks(&[0, 1, 2, 0]), [2]);
+    }
 
     #[test]
     fn zero_scores_fall_back_to_the_first_strong_peak_position() {

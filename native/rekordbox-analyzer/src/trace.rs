@@ -18,6 +18,7 @@ const BA_SET_SAMPLE_OFFSET: usize = 0x14bc8d0;
 const BA_GET_BPM_OFFSET: usize = 0x14bc8f0;
 const BA_GET_BEAT_NUM_OFFSET: usize = 0x14bc910;
 const BA_GET_BEAT_LIST_OFFSET: usize = 0x14bc940;
+const UNIT_ENVELOPE_ANALYZE_OFFSET: usize = 0x0f92a30;
 const UNIT_BEAT_ADJUST_ANALYZE_OFFSET: usize = 0x10fe2b0;
 const BEAT_INFO_ANALYZE_OFFSET: usize = 0x138a960;
 const BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x1390180;
@@ -64,6 +65,7 @@ const CALL_BA_SET_SAMPLE_OFFSET: usize = 0x106aa96;
 const CALL_BA_GET_BPM_OFFSET: usize = 0x106c708;
 const CALL_BA_GET_BEAT_NUM_OFFSET: usize = 0x106c71d;
 const CALL_BA_GET_BEAT_LIST_OFFSET: usize = 0x106c75a;
+const CALL_UNIT_ENVELOPE_ANALYZE_OFFSET: usize = 0x14e66cb;
 const CALL_UNIT_BEAT_ADJUST_ANALYZE_OFFSET: usize = 0x14e66f8;
 const CALL_BEAT_INFO_ANALYZE_OFFSET: usize = 0x14e6695;
 const CALL_BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x138d406;
@@ -134,15 +136,20 @@ const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
 const MAX_TRACE_LOUD_PEAK_CALLS: usize = 20_000;
 const MAX_TRACE_GRID_SNAP_PROBES: usize = 65_536;
 const MAX_TRACE_PHRASE_VALUES: usize = 100_000;
+const MAX_TRACE_UNIT_ENVELOPE_VALUES: usize = 250_000;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 const ENV_TRACE_ANALYZER_STAGES: &str = "REKORDBOX_ANALYZER_TRACE_STAGES";
 const ENV_TRACE_SCOPE: &str = "REKORDBOX_ANALYZER_TRACE_SCOPE";
+const ENV_TRACE_PCM_START: &str = "REKORDBOX_ANALYZER_TRACE_PCM_START";
+const ENV_TRACE_PCM_FRAMES: &str = "REKORDBOX_ANALYZER_TRACE_PCM_FRAMES";
+const MAX_TRACE_PCM_FRAMES: usize = 1_000_000;
 
 type BaCreate = unsafe extern "C" fn(i32, i32, u8, u8, u8) -> *mut c_void;
 type BaSetSample = unsafe extern "C" fn(*mut c_void, *mut f32, *mut f32, i32);
 type BaGetBpm = unsafe extern "C" fn(*mut c_void) -> i32;
 type BaGetBeatNum = unsafe extern "C" fn(*mut c_void) -> i32;
 type BaGetBeatList = unsafe extern "C" fn(*mut c_void, *mut BaBeatInfo);
+type UnitEnvelopeAnalyze = unsafe extern "C" fn(*mut c_void, f32, *mut StdVector, u8);
 type UnitBeatAdjustAnalyze = unsafe extern "C" fn(*mut c_void, *mut f32, *mut StdVector);
 type BeatInfoAnalyze = unsafe extern "C" fn(
     *mut c_void,
@@ -367,6 +374,7 @@ static BA_SET_SAMPLE: AtomicUsize = AtomicUsize::new(0);
 static BA_GET_BPM: AtomicUsize = AtomicUsize::new(0);
 static BA_GET_BEAT_NUM: AtomicUsize = AtomicUsize::new(0);
 static BA_GET_BEAT_LIST: AtomicUsize = AtomicUsize::new(0);
+static UNIT_ENVELOPE_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static UNIT_BEAT_ADJUST_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_SEG_ADJUST: AtomicUsize = AtomicUsize::new(0);
@@ -445,9 +453,11 @@ struct ReferenceTrace {
     phrase_beat_windows: Vec<PhraseBeatWindowTrace>,
     phrase_intro_end_judges: Vec<PhraseIntroEndJudgeTrace>,
     streamed_frames: u64,
+    input_pcm_probe: Option<InputPcmProbeTrace>,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
     gap_corrections: Vec<BeatStageTrace>,
+    unit_envelope_analyses: Vec<UnitEnvelopeAnalysisTrace>,
     unit_adjustments: Vec<UnitAdjustmentTrace>,
     ba_bpm_raw: Option<i32>,
     ba_beat_count: Option<i32>,
@@ -502,6 +512,15 @@ struct PeakBufferCalculationTrace {
     interval_ms: f32,
     accepted: bool,
     state_after: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InputPcmProbeTrace {
+    start_frame: u64,
+    requested_frames: usize,
+    left_bits: Vec<u32>,
+    right_bits: Vec<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -741,6 +760,20 @@ struct BeatInfoAnalyzeTrace {
 struct BeatStageTrace {
     stage: &'static str,
     args: Vec<i32>,
+    beats_before: Vec<InternalBeatTrace>,
+    beats_after: Vec<InternalBeatTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnitEnvelopeAnalysisTrace {
+    bpm: f32,
+    mode: u8,
+    source_frames: i32,
+    sample_rate: i32,
+    block_frames: i32,
+    envelope: Vec<i16>,
+    sparse_peaks: Vec<i16>,
     beats_before: Vec<InternalBeatTrace>,
     beats_after: Vec<InternalBeatTrace>,
 }
@@ -1023,13 +1056,22 @@ struct BeatInfoAnalyzeInfo {
 }
 
 pub(crate) fn begin_reference_trace() {
+    let input_pcm_probe = requested_input_pcm_probe()
+        .expect("reference trace PCM probe was validated before analysis")
+        .map(|(start_frame, requested_frames)| InputPcmProbeTrace {
+            start_frame,
+            requested_frames,
+            left_bits: Vec::with_capacity(requested_frames),
+            right_bits: Vec::with_capacity(requested_frames),
+        });
     let mut trace = trace()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 21,
+        schema_version: 23,
         requested_engine: requested_engine().to_string(),
         trace_scope: requested_trace_scope().to_string(),
+        input_pcm_probe,
         ..ReferenceTrace::default()
     };
     PEAK_SENSOR_BASE.store(0, Ordering::Release);
@@ -1191,6 +1233,10 @@ impl ReferenceTrace {
 
 #[cfg(target_arch = "x86_64")]
 pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
+    let input_pcm_probe = requested_input_pcm_probe()?;
+    if input_pcm_probe.is_some() && requested_trace_scope() != "full" {
+        bail!("{ENV_TRACE_PCM_START} requires {ENV_TRACE_SCOPE}=full");
+    }
     set_original(&BA_CREATE_VARIED_48, base + BA_CREATE_VARIED_48_OFFSET);
     set_original(&BA_CREATE_CONST_48, base + BA_CREATE_CONST_48_OFFSET);
     set_original(&BA_CREATE_VARIED_44, base + BA_CREATE_VARIED_44_OFFSET);
@@ -1199,6 +1245,7 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
     set_original(&BA_GET_BPM, base + BA_GET_BPM_OFFSET);
     set_original(&BA_GET_BEAT_NUM, base + BA_GET_BEAT_NUM_OFFSET);
     set_original(&BA_GET_BEAT_LIST, base + BA_GET_BEAT_LIST_OFFSET);
+    set_original(&UNIT_ENVELOPE_ANALYZE, base + UNIT_ENVELOPE_ANALYZE_OFFSET);
     set_original(
         &UNIT_BEAT_ADJUST_ANALYZE,
         base + UNIT_BEAT_ADJUST_ANALYZE_OFFSET,
@@ -1326,6 +1373,11 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_BA_GET_BEAT_LIST_OFFSET,
             base + BA_GET_BEAT_LIST_OFFSET,
             trace_ba_get_beat_list as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_UNIT_ENVELOPE_ANALYZE_OFFSET,
+            base + UNIT_ENVELOPE_ANALYZE_OFFSET,
+            trace_unit_envelope_analyze as usize,
         )?;
         patch_relative_call(
             base + CALL_UNIT_BEAT_ADJUST_ANALYZE_OFFSET,
@@ -1655,6 +1707,34 @@ fn parse_trace_scope(value: Option<&str>) -> &'static str {
         Some(_) => "invalid",
         None => "full",
     }
+}
+
+fn requested_input_pcm_probe() -> Result<Option<(u64, usize)>> {
+    let start = std::env::var(ENV_TRACE_PCM_START).ok();
+    let frames = std::env::var(ENV_TRACE_PCM_FRAMES).ok();
+    parse_input_pcm_probe(start.as_deref(), frames.as_deref())
+}
+
+fn parse_input_pcm_probe(
+    start: Option<&str>,
+    frames: Option<&str>,
+) -> Result<Option<(u64, usize)>> {
+    let (Some(start), Some(frames)) = (start, frames) else {
+        if start.is_some() || frames.is_some() {
+            bail!("{ENV_TRACE_PCM_START} and {ENV_TRACE_PCM_FRAMES} must be set together");
+        }
+        return Ok(None);
+    };
+    let start = start
+        .parse::<u64>()
+        .with_context(|| format!("{ENV_TRACE_PCM_START} must be a non-negative integer"))?;
+    let frames = frames
+        .parse::<usize>()
+        .with_context(|| format!("{ENV_TRACE_PCM_FRAMES} must be a positive integer"))?;
+    if frames == 0 || frames > MAX_TRACE_PCM_FRAMES {
+        bail!("{ENV_TRACE_PCM_FRAMES} must be in 1..={MAX_TRACE_PCM_FRAMES}");
+    }
+    Ok(Some((start, frames)))
 }
 
 fn trace_analyzer_stages_enabled() -> bool {
@@ -2490,7 +2570,28 @@ unsafe extern "C" fn trace_ba_set_sample(
         let mut trace = trace()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let batch_start = trace.streamed_frames;
         trace.streamed_frames = trace.streamed_frames.saturating_add(frames as u64);
+        let batch_end = trace.streamed_frames;
+        if let Some(probe) = trace.input_pcm_probe.as_mut() {
+            let probe_end = probe
+                .start_frame
+                .saturating_add(probe.requested_frames as u64);
+            let overlap_start = batch_start.max(probe.start_frame);
+            let overlap_end = batch_end.min(probe_end);
+            if overlap_start < overlap_end && !left.is_null() && !right.is_null() {
+                let offset = (overlap_start - batch_start) as usize;
+                let count = (overlap_end - overlap_start) as usize;
+                let left = unsafe { std::slice::from_raw_parts(left.add(offset), count) };
+                let right = unsafe { std::slice::from_raw_parts(right.add(offset), count) };
+                probe
+                    .left_bits
+                    .extend(left.iter().map(|sample| sample.to_bits()));
+                probe
+                    .right_bits
+                    .extend(right.iter().map(|sample| sample.to_bits()));
+            }
+        }
     }
     let function: BaSetSample = unsafe { original(&BA_SET_SAMPLE) };
     unsafe { function(analyzer, left, right, frames) };
@@ -3372,6 +3473,96 @@ unsafe extern "C" fn trace_unit_beat_adjust_analyze(
             }
         }
     }
+}
+
+unsafe extern "C" fn trace_unit_envelope_analyze(
+    analyzer: *mut c_void,
+    bpm: f32,
+    beats: *mut StdVector,
+    mode: u8,
+) {
+    let beats_before = unsafe { snapshot_internal_beats(beats) };
+    let function: UnitEnvelopeAnalyze = unsafe { original(&UNIT_ENVELOPE_ANALYZE) };
+    unsafe { function(analyzer, bpm, beats, mode) };
+    let beats_after = unsafe { snapshot_internal_beats(beats) };
+    let buffers = unsafe { snapshot_unit_envelope(analyzer.cast()) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match (beats_before, beats_after, buffers) {
+        (
+            Ok(beats_before),
+            Ok(beats_after),
+            Ok((source_frames, sample_rate, block_frames, envelope, sparse_peaks)),
+        ) => trace
+            .unit_envelope_analyses
+            .push(UnitEnvelopeAnalysisTrace {
+                bpm,
+                mode,
+                source_frames,
+                sample_rate,
+                block_frames,
+                envelope,
+                sparse_peaks,
+                beats_before,
+                beats_after,
+            }),
+        (before, after, buffers) => {
+            if let Err(error) = before {
+                trace
+                    .warnings
+                    .push(format!("failed to snapshot pre-envelope beats: {error:#}"));
+            }
+            if let Err(error) = after {
+                trace
+                    .warnings
+                    .push(format!("failed to snapshot post-envelope beats: {error:#}"));
+            }
+            if let Err(error) = buffers {
+                trace.warnings.push(format!(
+                    "failed to snapshot unit-envelope buffers: {error:#}"
+                ));
+            }
+        }
+    }
+}
+
+unsafe fn snapshot_unit_envelope(
+    analyzer: *const u8,
+) -> Result<(i32, i32, i32, Vec<i16>, Vec<i16>)> {
+    if analyzer.is_null() {
+        bail!("null unit-envelope analyzer");
+    }
+    let source_frames = unsafe { read_i32_at(analyzer, 8) };
+    let sample_rate = unsafe { read_i32_at(analyzer, 0x14) };
+    let block_frames = unsafe { read_i32_at(analyzer, 0x18) };
+    if source_frames <= 0 || sample_rate <= 0 || block_frames <= 0 {
+        bail!("invalid unit-envelope dimensions {source_frames}/{sample_rate}/{block_frames}");
+    }
+    let count = usize::try_from(source_frames)?.div_ceil(usize::try_from(block_frames)?);
+    if count > MAX_TRACE_UNIT_ENVELOPE_VALUES {
+        bail!("unit-envelope count {count} exceeds trace bound {MAX_TRACE_UNIT_ENVELOPE_VALUES}");
+    }
+    let envelope = unsafe { read_i16_buffer(read_pointer_at(analyzer, 0x58), count) }?;
+    let sparse_peaks = unsafe { read_i16_buffer(read_pointer_at(analyzer, 0x60), count) }?;
+    Ok((
+        source_frames,
+        sample_rate,
+        block_frames,
+        envelope,
+        sparse_peaks,
+    ))
+}
+
+unsafe fn read_i16_buffer(pointer: *const u8, count: usize) -> Result<Vec<i16>> {
+    if count != 0 && pointer.is_null() {
+        bail!("null i16 trace buffer");
+    }
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        values.push(unsafe { (pointer.add(index * 2) as *const i16).read_unaligned() });
+    }
+    Ok(values)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4977,6 +5168,19 @@ mod tests {
         assert_eq!(parse_trace_scope(Some("phrase")), "phrase");
         assert_eq!(parse_trace_scope(Some("PHRASE")), "phrase");
         assert_eq!(parse_trace_scope(Some("everything")), "invalid");
+    }
+
+    #[test]
+    fn pcm_probe_bounds_are_explicit_and_bounded() {
+        assert_eq!(parse_input_pcm_probe(None, None).unwrap(), None);
+        assert_eq!(
+            parse_input_pcm_probe(Some("1200"), Some("4096")).unwrap(),
+            Some((1_200, 4_096))
+        );
+        assert!(parse_input_pcm_probe(Some("1200"), None).is_err());
+        assert!(parse_input_pcm_probe(None, Some("4096")).is_err());
+        assert!(parse_input_pcm_probe(Some("1200"), Some("0")).is_err());
+        assert!(parse_input_pcm_probe(Some("1200"), Some("1000001")).is_err());
     }
 
     #[test]

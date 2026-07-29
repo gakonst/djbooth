@@ -32,6 +32,18 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — local synchronized stems audition UI
+
+- Added a dependency-free local Web Audio player for the 45-second London Grammar example. It
+  keeps the reference mix and all four Mel-Band-RoFormer outputs on one audio clock, supports
+  instant original/stem-sum switching, seeking, mute/solo, channel gain, and keyboard controls.
+- The local Node server binds only to `127.0.0.1`, serves bounded known paths with WAV byte ranges,
+  and accepts another complete four-stem directory through `--audio-dir`. The npm package includes
+  the UI source but not audio or model artifacts.
+- Retained the Python 3.12 + MLX runtime. A Rust binding port was deliberately deferred: MLXcel was
+  only acceptable with a measured runtime advantage, and the existing Python path already runs the
+  selected model faster than real time on the target M2 Max.
+
 ### 2026-07-29 — clean Apple Silicon Mel-Band-RoFormer stems backend
 
 - Added `stems doctor`, `stems setup`, and `stems separate` plus matching TypeScript exports. The
@@ -296,6 +308,37 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   `1094.8 ms → 989.2 ms` median backend time, level with the `991.0 ms`
   pre-integration baseline. Serial and overlapped DAT/EXT/2EX outputs are
   byte-identical.
+
+### 2026-07-29 — exact linked-rhythm boundary closure
+
+- Recovered the native `Analyzer::setSample` boundary: truncate each stereo
+  channel independently through signed 16-bit PCM, then average them while
+  retaining the possible half-LSB midpoint. Direct PCM probes match
+  `99.913%` of native float words; Dynamic analysis now consumes this signal
+  independently of Normal rhythm, key, phrase, and waveform mixes.
+- Added schema-23 tracing for `UnitEnvelopeMaker::analyze` and bounded
+  `pcm-probe`/`unit-envelope --stages` diagnostics. The native strong-envelope
+  detector emits a pending positive peak when its falling confirmation sample
+  is exactly zero. The clean extractor now preserves that boundary.
+- Recovered the fixed-history startup rule in `BeatSensor`: its first complete
+  four-period candidate counts the current interval and requests one
+  zero-initialized predecessor before the five real stored peaks. On a fresh
+  Funkytown trace, all `1,850` accepted candidate updates match band, peak,
+  period, and support exactly, and both implementations retain `13,177`
+  hypotheses.
+- A fresh 113-input Dynamic replay produced the same three malformed-media
+  failures and exact results on all 110 valid references: F1 `1.0`, exact beat
+  count, exact beat numbering, and median p95 timing error `0`. Mean p95 is
+  `0.120518 ms`; the only nonzero p95 rows are Rapture (`0.229 ms`), Adam Ten
+  Intro Mix (`12.426 ms`), Another Dimension (`0.227 ms`), and The Power
+  (`0.375 ms`).
+- Reused the half-LSB rhythm buffer when deriving monochrome waveform input,
+  removing one full-track allocation and traversal without changing generated
+  bytes. A same-state 100-track Auto comparison improved from `22.24 s` at
+  committed HEAD to `20.78 s`; a representative single track improved from
+  `1.386 s` to `1.334 s`. `target-cpu=native` remained neutral on the single
+  track (`1.341 s` versus `1.338 s`) and slower under a hot batch
+  (`25.92 s` versus `25.17 s`), so the portable release stays the default.
 
 ### 2026-07-29 — source-reader detail-count closure
 

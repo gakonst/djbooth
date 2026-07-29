@@ -4,15 +4,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
-    AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, RhythmMode, ThreeBandAnalysis,
-    analyze_beat_sensor_events, analyze_to_directory_with_options, compare_beat_grids,
-    compare_output_directories, compare_waveforms, decode_audio_file,
-    extract_native_phrase_features,
+    AnalysisOptions, AnalysisSampleRateConverter, AnlzFile, DatAnalysis, ExtAnalysis, RhythmMode,
+    ThreeBandAnalysis, analyze_beat_sensor_events, analyze_linked_rhythm_with_reader_padding,
+    analyze_to_directory_with_options, compare_beat_grids, compare_output_directories,
+    compare_waveforms, decode_audio_file, decode_audio_file_with_channels,
+    extract_native_phrase_features, extract_unit_envelope_feature, score_unit_envelope_feature,
 };
 use serde::Serialize;
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
 const ANALYZER_RHYTHM_MODE_ENV: &str = "REKORDBOX_ANALYZER_RHYTHM_MODE";
+const PCM_PROBE_MAX_FRAMES: usize = 262_144;
+const DIAGNOSTIC_PREVIEW_ITEMS: usize = 16;
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
@@ -35,7 +38,9 @@ fn run() -> Result<()> {
                    rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   rekordbox-analyzer pcm-probe AUDIO [--start N] [--frames N]\n  \
                    rekordbox-analyzer phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]\n  \
+                   rekordbox-analyzer unit-envelope AUDIO [--stages] [--values]\n  \
                    rekordbox-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
@@ -44,7 +49,9 @@ fn run() -> Result<()> {
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
+                   pcm-probe     Emit bounded raw/native-reader mono PCM bit patterns\n  \
                    phrase-features  Page native-shaped beat features using a reference grid\n  \
+                   unit-envelope Trace linked bar-phase scores and selected numbering\n  \
                    waveform-diff  Compare decoded waveform components semantically\n  \
                    rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape\n\n\
                  Rhythm modes:\n  \
@@ -90,13 +97,91 @@ fn run() -> Result<()> {
             let decoded = decode_audio_file(&audio)?;
             let resampled;
             let pcm = if let Some(sample_rate) = sample_rate {
-                resampled = decoded.mono().resample_linear(sample_rate)?;
+                resampled = decoded.rhythm_mono().resample_linear(sample_rate)?;
                 &resampled
             } else {
-                decoded.mono()
+                decoded.rhythm_mono()
             };
             let analysis = analyze_beat_sensor_events(pcm.samples(), pcm.sample_rate())?;
             println!("{}", serde_json::to_string(&analysis)?);
+            Ok(())
+        }
+        Some("pcm-probe") => {
+            let audio = required_path(args.next(), "audio path")?;
+            let mut start = None;
+            let mut frames = None;
+            while let Some(argument) = args.next() {
+                let (name, value) = if matches!(argument.as_str(), "--start" | "--frames") {
+                    let value = args
+                        .next()
+                        .with_context(|| format!("{argument} requires an integer value"))?;
+                    (argument, value)
+                } else if let Some(value) = argument.strip_prefix("--start=") {
+                    ("--start".to_string(), value.to_string())
+                } else if let Some(value) = argument.strip_prefix("--frames=") {
+                    ("--frames".to_string(), value.to_string())
+                } else {
+                    bail!("pcm-probe received unknown option '{argument}'");
+                };
+                let parsed = value
+                    .parse::<usize>()
+                    .with_context(|| format!("{name} must be an integer"))?;
+                match name.as_str() {
+                    "--start" if start.replace(parsed).is_some() => {
+                        bail!("pcm-probe received --start more than once")
+                    }
+                    "--frames" if frames.replace(parsed).is_some() => {
+                        bail!("pcm-probe received --frames more than once")
+                    }
+                    "--start" | "--frames" => {}
+                    _ => unreachable!("validated pcm-probe option"),
+                }
+            }
+            let start = start.unwrap_or_default();
+            let frames = frames.unwrap_or(1_024);
+            if frames == 0 || frames > PCM_PROBE_MAX_FRAMES {
+                bail!("--frames must be between 1 and {PCM_PROBE_MAX_FRAMES}");
+            }
+            let decoded = decode_audio_file_with_channels(&audio)?;
+            let [left, right] = decoded
+                .stereo()
+                .context("pcm-probe decoder did not retain source channels")?;
+            let end = start
+                .checked_add(frames)
+                .context("pcm-probe frame range overflow")?
+                .min(decoded.mono().len());
+            if start >= decoded.mono().len() {
+                bail!(
+                    "--start {start} is outside decoded PCM with {} frames",
+                    decoded.mono().len()
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "audioPath": audio,
+                    "sampleRate": decoded.mono().sample_rate(),
+                    "startFrame": start,
+                    "requestedFrames": frames,
+                    "returnedFrames": end - start,
+                    "rawMonoBits": decoded.mono().samples()[start..end]
+                        .iter()
+                        .map(|sample| sample.to_bits())
+                        .collect::<Vec<_>>(),
+                    "rhythmMonoBits": decoded.rhythm_mono().samples()[start..end]
+                        .iter()
+                        .map(|sample| sample.to_bits())
+                        .collect::<Vec<_>>(),
+                    "leftBits": left.samples()[start..end]
+                        .iter()
+                        .map(|sample| sample.to_bits())
+                        .collect::<Vec<_>>(),
+                    "rightBits": right.samples()[start..end]
+                        .iter()
+                        .map(|sample| sample.to_bits())
+                        .collect::<Vec<_>>(),
+                }))?
+            );
             Ok(())
         }
         Some("doctor") => {
@@ -116,6 +201,129 @@ fn run() -> Result<()> {
                     "dspCompatibility": "protocol-compatible-baseline",
                 }))?
             );
+            Ok(())
+        }
+        Some("unit-envelope") => {
+            let audio = required_path(args.next(), "audio path")?;
+            let mut include_values = false;
+            let mut include_stages = false;
+            for argument in args {
+                match argument.as_str() {
+                    "--values" if include_values => {
+                        bail!("unit-envelope received --values more than once")
+                    }
+                    "--values" => include_values = true,
+                    "--stages" if include_stages => {
+                        bail!("unit-envelope received --stages more than once")
+                    }
+                    "--stages" => include_stages = true,
+                    _ => bail!("unit-envelope received unknown option '{argument}'"),
+                }
+            }
+            let decoded = decode_audio_file(&audio)?;
+            let analysis = analyze_linked_rhythm_with_reader_padding(
+                decoded.rhythm_mono().samples(),
+                decoded.rhythm_mono().sample_rate(),
+                4,
+                decoded.source().reader_padding_frames(),
+            )?;
+            let converter = AnalysisSampleRateConverter::new(
+                decoded.rhythm_mono().sample_rate(),
+                analysis.sample_rate,
+            )?;
+            let prepared = converter.resample_mono_for_reader(
+                decoded.rhythm_mono().samples(),
+                decoded.source().reader_padding_frames(),
+            )?;
+            let feature = extract_unit_envelope_feature(&prepared, analysis.sample_rate)?;
+            if include_values && feature.envelope_len() > PCM_PROBE_MAX_FRAMES {
+                bail!(
+                    "unit-envelope value count {} exceeds output bound {PCM_PROBE_MAX_FRAMES}",
+                    feature.envelope_len()
+                );
+            }
+            let scoring = score_unit_envelope_feature(&feature, &analysis.beats)?;
+            let strong_peaks = feature
+                .strong_peaks()
+                .iter()
+                .take(DIAGNOSTIC_PREVIEW_ITEMS)
+                .map(|index| {
+                    serde_json::json!({
+                        "index": index,
+                        "value": feature.envelope()[*index],
+                    })
+                })
+                .collect::<Vec<_>>();
+            let first = analysis.beats.first().context("linked grid is empty")?;
+            let mut output = serde_json::json!({
+                "audioPath": audio,
+                "sampleRate": analysis.sample_rate,
+                "totalFrames": analysis.total_frames,
+                "beatCount": analysis.beats.len(),
+                "firstBeat": {
+                    "positionFrame": first.position_frame,
+                    "periodMs": first.period_ms,
+                    "beatNumber": first.beat_number,
+                },
+                "scoring": scoring,
+                "strongPeakCount": feature.strong_peak_count(),
+                "strongPeaks": strong_peaks,
+            });
+            if include_values {
+                output
+                    .as_object_mut()
+                    .expect("unit-envelope output is an object")
+                    .insert(
+                        "envelope".to_string(),
+                        serde_json::json!(feature.envelope()),
+                    );
+            }
+            if include_stages {
+                output
+                    .as_object_mut()
+                    .expect("unit-envelope output is an object")
+                    .insert(
+                        "stages".to_string(),
+                        serde_json::json!({
+                            "counts": {
+                                "events": analysis.beat_sensor.events.len(),
+                                "candidates": analysis.beat_sensor.candidates.len(),
+                                "selectedCandidates":
+                                    analysis.beat_sensor.selected_candidates.len(),
+                                "hypotheses": analysis.beat_sensor.beat_hypotheses.len(),
+                                "continuousHypotheses": analysis.continuous_hypotheses.len(),
+                                "shortRunHypotheses": analysis.short_run_hypotheses.len(),
+                                "provisionalSections": analysis.provisional_sections.len(),
+                                "refinedSections": analysis.refined_sections.len(),
+                                "suppressedHypotheses": analysis.suppressed_hypotheses.len(),
+                                "adjustedSections": analysis.adjusted_sections.len(),
+                                "expandedBeats": analysis.expanded_beats.len(),
+                                "finalBeats": analysis.beats.len(),
+                            },
+                            "refinedSections": analysis
+                                .refined_sections
+                                .iter()
+                                .take(DIAGNOSTIC_PREVIEW_ITEMS)
+                                .collect::<Vec<_>>(),
+                            "adjustedSections": analysis
+                                .adjusted_sections
+                                .iter()
+                                .take(DIAGNOSTIC_PREVIEW_ITEMS)
+                                .collect::<Vec<_>>(),
+                            "firstExpandedBeats":
+                                analysis.expanded_beats
+                                    .iter()
+                                    .take(DIAGNOSTIC_PREVIEW_ITEMS)
+                                    .collect::<Vec<_>>(),
+                            "firstFinalBeats":
+                                analysis.beats
+                                    .iter()
+                                    .take(DIAGNOSTIC_PREVIEW_ITEMS)
+                                    .collect::<Vec<_>>(),
+                        }),
+                    );
+            }
+            println!("{}", serde_json::to_string_pretty(&output)?);
             Ok(())
         }
         Some("beat-grid-diff") => {
@@ -286,7 +494,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|pcm-probe AUDIO [--start N] [--frames N]|phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]|unit-envelope AUDIO [--stages] [--values]|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }

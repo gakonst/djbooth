@@ -115,21 +115,24 @@ platform codec dependency:
   Life Is Hard; ordinary `M4A ` edit lists remain untrimmed because their stock
   grids prove different backend semantics. See Apple's
   [packet-table priming definition](https://developer.apple.com/documentation/audiotoolbox/audiofilepackettableinfo).
-- Key, Normal rhythm, and Dynamic rhythm retain the deterministic equal-weight
-  mono signal. Key and Normal rhythm resample it to 44.1 kHz; Dynamic consumes
-  source-rate PCM because its recovered detector measures positions in source
-  frames. Waveforms follow the native reader instead: each stereo channel is
-  rounded through signed 16-bit PCM and combined with an exact half-sum that
-  preserves half-LSB values. Native 44.1 and 48 kHz rates are retained. Other
-  8–200 kHz inputs select 48 kHz for the 8 kHz family and 44.1 kHz otherwise,
-  run each stereo channel separately through the recovered 29-tap Kaiser
-  converter, then quantize and mix. WAV/other readers advertise the decoded
-  length. FLAC adds its validated STREAMINFO maximum block size, even after a
-  leading ID3v2 tag. For MPEG-1 Layer III `Info` streams whose encoder field
-  starts with `LAME`, Core Audio derives a CBR byte duration and rounds its
-  packet count upward; the advertised final packet can therefore be absent.
-  The clean reader reproduces that structural estimate and supplies its
-  1,152 frames as zeroes. The converted reader exposes
+- Key and Normal rhythm retain the deterministic equal-weight mono signal and
+  resample it to 44.1 kHz. Dynamic instead reproduces
+  `Analyzer::setSample`: truncate each stereo channel independently through
+  signed 16-bit PCM, then average them while retaining the possible half-LSB
+  midpoint. It consumes source-rate PCM because its recovered detector
+  measures positions in source frames. Waveforms follow the native reader
+  instead: each stereo channel is rounded through signed 16-bit PCM and
+  combined with an exact half-sum that preserves half-LSB values. Native 44.1
+  and 48 kHz rates are retained. Other 8–200 kHz inputs select 48 kHz for the
+  8 kHz family and 44.1 kHz otherwise, run each stereo channel separately
+  through the recovered 29-tap Kaiser converter, then quantize and mix.
+  WAV/other readers advertise the decoded length. FLAC adds its validated
+  STREAMINFO maximum block size, even after a leading ID3v2 tag. For MPEG-1
+  Layer III `Info` streams whose encoder field starts with `LAME`, Core Audio
+  derives a CBR byte duration and rounds its packet count upward; the
+  advertised final packet can therefore be absent. The clean reader
+  reproduces that structural estimate and supplies its 1,152 frames as
+  zeroes. The converted reader exposes
   `ceil(advertised * target/source) - 1` frames.
 - The waveform path emits fixed 400-byte `PWAV`, 100-byte `PWV2`,
   1,200-column `PWV4`/`PWV6`, and variable 150 Hz
@@ -353,25 +356,27 @@ and exact beat count on all 110 tracks.
 
 ## Linked Dynamic differential checkpoint
 
-A fresh, read-only 110-track Dynamic replay completed with zero analyzer
-failures. All 110 tracks reached F1 `>= 0.99`; mean F1 is `0.999985758`, mean
-p95 timing error is `0.677 ms`, median p95 is zero, and p90/p95 of per-track
-p95 are `1.496/2.517 ms`. All 110 grids have exact aligned bar phase and exact
-beat numbering, 109/110 have exact beat count, and 60/110 have zero
-median/p95/max timestamp error. The prior static implementation reached
-94/110, mean F1
-`0.878300174`, and mean p95 `43.365 ms`.
+A fresh, read-only 113-input Dynamic replay completed on all 110 valid
+references; the same three malformed sources fail closed. All 110 valid grids
+have F1 `1.0`, exact beat count, exact aligned bar phase, and exact beat
+numbering. Median p95 timing error is zero and mean p95 is `0.120518 ms`.
+Rapture, Adam Ten Intro Mix, Another Dimension, and The Power are the only
+nonzero-p95 rows at `0.229/12.426/0.227/0.375 ms`. The prior static
+implementation reached 94/110, mean F1 `0.878300174`, and mean p95
+`43.365 ms`.
 
 The recovered low-frequency UnitEnvelope extractor, four-bucket scorer,
-all-nonpositive first-peak fallback, numbering branches, one-beat boundary
-repair, DASH AAC priming, and format-derived FLAC reader tail produce an exact
-Life Is Hard grid and recover seven previously missing FLAC endpoint beats.
-The recovered whole-beat-rounded short-section fit closes Chopin at the exact
-692 beats, labels, and tempo changes with zero p95 error. Enforcing the
-native one-eighth-beat survivor-spacing invariant at section bounds closes
-Conga at the exact 867 beats and labels, F1 `1.0`, and `0.862 ms` p95 error.
-The sole remaining beat-count residual is the existing Funkytown
-source/reference mismatch; its aligned labels are exact.
+all-nonpositive first-peak fallback, zero-valued falling confirmation,
+numbering branches, one-beat boundary repair, DASH AAC priming, and
+format-derived FLAC reader tail produce an exact Life Is Hard grid and recover
+seven previously missing FLAC endpoint beats. The recovered
+whole-beat-rounded short-section fit closes Chopin at the exact 692 beats,
+labels, and tempo changes with zero p95 error. Enforcing the native
+one-eighth-beat survivor-spacing invariant at section bounds closes Conga at
+the exact 867 beats and labels. The fixed-history startup rule closes
+Funkytown: all 1,850 accepted candidate updates match band, peak, period, and
+support, both paths retain 13,177 hypotheses, and the final 957 beats are
+exact.
 
 A separate 849-track audit confirms that Normal and Dynamic are distinct
 analysis modes, not interchangeable quality levels. All 14 references with
