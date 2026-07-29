@@ -61,6 +61,7 @@ impl AudioSourceInfo {
 pub struct DecodedAudio {
     source: AudioSourceInfo,
     mono: MonoPcm,
+    phrase_mono: MonoPcm,
     waveform_mono: MonoPcm,
     waveform_midpoint: MonoPcm,
     waveform_stereo: Option<[MonoPcm; 2]>,
@@ -75,6 +76,11 @@ impl DecodedAudio {
     /// Equal-weight, normalized mono samples at the source sample rate.
     pub fn mono(&self) -> &MonoPcm {
         &self.mono
+    }
+
+    /// Native signed-16-bit 99% left/1% right signal used by phrase analysis.
+    pub(crate) fn phrase_mono(&self) -> &MonoPcm {
+        &self.phrase_mono
     }
 
     /// Native signed-16-bit-quantized mono signal used by waveform analysis.
@@ -873,8 +879,19 @@ pub(crate) fn native_waveform_midpoint_pair(left: f32, right: f32) -> f32 {
     f32::from(midpoint) / 32_768.0
 }
 
+/// Mix two channels exactly as the native song-structure analyzer boundary.
+pub(crate) fn native_phrase_mono_pair(left: f32, right: f32) -> f32 {
+    let left = f64::from(quantize_analysis_pcm(left));
+    let right = f64::from(quantize_analysis_pcm(right));
+    (left * 0.99 + right * 0.01) as f32
+}
+
 fn native_waveform_mono_sample(frame: &[f32]) -> f32 {
     native_waveform_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
+}
+
+fn native_phrase_mono_sample(frame: &[f32]) -> f32 {
+    native_phrase_mono_pair(frame[0], *frame.get(1).unwrap_or(&frame[0]))
 }
 
 fn native_waveform_midpoint_sample(frame: &[f32]) -> f32 {
@@ -946,6 +963,7 @@ pub(crate) fn decode_audio_file_with_progress(
     let mut decoded_channels = None;
     let mut interleaved = Vec::<f32>::new();
     let mut mono = Vec::<f32>::with_capacity(expected_frames);
+    let mut phrase_mono = Vec::<f32>::with_capacity(expected_frames);
     let mut waveform_mono = Vec::<f32>::with_capacity(expected_frames);
     let mut waveform_midpoint = Vec::<f32>::with_capacity(expected_frames);
     let mut waveform_stereo = None::<[Vec<f32>; 2]>;
@@ -1004,6 +1022,7 @@ pub(crate) fn decode_audio_file_with_progress(
                 }
             })?;
             mono.push((sum / channels as f64).clamp(-1.0, 1.0) as f32);
+            phrase_mono.push(native_phrase_mono_sample(frame));
             waveform_mono.push(native_waveform_mono_sample(frame));
             waveform_midpoint.push(native_waveform_midpoint_sample(frame));
             if let Some([left, right]) = waveform_stereo.as_mut() {
@@ -1049,6 +1068,10 @@ pub(crate) fn decode_audio_file_with_progress(
         mono: MonoPcm {
             sample_rate,
             samples: mono,
+        },
+        phrase_mono: MonoPcm {
+            sample_rate,
+            samples: phrase_mono,
         },
         waveform_mono: MonoPcm {
             sample_rate,
@@ -1287,6 +1310,26 @@ mod tests {
         assert_eq!(
             native_waveform_midpoint_pair(1.0, -1.0).to_bits(),
             0.0_f32.to_bits()
+        );
+    }
+
+    #[test]
+    fn native_phrase_mixer_uses_signed_sixteen_bit_ninety_nine_one_weights() {
+        assert_eq!(
+            native_phrase_mono_pair(0.75, -0.25).to_bits(),
+            0.74_f32.to_bits()
+        );
+        assert_eq!(
+            native_phrase_mono_pair(1.9 / 32_768.0, -1.9 / 32_768.0).to_bits(),
+            (0.98_f32 / 32_768.0).to_bits()
+        );
+        assert_eq!(
+            native_phrase_mono_pair(32_767.0 / 32_768.0, -1.0).to_bits(),
+            0x3f7a_df4d
+        );
+        assert_eq!(
+            native_phrase_mono_pair(-1.0, 32_767.0 / 32_768.0).to_bits(),
+            0xbf7a_e14d
         );
     }
 

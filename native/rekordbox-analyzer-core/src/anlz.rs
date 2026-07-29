@@ -445,8 +445,9 @@ impl ExtendedBeatGrid {
 
 /// Complete canonical EXT analysis primitives.
 ///
-/// Cue and song-structure tags stay opaque because their mutable synthesis is
-/// not required for analysis and the latter is obfuscated on disk.
+/// Cue tags and retained song-structure tags stay opaque so unknown fields and
+/// optional on-disk PSSI obfuscation round-trip without loss. New clean-room
+/// song structures are synthesized by the phrase module before insertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtAnalysis {
     pub path: String,

@@ -68,7 +68,7 @@ The semantic writer currently covers:
 | File | Semantically rebuilt | Opaque but preserved |
 | --- | --- | --- |
 | DAT | `PPTH`, `PVBR`, `PQTZ`, `PWAV`, `PWV2`, empty cue scaffolding | non-empty `PCOB` entries |
-| EXT | `PPTH`, `PWV3`, `PQT2`, `PWV4`, `PWV5`, `PVB2` | `PCOB`, `PCO2`, obfuscated `PSSI` |
+| EXT | `PPTH`, `PWV3`, `PQT2`, `PWV4`, `PWV5`, `PVB2`, generated `PSSI` | `PCOB`, `PCO2`, retained opaque/obfuscated `PSSI` |
 | 2EX | `PPTH`, `PWV6`, `PWV7`, `PWVC` | none |
 
 The following fields remain named as unknown and are round-tripped explicitly:
@@ -157,6 +157,17 @@ platform codec dependency:
 - Key analysis combines peak chroma with a tuning-aware whitened 36-bin
   HPCP/CENS path, Krumhansl and Faraldo BGate profiles, and bounded
   intro/outro tonic evidence.
+- Song-structure analysis computes beat-aligned bar features from total,
+  low/mid/high-band energy, envelope onset density, and zero-crossing rate.
+  Its frontend follows the recovered reader contract: signed-16-bit stereo at
+  the native 44.1/48 kHz analysis rate, mixed as 99% left and 1% right.
+  A bounded dynamic program combines standardized change evidence with
+  mood-specific musical-duration priors. Post-leading phrase starts follow the
+  final beat grid's actual downbeat labels. The result uses the native 32-byte
+  `PSSI` header and 24-byte phrase records, including mood, end beat, phrase
+  kinds, `k1/k2/k3`, the Up3 discriminator and internal beats, and bounded
+  fill markers. `analysis.json` exposes mood, reader rate/mix, phrase count,
+  end beat, and the first twelve complete phrase records as a bounded summary.
 - Validated MPEG-1 Layer III `Xing` input gets the Rekordbox 6.8.2 400-entry
   `PVBR` table: offsets are relative to the first data frame and retain an
   eight-frame decoder preroll. `Info`/CBR, unmarked MP3, and VBRI input retain
@@ -368,6 +379,50 @@ local tempo movement pass in Dynamic. Of 835 static Normal references, Normal
 passes 759 while forced Dynamic passes 606. Differential tests and the local
 reference helper therefore require the same explicit mode on both sides.
 
+## Song-structure differential checkpoint
+
+The clean analyzer now emits a valid, non-empty `PSSI` phrase map rather than
+empty optional scaffolding. The binary envelope and record layout are exact:
+32 header bytes, 24 bytes per phrase, one-based contiguous indices, native
+mood/end-beat positions, phrase-kind fields, `k1/k2/k3`, Up3 `b` and internal
+beats, and optional fill markers.
+
+The implementation is clean-room and beat-synchronous. It uses six independent
+bar features, standardized multi-scale novelty, mood-specific phrase-duration
+priors, and a bounded dynamic-programming decoder. The first phrase retains
+native beat index one semantics. Every later phrase follows an actual
+`beat == 1` label; `99.59%` of 113 native-reference post-leading boundaries
+show that same contract.
+
+A full 110-track read-only differential after native input/rate correction
+reports:
+
+- mood-family accuracy: `90.0%`;
+- mean native/clean phrase count: `18.164/17.664`;
+- phrase-count mean absolute error: `2.482`;
+- boundary F1 exact/within 4/within 8 beat-grid entries:
+  `0.5665/0.6833/0.7233`;
+- first/last phrase-kind agreement: `99.09%/87.27%`;
+- macro kind agreement among boundaries matched within four entries: `45.61%`.
+
+These measurements establish a useful protocol-compatible baseline, not exact
+proprietary phrase analysis. A complete replay rejected an attempted endpoint
+bias because it traded a `+0.0016` exact-F1 change for worse four/eight-entry
+F1 and worse matched labels. Further complete sweeps removed a redundant
+boundary-level metrical bonus: duration priors already represented meter, and
+the removal improved corrected-input exact/within-four boundary F1 by
+`+0.0169/+0.0239`.
+
+An isolated committed-HEAD comparator measured the initial non-empty phrase
+stage at `+56 ms` (`+0.29%`) over 100 tracks. Samply attributed
+`0.35–0.74%` of representative-track CPU to phrase analysis, almost entirely
+to the scalar bar-feature scan. The live pipeline now overlaps that scan with
+waveform/key work and hoists filter coefficients outside the bar loop.
+Allocator samples never intersected a phrase stack. `target-cpu=native`, fat
+LTO/one codegen unit, and their combination were `2.44–3.41%` slower than the
+portable default on the same pinned workload, so release codegen remains
+portable.
+
 ## Historical variable-tempo and syncopated-phase audit
 
 The following records the superseded global/barwise experiments that motivated
@@ -434,8 +489,9 @@ artifact was retained, so distributable output remains unchanged.
 - MPEG-2/2.5 Layer III, Layer I/II, and nonzero VBRI seek-table parity have no
   local Rekordbox oracle yet. VBRI sample-count trailers are implemented from
   the validated header, while its 400 offsets remain conservatively zero.
-- Song structure/phrase analysis is not implemented. Clean `PSSI` is valid
-  empty scaffolding instead of a proprietary phrase map.
+- Song structure is implemented as a deterministic beat-synchronous baseline.
+  Exact proprietary phrase boundaries, mood family, phrase kinds, auxiliary
+  variant/internal-beat fields, and fill placement remain differential gaps.
 - Cue sections are emitted empty. Non-empty `PCOB`, `PCO2`, and obfuscated
   `PSSI` remain losslessly preservable by the format core.
 - Non-44.1/48 kHz Dynamic input uses the recovered 29-tap Kaiser polyphase
@@ -454,9 +510,9 @@ artifact was retained, so distributable output remains unchanged.
   151; the residual synthetic misses are height-only amplitude ramps/sweeps.
   Across 106 aligned real sources, `PWAV` height/color exactness is
   `99.9033%/99.8868%` and `PWV2` exactness is `99.9906%`.
-- Source-decoder/framer detail-count boundaries, syncopated Normal meter
-  inference, isolated source/oracle alignment outliers, phrase structure, and
-  unsupported MP3 seek variants remain high-value differential work.
+- Syncopated Normal meter inference, isolated source/oracle alignment
+  outliers, exact phrase semantics, and unsupported MP3 seek variants remain
+  high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.

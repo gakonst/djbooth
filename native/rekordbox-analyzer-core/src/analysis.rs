@@ -15,7 +15,8 @@ use crate::anlz::{
 };
 use crate::audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, MonoPcm, decode_audio_file,
-    decode_audio_file_with_progress, native_waveform_midpoint_pair, native_waveform_mono_pair,
+    decode_audio_file_with_progress, native_phrase_mono_pair, native_waveform_midpoint_pair,
+    native_waveform_mono_pair,
 };
 use crate::flac::build_flac_pvb2;
 use crate::key::{
@@ -23,6 +24,7 @@ use crate::key::{
     RawChromaFeatures, analyze_key, analyze_key_from_raw,
 };
 use crate::linked_rhythm::analyze_linked_beats_with_reader_padding;
+use crate::phrase::{SongStructure, analyze_song_structure};
 use crate::rhythm::{
     BeatAnalysis, FFT_SIZE as BEAT_FFT_SIZE, HOP_SIZE as BEAT_HOP_SIZE, OnsetEnvelopes,
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
@@ -40,6 +42,7 @@ const OUTPUT_NAMES: [(&str, &str); 3] = [
 ];
 const VBR_ENTRY_COUNT: usize = 400;
 const STREAMING_BATCH_FRAMES: usize = ANALYSIS_SAMPLE_RATE as usize * 5;
+const SUMMARY_PHRASES: usize = 12;
 /// Profiled single-track worker default.
 pub const DEFAULT_ANALYZER_THREADS: usize = 8;
 /// Hard ceiling for one analyzer process.
@@ -134,6 +137,7 @@ pub struct GeneratedAnalysis {
     pub two_ex: AnlzFile,
     pub beat: BeatAnalysis,
     pub key: KeyAnalysis,
+    pub song_structure: SongStructure,
     pub source: AudioSourceInfo,
     pub duration_seconds: f64,
     pub rhythm_mode_requested: RhythmMode,
@@ -169,7 +173,33 @@ pub struct OutputSummary {
     pub files: Vec<AnalysisFileSummary>,
     pub key: String,
     pub key_source: String,
+    pub song_structure: SongStructureSummary,
     pub tempo_bpm: f64,
+}
+
+/// Bounded song-structure summary for agent and CLI consumers.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SongStructureSummary {
+    pub end_beat: u16,
+    pub first_phrases: Vec<PhraseSummary>,
+    pub input_mix: &'static str,
+    pub mood: u16,
+    pub phrase_count: usize,
+    pub sample_rate: u32,
+}
+
+/// One phrase in the bounded song-structure JSON summary.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PhraseSummary {
+    pub b: bool,
+    pub beat: u16,
+    pub fill_beat: Option<u16>,
+    pub index: u16,
+    pub k1: bool,
+    pub k2: bool,
+    pub k3: bool,
+    pub kind: u16,
+    pub transition_beats: [Option<u16>; 3],
 }
 
 /// Bounded beat-grid summary compatible with the TypeScript wrapper.
@@ -273,21 +303,26 @@ pub fn analyze_audio_file_with_options(
                 )
             })
             .unwrap_or_default();
+    let phrase_pcm = waveform_pcms
+        .as_ref()
+        .and_then(|pcms| pcms.phrase.as_ref())
+        .unwrap_or_else(|| decoded.phrase_mono());
     let (waveforms, (beat, key)) = pool.install(|| {
         rayon::join(
             || match streamed_waveforms {
                 Some(waveforms) => Ok(waveforms),
                 None => {
-                    let [color, monochrome] = waveform_pcms
+                    let [color, monochrome] = &waveform_pcms
                         .as_ref()
-                        .context("waveform reader PCM was not prepared")?;
+                        .context("waveform reader PCM was not prepared")?
+                        .waveforms;
                     WaveformData::generate_native(color, monochrome)
                 }
             },
             || {
                 rayon::join(
                     || {
-                        select_beat_analysis(BeatAnalysisInputs {
+                        let selected = select_beat_analysis(BeatAnalysisInputs {
                             mode: options.rhythm_mode(),
                             source_samples: decoded.mono().samples(),
                             source_sample_rate: decoded.mono().sample_rate(),
@@ -296,7 +331,13 @@ pub fn analyze_audio_file_with_options(
                             analysis_sample_rate: pcm.sample_rate(),
                             streamed_onset,
                             streamed_time_domain,
-                        })
+                        })?;
+                        let song_structure = analyze_song_structure(
+                            phrase_pcm.samples(),
+                            phrase_pcm.sample_rate(),
+                            &selected.beat,
+                        )?;
+                        Ok::<_, anyhow::Error>((selected, song_structure))
                     },
                     || match streamed_key {
                         Some(raw) => analyze_key_from_raw(raw, pcm.sample_rate()),
@@ -307,11 +348,14 @@ pub fn analyze_audio_file_with_options(
         )
     });
     let waveforms = waveforms?;
-    let SelectedBeatAnalysis {
-        beat,
-        mode: rhythm_mode,
-        fallback: rhythm_fallback,
-    } = beat?;
+    let (
+        SelectedBeatAnalysis {
+            beat,
+            mode: rhythm_mode,
+            fallback: rhythm_fallback,
+        },
+        song_structure,
+    ) = beat?;
     let key = key?;
     let ((vbr_index, vbr_trailer_unknown), vbr_2) = seek_tables;
     let anlz_path = format!(
@@ -374,7 +418,7 @@ pub fn analyze_audio_file_with_options(
         waveforms.pwv4().to_tag()?,
     ];
     ext_tags.extend(vbr_2);
-    ext_tags.push(build_empty_song_structure_tag()?);
+    ext_tags.push(song_structure.to_tag()?);
     let ext = AnlzFile::from_tags(ext_tags)?;
 
     let two_ex = ThreeBandAnalysis {
@@ -394,6 +438,7 @@ pub fn analyze_audio_file_with_options(
         two_ex,
         beat,
         key,
+        song_structure,
         source,
         duration_seconds: pcm.duration_seconds(),
         rhythm_mode_requested: options.rhythm_mode(),
@@ -402,14 +447,22 @@ pub fn analyze_audio_file_with_options(
     })
 }
 
-fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<[MonoPcm; 2]> {
+struct ReaderPcms {
+    waveforms: [MonoPcm; 2],
+    phrase: Option<MonoPcm>,
+}
+
+fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<ReaderPcms> {
     let source = decoded.source();
     let target_rate = analysis_sample_rate(source.sample_rate())?;
     if source.sample_rate() == target_rate && source.reader_padding_frames() == 0 {
-        return Ok([
-            decoded.waveform_mono().clone(),
-            decoded.waveform_midpoint().clone(),
-        ]);
+        return Ok(ReaderPcms {
+            waveforms: [
+                decoded.waveform_mono().clone(),
+                decoded.waveform_midpoint().clone(),
+            ],
+            phrase: None,
+        });
     }
     let converter = AnalysisSampleRateConverter::new(source.sample_rate(), target_rate)?;
     if source.sample_rate() != target_rate {
@@ -424,35 +477,53 @@ fn waveform_reader_pcms(decoded: &DecodedAudio) -> Result<[MonoPcm; 2]> {
         let right = right?;
         let mut color = Vec::with_capacity(left.len());
         let mut monochrome = Vec::with_capacity(left.len());
+        let mut phrase = Vec::with_capacity(left.len());
         for (left, right) in left.into_iter().zip(right) {
             let left = quantize_analysis_pcm(left);
             let right = quantize_analysis_pcm(right);
             color.push(native_waveform_mono_pair(left, right));
             monochrome.push(native_waveform_midpoint_pair(left, right));
+            phrase.push(native_phrase_mono_pair(left, right));
         }
-        return Ok([
-            MonoPcm::new_native_waveform(target_rate, color)?,
-            MonoPcm::new_native_waveform(target_rate, monochrome)?,
-        ]);
+        return Ok(ReaderPcms {
+            waveforms: [
+                MonoPcm::new_native_waveform(target_rate, color)?,
+                MonoPcm::new_native_waveform(target_rate, monochrome)?,
+            ],
+            phrase: Some(MonoPcm::new(target_rate, phrase)?),
+        });
     }
-    let (color, monochrome) = rayon::join(
+    let ((color, monochrome), phrase) = rayon::join(
         || {
-            converter.resample_mono_for_reader(
-                decoded.waveform_mono().samples(),
-                source.reader_padding_frames(),
+            rayon::join(
+                || {
+                    converter.resample_mono_for_reader(
+                        decoded.waveform_mono().samples(),
+                        source.reader_padding_frames(),
+                    )
+                },
+                || {
+                    converter.resample_mono_for_reader(
+                        decoded.waveform_midpoint().samples(),
+                        source.reader_padding_frames(),
+                    )
+                },
             )
         },
         || {
             converter.resample_mono_for_reader(
-                decoded.waveform_midpoint().samples(),
+                decoded.phrase_mono().samples(),
                 source.reader_padding_frames(),
             )
         },
     );
-    Ok([
-        MonoPcm::new_native_waveform(target_rate, color?)?,
-        MonoPcm::new_native_waveform(target_rate, monochrome?)?,
-    ])
+    Ok(ReaderPcms {
+        waveforms: [
+            MonoPcm::new_native_waveform(target_rate, color?)?,
+            MonoPcm::new_native_waveform(target_rate, monochrome?)?,
+        ],
+        phrase: Some(MonoPcm::new(target_rate, phrase?)?),
+    })
 }
 
 struct SelectedBeatAnalysis {
@@ -950,6 +1021,7 @@ pub fn analyze_to_directory_with_options(
 
     let summarize_started = Instant::now();
     let beat_grid = summarize_beats(&generated.beat);
+    let song_structure = summarize_song_structure(&generated.song_structure);
     let file_summaries = files
         .iter()
         .map(|(path, size, tags)| AnalysisFileSummary {
@@ -971,7 +1043,7 @@ pub fn analyze_to_directory_with_options(
         .unwrap_or("none")
         .replace(['\r', '\n'], " ");
     let log = format!(
-        "backend=clean-room-rust-dsp\nrhythm_mode_requested={}\nrhythm_mode={}\nrhythm_fallback={rhythm_fallback_log}\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\n",
+        "backend=clean-room-rust-dsp\nrhythm_mode_requested={}\nrhythm_mode={}\nrhythm_fallback={rhythm_fallback_log}\nsample_rate={ANALYSIS_SAMPLE_RATE}\nsource_sample_rate={}\nchannels={}\nduration_seconds={:.6}\ntempo_bpm={:.6}\ntempo_confidence={:.6}\nkey={}\nkey_confidence={:.6}\nsong_structure_sample_rate={}\nsong_structure_input_mix=left-0.99-right-0.01\nsong_structure_mood={}\nsong_structure_phrases={}\nsong_structure_low_band_ratio={:.9}\nsong_structure_high_band_ratio={:.9}\nsong_structure_rhythmic_density={:.9}\nsong_structure_energy_deviation={:.9}\nsong_structure_adjacent_change_mean={:.9}\nsong_structure_adjacent_change_p90={:.9}\nsong_structure_long_change_mean={:.9}\nsong_structure_zero_crossing_rate={:.9}\n",
         generated.rhythm_mode_requested.as_str(),
         generated.rhythm_mode.as_str(),
         generated.source.sample_rate(),
@@ -981,6 +1053,17 @@ pub fn analyze_to_directory_with_options(
         generated.beat.confidence,
         generated.key.key,
         generated.key.confidence,
+        generated.song_structure.sample_rate,
+        generated.song_structure.mood,
+        generated.song_structure.entries.len(),
+        generated.song_structure.diagnostics.low_band_ratio,
+        generated.song_structure.diagnostics.high_band_ratio,
+        generated.song_structure.diagnostics.rhythmic_density,
+        generated.song_structure.diagnostics.energy_deviation,
+        generated.song_structure.diagnostics.adjacent_change_mean,
+        generated.song_structure.diagnostics.adjacent_change_p90,
+        generated.song_structure.diagnostics.long_change_mean,
+        generated.song_structure.diagnostics.zero_crossing_rate,
     );
     write_atomically(&log_path, log.as_bytes())?;
 
@@ -1006,6 +1089,7 @@ pub fn analyze_to_directory_with_options(
             files: file_summaries,
             key: generated.key.key,
             key_source: "clean-room-chroma".to_string(),
+            song_structure,
             tempo_bpm: generated.beat.bpm,
         },
         timings: AnalyzerTimings {
@@ -1018,6 +1102,32 @@ pub fn analyze_to_directory_with_options(
             total_ms,
         },
     })
+}
+
+fn summarize_song_structure(structure: &SongStructure) -> SongStructureSummary {
+    SongStructureSummary {
+        end_beat: structure.end_beat,
+        first_phrases: structure
+            .entries
+            .iter()
+            .take(SUMMARY_PHRASES)
+            .map(|entry| PhraseSummary {
+                b: entry.transition_beats[1].is_some(),
+                beat: entry.beat,
+                fill_beat: entry.fill_beat,
+                index: entry.index,
+                k1: entry.k1,
+                k2: entry.k2,
+                k3: entry.k3,
+                kind: entry.kind,
+                transition_beats: entry.transition_beats,
+            })
+            .collect(),
+        input_mix: "left-0.99-right-0.01",
+        mood: structure.mood,
+        phrase_count: structure.entries.len(),
+        sample_rate: structure.sample_rate,
+    }
 }
 
 fn validate_write_targets<'a>(
@@ -1127,15 +1237,6 @@ fn build_empty_extended_cue_tag(cue_type: u32) -> Result<AnlzTag> {
     raw[4..8].copy_from_slice(&20u32.to_be_bytes());
     raw[8..12].copy_from_slice(&20u32.to_be_bytes());
     raw[12..16].copy_from_slice(&cue_type.to_be_bytes());
-    AnlzTag::parse(&raw)
-}
-
-fn build_empty_song_structure_tag() -> Result<AnlzTag> {
-    let mut raw = vec![0u8; 32];
-    raw[..4].copy_from_slice(b"PSSI");
-    raw[4..8].copy_from_slice(&32u32.to_be_bytes());
-    raw[8..12].copy_from_slice(&32u32.to_be_bytes());
-    raw[12..16].copy_from_slice(&24u32.to_be_bytes());
     AnlzTag::parse(&raw)
 }
 
@@ -1644,14 +1745,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_optional_tags_have_native_envelopes() {
+    fn empty_extended_cue_tag_has_native_envelope() {
         let pco2 = build_empty_extended_cue_tag(1).expect("PCO2");
         assert_eq!(pco2.kind(), *b"PCO2");
         assert_eq!(pco2.raw().len(), 20);
-        let pssi = build_empty_song_structure_tag().expect("PSSI");
-        assert_eq!(pssi.kind(), *b"PSSI");
-        assert_eq!(pssi.header_len(), 32);
-        assert_eq!(pssi.raw().len(), 32);
     }
 
     #[test]

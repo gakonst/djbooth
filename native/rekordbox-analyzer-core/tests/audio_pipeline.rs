@@ -80,7 +80,21 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
     );
     assert_eq!(first.summary.key, "D");
     assert!(first.summary.beat_grid.beat_count >= 20);
+    assert_eq!(first.summary.song_structure.sample_rate, 44_100);
+    assert_eq!(
+        first.summary.song_structure.input_mix,
+        "left-0.99-right-0.01"
+    );
+    assert!(first.summary.song_structure.phrase_count >= 4);
+    assert!(
+        first.summary.song_structure.first_phrases.len()
+            <= first.summary.song_structure.phrase_count
+    );
     assert_eq!(second.summary.key, first.summary.key);
+    assert_eq!(
+        second.summary.song_structure.first_phrases,
+        first.summary.song_structure.first_phrases
+    );
     assert_eq!(
         second.summary.beat_grid.beat_count,
         first.summary.beat_grid.beat_count
@@ -144,6 +158,10 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
         .expect("parse generated EXT"),
     )
     .expect("decode generated EXT");
+    assert!(
+        ext.song_structure.raw().len() > ext.song_structure.header_len(),
+        "PSSI must contain generated phrase records"
+    );
     assert_eq!(
         ext.extended_beat_grid.entries.len(),
         dat.beat_grid.len(),

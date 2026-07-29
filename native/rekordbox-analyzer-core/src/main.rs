@@ -36,7 +36,7 @@ fn run() -> Result<()> {
                    rekordbox-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
-                   analyze       Decode audio; Normal is static, Dynamic follows tempo changes\n  \
+                   analyze       Emit beat grids, key, waveforms, seek maps, and song structure\n  \
                    beat-sensor-events  Emit the causal six-band peak-event stream as JSON\n  \
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
@@ -107,6 +107,8 @@ fn run() -> Result<()> {
                     "formats": ["WAV", "AIFF", "CAF", "MP3", "AAC/MP4", "ALAC", "FLAC", "Vorbis/OGG"],
                     "rhythmModes": ["normal", "dynamic", "auto"],
                     "defaultRhythmMode": "normal",
+                    "dsp": ["beat-grid", "musical-key", "waveforms", "seek-table", "song-structure"],
+                    "songStructure": "beat-synchronous-clean-room-baseline",
                     "dspCompatibility": "protocol-compatible-baseline",
                 }))?
             );
