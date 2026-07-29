@@ -4,12 +4,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
-    AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
+    AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, RhythmMode, ThreeBandAnalysis,
     analyze_beat_sensor_events, analyze_to_directory_with_options, compare_beat_grids,
     compare_output_directories, compare_waveforms, decode_audio_file,
 };
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
+const ANALYZER_RHYTHM_MODE_ENV: &str = "REKORDBOX_ANALYZER_RHYTHM_MODE";
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
@@ -27,7 +28,7 @@ fn run() -> Result<()> {
             println!(
                 "Clean-room audio-to-Rekordbox analyzer\n\n\
                  Usage:\n  \
-                   rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N]\n  \
+                   rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]\n  \
                    rekordbox-analyzer beat-sensor-events AUDIO [--sample-rate HZ]\n  \
                    rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
@@ -35,13 +36,17 @@ fn run() -> Result<()> {
                    rekordbox-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
-                   analyze       Decode audio, write DAT/EXT/2EX, and emit summary JSON\n  \
+                   analyze       Emit beat grids, key, waveforms, seek maps, and song structure\n  \
                    beat-sensor-events  Emit the causal six-band peak-event stream as JSON\n  \
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
                    waveform-diff  Compare decoded waveform components semantically\n  \
-                   rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape"
+                   rebuild-anlz  Byte-exactly rebuild one supported Rekordbox 6.8.2 ANLZ shape\n\n\
+                 Rhythm modes:\n  \
+                   normal        Static grid for relatively consistent tempo (default)\n  \
+                   dynamic       Per-beat grid for live, rubato, or changing tempo\n  \
+                   auto          Conservative p05-p95 local-tempo selection"
             );
             Ok(())
         }
@@ -100,6 +105,10 @@ fn run() -> Result<()> {
                     "proprietaryDependencies": false,
                     "analysisSampleRate": 44_100,
                     "formats": ["WAV", "AIFF", "CAF", "MP3", "AAC/MP4", "ALAC", "FLAC", "Vorbis/OGG"],
+                    "rhythmModes": ["normal", "dynamic", "auto"],
+                    "defaultRhythmMode": "normal",
+                    "dsp": ["beat-grid", "musical-key", "waveforms", "seek-table", "song-structure"],
+                    "songStructure": "beat-synchronous-clean-room-baseline",
                     "dspCompatibility": "protocol-compatible-baseline",
                 }))?
             );
@@ -170,7 +179,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }
@@ -182,6 +191,7 @@ fn analyze_arguments(
     let output = required_path(args.next(), "output directory")?;
     let mut log = None;
     let mut threads = None;
+    let mut rhythm_mode = None;
     while let Some(argument) = args.next() {
         if argument == "--threads" {
             if threads.is_some() {
@@ -194,6 +204,19 @@ fn analyze_arguments(
                 bail!("analyze received --threads more than once");
             }
             threads = Some(parse_analyzer_threads(value, "--threads")?);
+        } else if argument == "--rhythm-mode" {
+            if rhythm_mode.is_some() {
+                bail!("analyze received --rhythm-mode more than once");
+            }
+            let value = args
+                .next()
+                .context("--rhythm-mode requires normal, dynamic, or auto")?;
+            rhythm_mode = Some(parse_rhythm_mode(&value, "--rhythm-mode")?);
+        } else if let Some(value) = argument.strip_prefix("--rhythm-mode=") {
+            if rhythm_mode.is_some() {
+                bail!("analyze received --rhythm-mode more than once");
+            }
+            rhythm_mode = Some(parse_rhythm_mode(value, "--rhythm-mode")?);
         } else if argument.starts_with('-') {
             bail!("analyze received unknown option '{argument}'");
         } else if log.is_none() {
@@ -203,8 +226,8 @@ fn analyze_arguments(
         }
     }
 
-    let threads = match threads {
-        Some(threads) => threads,
+    let options = match threads {
+        Some(options) => options,
         None => match std::env::var(ANALYZER_THREADS_ENV) {
             Ok(value) => parse_analyzer_threads(&value, ANALYZER_THREADS_ENV)?,
             Err(std::env::VarError::NotPresent) => AnalysisOptions::automatic(),
@@ -213,7 +236,17 @@ fn analyze_arguments(
             }
         },
     };
-    Ok((audio, output, log, threads))
+    let rhythm_mode = match rhythm_mode {
+        Some(mode) => mode,
+        None => match std::env::var(ANALYZER_RHYTHM_MODE_ENV) {
+            Ok(value) => parse_rhythm_mode(&value, ANALYZER_RHYTHM_MODE_ENV)?,
+            Err(std::env::VarError::NotPresent) => options.rhythm_mode(),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                bail!("{ANALYZER_RHYTHM_MODE_ENV} must contain normal, dynamic, or auto")
+            }
+        },
+    };
+    Ok((audio, output, log, options.with_rhythm_mode(rhythm_mode)))
 }
 
 fn parse_analyzer_threads(value: &str, source: &str) -> Result<AnalysisOptions> {
@@ -221,6 +254,15 @@ fn parse_analyzer_threads(value: &str, source: &str) -> Result<AnalysisOptions> 
         .parse::<usize>()
         .with_context(|| format!("{source} must be an integer"))?;
     AnalysisOptions::new(threads)
+}
+
+fn parse_rhythm_mode(value: &str, source: &str) -> Result<RhythmMode> {
+    match value {
+        "normal" => Ok(RhythmMode::Normal),
+        "dynamic" => Ok(RhythmMode::Dynamic),
+        "auto" => Ok(RhythmMode::Auto),
+        _ => bail!("{source} must be normal, dynamic, or auto; received '{value}'"),
+    }
 }
 
 fn rebuild(input: &Path, source: &[u8]) -> Result<Vec<u8>> {

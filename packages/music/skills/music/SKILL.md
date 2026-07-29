@@ -1,6 +1,6 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings over Pro DJ Link; compile CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front-USB export or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; analyze Normal, Dynamic, or Auto Rekordbox beat grids; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings to connected CDJs over Pro DJ Link; synchronize CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front-USB sync or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
@@ -291,7 +291,8 @@ music tracks import-set "$SET_URL" --manifest "$MANIFEST_PATH" --write --format 
 This resolves, enriches, acquires into the canonical library, analyzes, then creates or updates the
 ordered Rekordbox playlist. Call it once; do not ask for separate resolution, download, analysis,
 or add-to-playlist steps after it succeeds. Clean-room analysis is automatic; do not pause to ask
-which analyzer to use. Pass `--analysis-engine reference` only for an explicit local parity request.
+which analyzer to use. The workflow defaults to `--analysis-rhythm-mode auto`. Pass
+`--analysis-engine reference` only for an explicit local parity request.
 
 When the user also approves cue recovery from an existing local set recording, include the approval
 in the same invocation:
@@ -352,6 +353,7 @@ supported platform, requires no Rekordbox application/JUCE/runtime bytes, and ne
 music rekordbox analyze doctor --engine clean --format json
 music rekordbox analyze track "$AUDIO_PATH" \
   --engine clean \
+  --rhythm-mode auto \
   --output-directory "$ANALYSIS_DIR" \
   --threads 8 \
   --format json
@@ -359,6 +361,7 @@ music rekordbox analyze tracks \
   --audio-path "$AUDIO_PATH_1" \
   --audio-path "$AUDIO_PATH_2" \
   --engine clean \
+  --rhythm-mode auto \
   --format json
 music rekordbox analyze beat-grid-diff \
   "$REFERENCE_ANALYSIS_DIR" \
@@ -376,8 +379,17 @@ Require a successful clean doctor check before analysis. Discover `rekordbox-ana
 The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`, `ANLZ0000.2EX`,
 `analysis.json`, and `clean-room-analyzer.log`. Keep these artifacts with the recording or manifest.
 Treat analyzer BPM/key as measurements from the acquired audio; never substitute Spotify metadata.
-The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform/beat/key baselines;
-do not claim proprietary byte-for-byte DSP parity.
+Choose `normal` for a static grid on steady-tempo tracks, `dynamic` for live, rubato, or materially
+changing tempo, and `auto` when the request does not specify. Auto rejects isolated tempo outliers
+and selects Dynamic only when the central 90% of recovered local tempi span at least 0.75%; otherwise
+it selects Normal. The selected and requested modes are persisted in `analysis.json` and the Tracks
+manifest, and a cache from another mode must be recomputed. Rekordbox 6.8.2 reference comparisons
+must use the same explicit mode: Normal and Dynamic are different algorithms, not interchangeable
+quality levels.
+
+The clean engine emits protocol-valid Rekordbox shapes and deterministic waveform/beat/key baselines.
+Do not claim whole-analyzer proprietary byte identity: the recovered Dynamic beat path can match
+reference timing while waveform, phrase, and finishing stages still have independent parity work.
 For parity work, use `analyze beat-grid-diff` rather than raw file hashes. Require matching beat
 counts and labels for steady-tempo material, inspect median/p95/max timing error and drift, and retain
 the reported missing/extra beats, downbeat error, tempo changes, and F1 collars for held-out tracks.
@@ -389,20 +401,21 @@ Use `--engine reference` only when the user explicitly asks for local parity inv
 mode requires macOS, Rosetta on Apple Silicon, a separately supplied
 `rekordbox-analyzer-reference`, and a compatible user-installed Rekordbox application. Neither the
 reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact. Do not silently fall
-back from clean to reference.
+back from clean to reference. Always choose explicit `normal` or `dynamic` mode for the reference
+engine and use the same mode for the clean candidate; reference `auto` is unsupported because Auto
+is the clean engine's conservative selector rather than a Rekordbox 6.8.2 analysis mode.
 
 For multiple independent tracks, prefer `analyze tracks`; it uses bounded isolated worker processes
-and preserves input order. `--threads` is one total native CPU budget divided deterministically
-across active processes, not a per-process multiplier; `--concurrency 4 --threads 12` produces
-worker budgets `[3, 3, 3, 3]`. The clean scheduler defaults to the lower of 12 processes, available
-parallelism, the thread budget, and the uncached track count. Single-track analysis defaults to eight
-native threads: its five-second decode/DSP pipeline measured `2.07x` faster than the prior buffered
-implementation, while twelve threads regressed from topology and cache pressure. Batch analysis
-still defaults to 12 one-thread processes; 16 tied it, while 20 and 24 did not improve the median.
-Lower `--threads` or `--concurrency` when analysis competes with live DJ software. Both limits accept
-values through 64, but values above the profiled defaults are overrides rather than expected
-speedups. Parallelize analysis only. Keep Rekordbox database installation stopped-Rekordbox, backed
-up, locked, and serialized through the workflow below.
+and preserves input order. `--threads` is one total native scheduling budget divided
+deterministically across active processes, not a per-process multiplier; `--concurrency 4
+--threads 12` produces worker budgets `[3, 3, 3, 3]`. Process concurrency is capped to host
+parallelism. On Apple Silicon, the default scheduling budget keeps two Rayon slots per core so
+independent Auto, waveform, and SRC branches remain runnable without adding extra analyzer
+processes. On the 12-core profiling host, 12 processes/24 slots analyzed the 100-track corpus in
+about 14.7 seconds; 16 processes were slower. Small default batches are capped at eight threads per
+track. Lower either limit when analysis competes with live DJ software. Both limits accept explicit
+values through 64. Parallelize analysis only. Keep Rekordbox database installation
+stopped-Rekordbox, backed up, locked, and serialized through the workflow below.
 
 For a durable Tracks manifest whose media is already acquired, resume only the analysis stage. This
 does not load provider credentials or download anything. It checkpoints per-item cache results and a
@@ -411,6 +424,7 @@ timestamped run ledger in the manifest:
 ```sh
 music tracks analyze-existing "$MANIFEST" \
   --engine clean \
+  --rhythm-mode auto \
   --progress always \
   --format json
 ```

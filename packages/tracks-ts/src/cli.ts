@@ -541,7 +541,7 @@ export const tracksCli = Cli.create("tracks", {
   version: VERSION,
   description:
     "Resolve DJ sets or run one approved, resumable resolve→enrich→acquire→analyze→Rekordbox playlist import.",
-  hint: "One-shot: tracks import-set <set-url> --manifest <path> --write; add --allow-set-clips --source-set-path <local-set> for same-run cue recovery.",
+  hint: "One-shot: tracks import-set <set-url> --manifest <path> --write defaults to clean Auto rhythm; add --analysis-rhythm-mode dynamic for known live/rubato sets or --allow-set-clips --source-set-path <local-set> for same-run cue recovery.",
   config: {
     flag: "config",
     files: ["tracks.json", "~/.config/tracks/config.json"],
@@ -549,7 +549,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. The proprietary reference oracle is opt-in only through --analysis-engine reference and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
+      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer with Auto rhythm mode as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. Use Dynamic for known live/rubato/materially changing tempo and Normal only when a static grid is intended. The proprietary reference oracle is opt-in only through --analysis-engine reference, requires explicit Normal or Dynamic mode, and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -656,7 +656,7 @@ tracksCli.command("analyze-existing", {
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
       .describe(
-        `Parallel clean-room analyzer workers; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; raise with --threads to oversubscribe`,
+        `Parallel analyzer processes; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; more than one process per host core did not improve the profiled batch`,
       ),
     engine: z
       .enum(["clean", "reference"])
@@ -672,6 +672,12 @@ tracksCli.command("analyze-existing", {
       .string()
       .optional()
       .describe("Reference-engine Rekordbox analysis cache override"),
+    rhythmMode: z
+      .enum(["normal", "dynamic", "auto"])
+      .default("auto")
+      .describe(
+        "Beat grid: Auto for clean conservative selection; reference requires Normal or Dynamic",
+      ),
     timeoutMs: z
       .number()
       .int()
@@ -685,7 +691,7 @@ tracksCli.command("analyze-existing", {
       .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
       .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
       .describe(
-        "Total native CPU budget shared across analyzer workers; raise with --concurrency to oversubscribe",
+        `Total native scheduling slots shared across analyzer workers; profiled default ${String(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)} here keeps independent Auto DSP branches runnable`,
       ),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
   }),
@@ -698,6 +704,7 @@ tracksCli.command("analyze-existing", {
     threadBudget: z.number().int().positive(),
     workerThreadBudgets: z.array(z.number().int().positive()),
     engine: z.enum(["clean", "reference"]),
+    rhythmMode: z.enum(["normal", "dynamic", "auto"]),
     analysisDirectories: z.record(z.string(), z.string()),
     startedAt: z.string(),
     finishedAt: z.string(),
@@ -717,6 +724,7 @@ tracksCli.command("analyze-existing", {
         concurrency: context.options.concurrency,
         engine: context.options.engine,
         force: context.options.force,
+        rhythmMode: context.options.rhythmMode,
         timeoutMs: context.options.timeoutMs,
         signal: controller.signal,
         threads: context.options.threads,
@@ -746,6 +754,7 @@ tracksCli.command("analyze-existing", {
         threadBudget: result.analysis.threadBudget,
         workerThreadBudgets: result.analysis.workerThreadBudgets,
         engine: context.options.engine,
+        rhythmMode: context.options.rhythmMode,
         analysisDirectories: result.analysisDirectories,
         startedAt: result.startedAt,
         finishedAt: result.finishedAt,
@@ -763,7 +772,7 @@ tracksCli.command("analyze-existing", {
 tracksCli.command("import-set", {
   description:
     "One-shot an approved set through resolution, deterministic Spotify primary selection, canonical acquisition, same-run cue fallback, clean-room analysis, and one verified ordered Rekordbox playlist commit.",
-  hint: "This is the full set workflow; clean analysis is automatic. Pass --allow-set-clips with --source-set-path to recover failed individual tracks automatically in pass 2/2.",
+  hint: "This is the full set workflow; clean Auto rhythm analysis is automatic. Use --analysis-rhythm-mode dynamic for known live/rubato sets. Pass --allow-set-clips with --source-set-path for failed-track recovery in pass 2/2.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
@@ -830,7 +839,7 @@ tracksCli.command("import-set", {
       .max(MAX_NATIVE_ANALYSIS_CONCURRENCY)
       .default(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)
       .describe(
-        `Parallel clean-room Rekordbox analyzer workers; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; raise with --analysis-threads to oversubscribe`,
+        `Parallel analyzer processes; CPU-adaptive default ${String(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY)} here; more than one process per host core did not improve the profiled batch`,
       ),
     analysisThreads: z
       .number()
@@ -839,13 +848,19 @@ tracksCli.command("import-set", {
       .max(MAX_NATIVE_ANALYSIS_THREAD_BUDGET)
       .default(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)
       .describe(
-        "Total native CPU budget shared across all analyzer workers; raise with --analysis-concurrency to oversubscribe",
+        `Total native scheduling slots shared across analyzer workers; profiled default ${String(DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET)} here keeps independent Auto DSP branches runnable`,
       ),
     analysisEngine: z
       .enum(["clean", "reference"])
       .default("clean")
       .describe(
         "Analyzer engine; clean is default, reference is a local proprietary parity oracle",
+      ),
+    analysisRhythmMode: z
+      .enum(["normal", "dynamic", "auto"])
+      .default("auto")
+      .describe(
+        "Beat grid: Auto selects Dynamic only for material tempo motion; reference engine requires Normal or Dynamic",
       ),
     analyzerBinary: z.string().optional().describe("Selected analyzer binary override"),
     rekordboxApp: z
@@ -886,6 +901,7 @@ tracksCli.command("import-set", {
     analyzed: z.number().int().nonnegative(),
     analysisCacheHits: z.number().int().nonnegative(),
     analysisEngine: z.enum(["clean", "reference"]),
+    analysisRhythmMode: z.enum(["normal", "dynamic", "auto"]),
     analysisThreads: z.number().int().positive(),
     dbPath: z.string(),
     folderId: z.string(),
@@ -960,6 +976,7 @@ tracksCli.command("import-set", {
         analysisConcurrency: context.options.analysisConcurrency,
         analysis: {
           engine: context.options.analysisEngine,
+          rhythmMode: context.options.analysisRhythmMode,
           threads: context.options.analysisThreads,
           timeoutMs: context.options.analysisTimeoutMs,
           ...(context.options.analyzerBinary
@@ -1001,6 +1018,7 @@ tracksCli.command("import-set", {
         analyzed: result.analysis.analyzed,
         analysisCacheHits: result.analysis.cacheHits,
         analysisEngine: context.options.analysisEngine,
+        analysisRhythmMode: context.options.analysisRhythmMode,
         analysisThreads: result.analysis.threadBudget,
         dbPath: result.rekordbox.dbPath,
         folderId: result.rekordbox.folderId,
@@ -1511,7 +1529,8 @@ function tracksErrorCta(
     (error.code === "INVALID_SOURCE" && /(?:cue|source-set|--write)/iu.test(error.message))
   ) {
     return {
-      description: "Review the one-shot import requirements, then retry the same manifest:",
+      description:
+        "Review the one-shot import requirements (clean Auto rhythm by default), then retry the same manifest:",
       commands: [tracksCtaCommand(displayName, "import-set --help")],
     };
   }

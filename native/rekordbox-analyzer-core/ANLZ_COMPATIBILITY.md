@@ -53,7 +53,7 @@ exact fractions, correlation, mean, MAE, error percentiles, and signed bias.
 rebuild for the supported Rekordbox 6.8.2 DAT/EXT/2EX shapes. The retained
 Science Fiction DAT, EXT, and 2EX oracle files were checked locally and rebuilt
 byte-for-byte. Repository tests gate the distributable DAT/EXT seed shapes,
-generated 2EX round trips, and optional FLAC `PVB2` preservation; the private
+generated 2EX round trips, and FLAC `PVB2` synthesis; the private
 three-file oracle check remains a separate local differential gate. This proves
 the serializer and field mapping, not the DSP.
 
@@ -68,7 +68,7 @@ The semantic writer currently covers:
 | File | Semantically rebuilt | Opaque but preserved |
 | --- | --- | --- |
 | DAT | `PPTH`, `PVBR`, `PQTZ`, `PWAV`, `PWV2`, empty cue scaffolding | non-empty `PCOB` entries |
-| EXT | `PPTH`, `PWV3`, `PQT2`, `PWV4`, `PWV5` | `PCOB`, `PCO2`, optional `PVB2`, obfuscated `PSSI` |
+| EXT | `PPTH`, `PWV3`, `PQT2`, `PWV4`, `PWV5`, `PVB2`, generated `PSSI` | `PCOB`, `PCO2`, retained opaque/obfuscated `PSSI` |
 | 2EX | `PPTH`, `PWV6`, `PWV7`, `PWVC` | none |
 
 The following fields remain named as unknown and are round-tripped explicitly:
@@ -109,35 +109,72 @@ platform codec dependency:
 
 - Symphonia 0.6 decodes WAV/AIFF/CAF, MP3, AAC/MP4, ALAC, FLAC, Vorbis/OGG,
   ADPCM, and PCM using redistributable Rust crates. Decode failures, changing
-  stream parameters, and non-finite samples fail closed.
-- Samples are normalized to `f32`, mixed to mono, deterministically resampled
-  to 44,100 Hz with integer-phase linear interpolation, and exposed as
-  tail-aware 294-sample frames: exactly 150 waveform columns per second.
+  stream parameters, and non-finite samples fail closed. Fragmented DASH AAC
+  discards the positive edit-list media start plus Core Audio's 512-frame
+  transform delay. The observed `1,600 + 512 = 2,112` priming exactly recovers
+  Life Is Hard; ordinary `M4A ` edit lists remain untrimmed because their stock
+  grids prove different backend semantics. See Apple's
+  [packet-table priming definition](https://developer.apple.com/documentation/audiotoolbox/audiofilepackettableinfo).
+- Key, Normal rhythm, and Dynamic rhythm retain the deterministic equal-weight
+  mono signal. Key and Normal rhythm resample it to 44.1 kHz; Dynamic consumes
+  source-rate PCM because its recovered detector measures positions in source
+  frames. Waveforms follow the native reader instead: each stereo channel is
+  rounded through signed 16-bit PCM and combined with an exact half-sum that
+  preserves half-LSB values. Native 44.1 and 48 kHz rates are retained. Other
+  8–200 kHz inputs select 48 kHz for the 8 kHz family and 44.1 kHz otherwise,
+  run each stereo channel separately through the recovered 29-tap Kaiser
+  converter, then quantize and mix. WAV/other readers advertise the decoded
+  length. FLAC adds its validated STREAMINFO maximum block size, even after a
+  leading ID3v2 tag. For MPEG-1 Layer III `Info` streams whose encoder field
+  starts with `LAME`, Core Audio derives a CBR byte duration and rounds its
+  packet count upward; the advertised final packet can therefore be absent.
+  The clean reader reproduces that structural estimate and supplies its
+  1,152 frames as zeroes. The converted reader exposes
+  `ceil(advertised * target/source) - 1` frames.
 - The waveform path emits fixed 400-byte `PWAV`, 100-byte `PWV2`,
   1,200-column `PWV4`/`PWV6`, and variable 150 Hz
   `PWV3`/`PWV5`/`PWV7` arrays. Peak-power height quantization and known
-  monochrome/RGB packing match the public ANLZ layouts. `PWV4` uses separate
-  linear-amplitude preview filters and its inverse luminance byte; `PWV5`
-  stores frame-RMS-normalized spectral hue independently from its height.
+  monochrome/RGB packing match the public ANLZ layouts. `PWV4` and `PWV5`
+  share the native 1 kHz legacy filter stream, with their distinct reductions,
+  color transform, and height packing reconstructed independently.
   `PWV6` and `PWV7` use a clean-room port of the linked three-band path:
   source-rate Butterworth filters, 1 ms peak buckets, track-relative preview
   windows, per-track normalization, finite decay histories, and the native
   nonlinear high-band transfer. Each entry is 7-bit low/mid/high, despite
   older public notes describing a different order.
-- Rhythm analysis uses low- and body-band STFT spectral flux, bounded
+- Normal rhythm analysis uses low- and body-band STFT spectral flux, bounded
   autocorrelation/harmonic scoring, hierarchical sub-frame tempo/phase
   refinement, FFT-center correction, a continuous non-snapping grid, and
-  low-band meter evidence. PQTZ stores floor milliseconds; each paired PQT2
-  word stores its big-endian `0..=999` microsecond remainder. The PQT2 word at
-  offset 44 is the wrapping sum of every PQTZ entry's beat, BPM-hundredths, and
-  floor-millisecond time.
+  low-band meter evidence. Dynamic is a clean-room port of the linked
+  `peakss::BeatSensor` path: causal peak detection, hypothesis pruning,
+  variable-tempo section refinement, pulse/phase selection, rolling
+  four-beat expansion, gap repair, and `UnitEnvelopeMaker` bar finishing.
+  Auto runs both inside the same bounded pool and selects Dynamic only when
+  the central 90% of its local tempi span at least 0.75% of the median.
+  PQTZ stores floor milliseconds; each paired PQT2 word stores its big-endian
+  `0..=999` microsecond remainder. The PQT2 word at offset 44 is the wrapping
+  sum of every PQTZ entry's beat, BPM-hundredths, and floor-millisecond time.
 - Key analysis combines peak chroma with a tuning-aware whitened 36-bin
   HPCP/CENS path, Krumhansl and Faraldo BGate profiles, and bounded
   intro/outro tonic evidence.
+- Song-structure analysis computes beat-aligned bar features from total,
+  low/mid/high-band energy, envelope onset density, and zero-crossing rate.
+  Its frontend follows the recovered reader contract: signed-16-bit stereo at
+  the native 44.1/48 kHz analysis rate, mixed as 99% left and 1% right.
+  A bounded dynamic program combines standardized change evidence with
+  mood-specific musical-duration priors. Post-leading phrase starts follow the
+  final beat grid's actual downbeat labels. The result uses the native 32-byte
+  `PSSI` header and 24-byte phrase records, including mood, end beat, phrase
+  kinds, `k1/k2/k3`, the Up3 discriminator and internal beats, and bounded
+  fill markers. `analysis.json` exposes mood, reader rate/mix, phrase count,
+  end beat, and the first twelve complete phrase records as a bounded summary.
 - Validated MPEG-1 Layer III `Xing` input gets the Rekordbox 6.8.2 400-entry
   `PVBR` table: offsets are relative to the first data frame and retain an
-  eight-frame decoder preroll. `Info`/CBR, unmarked MP3, constant-rate
-  containers, and unproven MPEG/VBR variants retain the native all-zero shape.
+  eight-frame decoder preroll. `Info`/CBR, unmarked MP3, and VBRI input retain
+  400 zero offsets but advertise the native reader's sample span in the final
+  word. That span excludes the metadata-only `Info` frame and ID3v1, preserves
+  the native floating-point 44.1 kHz frame estimate, and uses a validated VBRI
+  frame count when present.
 - `analyze AUDIO OUTPUT_DIR [LOG]` writes DAT/EXT/2EX, validates them through
   the clean parser, and emits the bounded summary consumed and persisted as
   `analysis.json` by the TypeScript wrapper.
@@ -152,35 +189,54 @@ tests also reject independent beat snapping by requiring all precise intervals
 to differ by at most one microsecond. No user library or proprietary fixture is
 mutated or packaged.
 
+Native FLAC analysis also validates the complete CRC-8 header and CRC-16 frame
+chain and emits the 400-entry, 8,032-byte `PVB2` seek table. A configured
+read-only local gate compares the result against Rekordbox 6.8.2; three
+independent FLAC tracks matched byte-for-byte. The CRC-16 implementation uses
+an eight-byte slicing table pinned against the scalar FLAC polynomial, and
+seek-table construction overlaps decode inside the same bounded worker pool.
+
 ## Deterministic parallel analysis
 
-`analyze AUDIO OUTPUT_DIR [LOG] --threads N` runs waveform, rhythm, and key
-analysis in one bounded Rayon pool. Rhythm and key FFT frames are partitioned
-into ordered contiguous ranges; global reductions remain in their original
-order. The default is the host's available parallelism, bounded to `1..=64`.
-`REKORDBOX_ANALYZER_THREADS` supplies the same budget when the TypeScript
-wrapper launches the helper.
+`analyze AUDIO OUTPUT_DIR [LOG] --threads N --rhythm-mode MODE` runs waveform,
+rhythm, and key analysis in one bounded Rayon pool. Rhythm and key FFT frames
+are partitioned into ordered contiguous ranges; global reductions remain in
+their original order. Auto overlaps its independent Normal and Dynamic
+candidates rather than serializing them. Non-44.1 kHz three-band extraction
+and resampling also run independently. The recovered SRC output fill is
+deterministically parallel above 262,144 frames. AArch64 packs the stateful
+legacy and three-band filters into bit-exact NEON pairs; obsolete fitted
+filter lanes are no longer evaluated. The raw helper defaults to the lower of
+eight and host parallelism, accepts `1..=64`, and reads the same budget from
+`REKORDBOX_ANALYZER_THREADS`.
 
 Thread counts 1, 2, 3, 4, 8, and 12 produced the same summary semantics and
 byte-identical DAT/EXT/2EX SHA-256 hashes for three real recordings plus one
 502-second recording. Five repeated 12-thread runs also retained those hashes.
-Release-mode wall-clock medians on an Apple M2 Max with 12 available CPUs were:
+With every recovered path enabled, a paired ten-run Science Fiction Auto check
+measured a `0.793 s` median at eight threads and `0.798 s` at twelve on an
+Apple M2 Max. Power Dynamic previously measured `1.31 s` at eight threads
+versus `2.27 s` at one.
 
-| Recording | Duration | Scalar baseline | Automatic (12) | Speedup |
-| --- | ---: | ---: | ---: | ---: |
-| Science Fiction | 397 s | 1.11 s | 0.54 s | 2.06x |
-| Crystalised | 201 s | 0.80 s | 0.46 s | 1.74x |
-| Pleasure from the Bass | 233 s | 0.62 s | 0.26 s | 2.38x |
-| Back Together (Main Classic Mix) | 502 s | 1.29 s | 0.55 s | 2.35x |
+The second profile-guided pass packs the ten BeatSensor biquads into four
+two-lane NEON stages plus two dependent scalar stages, evaluates two PWV7
+finite followers per vector, and replaces per-sample linear-resampler division
+with an exact quotient/remainder phase accumulator. A five-run 1 kHz Samply
+profile moved total process CPU from `9,873 ms` to `8,980 ms`. BeatSensor fell
+from `1,683 ms` to about `1,142 ms`, PWV7 follower work from `587 ms` to
+`277 ms`, and linear resampling from `450 ms` to `181 ms`.
 
-For all four files together, one process at a time with the same total
-12-thread budget took 1.86 seconds. Four analyzer processes receiving three
-threads each took 0.81 seconds, a 2.30x batch speedup, with peak RSS remaining
-about 188–190 MiB. The TypeScript multi-track and Tracks workflow commands
-treat `--threads` as one total CPU budget, divide it deterministically across
-active processes or stream slots, and cap process concurrency to that budget.
-This prevents process-level concurrency from multiplying the native worker
-count.
+The final 100-track, 8.55-hour Auto batch measured `14.62–14.78 s`
+(`6.79–6.86 tracks/s`) with 12 processes sharing 24 Rayon slots. Twelve,
+sixteen, and thirty-two slots measured `15.06/15.68/15.29 s`; 10 and 16
+processes sharing 24 slots measured `14.64/16.01 s`. The TypeScript scheduler
+therefore retains its host-bounded 12-process cap and two Apple-Silicon
+scheduling slots per core. Small batches still use at most eight threads per
+track, and explicit limits remain available through 64.
+
+All 110 valid Dynamic corpus tracks were replayed after this pass. Their
+DAT/EXT/2EX files are byte-identical to all 330 frozen pre-optimization
+artifacts, so beat-grid and waveform differential metrics are unchanged.
 
 ## Three-track differential
 
@@ -198,34 +254,35 @@ insertions or deletions. Beat-number accuracy and F1 at both 70 and 100 ms are
 `1.0` for all three. Median/p95 absolute timestamp errors are respectively
 `3.088/8.905`, `6.196/27.056`, and `4.032/7.341` ms.
 
-Wall time was 0.52–0.98 seconds per track on the test machine. The detailed
-monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and 0.999; color
-detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986. Peak-power
-quantization also brought clean/reference `PWV3` means within 0.14, 0.34, and
-0.26 of one another.
+Wall time was 0.52–0.98 seconds per track on the test machine. The original
+detailed monochrome waveform (`PWV3`) correlations were 0.998, 0.985, and
+0.999; color detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986.
+The later native `ZoomViewMaker` reconstruction replaced the PWV3 estimator.
+It uses a signed-16-bit stereo midpoint, 150 Hz low-pass ratio, eight
+whiteness thresholds, and globally normalized peak-squared height. Tiga and
+Crystalised are now completely byte-exact; Science Fiction differs in two
+1-LSB height entries and has exact whiteness.
 
-The RGB path was subsequently re-derived from 31 steady-frequency tones,
-0 to -60 dB amplitude ladders/ramps, and matched-PCM copies of the same three
-recordings. `PWV4` is an absolute representation: its first byte is linear
-peak, its second nonzero byte is approximately `256 - peak`, and its remaining
-fields are separately filtered linear band peaks. At -6 dB, clean PWV4
-medians for 80 Hz, 500 Hz, and 4 kHz are respectively
-`64/192/63/63/1/0`, `64/192/34/1/53/0`, and
-`64/192/1/0/3/33`; the reference values are
-`64/192/63/62/0/0`, `64/192/34/0/53/0`, and
-`64/192/0/0/0/33`.
+The RGB path was subsequently re-derived from native boundary traces,
+31 steady-frequency tones, amplitude ladders/ramps, and matched-PCM copies of
+the same three recordings. Its input boundary is signed-16-bit rounded stereo
+with the native exact half-sum described above. `PWV4`'s first
+two lanes are the positive and negative source extrema. Its remaining lanes
+come directly from the native legacy bank: `LP400`, two-stage `LP200`,
+two-stage `HP200 → LP2000`, and two-stage `HP2000`. Per-millisecond band
+dominance, saturation-before-dominance quantization, centered red/green
+windows, and the native 1,200-column phase reducer complete the path. No fitted
+green or blue filters remain.
 
-`PWV5` color is amplitude-invariant spectral hue, not absolute band loudness.
-Continuous Butterworth filters feed 294-sample band RMS values which are
-divided by broadband frame RMS before three-bit quantization; height remains a
-separate peak-power field. The same three tones now produce the exact reference
-hues `7/0/0`, `0/7/1`, and `0/2/7`, including when the tone is attenuated to
--60 dB. On visible frames in Science Fiction, the clean mean RGB moved from
-the former direct-map `3.59/2.04/0.90` to `6.27/1.36/1.67`, versus the
-reference `6.59/0.98/1.84`. Across Science Fiction, Crystalised, and Pleasure
-from the Bass, visible per-channel MAE is `0.49..1.16` red, `0.66..0.85`
-green, and `0.78..1.29` blue. PWV5 height correlations remain
-`0.993/0.913/0.986`.
+`PWV5` consumes the same 1 kHz stream with separate `LP100`,
+`HP300 → LP3000`, and `HP1500` color bands. Centered maxima and the native
+nonlinear RGB transform produce three-bit hue; globally normalized
+peak-squared amplitude produces its five-bit height. On fresh matched inputs,
+all six `PWV4` lanes are byte-exact for Science Fiction, Pleasure from the
+Bass, and Crystalised: 21,600/21,600 payload bytes. `PWV6` is also byte-exact
+for all three. Crystalised's complete `PWV5` is byte-exact; Pleasure from the
+Bass has byte-exact RGB and 99.9341% exact height; Science Fiction has exact
+red/green, 99.9966% exact blue, and 99.916% exact height.
 
 This is not a byte-parity claim. Three additional mostly steady heldouts expose
 the boundary of the current estimator: Ana Tijoux has exact count/downbeat
@@ -250,7 +307,7 @@ stateful envelope, and normalization path. The clean implementation now uses
 1 ms peak buckets, `300/200/100 ms` finite decay histories, and PWVC gains
 derived from the 1,200-column track preview.
 
-## 110-track differential checkpoint
+## 110-track Normal baseline checkpoint
 
 A read-only corpus pass matched 113 local recordings to 115 Rekordbox 6.8.2
 reference directories; 110 decoded successfully. Three malformed/short media
@@ -278,7 +335,99 @@ regressions; median PWV7 correlation is
 `0.999991/0.999977/0.999809` and median MAE is
 `0.0123/0.0169/0.0474`.
 
-## Variable-tempo and syncopated-phase audit
+The final native reader and legacy-lane reconstruction materially closes
+PWV4/PWV5 without changing any frozen beat grid. Across the same 110 tracks,
+every PWV4 lane has median correlation `1.0`, median MAE `0`, and median exact
+fraction `100%`. Entire tracks are byte-exact in 58/110 amplitude,
+67/110 negative-extrema, 60/110 bottom, 63/110 red, 62/110 green, and 56/110
+blue lanes. PWV5 median red/green/blue correlation is
+`0.9999995/0.9999945/0.9999981`; median MAE is
+`0.0000084/0.0000310/0.0000277`; and median exact fraction is
+`99.99916%/99.99795%/99.99723%`. Height correlation is `0.9999927`, with
+`99.89945%` median exact entries. PWV6 has median byte-exact output in every
+lane. PWV7 median low/mid/high correlation is
+`0.9999984/0.9999975/0.9999922`, with
+`99.7913%/99.7998%/99.6640%` median exact entries. A final-versus-frozen
+candidate replay has F1 `1.0`, zero p95 movement, exact phase, exact numbering,
+and exact beat count on all 110 tracks.
+
+## Linked Dynamic differential checkpoint
+
+A fresh, read-only 110-track Dynamic replay completed with zero analyzer
+failures. All 110 tracks reached F1 `>= 0.99`; mean F1 is `0.999985758`, mean
+p95 timing error is `0.677 ms`, median p95 is zero, and p90/p95 of per-track
+p95 are `1.496/2.517 ms`. All 110 grids have exact aligned bar phase and exact
+beat numbering, 109/110 have exact beat count, and 60/110 have zero
+median/p95/max timestamp error. The prior static implementation reached
+94/110, mean F1
+`0.878300174`, and mean p95 `43.365 ms`.
+
+The recovered low-frequency UnitEnvelope extractor, four-bucket scorer,
+all-nonpositive first-peak fallback, numbering branches, one-beat boundary
+repair, DASH AAC priming, and format-derived FLAC reader tail produce an exact
+Life Is Hard grid and recover seven previously missing FLAC endpoint beats.
+The recovered whole-beat-rounded short-section fit closes Chopin at the exact
+692 beats, labels, and tempo changes with zero p95 error. Enforcing the
+native one-eighth-beat survivor-spacing invariant at section bounds closes
+Conga at the exact 867 beats and labels, F1 `1.0`, and `0.862 ms` p95 error.
+The sole remaining beat-count residual is the existing Funkytown
+source/reference mismatch; its aligned labels are exact.
+
+A separate 849-track audit confirms that Normal and Dynamic are distinct
+analysis modes, not interchangeable quality levels. All 14 references with
+local tempo movement pass in Dynamic. Of 835 static Normal references, Normal
+passes 759 while forced Dynamic passes 606. Differential tests and the local
+reference helper therefore require the same explicit mode on both sides.
+
+## Song-structure differential checkpoint
+
+The clean analyzer now emits a valid, non-empty `PSSI` phrase map rather than
+empty optional scaffolding. The binary envelope and record layout are exact:
+32 header bytes, 24 bytes per phrase, one-based contiguous indices, native
+mood/end-beat positions, phrase-kind fields, `k1/k2/k3`, Up3 `b` and internal
+beats, and optional fill markers.
+
+The implementation is clean-room and beat-synchronous. It uses six independent
+bar features, standardized multi-scale novelty, mood-specific phrase-duration
+priors, and a bounded dynamic-programming decoder. The first phrase retains
+native beat index one semantics. Every later phrase follows an actual
+`beat == 1` label; `99.59%` of 113 native-reference post-leading boundaries
+show that same contract.
+
+A full 110-track read-only differential after native input/rate correction
+reports:
+
+- mood-family accuracy: `90.0%`;
+- mean native/clean phrase count: `18.164/17.664`;
+- phrase-count mean absolute error: `2.482`;
+- boundary F1 exact/within 4/within 8 beat-grid entries:
+  `0.5665/0.6833/0.7233`;
+- first/last phrase-kind agreement: `99.09%/87.27%`;
+- macro kind agreement among boundaries matched within four entries: `45.61%`.
+
+These measurements establish a useful protocol-compatible baseline, not exact
+proprietary phrase analysis. A complete replay rejected an attempted endpoint
+bias because it traded a `+0.0016` exact-F1 change for worse four/eight-entry
+F1 and worse matched labels. Further complete sweeps removed a redundant
+boundary-level metrical bonus: duration priors already represented meter, and
+the removal improved corrected-input exact/within-four boundary F1 by
+`+0.0169/+0.0239`.
+
+An isolated committed-HEAD comparator measured the initial non-empty phrase
+stage at `+56 ms` (`+0.29%`) over 100 tracks. Samply attributed
+`0.35–0.74%` of representative-track CPU to phrase analysis, almost entirely
+to the scalar bar-feature scan. The live pipeline now overlaps that scan with
+waveform/key work and hoists filter coefficients outside the bar loop.
+Allocator samples never intersected a phrase stack. `target-cpu=native`, fat
+LTO/one codegen unit, and their combination were `2.44–3.41%` slower than the
+portable default on the same pinned workload, so release codegen remains
+portable.
+
+## Historical variable-tempo and syncopated-phase audit
+
+The following records the superseded global/barwise experiments that motivated
+the linked-path reconstruction. They are retained to document rejected
+heuristics, not the current production Dynamic implementation.
 
 A second clean-room pass tested local-period estimation, beat snapping,
 barwise reconstruction, and pulse-based phase selection against nine real
@@ -337,26 +486,33 @@ artifact was retained, so distributable output remains unchanged.
 
 ## Known semantic gaps
 
-- Rekordbox EXT files for two tested FLACs contain an undocumented `PVB2`
-  section. Semantic rebuilds preserve it opaquely; the clean baseline does not
-  synthesize one because no public field definition was found.
-- MPEG-2/2.5 Layer III, Layer I/II, and VBRI seek-table parity have no local
-  Rekordbox oracle yet, so they intentionally use the conservative zero
-  `PVBR` fallback.
-- Song structure/phrase analysis is not implemented. Clean `PSSI` is valid
-  empty scaffolding instead of a proprietary phrase map.
+- MPEG-2/2.5 Layer III, Layer I/II, and nonzero VBRI seek-table parity have no
+  local Rekordbox oracle yet. VBRI sample-count trailers are implemented from
+  the validated header, while its 400 offsets remain conservatively zero.
+- Song structure is implemented as a deterministic beat-synchronous baseline.
+  Exact proprietary phrase boundaries, mood family, phrase kinds, auxiliary
+  variant/internal-beat fields, and fill placement remain differential gaps.
 - Cue sections are emitted empty. Non-empty `PCOB`, `PCO2`, and obfuscated
   `PSSI` remain losslessly preservable by the format core.
-- `PWVC` now stores the reconstructed per-track three-band normalization
+- Non-44.1/48 kHz Dynamic input uses the recovered 29-tap Kaiser polyphase
+  converter, including native rate-family selection, initial history,
+  format-derived reader length, and i16 boundary quantization. At the recovered
+  converter boundary, both Power stereo channels match all 15,598,860 native
+  48 kHz frames bit-for-bit before and after i16 quantization. Production
+  still mixes decoded channels before SRC; its clean grid matches all 608
+  stock beats with F1 `1.0`, exact labels/downbeat, and `0.375 ms` p95 timing
+  error.
+- `PWVC` stores the reconstructed per-track three-band normalization
   coefficients. Science Fiction matches the linked `[80, 172, 147]` values
-  exactly.
-- Variable-tempo tracking uses a guarded barwise Viterbi path and a bounded
-  second-pass drift refinement. It materially improves the two James Brown
-  heldouts without activating across the frozen steady-track corpora, but
-  larger tempo-family errors and classical rubato remain open.
-- Syncopated meter/downbeat inference, source-decoder boundary parity, PWV7
-  operation-order edge cases, and phrase structure remain high-value
-  differential work.
+  exactly. Fresh Science Fiction `PWV7` low/mid/high correlations are
+  `0.999989/0.999978/0.999944`; its complete PWV4 payload is byte-exact.
+- `PWV2` is exact on all 162 synthetic preview fixtures and `PWAV` is exact on
+  151; the residual synthetic misses are height-only amplitude ramps/sweeps.
+  Across 106 aligned real sources, `PWAV` height/color exactness is
+  `99.9033%/99.8868%` and `PWV2` exactness is `99.9906%`.
+- Syncopated Normal meter inference, isolated source/oracle alignment
+  outliers, exact phrase semantics, and unsupported MP3 seek variants remain
+  high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.

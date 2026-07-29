@@ -83,6 +83,7 @@ export async function analyzeExistingManifest(
         ...(options.force === undefined ? {} : { force: options.force }),
         ...(options.rekordboxApp ? { rekordboxApp: options.rekordboxApp } : {}),
         ...(options.rekordboxCache ? { rekordboxCache: options.rekordboxCache } : {}),
+        rhythmMode: options.rhythmMode ?? "auto",
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.threads === undefined ? {} : { threads: options.threads }),
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
@@ -219,6 +220,8 @@ function toAnalysisArtifact(
     tempoBpm: result.summary.tempo_bpm,
     key: result.summary.key,
     keySource: result.summary.key_source,
+    ...(result.rhythmMode ? { rhythmMode: result.rhythmMode } : {}),
+    ...(result.rhythmModeRequested ? { rhythmModeRequested: result.rhythmModeRequested } : {}),
     sourceMtimeMs: result.source.mtimeMs,
     sourceSize: result.source.size,
   };

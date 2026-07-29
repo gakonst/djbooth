@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub const FILE_HEADER_LEN: usize = 28;
 const TAG_HEADER_LEN: usize = 12;
 const VBR_ENTRY_COUNT: usize = 400;
+/// Number of entries in Rekordbox's FLAC `PVB2` seek table.
+pub const PVB2_ENTRY_COUNT: usize = 400;
+const PVB2_HEADER_LEN: usize = 32;
+const PVB2_ENTRY_BYTES: usize = 20;
 const PREVIEW_ENTRY_COUNT: usize = 400;
 const TINY_PREVIEW_ENTRY_COUNT: usize = 100;
 const CANONICAL_FILE_HEADER_TAIL: [u8; 16] = [
@@ -30,12 +34,25 @@ fn read_be_u32(data: &[u8], offset: usize, context: &str) -> Result<u32> {
     ))
 }
 
+fn read_be_u64(data: &[u8], offset: usize, context: &str) -> Result<u64> {
+    let bytes = data
+        .get(offset..offset + 8)
+        .with_context(|| format!("missing {context} at byte {offset}"))?;
+    Ok(u64::from_be_bytes(
+        bytes.try_into().expect("eight-byte slice"),
+    ))
+}
+
 fn write_be_u16(data: &mut [u8], offset: usize, value: u16) {
     data[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
 }
 
 fn write_be_u32(data: &mut [u8], offset: usize, value: u32) {
     data[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+}
+
+fn write_be_u64(data: &mut [u8], offset: usize, value: u64) {
+    data[offset..offset + 8].copy_from_slice(&value.to_be_bytes());
 }
 
 fn checked_u32(value: usize, context: &str) -> Result<u32> {
@@ -428,8 +445,9 @@ impl ExtendedBeatGrid {
 
 /// Complete canonical EXT analysis primitives.
 ///
-/// Cue and song-structure tags stay opaque because their mutable synthesis is
-/// not required for analysis and the latter is obfuscated on disk.
+/// Cue tags and retained song-structure tags stay opaque so unknown fields and
+/// optional on-disk PSSI obfuscation round-trip without loss. New clean-room
+/// song structures are synthesized by the phrase module before insertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtAnalysis {
     pub path: String,
@@ -709,6 +727,88 @@ fn parse_vbr_tag(tag: &AnlzTag) -> Result<(u32, Vec<u32>, u32)> {
     Ok((header_unknown, entries, trailer_unknown))
 }
 
+/// One Rekordbox FLAC `PVB2` seek-table entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pvb2Entry {
+    /// First interchannel sample represented by the selected FLAC frame.
+    pub sample_index: u64,
+    /// FLAC frame-header byte offset relative to the first audio frame.
+    pub byte_offset: u64,
+    /// Interchannel samples represented by the selected FLAC frame.
+    pub frame_block_samples: u32,
+}
+
+/// Semantic fields of one canonical 400-entry FLAC `PVB2` tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pvb2Table {
+    /// Total interchannel samples from FLAC STREAMINFO.
+    pub total_samples: u32,
+    /// Floor-targeted FLAC frame locations.
+    pub entries: Vec<Pvb2Entry>,
+}
+
+impl Pvb2Table {
+    /// Parse a canonical Rekordbox FLAC `PVB2` tag.
+    pub fn parse(tag: &AnlzTag) -> Result<Self> {
+        if tag.kind() != *b"PVB2"
+            || tag.header_len() != PVB2_HEADER_LEN
+            || tag.raw().len() != PVB2_HEADER_LEN + PVB2_ENTRY_COUNT * PVB2_ENTRY_BYTES
+        {
+            bail!("expected a canonical 400-entry PVB2 tag");
+        }
+        if read_be_u32(tag.raw(), 12, "PVB2 reserved word 0")? != 0
+            || read_be_u32(tag.raw(), 16, "PVB2 reserved word 1")? != 0
+            || read_be_u32(tag.raw(), 24, "PVB2 entry count")? as usize != PVB2_ENTRY_COUNT
+            || read_be_u32(tag.raw(), 28, "PVB2 entry size")? as usize != PVB2_ENTRY_BYTES
+        {
+            bail!("PVB2 has unsupported reserved, count, or entry-size fields");
+        }
+        let entries = (0..PVB2_ENTRY_COUNT)
+            .map(|index| {
+                let offset = PVB2_HEADER_LEN + index * PVB2_ENTRY_BYTES;
+                Ok(Pvb2Entry {
+                    sample_index: read_be_u64(tag.raw(), offset, "PVB2 sample index")?,
+                    byte_offset: read_be_u64(tag.raw(), offset + 8, "PVB2 byte offset")?,
+                    frame_block_samples: read_be_u32(
+                        tag.raw(),
+                        offset + 16,
+                        "PVB2 frame block size",
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            total_samples: read_be_u32(tag.raw(), 20, "PVB2 total samples")?,
+            entries,
+        })
+    }
+
+    /// Build the canonical 8,032-byte Rekordbox FLAC `PVB2` tag.
+    pub fn to_tag(&self) -> Result<AnlzTag> {
+        if self.entries.len() != PVB2_ENTRY_COUNT {
+            bail!(
+                "PVB2 requires {PVB2_ENTRY_COUNT} entries, found {}",
+                self.entries.len()
+            );
+        }
+        let total_len = PVB2_HEADER_LEN + PVB2_ENTRY_COUNT * PVB2_ENTRY_BYTES;
+        let mut raw = vec![0_u8; total_len];
+        raw[..4].copy_from_slice(b"PVB2");
+        write_be_u32(&mut raw, 4, PVB2_HEADER_LEN as u32);
+        write_be_u32(&mut raw, 8, total_len as u32);
+        write_be_u32(&mut raw, 20, self.total_samples);
+        write_be_u32(&mut raw, 24, PVB2_ENTRY_COUNT as u32);
+        write_be_u32(&mut raw, 28, PVB2_ENTRY_BYTES as u32);
+        for (index, entry) in self.entries.iter().enumerate() {
+            let offset = PVB2_HEADER_LEN + index * PVB2_ENTRY_BYTES;
+            write_be_u64(&mut raw, offset, entry.sample_index);
+            write_be_u64(&mut raw, offset + 8, entry.byte_offset);
+            write_be_u32(&mut raw, offset + 16, entry.frame_block_samples);
+        }
+        AnlzTag::parse(&raw)
+    }
+}
+
 /// Build a standard PQTZ beat grid.
 pub fn build_beat_grid_tag(entries: &[BeatGridEntry]) -> Result<AnlzTag> {
     let total_len = 24usize
@@ -959,6 +1059,68 @@ mod tests {
         let decoded = DatAnalysis::parse(&parsed).expect("decode DAT");
         let rebuilt = decoded.to_file().expect("rebuild DAT");
         assert_eq!(rebuilt.to_bytes().expect("serialize rebuilt DAT"), bytes);
+    }
+
+    #[test]
+    fn canonical_pvb2_semantic_roundtrip_is_byte_exact() {
+        let table = Pvb2Table {
+            total_samples: 31_193_626,
+            entries: (0..PVB2_ENTRY_COUNT)
+                .map(|index| Pvb2Entry {
+                    sample_index: index as u64 * 77_824,
+                    byte_offset: index as u64 * 246_215,
+                    frame_block_samples: 4_096,
+                })
+                .collect(),
+        };
+        let tag = table.to_tag().expect("build PVB2");
+        assert_eq!(tag.kind(), *b"PVB2");
+        assert_eq!(tag.header_len(), 32);
+        assert_eq!(tag.raw().len(), 8_032);
+        assert_eq!(&tag.raw()[12..20], &[0; 8]);
+        assert_eq!(
+            u32::from_be_bytes(tag.raw()[20..24].try_into().expect("sample count")),
+            table.total_samples
+        );
+        assert_eq!(
+            u32::from_be_bytes(tag.raw()[24..28].try_into().expect("entry count")),
+            400
+        );
+        assert_eq!(
+            u32::from_be_bytes(tag.raw()[28..32].try_into().expect("entry size")),
+            20
+        );
+
+        let parsed = Pvb2Table::parse(&tag).expect("parse PVB2");
+        assert_eq!(parsed, table);
+        assert_eq!(parsed.to_tag().expect("rebuild PVB2").raw(), tag.raw());
+    }
+
+    #[test]
+    fn malformed_pvb2_shape_fails_closed() {
+        let table = Pvb2Table {
+            total_samples: 1,
+            entries: vec![
+                Pvb2Entry {
+                    sample_index: 0,
+                    byte_offset: 0,
+                    frame_block_samples: 1,
+                };
+                PVB2_ENTRY_COUNT
+            ],
+        };
+        let mut raw = table.to_tag().expect("build PVB2").raw().to_vec();
+        write_be_u32(&mut raw, 28, 16);
+        let malformed = AnlzTag::parse(&raw).expect("generic tag envelope remains valid");
+        assert!(Pvb2Table::parse(&malformed).is_err());
+        assert!(
+            Pvb2Table {
+                total_samples: 1,
+                entries: Vec::new(),
+            }
+            .to_tag()
+            .is_err()
+        );
     }
 
     #[test]

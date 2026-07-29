@@ -196,6 +196,8 @@ export type RekordboxAnalysisArtifact = {
   tempoBpm: number | null;
   key: string | null;
   keySource: string | null;
+  rhythmMode?: "normal" | "dynamic";
+  rhythmModeRequested?: "normal" | "dynamic" | "auto";
   sourceMtimeMs: number;
   sourceSize: number;
 };
@@ -1108,6 +1110,8 @@ function validateArtifacts(value: unknown, path: string): void {
         "tempoBpm",
         "key",
         "keySource",
+        "rhythmMode",
+        "rhythmModeRequested",
         "sourceMtimeMs",
         "sourceSize",
       ]);
@@ -1124,6 +1128,14 @@ function validateArtifacts(value: unknown, path: string): void {
       if (item.tempoBpm !== null) positiveNumber(item.tempoBpm, `${itemPath}.tempoBpm`);
       if (item.key !== null) nonemptyString(item.key, `${itemPath}.key`);
       if (item.keySource !== null) nonemptyString(item.keySource, `${itemPath}.keySource`);
+      if (item.rhythmMode !== undefined)
+        oneOf(item.rhythmMode, ["normal", "dynamic"], `${itemPath}.rhythmMode`);
+      if (item.rhythmModeRequested !== undefined)
+        oneOf(
+          item.rhythmModeRequested,
+          ["normal", "dynamic", "auto"],
+          `${itemPath}.rhythmModeRequested`,
+        );
       nonnegativeNumber(item.sourceMtimeMs, `${itemPath}.sourceMtimeMs`);
       positiveInteger(item.sourceSize, `${itemPath}.sourceSize`);
     });

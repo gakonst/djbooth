@@ -62,6 +62,9 @@ function analysis(path: string): RekordboxAnalysisResult {
     contentId: 1,
     nativeLog: resolve(directory, "rehost-native.log"),
     outputs: [],
+    rhythmFallback: null,
+    rhythmMode: "normal",
+    rhythmModeRequested: "auto",
     source: { mtimeMs: 1, path, size: 2 },
     startResult: 0,
     summary: {
@@ -135,10 +138,15 @@ describe("analysis-only manifest workflow", () => {
       expect.objectContaining({
         concurrency: DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
         engine: "reference",
+        rhythmMode: "auto",
         threads: 7,
       }),
     );
     expect(result.manifest.artifacts.analysis).toHaveLength(2);
+    expect(result.manifest.artifacts.analysis?.[0]).toMatchObject({
+      rhythmMode: "normal",
+      rhythmModeRequested: "auto",
+    });
     expect(result.manifest.artifacts.analysisRuns).toEqual([
       expect.objectContaining({
         analyzed: 2,

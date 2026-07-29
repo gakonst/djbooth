@@ -21,6 +21,7 @@ const WAIT_SECONDS: u64 = 90;
 const COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const CALLBACK_STABILITY_WINDOW: Duration = Duration::from_millis(100);
 const OUTPUT_STABILITY_WINDOW: Duration = Duration::from_millis(500);
+const ANALYZER_RHYTHM_MODE_ENV: &str = "REKORDBOX_ANALYZER_RHYTHM_MODE";
 static CONTENT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
 pub const REHOST_WORKER_SUBCOMMAND: &str = "__rekordbox-rehost";
@@ -76,6 +77,10 @@ pub struct RehostResult {
     pub callback_error: Option<String>,
     #[serde(rename = "nativeLog")]
     pub native_log: String,
+    #[serde(rename = "rhythmMode")]
+    pub rhythm_mode: String,
+    #[serde(rename = "rhythmModeRequested")]
+    pub rhythm_mode_requested: String,
     #[serde(rename = "tracePath", skip_serializing_if = "Option::is_none")]
     pub trace_path: Option<String>,
     pub outputs: Vec<(String, u64)>,
@@ -149,6 +154,7 @@ struct AnlzTag {
 pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
     let total_started = Instant::now();
     ensure_x86_64_worker()?;
+    let rhythm_mode = reference_rhythm_mode()?;
 
     let audio_path = options
         .audio_path
@@ -187,7 +193,7 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
         begin_reference_trace();
     }
     let analyze_started = Instant::now();
-    let start_result = unsafe { rehost.analyze(&audio_path, &dat_path, content_id)? };
+    let start_result = unsafe { rehost.analyze(&audio_path, &dat_path, content_id, rhythm_mode)? };
     let analyze_start_ms = elapsed_ms(analyze_started);
     if start_result != 0 {
         rehost_output.restore()?;
@@ -234,6 +240,8 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
         callback_status,
         callback_error,
         native_log: native_log.display().to_string(),
+        rhythm_mode: rhythm_mode.as_str().to_string(),
+        rhythm_mode_requested: rhythm_mode.as_str().to_string(),
         trace_path: trace_path.map(|path| path.display().to_string()),
         outputs,
         summary,
@@ -247,6 +255,51 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
             total_ms: elapsed_ms(total_started),
         },
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReferenceRhythmMode {
+    Normal,
+    Dynamic,
+}
+
+impl ReferenceRhythmMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Dynamic => "dynamic",
+        }
+    }
+
+    const fn variable_tempo(self) -> c_int {
+        match self {
+            Self::Normal => 0,
+            Self::Dynamic => 1,
+        }
+    }
+}
+
+fn reference_rhythm_mode() -> Result<ReferenceRhythmMode> {
+    match std::env::var(ANALYZER_RHYTHM_MODE_ENV) {
+        Ok(value) => parse_reference_rhythm_mode(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_reference_rhythm_mode(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{ANALYZER_RHYTHM_MODE_ENV} must contain normal or dynamic")
+        }
+    }
+}
+
+fn parse_reference_rhythm_mode(value: Option<&str>) -> Result<ReferenceRhythmMode> {
+    match value {
+        Some("normal") => Ok(ReferenceRhythmMode::Normal),
+        Some("dynamic") | None => Ok(ReferenceRhythmMode::Dynamic),
+        Some("auto") => bail!(
+            "{ANALYZER_RHYTHM_MODE_ENV}=auto is unavailable for the reference analyzer; select normal or dynamic"
+        ),
+        Some(value) => bail!(
+            "{ANALYZER_RHYTHM_MODE_ENV} must be normal or dynamic for the reference analyzer; received '{value}'"
+        ),
+    }
 }
 
 pub fn bundle_rekordbox_templates(output_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -393,6 +446,7 @@ impl Rehost {
         audio_path: &Path,
         dat_path: &Path,
         content_id: i64,
+        rhythm_mode: ReferenceRhythmMode,
     ) -> Result<i32> {
         let analyzer = unsafe { (self.get_analyzer)() };
         if analyzer.is_null() {
@@ -431,7 +485,7 @@ impl Rehost {
                 audio.as_mut_ptr(),
                 anlz.as_mut_ptr(),
                 aux.as_mut_ptr(),
-                1,
+                rhythm_mode.variable_tempo(),
                 1,
                 1,
                 0,
@@ -1140,6 +1194,30 @@ mod tests {
         assert!(first > 0);
         assert!(second > 0);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn reference_rhythm_mode_maps_to_the_native_variable_tempo_flag() {
+        assert_eq!(
+            parse_reference_rhythm_mode(Some("normal")).unwrap(),
+            ReferenceRhythmMode::Normal
+        );
+        assert_eq!(ReferenceRhythmMode::Normal.variable_tempo(), 0);
+        assert_eq!(
+            parse_reference_rhythm_mode(Some("dynamic")).unwrap(),
+            ReferenceRhythmMode::Dynamic
+        );
+        assert_eq!(ReferenceRhythmMode::Dynamic.variable_tempo(), 1);
+        assert_eq!(
+            parse_reference_rhythm_mode(None).unwrap(),
+            ReferenceRhythmMode::Dynamic
+        );
+        assert!(
+            parse_reference_rhythm_mode(Some("auto"))
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable")
+        );
     }
 
     fn fixture_anlz_with_pqtz() -> Vec<u8> {

@@ -23,11 +23,16 @@ const BEAT_INFO_ANALYZE_OFFSET: usize = 0x138a960;
 const BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x1390180;
 const BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x13914f0;
 const BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x13918d0;
+const BEAT_INFO_FIND_NEAR_POS_OFFSET: usize = 0x138a760;
 const BEAT_SENSOR_CREATE_OFFSET: usize = 0x1389ba0;
 const PEAK_SENSOR_PUT_OFFSET: usize = 0x14e7ac0;
 const PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x13894f0;
+const LOUD_VIEW_ANALYZE_PEAK_OFFSET: usize = 0x148a270;
+const LOUD_VIEW_PEAK_DETECT_OFFSET: usize = 0x148c4c0;
+const LOUD_VIEW_PEAK_DETECT_900_OFFSET: usize = 0x148c7d0;
 const BEAT_LIST_CHANGE_STAT_OFFSET: usize = 0x14e6910;
 const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
+const LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET: usize = 0x40d3bf8;
 const FWRITE_OFFSET: usize = 0x21dcd98;
 const MALLOC_OFFSET: usize = 0x21dc954;
 const EXP10_OFFSET: usize = 0x21dc9d2;
@@ -45,9 +50,31 @@ const CALL_BEAT_INFO_ANALYZE_OFFSET: usize = 0x14e6695;
 const CALL_BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x138d406;
 const CALL_BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x138f837;
 const CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x138f8f4;
+const CALL_SEG_FIND_NEAR_POS_0_OFFSET: usize = 0x139071b;
+const CALL_SEG_FIND_NEAR_POS_1_OFFSET: usize = 0x139092e;
+const CALL_SEG_FIND_NEAR_POS_2_OFFSET: usize = 0x1390b3d;
+const CALL_SEG_FIND_NEAR_POS_3_OFFSET: usize = 0x1390e31;
+const CALL_SEG_FIND_NEAR_POS_4_OFFSET: usize = 0x139103e;
+const CALL_SEG_FIND_NEAR_POS_5_OFFSET: usize = 0x13912b1;
+const CALL_GRID_FIND_NEAR_POS_0_OFFSET: usize = 0x138d767;
+const CALL_GRID_FIND_NEAR_POS_1_OFFSET: usize = 0x138d90a;
+const CALL_GRID_FIND_NEAR_POS_2_OFFSET: usize = 0x138dc6e;
+const CALL_GRID_FIND_NEAR_POS_3_OFFSET: usize = 0x138dd13;
+const CALL_GRID_FIND_NEAR_POS_4_OFFSET: usize = 0x138dd5e;
+const CALL_GRID_FIND_NEAR_POS_5_OFFSET: usize = 0x138de03;
+const CALL_GRID_FIND_NEAR_POS_6_OFFSET: usize = 0x138de4e;
+const CALL_GRID_FIND_NEAR_POS_7_OFFSET: usize = 0x138def7;
+const CALL_GRID_FIND_NEAR_POS_8_OFFSET: usize = 0x138df4c;
 const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
 const CALL_PEAK_SENSOR_PUT_OFFSET: usize = 0x14e78ec;
 const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
+const CALL_LOUD_VIEW_ANALYZE_PEAK_0_OFFSET: usize = 0x14e64b4;
+const CALL_LOUD_VIEW_ANALYZE_PEAK_1_OFFSET: usize = 0x14e6527;
+const CALL_LOUD_VIEW_PEAK_DETECT_0_OFFSET: usize = 0x148a93f;
+const CALL_LOUD_VIEW_PEAK_DETECT_900_0_OFFSET: usize = 0x148a97d;
+const CALL_LOUD_VIEW_PEAK_DETECT_1_OFFSET: usize = 0x148abab;
+const CALL_LOUD_VIEW_PEAK_DETECT_900_1_OFFSET: usize = 0x148abe6;
+const CALL_LOUD_VIEW_PEAK_DETECT_2_OFFSET: usize = 0x148ac27;
 const CALL_CHECKPOINT_CONTINUOUS_REGION_OFFSET: usize = 0x138b51b;
 const CALL_CHECKPOINT_MINIMUM_RUN_OFFSET: usize = 0x138b7d8;
 const CALL_CHECKPOINT_TEMPO_FAMILY_OFFSET: usize = 0x138c5ff;
@@ -63,6 +90,8 @@ const IIR_FILTER_BYTES: usize = 0x58;
 const BEAT_SENSOR_PEAK_BYTES: usize = 0xa0;
 const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
 const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
+const MAX_TRACE_LOUD_PEAK_CALLS: usize = 20_000;
+const MAX_TRACE_GRID_SNAP_PROBES: usize = 65_536;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 const ENV_TRACE_ANALYZER_STAGES: &str = "REKORDBOX_ANALYZER_TRACE_STAGES";
 
@@ -86,9 +115,37 @@ type BeatInfoSegAdjust =
     unsafe extern "C" fn(*mut c_void, *mut BeatInfoAnalyzeInfo, *mut StdVector, i32);
 type BeatInfoGapCorrect = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32);
 type BeatInfoGapCorrectRange = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, i32);
+type BeatInfoFindNearPos =
+    unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, *mut i32) -> i32;
 type BeatSensorCreate = unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, i32) -> u64;
 type PeakSensorPut = unsafe extern "C" fn(*mut c_void, f32) -> u8;
 type PeakBufferCalcBeat = unsafe extern "C" fn(*mut c_void, f32) -> u8;
+type LoudViewAnalyzePeak =
+    unsafe extern "C" fn(*mut c_void, *mut f32, *mut f32, *mut f32, *mut f32, i32) -> u64;
+type LoudViewPeakDetect = unsafe extern "C" fn(
+    *mut c_void,
+    *const f32,
+    *mut LoudViewPeakEvent,
+    *mut i64,
+    *mut i32,
+    *mut i64,
+    i32,
+    i64,
+    *mut i32,
+    *mut i32,
+    *mut i64,
+) -> i64;
+type LoudViewPeakDetect900 = unsafe extern "C" fn(
+    *mut c_void,
+    *const f32,
+    *mut LoudViewPeakEvent,
+    *mut i64,
+    *mut i32,
+    *mut i64,
+    i32,
+    i64,
+    *mut i32,
+) -> i64;
 type BeatListChangeStat = unsafe extern "C" fn(*mut c_void, f32, i32, f32, *mut c_void);
 type AllocateBytes = unsafe extern "C" fn(usize) -> *mut c_void;
 type Exp10 = unsafe extern "C" fn(f64) -> f64;
@@ -106,9 +163,13 @@ static BEAT_INFO_ANALYZE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_SEG_ADJUST: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT_RANGE: AtomicUsize = AtomicUsize::new(0);
+static BEAT_INFO_FIND_NEAR_POS: AtomicUsize = AtomicUsize::new(0);
 static BEAT_SENSOR_CREATE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_PUT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_CALC_BEAT: AtomicUsize = AtomicUsize::new(0);
+static LOUD_VIEW_ANALYZE_PEAK: AtomicUsize = AtomicUsize::new(0);
+static LOUD_VIEW_PEAK_DETECT: AtomicUsize = AtomicUsize::new(0);
+static LOUD_VIEW_PEAK_DETECT_900: AtomicUsize = AtomicUsize::new(0);
 static BEAT_LIST_CHANGE_STAT: AtomicUsize = AtomicUsize::new(0);
 static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
 static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
@@ -128,10 +189,17 @@ struct ReferenceTrace {
     beat_sensor_creates: Vec<BeatSensorCreateTrace>,
     peak_sensor_events: Vec<PeakSensorEventTrace>,
     peak_buffer_calculations: Vec<PeakBufferCalculationTrace>,
+    loud_view_calls: Vec<LoudViewCallTrace>,
+    loud_view_peak_calls: Vec<LoudViewPeakCallTrace>,
+    loud_view_final: Option<LoudViewSnapshotTrace>,
     beat_list_changes: Vec<BeatListChangeTrace>,
     analyzer_checkpoints: Vec<AnalyzerCheckpointTrace>,
     section_checkpoints: Vec<SectionCheckpointTrace>,
     refinement_checkpoints: Vec<RefinementCheckpointTrace>,
+    phase_probe_blocks: Vec<PhaseProbeBlockTrace>,
+    #[serde(skip)]
+    phase_probe_accumulator: Option<PhaseProbeAccumulator>,
+    grid_snap_probes: Vec<GridSnapProbeTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -194,6 +262,112 @@ struct PeakBufferCalculationTrace {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LoudViewCallTrace {
+    sample_count: i32,
+    input_peak: f32,
+    low_provided: bool,
+    low_input_peak: f32,
+    mid_provided: bool,
+    mid_input_peak: f32,
+    high_provided: bool,
+    high_input_peak: f32,
+    result: u64,
+    processed_frames: i64,
+    raw_batch_emitted: i64,
+    raw_batch_value: f32,
+    raw_batch_sum: f32,
+    raw_batch_frames: i32,
+    raw_batch_pending: i32,
+    raw_output_index: i32,
+    loud_ready: i32,
+    loud_emitted: i32,
+    dots_ready: i32,
+    dots_emitted: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoudViewPeakCallTrace {
+    stage: u8,
+    detector_900: bool,
+    band: i32,
+    sample_count: i64,
+    input_peak: f32,
+    event_count_before: i32,
+    event_count_after: i32,
+    sample_position_before: i64,
+    sample_position_after: i64,
+    frame_index_before: i64,
+    frame_index_after: i64,
+    output_flag_before: i32,
+    output_flag_after: i32,
+    secondary_flag_before: Option<i32>,
+    secondary_flag_after: Option<i32>,
+    secondary_position_before: Option<i64>,
+    secondary_position_after: Option<i64>,
+    peak_before: Option<LoudViewPeakEventTrace>,
+    peak_after: Option<LoudViewPeakEventTrace>,
+    new_events: Vec<LoudViewPeakEventTrace>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct LoudViewPeakEvent {
+    peak: f32,
+    peak_900: f32,
+    start: i64,
+    end: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoudViewPeakEventTrace {
+    peak: f32,
+    peak_900: f32,
+    start: i64,
+    end: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoudViewSnapshotTrace {
+    frame_samples: i32,
+    total_samples: i64,
+    processed_frames: i64,
+    normalization: f32,
+    loud_count: i32,
+    dots_count: i32,
+    raw_peaks: Vec<f32>,
+    low_peaks: Vec<f32>,
+    mid_peaks: Vec<f32>,
+    high_peaks: Vec<f32>,
+    loud_records: Vec<LoudViewRecordTrace>,
+    loud_output: Vec<LoudViewOutputTrace>,
+    dots_primary: Vec<i64>,
+    dots_secondary: Vec<i64>,
+    dots_output: Vec<LoudViewOutputTrace>,
+    dots_levels: Vec<i32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoudViewRecordTrace {
+    adjusted_height: i32,
+    raw_height: i32,
+    low_level: i32,
+    mid_level: i32,
+    high_level: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoudViewOutputTrace {
+    value: f32,
+    color: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BeatListChangeTrace {
     period_ms: f32,
     peak_position: i32,
@@ -249,6 +423,56 @@ struct RefinementCheckpointTrace {
 struct HistogramBinTrace {
     bin: usize,
     votes: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhaseProbeBlockTrace {
+    callsite: u8,
+    section_index: usize,
+    lower_frame: f64,
+    upper_frame: f64,
+    period_frames: f64,
+    tolerance_frames: i32,
+    trial_count: usize,
+    total_calls: usize,
+    total_hits: usize,
+    best_trial: Option<PhaseProbeTrialTrace>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhaseProbeTrialTrace {
+    start_target: i32,
+    last_target: i32,
+    score: i64,
+    calls: usize,
+    hits: usize,
+    first_hit: Option<i32>,
+}
+
+#[derive(Debug)]
+struct PhaseProbeAccumulator {
+    block: PhaseProbeBlockTrace,
+    current_trial: PhaseProbeTrialTrace,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SegAdjustProbeContext {
+    section_index: usize,
+    lower_frame: f64,
+    upper_frame: f64,
+    period_frames: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GridSnapProbeTrace {
+    callsite: u8,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_position: i32,
+    result_index: i32,
 }
 
 #[derive(Debug, Serialize)]
@@ -356,7 +580,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 8,
+        schema_version: 15,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -375,6 +599,7 @@ pub(crate) fn finish_reference_trace(
     let mut trace = trace()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.flush_phase_probe_block();
     trace.final_beat_grid = final_beat_grid;
     trace.stage_parity = stage_parity(&trace, &final_beats);
     trace.final_beats = final_beats;
@@ -389,6 +614,131 @@ pub(crate) fn finish_reference_trace(
 
 fn trace() -> &'static Mutex<ReferenceTrace> {
     TRACE.get_or_init(|| Mutex::new(ReferenceTrace::default()))
+}
+
+impl ReferenceTrace {
+    fn record_phase_probe(
+        &mut self,
+        callsite: u8,
+        context: SegAdjustProbeContext,
+        target_position: i32,
+        tolerance_frames: i32,
+        result_position: i32,
+    ) {
+        let continues_block = self
+            .phase_probe_accumulator
+            .as_ref()
+            .is_some_and(|accumulator| {
+                accumulator.block.callsite == callsite
+                    && accumulator.block.section_index == context.section_index
+                    && accumulator.block.lower_frame.to_bits() == context.lower_frame.to_bits()
+                    && accumulator.block.upper_frame.to_bits() == context.upper_frame.to_bits()
+                    && accumulator.block.period_frames.to_bits() == context.period_frames.to_bits()
+                    && accumulator.block.tolerance_frames == tolerance_frames
+            });
+        if !continues_block {
+            self.flush_phase_probe_block();
+            self.phase_probe_accumulator = Some(PhaseProbeAccumulator {
+                block: PhaseProbeBlockTrace {
+                    callsite,
+                    section_index: context.section_index,
+                    lower_frame: context.lower_frame,
+                    upper_frame: context.upper_frame,
+                    period_frames: context.period_frames,
+                    tolerance_frames,
+                    trial_count: 0,
+                    total_calls: 0,
+                    total_hits: 0,
+                    best_trial: None,
+                },
+                current_trial: PhaseProbeTrialTrace {
+                    start_target: target_position,
+                    last_target: target_position,
+                    score: 0,
+                    calls: 0,
+                    hits: 0,
+                    first_hit: None,
+                },
+            });
+        } else if self
+            .phase_probe_accumulator
+            .as_ref()
+            .is_some_and(|accumulator| {
+                target_position <= accumulator.current_trial.last_target
+                    || ((i64::from(target_position)
+                        - i64::from(accumulator.current_trial.last_target))
+                        as f64)
+                        < accumulator.block.period_frames * 0.5
+            })
+        {
+            self.finish_phase_probe_trial();
+            let accumulator = self
+                .phase_probe_accumulator
+                .as_mut()
+                .expect("the phase-probe block remains active");
+            accumulator.current_trial = PhaseProbeTrialTrace {
+                start_target: target_position,
+                last_target: target_position,
+                score: 0,
+                calls: 0,
+                hits: 0,
+                first_hit: None,
+            };
+        }
+
+        let accumulator = self
+            .phase_probe_accumulator
+            .as_mut()
+            .expect("a phase-probe block was initialized");
+        accumulator.current_trial.last_target = target_position;
+        accumulator.current_trial.calls += 1;
+        if result_position >= 0 {
+            accumulator.current_trial.hits += 1;
+            accumulator
+                .current_trial
+                .first_hit
+                .get_or_insert(result_position);
+            accumulator.current_trial.score +=
+                i64::from(tolerance_frames - result_position.abs_diff(target_position) as i32);
+        }
+    }
+
+    fn finish_phase_probe_trial(&mut self) {
+        let Some(accumulator) = self.phase_probe_accumulator.as_mut() else {
+            return;
+        };
+        let trial = accumulator.current_trial.clone();
+        accumulator.block.trial_count += 1;
+        accumulator.block.total_calls += trial.calls;
+        accumulator.block.total_hits += trial.hits;
+        let replaces_best = accumulator
+            .block
+            .best_trial
+            .as_ref()
+            .is_none_or(|best| trial.score > best.score);
+        if replaces_best {
+            accumulator.block.best_trial = Some(trial);
+        }
+    }
+
+    fn flush_phase_probe_block(&mut self) {
+        let Some(mut accumulator) = self.phase_probe_accumulator.take() else {
+            return;
+        };
+        let trial = accumulator.current_trial;
+        accumulator.block.trial_count += 1;
+        accumulator.block.total_calls += trial.calls;
+        accumulator.block.total_hits += trial.hits;
+        let replaces_best = accumulator
+            .block
+            .best_trial
+            .as_ref()
+            .is_none_or(|best| trial.score > best.score);
+        if replaces_best {
+            accumulator.block.best_trial = Some(trial);
+        }
+        self.phase_probe_blocks.push(accumulator.block);
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -412,9 +762,22 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         &BEAT_INFO_GAP_CORRECT_RANGE,
         base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
     );
+    set_original(
+        &BEAT_INFO_FIND_NEAR_POS,
+        base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+    );
     set_original(&BEAT_SENSOR_CREATE, base + BEAT_SENSOR_CREATE_OFFSET);
     set_original(&PEAK_SENSOR_PUT, base + PEAK_SENSOR_PUT_OFFSET);
     set_original(&PEAK_BUFFER_CALC_BEAT, base + PEAK_BUFFER_CALC_BEAT_OFFSET);
+    set_original(
+        &LOUD_VIEW_ANALYZE_PEAK,
+        base + LOUD_VIEW_ANALYZE_PEAK_OFFSET,
+    );
+    set_original(&LOUD_VIEW_PEAK_DETECT, base + LOUD_VIEW_PEAK_DETECT_OFFSET);
+    set_original(
+        &LOUD_VIEW_PEAK_DETECT_900,
+        base + LOUD_VIEW_PEAK_DETECT_900_OFFSET,
+    );
     set_original(&BEAT_LIST_CHANGE_STAT, base + BEAT_LIST_CHANGE_STAT_OFFSET);
     set_original(&MALLOC, base + MALLOC_OFFSET);
     set_original(&EXP10, base + EXP10_OFFSET);
@@ -502,6 +865,81 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             trace_beat_info_gap_correct_range as usize,
         )?;
         patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_0_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_1_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_2_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_2 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_3_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_3 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_4_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_4 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_SEG_FIND_NEAR_POS_5_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_find_near_pos_5 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_0_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_1_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_2_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_2 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_3_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_3 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_4_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_4 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_5_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_5 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_6_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_6 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_7_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_7 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_8_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_8 as usize,
+        )?;
+        patch_relative_call(
             base + CALL_BEAT_SENSOR_CREATE_OFFSET,
             base + BEAT_SENSOR_CREATE_OFFSET,
             trace_beat_sensor_create as usize,
@@ -515,6 +953,41 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_PEAK_BUFFER_CALC_BEAT_OFFSET,
             base + PEAK_BUFFER_CALC_BEAT_OFFSET,
             trace_peak_buffer_calc_beat as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_ANALYZE_PEAK_0_OFFSET,
+            base + LOUD_VIEW_ANALYZE_PEAK_OFFSET,
+            trace_loud_view_analyze_peak as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_ANALYZE_PEAK_1_OFFSET,
+            base + LOUD_VIEW_ANALYZE_PEAK_OFFSET,
+            trace_loud_view_analyze_peak as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_PEAK_DETECT_0_OFFSET,
+            base + LOUD_VIEW_PEAK_DETECT_OFFSET,
+            trace_loud_view_peak_detect_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_PEAK_DETECT_900_0_OFFSET,
+            base + LOUD_VIEW_PEAK_DETECT_900_OFFSET,
+            trace_loud_view_peak_detect_900_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_PEAK_DETECT_1_OFFSET,
+            base + LOUD_VIEW_PEAK_DETECT_OFFSET,
+            trace_loud_view_peak_detect_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_PEAK_DETECT_900_1_OFFSET,
+            base + LOUD_VIEW_PEAK_DETECT_900_OFFSET,
+            trace_loud_view_peak_detect_900_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_LOUD_VIEW_PEAK_DETECT_2_OFFSET,
+            base + LOUD_VIEW_PEAK_DETECT_OFFSET,
+            trace_loud_view_peak_detect_2 as usize,
         )?;
         patch_relative_call(
             base + CALL_CHECKPOINT_CONTINUOUS_REGION_OFFSET,
@@ -545,6 +1018,11 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET,
             base + BEAT_LIST_CHANGE_STAT_OFFSET,
             trace_beat_list_change_stat as usize,
+        )?;
+        patch_pointer(
+            base + LOUD_VIEW_ANALYZE_PEAK_VTABLE_SLOT_OFFSET,
+            base + LOUD_VIEW_ANALYZE_PEAK_OFFSET,
+            trace_loud_view_analyze_peak as usize,
         )?;
     }
     Ok(())
@@ -778,6 +1256,429 @@ unsafe extern "C" fn trace_peak_sensor_put(sensor: *mut c_void, input: f32) -> u
     result
 }
 
+unsafe extern "C" fn trace_loud_view_analyze_peak(
+    loud_view: *mut c_void,
+    input: *mut f32,
+    low: *mut f32,
+    mid: *mut f32,
+    high: *mut f32,
+    sample_count: i32,
+) -> u64 {
+    let input_peak = unsafe { loud_view_input_peak(input, sample_count) };
+    let low_input_peak = unsafe { loud_view_input_peak(low, sample_count) };
+    let mid_input_peak = unsafe { loud_view_input_peak(mid, sample_count) };
+    let high_input_peak = unsafe { loud_view_input_peak(high, sample_count) };
+    let function: LoudViewAnalyzePeak = unsafe { original(&LOUD_VIEW_ANALYZE_PEAK) };
+    let result = unsafe { function(loud_view, input, low, mid, high, sample_count) };
+    unsafe {
+        record_loud_view_snapshot(
+            loud_view,
+            sample_count,
+            input_peak,
+            (!low.is_null(), low_input_peak),
+            (!mid.is_null(), mid_input_peak),
+            (!high.is_null(), high_input_peak),
+            result,
+        )
+    };
+    result
+}
+
+unsafe fn loud_view_input_peak(input: *const f32, sample_count: i32) -> f32 {
+    if input.is_null() || !(1..=100_000).contains(&sample_count) {
+        return f32::NAN;
+    }
+    unsafe { std::slice::from_raw_parts(input, sample_count as usize) }
+        .iter()
+        .fold(0.0_f32, |peak, &sample| peak.max(sample.abs()))
+}
+
+#[derive(Clone, Copy)]
+struct LoudViewPeakCallState {
+    event_count: i32,
+    sample_position: i64,
+    frame_index: i64,
+    output_flag: i32,
+    secondary_flag: Option<i32>,
+    secondary_position: Option<i64>,
+    peak: Option<LoudViewPeakEventTrace>,
+}
+
+macro_rules! define_loud_view_peak_detect {
+    ($name:ident, $stage:literal) => {
+        unsafe extern "C" fn $name(
+            loud_view: *mut c_void,
+            input: *const f32,
+            events: *mut LoudViewPeakEvent,
+            sample_position: *mut i64,
+            event_count: *mut i32,
+            frame_index: *mut i64,
+            band: i32,
+            sample_count: i64,
+            output_flag: *mut i32,
+            secondary_flag: *mut i32,
+            secondary_position: *mut i64,
+        ) -> i64 {
+            unsafe {
+                trace_loud_view_peak_detect(
+                    $stage,
+                    loud_view,
+                    input,
+                    events,
+                    sample_position,
+                    event_count,
+                    frame_index,
+                    band,
+                    sample_count,
+                    output_flag,
+                    secondary_flag,
+                    secondary_position,
+                )
+            }
+        }
+    };
+}
+
+macro_rules! define_loud_view_peak_detect_900 {
+    ($name:ident, $stage:literal) => {
+        unsafe extern "C" fn $name(
+            loud_view: *mut c_void,
+            input: *const f32,
+            events: *mut LoudViewPeakEvent,
+            sample_position: *mut i64,
+            event_count: *mut i32,
+            frame_index: *mut i64,
+            band: i32,
+            sample_count: i64,
+            output_flag: *mut i32,
+        ) -> i64 {
+            unsafe {
+                trace_loud_view_peak_detect_900(
+                    $stage,
+                    loud_view,
+                    input,
+                    events,
+                    sample_position,
+                    event_count,
+                    frame_index,
+                    band,
+                    sample_count,
+                    output_flag,
+                )
+            }
+        }
+    };
+}
+
+define_loud_view_peak_detect!(trace_loud_view_peak_detect_0, 0);
+define_loud_view_peak_detect_900!(trace_loud_view_peak_detect_900_0, 1);
+define_loud_view_peak_detect!(trace_loud_view_peak_detect_1, 2);
+define_loud_view_peak_detect_900!(trace_loud_view_peak_detect_900_1, 3);
+define_loud_view_peak_detect!(trace_loud_view_peak_detect_2, 4);
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn trace_loud_view_peak_detect(
+    stage: u8,
+    loud_view: *mut c_void,
+    input: *const f32,
+    events: *mut LoudViewPeakEvent,
+    sample_position: *mut i64,
+    event_count: *mut i32,
+    frame_index: *mut i64,
+    band: i32,
+    sample_count: i64,
+    output_flag: *mut i32,
+    secondary_flag: *mut i32,
+    secondary_position: *mut i64,
+) -> i64 {
+    let before = unsafe {
+        loud_view_peak_call_state(
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            output_flag,
+            Some(secondary_flag),
+            Some(secondary_position),
+        )
+    };
+    let function: LoudViewPeakDetect = unsafe { original(&LOUD_VIEW_PEAK_DETECT) };
+    let result = unsafe {
+        function(
+            loud_view,
+            input,
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            band,
+            sample_count,
+            output_flag,
+            secondary_flag,
+            secondary_position,
+        )
+    };
+    let after = unsafe {
+        loud_view_peak_call_state(
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            output_flag,
+            Some(secondary_flag),
+            Some(secondary_position),
+        )
+    };
+    unsafe {
+        record_loud_view_peak_call(
+            stage,
+            false,
+            band,
+            input,
+            sample_count,
+            events,
+            before,
+            after,
+        )
+    };
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn trace_loud_view_peak_detect_900(
+    stage: u8,
+    loud_view: *mut c_void,
+    input: *const f32,
+    events: *mut LoudViewPeakEvent,
+    sample_position: *mut i64,
+    event_count: *mut i32,
+    frame_index: *mut i64,
+    band: i32,
+    sample_count: i64,
+    output_flag: *mut i32,
+) -> i64 {
+    let before = unsafe {
+        loud_view_peak_call_state(
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            output_flag,
+            None,
+            None,
+        )
+    };
+    let function: LoudViewPeakDetect900 = unsafe { original(&LOUD_VIEW_PEAK_DETECT_900) };
+    let result = unsafe {
+        function(
+            loud_view,
+            input,
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            band,
+            sample_count,
+            output_flag,
+        )
+    };
+    let after = unsafe {
+        loud_view_peak_call_state(
+            events,
+            sample_position,
+            event_count,
+            frame_index,
+            output_flag,
+            None,
+            None,
+        )
+    };
+    unsafe {
+        record_loud_view_peak_call(
+            stage,
+            true,
+            band,
+            input,
+            sample_count,
+            events,
+            before,
+            after,
+        )
+    };
+    result
+}
+
+unsafe fn loud_view_peak_call_state(
+    events: *const LoudViewPeakEvent,
+    sample_position: *const i64,
+    event_count: *const i32,
+    frame_index: *const i64,
+    output_flag: *const i32,
+    secondary_flag: Option<*const i32>,
+    secondary_position: Option<*const i64>,
+) -> LoudViewPeakCallState {
+    let event_count = unsafe { read_pointer_or_default(event_count) };
+    LoudViewPeakCallState {
+        event_count,
+        sample_position: unsafe { read_pointer_or_default(sample_position) },
+        frame_index: unsafe { read_pointer_or_default(frame_index) },
+        output_flag: unsafe { read_pointer_or_default(output_flag) },
+        secondary_flag: secondary_flag.map(|pointer| unsafe { read_pointer_or_default(pointer) }),
+        secondary_position: secondary_position
+            .map(|pointer| unsafe { read_pointer_or_default(pointer) }),
+        peak: unsafe { snapshot_loud_view_peak(events, event_count - 1) },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn record_loud_view_peak_call(
+    stage: u8,
+    detector_900: bool,
+    band: i32,
+    input: *const f32,
+    sample_count: i64,
+    events: *const LoudViewPeakEvent,
+    before: LoudViewPeakCallState,
+    after: LoudViewPeakCallState,
+) {
+    let input_peak = if input.is_null() || !(1..=100_000).contains(&sample_count) {
+        f32::NAN
+    } else {
+        unsafe { std::slice::from_raw_parts(input, sample_count as usize) }
+            .iter()
+            .fold(0.0_f32, |peak, &sample| peak.max(sample.abs()))
+    };
+    let first_new = before.event_count.max(0);
+    let last_new = after.event_count.clamp(first_new, 4_096);
+    let new_events = (first_new..last_new)
+        .filter_map(|index| unsafe { snapshot_loud_view_peak(events, index) })
+        .collect();
+
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if trace.loud_view_peak_calls.len() >= MAX_TRACE_LOUD_PEAK_CALLS {
+        if trace.loud_view_peak_calls.len() == MAX_TRACE_LOUD_PEAK_CALLS {
+            trace
+                .warnings
+                .push("LoudViewMaker peak-call trace reached its bound".to_string());
+        }
+        return;
+    }
+    trace.loud_view_peak_calls.push(LoudViewPeakCallTrace {
+        stage,
+        detector_900,
+        band,
+        sample_count,
+        input_peak,
+        event_count_before: before.event_count,
+        event_count_after: after.event_count,
+        sample_position_before: before.sample_position,
+        sample_position_after: after.sample_position,
+        frame_index_before: before.frame_index,
+        frame_index_after: after.frame_index,
+        output_flag_before: before.output_flag,
+        output_flag_after: after.output_flag,
+        secondary_flag_before: before.secondary_flag,
+        secondary_flag_after: after.secondary_flag,
+        secondary_position_before: before.secondary_position,
+        secondary_position_after: after.secondary_position,
+        peak_before: before.peak,
+        peak_after: after.peak,
+        new_events,
+    });
+}
+
+unsafe fn snapshot_loud_view_peak(
+    events: *const LoudViewPeakEvent,
+    index: i32,
+) -> Option<LoudViewPeakEventTrace> {
+    if events.is_null() || !(0..4_096).contains(&index) {
+        return None;
+    }
+    let event = unsafe { events.add(index as usize).read_unaligned() };
+    Some(LoudViewPeakEventTrace {
+        peak: event.peak,
+        peak_900: event.peak_900,
+        start: event.start,
+        end: event.end,
+    })
+}
+
+unsafe fn read_pointer_or_default<T: Copy + Default>(pointer: *const T) -> T {
+    if pointer.is_null() {
+        T::default()
+    } else {
+        unsafe { pointer.read_unaligned() }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn record_loud_view_snapshot(
+    loud_view: *mut c_void,
+    sample_count: i32,
+    input_peak: f32,
+    low_input: (bool, f32),
+    mid_input: (bool, f32),
+    high_input: (bool, f32),
+    result: u64,
+) {
+    if loud_view.is_null() {
+        return;
+    }
+    let object = loud_view.cast::<u8>();
+    let processed_frames = unsafe { read_i64_at(object, 0x18) };
+    let frame_samples = unsafe { read_i32_at(object, 0x1288) };
+    let total_samples = unsafe { read_i64_at(object, 0x12a0) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    trace.loud_view_calls.push(LoudViewCallTrace {
+        sample_count,
+        input_peak,
+        low_provided: low_input.0,
+        low_input_peak: low_input.1,
+        mid_provided: mid_input.0,
+        mid_input_peak: mid_input.1,
+        high_provided: high_input.0,
+        high_input_peak: high_input.1,
+        result,
+        processed_frames,
+        raw_batch_emitted: unsafe { read_i64_at(object, 0x158) },
+        raw_batch_value: unsafe {
+            let pointer = read_pointer_at(object, 0x140);
+            if pointer.is_null() {
+                f32::NAN
+            } else {
+                read_f32_at(pointer, 0)
+            }
+        },
+        raw_batch_sum: unsafe { read_f32_at(object, 0x164) },
+        raw_batch_frames: unsafe { read_i32_at(object, 0x2d0) },
+        raw_batch_pending: unsafe { read_i32_at(object, 0x2d4) },
+        raw_output_index: unsafe { read_i32_at(object, 0x16c) },
+        loud_ready: unsafe { read_i32_at(object, 0x234) },
+        loud_emitted: unsafe { read_i32_at(object, 0x238) },
+        dots_ready: unsafe { read_i32_at(object, 0x244) },
+        dots_emitted: unsafe { read_i32_at(object, 0x248) },
+    });
+    let expected_frames = if frame_samples > 0 && total_samples > 0 {
+        let frame_samples = i64::from(frame_samples);
+        total_samples.saturating_add(frame_samples - 1) / frame_samples
+    } else {
+        0
+    };
+    if processed_frames < expected_frames {
+        return;
+    }
+    match unsafe { snapshot_loud_view(object) } {
+        Ok(snapshot) => trace.loud_view_final = Some(snapshot),
+        Err(error) => trace
+            .warnings
+            .push(format!("failed to snapshot LoudViewMaker: {error:#}")),
+    }
+}
+
 unsafe extern "C" fn trace_peak_buffer_calc_beat(buffer: *mut c_void, interval_ms: f32) -> u8 {
     let function: PeakBufferCalcBeat = unsafe { original(&PEAK_BUFFER_CALC_BEAT) };
     let result = unsafe { function(buffer, interval_ms) };
@@ -874,7 +1775,7 @@ unsafe fn snapshot_signal_beat_count(signal: *const c_void) -> Result<usize> {
     let vector = unsafe { &*vector };
     let begin = vector.begin as usize;
     let end = vector.end as usize;
-    if end < begin || (end - begin) % INTERNAL_BEAT_BYTES != 0 {
+    if end < begin || !(end - begin).is_multiple_of(INTERNAL_BEAT_BYTES) {
         bail!("invalid BeatListSignal vector bounds");
     }
     Ok((end - begin) / INTERNAL_BEAT_BYTES)
@@ -986,6 +1887,20 @@ unsafe extern "C" fn trace_ba_set_sample(
     }
     let function: BaSetSample = unsafe { original(&BA_SET_SAMPLE) };
     unsafe { function(analyzer, left, right, frames) };
+    if !analyzer.is_null() {
+        let loud_view = unsafe { analyzer.cast::<u8>().add(0x688).cast::<c_void>() };
+        unsafe {
+            record_loud_view_snapshot(
+                loud_view,
+                frames,
+                f32::NAN,
+                (false, f32::NAN),
+                (false, f32::NAN),
+                (false, f32::NAN),
+                0,
+            )
+        };
+    }
 }
 
 unsafe extern "C" fn trace_ba_get_bpm(analyzer: *mut c_void) -> i32 {
@@ -1338,6 +2253,190 @@ unsafe fn record_caller_section_checkpoint(stage: &'static str) {
 #[cfg(not(target_arch = "x86_64"))]
 unsafe fn record_caller_section_checkpoint(_stage: &'static str) {}
 
+macro_rules! define_find_near_pos_probe {
+    ($name:ident, $callsite:literal) => {
+        #[inline(never)]
+        unsafe extern "C" fn $name(
+            analyzer: *mut c_void,
+            beats: *mut StdVector,
+            target_position: i32,
+            tolerance_frames: i32,
+            result_index: *mut i32,
+        ) -> i32 {
+            let context = unsafe { caller_seg_adjust_probe_context() };
+            unsafe {
+                trace_find_near_pos(
+                    $callsite,
+                    context,
+                    analyzer,
+                    beats,
+                    target_position,
+                    tolerance_frames,
+                    result_index,
+                )
+            }
+        }
+    };
+}
+
+define_find_near_pos_probe!(trace_find_near_pos_0, 0);
+define_find_near_pos_probe!(trace_find_near_pos_1, 1);
+define_find_near_pos_probe!(trace_find_near_pos_2, 2);
+define_find_near_pos_probe!(trace_find_near_pos_3, 3);
+define_find_near_pos_probe!(trace_find_near_pos_4, 4);
+define_find_near_pos_probe!(trace_find_near_pos_5, 5);
+
+macro_rules! define_grid_find_near_pos_probe {
+    ($name:ident, $callsite:literal) => {
+        unsafe extern "C" fn $name(
+            analyzer: *mut c_void,
+            beats: *mut StdVector,
+            target_position: i32,
+            tolerance_frames: i32,
+            result_index: *mut i32,
+        ) -> i32 {
+            unsafe {
+                trace_grid_find_near_pos(
+                    $callsite,
+                    analyzer,
+                    beats,
+                    target_position,
+                    tolerance_frames,
+                    result_index,
+                )
+            }
+        }
+    };
+}
+
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_0, 0);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_1, 1);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_2, 2);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_3, 3);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_4, 4);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_5, 5);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_6, 6);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_7, 7);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_8, 8);
+
+unsafe fn trace_grid_find_near_pos(
+    callsite: u8,
+    analyzer: *mut c_void,
+    beats: *mut StdVector,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_index: *mut i32,
+) -> i32 {
+    let function: BeatInfoFindNearPos = unsafe { original(&BEAT_INFO_FIND_NEAR_POS) };
+    let result_position = unsafe {
+        function(
+            analyzer,
+            beats,
+            target_position,
+            tolerance_frames,
+            result_index,
+        )
+    };
+    if trace_analyzer_stages_enabled() {
+        let result_index = if result_index.is_null() {
+            -1
+        } else {
+            unsafe { result_index.read() }
+        };
+        let mut trace = trace()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if trace.grid_snap_probes.len() >= MAX_TRACE_GRID_SNAP_PROBES {
+            const WARNING: &str = "grid-snap probe trace reached its bound";
+            if !trace.warnings.iter().any(|warning| warning == WARNING) {
+                trace.warnings.push(WARNING.to_string());
+            }
+            return result_position;
+        }
+        trace.grid_snap_probes.push(GridSnapProbeTrace {
+            callsite,
+            target_position,
+            tolerance_frames,
+            result_position,
+            result_index,
+        });
+    }
+    result_position
+}
+
+unsafe fn trace_find_near_pos(
+    callsite: u8,
+    context: SegAdjustProbeContext,
+    analyzer: *mut c_void,
+    beats: *mut StdVector,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_index: *mut i32,
+) -> i32 {
+    let function: BeatInfoFindNearPos = unsafe { original(&BEAT_INFO_FIND_NEAR_POS) };
+    let result_position = unsafe {
+        function(
+            analyzer,
+            beats,
+            target_position,
+            tolerance_frames,
+            result_index,
+        )
+    };
+    if trace_analyzer_stages_enabled() {
+        let mut trace = trace()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        trace.record_phase_probe(
+            callsite,
+            context,
+            target_position,
+            tolerance_frames,
+            result_position,
+        );
+    }
+    result_position
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(never)]
+unsafe fn caller_seg_adjust_probe_context() -> SegAdjustProbeContext {
+    let frame_pointer: usize;
+    unsafe {
+        std::arch::asm!(
+            "mov {frame_pointer}, rbp",
+            frame_pointer = out(reg) frame_pointer,
+            options(nostack, preserves_flags)
+        )
+    };
+    let wrapper_frame = unsafe { (frame_pointer as *const usize).read() };
+    let seg_adjust_frame = unsafe { (wrapper_frame as *const usize).read() };
+    SegAdjustProbeContext {
+        section_index: unsafe {
+            (seg_adjust_frame.wrapping_sub(0xe8) as *const usize).read_unaligned()
+        },
+        lower_frame: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x70) as *const f64).read_unaligned()
+        },
+        upper_frame: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x48) as *const f64).read_unaligned()
+        },
+        period_frames: unsafe {
+            (seg_adjust_frame.wrapping_sub(0x38) as *const f64).read_unaligned()
+        },
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn caller_seg_adjust_probe_context() -> SegAdjustProbeContext {
+    SegAdjustProbeContext {
+        section_index: 0,
+        lower_frame: 0.0,
+        upper_frame: 0.0,
+        period_frames: 0.0,
+    }
+}
+
 unsafe extern "C" fn trace_beat_info_seg_adjust(
     analyzer: *mut c_void,
     info: *mut BeatInfoAnalyzeInfo,
@@ -1529,8 +2628,82 @@ unsafe fn read_f32_at(base: *const u8, offset: usize) -> f32 {
     unsafe { (base.add(offset) as *const f32).read_unaligned() }
 }
 
+unsafe fn read_i64_at(base: *const u8, offset: usize) -> i64 {
+    unsafe { (base.add(offset) as *const i64).read_unaligned() }
+}
+
+unsafe fn snapshot_loud_view(object: *const u8) -> Result<LoudViewSnapshotTrace> {
+    const LOUD_COLUMNS: usize = 400;
+    const DOT_COLUMNS: usize = 100;
+
+    let read_pointer_f32 = |offset: usize, count: usize| -> Result<Vec<f32>> {
+        let pointer = unsafe { read_pointer_at(object, offset) };
+        if pointer.is_null() {
+            bail!("null LoudViewMaker float buffer at {offset:#x}");
+        }
+        Ok((0..count)
+            .map(|index| unsafe { read_f32_at(pointer, index * size_of::<f32>()) })
+            .collect())
+    };
+    let read_pointer_i64 = |offset: usize, count: usize| -> Result<Vec<i64>> {
+        let pointer = unsafe { read_pointer_at(object, offset) };
+        if pointer.is_null() {
+            bail!("null LoudViewMaker integer buffer at {offset:#x}");
+        }
+        Ok((0..count)
+            .map(|index| unsafe { read_i64_at(pointer, index * size_of::<i64>()) })
+            .collect())
+    };
+
+    let loud_records = (0..LOUD_COLUMNS)
+        .map(|index| {
+            let base = 0x12b8 + index * 20;
+            LoudViewRecordTrace {
+                adjusted_height: unsafe { read_i32_at(object, base) },
+                raw_height: unsafe { read_i32_at(object, base + 4) },
+                low_level: unsafe { read_i32_at(object, base + 8) },
+                mid_level: unsafe { read_i32_at(object, base + 12) },
+                high_level: unsafe { read_i32_at(object, base + 16) },
+            }
+        })
+        .collect();
+    let loud_output = (0..LOUD_COLUMNS)
+        .map(|index| LoudViewOutputTrace {
+            value: unsafe { read_f32_at(object, 0x2dc + index * 8) },
+            color: unsafe { read_i32_at(object, 0x2e0 + index * 8) },
+        })
+        .collect();
+    let dots_output = (0..DOT_COLUMNS)
+        .map(|index| LoudViewOutputTrace {
+            value: unsafe { read_f32_at(object, 0xf5c + index * 8) },
+            color: unsafe { read_i32_at(object, 0xf60 + index * 8) },
+        })
+        .collect();
+
+    Ok(LoudViewSnapshotTrace {
+        frame_samples: unsafe { read_i32_at(object, 0x1288) },
+        total_samples: unsafe { read_i64_at(object, 0x12a0) },
+        processed_frames: unsafe { read_i64_at(object, 0x18) },
+        normalization: unsafe { read_f32_at(object, 0x270) },
+        loud_count: unsafe { read_i32_at(object, 0x12a8) },
+        dots_count: unsafe { read_i32_at(object, 0x12b0) },
+        raw_peaks: read_pointer_f32(0x250, LOUD_COLUMNS)?,
+        low_peaks: read_pointer_f32(0x190, LOUD_COLUMNS)?,
+        mid_peaks: read_pointer_f32(0x1a8, LOUD_COLUMNS)?,
+        high_peaks: read_pointer_f32(0x1c0, LOUD_COLUMNS)?,
+        loud_records,
+        loud_output,
+        dots_primary: read_pointer_i64(0x1d8, DOT_COLUMNS)?,
+        dots_secondary: read_pointer_i64(0x200, DOT_COLUMNS)?,
+        dots_output,
+        dots_levels: (0..DOT_COLUMNS)
+            .map(|index| unsafe { read_i32_at(object, 0x31f8 + index * 4) })
+            .collect(),
+    })
+}
+
 unsafe fn snapshot_u32_words(pointer: *const u8, bytes: usize) -> Result<Vec<u32>> {
-    if bytes % std::mem::size_of::<u32>() != 0 {
+    if !bytes.is_multiple_of(std::mem::size_of::<u32>()) {
         bail!("snapshot byte length {bytes} is not word aligned");
     }
     if pointer.is_null() {
@@ -1603,7 +2776,7 @@ unsafe fn snapshot_internal_beats(vector: *const StdVector) -> Result<Vec<Intern
         bail!("inverted beat vector");
     }
     let bytes = end - begin;
-    if bytes % INTERNAL_BEAT_BYTES != 0 {
+    if !bytes.is_multiple_of(INTERNAL_BEAT_BYTES) {
         bail!("beat vector byte length {bytes} is not divisible by {INTERNAL_BEAT_BYTES}");
     }
     let count = bytes / INTERNAL_BEAT_BYTES;
@@ -1708,5 +2881,31 @@ mod tests {
         let mismatch = &parity.first_mismatches[0];
         assert_eq!(mismatch.converted_time_ms, 1_000);
         assert_eq!(mismatch.final_time_ms, 1_001);
+    }
+
+    #[test]
+    fn phase_probe_summary_groups_trials_without_serializing_each_call() {
+        let context = SegAdjustProbeContext {
+            section_index: 2,
+            lower_frame: 0.0,
+            upper_frame: 1_000.0,
+            period_frames: 500.0,
+        };
+        let mut trace = ReferenceTrace::default();
+        trace.record_phase_probe(3, context, 0, 62, -1);
+        trace.record_phase_probe(3, context, 500, 62, 500);
+        trace.record_phase_probe(3, context, 96, 62, 100);
+        trace.record_phase_probe(3, context, 596, 62, 600);
+        trace.flush_phase_probe_block();
+
+        assert_eq!(trace.phase_probe_blocks.len(), 1);
+        let block = &trace.phase_probe_blocks[0];
+        assert_eq!(block.trial_count, 2);
+        assert_eq!(block.total_calls, 4);
+        assert_eq!(block.total_hits, 3);
+        let best = block.best_trial.as_ref().expect("best phase trial");
+        assert_eq!(best.start_target, 96);
+        assert_eq!(best.score, 116);
+        assert_eq!(best.first_hit, Some(100));
     }
 }

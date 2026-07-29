@@ -568,6 +568,32 @@ export class ThreeByteWaveformTag extends AbstractAnlzTag {
   }
 }
 
+/** One native 24-byte song-structure phrase record. */
+export type SongStructureEntry = {
+  b: number;
+  beat: number;
+  beat2: number;
+  beat3: number;
+  beat4: number;
+  beatFill: number;
+  fill: number;
+  index: number;
+  k1: number;
+  k2: number;
+  k3: number;
+  kind: number;
+};
+
+/** Parsed song-structure (`PSSI`) payload. */
+export type SongStructure = {
+  bank: number;
+  endBeat: number;
+  entries: Array<SongStructureEntry>;
+  mood: number;
+  unknown1: number;
+  unknown2: number;
+};
+
 /** Song-structure (`PSSI`) tag, transparently deobfuscated on read. */
 export class SongStructureTag extends AbstractAnlzTag {
   constructor(data: Buffer) {
@@ -576,27 +602,32 @@ export class SongStructureTag extends AbstractAnlzTag {
     assertRange(this.data, 32, this.data.readUInt16BE(16) * 24, "PSSI entries");
   }
 
-  override get(): Record<string, unknown> {
+  override get(): SongStructure {
     const count = this.data.readUInt16BE(16);
     assertRange(this.data, 32, count * 24, "PSSI entries");
     return {
-      bank: this.data[30],
+      bank: this.data[30]!,
       endBeat: this.data.readUInt16BE(26),
       entries: Array.from({ length: count }, (_, index) => {
         const offset = 32 + index * 24;
         return {
-          b: this.data[offset + 11],
+          b: this.data[offset + 11]!,
           beat: this.data.readUInt16BE(offset + 2),
           beat2: this.data.readUInt16BE(offset + 12),
           beat3: this.data.readUInt16BE(offset + 14),
           beat4: this.data.readUInt16BE(offset + 16),
           beatFill: this.data.readUInt16BE(offset + 22),
-          fill: this.data[offset + 21],
+          fill: this.data[offset + 21]!,
           index: this.data.readUInt16BE(offset),
+          k1: this.data[offset + 7]!,
+          k2: this.data[offset + 9]!,
+          k3: this.data[offset + 19]!,
           kind: this.data.readUInt16BE(offset + 4),
         };
       }),
       mood: this.data.readUInt16BE(18),
+      unknown1: this.data[28]!,
+      unknown2: this.data[29]!,
     };
   }
 

@@ -14,6 +14,7 @@ import {
   MonochromeWaveformTag,
   PathTag,
   PQTZAnlzTag,
+  PSSIAnlzTag,
   readAnlzFiles,
   TAGS,
   walkAnlzDirectories,
@@ -207,6 +208,91 @@ describe("ANLZ parsing", () => {
     const reparsed = AnlzFile.parse(rebuilt);
     expect(reparsed.getTag("PSSI").get()).toMatchObject({ bank: 7, mood: 2 });
     expect(reparsed.build()).toEqual(rebuilt);
+  });
+
+  it("decodes every known PSSI phrase flag and internal beat", () => {
+    const structure = Buffer.alloc(104);
+    structure.write("PSSI", 0, "ascii");
+    structure.writeUInt32BE(32, 4);
+    structure.writeUInt32BE(104, 8);
+    structure.writeUInt32BE(24, 12);
+    structure.writeUInt16BE(3, 16);
+    structure.writeUInt16BE(1, 18);
+    structure.writeUInt16BE(65, 26);
+    structure[28] = 1;
+    structure[29] = 2;
+    structure[30] = 7;
+    structure.writeUInt16BE(1, 32);
+    structure.writeUInt16BE(9, 34);
+    structure.writeUInt16BE(2, 36);
+    structure[41] = 1;
+    structure[43] = 1;
+    structure.writeUInt16BE(17, 44);
+    structure.writeUInt16BE(21, 46);
+    structure.writeUInt16BE(25, 48);
+    structure[53] = 1;
+    structure.writeUInt16BE(29, 54);
+    structure.writeUInt16BE(2, 56);
+    structure.writeUInt16BE(33, 58);
+    structure.writeUInt16BE(2, 60);
+    structure[75] = 1;
+    structure.writeUInt16BE(3, 80);
+    structure.writeUInt16BE(65, 82);
+    structure.writeUInt16BE(6, 84);
+    structure[87] = 1;
+
+    const parsed = new PSSIAnlzTag(structure).get();
+    expect(parsed).toEqual({
+      bank: 7,
+      endBeat: 65,
+      entries: [
+        {
+          b: 1,
+          beat: 9,
+          beat2: 17,
+          beat3: 21,
+          beat4: 25,
+          beatFill: 29,
+          fill: 1,
+          index: 1,
+          k1: 0,
+          k2: 1,
+          k3: 0,
+          kind: 2,
+        },
+        {
+          b: 0,
+          beat: 33,
+          beat2: 0,
+          beat3: 0,
+          beat4: 0,
+          beatFill: 0,
+          fill: 0,
+          index: 2,
+          k1: 0,
+          k2: 0,
+          k3: 1,
+          kind: 2,
+        },
+        {
+          b: 0,
+          beat: 65,
+          beat2: 0,
+          beat3: 0,
+          beat4: 0,
+          beatFill: 0,
+          fill: 0,
+          index: 3,
+          k1: 1,
+          k2: 0,
+          k3: 0,
+          kind: 6,
+        },
+      ],
+      mood: 1,
+      unknown1: 1,
+      unknown2: 2,
+    });
   });
 
   it("turns every known truncated tag boundary into a format error", () => {
