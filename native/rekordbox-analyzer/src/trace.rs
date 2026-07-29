@@ -52,6 +52,15 @@ const CALL_SEG_FIND_NEAR_POS_2_OFFSET: usize = 0x1390b3d;
 const CALL_SEG_FIND_NEAR_POS_3_OFFSET: usize = 0x1390e31;
 const CALL_SEG_FIND_NEAR_POS_4_OFFSET: usize = 0x139103e;
 const CALL_SEG_FIND_NEAR_POS_5_OFFSET: usize = 0x13912b1;
+const CALL_GRID_FIND_NEAR_POS_0_OFFSET: usize = 0x138d767;
+const CALL_GRID_FIND_NEAR_POS_1_OFFSET: usize = 0x138d90a;
+const CALL_GRID_FIND_NEAR_POS_2_OFFSET: usize = 0x138dc6e;
+const CALL_GRID_FIND_NEAR_POS_3_OFFSET: usize = 0x138dd13;
+const CALL_GRID_FIND_NEAR_POS_4_OFFSET: usize = 0x138dd5e;
+const CALL_GRID_FIND_NEAR_POS_5_OFFSET: usize = 0x138de03;
+const CALL_GRID_FIND_NEAR_POS_6_OFFSET: usize = 0x138de4e;
+const CALL_GRID_FIND_NEAR_POS_7_OFFSET: usize = 0x138def7;
+const CALL_GRID_FIND_NEAR_POS_8_OFFSET: usize = 0x138df4c;
 const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
 const CALL_PEAK_SENSOR_PUT_OFFSET: usize = 0x14e78ec;
 const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
@@ -70,6 +79,7 @@ const IIR_FILTER_BYTES: usize = 0x58;
 const BEAT_SENSOR_PEAK_BYTES: usize = 0xa0;
 const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
 const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
+const MAX_TRACE_GRID_SNAP_PROBES: usize = 65_536;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 const ENV_TRACE_ANALYZER_STAGES: &str = "REKORDBOX_ANALYZER_TRACE_STAGES";
 
@@ -145,6 +155,7 @@ struct ReferenceTrace {
     phase_probe_blocks: Vec<PhaseProbeBlockTrace>,
     #[serde(skip)]
     phase_probe_accumulator: Option<PhaseProbeAccumulator>,
+    grid_snap_probes: Vec<GridSnapProbeTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -306,6 +317,16 @@ struct SegAdjustProbeContext {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct GridSnapProbeTrace {
+    callsite: u8,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_position: i32,
+    result_index: i32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BeatInfoAnalyzeTrace {
     info_value_00: i32,
     info_unknown_04: u32,
@@ -409,7 +430,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 10,
+        schema_version: 11,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -713,6 +734,51 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_SEG_FIND_NEAR_POS_5_OFFSET,
             base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
             trace_find_near_pos_5 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_0_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_0 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_1_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_1 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_2_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_2 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_3_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_3 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_4_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_4 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_5_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_5 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_6_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_6 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_7_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_7 as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_GRID_FIND_NEAR_POS_8_OFFSET,
+            base + BEAT_INFO_FIND_NEAR_POS_OFFSET,
+            trace_grid_find_near_pos_8 as usize,
         )?;
         patch_relative_call(
             base + CALL_BEAT_SENSOR_CREATE_OFFSET,
@@ -1583,6 +1649,84 @@ define_find_near_pos_probe!(trace_find_near_pos_2, 2);
 define_find_near_pos_probe!(trace_find_near_pos_3, 3);
 define_find_near_pos_probe!(trace_find_near_pos_4, 4);
 define_find_near_pos_probe!(trace_find_near_pos_5, 5);
+
+macro_rules! define_grid_find_near_pos_probe {
+    ($name:ident, $callsite:literal) => {
+        unsafe extern "C" fn $name(
+            analyzer: *mut c_void,
+            beats: *mut StdVector,
+            target_position: i32,
+            tolerance_frames: i32,
+            result_index: *mut i32,
+        ) -> i32 {
+            unsafe {
+                trace_grid_find_near_pos(
+                    $callsite,
+                    analyzer,
+                    beats,
+                    target_position,
+                    tolerance_frames,
+                    result_index,
+                )
+            }
+        }
+    };
+}
+
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_0, 0);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_1, 1);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_2, 2);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_3, 3);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_4, 4);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_5, 5);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_6, 6);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_7, 7);
+define_grid_find_near_pos_probe!(trace_grid_find_near_pos_8, 8);
+
+unsafe fn trace_grid_find_near_pos(
+    callsite: u8,
+    analyzer: *mut c_void,
+    beats: *mut StdVector,
+    target_position: i32,
+    tolerance_frames: i32,
+    result_index: *mut i32,
+) -> i32 {
+    let function: BeatInfoFindNearPos = unsafe { original(&BEAT_INFO_FIND_NEAR_POS) };
+    let result_position = unsafe {
+        function(
+            analyzer,
+            beats,
+            target_position,
+            tolerance_frames,
+            result_index,
+        )
+    };
+    if trace_analyzer_stages_enabled() {
+        let result_index = if result_index.is_null() {
+            -1
+        } else {
+            unsafe { result_index.read() }
+        };
+        let mut trace = trace()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if trace.grid_snap_probes.len() >= MAX_TRACE_GRID_SNAP_PROBES {
+            const WARNING: &str = "grid-snap probe trace reached its bound";
+            if !trace.warnings.iter().any(|warning| warning == WARNING) {
+                trace.warnings.push(WARNING.to_string());
+            }
+            return result_position;
+        }
+        trace.grid_snap_probes.push(GridSnapProbeTrace {
+            callsite,
+            target_position,
+            tolerance_frames,
+            result_position,
+            result_index,
+        });
+    }
+    result_position
+}
 
 unsafe fn trace_find_near_pos(
     callsite: u8,

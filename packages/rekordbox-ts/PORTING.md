@@ -1148,3 +1148,40 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   `[-30, -20, -3, -3, -20, -3]`; later beat expansion applies it by detector
   band. Remaining decoder work is expanded beat emission/downbeat numbering,
   those per-band corrections, and the narrow inter-section gap repair.
+
+## Linked rolling-grid and gap-repair checkpoint (2026-07-28)
+
+- Extended the private tracer to schema v11 by wrapping all nine grid-expansion
+  `findNearPos` callsites. Rafael records 859 bounded probes: three initial
+  section anchors, 531 per-beat observations, and 325 pulse snaps. The added
+  trace is development-only and contains no Rekordbox code or runtime asset.
+- Recovered the native production fit as `16 history + 4 stride + 12 future =
+32 beats`, represented by 129 quarter-beat scratch slots. Predictions advance
+  recursively from pulse snaps. Fit endpoints apply the exact six-band
+  `[-30, -20, -3, -3, -20, -3] ms` offsets; an unsnapped endpoint uses the
+  maximum table value, `-3 ms`.
+- The first local period is `(correctedRight - correctedAnchor) / 32`. Every
+  later fit advances four beats and uses an already-truncated emitted left
+  endpoint. Its interval metadata takes effect after 16 history beats plus the
+  four-beat stride. Four-beat chunk boundaries deliberately restart from an
+  integer source-frame position; the final 12-beat tail does not. These
+  quantization details explain the prior one-frame drift.
+- Ported the complete expansion as clean Rust `expand_tempo_sections`,
+  including the native overlap sentinel before each section, detector-band
+  provenance, section flags, and local `f32` periods. The 182-survivor Rafael
+  fixture matches all 1,079 pre-repair records exactly; a semantic FNV digest
+  covers every position, period bit pattern, band, and anchor flag.
+- Ported the generic four-record `gapCorrect` state machine. Its `0.9/1.1`
+  outer-gap tests can snap a boundary, split a span into thirds or quarters,
+  insert copied metadata, or remove one duplicate. Rafael reproduces both
+  native transition repairs exactly, reducing `1,079 → 1,077`.
+- The linked downbeat stage is not a musical classifier. It binary-searches the
+  last emitted beat at or before the first selected phase anchor, then numbers
+  the complete grid modulo `max(configuredStride, 4)` so that anchor is beat
+  one. Numbering occurs before the inclusive `[0, totalFrames]` trim. Clean
+  `finalize_expanded_beats` reproduces all 1,077 Rafael positions, local tempo
+  bits, detector bands, section flags, and beat labels exactly.
+- Remaining integration work: feed the clean BeatSensor survivor stream through
+  the recovered decoder in the production rhythm path, replay the complete
+  five-track linked corpus, and resolve the few PCM-dependent BeatSensor
+  endpoint ties before selecting it as the default grid.
