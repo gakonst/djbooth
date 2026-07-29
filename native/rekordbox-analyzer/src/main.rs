@@ -28,6 +28,27 @@ fn run() -> Result<()> {
                 audio_path,
                 output_dir,
                 native_log_path,
+                trace_path: None,
+            })?;
+            println!("{}", serde_json::to_string(&result)?);
+            if !result.success() {
+                bail!("Rekordbox analyzer did not produce a valid EXT file");
+            }
+            Ok(())
+        }
+        Some("analyze-trace") => {
+            let audio_path = required_path(args.next(), "audio path")?;
+            let output_dir = required_path(args.next(), "output directory")?;
+            let trace_path = required_path(args.next(), "trace path")?;
+            let native_log_path = args.next().map(PathBuf::from);
+            if args.next().is_some() {
+                bail!("unexpected extra analyzer trace argument");
+            }
+            let result = run_rehost(RehostOptions {
+                audio_path,
+                output_dir,
+                native_log_path,
+                trace_path: Some(trace_path),
             })?;
             println!("{}", serde_json::to_string(&result)?);
             if !result.success() {
@@ -143,7 +164,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [NATIVE_LOG]|analyze-trace AUDIO OUTPUT_DIR TRACE_JSON [NATIVE_LOG]|doctor|bundle-templates OUTPUT_DIR|diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT|rebuild-dat INPUT_DAT OUTPUT_DAT>"
         ),
     }
 }

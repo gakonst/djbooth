@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::DEFAULT_ANLZ_STEM;
 use crate::backend::{ENV_REKORDBOX_ANALYZER_ROOT, RekordboxOffsets, prepare_rekordbox_backend};
+use crate::trace::{begin_reference_trace, finish_reference_trace, install_reference_trace};
 
 const TEMPLATE_SUFFIX: &str = "Library/Pioneer/rekordbox/share/PIONEER/USBANLZ";
 const VENDORED_TEMPLATE_SUFFIX: &str = "vendor/rekordbox-analyzer-templates";
@@ -54,6 +55,7 @@ pub struct RehostOptions {
     pub audio_path: PathBuf,
     pub output_dir: PathBuf,
     pub native_log_path: Option<PathBuf>,
+    pub trace_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +76,8 @@ pub struct RehostResult {
     pub callback_error: Option<String>,
     #[serde(rename = "nativeLog")]
     pub native_log: String,
+    #[serde(rename = "tracePath", skip_serializing_if = "Option::is_none")]
+    pub trace_path: Option<String>,
     pub outputs: Vec<(String, u64)>,
     pub summary: OutputSummary,
     pub timings: RehostTimings,
@@ -176,8 +180,12 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
 
     let mut rehost_output = NativeOutputRedirect::start(&native_log)?;
     let load_started = Instant::now();
-    let mut rehost = unsafe { Rehost::load(&binary, backend.offsets)? };
+    let trace_path = options.trace_path.as_ref().map(|path| expand_home(path));
+    let mut rehost = unsafe { Rehost::load(&binary, backend.offsets, trace_path.is_some())? };
     let load_ms = elapsed_ms(load_started);
+    if trace_path.is_some() {
+        begin_reference_trace();
+    }
     let analyze_started = Instant::now();
     let start_result = unsafe { rehost.analyze(&audio_path, &dat_path, content_id)? };
     let analyze_start_ms = elapsed_ms(analyze_started);
@@ -207,6 +215,13 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
     rehost_output.restore()?;
     let summarize_started = Instant::now();
     let summary = summarize_outputs(&dat_path, key)?;
+    if let Some(trace_path) = &trace_path {
+        finish_reference_trace(
+            trace_path,
+            summary.beat_grid.clone(),
+            parse_pqtz_entries(&dat_path)?,
+        )?;
+    }
     let summarize_ms = elapsed_ms(summarize_started);
 
     Ok(RehostResult {
@@ -219,6 +234,7 @@ pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
         callback_status,
         callback_error,
         native_log: native_log.display().to_string(),
+        trace_path: trace_path.map(|path| path.display().to_string()),
         outputs,
         summary,
         timings: RehostTimings {
@@ -339,7 +355,7 @@ struct Rehost {
 }
 
 impl Rehost {
-    unsafe fn load(binary: &Path, offsets: RekordboxOffsets) -> Result<Self> {
+    unsafe fn load(binary: &Path, offsets: RekordboxOffsets, trace: bool) -> Result<Self> {
         let c_path = CString::new(binary.to_string_lossy().as_bytes())?;
         let handle = unsafe { libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         if handle.is_null() {
@@ -366,6 +382,9 @@ impl Rehost {
             callback: AnalyzerCallback::new(string_to_raw_utf8),
         };
         unsafe { force_key_analysis(base, offsets.force_key_analysis_patch)? };
+        if trace {
+            unsafe { install_reference_trace(base)? };
+        }
         Ok(rehost)
     }
 
@@ -708,6 +727,41 @@ fn iter_anlz_tags_from_bytes(data: &[u8]) -> Result<Vec<AnlzTag>> {
 }
 
 fn parse_pqtz(path: &Path) -> Result<Option<BeatGridSummary>> {
+    let entries = parse_pqtz_entries(path)?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let sum = entries.iter().map(|entry| entry.bpm).sum::<f64>();
+    let avg = (sum / entries.len() as f64 * 1_000_000.0).round() / 1_000_000.0;
+    let min = entries
+        .iter()
+        .map(|entry| entry.bpm)
+        .fold(f64::INFINITY, f64::min);
+    let max = entries
+        .iter()
+        .map(|entry| entry.bpm)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let first_downbeat_ms = entries
+        .iter()
+        .find(|entry| entry.beat == 1)
+        .unwrap_or(&entries[0])
+        .time_ms;
+    let last_beat_ms = entries
+        .last()
+        .map(|entry| entry.time_ms)
+        .unwrap_or_default();
+    Ok(Some(BeatGridSummary {
+        beat_count: entries.len(),
+        avg_bpm: avg,
+        min_bpm: min,
+        max_bpm: max,
+        first_downbeat_ms,
+        last_beat_ms,
+        first_beats: entries.into_iter().take(8).collect(),
+    }))
+}
+
+fn parse_pqtz_entries(path: &Path) -> Result<Vec<BeatEntry>> {
     let data = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     for tag in iter_anlz_tags_from_bytes(&data)? {
         if tag.tag != "PQTZ" {
@@ -734,39 +788,9 @@ fn parse_pqtz(path: &Path) -> Result<Option<BeatGridSummary>> {
                 time_ms,
             });
         }
-        if entries.is_empty() {
-            return Ok(None);
-        }
-        let sum = entries.iter().map(|entry| entry.bpm).sum::<f64>();
-        let avg = (sum / entries.len() as f64 * 1_000_000.0).round() / 1_000_000.0;
-        let min = entries
-            .iter()
-            .map(|entry| entry.bpm)
-            .fold(f64::INFINITY, f64::min);
-        let max = entries
-            .iter()
-            .map(|entry| entry.bpm)
-            .fold(f64::NEG_INFINITY, f64::max);
-        let first_downbeat_ms = entries
-            .iter()
-            .find(|entry| entry.beat == 1)
-            .unwrap_or(&entries[0])
-            .time_ms;
-        let last_beat_ms = entries
-            .last()
-            .map(|entry| entry.time_ms)
-            .unwrap_or_default();
-        return Ok(Some(BeatGridSummary {
-            beat_count: entries.len(),
-            avg_bpm: avg,
-            min_bpm: min,
-            max_bpm: max,
-            first_downbeat_ms,
-            last_beat_ms,
-            first_beats: entries.into_iter().take(8).collect(),
-        }));
+        return Ok(entries);
     }
-    Ok(None)
+    Ok(Vec::new())
 }
 
 fn summarize_outputs(dat_path: &Path, key: Option<String>) -> Result<OutputSummary> {
