@@ -115,22 +115,24 @@ platform codec dependency:
   Life Is Hard; ordinary `M4A ` edit lists remain untrimmed because their stock
   grids prove different backend semantics. See Apple's
   [packet-table priming definition](https://developer.apple.com/documentation/audiotoolbox/audiofilepackettableinfo).
-- Samples are normalized to `f32` and mixed to mono. Waveform, key, and Normal
-  rhythm analysis deterministically resample to 44,100 Hz with integer-phase
-  linear interpolation and expose tail-aware 294-sample frames: exactly 150
-  waveform columns per second. Dynamic rhythm consumes source-rate PCM because
-  its recovered detector measures positions in source frames. For other rates,
-  the linked reader accepts 8–200 kHz, selects 48 kHz for the 8 kHz family and
-  44.1 kHz otherwise, then runs the recovered 29-tap Kaiser converter and i16
-  boundary. Reader length is format-derived: WAV/other readers advertise the
-  decoded length, while FLAC adds its validated STREAMINFO maximum block size;
-  the converted reader exposes `ceil(advertised * target/source) - 1` frames.
+- Key, Normal rhythm, and Dynamic rhythm retain the deterministic equal-weight
+  mono signal. Key and Normal rhythm resample it to 44.1 kHz; Dynamic consumes
+  source-rate PCM because its recovered detector measures positions in source
+  frames. Waveforms follow the native reader instead: each stereo channel is
+  clamped and truncated through signed 16-bit PCM, nearly equal magnitudes
+  select the stronger channel (right wins ties), and materially different
+  channels are averaged. Native 44.1 and 48 kHz rates are retained. Other
+  8–200 kHz inputs select 48 kHz for the 8 kHz family and 44.1 kHz otherwise,
+  run each stereo channel separately through the recovered 29-tap Kaiser
+  converter, then quantize and mix. WAV/other readers advertise the decoded
+  length; FLAC adds its validated STREAMINFO maximum block size. The converted
+  reader exposes `ceil(advertised * target/source) - 1` frames.
 - The waveform path emits fixed 400-byte `PWAV`, 100-byte `PWV2`,
   1,200-column `PWV4`/`PWV6`, and variable 150 Hz
   `PWV3`/`PWV5`/`PWV7` arrays. Peak-power height quantization and known
-  monochrome/RGB packing match the public ANLZ layouts. `PWV4` uses separate
-  linear-amplitude preview filters and its inverse luminance byte; `PWV5`
-  stores frame-RMS-normalized spectral hue independently from its height.
+  monochrome/RGB packing match the public ANLZ layouts. `PWV4` and `PWV5`
+  share the native 1 kHz legacy filter stream, with their distinct reductions,
+  color transform, and height packing reconstructed independently.
   `PWV6` and `PWV7` use a clean-room port of the linked three-band path:
   source-rate Butterworth filters, 1 ms peak buckets, track-relative preview
   windows, per-track normalization, finite decay histories, and the native
@@ -240,28 +242,26 @@ detail height (`PWV5`) correlations were 0.993, 0.913, and 0.986. Peak-power
 quantization also brought clean/reference `PWV3` means within 0.14, 0.34, and
 0.26 of one another.
 
-The RGB path was subsequently re-derived from 31 steady-frequency tones,
-0 to -60 dB amplitude ladders/ramps, and matched-PCM copies of the same three
-recordings. `PWV4` is an absolute representation: its first byte is linear
-peak, its second nonzero byte is approximately `256 - peak`, and its remaining
-fields are separately filtered linear band peaks. At -6 dB, clean PWV4
-medians for 80 Hz, 500 Hz, and 4 kHz are respectively
-`64/192/63/63/1/0`, `64/192/34/1/53/0`, and
-`64/192/1/0/3/33`; the reference values are
-`64/192/63/62/0/0`, `64/192/34/0/53/0`, and
-`64/192/0/0/0/33`.
+The RGB path was subsequently re-derived from native boundary traces,
+31 steady-frequency tones, amplitude ladders/ramps, and matched-PCM copies of
+the same three recordings. Its input boundary is signed-16-bit quantized
+stereo, mixed with the native magnitude rule described above. `PWV4`'s first
+two lanes are the positive and negative source extrema. Its remaining lanes
+come directly from the native legacy bank: `LP400`, two-stage `LP200`,
+two-stage `HP200 → LP2000`, and two-stage `HP2000`. Per-millisecond band
+dominance, saturation-before-dominance quantization, centered red/green
+windows, and the native 1,200-column phase reducer complete the path. No fitted
+green or blue filters remain.
 
-`PWV5` color is amplitude-invariant spectral hue, not absolute band loudness.
-Continuous Butterworth filters feed 294-sample band RMS values which are
-divided by broadband frame RMS before three-bit quantization; height remains a
-separate peak-power field. The same three tones now produce the exact reference
-hues `7/0/0`, `0/7/1`, and `0/2/7`, including when the tone is attenuated to
--60 dB. On visible frames in Science Fiction, the clean mean RGB moved from
-the former direct-map `3.59/2.04/0.90` to `6.27/1.36/1.67`, versus the
-reference `6.59/0.98/1.84`. Across Science Fiction, Crystalised, and Pleasure
-from the Bass, visible per-channel MAE is `0.49..1.16` red, `0.66..0.85`
-green, and `0.78..1.29` blue. PWV5 height correlations remain
-`0.993/0.913/0.986`.
+`PWV5` consumes the same 1 kHz stream with separate `LP100`,
+`HP300 → LP3000`, and `HP1500` color bands. Centered maxima and the native
+nonlinear RGB transform produce three-bit hue; globally normalized
+peak-squared amplitude produces its five-bit height. On fresh matched inputs,
+all six `PWV4` lanes are byte-exact for Science Fiction, Pleasure from the
+Bass, and Crystalised: 21,600/21,600 payload bytes. `PWV6` is also byte-exact
+for all three. Crystalised's complete `PWV5` is byte-exact; Pleasure from the
+Bass has byte-exact RGB and 99.9341% exact height; Science Fiction has exact
+red/green, 99.9966% exact blue, and 99.916% exact height.
 
 This is not a byte-parity claim. Three additional mostly steady heldouts expose
 the boundary of the current estimator: Ana Tijoux has exact count/downbeat
@@ -314,16 +314,21 @@ regressions; median PWV7 correlation is
 `0.999991/0.999977/0.999809` and median MAE is
 `0.0123/0.0169/0.0474`.
 
-The later exact legacy-lane reconstruction materially closes PWV4/PWV5 without
-changing PWV6/PWV7. Across the same 110 tracks, PWV4 median correlation is
-`0.99930` for amplitude, `0.99999` for bottom, and `0.99999` for red; median
-exact fractions are `87.75%`, `98.08%`, and `98.17%`. PWV5 median
-red/green/blue correlations are `0.99722/0.98962/0.97689`, median MAE is
-`0.0242/0.0455/0.1240`, and median exact fractions are
-`98.21%/96.48%/93.03%`. PWV5 height correlation is `0.99977`.
-PWV4 green/blue remain the older fitted lanes and are the largest color
-preview gap. PWAV/PWV2 amplitude and PWV3 whiteness also remain materially
-less exact.
+The final native reader and legacy-lane reconstruction materially closes
+PWV4/PWV5 without changing any frozen beat grid. Across the same 110 tracks,
+every PWV4 lane has median correlation `1.0`, median MAE `0`, and median exact
+fraction `100%`. Entire tracks are byte-exact in 58/110 amplitude,
+67/110 negative-extrema, 60/110 bottom, 63/110 red, 62/110 green, and 56/110
+blue lanes. PWV5 median red/green/blue correlation is
+`0.9999995/0.9999945/0.9999981`; median MAE is
+`0.0000084/0.0000310/0.0000277`; and median exact fraction is
+`99.99916%/99.99795%/99.99723%`. Height correlation is `0.9999927`, with
+`99.89945%` median exact entries. PWV6 has median byte-exact output in every
+lane. PWV7 median low/mid/high correlation is
+`0.9999984/0.9999975/0.9999922`, with
+`99.7913%/99.7998%/99.6640%` median exact entries. A final-versus-frozen
+candidate replay has F1 `1.0`, zero p95 movement, exact phase, exact numbering,
+and exact beat count on all 110 tracks.
 
 ## Linked Dynamic differential checkpoint
 
@@ -431,11 +436,11 @@ artifact was retained, so distributable output remains unchanged.
 - `PWVC` stores the reconstructed per-track three-band normalization
   coefficients. Science Fiction matches the linked `[80, 172, 147]` values
   exactly. Fresh Science Fiction `PWV7` low/mid/high correlations are
-  `0.999989/0.999978/0.999944`; PWV4 green/blue remain less exact.
+  `0.999989/0.999978/0.999944`; its complete PWV4 payload is byte-exact.
 - Source-decoder/framer detail-count boundaries, syncopated Normal meter
-  inference, PWAV/PWV2 and PWV3 whiteness, PWV4 green/blue operation order,
-  the two Dynamic survivor near-ties, phrase structure, and unsupported MP3
-  seek variants remain high-value differential work.
+  inference, PWAV/PWV2 and PWV3 whiteness, isolated source/oracle alignment
+  outliers, the two Dynamic survivor near-ties, phrase structure, and
+  unsupported MP3 seek variants remain high-value differential work.
 
 Clean output is a protocol-compatible baseline suitable for import and
 connected-player testing, not a representation of proprietary Rekordbox DSP.

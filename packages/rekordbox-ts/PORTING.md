@@ -25,6 +25,36 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — native waveform-reader and PWV4 closure
+
+- Recovered the waveform reader's exact signed-16-bit stereo boundary. Each channel is multiplied
+  by 32,768, clamped, truncated, and normalized by 32,767. Channels within `0.001` absolute
+  magnitude select the stronger one, with right-channel tie breaking; other frames average.
+  Rate-converted files resample left and right independently before quantization and mixing.
+- Waveforms retain native 44.1/48 kHz input. Other rates select 48 kHz for the 8 kHz family and
+  44.1 kHz otherwise. FLAC reader length includes one validated STREAMINFO maximum block before
+  the final target-frame subtraction. This recovers Crystalised's 96→48 kHz path and the exact
+  Tiga/Crystalised tail lengths.
+- Removed the fitted PWV4 green/blue path. All six lanes now come from the recovered 1 kHz legacy
+  bank, with native dominance, saturation, centered maxima, and phase reduction. Science Fiction,
+  Pleasure from the Bass, and Crystalised are byte-exact in all 18/18 PWV4 lanes
+  (21,600/21,600 payload bytes); all three PWV6 payloads are also byte-exact.
+- Across the 110 valid reference tracks, every PWV4 lane has median correlation `1.0`, median MAE
+  `0`, and median exact fraction `100%`. PWV5 median RGB correlations are
+  `0.9999995/0.9999945/0.9999981`, with `99.99916%/99.99795%/99.99723%` exact entries. PWV6 is
+  median byte-exact; PWV7 median correlations are `0.9999984/0.9999975/0.9999922`.
+- Replayed every final output against the frozen candidate. All 110 grids retain F1 `1.0`, zero
+  p95 timing movement, exact phase, exact numbering, and exact beat count. The three malformed
+  media inputs continue to fail closed.
+- Removed the obsolete fitted-filter work. Representative release analyses complete in `0.790 s`
+  (Science Fiction), `0.400 s` (Pleasure from the Bass), and `0.722 s` (Crystalised). Nightly
+  formatting, 123 unit tests plus one intentional ignored diagnostic, strict Clippy, the
+  121-test package validation, and complete root `pnpm validate` pass.
+- Built and ad-hoc signed the universal packaged analyzer, regenerated the three Dynamic
+  reference/clean pairs, and replaced only the clean rows in playlist `103599839`. A stopped-library
+  backup preceded the write. All nine installed ANLZ files parse, `PRAGMA quick_check` returns
+  `ok`, foreign-key check is empty, and the alternating playlist order is unchanged.
+
 ### 2026-07-28 — second profile-guided analyzer performance closure
 
 - Reprofiled the fully recovered Auto analyzer with Samply 0.13.1 at 1 kHz. Across five

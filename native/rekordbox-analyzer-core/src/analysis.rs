@@ -14,8 +14,8 @@ use crate::anlz::{
     build_empty_cue_tag, build_path_tag,
 };
 use crate::audio::{
-    ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, decode_audio_file,
-    decode_audio_file_with_progress,
+    ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DecodedAudio, MonoPcm, decode_audio_file,
+    decode_audio_file_with_progress, native_waveform_mono_pair,
 };
 use crate::flac::build_flac_pvb2;
 use crate::key::{
@@ -28,7 +28,10 @@ use crate::rhythm::{
     SpectralFluxPlan, TimeDomainAccumulator, TimeDomainEnvelopes, analyze_beats,
     analyze_beats_from_streamed_features, normalize_spectral_flux,
 };
-use crate::waveform::{StreamingWaveformAccumulator, WaveformData, extract_three_band_source};
+use crate::sample_rate_converter::{
+    AnalysisSampleRateConverter, analysis_sample_rate, quantize_analysis_pcm,
+};
+use crate::waveform::{StreamingWaveformAccumulator, WaveformData};
 
 const OUTPUT_NAMES: [(&str, &str); 3] = [
     ("DAT", "ANLZ0000.DAT"),
@@ -241,18 +244,21 @@ pub fn analyze_audio_file_with_options(
         )
     };
     let source = decoded.source();
-    let (source_three_band, resampled_pcm) = if source.sample_rate() != ANALYSIS_SAMPLE_RATE {
-        let (three_band, resampled) = pool.install(|| {
+    let (resampled_pcm, waveform_pcm) = if source.sample_rate() != ANALYSIS_SAMPLE_RATE {
+        let (resampled, waveform) = pool.install(|| {
             rayon::join(
-                || extract_three_band_source(decoded.mono()),
                 || decoded.mono().resample_linear(ANALYSIS_SAMPLE_RATE),
+                || waveform_reader_pcm(&decoded),
             )
         });
-        (Some(three_band), Some(resampled?))
-    } else {
+        (Some(resampled?), Some(waveform?))
+    } else if streamed_features.is_some() {
         (None, None)
+    } else {
+        (None, Some(waveform_reader_pcm(&decoded)?))
     };
     let pcm = resampled_pcm.as_ref().unwrap_or_else(|| decoded.mono());
+    let waveform_pcm = waveform_pcm.as_ref().unwrap_or(pcm);
     if pcm.is_empty() {
         bail!("decoded audio contains no PCM frames");
     }
@@ -272,7 +278,7 @@ pub fn analyze_audio_file_with_options(
         rayon::join(
             || match streamed_waveforms {
                 Some(waveforms) => Ok(waveforms),
-                None => WaveformData::generate_with_three_band_source(pcm, source_three_band),
+                None => WaveformData::generate(waveform_pcm),
             },
             || {
                 rayon::join(
@@ -390,6 +396,41 @@ pub fn analyze_audio_file_with_options(
         rhythm_mode,
         rhythm_fallback,
     })
+}
+
+fn waveform_reader_pcm(decoded: &DecodedAudio) -> Result<MonoPcm> {
+    let source = decoded.source();
+    let target_rate = analysis_sample_rate(source.sample_rate())?;
+    if source.sample_rate() == target_rate && source.reader_padding_frames() == 0 {
+        return Ok(decoded.waveform_mono().clone());
+    }
+    let converter = AnalysisSampleRateConverter::new(source.sample_rate(), target_rate)?;
+    if source.sample_rate() != target_rate {
+        let [left, right] = decoded
+            .waveform_stereo()
+            .context("converted waveform reader is missing source channels")?;
+        let (left, right) = rayon::join(
+            || converter.resample_mono_for_reader(left.samples(), source.reader_padding_frames()),
+            || converter.resample_mono_for_reader(right.samples(), source.reader_padding_frames()),
+        );
+        let left = left?;
+        let right = right?;
+        let mixed = left
+            .into_iter()
+            .zip(right)
+            .map(|(left, right)| {
+                native_waveform_mono_pair(quantize_analysis_pcm(left), quantize_analysis_pcm(right))
+            })
+            .collect();
+        return MonoPcm::new_native_waveform(target_rate, mixed);
+    }
+    MonoPcm::new_native_waveform(
+        target_rate,
+        converter.resample_mono_for_reader(
+            decoded.waveform_mono().samples(),
+            source.reader_padding_frames(),
+        )?,
+    )
 }
 
 struct SelectedBeatAnalysis {
@@ -526,7 +567,10 @@ struct StreamedPcmBatch {
 
 enum StreamedPcmMessage {
     Samples(StreamedPcmBatch),
-    Complete { beat_frame_count: usize },
+    Complete {
+        beat_frame_count: usize,
+        reader_padding_frames: usize,
+    },
     Abort,
 }
 
@@ -556,7 +600,7 @@ fn decode_with_streaming_features(
             let decoded = decode_audio_file_with_progress(
                 path,
                 STREAMING_BATCH_FRAMES,
-                |sample_rate, samples, complete| {
+                |sample_rate, samples, waveform_samples, complete, reader_padding_frames| {
                     if sample_rate != ANALYSIS_SAMPLE_RATE {
                         return Ok(());
                     }
@@ -594,10 +638,16 @@ fn decode_with_streaming_features(
                     {
                         if complete {
                             waveform_sender
-                                .send(StreamedPcmMessage::Complete { beat_frame_count })
+                                .send(StreamedPcmMessage::Complete {
+                                    beat_frame_count,
+                                    reader_padding_frames,
+                                })
                                 .context("streaming waveform worker disconnected")?;
                             time_domain_sender
-                                .send(StreamedPcmMessage::Complete { beat_frame_count })
+                                .send(StreamedPcmMessage::Complete {
+                                    beat_frame_count,
+                                    reader_padding_frames,
+                                })
                                 .context("streaming time-domain worker disconnected")?;
                         }
                         return Ok(());
@@ -659,23 +709,35 @@ fn decode_with_streaming_features(
                         next_key_frame = key_range.end;
                         key_jobs += 1;
                     }
-                    let stream_batch = StreamedPcmBatch {
+                    let waveform_batch = Arc::<[f32]>::from(
+                        &waveform_samples[next_stream_sample..waveform_samples.len()],
+                    );
+                    waveform_sender
+                        .send(StreamedPcmMessage::Samples(StreamedPcmBatch {
+                            range: 0..waveform_batch.len(),
+                            samples: waveform_batch,
+                        }))
+                        .context("streaming waveform worker disconnected")?;
+                    let time_domain_batch = StreamedPcmBatch {
                         samples: batch,
                         range: next_stream_sample - copy_start..samples.len() - copy_start,
                     };
-                    waveform_sender
-                        .send(StreamedPcmMessage::Samples(stream_batch.clone()))
-                        .context("streaming waveform worker disconnected")?;
                     time_domain_sender
-                        .send(StreamedPcmMessage::Samples(stream_batch))
+                        .send(StreamedPcmMessage::Samples(time_domain_batch))
                         .context("streaming time-domain worker disconnected")?;
                     next_stream_sample = samples.len();
                     if complete {
                         waveform_sender
-                            .send(StreamedPcmMessage::Complete { beat_frame_count })
+                            .send(StreamedPcmMessage::Complete {
+                                beat_frame_count,
+                                reader_padding_frames,
+                            })
                             .context("streaming waveform worker disconnected")?;
                         time_domain_sender
-                            .send(StreamedPcmMessage::Complete { beat_frame_count })
+                            .send(StreamedPcmMessage::Complete {
+                                beat_frame_count,
+                                reader_padding_frames,
+                            })
                             .context("streaming time-domain worker disconnected")?;
                     }
                     Ok(())
@@ -733,7 +795,11 @@ fn consume_streamed_waveforms(
             StreamedPcmMessage::Samples(batch) => {
                 accumulator.push(&batch.samples[batch.range]);
             }
-            StreamedPcmMessage::Complete { .. } => {
+            StreamedPcmMessage::Complete {
+                reader_padding_frames,
+                ..
+            } => {
+                accumulator.push_zeros(reader_padding_frames.saturating_sub(1));
                 result
                     .send(accumulator.finish())
                     .expect("streaming waveform result receiver remains connected");
@@ -754,7 +820,9 @@ fn consume_streamed_time_domain(
             StreamedPcmMessage::Samples(batch) => {
                 accumulator.push(&batch.samples[batch.range]);
             }
-            StreamedPcmMessage::Complete { beat_frame_count } => {
+            StreamedPcmMessage::Complete {
+                beat_frame_count, ..
+            } => {
                 result
                     .send(accumulator.finish(beat_frame_count))
                     .expect("streaming time-domain result receiver remains connected");

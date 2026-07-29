@@ -11,6 +11,8 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
+use crate::sample_rate_converter::quantize_analysis_pcm;
+
 /// Sample rate used by the Rekordbox 6 analysis primitives.
 pub const ANALYSIS_SAMPLE_RATE: u32 = 44_100;
 
@@ -59,6 +61,8 @@ impl AudioSourceInfo {
 pub struct DecodedAudio {
     source: AudioSourceInfo,
     mono: MonoPcm,
+    waveform_mono: MonoPcm,
+    waveform_stereo: Option<[MonoPcm; 2]>,
 }
 
 impl DecodedAudio {
@@ -72,6 +76,16 @@ impl DecodedAudio {
         &self.mono
     }
 
+    /// Native signed-16-bit-quantized mono signal used by waveform analysis.
+    pub(crate) fn waveform_mono(&self) -> &MonoPcm {
+        &self.waveform_mono
+    }
+
+    /// Unmixed channels retained when the native waveform reader converts rates.
+    pub(crate) fn waveform_stereo(&self) -> Option<&[MonoPcm; 2]> {
+        self.waveform_stereo.as_ref()
+    }
+
     /// Resample the decoded mono signal to 44.1 kHz.
     pub fn into_analysis_pcm(self) -> Result<MonoPcm> {
         if self.mono.sample_rate == ANALYSIS_SAMPLE_RATE {
@@ -82,7 +96,10 @@ impl DecodedAudio {
     }
 }
 
-/// Finite mono PCM samples in the normalized `[-1.0, 1.0]` range.
+/// Finite mono PCM samples.
+///
+/// Public construction clamps into `[-1.0, 1.0]`. The crate-private waveform
+/// path may retain Rekordbox's signed-16-bit floor of `-32768 / 32767`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonoPcm {
     sample_rate: u32,
@@ -107,12 +124,28 @@ impl MonoPcm {
         })
     }
 
+    /// Construct waveform PCM while preserving the signed-16-bit negative floor.
+    pub(crate) fn new_native_waveform(sample_rate: u32, samples: Vec<f32>) -> Result<Self> {
+        if sample_rate == 0 {
+            bail!("mono PCM sample rate must be nonzero");
+        }
+        for (index, sample) in samples.iter().enumerate() {
+            if !sample.is_finite() {
+                bail!("mono PCM sample {index} is not finite");
+            }
+        }
+        Ok(Self {
+            sample_rate,
+            samples,
+        })
+    }
+
     /// Signal sample rate in Hertz.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Normalized mono samples.
+    /// Mono samples; waveform-internal PCM may reach `-32768 / 32767`.
     pub fn samples(&self) -> &[f32] {
         &self.samples
     }
@@ -653,19 +686,46 @@ fn trim_leading_interleaved_frames<'a>(
     &interleaved[trim_frames * channels..]
 }
 
+/// Mix two `/ 32768`-normalized, signed-16-bit-quantized waveform channels.
+pub(crate) fn native_waveform_mono_pair(left: f32, right: f32) -> f32 {
+    let scale = 32_768.0 / 32_767.0;
+    let left = f64::from(left) * scale;
+    let right = f64::from(right) * scale;
+    let difference = (left.abs() - right.abs()).abs();
+    let mixed = if difference < 0.001 {
+        if right.abs() < left.abs() {
+            left
+        } else {
+            right
+        }
+    } else {
+        (left + right) * 0.5
+    };
+    // Rekordbox scales signed 16-bit PCM by 1 / 32767 without clipping, so
+    // -32768 intentionally survives as roughly -1.00003.
+    mixed as f32
+}
+
+fn native_waveform_mono_sample(frame: &[f32]) -> f32 {
+    native_waveform_mono_pair(
+        quantize_analysis_pcm(frame[0]),
+        quantize_analysis_pcm(*frame.get(1).unwrap_or(&frame[0])),
+    )
+}
+
 /// Decode a local audio file to equal-weight mono PCM with Symphonia codecs.
 ///
 /// Decoder errors fail the operation rather than silently dropping packets. All
 /// selected Symphonia features are pure Rust and redistributable. Architecture-
 /// appropriate SIMD kernels accelerate codec transforms.
 pub fn decode_audio_file(path: impl AsRef<Path>) -> Result<DecodedAudio> {
-    decode_audio_file_with_progress(path, usize::MAX, |_, _, _| Ok(()))
+    decode_audio_file_with_progress(path, usize::MAX, |_, _, _, _, _| Ok(()))
 }
 
 pub(crate) fn decode_audio_file_with_progress(
     path: impl AsRef<Path>,
     progress_interval_frames: usize,
-    mut progress: impl FnMut(u32, &[f32], bool) -> Result<()>,
+    mut progress: impl FnMut(u32, &[f32], &[f32], bool, usize) -> Result<()>,
 ) -> Result<DecodedAudio> {
     if progress_interval_frames == 0 {
         bail!("decode progress interval must be nonzero");
@@ -715,6 +775,8 @@ pub(crate) fn decode_audio_file_with_progress(
     let mut decoded_channels = None;
     let mut interleaved = Vec::<f32>::new();
     let mut mono = Vec::<f32>::with_capacity(expected_frames);
+    let mut waveform_mono = Vec::<f32>::with_capacity(expected_frames);
+    let mut waveform_stereo = None::<[Vec<f32>; 2]>;
     let mut next_progress = progress_interval_frames;
 
     while let Some(packet) = format
@@ -746,6 +808,12 @@ pub(crate) fn decode_audio_file_with_progress(
             None => decoded_channels = Some(channels),
             _ => {}
         }
+        if waveform_stereo.is_none() && !matches!(sample_rate, 44_100 | 48_000) {
+            waveform_stereo = Some([
+                Vec::with_capacity(expected_frames),
+                Vec::with_capacity(expected_frames),
+            ]);
+        }
 
         interleaved.resize(decoded.samples_interleaved(), 0.0);
         decoded.copy_to_slice_interleaved(&mut interleaved);
@@ -764,9 +832,20 @@ pub(crate) fn decode_audio_file_with_progress(
                 }
             })?;
             mono.push((sum / channels as f64).clamp(-1.0, 1.0) as f32);
+            waveform_mono.push(native_waveform_mono_sample(frame));
+            if let Some([left, right]) = waveform_stereo.as_mut() {
+                left.push(frame[0]);
+                right.push(*frame.get(1).unwrap_or(&frame[0]));
+            }
         }
         if mono.len() >= next_progress {
-            progress(sample_rate, &mono, false)?;
+            progress(
+                sample_rate,
+                &mono,
+                &waveform_mono,
+                false,
+                reader_padding_frames,
+            )?;
             next_progress = mono.len().saturating_add(progress_interval_frames);
         }
     }
@@ -776,7 +855,13 @@ pub(crate) fn decode_audio_file_with_progress(
     if remaining_leading_trim != 0 {
         bail!("AAC priming exceeds decoded audio by {remaining_leading_trim} source frames");
     }
-    progress(sample_rate, &mono, true)?;
+    progress(
+        sample_rate,
+        &mono,
+        &waveform_mono,
+        true,
+        reader_padding_frames,
+    )?;
     let decoded_frames = mono.len();
     Ok(DecodedAudio {
         source: AudioSourceInfo {
@@ -790,6 +875,22 @@ pub(crate) fn decode_audio_file_with_progress(
             sample_rate,
             samples: mono,
         },
+        waveform_mono: MonoPcm {
+            sample_rate,
+            samples: waveform_mono,
+        },
+        waveform_stereo: waveform_stereo.map(|[left, right]| {
+            [
+                MonoPcm {
+                    sample_rate,
+                    samples: left,
+                },
+                MonoPcm {
+                    sample_rate,
+                    samples: right,
+                },
+            ]
+        }),
     })
 }
 
@@ -909,6 +1010,40 @@ mod tests {
                 .expect("clamped PCM")
                 .samples(),
             &[-1.0, 1.0]
+        );
+    }
+
+    #[test]
+    fn native_waveform_pcm_retains_signed_sixteen_bit_floor() {
+        let floor = -32_768.0_f32 / 32_767.0;
+        let pcm = MonoPcm::new_native_waveform(44_100, vec![floor]).expect("native waveform PCM");
+        assert_eq!(pcm.samples()[0].to_bits(), floor.to_bits());
+        assert!(pcm.samples()[0] < -1.0);
+    }
+
+    #[test]
+    fn native_waveform_mixer_preserves_nearly_equal_dominant_channel() {
+        let left = -32_767.0_f32 / 32_768.0;
+        let right = -1.0_f32;
+        let mixed = native_waveform_mono_sample(&[left, right]);
+        assert_eq!(mixed.to_bits(), (-32_768.0_f32 / 32_767.0).to_bits());
+        assert!(mixed < -1.0);
+    }
+
+    #[test]
+    fn native_waveform_mixer_averages_materially_different_channels() {
+        let mixed = native_waveform_mono_sample(&[0.75, -0.25]);
+        let scale = 32_768.0_f64 / 32_767.0;
+        let expected = ((0.75_f64 - 0.25) * 0.5 * scale) as f32;
+        assert_eq!(mixed.to_bits(), expected.to_bits());
+    }
+
+    #[test]
+    fn native_waveform_mixer_quantizes_each_channel_before_mixing() {
+        let below_one_lsb = 0.5_f32 / 32_768.0;
+        assert_eq!(
+            native_waveform_mono_sample(&[below_one_lsb, 0.0]).to_bits(),
+            0.0_f32.to_bits()
         );
     }
 
