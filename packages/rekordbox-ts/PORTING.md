@@ -25,6 +25,33 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — native MP3 length and PVBR closure
+
+- Recovered `FileReadMp3::FrameAnalyzer`, `checkXingVbri`, and `updateLength` from the linked
+  Rekordbox 6.8.2 binary and checked the result against fresh stock analyses. `Info`, unmarked CBR,
+  and VBRI files keep 400 zero seek offsets, but their final `PVBR` word is a native reader sample
+  span rather than zero.
+- The CBR path excludes the metadata-only `Info` frame and an end-of-file ID3v1 tag. At 44.1 kHz
+  family rates it divides the remaining byte span by the exact floating-point nominal frame size;
+  otherwise it uses the first frame's integral size. Validated VBRI headers use their declared frame
+  count.
+- Dam Swindle's complete 1,620-byte `PVBR` tag now matches a fresh Rekordbox oracle byte-for-byte:
+  11,501 frames and 13,249,152 samples. The same rule independently predicts the malformed Darshan
+  oracle's 19,094 frames and 21,996,288 samples despite its stale 18,759-frame `Info` declaration.
+  Synthetic tests pin Info, unmarked, ID3v1, and VBRI behavior.
+
+### 2026-07-29 — release code-generation benchmark
+
+- Benchmarked the portable release, `-C target-cpu=native`, fat LTO with one codegen unit, and both
+  options together on an M2 Max. All variants emitted byte-identical analyzer artifacts.
+- On a controlled 100-track, 8.55-hour batch, the portable baseline won at `19.955 s` median.
+  Native CPU was `1.17%` slower, fat LTO `4.66%` slower, and the combined build `8.13%` slower.
+  Single-track results were likewise neutral or slower. Fat LTO reduced binary size by `31.6%`,
+  but not analysis time.
+- A fresh 1 kHz Samply profile attributes only `0.19%` leaf and `0.35%` inclusive CPU to allocation.
+  Keep the portable release profile and system allocator; host-specific instructions, LTO, and an
+  alternate allocator do not justify additional build complexity on this workload.
+
 ### 2026-07-29 — native PWV3 monochrome-detail closure
 
 - Recovered the independent `ZoomViewMaker` path instead of deriving monochrome detail from the
