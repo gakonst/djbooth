@@ -461,6 +461,172 @@ pub fn derive_native_phrase_bar_change_features(
     Ok(derive_native_phrase_change_features_unchecked(bars))
 }
 
+/// Select boundary candidates from one native 22-value phrase-change window.
+///
+/// The returned indices are absolute one-based bars. `[0]` is the native
+/// no-candidate sentinel. Candidate ranking is stable, and the final
+/// three-zero cleanup limit is intentional: the linked judge discards the
+/// whole window when four rejected slots remain before its last accepted
+/// candidate.
+pub fn judge_native_phrase_change_window(
+    features: &NativePhraseChangeFeatures,
+    start_bar: i32,
+) -> Result<Vec<i32>> {
+    let primary = &features.normalized;
+    let secondary = &features.symmetric_ratio;
+    let tertiary = &features.directional_ratio;
+    let value_count = primary.len();
+    if value_count < 10 {
+        bail!("native phrase change judge requires at least ten values");
+    }
+    if secondary.len() != value_count || tertiary.len() != value_count {
+        bail!("native phrase change judge requires equally sized feature arrays");
+    }
+    if primary
+        .iter()
+        .chain(secondary)
+        .chain(tertiary)
+        .any(|value| !value.is_finite())
+    {
+        bail!("native phrase change judge requires finite features");
+    }
+    if start_bar <= 0 {
+        bail!("native phrase change judge requires a positive one-based start bar");
+    }
+
+    let ranked_count = value_count - 6;
+    let mut average = secondary[3..value_count - 3].iter().sum::<f64>() / ranked_count as f64;
+    if average == 0.0 {
+        average = 0.003;
+    }
+
+    let mut primary_max = 1;
+    for candidate in 2..=ranked_count {
+        if primary[candidate + 2] > primary[primary_max + 2] {
+            primary_max = candidate;
+        }
+    }
+
+    let mut ranked = (1..=ranked_count).collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        secondary[*right + 2]
+            .partial_cmp(&secondary[*left + 2])
+            .expect("validated finite phrase feature")
+    });
+    let mut adjacent = ranked[..4].to_vec();
+    adjacent.sort_by(|left, right| right.cmp(left));
+    let mut survivors = adjacent.clone();
+    let mut removed = 0;
+    for pair in 0..3 {
+        let high = adjacent[pair];
+        let low = adjacent[pair + 1];
+        let has_replacement = if pair == 0 {
+            ranked_count >= 5
+        } else {
+            removed + 4 < ranked_count
+        };
+        if high - low != 1 || !has_replacement {
+            continue;
+        }
+        let ratio = if secondary[low + 2] == 0.0 {
+            secondary[high + 2] * 333.333_333_333_333_3
+        } else {
+            secondary[high + 2] / secondary[low + 2]
+        };
+        if ratio < 1.7 && tertiary[high + 2] <= 1.8 {
+            survivors[pair] = 0;
+            removed += 1;
+        }
+        if tertiary[high + 2] > 1.8 {
+            survivors[pair + 1] = 0;
+            removed += 1;
+        }
+    }
+    ranked[..4].copy_from_slice(&survivors);
+
+    let threshold_105 = 1.05 * average;
+    let threshold_109 = 1.09 * average;
+    let threshold_10573 = 1.0573 * average;
+    let inverse_threshold_109 = (1.0 / 1.09) / average;
+    let mut slots = vec![0; removed + 4];
+    let mut accepted = 0;
+    for (slot, candidate) in ranked[..slots.len()].iter().copied().enumerate() {
+        if candidate == 0 {
+            continue;
+        }
+
+        let local_two = (secondary[candidate] + secondary[candidate + 1]) * 0.5;
+        let local_three =
+            (secondary[candidate - 1] + secondary[candidate] + secondary[candidate + 1]) / 3.0;
+        let primary_three =
+            (primary[candidate - 1] + primary[candidate] + primary[candidate + 1]) / 3.0;
+        let future_two = (secondary[candidate + 3] + secondary[candidate + 4]) * 0.5;
+        let later_two = (secondary[candidate + 4] + secondary[candidate + 5]) * 0.5;
+        let skipped_middle = (secondary[candidate + 5] + secondary[candidate + 3]) * 0.5;
+        let current_primary = primary[candidate + 2];
+        let previous_primary = primary[candidate + 1];
+        let current_secondary = secondary[candidate + 2];
+
+        if current_secondary <= threshold_105 && candidate != primary_max {
+            continue;
+        }
+        if candidate != primary_max {
+            let primary_ratio = native_ratio(current_primary, primary_three);
+            if primary_ratio <= threshold_109 && primary_ratio >= inverse_threshold_109 {
+                continue;
+            }
+        }
+        if (local_two >= threshold_10573 || local_three >= threshold_10573)
+            && (candidate != primary_max || native_ratio(current_primary, previous_primary) <= 1.1)
+        {
+            continue;
+        }
+
+        let future_two = native_nonzero(future_two);
+        let later_two = native_nonzero(later_two);
+        let admitted = future_two < 1.2
+            || current_secondary / later_two > average
+            || later_two < 1.2
+            || current_secondary / future_two > average
+            || (current_secondary > 1.4 && skipped_middle < 1.2);
+        if !admitted {
+            continue;
+        }
+        let candidate = i32::try_from(candidate)
+            .ok()
+            .and_then(|candidate| candidate.checked_add(start_bar))
+            .and_then(|candidate| candidate.checked_add(2))
+            .ok_or_else(|| anyhow::anyhow!("native phrase candidate index overflow"))?;
+        slots[slot] = candidate;
+        accepted += 1;
+    }
+
+    while slots.last() == Some(&0) {
+        slots.pop();
+    }
+    if accepted == 0 {
+        return Ok(vec![0]);
+    }
+    slots.sort_unstable();
+    let rejected_prefix = slots
+        .iter()
+        .take_while(|candidate| **candidate == 0)
+        .count();
+    if rejected_prefix > 3 {
+        return Ok(vec![0]);
+    }
+    slots.drain(..rejected_prefix);
+    Ok(slots)
+}
+
+fn native_nonzero(value: f64) -> f64 {
+    if value == 0.0 { 0.003 } else { value }
+}
+
+fn native_ratio(numerator: f64, denominator: f64) -> f64 {
+    numerator / native_nonzero(denominator)
+}
+
 fn derive_native_phrase_change_features_unchecked(
     mut normalized: Vec<f64>,
 ) -> NativePhraseChangeFeatures {
@@ -897,9 +1063,186 @@ mod tests {
     }
 
     #[test]
+    fn native_change_judge_matches_captured_rank_and_threshold_result() {
+        let features = NativePhraseChangeFeatures {
+            normalized: vec![
+                0.9375107081998899,
+                0.9524291547126951,
+                0.9401769794944234,
+                0.9462614782710926,
+                0.9499977144107871,
+                0.9439149165144872,
+                0.951074052313648,
+                0.949861726919943,
+                0.9423347738321425,
+                0.9507508038677926,
+                0.9411321635726104,
+                0.9558680116282967,
+                0.9452631892784565,
+                0.9481996172292793,
+                0.9477617012963716,
+                0.17100498101967251,
+                0.15770056894487494,
+                0.17377998430072264,
+                0.15671323006775806,
+                0.17176476246926956,
+                0.15900154346787712,
+                0.1759392734400592,
+            ],
+            symmetric_ratio: vec![
+                1.007206870467956,
+                1.0159128278560678,
+                1.0130317753843114,
+                1.0064716525817736,
+                1.0039484183024345,
+                1.006444222662315,
+                1.0075845138941089,
+                1.0012763177622033,
+                1.0079875573912984,
+                1.0089310405063638,
+                1.0102202864459218,
+                1.015657575658394,
+                1.0112189096858146,
+                1.0031064659918305,
+                1.0004620527842691,
+                5.542304648934996,
+                1.0843650226743835,
+                1.10196168259525,
+                1.1089043613330247,
+                1.09604506521245,
+                1.080271038400146,
+                1.10652556951816,
+            ],
+            directional_ratio: vec![
+                0.9928446968748261,
+                1.0159128278560678,
+                0.9871358671060761,
+                1.0064716525817736,
+                1.0039484183024345,
+                0.9935970394412238,
+                1.0075845138941089,
+                0.9987253091483719,
+                0.9920757381053686,
+                1.0089310405063638,
+                0.9898831110570171,
+                1.015657575658394,
+                0.9889055578585844,
+                1.0031064659918305,
+                0.999538160609907,
+                0.1804303558434232,
+                0.9221986868717759,
+                1.10196168259525,
+                0.9017910244287345,
+                1.09604506521245,
+                0.9256936124854136,
+                1.10652556951816,
+            ],
+        };
+
+        assert_eq!(
+            judge_native_phrase_change_window(&features, 49).expect("judge"),
+            [60, 64]
+        );
+    }
+
+    #[test]
+    fn native_change_judge_preserves_captured_three_zero_quorum() {
+        let features = NativePhraseChangeFeatures {
+            normalized: vec![
+                0.7847212036844456,
+                0.8027666109686161,
+                0.7843179617503733,
+                0.7977155785209983,
+                0.7858730192633699,
+                0.8000250906214732,
+                0.78444844227819,
+                0.7989549534633168,
+                0.7839512292942151,
+                0.801876268139109,
+                0.7825586431724094,
+                0.7991914350356267,
+                0.7863735761750984,
+                0.8008917523928059,
+                0.781112591632359,
+                0.2139497668182596,
+                0.19989885868164275,
+                0.21924604546615772,
+                0.2048188160180513,
+                0.21518623080885144,
+                0.20179076706889862,
+                0.21912052284830508,
+            ],
+            symmetric_ratio: vec![
+                1.0187049222585178,
+                1.0229959470948957,
+                1.0235219007060232,
+                1.0170818691194135,
+                1.0150693037772551,
+                1.0180080891075363,
+                1.0198568159534431,
+                1.0184926253954907,
+                1.0191385938416213,
+                1.0228649923299842,
+                1.0246852106679034,
+                1.0212543711686446,
+                1.0162999613019477,
+                1.0184621872575164,
+                1.0253217794365759,
+                3.6509158352851947,
+                1.0702900868433383,
+                1.0967848786737053,
+                1.0704389847016542,
+                1.0506174920466604,
+                1.066382936813849,
+                1.085879825083818,
+            ],
+            directional_ratio: vec![
+                0.9816385276542611,
+                1.0229959470948957,
+                0.9770186639975188,
+                1.0170818691194135,
+                0.9851544089441189,
+                1.0180080891075363,
+                0.9805298002201619,
+                1.0184926253954907,
+                0.981220813383704,
+                1.0228649923299842,
+                0.97590946916096,
+                1.0212543711686446,
+                0.9839614661786797,
+                1.0184621872575164,
+                0.9753035779163001,
+                0.27390387648360676,
+                0.9343261348419583,
+                1.0967848786737053,
+                0.93419617025506,
+                1.0506174920466604,
+                0.9377494382907244,
+                1.085879825083818,
+            ],
+        };
+
+        assert_eq!(
+            judge_native_phrase_change_window(&features, 49).expect("judge"),
+            [0]
+        );
+    }
+
+    #[test]
     fn native_change_features_reject_invalid_inputs() {
         assert!(derive_native_phrase_change_features(&[f64::NAN]).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 8], 0).is_err());
         assert!(derive_native_phrase_bar_change_features(&[1.0; 3], 1).is_err());
+        assert!(
+            judge_native_phrase_change_window(
+                &NativePhraseChangeFeatures {
+                    normalized: vec![0.0; 10],
+                    symmetric_ratio: vec![0.0; 9],
+                    directional_ratio: vec![0.0; 10],
+                },
+                1,
+            )
+            .is_err()
+        );
     }
 }

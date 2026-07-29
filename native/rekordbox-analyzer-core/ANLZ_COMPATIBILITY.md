@@ -489,6 +489,17 @@ remaining upstream input identities and downstream candidate-suppression
 rules are fully mapped; production boundaries do not consume an incomplete
 judge.
 
+`VerseHookJudge23Sub` is now ported as
+`judge_native_phrase_change_window`. The clean implementation reproduces the
+stable top-change ranking, adjacent-pulse suppression, dynamic
+`1.05/1.09/1.0573` mean thresholds, primary-feature exception, forward-window
+tests, absolute bar mapping, and the native three-zero result cleanup limit.
+It matches all `114/114` captured sub-judge calls across two mood-2 runs and
+one mood-3 run, including windows where an otherwise valid candidate is
+discarded because too many earlier ranked slots were rejected. This primitive
+also remains diagnostic until the top-level three-family merge and genre pass
+are fully replayed.
+
 A newer 120-track read-only replay, using the same cohort before and after the
 production low-level integration, reports exact/within-four/within-eight
 boundary F1 improving from `0.5245/0.6348/0.6855` to
