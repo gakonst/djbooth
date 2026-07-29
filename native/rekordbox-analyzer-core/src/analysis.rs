@@ -1178,6 +1178,7 @@ struct Mp3Frame {
 struct Mp3Header {
     version: u8,
     layer: u8,
+    bitrate_kbps: usize,
     sample_rate: usize,
     channel_mode: u8,
     has_crc: bool,
@@ -1188,9 +1189,13 @@ struct Mp3Header {
 fn build_xing_vbr_index(data: &[u8]) -> Result<(Vec<u32>, u32)> {
     let Some((first_offset, first_header, data_frame_count, stream_bytes)) = find_xing_header(data)
     else {
-        // Rekordbox 6.8.2 emits the native all-zero shape for Info/CBR streams
-        // and for files without a validated Xing seek header.
-        return Ok((vec![0; VBR_ENTRY_COUNT], 0));
+        // Rekordbox leaves the 400 seek offsets empty for Info/CBR, VBRI, and
+        // unmarked streams, but still stores its reader's advertised sample
+        // span in the trailing word.
+        return Ok((
+            vec![0; VBR_ENTRY_COUNT],
+            native_non_xing_sample_count(data).unwrap_or_default(),
+        ));
     };
     if data_frame_count == 0 {
         return Ok((vec![0; VBR_ENTRY_COUNT], 0));
@@ -1258,6 +1263,88 @@ fn build_xing_vbr_index(data: &[u8]) -> Result<(Vec<u32>, u32)> {
         entries.push(u32::try_from(relative).context("PVBR byte offset exceeds 32 bits")?);
     }
     Ok((entries, trailer))
+}
+
+fn native_non_xing_sample_count(data: &[u8]) -> Option<u32> {
+    let (first_offset, first_header) = find_first_mp3_header(data)?;
+    let xing_offset = first_offset.checked_add(first_header.xing_marker_offset())?;
+    let marker = data.get(xing_offset..xing_offset.checked_add(4)?)?;
+    if marker == b"Xing" {
+        return None;
+    }
+    let has_info_frame = marker == b"Info";
+
+    let vbri_offset = first_offset.checked_add(36)?;
+    if data.get(vbri_offset..vbri_offset.checked_add(4)?) == Some(b"VBRI") {
+        let frame_count = u64::from(read_be_u32_at(data, vbri_offset.checked_add(14)?)?);
+        return u32::try_from(frame_count.checked_mul(u64::from(first_header.sample_count))?).ok();
+    }
+
+    let geometry = first_header.geometry();
+    let mut offset = first_offset;
+    let mut frame_count = 0usize;
+    let mut frame_bytes = 0usize;
+    while let Some(header_bytes) = data.get(offset..offset.saturating_add(4)) {
+        let Some(header) = parse_mp3_header(header_bytes) else {
+            break;
+        };
+        if header.geometry() != geometry || header.bitrate_kbps != first_header.bitrate_kbps {
+            return None;
+        }
+        let frame_end = offset.checked_add(header.frame_len)?;
+        if frame_end > data.len() {
+            break;
+        }
+        frame_count = frame_count.checked_add(1)?;
+        frame_bytes = frame_bytes.checked_add(header.frame_len)?;
+        offset = frame_end;
+    }
+    if frame_count < 2 {
+        return None;
+    }
+
+    let has_variable_padding =
+        first_header.sample_rate.is_multiple_of(11_025) && !frame_bytes.is_multiple_of(frame_count);
+    let estimated_frame_bytes = if has_variable_padding {
+        first_header.bitrate_kbps as f64 * 1_000.0 * f64::from(first_header.sample_count) * 0.125
+            / first_header.sample_rate as f64
+    } else {
+        first_header.frame_len as f64
+    };
+    let effective_end =
+        if data.len() >= 128 && data.get(data.len() - 128..data.len() - 125) == Some(b"TAG") {
+            data.len() - 128
+        } else {
+            data.len()
+        };
+    let byte_span = effective_end
+        .checked_sub(first_offset)?
+        .checked_sub(if has_info_frame {
+            first_header.frame_len
+        } else {
+            0
+        })?;
+    let estimated_frames = (byte_span as f64 / estimated_frame_bytes) as u64;
+    u32::try_from(estimated_frames.checked_mul(u64::from(first_header.sample_count))?).ok()
+}
+
+fn find_first_mp3_header(data: &[u8]) -> Option<(usize, Mp3Header)> {
+    let search_start = id3v2_end(data);
+    for offset in search_start..data.len().saturating_sub(3) {
+        let Some(header) = parse_mp3_header(data.get(offset..offset + 4)?) else {
+            continue;
+        };
+        let next_offset = offset.checked_add(header.frame_len)?;
+        let Some(next_header) =
+            parse_mp3_header(data.get(next_offset..next_offset.checked_add(4)?)?)
+        else {
+            continue;
+        };
+        if next_header.geometry() == header.geometry() {
+            return Some((offset, header));
+        }
+    }
+    None
 }
 
 fn find_xing_header(data: &[u8]) -> Option<(usize, Mp3Header, usize, usize)> {
@@ -1354,6 +1441,7 @@ fn parse_mp3_header(bytes: &[u8]) -> Option<Mp3Header> {
     Some(Mp3Header {
         version: version as u8,
         layer: layer as u8,
+        bitrate_kbps: bitrate,
         sample_rate,
         channel_mode: ((header >> 6) & 0x3) as u8,
         has_crc: header & 0x0001_0000 == 0,
@@ -1525,14 +1613,34 @@ mod tests {
     }
 
     #[test]
-    fn info_and_unmarked_mp3_streams_keep_native_zero_pvbr_shape() {
-        for marker in [Some((b"Info".as_slice(), 400usize)), None] {
+    fn info_and_unmarked_cbr_streams_keep_zero_offsets_and_advertise_samples() {
+        for (marker, expected_frames) in [(Some((b"Info".as_slice(), 400usize)), 4), (None, 5)] {
             let mut mp3 = Vec::new();
-            append_fake_mp3_frame(&mut mp3, [0xff, 0xfb, 0x90, 0x00], marker);
+            append_fake_mp3_frame(&mut mp3, [0xff, 0xfb, 0x94, 0x00], marker);
+            for _ in 0..4 {
+                append_fake_mp3_frame(&mut mp3, [0xff, 0xfb, 0x94, 0x00], None);
+            }
+            let id3v1 = mp3.len();
+            mp3.resize(id3v1 + 128, 0);
+            mp3[id3v1..id3v1 + 3].copy_from_slice(b"TAG");
             let (entries, trailer) = build_xing_vbr_index(&mp3).expect("zero PVBR");
             assert_eq!(entries, vec![0; VBR_ENTRY_COUNT]);
-            assert_eq!(trailer, 0);
+            assert_eq!(trailer, expected_frames * 1_152);
         }
+    }
+
+    #[test]
+    fn vbri_streams_keep_zero_offsets_and_use_declared_frame_count() {
+        let mut mp3 = Vec::new();
+        append_fake_mp3_frame(&mut mp3, [0xff, 0xfb, 0x94, 0x00], None);
+        let vbri_offset = 36;
+        mp3[vbri_offset..vbri_offset + 4].copy_from_slice(b"VBRI");
+        mp3[vbri_offset + 14..vbri_offset + 18].copy_from_slice(&123u32.to_be_bytes());
+        append_fake_mp3_frame(&mut mp3, [0xff, 0xfb, 0x94, 0x00], None);
+
+        let (entries, trailer) = build_xing_vbr_index(&mp3).expect("VBRI PVBR");
+        assert_eq!(entries, vec![0; VBR_ENTRY_COUNT]);
+        assert_eq!(trailer, 123 * 1_152);
     }
 
     #[test]

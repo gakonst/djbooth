@@ -154,8 +154,11 @@ platform codec dependency:
   intro/outro tonic evidence.
 - Validated MPEG-1 Layer III `Xing` input gets the Rekordbox 6.8.2 400-entry
   `PVBR` table: offsets are relative to the first data frame and retain an
-  eight-frame decoder preroll. `Info`/CBR, unmarked MP3, constant-rate
-  containers, and unproven MPEG/VBR variants retain the native all-zero shape.
+  eight-frame decoder preroll. `Info`/CBR, unmarked MP3, and VBRI input retain
+  400 zero offsets but advertise the native reader's sample span in the final
+  word. That span excludes the metadata-only `Info` frame and ID3v1, preserves
+  the native floating-point 44.1 kHz frame estimate, and uses a validated VBRI
+  frame count when present.
 - `analyze AUDIO OUTPUT_DIR [LOG]` writes DAT/EXT/2EX, validates them through
   the clean parser, and emits the bounded summary consumed and persisted as
   `analysis.json` by the TypeScript wrapper.
@@ -420,9 +423,9 @@ artifact was retained, so distributable output remains unchanged.
 
 ## Known semantic gaps
 
-- MPEG-2/2.5 Layer III, Layer I/II, and VBRI seek-table parity have no local
-  Rekordbox oracle yet, so they intentionally use the conservative zero
-  `PVBR` fallback.
+- MPEG-2/2.5 Layer III, Layer I/II, and nonzero VBRI seek-table parity have no
+  local Rekordbox oracle yet. VBRI sample-count trailers are implemented from
+  the validated header, while its 400 offsets remain conservatively zero.
 - Song structure/phrase analysis is not implemented. Clean `PSSI` is valid
   empty scaffolding instead of a proprietary phrase map.
 - Cue sections are emitted empty. Non-empty `PCOB`, `PCO2`, and obfuscated
