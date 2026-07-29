@@ -6,24 +6,75 @@ This file is the durable project journal: source pins, compatibility scope, deci
 
 - `dylanljones/pyrekordbox`: `f695541827cc488af267d6ca8a8e0052598d85a0` (2025-12-24)
 - `wevm/incur`: `4c0fc4b15b4e0b72136f30b0a0ad25cc35e0a84b` (2026-07-10), npm `0.4.13`
+- `Holzhaus/rekordcrate`: `e8574896b099d8b9e68b389a738e5872cdc8b5b2` (empty legacy Device Library scaffold and independent format reference)
+- `fragmede/rekordbox-pdb-rs`: `b9896c4e279f2ffd5a8eee1f05a7a0282fe44f35` (independent generated-output verification)
 
 The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
 
 ## Compatibility matrix
 
-| Area                         | TypeScript API | CLI             | Parity tests | Status   |
-| ---------------------------- | -------------- | --------------- | ------------ | -------- |
-| Configuration discovery      | implemented    | `config show`   | 4 tests      | complete |
-| Utility functions            | implemented    | n/a             | 6 tests      | complete |
-| Rekordbox XML                | implemented    | `xml ...`       | 6 tests      | complete |
-| ANLZ files                   | implemented    | `anlz ...`      | 5 tests      | complete |
-| My Settings files            | implemented    | `settings ...`  | 7 tests      | complete |
-| Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete |
-| Master database              | implemented    | `db ...`        | 5 tests      | complete |
-| Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete |
-| Device Library Plus          | implemented    | `device ...`    | 4 tests      | complete |
+| Area                         | TypeScript API | CLI             | Parity tests | Status                      |
+| ---------------------------- | -------------- | --------------- | ------------ | --------------------------- |
+| Configuration discovery      | implemented    | `config show`   | 4 tests      | complete                    |
+| Utility functions            | implemented    | n/a             | 6 tests      | complete                    |
+| Rekordbox XML                | implemented    | `xml ...`       | 6 tests      | complete                    |
+| ANLZ files                   | implemented    | `anlz ...`      | 5 tests      | complete                    |
+| My Settings files            | implemented    | `settings ...`  | 7 tests      | complete                    |
+| Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete                    |
+| Master database              | implemented    | `db ...`        | 5 tests      | complete                    |
+| Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete                    |
+| Device Library Plus          | implemented    | `device ...`    | 4 tests      | complete                    |
+| Legacy Device Library PDB    | implemented    | `music usb ...` | 9 tests      | hardware validation pending |
 
 ## Decisions
+
+### 2026-07-29 — Bidirectional, differential CDJ USB synchronization
+
+- Make `music usb sync <mounted-root> --write` the normal round-trip boundary. Import all unseen
+  legacy history tables before replacing `export.pdb`, create one root-level
+  `DJ Set YYYY-MM-DD` normal playlist per history, preserve ordered duplicate plays, increment
+  `DJPlayCount` once per imported history occurrence, then reconcile the complete active
+  master-library track and playlist set back to the USB.
+- Persist a versioned ownership marker with a stable media ID, per-generation ID, master content
+  ID to DeviceSQL track-ID mapping, stable `/Contents/...` path, source file fingerprints, ANLZ
+  output sizes, and imported-history receipts. Never guess track identity for histories on an
+  unowned or version-1 export.
+- Keep DeviceSQL track IDs and media paths stable across library additions and metadata changes.
+  Reuse unchanged audio and rewritten ANLZ files, atomically replace only changed files and
+  `export.pdb`, and remove only obsolete paths recorded in the previous ownership marker.
+- Treat a history import as one guarded master-database mutation: use the shared cross-process
+  lock, require Rekordbox and rekordboxAgent to be stopped, take a durable checksummed backup,
+  commit all playlists/memberships/play counts once, then reopen read-only for SQLite integrity,
+  foreign-key, exact playlist-order, and exact counter verification.
+- Derive a deterministic playlist UUID from media generation plus complete ordered history
+  content. This is the database-side idempotency receipt. Atomically checkpoint the corresponding
+  USB receipt before compiling histories out of the fresh PDB, so retries are exact even if the
+  database commit, marker checkpoint, and outbound media update are interrupted independently.
+- Keep the current configfs appliance LUN read-only. Mounted physical media can complete this
+  round trip now; accepting CDJ writes through the Orange Pi gadget requires a separate exclusive
+  writable-partition handoff and must never dual-mount the deck-owned filesystem.
+
+### 2026-07-28 — SQLite-to-CDJ-3000 legacy Device Library compiler
+
+- Keep Rekordbox `master.db` SQLite authoritative. A front-USB export is disposable compiler output:
+  copied audio, rewritten DAT/EXT/2EX analysis, a materialized playlist tree, and
+  `PIONEER/rekordbox/export.pdb`. Do not route this workflow through Device Library Plus
+  `exportLibrary.db`.
+- Build fresh DeviceSQL pages from the documented legacy page, heap, row-directory, presence-mask,
+  and string encodings. Start from rekordcrate's unchanged empty export scaffold so standard color,
+  column, and menu rows stay deck-compatible; verify its byte length and SHA-256 before every use.
+- Support MP3, M4A, FLAC, WAV, and AIFF with explicit legacy file-type values. Fail closed on missing
+  local audio, missing DAT analysis, over-4-GiB files, unsupported formats, invalid playlist
+  hierarchy, and incomplete generated row counts.
+- Rewrite every copied ANLZ `PPTH` tag to its exported `/Contents/...` path and parse the result
+  again before publication. Preserve regular-playlist order and duplicate memberships; materialize
+  smart playlists through the existing master-database selector.
+- Stage the complete output on the target volume and swap only the exporter-owned `Contents`,
+  `PIONEER/USBANLZ`, and `export.pdb` paths. Refuse replacement without the prior export's ownership
+  marker, and roll back renamed paths if installation fails.
+- Verify 500-track page growth and full SQLite-to-filesystem exports in Vitest. Independently parse
+  a generated Unicode/FLAC/playlist database with pinned `rekordbox-pdb-rs`; actual CDJ-3000
+  enumeration and browsing remain a hardware gate.
 
 ### 2026-07-29 — clean-room song-structure baseline
 

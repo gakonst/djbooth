@@ -26,12 +26,16 @@ import type {
 
 const staleLockAgeMs = 24 * 60 * 60 * 1_000;
 
-type ProcessState = {
+/** Rekordbox processes that must be stopped before a direct master.db write. */
+export type RekordboxWriteProcessState = {
   rekordboxPid: number;
   rekordboxAgentPid: number;
 };
 
-type BackupFile = {
+type ProcessState = RekordboxWriteProcessState;
+
+/** One checksummed file in a guarded master.db backup. */
+export type RekordboxWriteBackupFile = {
   name: string;
   sourcePath: string;
   backupPath: string;
@@ -39,11 +43,14 @@ type BackupFile = {
   sha256: string;
 };
 
-type CueWriteBackup = {
+/** Durable pre-write backup shared by direct Rekordbox database mutations. */
+export type RekordboxWriteBackup = {
   directory: string;
   reportPath: string;
-  files: Array<BackupFile>;
+  files: Array<RekordboxWriteBackupFile>;
 };
+
+type CueWriteBackup = RekordboxWriteBackup;
 
 type JournalStage = {
   status: "pending" | "in-progress" | "succeeded" | "failed";
@@ -229,7 +236,7 @@ async function createBackup(
   await mkdir(directory, { mode: 0o700 });
   await syncDirectory(root);
 
-  const files: Array<BackupFile> = [];
+  const files: Array<RekordboxWriteBackupFile> = [];
   for (const source of backupSources(dbPath)) {
     let before;
     try {
@@ -278,6 +285,18 @@ async function createBackup(
   );
   await syncDirectory(directory);
   return { directory, reportPath, files };
+}
+
+/** Create a durable checksummed backup before a guarded direct master.db mutation. */
+export async function createRekordboxWriteBackup(
+  dbPath: string,
+  options: { backupRoot?: string; mutationId?: string } = {},
+): Promise<RekordboxWriteBackup> {
+  return createBackup(
+    await realpath(resolve(dbPath)),
+    options.mutationId ?? randomUUID(),
+    options.backupRoot,
+  );
 }
 
 async function readLockOwner(path: string): Promise<{ pid?: number; [key: string]: unknown }> {
@@ -359,6 +378,13 @@ export async function acquireCueWriteLock(
       }
     },
   };
+}
+
+/** Acquire the cross-process lock shared by every direct Rekordbox library writer. */
+export async function acquireRekordboxWriteLock(
+  dbPath: string,
+): Promise<{ path: string; release: () => Promise<void> }> {
+  return acquireCueWriteLock(dbPath);
 }
 
 async function acquireCueWriteLockGuard(lockPath: string): Promise<{ release(): Promise<void> }> {
@@ -457,6 +483,16 @@ function assertStopped(state: ProcessState): void {
     throw new Error(
       `Close Rekordbox and rekordboxAgent before writing; running: ${running.join(", ")}`,
     );
+}
+
+/** Read the live Rekordbox process state used by guarded writers. */
+export function getRekordboxWriteProcessState(): RekordboxWriteProcessState {
+  return defaultProcessState();
+}
+
+/** Refuse a direct database write while Rekordbox or rekordboxAgent is running. */
+export function assertRekordboxWriteStopped(state: RekordboxWriteProcessState): void {
+  assertStopped(state);
 }
 
 function openDatabase(

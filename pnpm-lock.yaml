@@ -12,6 +12,40 @@ importers:
         specifier: latest
         version: 2.31.0(@types/node@24.13.3)
 
+  packages/cdj-usb:
+    dependencies:
+      '@gakonst/rekordbox':
+        specifier: workspace:*
+        version: link:../rekordbox-ts
+      incur:
+        specifier: 0.4.13
+        version: 0.4.13
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^4.1.10
+        version: 4.1.10(vitest@4.1.10)
+      oxfmt:
+        specifier: ^0.35.0
+        version: 0.35.0
+      oxlint:
+        specifier: ^1.50.0
+        version: 1.73.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.23.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+
   packages/djlink:
     dependencies:
       '@gakonst/rekordbox':
@@ -54,6 +88,9 @@ importers:
       '@cloudflare/codemode':
         specifier: 0.4.2
         version: 0.4.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(zod@4.4.3)
+      '@gakonst/cdj-usb':
+        specifier: workspace:*
+        version: link:../cdj-usb
       '@gakonst/djlink':
         specifier: workspace:*
         version: link:../djlink

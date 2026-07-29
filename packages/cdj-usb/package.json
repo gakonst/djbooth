@@ -1,0 +1,66 @@
+{
+  "name": "@gakonst/cdj-usb",
+  "version": "0.1.0",
+  "description": "Differential CDJ-3000 media synchronizer and safe Linux USB mass-storage appliance controller",
+  "license": "MIT",
+  "author": "Georgios Konstantopoulos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/cdj-usb"
+  },
+  "bin": {
+    "cdj-usb": "./dist/bin.js"
+  },
+  "files": [
+    "deploy",
+    "dist",
+    "native-bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "cli": "tsx src/bin.ts",
+    "format": "oxfmt --write src test scripts package.json tsconfig.json tsconfig.build.json README.md deploy && cargo +nightly fmt --manifest-path native/Cargo.toml --all",
+    "format:check": "oxfmt --check src test scripts package.json tsconfig.json tsconfig.build.json README.md deploy && cargo +nightly fmt --manifest-path native/Cargo.toml --all -- --check",
+    "lint": "oxlint src test scripts && cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings",
+    "native:build": "node scripts/build-native.mjs",
+    "native:test": "cargo test --manifest-path native/Cargo.toml",
+    "prepack": "pnpm build && pnpm native:build",
+    "test": "vitest run && pnpm native:test",
+    "typecheck": "tsc --noEmit",
+    "validate": "pnpm check && pnpm build"
+  },
+  "dependencies": {
+    "@gakonst/rekordbox": "workspace:*",
+    "incur": "0.4.13",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "@vitest/coverage-v8": "^4.1.10",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,6 +1,6 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; analyze Normal, Dynamic, or Auto Rekordbox beat grids; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; and serve analyzed local recordings to connected CDJs over Pro DJ Link. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, or one-shot resolve-download-analyze-playlist music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; analyze Normal, Dynamic, or Auto Rekordbox beat grids; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings to connected CDJs over Pro DJ Link; synchronize CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front-USB sync or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
@@ -39,6 +39,7 @@ import * as slsk from "@gakonst/music/slsk";
 import * as ytdlp from "@gakonst/music/ytdlp";
 import * as rekordbox from "@gakonst/music/rekordbox";
 import * as djlink from "@gakonst/music/djlink";
+import * as usb from "@gakonst/music/usb";
 ```
 
 Do not shell between package CLIs from TypeScript. Construct the exported clients once and pass
@@ -90,6 +91,11 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
   use Spotify APIs for DJ mixing, segueing, or overlapping playback.
 - Treat `music djlink load` as remote load/cue, not transport control. Keep deck PLAY physical;
   CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
+- Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb sync --write` for the
+  normal day-to-day mounted-media workflow: import unseen histories into SQLite, then
+  differentially reconcile legacy `export.pdb`, audio, and rewritten ANLZ. Do not use Device
+  Library Plus. Never change gadget media while configured, and require physical USB STOP/eject
+  before `detach --confirm-host-ejected`.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
 - When CDJ Search appears broken, run `music djlink search <query>` first. It exercises the exact
@@ -529,7 +535,49 @@ For a request to play Spotify on a deck, choose the legitimate path explicitly:
   analyze it, then serve that verified file. Spotify metadata may help identity matching but must
   not be described as the audio source.
 
-## 9. Handoff and resume
+## 9. Sync and expose front USB media
+
+Synchronize the normal Rekordbox SQLite library with mounted FAT/exFAT media or a staging
+directory:
+
+```sh
+music usb sync "$MEDIA_ROOT" --database "$MASTER_DB" --write --format json
+```
+
+Sync first imports every unseen nonempty CDJ history as a root-level `DJ Set YYYY-MM-DD` playlist,
+preserving order and duplicates and incrementing play counts exactly once. It then writes
+`PIONEER/rekordbox/export.pdb`, copies supported local audio beneath `Contents/`, copies DAT/EXT/2EX
+beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`, and materializes the complete active
+playlist tree. Later runs retain stable device IDs, reuse unchanged files, and remove obsolete
+exporter-owned files. SQLite remains authoritative and Device Library Plus is not involved. Sync
+does not create an image and requires `--write` because histories can mutate `master.db`.
+
+Use `music usb export` only for an outbound-only initial compile. It refuses to replace media that
+contains unimported history.
+
+The current low-level transport uses an immutable complete backing image. Use it only on a Linux
+board whose deck-facing connector exposes a USB device controller:
+
+```sh
+music usb doctor "$IMAGE" --format json
+music usb status --format json
+sudo music usb publish "$IMAGE" --format json
+sudo music usb attach --format json
+```
+
+`publish` content-addresses and fsyncs an immutable generation; `attach` re-hashes it and configures
+one read-only mass-storage LUN. Linux serves blocks after the Rust controller exits. Before changing
+generations, stop playback, press USB STOP/eject on the physical deck, then run:
+
+```sh
+sudo music usb detach --confirm-host-ejected --format json
+```
+
+If `/sys/class/udc` is empty, the selected Orange Pi/Raspberry Pi port is not in peripheral mode or
+does not support it. Repair the board/device-tree boundary; do not emulate a drive through a
+host-only USB port.
+
+## 10. Handoff and resume
 
 Return source/title, provider, resolution counts, Spotify match counts, acquisition counts by
 backend, output directory, manifest path, Rekordbox identifiers, backup path, cache statistics,

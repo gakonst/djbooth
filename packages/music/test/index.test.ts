@@ -1,12 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { library, rekordbox, slsk, soundcloud, spots, tracks, ytdlp } from "../src/index.js";
+import { library, rekordbox, slsk, soundcloud, spots, tracks, usb, ytdlp } from "../src/index.js";
 import * as librarySubpath from "../src/library.js";
 import * as rekordboxSubpath from "../src/rekordbox.js";
 import * as slskSubpath from "../src/slsk.js";
 import * as soundcloudSubpath from "../src/soundcloud.js";
 import * as spotsSubpath from "../src/spots.js";
 import * as tracksSubpath from "../src/tracks.js";
+import * as usbSubpath from "../src/usb.js";
 import * as ytdlpSubpath from "../src/ytdlp.js";
 
 describe("umbrella exports", () => {
@@ -21,6 +22,7 @@ describe("umbrella exports", () => {
     expect(library.RekordboxLibraryService).toBeTypeOf("function");
     expect(library.LibraryMutationConflictError).toBeTypeOf("function");
     expect(library.LibraryMutationError).toBeTypeOf("function");
+    expect(usb.statusCdjUsb).toBeTypeOf("function");
   });
 
   test("re-exports each package through its dedicated subpath module", () => {
@@ -34,5 +36,6 @@ describe("umbrella exports", () => {
     expect(librarySubpath.RekordboxLibraryService).toBe(library.RekordboxLibraryService);
     expect(librarySubpath.LibraryMutationConflictError).toBe(library.LibraryMutationConflictError);
     expect(librarySubpath.LibraryMutationError).toBe(library.LibraryMutationError);
+    expect(usbSubpath.statusCdjUsb).toBe(usb.statusCdjUsb);
   });
 });

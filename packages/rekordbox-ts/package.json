@@ -26,6 +26,7 @@
   "files": [
     "dist",
     "PORTING.md",
+    "THIRD_PARTY_NOTICES.md",
     "README.md",
     "LICENSE"
   ],
@@ -56,6 +57,10 @@
     "./devicelib-plus": {
       "types": "./dist/devicelib-plus/index.d.ts",
       "default": "./dist/devicelib-plus/index.js"
+    },
+    "./devicelib": {
+      "types": "./dist/devicelib/index.d.ts",
+      "default": "./dist/devicelib/index.js"
     },
     "./masterdb": {
       "types": "./dist/masterdb/index.d.ts",

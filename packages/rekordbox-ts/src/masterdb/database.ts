@@ -2650,6 +2650,7 @@ export class MasterDatabase {
       parent?: models.DjmdPlaylist | string | number;
       seq?: number;
       smartList?: SmartList;
+      uuid?: string;
     } = {},
   ): models.DjmdPlaylist {
     const parentId = options.parent ? this.resolve(models.DjmdPlaylist, options.parent).ID : "root";
@@ -2676,7 +2677,7 @@ export class MasterDatabase {
       ParentID: parentId,
       Seq: seq,
       SmartList: options.smartList?.toXml() ?? null,
-      UUID: randomUUID(),
+      UUID: options.uuid ?? randomUUID(),
     });
   }
 
@@ -2687,6 +2688,7 @@ export class MasterDatabase {
       imagePath?: string;
       parent?: models.DjmdPlaylist | string | number;
       seq?: number;
+      uuid?: string;
     } = {},
   ) {
     return this.createPlaylistRow(name, models.PlaylistType.PLAYLIST, options);

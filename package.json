@@ -32,6 +32,7 @@
     "test:pack": "node scripts/smoke-packed-clis.mjs",
     "tracks": "pnpm --filter @gakonst/tracks cli",
     "typecheck": "pnpm build && pnpm -r --workspace-concurrency=2 run typecheck",
+    "usb": "pnpm --filter @gakonst/cdj-usb cli",
     "validate": "pnpm plugin:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "ytdlp": "pnpm --filter @gakonst/ytdlp-ts dev"
   },
