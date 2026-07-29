@@ -980,7 +980,7 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 - The runtime call is exactly
   `create(sampleRate, 0, totalFrames, 8, 6)`. Each path is averaged over eight
   input samples. The independent paths are two identical `LP283` biquads, two
-  identical `BP150/Q1.5` biquads, alternating `HP283/LP7900` biquads, and two
+  identical `BP150/bandwidth=1.5` biquads, alternating `HP283/LP7900` biquads, and two
   identical `HP7900` biquads. Coefficients are double precision and now
   captured bit for bit for both native sample rates.
 - The apparent fifth and sixth through-filter paths are not raw full-band
@@ -1002,3 +1002,39 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   streams and peak events, compare their emitted candidate records against
   schema-v2 survivor traces, then connect the already recovered section
   decoder.
+
+## Linked peak voting and BeatListSignal checkpoint (2026-07-28)
+
+- Extended the private tracer to schema v5 by replacing the real
+  `BeatListSignal::changeStat` virtual-table slot. Each callback now records
+  its chosen period, detector path, support, generation boundary, vector
+  counts, and exact `PeakBuffer` ring history. A complete linked
+  `Science Fiction` run captured 2,148 callbacks and 17,287 pre-pruning
+  `BeatInfo` records without warnings.
+- Ported the six causal filter paths, adaptive peak detector, 32-entry
+  `PeakBuffer`, tempo-family selector, and `BeatListSignal` expansion as
+  clean-room Rust. On the native 48 kHz MP3, the Rust front end emits all
+  3,919 linked peak events with identical per-band counts; 3,889 positions are
+  frame exact. It reproduces 2,114/2,148 selected callbacks exactly and emits
+  17,249 hypotheses versus 17,287 linked, with 16,964 exact
+  position/period/band matches. The first callback divergence is a high-band
+  local-maximum tie at frame 567,320 versus 567,448; the linked and Symphonia
+  decoded PCM differ slightly before filtering.
+- `selectBand` is a cumulative 256-bin period histogram. It bins
+  `round(60000 / periodMs)`, adds
+  `max(1, trunc(4 / (errorMs + 0.5)))`, requires three votes, and retains
+  direct/double/half-period families. The pending candidate with the smallest
+  error supplies the family prior; incompatible pending paths are cleared
+  before callbacks.
+- Each callback backfills `support + 2` recent peaks, quantizes each interval
+  to quarter periods, and inserts a 24-byte semantic record in peak-position
+  order. The low byte of a 256-aligned generation counter controls replacement.
+  Nearby period variants intentionally coexist; exact 0.1-BPM metrical matches
+  and conflicting families take the replacement branch. Replaying all schema-v5
+  callbacks through this recovered expansion reproduces all 17,287 linked
+  records exactly, including order and every semantic field.
+- This path remains diagnostic and is not yet substituted into the production
+  beat-grid writer. Remaining work: isolate the linked MP3 decode/resample
+  boundary for the 30 near-tie maxima, close the few `PeakBuffer` endpoint
+  decisions, then feed the now-compatible pre-pruning vector into the recovered
+  `BeatInfoAnalyzer` section decoder.

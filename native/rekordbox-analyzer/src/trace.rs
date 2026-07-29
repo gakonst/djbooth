@@ -24,6 +24,10 @@ const BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x1390180;
 const BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x13914f0;
 const BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x13918d0;
 const BEAT_SENSOR_CREATE_OFFSET: usize = 0x1389ba0;
+const PEAK_SENSOR_PUT_OFFSET: usize = 0x14e7ac0;
+const PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x13894f0;
+const BEAT_LIST_CHANGE_STAT_OFFSET: usize = 0x14e6910;
+const BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET: usize = 0x40d7738;
 
 const CALL_BA_CREATE_VARIED_44_OFFSET: usize = 0x1068a51;
 const CALL_BA_CREATE_CONST_44_OFFSET: usize = 0x1068a9a;
@@ -39,6 +43,8 @@ const CALL_BEAT_INFO_SEG_ADJUST_OFFSET: usize = 0x138d406;
 const CALL_BEAT_INFO_GAP_CORRECT_OFFSET: usize = 0x138f837;
 const CALL_BEAT_INFO_GAP_CORRECT_RANGE_OFFSET: usize = 0x138f8f4;
 const CALL_BEAT_SENSOR_CREATE_OFFSET: usize = 0x14e60ab;
+const CALL_PEAK_SENSOR_PUT_OFFSET: usize = 0x14e78ec;
+const CALL_PEAK_BUFFER_CALC_BEAT_OFFSET: usize = 0x14e797f;
 const ENGINE_SELECTION_BRANCH_OFFSET: usize = 0x1068a0c;
 
 const INTERNAL_BEAT_BYTES: usize = 24;
@@ -48,6 +54,7 @@ const BEAT_SENSOR_FILTER_BYTES: usize = 0x30;
 const IIR_FILTER_BYTES: usize = 0x58;
 const BEAT_SENSOR_PEAK_BYTES: usize = 0xa0;
 const BEAT_SENSOR_BAND_STATE_BYTES: usize = 0x50;
+const MAX_TRACE_PEAK_EVENTS: usize = 200_000;
 const ENV_TRACE_ENGINE: &str = "REKORDBOX_ANALYZER_TRACE_ENGINE";
 
 type BaCreate = unsafe extern "C" fn(i32, i32, u8, u8, u8) -> *mut c_void;
@@ -71,6 +78,9 @@ type BeatInfoSegAdjust =
 type BeatInfoGapCorrect = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32);
 type BeatInfoGapCorrectRange = unsafe extern "C" fn(*mut c_void, *mut StdVector, i32, i32, i32);
 type BeatSensorCreate = unsafe extern "C" fn(*mut c_void, i32, i32, i32, i32, i32) -> u64;
+type PeakSensorPut = unsafe extern "C" fn(*mut c_void, f32) -> u8;
+type PeakBufferCalcBeat = unsafe extern "C" fn(*mut c_void, f32) -> u8;
+type BeatListChangeStat = unsafe extern "C" fn(*mut c_void, f32, i32, f32, *mut c_void);
 
 static BA_CREATE_VARIED_48: AtomicUsize = AtomicUsize::new(0);
 static BA_CREATE_CONST_48: AtomicUsize = AtomicUsize::new(0);
@@ -86,6 +96,12 @@ static BEAT_INFO_SEG_ADJUST: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT: AtomicUsize = AtomicUsize::new(0);
 static BEAT_INFO_GAP_CORRECT_RANGE: AtomicUsize = AtomicUsize::new(0);
 static BEAT_SENSOR_CREATE: AtomicUsize = AtomicUsize::new(0);
+static PEAK_SENSOR_PUT: AtomicUsize = AtomicUsize::new(0);
+static PEAK_BUFFER_CALC_BEAT: AtomicUsize = AtomicUsize::new(0);
+static BEAT_LIST_CHANGE_STAT: AtomicUsize = AtomicUsize::new(0);
+static PEAK_SENSOR_BASE: AtomicUsize = AtomicUsize::new(0);
+static PEAK_BUFFER_BASE: AtomicUsize = AtomicUsize::new(0);
+static PEAK_SENSOR_BAND_COUNT: AtomicI32 = AtomicI32::new(0);
 static LAST_BEAT_COUNT: AtomicI32 = AtomicI32::new(0);
 static TRACE: OnceLock<Mutex<ReferenceTrace>> = OnceLock::new();
 
@@ -96,6 +112,9 @@ struct ReferenceTrace {
     requested_engine: String,
     engine_creates: Vec<EngineCreateTrace>,
     beat_sensor_creates: Vec<BeatSensorCreateTrace>,
+    peak_sensor_events: Vec<PeakSensorEventTrace>,
+    peak_buffer_calculations: Vec<PeakBufferCalculationTrace>,
+    beat_list_changes: Vec<BeatListChangeTrace>,
     streamed_frames: u64,
     beat_info_analyzes: Vec<BeatInfoAnalyzeTrace>,
     segment_adjustments: Vec<BeatStageTrace>,
@@ -136,6 +155,47 @@ struct BeatSensorCreateTrace {
     filter_stage_words: Vec<Vec<u32>>,
     peak_sensor_words: Vec<u32>,
     band_state_words: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeakSensorEventTrace {
+    band: i32,
+    input: f32,
+    state_before: Vec<u32>,
+    state_after: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeakBufferCalculationTrace {
+    band: i32,
+    interval_ms: f32,
+    accepted: bool,
+    state_after: Vec<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BeatListChangeTrace {
+    period_ms: f32,
+    peak_position: i32,
+    peak_amplitude: f32,
+    band: i32,
+    support: i32,
+    generation_before: u32,
+    generation_after: u32,
+    hypothesis_count_before: usize,
+    hypothesis_count_after: usize,
+    peaks: Vec<PeakInfoTrace>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeakInfoTrace {
+    position: i32,
+    amplitude: f32,
+    interval_ms: f32,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,10 +303,13 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 3,
+        schema_version: 5,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
+    PEAK_SENSOR_BASE.store(0, Ordering::Release);
+    PEAK_BUFFER_BASE.store(0, Ordering::Release);
+    PEAK_SENSOR_BAND_COUNT.store(0, Ordering::Release);
     LAST_BEAT_COUNT.store(0, Ordering::Release);
 }
 
@@ -296,6 +359,9 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
         base + BEAT_INFO_GAP_CORRECT_RANGE_OFFSET,
     );
     set_original(&BEAT_SENSOR_CREATE, base + BEAT_SENSOR_CREATE_OFFSET);
+    set_original(&PEAK_SENSOR_PUT, base + PEAK_SENSOR_PUT_OFFSET);
+    set_original(&PEAK_BUFFER_CALC_BEAT, base + PEAK_BUFFER_CALC_BEAT_OFFSET);
+    set_original(&BEAT_LIST_CHANGE_STAT, base + BEAT_LIST_CHANGE_STAT_OFFSET);
 
     unsafe {
         match requested_engine() {
@@ -383,6 +449,21 @@ pub(crate) unsafe fn install_reference_trace(base: usize) -> Result<()> {
             base + CALL_BEAT_SENSOR_CREATE_OFFSET,
             base + BEAT_SENSOR_CREATE_OFFSET,
             trace_beat_sensor_create as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_PEAK_SENSOR_PUT_OFFSET,
+            base + PEAK_SENSOR_PUT_OFFSET,
+            trace_peak_sensor_put as usize,
+        )?;
+        patch_relative_call(
+            base + CALL_PEAK_BUFFER_CALC_BEAT_OFFSET,
+            base + PEAK_BUFFER_CALC_BEAT_OFFSET,
+            trace_peak_buffer_calc_beat as usize,
+        )?;
+        patch_pointer(
+            base + BEAT_LIST_CHANGE_STAT_VTABLE_SLOT_OFFSET,
+            base + BEAT_LIST_CHANGE_STAT_OFFSET,
+            trace_beat_list_change_stat as usize,
         )?;
     }
     Ok(())
@@ -484,6 +565,11 @@ unsafe fn patch_bytes(address: usize, expected: &[u8], replacement: &[u8]) -> Re
     Ok(())
 }
 
+#[cfg(target_arch = "x86_64")]
+unsafe fn patch_pointer(address: usize, expected: usize, replacement: usize) -> Result<()> {
+    unsafe { patch_bytes(address, &expected.to_ne_bytes(), &replacement.to_ne_bytes()) }
+}
+
 fn hex_bytes(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -531,6 +617,18 @@ unsafe extern "C" fn trace_beat_sensor_create(
             band_count,
         )
     };
+    if !sensor.is_null() && band_count > 0 {
+        let sensor_bytes = sensor.cast::<u8>();
+        PEAK_SENSOR_BASE.store(
+            unsafe { read_pointer_at(sensor_bytes, 0x20) } as usize,
+            Ordering::Release,
+        );
+        PEAK_BUFFER_BASE.store(
+            unsafe { read_pointer_at(sensor_bytes, 0x28) } as usize,
+            Ordering::Release,
+        );
+        PEAK_SENSOR_BAND_COUNT.store(band_count, Ordering::Release);
+    }
     let snapshot = unsafe { snapshot_beat_sensor(sensor, band_count) };
     let mut trace = trace()
         .lock()
@@ -559,6 +657,209 @@ unsafe extern "C" fn trace_beat_sensor_create(
         band_state_words,
     });
     result
+}
+
+unsafe extern "C" fn trace_peak_sensor_put(sensor: *mut c_void, input: f32) -> u8 {
+    let before = unsafe { snapshot_u32_words(sensor.cast(), BEAT_SENSOR_PEAK_BYTES) };
+    let function: PeakSensorPut = unsafe { original(&PEAK_SENSOR_PUT) };
+    let result = unsafe { function(sensor, input) };
+    if result == 0 {
+        return result;
+    }
+    let after = unsafe { snapshot_u32_words(sensor.cast(), BEAT_SENSOR_PEAK_BYTES) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if trace.peak_sensor_events.len() >= MAX_TRACE_PEAK_EVENTS {
+        if trace.peak_sensor_events.len() == MAX_TRACE_PEAK_EVENTS {
+            trace
+                .warnings
+                .push("peak-sensor event trace reached its bound".to_string());
+        }
+        return result;
+    }
+    let mut failures = Vec::new();
+    let state_before = snapshot_words_or_empty(before, "peak sensor before", &mut failures);
+    let state_after = snapshot_words_or_empty(after, "peak sensor after", &mut failures);
+    trace.warnings.extend(failures);
+    trace.peak_sensor_events.push(PeakSensorEventTrace {
+        band: traced_band(sensor as usize, &PEAK_SENSOR_BASE, BEAT_SENSOR_PEAK_BYTES),
+        input,
+        state_before,
+        state_after,
+    });
+    result
+}
+
+unsafe extern "C" fn trace_peak_buffer_calc_beat(buffer: *mut c_void, interval_ms: f32) -> u8 {
+    let function: PeakBufferCalcBeat = unsafe { original(&PEAK_BUFFER_CALC_BEAT) };
+    let result = unsafe { function(buffer, interval_ms) };
+    let after = unsafe { snapshot_u32_words(buffer.cast(), BEAT_SENSOR_BAND_STATE_BYTES) };
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if trace.peak_buffer_calculations.len() >= MAX_TRACE_PEAK_EVENTS {
+        if trace.peak_buffer_calculations.len() == MAX_TRACE_PEAK_EVENTS {
+            trace
+                .warnings
+                .push("peak-buffer calculation trace reached its bound".to_string());
+        }
+        return result;
+    }
+    let mut failures = Vec::new();
+    let state_after = snapshot_words_or_empty(after, "peak buffer after", &mut failures);
+    trace.warnings.extend(failures);
+    trace
+        .peak_buffer_calculations
+        .push(PeakBufferCalculationTrace {
+            band: traced_band(
+                buffer as usize,
+                &PEAK_BUFFER_BASE,
+                BEAT_SENSOR_BAND_STATE_BYTES,
+            ),
+            interval_ms,
+            accepted: result != 0,
+            state_after,
+        });
+    result
+}
+
+unsafe extern "C" fn trace_beat_list_change_stat(
+    signal: *mut c_void,
+    period_ms: f32,
+    peak_position: i32,
+    peak_amplitude: f32,
+    buffer: *mut c_void,
+) {
+    let support = unsafe { read_i32_at(buffer.cast(), 0x40) };
+    let generation_before = unsafe { read_u32_at(signal.cast(), 0x1c) };
+    let count_before = unsafe { snapshot_signal_beat_count(signal) };
+    let peaks = unsafe { snapshot_peak_history(buffer, support) };
+    let function: BeatListChangeStat = unsafe { original(&BEAT_LIST_CHANGE_STAT) };
+    unsafe { function(signal, period_ms, peak_position, peak_amplitude, buffer) };
+    let generation_after = unsafe { read_u32_at(signal.cast(), 0x1c) };
+    let count_after = unsafe { snapshot_signal_beat_count(signal) };
+
+    let mut trace = trace()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if trace.beat_list_changes.len() >= MAX_TRACE_PEAK_EVENTS {
+        if trace.beat_list_changes.len() == MAX_TRACE_PEAK_EVENTS {
+            trace
+                .warnings
+                .push("beat-list change trace reached its bound".to_string());
+        }
+        return;
+    }
+    let mut failures = Vec::new();
+    let hypothesis_count_before =
+        snapshot_value_or_default(count_before, "beat-list count before", &mut failures);
+    let hypothesis_count_after =
+        snapshot_value_or_default(count_after, "beat-list count after", &mut failures);
+    let peaks = snapshot_value_or_default(peaks, "beat-list peak history", &mut failures);
+    trace.warnings.extend(failures);
+    trace.beat_list_changes.push(BeatListChangeTrace {
+        period_ms,
+        peak_position,
+        peak_amplitude,
+        band: traced_band(
+            buffer as usize,
+            &PEAK_BUFFER_BASE,
+            BEAT_SENSOR_BAND_STATE_BYTES,
+        ),
+        support,
+        generation_before,
+        generation_after,
+        hypothesis_count_before,
+        hypothesis_count_after,
+        peaks,
+    });
+}
+
+unsafe fn snapshot_signal_beat_count(signal: *const c_void) -> Result<usize> {
+    if signal.is_null() {
+        bail!("null BeatListSignal");
+    }
+    let vector = unsafe { read_pointer_at(signal.cast(), 0x10) } as *const StdVector;
+    if vector.is_null() {
+        bail!("null BeatListSignal vector");
+    }
+    let vector = unsafe { &*vector };
+    let begin = vector.begin as usize;
+    let end = vector.end as usize;
+    if end < begin || (end - begin) % INTERNAL_BEAT_BYTES != 0 {
+        bail!("invalid BeatListSignal vector bounds");
+    }
+    Ok((end - begin) / INTERNAL_BEAT_BYTES)
+}
+
+unsafe fn snapshot_peak_history(buffer: *const c_void, support: i32) -> Result<Vec<PeakInfoTrace>> {
+    if buffer.is_null() {
+        bail!("null PeakBuffer");
+    }
+    if support < 0 {
+        return Ok(Vec::new());
+    }
+    let bytes = buffer.cast::<u8>();
+    let storage = unsafe { read_pointer_at(bytes, 0x08) };
+    let next = unsafe { read_i32_at(bytes, 0x10) };
+    let count = unsafe { read_i32_at(bytes, 0x14) };
+    let capacity = unsafe { read_i32_at(bytes, 0x18) };
+    if storage.is_null()
+        || capacity <= 0
+        || capacity > 32
+        || count < 0
+        || count > capacity
+        || next < 0
+        || next >= capacity
+    {
+        bail!(
+            "invalid PeakBuffer ring storage={storage:p} next={next} count={count} capacity={capacity}"
+        );
+    }
+    let record_count = support
+        .checked_add(2)
+        .context("PeakBuffer support overflow")?;
+    if record_count > count {
+        bail!("PeakBuffer history {record_count} exceeds stored count {count}");
+    }
+    let mut peaks = Vec::with_capacity(record_count as usize);
+    for remaining in (0..record_count).rev() {
+        let index = (next + capacity - 1 - remaining).rem_euclid(capacity);
+        let record = unsafe { storage.add(index as usize * 12) };
+        peaks.push(PeakInfoTrace {
+            position: unsafe { read_i32_at(record, 0) },
+            amplitude: unsafe { read_f32_at(record, 4) },
+            interval_ms: unsafe { read_f32_at(record, 8) },
+        });
+    }
+    Ok(peaks)
+}
+
+fn snapshot_value_or_default<T: Default>(
+    result: Result<T>,
+    label: &str,
+    failures: &mut Vec<String>,
+) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            failures.push(format!("failed to snapshot {label}: {error:#}"));
+            T::default()
+        }
+    }
+}
+
+fn traced_band(pointer: usize, base: &AtomicUsize, stride: usize) -> i32 {
+    let base = base.load(Ordering::Acquire);
+    let count = PEAK_SENSOR_BAND_COUNT.load(Ordering::Acquire);
+    let Some(offset) = pointer.checked_sub(base) else {
+        return -1;
+    };
+    if base == 0 || count <= 0 || offset % stride != 0 || offset / stride >= count as usize {
+        return -1;
+    }
+    (offset / stride) as i32
 }
 
 fn record_engine_create(
@@ -827,6 +1128,20 @@ fn snapshot_or_empty(
     }
 }
 
+fn snapshot_words_or_empty(
+    result: Result<Vec<u32>>,
+    label: &str,
+    failures: &mut Vec<String>,
+) -> Vec<u32> {
+    match result {
+        Ok(words) => words,
+        Err(error) => {
+            failures.push(format!("failed to snapshot {label}: {error:#}"));
+            Vec::new()
+        }
+    }
+}
+
 unsafe fn snapshot_beat_info_source(
     info: *const BeatInfoAnalyzeInfo,
 ) -> Result<(i32, u32, Vec<InternalBeatTrace>)> {
@@ -904,6 +1219,18 @@ unsafe fn snapshot_beat_sensor(
 
 unsafe fn read_pointer_at(base: *const u8, offset: usize) -> *const u8 {
     unsafe { (base.add(offset) as *const *const u8).read_unaligned() }
+}
+
+unsafe fn read_i32_at(base: *const u8, offset: usize) -> i32 {
+    unsafe { (base.add(offset) as *const i32).read_unaligned() }
+}
+
+unsafe fn read_u32_at(base: *const u8, offset: usize) -> u32 {
+    unsafe { (base.add(offset) as *const u32).read_unaligned() }
+}
+
+unsafe fn read_f32_at(base: *const u8, offset: usize) -> f32 {
+    unsafe { (base.add(offset) as *const f32).read_unaligned() }
 }
 
 unsafe fn snapshot_u32_words(pointer: *const u8, bytes: usize) -> Result<Vec<u32>> {

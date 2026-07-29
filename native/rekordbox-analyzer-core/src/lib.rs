@@ -7,6 +7,7 @@
 pub mod analysis;
 pub mod anlz;
 pub mod audio;
+pub mod beat_sensor;
 pub mod differential;
 pub mod key;
 pub mod rhythm;
@@ -28,6 +29,10 @@ pub use anlz::{
 pub use audio::{
     ANALYSIS_SAMPLE_RATE, AudioSourceInfo, DETAIL_COLUMNS_PER_SECOND, DETAIL_FRAME_SAMPLES,
     DecodedAudio, FrameSpec, MonoPcm, PcmFrame, PcmFrames, decode_audio_file,
+};
+pub use beat_sensor::{
+    BeatSensorAnalysis, BeatSensorCandidate, BeatSensorEvent, BeatSensorHypothesis,
+    analyze_beat_sensor_events,
 };
 pub use differential::{
     BeatGridDifferential, BeatGridEndpoint, BeatMatchRate, DifferentialReport, FileDifferential,

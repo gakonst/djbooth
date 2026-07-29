@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{Context, Result, bail};
 use rekordbox_analyzer_core::{
     AnalysisOptions, AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis,
-    analyze_to_directory_with_options, compare_beat_grids, compare_output_directories,
-    compare_waveforms,
+    analyze_beat_sensor_events, analyze_to_directory_with_options, compare_beat_grids,
+    compare_output_directories, compare_waveforms, decode_audio_file,
 };
 
 const ANALYZER_THREADS_ENV: &str = "REKORDBOX_ANALYZER_THREADS";
@@ -28,6 +28,7 @@ fn run() -> Result<()> {
                 "Clean-room audio-to-Rekordbox analyzer\n\n\
                  Usage:\n  \
                    rekordbox-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N]\n  \
+                   rekordbox-analyzer beat-sensor-events AUDIO [--sample-rate HZ]\n  \
                    rekordbox-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
                    rekordbox-analyzer doctor\n  \
                    rekordbox-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
@@ -35,6 +36,7 @@ fn run() -> Result<()> {
                    rekordbox-analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
                    analyze       Decode audio, write DAT/EXT/2EX, and emit summary JSON\n  \
+                   beat-sensor-events  Emit the causal six-band peak-event stream as JSON\n  \
                    beat-grid-diff  Align PQTZ/PQT2 grids and report semantic timing errors\n  \
                    doctor        Report codec, DSP, and proprietary-dependency status\n  \
                    diff          Compare reference and candidate ANLZ directories exactly\n  \
@@ -53,6 +55,39 @@ fn run() -> Result<()> {
             let result =
                 analyze_to_directory_with_options(&audio, &output, log.as_deref(), options)?;
             println!("{}", serde_json::to_string(&result)?);
+            Ok(())
+        }
+        Some("beat-sensor-events") => {
+            let audio = required_path(args.next(), "audio path")?;
+            let mut sample_rate = None;
+            while let Some(argument) = args.next() {
+                let value = if argument == "--sample-rate" {
+                    args.next()
+                        .context("--sample-rate requires an integer value")?
+                } else if let Some(value) = argument.strip_prefix("--sample-rate=") {
+                    value.to_string()
+                } else {
+                    bail!("beat-sensor-events received unknown option '{argument}'");
+                };
+                if sample_rate.is_some() {
+                    bail!("beat-sensor-events received --sample-rate more than once");
+                }
+                sample_rate = Some(
+                    value
+                        .parse::<u32>()
+                        .with_context(|| format!("invalid sample rate '{value}'"))?,
+                );
+            }
+            let decoded = decode_audio_file(&audio)?;
+            let resampled;
+            let pcm = if let Some(sample_rate) = sample_rate {
+                resampled = decoded.mono().resample_linear(sample_rate)?;
+                &resampled
+            } else {
+                decoded.mono()
+            };
+            let analysis = analyze_beat_sensor_events(pcm.samples(), pcm.sample_rate())?;
+            println!("{}", serde_json::to_string(&analysis)?);
             Ok(())
         }
         Some("doctor") => {
@@ -135,7 +170,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: rekordbox-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }
