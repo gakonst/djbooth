@@ -43,6 +43,29 @@ export type RekordboxBeatGridSummary = {
   min_bpm: number;
 };
 
+/** Bounded phrase entry emitted in an analyzer result summary. */
+export type RekordboxPhraseSummary = {
+  b: boolean;
+  beat: number;
+  fill_beat: number | null;
+  index: number;
+  k1: boolean;
+  k2: boolean;
+  k3: boolean;
+  kind: number;
+  transition_beats: [number | null, number | null, number | null];
+};
+
+/** Bounded clean-room song-structure summary. */
+export type RekordboxSongStructureSummary = {
+  end_beat: number;
+  first_phrases: Array<RekordboxPhraseSummary>;
+  input_mix: string;
+  mood: number;
+  phrase_count: number;
+  sample_rate: number;
+};
+
 /** Analyzer result plus the durable summary path. */
 export type RekordboxAnalysisResult = {
   analyzePath: string;
@@ -68,6 +91,7 @@ export type RekordboxAnalysisResult = {
     files: Array<{ path: string; size: number; tags: Array<string> }>;
     key: string | null;
     key_source: string | null;
+    song_structure?: RekordboxSongStructureSummary;
     tempo_bpm: number | null;
   };
   summaryPath: string;
@@ -215,6 +239,32 @@ const beatGridSchema = z.object({
   max_bpm: finiteNumber.positive(),
   min_bpm: finiteNumber.positive(),
 });
+const songStructureSchema = z.object({
+  end_beat: z.number().int().min(1).max(65_535),
+  first_phrases: z
+    .array(
+      z.object({
+        b: z.boolean(),
+        beat: z.number().int().min(1).max(65_535),
+        fill_beat: z.number().int().min(1).max(65_535).nullable(),
+        index: z.number().int().min(1).max(65_535),
+        k1: z.boolean(),
+        k2: z.boolean(),
+        k3: z.boolean(),
+        kind: z.number().int().min(1).max(65_535),
+        transition_beats: z.tuple([
+          z.number().int().min(1).max(65_535).nullable(),
+          z.number().int().min(1).max(65_535).nullable(),
+          z.number().int().min(1).max(65_535).nullable(),
+        ]),
+      }),
+    )
+    .max(12),
+  input_mix: z.literal("left-0.99-right-0.01"),
+  mood: z.number().int().min(1).max(3),
+  phrase_count: z.number().int().min(1),
+  sample_rate: z.union([z.literal(44_100), z.literal(48_000)]),
+});
 const analysisResultSchema = z.object({
   analyzePath: z.string().min(1),
   audioPath: z.string().min(1),
@@ -245,6 +295,7 @@ const analysisResultSchema = z.object({
     ),
     key: z.string().trim().min(1).max(64).nullable(),
     key_source: z.string().nullable(),
+    song_structure: songStructureSchema.optional(),
     tempo_bpm: finiteNumber.positive().max(1_000).nullable(),
   }),
   summaryPath: z.string().min(1),

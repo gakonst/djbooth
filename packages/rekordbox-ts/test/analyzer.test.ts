@@ -225,6 +225,24 @@ console.log(JSON.stringify({
     files: outputs.map(([path, size]) => ({ path, size, tags: [] })),
     key: "F",
     key_source: "fake",
+    song_structure: {
+      end_beat: 65,
+      first_phrases: [{
+        b: false,
+        beat: 1,
+        fill_beat: null,
+        index: 1,
+        k1: false,
+        k2: false,
+        k3: false,
+        kind: 1,
+        transition_beats: [null, null, null],
+      }],
+      input_mix: "left-0.99-right-0.01",
+      mood: 1,
+      phrase_count: 1,
+      sample_rate: 44100,
+    },
     tempo_bpm: 125,
   },
   timings: {
@@ -727,6 +745,11 @@ describe("Rekordbox analyzer wrapper", () => {
 
     const first = analyzeTrack(audioPath, { ...options, force: true });
     expect(first.summary.tempo_bpm).toBe(125);
+    expect(first.summary.song_structure).toMatchObject({
+      input_mix: "left-0.99-right-0.01",
+      mood: 1,
+      phrase_count: 1,
+    });
     expect(first.source.path).toBe(realpathSync(audioPath));
     expect(counterValue(counter)).toBe(1);
     expect(analyzeTrack(audioPath, options).summaryPath).toBe(first.summaryPath);

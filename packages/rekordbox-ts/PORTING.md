@@ -25,6 +25,48 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — clean-room song-structure baseline
+
+- Replaced the empty `PSSI` placeholder with deterministic beat-synchronous
+  phrase analysis. The clean writer reproduces the native 32-byte header,
+  24-byte records, mood/end-beat fields, contiguous phrase indices, phrase
+  kinds, `k1/k2/k3`, Up3 `b`/internal beats, and optional fill markers.
+  The structured analyzer result now includes a bounded song-structure summary
+  (reader rate/mix, mood, count, end beat, and first twelve phrase records), so
+  CLI/agent consumers do not need to decode binary EXT data for basic audits.
+- Binary inspection of Rekordbox 6.8.2 recovered the linked analyzer's
+  streaming stereo-combination boundary, 44.1/48 kHz rate routing, staged
+  song-structure pipeline, and exact `PSSI` packing contract. The clean
+  frontend now consumes signed-16-bit stereo as 99% left/1% right at the
+  routed reader rate. The remaining DSP stays independent: six bar-level
+  energy/rhythm/spectral features, standardized novelty, a duration-prior
+  decoder, and energy/change-based labels.
+- Phrase boundaries after the leading record follow actual `beat == 1` grid
+  labels instead of assuming that beat index zero is a downbeat. Across 113
+  native references, `99.59%` of native post-leading boundaries use those
+  labels; a phase-shifted synthetic regression test pins the behavior.
+- On the 110 decodable-track differential, mood family matches `90.0%`.
+  Native/clean phrase counts average `18.164/17.664` with `2.482` mean absolute
+  count error. Boundary F1 is `0.5665` exact, `0.6833` within four beat-grid
+  entries, and `0.7233` within eight; first/last phrase-kind agreement is
+  `99.09%/87.27%`. This is valid non-empty protocol output, not proprietary
+  segmentation or label parity.
+- Rejected a first/last-segment bias after a complete replay: exact F1 moved
+  only `+0.0016`, while four/eight-entry boundary F1 regressed
+  `-0.0024/-0.0067` and label agreement regressed `-0.0040`.
+- Rejected a downbeat-relative meter phase because exact F1 fell from `0.5496`
+  to `0.5058`. Boundary-prior sweeps instead showed that the duration model
+  already supplied the useful metrical evidence; removing the redundant
+  per-boundary bonus raised corrected-input exact/within-four F1 by
+  `+0.0169/+0.0239`.
+- A valid committed-HEAD comparator measured initial phrase generation at
+  `+56 ms/+0.29%` for 100 tracks. Samply placed representative phrase CPU at
+  `0.35–0.74%`, almost all in the scalar feature scan. Phrase work now overlaps
+  waveform/key analysis and filter coefficients are hoisted per track.
+  Allocator samples never intersected phrase stacks. Native CPU codegen and fat
+  LTO/one-CGU variants were `2.44–3.41%` slower, so portable release defaults
+  remain intentional.
+
 ### 2026-07-29 — source-reader detail-count closure
 
 - Closed the three residual `PWV3`/`PWV5`/`PWV7` count mismatches without
