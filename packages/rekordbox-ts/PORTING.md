@@ -125,6 +125,14 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   primitive without changing production labels. A full replay correctly
   rejected substituting only `/8` into the independent bar model (`33.64%`
   mood accuracy, `0.3584` exact F1).
+- Recovered the native consumers after that frontend and exposed them through
+  `extract_native_phrase_features`. The diagnostic trace matches one-based
+  constant-tempo windows and emits low/middle/divided sums, low/middle/all
+  maxima, four quarter-beat low/raw-power records, and eight high-band peak
+  records. It uses the linked `LP150/5`, `HP500/5`, `LP100/5`,
+  `BP400–1000/10`, and `BP5000–7000/10` chains with exact Butterworth damping
+  and native rounding. Production labels remain unchanged pending complete
+  held-out replay.
 - Added bounded per-phrase feature evidence: all at-most-38 records in the
   clean log and the first twelve in `analysis.json`. Records include the six
   standardized features, duration, energy delta, and transition distance.

@@ -64,7 +64,10 @@ pub use phrase::{
     PhraseEntry, PhraseFeatureDiagnostics, SongStructure, SongStructureDiagnostics,
     analyze_song_structure,
 };
-pub use phrase_frontend::{PhraseMultiratePcm, generate_phrase_multirate};
+pub use phrase_frontend::{
+    NativePhraseFeatureTrace, PhraseBeatBoundaries, PhraseMultiratePcm,
+    extract_native_phrase_features, generate_phrase_multirate,
+};
 pub use rhythm::{BeatAnalysis, analyze_beats};
 pub use sample_rate_converter::{
     AnalysisSampleRateConverter, analysis_sample_rate, quantize_analysis_pcm,

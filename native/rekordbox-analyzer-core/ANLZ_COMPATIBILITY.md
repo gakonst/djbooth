@@ -431,6 +431,19 @@ through an incomplete feature port. A complete replay rejected feeding only
 the recovered `Fs/8` stream into the independent six-feature model: mood
 accuracy fell to `33.64%` and exact boundary F1 to `0.3584`.
 
+The next clean-room checkpoint recovers the native consumers behind that
+frontend as a separate diagnostic API. `extract_native_phrase_features`
+reproduces the linked analyzer's one-based, constant-BPM beat-window rounding
+at `Fs/2`, `Fs/8`, and `Fs/32`, then emits low/middle/divided beat sums,
+low/middle/all beat peaks, four-way low-peak and raw-power slices, and
+eight-way high-peak slices. The filters match the linked constructors:
+`LP150 → abs → LP5`, `HP500 → abs → LP5`, `LP100 → abs → LP5`,
+`HP400 → LP1000 → abs → LP10`, and
+`HP5000 → LP7000 → abs → LP10`. Second- and fourth-order Butterworth damping,
+first-order envelope coefficients, native quarter/eighth rounding, and
+out-of-range zero behavior are explicit and unit-tested. These traces remain
+off the production label path until held-out replay demonstrates a gain.
+
 The analyzer now emits at most 38 per-phrase feature diagnostics in
 `clean-room-analyzer.log`; the first twelve are nested into the bounded JSON
 summary. Each record carries six standardized features, duration, energy
