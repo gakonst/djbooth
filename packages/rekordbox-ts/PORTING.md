@@ -927,3 +927,44 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   mismatched reference/audio identity and one M4A with a seven-column decoder
   duration difference. No proprietary code or oracle asset enters release
   output.
+
+## Linked variable-tempo decoder checkpoint (2026-07-28)
+
+- Extended the private x86_64 reference tracer through
+  `peakss::BeatInfoAnalyzer::analyze`, `segAdjust`, and both `gapCorrect`
+  overloads. Schema v2 records the detector candidates both before and after
+  native pruning, the tempo-section vector on both sides of phase adjustment,
+  every boundary repair, and the final raw beat list. The outer writer still
+  performs no rhythm decisions.
+- Recovered the front-end topology used by the linked analyzer. Six synchronous
+  paths use a `283 Hz` low-pass, `150 Hz` wide band-pass (`Q=1.5`), a
+  `283–7,900 Hz` band-pass, a `7,900 Hz` high-pass, and two through paths.
+  Peak histories propose interval/phase candidates; simultaneous candidates
+  are voted first at integer BPM and then at `0.1 BPM` resolution.
+- The native state decoder treats intervals as compatible when their direct,
+  half-time, or double-time distance is within `min(4%, 20 ms)`. It retains
+  independent tempo families, removes values without at least eight
+  consecutive observations, creates one section per surviving family, and
+  runs a separate phase search over each section. This is categorically
+  different from the clean analyzer's current one-global-period tracker.
+- Four linked traces isolate the failure modes. `Luv Techniques` reduced
+  `12,085 → 1,422` detector candidates and produced one `125 BPM` section.
+  `The Power (dub)` reduced `1,393 → 473` candidates and preserved a
+  `145.50 → 108.40 BPM` transition; boundary repair moved only two beats.
+  `Rafael – ID` reduced `968 → 182` candidates and preserved
+  `117.05 → 108.80 → 165.81 BPM`; boundary repair removed two beats and
+  rewrote the transition. `Get Up Offa That Thing` reduced
+  `3,700 → 332` candidates and emitted one section whose four-beat intervals
+  continue to track the live drummer.
+- The linked return BPM is the dominant/longest section, not necessarily the
+  first or arithmetic mean. Section phase adjustment searches nearby detected
+  peaks with a tolerance no smaller than one-eighth of the candidate interval,
+  scores multiple pulse spacings, then stores a section origin, pulse count,
+  and subdivision. Gap correction is a separate, narrow boundary operation;
+  it is not server-side recovery or a general post-hoc grid repair.
+- Remaining clean-room work is now sharply bounded: reproduce the six-path
+  peak candidate stream, port the two-stage tempo histogram plus minimum-run
+  state decoder, synthesize each retained section independently, and port the
+  observed boundary rules. The existing barwise Viterbi path remains useful
+  inside one tempo family but cannot solve missing `3:2`, `4:3`, or unrelated
+  section families by construction.

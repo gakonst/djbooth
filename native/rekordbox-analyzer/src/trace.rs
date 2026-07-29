@@ -124,6 +124,7 @@ struct BeatInfoAnalyzeTrace {
     arg7: u32,
     bpm: f32,
     source_beats: Vec<InternalBeatTrace>,
+    source_beats_after: Vec<InternalBeatTrace>,
     output_before: Vec<InternalBeatTrace>,
     output_after: Vec<InternalBeatTrace>,
 }
@@ -216,7 +217,7 @@ pub(crate) fn begin_reference_trace() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *trace = ReferenceTrace {
-        schema_version: 1,
+        schema_version: 2,
         requested_engine: requested_engine().to_string(),
         ..ReferenceTrace::default()
     };
@@ -616,6 +617,7 @@ unsafe extern "C" fn trace_beat_info_analyze(
     let output_before = unsafe { snapshot_internal_beats(output) };
     let function: BeatInfoAnalyze = unsafe { original(&BEAT_INFO_ANALYZE) };
     let bpm = unsafe { function(analyzer, info, output, arg3, arg4, arg5, arg6, arg7) };
+    let source_after = unsafe { snapshot_beat_info_source(info) };
     let output_after = unsafe { snapshot_internal_beats(output) };
 
     let mut failures = Vec::new();
@@ -624,6 +626,15 @@ unsafe extern "C" fn trace_beat_info_analyze(
         Err(error) => {
             failures.push(format!("failed to snapshot beat-info source: {error:#}"));
             (0, 0, Vec::new())
+        }
+    };
+    let source_beats_after = match source_after {
+        Ok((_, _, beats)) => beats,
+        Err(error) => {
+            failures.push(format!(
+                "failed to snapshot beat-info source after analysis: {error:#}"
+            ));
+            Vec::new()
         }
     };
     let output_before = snapshot_or_empty(output_before, "beat-info output before", &mut failures);
@@ -642,6 +653,7 @@ unsafe extern "C" fn trace_beat_info_analyze(
         arg7,
         bpm,
         source_beats,
+        source_beats_after,
         output_before,
         output_after,
     });
