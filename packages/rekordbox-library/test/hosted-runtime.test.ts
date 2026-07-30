@@ -29,6 +29,67 @@ afterEach(async () => {
 });
 
 describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
+  it("reuses persisted playlist and track responses across runtime restarts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-persistent-cache-"));
+    roots.push(root);
+    const statePath = join(root, "state.sqlite");
+    const playlistId = hostedPlaylistId("spotify", "playlist-one");
+    const playlist = hostedPlaylist(playlistId);
+    const track = localTrack("hosted-track:spotify:track:one", 1);
+    const firstState = new HostedPlaylistStateStore(statePath);
+    const first = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({
+          items: [playlist],
+          providers: [{ provider: "spotify", connected: true }],
+        }),
+        getTracks: async () => [track],
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId: "playlistId" in mutation ? mutation.playlistId : playlistId,
+          revision: null,
+          queuedAt: "2026-07-29T00:00:00.000Z",
+        }),
+      },
+      state: firstState,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(first);
+    await first.listPlaylists();
+    await first.getTracks(playlistId);
+    await first.close();
+    runtimes.splice(runtimes.indexOf(first), 1);
+
+    const listPlaylists = vi.fn(async (): Promise<HostedPlaylistsResponse> => {
+      throw new Error("offline");
+    });
+    const getTracks = vi.fn(async (): Promise<TrackSummary[]> => {
+      throw new Error("offline");
+    });
+    const second = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists,
+        getTracks,
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId: "playlistId" in mutation ? mutation.playlistId : playlistId,
+          revision: null,
+          queuedAt: "2026-07-29T00:00:00.000Z",
+        }),
+      },
+      state: new HostedPlaylistStateStore(statePath),
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(second);
+
+    await expect(second.listPlaylists()).resolves.toMatchObject({ items: [{ id: playlistId }] });
+    await expect(second.getTracks(playlistId)).resolves.toMatchObject([{ id: track.id }]);
+    expect(listPlaylists).not.toHaveBeenCalled();
+    expect(getTracks).not.toHaveBeenCalled();
+  });
+
   it("forwards hosted stream byte-range requests without caching them", async () => {
     const root = mkdtempSync(join(tmpdir(), "hosted-runtime-stream-"));
     roots.push(root);

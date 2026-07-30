@@ -165,6 +165,9 @@ describe("library server", () => {
     expect(await page.text()).toContain("library");
     expect(page.headers.get("cross-origin-resource-policy")).toBe("same-origin");
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("content-security-policy")).toContain("'wasm-unsafe-eval'");
+    expect(page.headers.get("content-security-policy")).toContain("'unsafe-eval'");
+    expect(page.headers.get("content-security-policy")).toContain("ws://127.0.0.1:*");
     expect(page.headers.get("x-content-type-options")).toBe("nosniff");
     expect(page.headers.get("x-frame-options")).toBe("DENY");
 
@@ -172,6 +175,16 @@ describe("library server", () => {
     expect(headPage.status).toBe(200);
     expect(headPage.headers.get("content-length")).toBe(String("<main>library</main>".length));
     expect(await headPage.text()).toBe("");
+
+    mkdirSync(join(files.staticDirectory, "assets"));
+    writeFileSync(join(files.staticDirectory, "assets/nanocodex-worker-test.js"), "worker");
+    writeFileSync(join(files.staticDirectory, "assets/nanocodex-test.wasm"), "wasm");
+    const worker = await fetch(new URL("assets/nanocodex-worker-test.js", server.url));
+    expect(worker.status).toBe(200);
+    expect(worker.headers.get("content-security-policy")).toContain("'unsafe-eval'");
+    expect(worker.headers.get("content-security-policy")).toContain("'wasm-unsafe-eval'");
+    const wasm = await fetch(new URL("assets/nanocodex-test.wasm", server.url));
+    expect(wasm.headers.get("content-type")).toBe("application/wasm");
 
     const bootstrap = (await (
       await fetch(new URL("api/bootstrap", server.url))

@@ -1,5 +1,7 @@
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   Cloud,
   CloudOff,
@@ -25,8 +27,10 @@ type Props = {
   status?: HostedProviderStatus;
   items: HostedPlaylistItem[];
   loading: boolean;
+  expanded: boolean;
   selectedPlaylistId: string | null;
   onSelectPlaylist?(playlist: PlaylistItem): void;
+  onToggle(): void;
   onEditPlaylist?(playlist: PlaylistItem): void;
   onToggleDownload?(playlist: PlaylistItem, enabled: boolean): void;
   onPlaylistContextMenu?(
@@ -41,8 +45,10 @@ export function HostedPlaylistSection({
   status,
   items,
   loading,
+  expanded,
   selectedPlaylistId,
   onSelectPlaylist,
+  onToggle,
   onEditPlaylist,
   onToggleDownload,
   onPlaylistContextMenu,
@@ -53,44 +59,60 @@ export function HostedPlaylistSection({
   return (
     <div className={`sidebar-section hosted-playlists-section provider-${provider}`}>
       <div className="sidebar-section-heading hosted-provider-heading">
-        <span className="sidebar-section-label">
+        <button
+          className="hosted-provider-toggle"
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-controls={`hosted-provider-${provider}`}
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <ProviderIcon size={12} aria-hidden="true" />
-          {providerLabel}
-        </span>
+          <span>{providerLabel}</span>
+          {status?.connected ? (
+            <span className="sidebar-count">{compactCount(items.length)}</span>
+          ) : null}
+        </button>
         <ProviderConnectionStatus providerLabel={providerLabel} status={status} loading={loading} />
       </div>
 
-      {loading ? (
-        <HostedPlaylistSkeleton />
-      ) : !status?.connected ? (
-        <div
-          className={`sidebar-provider-message ${status?.error ? "is-error" : ""}`}
-          role={status?.error ? "alert" : "status"}
-          title={status?.error}
-        >
-          {status?.error ? <TriangleAlert size={13} /> : <CloudOff size={13} />}
-          <span>{status?.error ?? `${providerLabel} is not connected`}</span>
-        </div>
-      ) : items.length === 0 ? (
-        <div className="sidebar-empty hosted-playlists-empty">
-          <ListMusic size={15} />
-          <span>No playlists found</span>
-        </div>
-      ) : (
-        <div className="hosted-playlist-list" role="list" aria-label={`${providerLabel} playlists`}>
-          {items.map((playlist) => (
-            <HostedPlaylistRow
-              key={playlist.id}
-              playlist={playlist}
-              selected={playlist.id === selectedPlaylistId}
-              onSelect={onSelectPlaylist}
-              onEdit={onEditPlaylist}
-              onToggleDownload={onToggleDownload}
-              onContextMenu={onPlaylistContextMenu}
-            />
-          ))}
-        </div>
-      )}
+      <div id={`hosted-provider-${provider}`} hidden={!expanded}>
+        {loading ? (
+          <HostedPlaylistSkeleton />
+        ) : !status?.connected ? (
+          <div
+            className={`sidebar-provider-message ${status?.error ? "is-error" : ""}`}
+            role={status?.error ? "alert" : "status"}
+            title={status?.error}
+          >
+            {status?.error ? <TriangleAlert size={13} /> : <CloudOff size={13} />}
+            <span>{status?.error ?? `${providerLabel} is not connected`}</span>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="sidebar-empty hosted-playlists-empty">
+            <ListMusic size={15} />
+            <span>No playlists found</span>
+          </div>
+        ) : (
+          <div
+            className="hosted-playlist-list"
+            role="list"
+            aria-label={`${providerLabel} playlists`}
+          >
+            {items.map((playlist) => (
+              <HostedPlaylistRow
+                key={playlist.id}
+                playlist={playlist}
+                selected={playlist.id === selectedPlaylistId}
+                onSelect={onSelectPlaylist}
+                onEdit={onEditPlaylist}
+                onToggleDownload={onToggleDownload}
+                onContextMenu={onPlaylistContextMenu}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

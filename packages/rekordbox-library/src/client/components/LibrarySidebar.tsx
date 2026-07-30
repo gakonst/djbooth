@@ -58,6 +58,7 @@ type Props = {
 type PlaylistNode = PlaylistItem & { children: PlaylistNode[] };
 
 const smartViews = [{ id: "all", label: "All tracks", icon: Music2, count: "tracks" as const }];
+const hostedExpansionStorageKey = "rekordbox-library:hosted-sections";
 
 export function LibrarySidebar({
   bootstrap,
@@ -82,6 +83,13 @@ export function LibrarySidebar({
 }: Props) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [expandedHosted, setExpandedHosted] = useState<Set<string>>(() => {
+    const selectedProvider = hosted?.items.find((item) => item.id === selectedHostedPlaylistId)
+      ?.hosted?.provider;
+    const restored = readExpandedHostedProviders();
+    if (selectedProvider) restored.add(selectedProvider);
+    return restored;
+  });
   const tree = useMemo(() => buildPlaylistTree(items.filter((item) => !item.hosted)), [items]);
   const normalizedQuery = query.trim().toLocaleLowerCase();
 
@@ -91,6 +99,21 @@ export function LibrarySidebar({
     if (!parents.length) return;
     setExpanded((current) => new Set([...current, ...parents]));
   }, [items, selectedPlaylistId]);
+
+  useEffect(() => {
+    const selectedProvider = hosted?.items.find((item) => item.id === selectedHostedPlaylistId)
+      ?.hosted?.provider;
+    if (!selectedProvider) return;
+    setExpandedHosted((current) => new Set([...current, selectedProvider]));
+  }, [hosted?.items, selectedHostedPlaylistId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(hostedExpansionStorageKey, JSON.stringify([...expandedHosted]));
+    } catch {
+      // Private browsing or storage policy may reject persistence; collapsing still works.
+    }
+  }, [expandedHosted]);
 
   const selectSmartView = (id: string) => {
     onSelectPlaylist(null);
@@ -168,7 +191,16 @@ export function LibrarySidebar({
             status={hostedProviderStatus(hosted?.providers ?? [], provider)}
             items={hostedPlaylistsForProvider(hosted?.items ?? [], provider, normalizedQuery)}
             loading={hostedLoading}
+            expanded={Boolean(normalizedQuery) || expandedHosted.has(provider)}
             selectedPlaylistId={selectedHostedPlaylistId}
+            onToggle={() =>
+              setExpandedHosted((current) => {
+                const next = new Set(current);
+                if (next.has(provider)) next.delete(provider);
+                else next.add(provider);
+                return next;
+              })
+            }
             onSelectPlaylist={(playlist) => {
               onSelectHostedPlaylist?.(playlist);
               onClose();
@@ -247,6 +279,20 @@ export function LibrarySidebar({
       </div>
     </aside>
   );
+}
+
+function readExpandedHostedProviders(): Set<string> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(hostedExpansionStorageKey) ?? "[]");
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(
+      parsed.filter(
+        (provider): provider is string => provider === "spotify" || provider === "soundcloud",
+      ),
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 function PlaylistTreeNode({

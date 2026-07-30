@@ -79,6 +79,8 @@ export type HostedPlaylistRuntimeOptions = {
 
 const OUTBOX_REVISION_PREFIX = "local-outbox:";
 const LOCAL_MIRROR_OUTBOX_PREFIX = "local-mirror:";
+const REMOTE_PLAYLIST_CACHE_KEY = "remote:hosted-playlists";
+const REMOTE_CACHE_STALE_MS = 7 * 24 * 60 * 60 * 1_000;
 type QueuedHostedPlaylistMutation = Exclude<
   HostedPlaylistMutation,
   { type: "create-hosted-playlist" | "set-hosted-playlist-download" }
@@ -139,9 +141,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   constructor(options: HostedPlaylistRuntimeOptions) {
     this.#catalog = options.catalog;
     this.#state = options.state;
-    this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 60_000);
+    this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 5 * 60_000);
     this.#playlistRetryCacheMs = positiveDuration(options.playlistRetryCacheMs, 5_000);
-    this.#trackCacheMs = positiveDuration(options.trackCacheMs, 30_000);
+    this.#trackCacheMs = positiveDuration(options.trackCacheMs, 5 * 60_000);
     this.#outboxMaxAttempts = positiveInteger(options.outboxMaxAttempts, 4, "Outbox attempts");
     this.#outboxRetryBaseMs = positiveDuration(options.outboxRetryBaseMs, 250);
     this.#outboxRetryMaxMs = positiveDuration(options.outboxRetryMaxMs, 5_000);
@@ -156,6 +158,12 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
       onJobChanged: (job) => this.#handleJobChanged(job),
     });
     this.#worker.start();
+    const persisted = this.#state.getWebCache<HostedPlaylistsResponse>(REMOTE_PLAYLIST_CACHE_KEY, {
+      allowExpired: true,
+      maxStaleMs: REMOTE_CACHE_STALE_MS,
+    });
+    if (persisted && isHostedPlaylistsResponse(persisted.value))
+      this.#playlistSuccess = persisted.value;
     void this.#kickOutbox().catch(() => undefined);
   }
 
@@ -174,6 +182,17 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
       this.#playlistCache = { ...cached, promise };
       return promise;
     }
+    const persisted = this.#state.getWebCache<HostedPlaylistsResponse>(REMOTE_PLAYLIST_CACHE_KEY);
+    if (!cached && persisted && isHostedPlaylistsResponse(persisted.value)) {
+      this.#playlistSuccess = persisted.value;
+      const promise = (
+        this.#catalog.refreshPlaylistState
+          ? this.#catalog.refreshPlaylistState(persisted.value)
+          : Promise.resolve(persisted.value)
+      ).then((response) => this.#scheduleChangedDownloads(response));
+      this.#playlistCache = { expiresAt: persisted.expiresAt, promise };
+      return promise;
+    }
     this.#playlistStateDirty = false;
     const promise = this.#catalog
       .listPlaylists()
@@ -186,6 +205,12 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
           fresh,
           this.#playlistSuccess,
         );
+        if (this.#playlistSuccess.items.length || this.#playlistSuccess.providers.length)
+          this.#cacheWebResponse(
+            REMOTE_PLAYLIST_CACHE_KEY,
+            this.#playlistSuccess,
+            this.#playlistCacheMs,
+          );
         if (this.#playlistCache?.promise === promise) {
           this.#playlistCache.expiresAt =
             Date.now() + (degraded ? this.#playlistRetryCacheMs : this.#playlistCacheMs);
@@ -217,12 +242,36 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
       this.#trackCache.set(playlistId, { ...cached, promise });
       return promise;
     }
+    const persistentKey = remoteTrackCacheKey(playlistId);
+    const persisted = this.#state.getWebCache<TrackSummary[]>(persistentKey);
+    if (!cached && persisted && Array.isArray(persisted.value)) {
+      const promise = this.#catalog.refreshTrackState
+        ? this.#catalog.refreshTrackState(playlistId, persisted.value)
+        : Promise.resolve(persisted.value);
+      this.#trackCache.set(playlistId, { expiresAt: persisted.expiresAt, promise });
+      return promise;
+    }
     this.#trackStateDirty.delete(playlistId);
-    const promise = this.#catalog.getTracks(playlistId).catch((error: unknown) => {
-      if (this.#trackCache.get(playlistId)?.promise === promise)
-        this.#trackCache.delete(playlistId);
-      throw error;
+    const stale = this.#state.getWebCache<TrackSummary[]>(persistentKey, {
+      allowExpired: true,
+      maxStaleMs: REMOTE_CACHE_STALE_MS,
     });
+    const promise = this.#catalog
+      .getTracks(playlistId)
+      .then((tracks) => {
+        this.#cacheWebResponse(persistentKey, tracks, this.#trackCacheMs);
+        return tracks;
+      })
+      .catch(async (error: unknown) => {
+        if (stale && Array.isArray(stale.value)) {
+          return this.#catalog.refreshTrackState
+            ? this.#catalog.refreshTrackState(playlistId, stale.value)
+            : stale.value;
+        }
+        if (this.#trackCache.get(playlistId)?.promise === promise)
+          this.#trackCache.delete(playlistId);
+        throw error;
+      });
     this.#trackCache.set(playlistId, { expiresAt: now + this.#trackCacheMs, promise });
     return promise;
   }
@@ -314,8 +363,12 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     const priorPlaylists = this.#playlistCache?.promise;
     const receipt = await this.#catalog.mutate(mutation);
     this.#playlistCache = undefined;
+    this.#state.deleteWebCache(REMOTE_PLAYLIST_CACHE_KEY);
     this.#playlistStateDirty = false;
-    if ("playlistId" in mutation) this.#trackCache.delete(mutation.playlistId);
+    if ("playlistId" in mutation) {
+      this.#trackCache.delete(mutation.playlistId);
+      this.#state.deleteWebCache(remoteTrackCacheKey(mutation.playlistId));
+    }
     if ("playlistId" in mutation) this.#trackStateDirty.delete(mutation.playlistId);
     if (mutation.type === "set-hosted-playlist-download") {
       const { provider, remoteId } = parseHostedPlaylistId(mutation.playlistId);
@@ -614,10 +667,20 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#outboxRetryTimer.unref?.();
   }
 
+  #cacheWebResponse(key: string, value: unknown, ttlMs: number): void {
+    try {
+      this.#state.setWebCache(key, value, ttlMs);
+    } catch {
+      // A cache quota/serialization failure must not hide a successful provider response.
+    }
+  }
+
   #invalidateHostedPlaylist(playlistId: string): void {
     this.#playlistCache = undefined;
+    this.#state.deleteWebCache(REMOTE_PLAYLIST_CACHE_KEY);
     this.#playlistStateDirty = false;
     this.#trackCache.delete(playlistId);
+    this.#state.deleteWebCache(remoteTrackCacheKey(playlistId));
     this.#trackStateDirty.delete(playlistId);
   }
 
@@ -847,6 +910,21 @@ function hostedProviderItems(
   provider: HostedPlaylistProvider,
 ): PlaylistItem[] {
   return response.items.filter((item) => item.hosted?.provider === provider);
+}
+
+function remoteTrackCacheKey(playlistId: string): string {
+  return `remote:hosted-tracks:${playlistId}`;
+}
+
+function isHostedPlaylistsResponse(value: unknown): value is HostedPlaylistsResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "items" in value &&
+    Array.isArray(value.items) &&
+    "providers" in value &&
+    Array.isArray(value.providers)
+  );
 }
 
 function positiveDuration(value: number | undefined, fallback: number): number {

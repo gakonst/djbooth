@@ -106,6 +106,16 @@ type OutboxRow = {
   updated_at: string;
 };
 
+type WebCacheRow = {
+  payload_json: string;
+  expires_at: number;
+  updated_at: number;
+};
+
+const maximumWebCachePayloadBytes = 8 * 1024 * 1024;
+const maximumWebCacheEntries = 512;
+const maximumWebCacheStaleMs = 7 * 24 * 60 * 60 * 1_000;
+
 export function defaultHostedStatePath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.MUSIC_LIBRARY_STATE_PATH) return env.MUSIC_LIBRARY_STATE_PATH;
   const root = env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
@@ -286,6 +296,72 @@ export class HostedPlaylistStateStore {
       )
       .all(JSON.stringify(localContentIds), provider) as TrackMappingRow[];
     return rows.map(trackMapping);
+  }
+
+  getWebCache<T>(
+    key: string,
+    options: { allowExpired?: boolean; maxStaleMs?: number } = {},
+  ): { value: T; expiresAt: number; updatedAt: number } | undefined {
+    const row = this.#database
+      .prepare("SELECT payload_json, expires_at, updated_at FROM web_cache WHERE cache_key = ?")
+      .get(key) as WebCacheRow | undefined;
+    if (!row) return undefined;
+    const now = Date.now();
+    const maxStaleMs = options.maxStaleMs ?? maximumWebCacheStaleMs;
+    if (row.expires_at <= now) {
+      if (row.expires_at < now - maxStaleMs) this.deleteWebCache(key);
+      if (!options.allowExpired || row.expires_at < now - maxStaleMs) return undefined;
+    }
+    try {
+      return {
+        value: JSON.parse(row.payload_json) as T,
+        expiresAt: row.expires_at,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      this.deleteWebCache(key);
+      return undefined;
+    }
+  }
+
+  setWebCache(key: string, value: unknown, ttlMs: number): void {
+    if (!key || key.length > 512) throw new RangeError("Web cache key is invalid");
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 0)
+      throw new RangeError("Web cache duration must be a non-negative integer");
+    const payload = JSON.stringify(value);
+    if (payload === undefined) throw new TypeError("Web cache value is not JSON serializable");
+    if (Buffer.byteLength(payload) > maximumWebCachePayloadBytes)
+      throw new RangeError("Web cache payload exceeds 8 MiB");
+    const now = Date.now();
+    this.#database.transaction(() => {
+      this.#database
+        .prepare(
+          `INSERT INTO web_cache (cache_key, payload_json, expires_at, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(cache_key) DO UPDATE SET
+             payload_json = excluded.payload_json,
+             expires_at = excluded.expires_at,
+             updated_at = excluded.updated_at`,
+        )
+        .run(key, payload, now + ttlMs, now);
+      this.#database
+        .prepare("DELETE FROM web_cache WHERE expires_at < ?")
+        .run(now - maximumWebCacheStaleMs);
+      this.#database
+        .prepare(
+          `DELETE FROM web_cache
+            WHERE cache_key IN (
+              SELECT cache_key FROM web_cache
+              ORDER BY updated_at DESC
+              LIMIT -1 OFFSET ?
+            )`,
+        )
+        .run(maximumWebCacheEntries);
+    })();
+  }
+
+  deleteWebCache(key: string): void {
+    this.#database.prepare("DELETE FROM web_cache WHERE cache_key = ?").run(key);
   }
 
   setTrack(
@@ -590,6 +666,14 @@ export class HostedPlaylistStateStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_outbox_status_created
         ON hosted_outbox(status, created_at);
+      CREATE TABLE IF NOT EXISTS web_cache (
+        cache_key TEXT PRIMARY KEY,
+        payload_json TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS web_cache_expiry
+        ON web_cache(expires_at);
     `);
   }
 }

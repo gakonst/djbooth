@@ -12,6 +12,7 @@ const stores: HostedPlaylistStateStore[] = [];
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 function state(): HostedPlaylistStateStore {
@@ -23,6 +24,31 @@ function state(): HostedPlaylistStateStore {
 }
 
 describe("HostedPlaylistStateStore", () => {
+  it("persists bounded web responses and retains expired entries only for stale fallback", () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const store = state();
+    store.setWebCache("remote:test", { items: [1, 2, 3] }, 500);
+
+    expect(store.getWebCache("remote:test")).toMatchObject({
+      value: { items: [1, 2, 3] },
+      expiresAt: 1_500,
+      updatedAt: 1_000,
+    });
+    store.close();
+    stores.splice(stores.indexOf(store), 1);
+
+    const reopened = new HostedPlaylistStateStore(store.path);
+    stores.push(reopened);
+    now = 1_501;
+    expect(reopened.getWebCache("remote:test")).toBeUndefined();
+    expect(reopened.getWebCache("remote:test", { allowExpired: true })).toMatchObject({
+      value: { items: [1, 2, 3] },
+    });
+    reopened.deleteWebCache("remote:test");
+    expect(reopened.getWebCache("remote:test", { allowExpired: true })).toBeUndefined();
+  });
+
   it("persists download subscriptions and provider mappings", () => {
     const store = state();
     expect(store.setDownloadEnabled("spotify", "playlist-a", true)).toMatchObject({

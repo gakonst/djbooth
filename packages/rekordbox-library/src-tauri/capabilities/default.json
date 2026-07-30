@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Base desktop-window permissions. Privileged processes remain Rust-owned.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

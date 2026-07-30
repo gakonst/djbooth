@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
-import { analyzeTracks } from "@gakonst/rekordbox";
+import { analyzeTracks } from "@gakonst/rekordbox/analyzer";
 import {
   SoulseekLibraryAcquirer,
   YtdlpNativeAcquirer,

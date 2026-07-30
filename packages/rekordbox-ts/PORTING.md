@@ -32,6 +32,30 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — Tauri workstation and browser-WASM Nanocodex consumer
+
+- Wrapped the existing local-first React library workstation in a Tauri 2 macOS shell. Release
+  builds bundle a Node 22 sidecar and pnpm-deployed production tree, preserving the proven encrypted
+  SQLite/native-addon boundary without requiring Node on the destination machine. The app bundle
+  also carries the clean analyzer and uv; Python/MLX/model artifacts remain in the existing cache.
+- Embedded the published `nanocodex/browser` Rust/WASM binding in a dedicated Worker with one
+  persistent session. A loopback same-origin WebSocket relay consumes and atomically refreshes the
+  standard Codex `~/.codex/auth.json` ChatGPT session, including account and FedRAMP headers; the
+  webview/WASM worker never receives a token. An environment API key remains fallback-only. The
+  full-height assistant rail shows user/assistant turns, reasoning/tool progress, typed execution
+  receipts, and background analyzer/stems work. Its generated JavaScript Code Mode cells can fan
+  out independent typed tool calls inside the dedicated Worker; the Worker receives neither OAuth
+  tokens nor a direct database handle. Synthetic WebSocket close codes are normalized before relay,
+  avoiding the packaged-backend crash observed with browser code `1005`.
+- Collapsed Spotify/SoundCloud sections now remember their expansion state. Remote playlist and
+  track metadata uses a bounded SQLite-backed cache (five-minute freshness, seven-day stale/offline
+  fallback, 512 entries, 8 MiB per value) so app restarts and provider outages do not force repeat
+  web fetches. Explicit downloads remain the durable cache for complete recordings; transient
+  byte-range playback is still streamed rather than silently duplicating media.
+- Added bounded local processing jobs for selected library tracks. Analysis and stems outputs are
+  isolated under `~/Music/Rekordbox Derived/`; four-source results can be auditioned against the
+  original on one Web Audio clock before any explicit library-import workflow is introduced.
+
 ### 2026-07-29 — library-scale MLX model reuse and selected stem output
 
 - Added `separateStemsBatch` and `stems playlist`. The playlist command opens the discovered

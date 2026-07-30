@@ -1,6 +1,7 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  AudioLines,
   ChevronRight,
   CircleAlert,
   Copy,
@@ -16,6 +17,7 @@ import {
   RefreshCw,
   Search,
   Sparkles,
+  TestTube2,
   Trash2,
   Undo2,
   Workflow,
@@ -31,6 +33,8 @@ import type {
   LibraryMutation,
   MutationReceipt,
   PlaylistItem,
+  ProcessingJob,
+  PromptAction as LibraryPromptAction,
   TrackCue,
   TrackCueInput,
   TrackSort,
@@ -38,14 +42,17 @@ import type {
   TracksResponse,
 } from "../shared/types.js";
 import {
+  getAssistantAuth,
   getBootstrap,
   getHostedPlaylists,
+  getProcessingJobs,
   getPlaylists,
   getTrackDetail,
   getTracks,
   LibraryApiError,
   mutateLibrary,
   mutateHostedPlaylist,
+  startProcessingJob,
   subscribeLibraryEvents,
 } from "./api.js";
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from "./components/ContextMenu.js";
@@ -58,6 +65,11 @@ import {
 } from "./components/PlayerPanel.js";
 import { PlaylistEditor } from "./components/PlaylistEditor.js";
 import {
+  PromptDock,
+  type PromptActionResult,
+  type PromptSubmission,
+} from "./components/PromptDock.js";
+import {
   alignCanvasStateToPlaylist,
   deriveConnectedOrder,
   playlistMembershipSnapshot,
@@ -68,6 +80,7 @@ import {
 } from "./components/SetCanvas.js";
 import { TrackTable } from "./components/TrackTable.js";
 import { TrackMetadataDialog } from "./components/TrackMetadataDialog.js";
+import { StemAudition } from "./components/StemAudition.js";
 import {
   activeTrackIndex,
   hostedRemoteTrackIds,
@@ -94,6 +107,7 @@ import {
   type LibraryHistoryPreparation,
 } from "./library-history.js";
 import { libraryMutationCoalesceKey, useLibraryMutationQueue } from "./useLibraryMutationQueue.js";
+import { NanocodexPlanner } from "./nanocodex-planner.js";
 import { buildHotkeyPalette, type HotkeyBinding, useHotkeys } from "./useHotkeys.js";
 import {
   applyOptimisticLibraryMutation,
@@ -191,6 +205,7 @@ type OptimisticWriteSession = {
 
 export function App() {
   const queryClient = useQueryClient();
+  const [nanocodexPlanner] = useState(() => new NanocodexPlanner());
   const playerAdapter = useMemo<PlayerAdapter>(
     () => ({
       getAudioUrl: (track) =>
@@ -226,6 +241,7 @@ export function App() {
   const [cueDialog, setCueDialog] = useState<CueDialogState>(null);
   const [metadataTarget, setMetadataTarget] = useState<TrackSummary>();
   const [toast, setToast] = useState<ToastState>(null);
+  const [auditionJob, setAuditionJob] = useState<ProcessingJob>();
   const [viewMode, setViewMode] = useState<"table" | "canvas">("table");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [playerTrackId, setPlayerTrackId] = useState<string | null>(urlState.trackId);
@@ -266,9 +282,16 @@ export function App() {
   );
   const contextMenu = useContextMenu<ContextTarget>();
 
+  useEffect(() => () => nanocodexPlanner.dispose(), [nanocodexPlanner]);
+
   const bootstrapQuery = useQuery({
     queryKey: ["bootstrap"],
     queryFn: ({ signal }) => getBootstrap(signal),
+  });
+  const assistantAuthQuery = useQuery({
+    queryKey: ["assistant-auth"],
+    queryFn: ({ signal }) => getAssistantAuth(signal),
+    staleTime: 30_000,
   });
   const playlistsQuery = useQuery({
     queryKey: ["playlists"],
@@ -283,6 +306,14 @@ export function App() {
         ? 5_000
         : 60_000,
     refetchIntervalInBackground: true,
+  });
+  const processingJobsQuery = useQuery({
+    queryKey: ["processing-jobs"],
+    queryFn: ({ signal }) => getProcessingJobs(signal),
+    refetchInterval: (query) =>
+      query.state.data?.some((job) => job.status === "queued" || job.status === "running")
+        ? 1_000
+        : false,
   });
   const playlists = playlistsQuery.data ?? [];
   const hostedPlaylists = hostedPlaylistsQuery.data?.items ?? [];
@@ -990,6 +1021,10 @@ export function App() {
   useEffect(
     () =>
       subscribeLibraryEvents((event) => {
+        if (event.type === "processing-job") {
+          void queryClient.invalidateQueries({ queryKey: ["processing-jobs"] });
+          return;
+        }
         if (event.type === "hosted-mutation" || event.type === "hosted-job") {
           if (event.type === "hosted-mutation") clearHistory();
           // The POST caller owns this optimistic snapshot. Provider completion performs the
@@ -1108,6 +1143,7 @@ export function App() {
     cueDialog ||
     metadataTarget ||
     shortcutsOpen ||
+    auditionJob ||
     contextMenu.open,
   );
   const managedPlaylistCandidate = editorOpen && editingPlaylist ? editingPlaylist : normalPlaylist;
@@ -1167,6 +1203,88 @@ export function App() {
       setViewMode("canvas");
     },
     [canvasPlaylist, normalPlaylist],
+  );
+
+  const enqueueProcessingJob = useCallback(
+    async (
+      contentId: string,
+      operation: "analyze" | "stems",
+      stem: "vocals" | "instrumental" | "all" = "all",
+    ) => {
+      const token = bootstrapQuery.data?.csrfToken;
+      if (!token) throw new Error("The local job token is unavailable. Refresh the library.");
+      const job = await startProcessingJob(token, {
+        contentId,
+        operation,
+        ...(operation === "stems" ? { stem } : {}),
+      });
+      queryClient.setQueryData<ProcessingJob[]>(["processing-jobs"], (current = []) => [
+        job,
+        ...current.filter((candidate) => candidate.id !== job.id),
+      ]);
+      return job;
+    },
+    [bootstrapQuery.data?.csrfToken, queryClient],
+  );
+
+  const executePromptAction = useCallback(
+    async (action: LibraryPromptAction): Promise<void> => {
+      if (action.type === "mutate") {
+        await applyMutationAsync(action.mutation);
+        return;
+      }
+      if (action.type === "open-playlist") {
+        updateUrl({ playlistId: action.playlistId, trackId: null, filter: "all" });
+        setViewMode("table");
+        return;
+      }
+      if (action.type === "search-tracks") {
+        setSearchInput(action.query);
+        updateUrl({ query: action.query, trackId: null });
+        setViewMode("table");
+        return;
+      }
+      if (action.type === "process-track") {
+        await enqueueProcessingJob(action.contentId, action.operation, action.stem ?? "all");
+        return;
+      }
+      openCanvas();
+    },
+    [applyMutationAsync, enqueueProcessingJob, openCanvas, updateUrl],
+  );
+
+  const submitLibraryPrompt = useCallback(
+    async (submission: PromptSubmission): Promise<PromptActionResult> => {
+      const plan = await nanocodexPlanner.plan(
+        submission.id,
+        submission.prompt,
+        {
+          canWrite,
+          playlistId: urlState.playlistId,
+          trackId: selectedTrack?.hosted
+            ? selectedTrack.hosted.localContentId
+            : (selectedTrack?.id ?? null),
+          playheadSeconds: playheadSecondsRef.current,
+          playlists: allPlaylists,
+        },
+        submission.report,
+      );
+      for (const action of plan.actions) await executePromptAction(action);
+      return {
+        summary: plan.summary,
+        details: plan.actions.length
+          ? plan.actions.map((action) => action.label)
+          : ["Nanocodex answered without staging a library action."],
+      };
+    },
+    [
+      allPlaylists,
+      canWrite,
+      executePromptAction,
+      nanocodexPlanner,
+      selectedTrack,
+      urlState.playlistId,
+    ],
   );
 
   const hotkeyBindings: HotkeyBinding[] = [
@@ -1641,6 +1759,19 @@ export function App() {
         icon: <Sparkles size={14} />,
         disabled: !canWrite || Boolean(track.hosted),
       },
+      { kind: "separator" },
+      {
+        id: "analyze-track",
+        label: "Run clean-room analysis",
+        icon: <TestTube2 size={14} />,
+        disabled: Boolean(track.hosted) || !track.path || !track.fileExists,
+      },
+      {
+        id: "separate-stems",
+        label: "Generate MLX stems",
+        icon: <AudioLines size={14} />,
+        disabled: Boolean(track.hosted) || !track.path || !track.fileExists,
+      },
       ...(target.kind === "canvas-node"
         ? [
             { kind: "separator" } satisfies ContextMenuEntry,
@@ -1790,6 +1921,14 @@ export function App() {
     if (id === "remove-canvas-node" && node) {
       setCanvasState((current) => removeCanvasNode(current, node.id));
     }
+    if (id === "analyze-track" && !track.hosted)
+      void enqueueProcessingJob(track.id, "analyze").catch((error) =>
+        setToast({ tone: "error", message: errorMessage(error) }),
+      );
+    if (id === "separate-stems" && !track.hosted)
+      void enqueueProcessingJob(track.id, "stems").catch((error) =>
+        setToast({ tone: "error", message: errorMessage(error) }),
+      );
     if (id === "copy-path" && track.path)
       void navigator.clipboard
         .writeText(track.path)
@@ -2441,6 +2580,30 @@ export function App() {
         onClose={contextMenu.close}
         onSelect={(entry) => handleContextAction(entry.id)}
       />
+
+      <PromptDock
+        authLabel={
+          assistantAuthQuery.data?.mode === "chatgpt"
+            ? `ChatGPT${assistantAuthQuery.data.plan ? ` ${assistantAuthQuery.data.plan}` : ""}`
+            : assistantAuthQuery.data?.message
+        }
+        disabled={assistantAuthQuery.data?.mode === "unavailable"}
+        disabledReason={assistantAuthQuery.data?.message}
+        playlistName={selectedPlaylist?.name}
+        globalShortcutEnabled={!modalOpen}
+        jobs={processingJobsQuery.data ?? []}
+        onAudition={(job) => setAuditionJob(job)}
+        suggestions={[
+          "Find tracks for a late-night warm-up",
+          "Set a memory cue here",
+          "Open the set canvas",
+        ]}
+        onSubmit={submitLibraryPrompt}
+      />
+
+      {auditionJob ? (
+        <StemAudition job={auditionJob} onClose={() => setAuditionJob(undefined)} />
+      ) : null}
 
       {toast ? <Toast message={toast.message} tone={toast.tone} onDismiss={dismissToast} /> : null}
     </div>

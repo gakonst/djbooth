@@ -1,0 +1,6 @@
+/target/
+/gen/
+/binaries/*
+!/binaries/.gitkeep
+/resources/*
+!/resources/.gitkeep

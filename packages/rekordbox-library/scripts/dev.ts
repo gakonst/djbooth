@@ -46,6 +46,7 @@ try {
         "/api": {
           target: api.url,
           changeOrigin: false,
+          ws: true,
         },
       },
       strictPort: true,

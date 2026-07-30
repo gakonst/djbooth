@@ -311,7 +311,13 @@ export type HostedPlaylistsResponse = {
 
 export type LibraryEvent = {
   id: number;
-  type: "connected" | "mutation" | "external-change" | "hosted-mutation" | "hosted-job";
+  type:
+    | "connected"
+    | "mutation"
+    | "external-change"
+    | "hosted-mutation"
+    | "hosted-job"
+    | "processing-job";
   emittedAt: string;
   mutation?: LibraryMutation["type"] | HostedPlaylistMutation["type"];
   changedId?: string;
@@ -327,6 +333,13 @@ export type PromptAction =
   | { type: "open-playlist"; playlistId: string; label: string }
   | { type: "search-tracks"; query: string; label: string }
   | { type: "show-canvas"; label: string }
+  | {
+      type: "process-track";
+      contentId: string;
+      operation: "analyze" | "stems";
+      stem?: "vocals" | "instrumental" | "all";
+      label: string;
+    }
   | { type: "mutate"; mutation: LibraryMutation; label: string };
 
 export type PromptPlan = {
@@ -334,6 +347,28 @@ export type PromptPlan = {
   prompt: string;
   summary: string;
   actions: PromptAction[];
+};
+
+export type ProcessingJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type ProcessingJob = {
+  id: string;
+  contentId: string;
+  trackTitle: string;
+  operation: "analyze" | "stems";
+  status: ProcessingJobStatus;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  outputDirectory?: string;
+  message?: string;
+  error?: string;
+  artifacts?: Array<{
+    label: string;
+    stem?: string;
+    url?: string;
+    path: string;
+  }>;
 };
 
 export type ApiError = {

@@ -17,9 +17,9 @@ import {
   MasterDatabase,
   type ModelClass,
   PlaylistType,
-  getRekordboxProcessState,
   normalizeRekordboxKeyName,
-} from "@gakonst/rekordbox";
+} from "@gakonst/rekordbox/masterdb";
+import { getRekordboxProcessState } from "@gakonst/rekordbox/utils";
 import { acquireRekordboxDatabaseLock, assertRekordboxStopped } from "@gakonst/tracks";
 import { parseFile, selectCover } from "music-metadata";
 

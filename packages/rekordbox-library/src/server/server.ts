@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 
 import { z } from "zod";
@@ -49,6 +49,9 @@ import {
   type TrackFilter,
 } from "./library.js";
 import { planLibraryPrompt } from "./prompt.js";
+import { ProcessingJobManager } from "./processing-jobs.js";
+import { createResponsesCredentialProvider } from "./openai-auth.js";
+import { attachResponsesProxy } from "./responses-proxy.js";
 
 const hostedMutationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -175,6 +178,12 @@ const promptSchema = z.object({
   }),
 });
 
+const processingJobSchema = z.object({
+  contentId: z.string().min(1).max(2_048),
+  operation: z.enum(["analyze", "stems"]),
+  stem: z.enum(["vocals", "instrumental", "all"]).optional(),
+});
+
 export type LibraryApi = {
   close?(): void;
   getAudioPath(id: string): string;
@@ -238,6 +247,7 @@ const contentTypes: Readonly<Record<string, string>> = {
   ".map": "application/json; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
   ".woff2": "font/woff2",
 };
 
@@ -260,6 +270,11 @@ const imageTypes: Readonly<Record<string, string>> = {
   ".png": "image/png",
   ".webp": "image/webp",
 };
+
+const pageContentSecurityPolicy =
+  "default-src 'self'; base-uri 'none'; connect-src 'self' ws://127.0.0.1:* https://*.soundcloud.cloud https://*.sndcdn.com; form-action 'none'; frame-ancestors 'none'; frame-src https://open.spotify.com; img-src 'self' data:; media-src 'self' blob: https://*.soundcloud.cloud https://*.sndcdn.com; object-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' https://open.spotify.com; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:";
+const nanocodexWorkerContentSecurityPolicy =
+  "default-src 'none'; connect-src 'self' ws://127.0.0.1:*; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'";
 
 class HttpError extends Error {
   constructor(
@@ -616,12 +631,14 @@ async function serveStatic(
     throw new Error("Static symlink escapes the client bundle");
   const bytes = request.method === "HEAD" ? undefined : await readFile(realCandidate);
   const contentLength = bytes?.length ?? statSync(realCandidate).size;
+  const contentSecurityPolicy = /^nanocodex-worker-.+\.js$/u.test(basename(realCandidate))
+    ? nanocodexWorkerContentSecurityPolicy
+    : pageContentSecurityPolicy;
   response.writeHead(200, {
     "cache-control":
       extname(realCandidate) === ".html" ? "no-cache" : "public, max-age=31536000, immutable",
     "content-length": contentLength,
-    "content-security-policy":
-      "default-src 'self'; base-uri 'none'; connect-src 'self' https://*.soundcloud.cloud https://*.sndcdn.com; form-action 'none'; frame-ancestors 'none'; frame-src https://open.spotify.com; img-src 'self' data:; media-src 'self' blob: https://*.soundcloud.cloud https://*.sndcdn.com; object-src 'none'; script-src 'self' https://open.spotify.com; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:",
+    "content-security-policy": contentSecurityPolicy,
     "content-type":
       contentTypes[extname(realCandidate).toLocaleLowerCase()] ?? "application/octet-stream",
   });
@@ -797,6 +814,10 @@ export async function startLibraryServer(
     for (const client of eventClients) writeEvent(client, message);
     return event;
   };
+  const processingJobs = new ProcessingJobManager({ getTrack: (id) => api.getTrack(id) });
+  const stopProcessingJobEvents = processingJobs.onChanged((job) => {
+    publish("processing-job", { changedId: job.id });
+  });
   const stopHostedJobEvents = hosted?.onJobChanged?.(({ playlistId }) => {
     publish("hosted-job", { changedId: playlistId });
   });
@@ -804,6 +825,9 @@ export async function startLibraryServer(
     for (const client of eventClients) writeEvent(client, ": keepalive\n\n");
   }, 20_000);
   heartbeat.unref();
+  const responsesCredentials = createResponsesCredentialProvider({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
 
   const server = createServer(async (request, response) => {
     setSecurityHeaders(response);
@@ -813,6 +837,11 @@ export async function startLibraryServer(
       if (url.pathname === "/api/bootstrap") {
         assertMethod(request, ["GET", "HEAD"]);
         json(request, response, 200, api.getBootstrap(token));
+        return;
+      }
+      if (url.pathname === "/api/assistant/auth") {
+        assertMethod(request, ["GET", "HEAD"]);
+        json(request, response, 200, await responsesCredentials.status());
         return;
       }
       if (url.pathname === "/api/events") {
@@ -842,6 +871,40 @@ export async function startLibraryServer(
       if (url.pathname === "/api/playlists") {
         assertMethod(request, ["GET", "HEAD"]);
         json(request, response, 200, { items: api.getPlaylists() });
+        return;
+      }
+      if (url.pathname === "/api/processing/jobs") {
+        assertMethod(request, ["GET", "HEAD", "POST"]);
+        if (request.method === "POST") {
+          assertMutationRequest(request, token);
+          const job = processingJobs.start(processingJobSchema.parse(await readJsonBody(request)));
+          json(request, response, 202, { job });
+        } else {
+          json(request, response, 200, { items: processingJobs.list() });
+        }
+        return;
+      }
+      const processingAudioMatch = /^\/api\/processing\/jobs\/([^/]+)\/audio\/([^/]+)$/u.exec(
+        url.pathname,
+      );
+      if (processingAudioMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        await streamAudio(
+          request,
+          response,
+          processingJobs.resolveAudio(
+            decodeURIComponent(processingAudioMatch[1]!),
+            decodeURIComponent(processingAudioMatch[2]!),
+          ),
+        );
+        return;
+      }
+      const processingJobMatch = /^\/api\/processing\/jobs\/([^/]+)$/u.exec(url.pathname);
+      if (processingJobMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        json(request, response, 200, {
+          job: processingJobs.get(decodeURIComponent(processingJobMatch[1]!)),
+        });
         return;
       }
       if (url.pathname === "/api/hosted-playlists") {
@@ -1057,6 +1120,7 @@ export async function startLibraryServer(
       json(request, response, responseError.status, responseError.body);
     }
   });
+  const responsesProxy = attachResponsesProxy(server, { credentials: responsesCredentials });
 
   try {
     await new Promise<void>((resolveListen, reject) => {
@@ -1067,8 +1131,10 @@ export async function startLibraryServer(
       });
     });
   } catch (error) {
+    responsesProxy.close();
     clearInterval(heartbeat);
     stopHostedJobEvents?.();
+    stopProcessingJobEvents();
     if (ownsApi) api.close?.();
     if (ownsHosted) await hosted?.close?.();
     throw error;
@@ -1125,12 +1191,14 @@ export async function startLibraryServer(
     url: `http://${displayHost}:${address.port}/`,
     close: () => {
       closePromise ??= new Promise<void>((resolveClose, reject) => {
+        responsesProxy.close();
         clearInterval(heartbeat);
         if (externalChangeTimer) clearTimeout(externalChangeTimer);
         for (const watcher of watchers) unwatchFile(watcher.path, watcher.listener);
         for (const client of eventClients) client.end();
         eventClients.clear();
         stopHostedJobEvents?.();
+        stopProcessingJobEvents();
         server.close((serverError) => {
           void (async () => {
             let closeError: unknown = serverError;

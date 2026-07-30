@@ -76,6 +76,10 @@
       "types": "./dist/stems/index.d.ts",
       "default": "./dist/stems/index.js"
     },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "default": "./dist/utils.js"
+    },
     "./xml": {
       "types": "./dist/xml/index.d.ts",
       "default": "./dist/xml/index.js"

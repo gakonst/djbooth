@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "externalBin": ["binaries/rekordbox-library-node"],
+    "resources": {
+      "resources/backend": "backend",
+      "resources/licenses": "licenses",
+      "resources/tools": "tools"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

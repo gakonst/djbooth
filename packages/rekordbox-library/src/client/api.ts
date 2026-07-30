@@ -8,6 +8,7 @@ import type {
   LibraryMutation,
   MutationReceipt,
   PlaylistItem,
+  ProcessingJob,
   PromptContext,
   PromptPlan,
   TrackDetail,
@@ -37,8 +38,19 @@ export type TrackQuery = {
   sort?: TrackSort;
 };
 
+export type AssistantAuthStatus = {
+  mode: "api-key" | "chatgpt" | "unavailable";
+  email?: string;
+  plan?: string;
+  message: string;
+};
+
 export function getBootstrap(signal?: AbortSignal): Promise<LibraryBootstrap> {
   return apiRequest<LibraryBootstrap>("/api/bootstrap", { signal });
+}
+
+export function getAssistantAuth(signal?: AbortSignal): Promise<AssistantAuthStatus> {
+  return apiRequest<AssistantAuthStatus>("/api/assistant/auth", { signal });
 }
 
 export async function getPlaylists(signal?: AbortSignal): Promise<PlaylistItem[]> {
@@ -160,6 +172,32 @@ export async function planLibraryPrompt(
     body: JSON.stringify({ prompt, context }),
   });
   return response.plan;
+}
+
+export async function getProcessingJobs(signal?: AbortSignal): Promise<ProcessingJob[]> {
+  const response = await apiRequest<{ items: ProcessingJob[] }>("/api/processing/jobs", { signal });
+  return response.items;
+}
+
+export async function startProcessingJob(
+  token: string,
+  request: {
+    contentId: string;
+    operation: "analyze" | "stems";
+    stem?: "vocals" | "instrumental" | "all";
+  },
+  signal?: AbortSignal,
+): Promise<ProcessingJob> {
+  const response = await apiRequest<{ job: ProcessingJob }>("/api/processing/jobs", {
+    method: "POST",
+    signal,
+    headers: {
+      "content-type": "application/json",
+      "x-music-library-token": token,
+    },
+    body: JSON.stringify(request),
+  });
+  return response.job;
 }
 
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

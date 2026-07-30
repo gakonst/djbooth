@@ -115,6 +115,8 @@ describe("LibrarySidebar", () => {
     expect(markup).toContain("Spotify");
     expect(markup).toContain("SoundCloud");
     expect(markup).toContain("Spotify connected as georgegak");
+    expect(markup).toContain('aria-expanded="true" aria-controls="hosted-provider-spotify"');
+    expect(markup).toContain('aria-expanded="false" aria-controls="hosted-provider-soundcloud"');
     expect(markup).toContain('aria-label="Stop keeping Editable mix downloaded"');
     expect(markup).toContain('aria-label="Edit Editable mix in split view"');
     expect(markup).toContain('aria-label="Playlist tracks unavailable"');
