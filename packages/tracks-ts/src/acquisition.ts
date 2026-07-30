@@ -347,6 +347,8 @@ export async function createSourceSetClip(options: {
   await mkdir(dirname(outputPath), { recursive: true });
   const temporary = temporaryMediaPath(outputPath);
   try {
+    const source = await probeAudio(options.sourcePath);
+    const encoding = sourceSetClipEncoding(source.codec, extname(outputPath));
     await runProcess(options.ffmpeg ?? "ffmpeg", [
       "-hide_banner",
       "-loglevel",
@@ -363,7 +365,8 @@ export async function createSourceSetClip(options: {
       "0:a:0",
       "-vn",
       "-c:a",
-      "copy",
+      encoding.codec,
+      ...(encoding.bitrate ? ["-b:a", encoding.bitrate] : []),
       "-map_metadata",
       "-1",
       ...metadataArguments(options.metadata, extname(outputPath)),
@@ -380,6 +383,29 @@ export async function createSourceSetClip(options: {
     await rm(temporary, { force: true });
     throw error;
   }
+}
+
+/**
+ * Select a container-compatible source-set clip encoding while preserving compatible source bytes.
+ */
+export function sourceSetClipEncoding(
+  sourceCodec: string,
+  outputExtension: string,
+): { codec: "copy" | "aac" | "flac" | "libmp3lame"; bitrate?: string } {
+  const codec = sourceCodec.toLocaleLowerCase("en-US");
+  const extension = outputExtension.toLocaleLowerCase("en-US");
+  if (extension === ".m4a") {
+    return codec === "aac" || codec === "alac"
+      ? { codec: "copy" }
+      : { codec: "aac", bitrate: "320k" };
+  }
+  if (extension === ".flac") {
+    return codec === "flac" ? { codec: "copy" } : { codec: "flac" };
+  }
+  if (extension === ".mp3") {
+    return codec === "mp3" ? { codec: "copy" } : { codec: "libmp3lame", bitrate: "320k" };
+  }
+  throw new Error(`Unsupported source-set clip output extension: ${outputExtension}`);
 }
 
 export async function retagAudio(options: {

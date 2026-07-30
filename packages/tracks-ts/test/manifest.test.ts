@@ -157,9 +157,9 @@ describe("pipeline manifests", () => {
             artist: "ID",
             title: "ID",
           },
-          spotify: { status: "pending" },
-          acquisition: { status: "pending" },
-          rekordbox: { status: "pending" },
+          spotify: { status: "skipped", reason: "Unresolved track identity" },
+          acquisition: { status: "skipped", reason: "Unresolved track identity" },
+          rekordbox: { status: "skipped", reason: "Unresolved track identity" },
           warnings: [],
           errors: [],
         },
@@ -240,6 +240,7 @@ describe("pipeline manifests", () => {
       id: "5wptlXe6PweNiihKvbHIV8",
       uri: "spotify:track:5wptlXe6PweNiihKvbHIV8",
       url: "https://open.spotify.com/track/5wptlXe6PweNiihKvbHIV8",
+      durationMs: 326_000,
     });
   });
 

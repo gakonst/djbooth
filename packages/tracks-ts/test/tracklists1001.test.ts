@@ -318,10 +318,21 @@ describe("1001Tracklists client", () => {
           positionId: "14103334",
           trackId: "f45gvfnf",
           mediaItemId: "1154917",
+          mediaObjectId: 5,
           artist: "Mita Gami & Rafael",
           title: "What Is Luv",
         },
         { order: 2, isId: true, positionId: "14103335" },
+        {
+          order: 3,
+          isId: false,
+          positionId: "14103336",
+          trackId: "knownbase",
+          mediaItemId: "14103336",
+          mediaObjectId: 8,
+          artist: "Known Artist",
+          title: "Known Track",
+        },
       ],
       suggestions: [
         {
@@ -356,6 +367,15 @@ describe("1001Tracklists client", () => {
         return new Response("<!doctype html><title>upstream failure</title>", { status: 502 });
       }
       expect(url.pathname).toBe("/ajax/get_medialink.php");
+      if (url.searchParams.get("idObject") === "8") {
+        expect(url.searchParams.get("idItem")).toBe("14103336");
+        return Response.json({
+          success: true,
+          data: [],
+          more: [{ source: "13", idLink: "positionVideo", type: "video" }],
+        });
+      }
+      expect(url.searchParams.get("idObject")).toBe("5");
       expect(url.searchParams.get("idItem")).toBe("1154917");
       return Response.json({
         success: true,
@@ -427,9 +447,16 @@ describe("1001Tracklists client", () => {
         url: "https://www.youtube.com/watch?v=n4wxIcorAyU",
       },
     ]);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(first.tracks[2]?.media).toEqual([
+      {
+        platform: "youtube",
+        sourceId: "positionVideo",
+        url: "https://www.youtube.com/watch?v=positionVideo",
+      },
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect(loadHtml).toHaveBeenCalledTimes(1);
-    expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 3, writes: 3 });
+    expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 4, writes: 4 });
   });
 });
 
@@ -464,6 +491,16 @@ const TRACKLIST_HTML = String.raw`
       </div>
       <div class="tlpItem" data-id="14103335" data-isid="true">
         <div><input id="tlp14103335_cue_seconds" value="0"><span class="trackValue">ID - ID</span></div>
+      </div>
+      <div class="tlpItem" data-id="14103336" data-trackid="knownbase">
+        <div>
+          <input id="tlp14103336_cue_seconds" value="0">
+          <meta itemprop="name" content="Known Artist - Known Track">
+          <meta itemprop="byArtist" content="Known Artist">
+          <span class="trackValue">Known Artist - Known Track</span>
+          <span class="trackStatus">(ID Remix)</span>
+        </div>
+        <div class="mediaRow" data-tlp="14103336"></div>
       </div>
       <div class="sugTog" id="sug_952278" data-pos="1" data-tlp="14103335" data-type="0">
         <span id="sug952278_cue_value">1:12:27</span>

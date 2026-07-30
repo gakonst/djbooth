@@ -125,6 +125,7 @@ export interface DatabaseTrack {
   positionId?: string;
   trackId?: string;
   mediaItemId?: string;
+  mediaObjectId?: 5 | 8;
   kind?: "position" | "mashup-part";
   durationSeconds?: number;
   artist?: string | null;

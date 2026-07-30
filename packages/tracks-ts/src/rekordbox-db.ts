@@ -26,7 +26,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 
 import { acquirePipelineManifestLock, probeAudio } from "./acquisition.js";
-import { TracksError } from "./errors.js";
+import { errorMessage, TracksError } from "./errors.js";
 import {
   parseManifest,
   type AcquisitionDownload,
@@ -441,6 +441,13 @@ export function planRekordboxImport(
         `Manifest entry ${entry.id} has unresolved acquisition errors`,
         { exitCode: 2, details: { errors: acquisitionErrors } },
       );
+    if (
+      entry.identity.status === "unidentified" &&
+      entry.acquisition.status === "skipped" &&
+      entry.rekordbox.status === "skipped"
+    ) {
+      continue;
+    }
     if (entry.acquisition.status !== "downloaded")
       throw new TracksError(
         "INVALID_SOURCE",
@@ -840,7 +847,7 @@ async function importManifestToRekordboxLocked(
       if (!databaseCommitAttempted) removeInstalledAnalysis(installedAnalysis);
       throw new TracksError(
         "TOOL_FAILED",
-        `Rekordbox database import failed; pre-write backup: ${backup.directory}`,
+        `Rekordbox database import failed: ${errorMessage(error)}; pre-write backup: ${backup.directory}`,
         { cause: error, details: { backup } },
       );
     } finally {

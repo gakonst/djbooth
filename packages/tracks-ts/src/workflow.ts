@@ -270,6 +270,7 @@ export async function runSetToRekordbox(
       details: { status: "completed", operations: resolved.entries.length },
     };
   });
+  const checkpointedPlaylistId = manifest.artifacts.rekordbox?.playlistId;
 
   if (options.allowSourceSetClips) {
     manifest = await runStage("source-set", async () => {
@@ -598,6 +599,7 @@ export async function runSetToRekordbox(
       manifest,
       manifestPath,
       analysisDirectories,
+      ...(checkpointedPlaylistId === undefined ? {} : { playlistId: checkpointedPlaylistId }),
       ...options.rekordbox,
     });
     return {
@@ -706,7 +708,15 @@ function assertAcquisitionComplete(
   manifest: SetManifest,
   acquisition: AcquireManifestResult,
 ): void {
-  const incomplete = manifest.entries.filter((entry) => entry.acquisition.status !== "downloaded");
+  const incomplete = manifest.entries.filter(
+    (entry) =>
+      entry.acquisition.status !== "downloaded" &&
+      !(
+        entry.identity.status === "unidentified" &&
+        entry.acquisition.status === "skipped" &&
+        entry.rekordbox.status === "skipped"
+      ),
+  );
   if (!acquisition.failures.length && !incomplete.length) return;
   throw new TracksError(
     "TOOL_FAILED",

@@ -74,7 +74,7 @@ export class Tracklists1001Client {
         ? undefined
         : (options.cache ??
           new JsonDiskCache({
-            namespace: "1001tracklists-v4",
+            namespace: "1001tracklists-v6",
             ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }));
     this.#pageCache =
@@ -90,7 +90,7 @@ export class Tracklists1001Client {
         ? undefined
         : (options.mediaCache ??
           new JsonDiskCache({
-            namespace: "1001tracklists-media-v1",
+            namespace: "1001tracklists-media-v2",
             ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }));
     this.#cacheMode = options.cacheMode ?? "default";
@@ -188,17 +188,28 @@ export class Tracklists1001Client {
       : await loadBrowserHtml(url, this.#browser!, this.#signal);
     const parsed = parse1001TracklistHtml(html, url);
     const mediaByItem = new Map<string, TrackMediaLink[]>();
-    const mediaItemIds = [
-      ...new Set(parsed.tracks.flatMap((track) => (track.mediaItemId ? [track.mediaItemId] : []))),
+    const mediaItems = [
+      ...new Map(
+        parsed.tracks.flatMap((track) =>
+          track.mediaItemId && track.mediaObjectId
+            ? [
+                [
+                  `${String(track.mediaObjectId)}:${track.mediaItemId}`,
+                  { objectId: track.mediaObjectId, itemId: track.mediaItemId },
+                ] as const,
+              ]
+            : [],
+        ),
+      ).values(),
     ];
-    await mapConcurrent(mediaItemIds, this.#mediaConcurrency, async (mediaItemId) => {
-      const links = await this.#loadMediaLinks(url, mediaItemId);
-      mediaByItem.set(mediaItemId, links);
+    await mapConcurrent(mediaItems, this.#mediaConcurrency, async ({ objectId, itemId }) => {
+      const links = await this.#loadMediaLinks(url, objectId, itemId);
+      mediaByItem.set(`${String(objectId)}:${itemId}`, links);
     });
     parsed.tracks = parsed.tracks.map((track) => {
-      if (!track.mediaItemId) return track;
+      if (!track.mediaItemId || !track.mediaObjectId) return track;
       const media = preferredMediaOrder(
-        mediaByItem.get(track.mediaItemId) ?? [],
+        mediaByItem.get(`${String(track.mediaObjectId)}:${track.mediaItemId}`) ?? [],
         track.durationSeconds,
       );
       return {
@@ -209,11 +220,15 @@ export class Tracklists1001Client {
     return parsed;
   }
 
-  async #loadMediaLinks(tracklistUrl: string, mediaItemId: string): Promise<TrackMediaLink[]> {
+  async #loadMediaLinks(
+    tracklistUrl: string,
+    mediaObjectId: 5 | 8,
+    mediaItemId: string,
+  ): Promise<TrackMediaLink[]> {
     const origin = new URL(tracklistUrl).origin;
     const load = async () => {
       const url = new URL("/ajax/get_medialink.php", origin);
-      url.searchParams.set("idObject", "5");
+      url.searchParams.set("idObject", String(mediaObjectId));
       url.searchParams.set("idItem", mediaItemId);
       let response: Response;
       try {
@@ -250,7 +265,7 @@ export class Tracklists1001Client {
       return body;
     };
     const raw = this.#mediaCache
-      ? await this.#mediaCache.getOrLoad({ origin, mediaItemId }, load, {
+      ? await this.#mediaCache.getOrLoad({ origin, mediaObjectId, mediaItemId }, load, {
           ttlMs: 30 * 24 * 60 * 60 * 1000,
           mode: this.#cacheMode,
           shouldStore: isValidMediaResponse,
@@ -403,12 +418,15 @@ function parseTrack(value: unknown, index: number): DatabaseTrack {
   const isId = typeof row.isId === "boolean" ? row.isId : undefined;
   const durationSeconds = numberValue(row.durationSeconds ?? row.duration_seconds);
   const media = parseTrackMedia(row.media ?? row.mediaLinks);
+  const mediaObjectId =
+    row.mediaObjectId === 5 || row.mediaObjectId === 8 ? row.mediaObjectId : undefined;
   return {
     order,
     ...(isId === undefined ? {} : { isId }),
     ...(typeof row.positionId === "string" ? { positionId: row.positionId } : {}),
     ...(typeof row.trackId === "string" ? { trackId: row.trackId } : {}),
     ...(typeof row.mediaItemId === "string" ? { mediaItemId: row.mediaItemId } : {}),
+    ...(mediaObjectId === undefined ? {} : { mediaObjectId }),
     ...(row.kind === "position" || row.kind === "mashup-part" ? { kind: row.kind } : {}),
     ...(durationSeconds !== undefined ? { durationSeconds } : {}),
     ...(artist !== undefined ? { artist } : {}),
@@ -583,13 +601,18 @@ export function parse1001TracklistHtml(html: string, requestedUrl: string): Data
       if (comparableTrackText(metaName) !== comparableTrackText(visible)) mismatchedRows += 1;
     }
     const identity = parseHtmlIdentity(metaName ?? visible, metaArtist);
-    const status = stripHtml(extractElementsByClass(row, "span", "trackStatus")[0] ?? "");
-    const isId = attributes["data-isid"] === "true" || /(?:^|\W)ID(?:\W|$)/iu.test(status.trim());
+    const isId = attributes["data-isid"] === "true" || !identity.artist || !identity.title;
     const cue = numberValue(
       firstMatchingTagAttributes(row, "input", (item) => Boolean(item.id?.endsWith("_cue_seconds")))
         ?.value,
     );
     const mediaAttributes = firstTagByClassAttributes(row, "div", "mediaRow");
+    const mediaItemId = mediaAttributes?.["data-trackid"] ?? mediaAttributes?.["data-tlp"];
+    const mediaObjectId = mediaAttributes?.["data-trackid"]
+      ? 5
+      : mediaAttributes?.["data-tlp"]
+        ? 8
+        : undefined;
     const publisher = metaValue(row, "itemprop", "publisher");
     const label = publisher ? stripHtml(decodeHtml(publisher)) : undefined;
     const durationSeconds = parseIsoDuration(metaValue(row, "itemprop", "duration"));
@@ -598,9 +621,8 @@ export function parse1001TracklistHtml(html: string, requestedUrl: string): Data
       isId,
       ...(attributes["data-id"] ? { positionId: attributes["data-id"] } : {}),
       ...(attributes["data-trackid"] ? { trackId: attributes["data-trackid"] } : {}),
-      ...(mediaAttributes?.["data-trackid"]
-        ? { mediaItemId: mediaAttributes["data-trackid"] }
-        : {}),
+      ...(mediaItemId ? { mediaItemId } : {}),
+      ...(mediaObjectId ? { mediaObjectId } : {}),
       kind: attributes["data-mashpos"] === "true" ? "mashup-part" : "position",
       ...(durationSeconds === undefined ? {} : { durationSeconds }),
       ...(identity.artist ? { artist: identity.artist } : {}),
@@ -819,7 +841,7 @@ function extractElementsByClass(html: string, tagName: string, className: string
   let depth = 0;
   for (let match = expression.exec(html); match; match = expression.exec(html)) {
     const tag = match[0];
-    const closing = /^<\//u.test(tag);
+    const closing = tag.startsWith("</");
     if (start < 0) {
       if (closing) continue;
       const attributes = parseAttributes(tag);

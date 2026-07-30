@@ -1856,9 +1856,12 @@ function validatePlan(
       throw new Error(`Recording plan for order ${recording.entryOrder} has no variants`);
     }
   }
-  if (requireComplete && planned.length !== manifest.entries.length) {
+  const missingRequired = manifest.entries.filter(
+    (entry) => entry.acquisition.status !== "skipped" && !planned.includes(entry.order),
+  );
+  if (requireComplete && missingRequired.length) {
     throw new Error(
-      `Complete acquisition plan must cover all ${manifest.entries.length} entries; received ${planned.length}`,
+      `Complete acquisition plan is missing required orders: ${missingRequired.map((entry) => entry.order).join(", ")}`,
     );
   }
   for (const order of planned)

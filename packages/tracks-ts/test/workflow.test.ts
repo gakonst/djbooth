@@ -472,6 +472,63 @@ describe("runSetToRekordbox", () => {
     ]);
   });
 
+  test("retains the stable playlist target while a changed track invalidates its checkpoint", async () => {
+    const checkpointed = downloadedManifest(true);
+    checkpointed.entries[0]!.rekordbox = {
+      status: "imported",
+      target: "rekordbox-db",
+      artifact: "/tmp/master.db",
+      dbContentId: "old-content",
+      playlistMembershipId: "old-membership",
+      dbContentIds: ["old-content"],
+      playlistMembershipIds: ["old-membership"],
+    };
+    checkpointed.artifacts.rekordbox = {
+      target: "rekordbox-db",
+      dbPath: "/tmp/master.db",
+      folderName: "Sets",
+      folderId: "folder",
+      playlistName: "Example Set",
+      playlistId: "stable-playlist",
+      backupDirectory: "/tmp/backup",
+    };
+    const refreshed = downloadedManifest(true);
+    const importRekordbox = vi.fn<RunSetToRekordboxDependencies["importRekordbox"]>(
+      async (options) => {
+        expect(options.playlistId).toBe("stable-playlist");
+        return importResult(options.manifest, true);
+      },
+    );
+    const dependencies: RunSetToRekordboxDependencies = {
+      exists: async () => true,
+      readManifest: async () => checkpointed,
+      writeManifest: vi.fn(),
+      identify: vi.fn(),
+      createManifest,
+      enrichSpotify: async (current) => spotifyResult(current, 0),
+      describeSourceSet: vi.fn(),
+      buildPlan: async () => ({
+        clips: [],
+        recordings: [],
+        stagingDirectory: "/tmp/staging",
+      }),
+      acquire: async () => acquisitionResult(refreshed, true),
+      analyze: async () => analysisResult(true),
+      importRekordbox,
+    };
+
+    await runSetToRekordbox({
+      source,
+      manifestPath,
+      outputDirectory,
+      approved: true,
+      acquirers: [],
+      dependencies,
+    });
+
+    expect(importRekordbox).toHaveBeenCalledOnce();
+  });
+
   test("backfills durable analyzer metadata on an older warm manifest", async () => {
     const manifest = downloadedManifest();
     const writeManifest = vi.fn();

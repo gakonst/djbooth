@@ -10,11 +10,22 @@ import {
   readManifest,
   safeFilename,
   scoreYoutubeCandidates,
+  sourceSetClipEncoding,
   writeManifestAtomic,
 } from "../src/acquisition.js";
 import { createManifest } from "../src/manifest.js";
 
 describe("acquisition primitives", () => {
+  test("transcodes source clips only when the target container requires it", () => {
+    expect(sourceSetClipEncoding("opus", ".m4a")).toEqual({
+      codec: "aac",
+      bitrate: "320k",
+    });
+    expect(sourceSetClipEncoding("aac", ".m4a")).toEqual({ codec: "copy" });
+    expect(sourceSetClipEncoding("flac", ".flac")).toEqual({ codec: "copy" });
+    expect(sourceSetClipEncoding("opus", ".flac")).toEqual({ codec: "flac" });
+  });
+
   test("appends canonical download provenance to audio comments exactly once", () => {
     const metadata = { title: "Track", artists: ["Artist"], comment: "Resolved from set" };
     const youtube = audioMetadataWithAcquisitionSource(metadata, {

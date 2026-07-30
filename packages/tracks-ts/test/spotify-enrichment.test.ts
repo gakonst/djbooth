@@ -102,7 +102,7 @@ describe("Spotify manifest enrichment", () => {
       matched: 1,
       ambiguous: 0,
       unmatched: 0,
-      skipped: 1,
+      skipped: 0,
       failed: 0,
     });
     expect(calls).toEqual([
@@ -132,7 +132,7 @@ describe("Spotify manifest enrichment", () => {
     });
     expect(value.entries[1]!.spotify).toEqual({
       status: "skipped",
-      reason: "Track identity is unresolved",
+      reason: "Unresolved track identity",
     });
     expect(parseManifest(value)).toEqual(value);
   });

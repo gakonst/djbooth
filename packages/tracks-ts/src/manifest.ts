@@ -295,10 +295,11 @@ export function createManifest(tracklist: Tracklist): SetManifest {
   const entries = tracklist.tracks.map((track) => {
     const status = isUnidentified(track) ? "unidentified" : "identified";
     const searchQuery = status === "identified" ? trackSearchQuery(track)! : undefined;
-    const spotifyId =
+    const spotifyMedia =
       status === "identified"
-        ? track.mediaLinks?.find((link) => link.platform === "spotify")?.sourceId
+        ? track.mediaLinks?.find((link) => link.platform === "spotify")
         : undefined;
+    const spotifyId = spotifyMedia?.sourceId;
     const identityMetadata = copyIdentityMetadata(track);
     const identity: TrackIdentity =
       status === "identified"
@@ -319,21 +320,30 @@ export function createManifest(tracklist: Tracklist): SetManifest {
         ...(track.endSeconds === undefined ? {} : { endSeconds: track.endSeconds }),
       },
       identity,
-      spotify: spotifyId
-        ? {
-            status: "matched" as const,
-            query: `spotify:id:${spotifyId}`,
-            score: 1,
-            id: spotifyId,
-            uri: `spotify:track:${spotifyId}`,
-            url: `https://open.spotify.com/track/${spotifyId}`,
-          }
-        : { status: "pending" as const, ...(searchQuery ? { query: searchQuery } : {}) },
-      acquisition: {
-        status: "pending" as const,
-        ...(searchQuery ? { query: searchQuery } : {}),
-      },
-      rekordbox: { status: "pending" as const },
+      spotify:
+        status === "unidentified"
+          ? { status: "skipped" as const, reason: "Unresolved track identity" }
+          : spotifyId
+            ? {
+                status: "matched" as const,
+                query: `spotify:id:${spotifyId}`,
+                score: 1,
+                id: spotifyId,
+                uri: `spotify:track:${spotifyId}`,
+                url: `https://open.spotify.com/track/${spotifyId}`,
+                ...(spotifyMedia.durationSeconds === undefined
+                  ? {}
+                  : { durationMs: Math.round(spotifyMedia.durationSeconds * 1000) }),
+              }
+            : { status: "pending" as const, query: searchQuery! },
+      acquisition:
+        status === "unidentified"
+          ? { status: "skipped" as const, reason: "Unresolved track identity" }
+          : { status: "pending" as const, query: searchQuery! },
+      rekordbox:
+        status === "unidentified"
+          ? { status: "skipped" as const, reason: "Unresolved track identity" }
+          : { status: "pending" as const },
       warnings: [],
       errors: [],
     };
@@ -425,6 +435,7 @@ export function parseManifest(value: unknown): SetManifest {
   const rekordboxArtifact = artifacts.rekordbox;
   if (rekordboxArtifact) {
     (entries as ResolvedTrack[]).forEach((entry, index) => {
+      if (isSkippedUnidentifiedEntry(entry)) return;
       if (entry.rekordbox.status !== "imported" || entry.rekordbox.target !== "rekordbox-db") {
         invalid(
           `$.entries[${index}].rekordbox.status`,
@@ -441,6 +452,14 @@ export function parseManifest(value: unknown): SetManifest {
     });
   }
   return value as SetManifest;
+}
+
+function isSkippedUnidentifiedEntry(entry: ResolvedTrack): boolean {
+  return (
+    entry.identity.status === "unidentified" &&
+    entry.acquisition.status === "skipped" &&
+    entry.rekordbox.status === "skipped"
+  );
 }
 
 export function trackSearchQuery(track: TracklistEntry): string | undefined {
