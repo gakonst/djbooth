@@ -170,6 +170,20 @@ function HostedPlaylistRow({
   const canEdit = hosted.capabilities.itemsEditable;
   const syncing = hosted.syncState === "queued" || hosted.syncState === "syncing";
   const readOnlyLabel = canRead ? "Read-only playlist" : "Playlist tracks unavailable";
+  const progress =
+    hosted.syncTotal && hosted.syncTotal > 0
+      ? `${String(Math.min(hosted.syncCurrent ?? 0, hosted.syncTotal))}/${String(hosted.syncTotal)}`
+      : undefined;
+  const retry = hosted.syncState === "error";
+  const actionLabel = syncing
+    ? (progress ?? "Syncing")
+    : retry
+      ? "Retry"
+      : hosted.downloadEnabled
+        ? progress && hosted.syncCurrent === hosted.syncTotal
+          ? "Ready"
+          : "Saved"
+        : "Get";
 
   return (
     <div
@@ -207,17 +221,26 @@ function HostedPlaylistRow({
       <button
         className={`hosted-download-toggle ${hosted.downloadEnabled ? "is-enabled" : ""} ${hosted.syncState === "error" ? "is-error" : ""}`}
         type="button"
-        disabled={!canRead || !onToggleDownload || syncing}
-        onClick={() => onToggleDownload?.(playlist, !hosted.downloadEnabled)}
+        disabled={!canRead || !onToggleDownload}
+        onClick={() => onToggleDownload?.(playlist, retry ? true : !hosted.downloadEnabled)}
         aria-pressed={hosted.downloadEnabled}
-        aria-label={`${hosted.downloadEnabled ? "Stop keeping" : "Keep"} ${playlist.name} downloaded`}
-        title={
-          hosted.syncError ??
-          (!canRead
-            ? "Tracks are unavailable from this provider"
+        aria-label={
+          retry
+            ? `Retry missing tracks in ${playlist.name}`
             : hosted.downloadEnabled
-              ? "Keep downloaded"
-              : "Download and keep in sync")
+              ? `Stop keeping ${playlist.name} downloaded`
+              : `Download and keep ${playlist.name} in sync`
+        }
+        title={
+          !canRead
+            ? "Tracks are unavailable from this provider"
+            : retry
+              ? `${progress ? `${progress} verified. ` : ""}Retry missing or invalid tracks; verified files will be reused.`
+              : syncing
+                ? `${progress ? `${progress}. ` : ""}Stop sync without deleting completed files.`
+                : hosted.downloadEnabled
+                  ? `${progress ? `${progress}. ` : ""}Verified files are kept and reused.`
+                  : "Download, analyze, and keep in sync. Existing verified files are reused."
         }
       >
         {syncing ? (
@@ -229,6 +252,7 @@ function HostedPlaylistRow({
         ) : (
           <Circle size={12} />
         )}
+        <span>{actionLabel}</span>
       </button>
 
       {canEdit ? (

@@ -50,7 +50,9 @@ The workstation provides:
 
 - playlist hierarchy and search, health filters, ordered and column-sortable track browsing;
 - a persistent one/two-deck practice surface with key track metadata, RGB Rekordbox waveform
-  previews, three-band Web Audio EQ, trim, equal-power crossfader, and timed A↔B transitions.
+  previews, accessible rotary three-band Web Audio EQ/trim controls, equal-power crossfader, and
+  timed A↔B transitions. Completed four-source jobs expose synchronized Orig/All/Vocal/Drums/Bass/
+  Other switches directly on each playing deck without decoding the full stem set into memory.
   Allowlisted Spotify/SoundCloud/YouTube source links (plus a non-clickable Soulseek marker) retain
   provenance. Local playback uses HTTP ranges and bounded ANLZ peaks, never a full-file browser
   decode; provider embeds remain unmodified until an independently acquired local match exists;
@@ -63,6 +65,9 @@ The workstation provides:
   opened and run through the shared music-ts identity, Soulseek/native fallback, verification,
   clean analysis, checkpoint, and import pipeline. Analysis begins for each verified recording
   immediately. Provider sections are collapsed by default and remember their expansion state.
+  Playlist rows and the selected-playlist status strip expose durable acquisition progress, retry,
+  and stop-sync actions. Reopening or retrying verifies and reuses completed canonical recordings;
+  downloader calls run only for missing, corrupt, or identity/duration-invalid media.
   Playlist/track metadata is cached in the bounded local control database for 30 minutes and remains
   available as a seven-day offline fallback. Expired rows return immediately while one background
   refresh updates them, so provider latency never blocks revisiting a known playlist; acquired
@@ -90,7 +95,7 @@ The workstation provides:
   literal title/artist searches remain ordinary search. Filesystem paths are stripped from model
   candidate results. The model stages bounded plans; the normal application layer remains the sole
   executor of library mutations;
-- visible per-deck MLX stems controls and a local analyzer/MLX job queue. Duplicate active requests
+- visible per-deck MLX generation/live-mix controls and a local analyzer/MLX job queue. Duplicate active requests
   collapse, complete stem files are reused, and CPU analysis may overlap the serialized GPU lane.
   Compatible stem requests arriving in the same 50 ms burst run as one batch and share a single
   model load.

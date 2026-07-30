@@ -91,6 +91,7 @@ describe("HostedPlaylistStateStore", () => {
 
   it("coalesces active download jobs and atomically claims one", () => {
     const store = state();
+    store.setDownloadEnabled("soundcloud", "soundcloud:playlists:1", true);
     const getJob = vi.spyOn(store, "getJob");
     const first = store.enqueueDownload("soundcloud", "soundcloud:playlists:1");
     expect(getJob).not.toHaveBeenCalled();
@@ -110,6 +111,13 @@ describe("HostedPlaylistStateStore", () => {
       total: 2,
     });
     expect(getJob).not.toHaveBeenCalled();
+    expect(store.getPlaylist("soundcloud", "soundcloud:playlists:1")).toMatchObject({
+      syncCurrent: 1,
+      syncTotal: 2,
+    });
+    expect(store.listPlaylists()).toEqual([
+      expect.objectContaining({ syncCurrent: 1, syncTotal: 2 }),
+    ]);
   });
 
   it("coalesces rapid optimistic writes and resumes interrupted work", () => {

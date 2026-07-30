@@ -20,6 +20,8 @@ export type HostedPlaylistState = {
   revision: string | null;
   syncState: HostedPlaylistSyncState;
   syncError: string | null;
+  syncCurrent?: number;
+  syncTotal?: number;
   updatedAt: string;
 };
 
@@ -68,6 +70,8 @@ type PlaylistStateRow = {
   revision: string | null;
   sync_state: HostedPlaylistSyncState;
   sync_error: string | null;
+  sync_current?: number | null;
+  sync_total?: number | null;
   updated_at: string;
 };
 
@@ -148,10 +152,16 @@ export class HostedPlaylistStateStore {
   getPlaylist(provider: HostedPlaylistProvider, remoteId: string): HostedPlaylistState | undefined {
     const row = this.#database
       .prepare(
-        `SELECT provider, remote_id, download_enabled, local_playlist_id, revision,
-                sync_state, sync_error, updated_at
-           FROM playlist_state
-          WHERE provider = ? AND remote_id = ?`,
+        `SELECT p.provider, p.remote_id, p.download_enabled, p.local_playlist_id, p.revision,
+                p.sync_state, p.sync_error, p.updated_at,
+                j.current AS sync_current, j.total AS sync_total
+           FROM playlist_state p
+           LEFT JOIN hosted_job j ON j.id = (
+             SELECT h.id FROM hosted_job h
+              WHERE h.provider = p.provider AND h.playlist_id = p.remote_id
+              ORDER BY h.created_at DESC LIMIT 1
+           )
+          WHERE p.provider = ? AND p.remote_id = ?`,
       )
       .get(provider, remoteId) as PlaylistStateRow | undefined;
     return row ? playlistState(row) : undefined;
@@ -160,10 +170,16 @@ export class HostedPlaylistStateStore {
   getPlaylistByLocalId(localPlaylistId: string): HostedPlaylistState | undefined {
     const rows = this.#database
       .prepare(
-        `SELECT provider, remote_id, download_enabled, local_playlist_id, revision,
-                sync_state, sync_error, updated_at
-           FROM playlist_state
-          WHERE local_playlist_id = ?
+        `SELECT p.provider, p.remote_id, p.download_enabled, p.local_playlist_id, p.revision,
+                p.sync_state, p.sync_error, p.updated_at,
+                j.current AS sync_current, j.total AS sync_total
+           FROM playlist_state p
+           LEFT JOIN hosted_job j ON j.id = (
+             SELECT h.id FROM hosted_job h
+              WHERE h.provider = p.provider AND h.playlist_id = p.remote_id
+              ORDER BY h.created_at DESC LIMIT 1
+           )
+          WHERE p.local_playlist_id = ?
           LIMIT 2`,
       )
       .all(localPlaylistId) as PlaylistStateRow[];
@@ -178,10 +194,16 @@ export class HostedPlaylistStateStore {
   listPlaylists(): HostedPlaylistState[] {
     const rows = this.#database
       .prepare(
-        `SELECT provider, remote_id, download_enabled, local_playlist_id, revision,
-                sync_state, sync_error, updated_at
-           FROM playlist_state
-          ORDER BY provider, remote_id`,
+        `SELECT p.provider, p.remote_id, p.download_enabled, p.local_playlist_id, p.revision,
+                p.sync_state, p.sync_error, p.updated_at,
+                j.current AS sync_current, j.total AS sync_total
+           FROM playlist_state p
+           LEFT JOIN hosted_job j ON j.id = (
+             SELECT h.id FROM hosted_job h
+              WHERE h.provider = p.provider AND h.playlist_id = p.remote_id
+              ORDER BY h.created_at DESC LIMIT 1
+           )
+          ORDER BY p.provider, p.remote_id`,
       )
       .all() as PlaylistStateRow[];
     return rows.map(playlistState);
@@ -650,6 +672,8 @@ export class HostedPlaylistStateStore {
       );
       CREATE INDEX IF NOT EXISTS hosted_job_status_created
         ON hosted_job(status, created_at);
+      CREATE INDEX IF NOT EXISTS hosted_job_playlist_created
+        ON hosted_job(provider, playlist_id, created_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS hosted_job_active_playlist
         ON hosted_job(provider, playlist_id, kind)
         WHERE status IN ('queued', 'running');
@@ -687,6 +711,9 @@ function playlistState(row: PlaylistStateRow): HostedPlaylistState {
     revision: row.revision,
     syncState: row.sync_state,
     syncError: row.sync_error,
+    ...(row.sync_total !== undefined && row.sync_total !== null && row.sync_total > 0
+      ? { syncCurrent: row.sync_current ?? 0, syncTotal: row.sync_total }
+      : {}),
     updatedAt: row.updated_at,
   };
 }

@@ -24,11 +24,24 @@ import {
 } from "react";
 import WaveSurfer from "wavesurfer.js";
 
-import type { HostedTrack, HotCueSlot, TrackCue, TrackWaveform } from "../../shared/types.js";
+import type {
+  HostedTrack,
+  HotCueSlot,
+  ProcessingJob,
+  TrackCue,
+  TrackWaveform,
+} from "../../shared/types.js";
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
 import { formatBpm } from "../format.js";
-import { connectDeckAudio, FLAT_DECK_EQ, type DeckAudioGraph, type DeckEq } from "../deck-audio.js";
+import {
+  connectDeckAudio,
+  FLAT_DECK_EQ,
+  toggleStemMix,
+  type DeckAudioGraph,
+  type DeckEq,
+  type DeckStemSource,
+} from "../deck-audio.js";
 import {
   trackSourcesFromComment,
   type TrackSource,
@@ -104,6 +117,7 @@ export type PlayerPanelProps = {
   outputGain?: number;
   mediaSessionEnabled?: boolean;
   stemsPending?: boolean;
+  stemJob?: ProcessingJob;
   canEditCues?: boolean;
   cueMutationPending?: boolean;
   previousDisabled?: boolean;
@@ -156,6 +170,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     outputGain = 1,
     mediaSessionEnabled = true,
     stemsPending = false,
+    stemJob,
     canEditCues = false,
     cueMutationPending = false,
     previousDisabled = false,
@@ -180,6 +195,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const waveSurferRef = useRef<WaveSurfer | undefined>(undefined);
   const spotifyPlayerRef = useRef<SpotifyEmbedPlayerHandle>(null);
   const audioGraphRef = useRef<DeckAudioGraph | undefined>(undefined);
+  const stemSourcesRef = useRef<readonly DeckStemSource[]>([]);
   const mixRef = useRef({ eq: eq ?? FLAT_DECK_EQ, outputGain });
   const spotifyWasPlayingRef = useRef(false);
   const currentTimeRef = useRef(0);
@@ -198,6 +214,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [selectedHotCueSlot, setSelectedHotCueSlot] = useState<HotCueSlot>();
   const [waveformData, setWaveformData] = useState<PlayerWaveform | null>(null);
+  const [liveStemIds, setLiveStemIds] = useState<string[] | undefined>();
 
   callbacksRef.current = { onEnded, onReady, onTimeChange, onPlayStateChange, onError };
   currentTimeRef.current = currentTime;
@@ -225,6 +242,22 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     }
     return sources;
   }, [track?.comment, track?.hosted]);
+  const availableStems = useMemo(
+    () =>
+      (stemJob?.status === "completed" ? (stemJob.artifacts ?? []) : [])
+        .filter((artifact): artifact is typeof artifact & { stem: string; url: string } =>
+          Boolean(artifact.stem && artifact.url),
+        )
+        .map((artifact) => ({
+          id: artifact.stem.toLowerCase(),
+          label: stemLabel(artifact.stem),
+          url: artifact.url,
+        }))
+        .sort((left, right) => stemOrder(left.id) - stemOrder(right.id)),
+    [stemJob],
+  );
+  const stemFingerprint = availableStems.map(({ id, url }) => `${id}:${url}`).join("|");
+  stemSourcesRef.current = availableStems;
   const spotifyStreaming =
     track?.hosted?.provider === "spotify" && track.hosted.localContentId === null;
   const soundCloudStreaming =
@@ -269,6 +302,24 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setVolumeState(normalized);
     if (normalized > 0) setMuted(false);
   }, []);
+
+  const applyStemMix = useCallback(
+    async (nextIds: string[] | undefined) => {
+      const graph = audioGraphRef.current;
+      if (!graph) {
+        reportError(new Error("Live stems require local deck audio"));
+        return;
+      }
+      try {
+        await graph.resume();
+        await graph.setStemMix(nextIds);
+        setLiveStemIds(nextIds);
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    [reportError],
+  );
 
   const play = useCallback(async () => {
     if (spotifyStreaming) {
@@ -365,6 +416,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     });
     waveSurferRef.current = waveSurfer;
     audioGraphRef.current = connectDeckAudio(media, mixRef.current.eq, mixRef.current.outputGain);
+    audioGraphRef.current?.setStemSources(stemSourcesRef.current);
     waveSurfer.setVolume(volume);
     waveSurfer.setMuted(muted);
 
@@ -538,6 +590,13 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     audioGraphRef.current?.update(eq ?? FLAT_DECK_EQ, outputGain);
   }, [eq, outputGain]);
 
+  useEffect(() => {
+    setLiveStemIds(undefined);
+    audioGraphRef.current?.setStemSources(availableStems);
+    // Artifact identity, not query-object identity, determines whether media layers changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stemFingerprint, track?.id]);
+
   useEffect(() => setLoadAttempt(0), [track?.id]);
   useEffect(() => {
     if (!mediaError || !remoteStreaming) return;
@@ -702,7 +761,43 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
                   })}
                 </div>
               ) : null}
-              {onSeparateStems ? (
+              {availableStems.length ? (
+                <div className="player-live-stems" aria-label="Live stem mix">
+                  <button
+                    type="button"
+                    className={liveStemIds === undefined ? "is-active" : ""}
+                    onClick={() => void applyStemMix(undefined)}
+                    aria-pressed={liveStemIds === undefined}
+                    title="Play the original recording"
+                  >
+                    Orig
+                  </button>
+                  <button
+                    type="button"
+                    className={liveStemIds?.length === availableStems.length ? "is-active" : ""}
+                    onClick={() => void applyStemMix(availableStems.map(({ id }) => id))}
+                    aria-pressed={liveStemIds?.length === availableStems.length}
+                    title="Play all separated parts"
+                  >
+                    All
+                  </button>
+                  {availableStems.map((stem) => {
+                    const active = liveStemIds?.includes(stem.id) ?? false;
+                    return (
+                      <button
+                        key={stem.id}
+                        type="button"
+                        className={active ? "is-active" : ""}
+                        onClick={() => void applyStemMix(toggleStemMix(liveStemIds, stem.id))}
+                        aria-pressed={active}
+                        title={`${active ? "Mute" : "Enable"} ${stem.label.toLowerCase()}`}
+                      >
+                        {stemShortLabel(stem.id)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : onSeparateStems ? (
                 <button
                   className="player-stems-button"
                   type="button"
@@ -1080,20 +1175,64 @@ function EqControl({
   value: number;
   onChange(value: number): void;
 }) {
+  const normalized = (clamp(value, -24, 12) + 24) / 36;
+  const angle = -135 + normalized * 270;
+  const changeBy = (delta: number) => onChange(clamp(Math.round((value + delta) * 2) / 2, -24, 12));
   return (
-    <label title={`${label}: ${value > 0 ? "+" : ""}${value.toFixed(1)} dB`}>
+    <label className="player-eq-knob-control">
       <span>{label}</span>
-      <input
-        type="range"
-        min="-24"
-        max="12"
-        step="0.5"
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+      <span
+        className="player-eq-knob"
+        role="slider"
+        tabIndex={0}
         aria-label={`${label} EQ`}
-      />
+        aria-valuemin={-24}
+        aria-valuemax={12}
+        aria-valuenow={value}
+        aria-valuetext={`${value > 0 ? "+" : ""}${value.toFixed(1)} decibels`}
+        style={{ "--knob-angle": `${String(angle)}deg` } as React.CSSProperties}
+        title="Drag vertically · double-click to reset"
+        onDoubleClick={() => onChange(0)}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          event.currentTarget.dataset.startY = String(event.clientY);
+          event.currentTarget.dataset.startValue = String(value);
+        }}
+        onPointerMove={(event) => {
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          const startY = Number(event.currentTarget.dataset.startY);
+          const startValue = Number(event.currentTarget.dataset.startValue);
+          const next = startValue + ((startY - event.clientY) / 120) * 36;
+          onChange(clamp(Math.round(next * 2) / 2, -24, 12));
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowUp" || event.key === "ArrowRight") changeBy(0.5);
+          else if (event.key === "ArrowDown" || event.key === "ArrowLeft") changeBy(-0.5);
+          else if (event.key === "PageUp") changeBy(3);
+          else if (event.key === "PageDown") changeBy(-3);
+          else if (event.key === "Home") onChange(-24);
+          else if (event.key === "End") onChange(12);
+          else return;
+          event.preventDefault();
+        }}
+      >
+        <span className="player-eq-knob-marker" />
+      </span>
+      <output>{value === 0 ? "0" : `${value > 0 ? "+" : ""}${value.toFixed(1)}`}</output>
     </label>
   );
+}
+
+function stemLabel(stem: string): string {
+  return stem.charAt(0).toUpperCase() + stem.slice(1).toLowerCase();
+}
+
+function stemShortLabel(stem: string): string {
+  return { vocals: "V", drums: "D", bass: "B", other: "O" }[stem] ?? stem.slice(0, 1).toUpperCase();
+}
+
+function stemOrder(stem: string): number {
+  return ["vocals", "drums", "bass", "other"].indexOf(stem);
 }
 
 function sourceLabel(source: TrackSource): string {

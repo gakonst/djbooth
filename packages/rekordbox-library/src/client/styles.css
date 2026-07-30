@@ -3326,6 +3326,225 @@ select:focus-visible,
   }
 }
 
+/* Acquisition state stays explicit without turning the provider browser into a job console. */
+.hosted-playlist-row {
+  min-height: 34px;
+  gap: 2px;
+}
+
+.hosted-download-toggle {
+  display: inline-flex;
+  width: auto;
+  min-width: 49px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 2%);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.hosted-download-toggle.is-enabled {
+  border-color: rgb(34 197 94 / 22%);
+  background: rgb(34 197 94 / 7%);
+}
+
+.hosted-download-toggle.is-error {
+  border-color: rgb(239 68 68 / 24%);
+  background: rgb(239 68 68 / 8%);
+}
+
+.hosted-acquisition-bar {
+  display: grid;
+  min-height: 36px;
+  flex: none;
+  grid-template-columns: 20px minmax(0, 1fr) minmax(70px, 150px) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(90deg, rgb(34 197 94 / 7%), transparent 55%), #0b0d10;
+}
+
+.hosted-acquisition-bar.is-error {
+  background: linear-gradient(90deg, rgb(239 68 68 / 8%), transparent 55%), #0b0d10;
+}
+
+.hosted-acquisition-icon {
+  display: inline-grid;
+  color: var(--success);
+  place-items: center;
+}
+
+.hosted-acquisition-bar.is-error .hosted-acquisition-icon {
+  color: var(--danger);
+}
+
+.hosted-acquisition-copy {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.hosted-acquisition-copy strong {
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.hosted-acquisition-copy small {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+}
+
+.hosted-acquisition-bar progress {
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: var(--success);
+}
+
+.hosted-acquisition-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* Rotary deck controls: vertical drag, keyboard arrows, double-click reset. */
+.player-eq-controls {
+  align-items: end;
+  gap: 4px;
+}
+
+.player-eq-controls .player-eq-knob-control {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  cursor: ns-resize;
+}
+
+.player-eq-knob-control > span:first-child,
+.player-eq-knob-control output {
+  color: var(--faint);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 6px;
+  font-weight: 700;
+  line-height: 8px;
+  text-transform: uppercase;
+}
+
+.player-eq-knob-control output {
+  min-width: 27px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.player-eq-knob {
+  position: relative;
+  display: block;
+  width: 25px;
+  height: 25px;
+  border: 1px solid #343844;
+  border-radius: 50%;
+  outline: 0;
+  background:
+    radial-gradient(circle at 38% 32%, #3b3f48 0 7%, transparent 8%),
+    radial-gradient(circle, #272a31 0 58%, #15171c 60% 100%);
+  box-shadow:
+    inset 0 0 0 2px rgb(0 0 0 / 28%),
+    0 1px 2px rgb(0 0 0 / 45%);
+  touch-action: none;
+}
+
+.player-eq-knob::before {
+  position: absolute;
+  inset: -3px;
+  border: 1px solid transparent;
+  border-top-color: rgb(167 139 250 / 52%);
+  border-right-color: rgb(167 139 250 / 20%);
+  border-radius: 50%;
+  content: "";
+  transform: rotate(calc(var(--knob-angle) - 45deg));
+}
+
+.player-eq-knob:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    0 0 0 3px var(--accent);
+}
+
+.player-eq-knob-marker {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 2px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent-bright);
+  transform: translateX(-50%) rotate(var(--knob-angle));
+  transform-origin: 50% 9.5px;
+}
+
+.player-live-stems {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgb(167 139 250 / 18%);
+  border-radius: 5px;
+  background: rgb(124 58 237 / 6%);
+}
+
+.player-live-stems button {
+  min-width: 20px;
+  height: 18px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--faint);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.player-live-stems button:hover {
+  background: var(--surface-active);
+  color: var(--text-soft);
+}
+
+.player-live-stems button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  box-shadow: inset 0 0 0 1px rgb(167 139 250 / 24%);
+}
+
+@media (max-width: 1100px) {
+  .hosted-acquisition-bar {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+
+  .hosted-acquisition-bar progress,
+  .hosted-acquisition-copy small {
+    display: none;
+  }
+}
+
 /* Two-deck practice surface. Each deck keeps the streaming waveform path while shedding the
    full-width cue bank; the center strip owns equal-power crossfades and timed transitions. */
 .player-dock.is-dual {
@@ -5812,4 +6031,23 @@ select:focus-visible,
     grid-template-columns: repeat(16, 18px);
     flex: none;
   }
+}
+
+/* Final provider-action precedence after legacy compact-player rules. */
+.hosted-download-toggle {
+  display: inline-flex;
+  width: auto;
+  min-width: 49px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 2%);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }

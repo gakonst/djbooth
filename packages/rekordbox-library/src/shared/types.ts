@@ -47,6 +47,9 @@ export type HostedPlaylist = {
   downloadEnabled: boolean;
   syncState: HostedPlaylistSyncState;
   syncError?: string;
+  /** Latest durable acquisition progress, including completed and failed runs. */
+  syncCurrent?: number;
+  syncTotal?: number;
 };
 
 export type PlaylistItem = {

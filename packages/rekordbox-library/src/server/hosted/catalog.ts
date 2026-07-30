@@ -188,6 +188,8 @@ export class HostedPlaylistCatalog {
       downloadEnabled: _downloadEnabled,
       syncError: _syncError,
       syncState: _syncState,
+      syncCurrent: _syncCurrent,
+      syncTotal: _syncTotal,
       ...providerPlaylist
     } = item.hosted;
     return {
@@ -197,6 +199,8 @@ export class HostedPlaylistCatalog {
         downloadEnabled: state.downloadEnabled,
         syncState: state.syncState,
         ...(state.syncError ? { syncError: state.syncError } : {}),
+        ...(state.syncCurrent === undefined ? {} : { syncCurrent: state.syncCurrent }),
+        ...(state.syncTotal === undefined ? {} : { syncTotal: state.syncTotal }),
       },
     };
   }

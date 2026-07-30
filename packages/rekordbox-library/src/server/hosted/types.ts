@@ -53,6 +53,8 @@ export type HostedPlaylistStoredState = {
   revision: string | null;
   syncState: HostedPlaylistSyncState;
   syncError: string | null;
+  syncCurrent?: number;
+  syncTotal?: number;
 };
 
 export type HostedTrackStoredState = {

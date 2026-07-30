@@ -4,10 +4,12 @@ import {
   AudioLines,
   ChevronRight,
   CircleAlert,
+  CloudDownload,
   Copy,
   Flag,
   Keyboard,
   Library,
+  LoaderCircle,
   Menu,
   PanelRightOpen,
   Pencil,
@@ -15,6 +17,7 @@ import {
   Plus,
   Redo2,
   RefreshCw,
+  RotateCcw,
   Search,
   Sparkles,
   TestTube2,
@@ -852,8 +855,9 @@ export function App() {
                   current,
                   receipt.playlistId,
                   receipt.revision,
-                  input.type === "set-hosted-playlist-download" ||
-                    Boolean(receipt.revision?.startsWith("local-outbox:")),
+                  input.type === "set-hosted-playlist-download"
+                    ? input.enabled
+                    : Boolean(receipt.revision?.startsWith("local-outbox:")),
                 )
               : current,
           );
@@ -1227,6 +1231,16 @@ export function App() {
       )
       .map((job) => job.contentId),
   );
+  const completedStemJobFor = (contentId: string | undefined) =>
+    contentId
+      ? (processingJobsQuery.data ?? []).find(
+          (job) =>
+            job.contentId === contentId &&
+            job.operation === "stems" &&
+            job.status === "completed" &&
+            job.artifacts?.some((artifact) => artifact.stem && artifact.url),
+        )
+      : undefined;
   const playerIndex = activeTrackIndex(tracks, playerTrackId ?? playerTrack?.id);
   const previousTrack = playerIndex > 0 ? tracks[playerIndex - 1] : undefined;
   const nextTrack = playerIndex >= 0 ? tracks[playerIndex + 1] : undefined;
@@ -2284,6 +2298,19 @@ export function App() {
           </div>
         </header>
 
+        {selectedHostedPlaylist ? (
+          <HostedAcquisitionStatus
+            playlist={selectedHostedPlaylist}
+            onChange={(enabled) =>
+              applyHostedMutation({
+                type: "set-hosted-playlist-download",
+                playlistId: selectedHostedPlaylist.id,
+                enabled,
+              })
+            }
+          />
+        ) : null}
+
         <div className={`player-dock${dualDeck ? " is-dual" : ""}`}>
           <PlayerPanel
             ref={playerRef}
@@ -2295,6 +2322,7 @@ export function App() {
             eq={deckAEq}
             outputGain={deckGains.a}
             stemsPending={Boolean(playerTrack && pendingStemTrackIds.has(playerTrack.id))}
+            stemJob={completedStemJobFor(playerTrack?.id)}
             canEditCues={canWrite && !playerTrack?.hosted}
             cueMutationPending={false}
             previousDisabled={!previousTrack}
@@ -2402,6 +2430,7 @@ export function App() {
                 outputGain={deckGains.b}
                 mediaSessionEnabled={false}
                 stemsPending={Boolean(deckBTrack && pendingStemTrackIds.has(deckBTrack.id))}
+                stemJob={completedStemJobFor(deckBTrack?.id)}
                 canEditCues={false}
                 previousDisabled
                 nextDisabled
@@ -2949,7 +2978,7 @@ function optimisticHostedPlaylists(
           hosted: {
             ...playlist.hosted,
             downloadEnabled: mutation.enabled,
-            syncState: "queued",
+            syncState: mutation.enabled ? "queued" : "idle",
             syncError: undefined,
           },
         };
@@ -3074,6 +3103,61 @@ function playlistSubtreeIds(playlists: readonly PlaylistItem[], rootId: string):
 function errorMessage(error: unknown): string {
   if (error instanceof LibraryApiError || error instanceof Error) return error.message;
   return String(error);
+}
+
+function HostedAcquisitionStatus({
+  playlist,
+  onChange,
+}: {
+  playlist: PlaylistItem;
+  onChange(enabled: boolean): void;
+}) {
+  const hosted = playlist.hosted;
+  if (!hosted) return null;
+  const syncing = hosted.syncState === "queued" || hosted.syncState === "syncing";
+  const failed = hosted.syncState === "error";
+  const current = hosted.syncCurrent ?? 0;
+  const total = hosted.syncTotal ?? playlist.trackCount ?? 0;
+  const progress = total > 0 ? `${String(Math.min(current, total))}/${String(total)}` : undefined;
+  const status = syncing
+    ? `${progress ? `${progress} · ` : ""}Acquiring and analyzing`
+    : failed
+      ? `${progress ? `${progress} verified · ` : ""}Some tracks need attention`
+      : hosted.downloadEnabled
+        ? `${progress ? `${progress} · ` : ""}Kept available offline`
+        : `${progress ? `${progress} already local · ` : ""}Automatic sync is off`;
+
+  return (
+    <section
+      className={`hosted-acquisition-bar${failed ? " is-error" : ""}`}
+      aria-label={`${playlist.name} acquisition`}
+    >
+      <span className="hosted-acquisition-icon" aria-hidden="true">
+        {syncing ? (
+          <LoaderCircle className="spin" size={14} />
+        ) : failed ? (
+          <CircleAlert size={14} />
+        ) : (
+          <CloudDownload size={14} />
+        )}
+      </span>
+      <span className="hosted-acquisition-copy">
+        <strong>{status}</strong>
+        <small>Verified files are reused; only missing or invalid audio downloads again.</small>
+      </span>
+      {syncing && total > 0 ? (
+        <progress value={Math.min(current, total)} max={total} aria-label={status} />
+      ) : null}
+      <button
+        type="button"
+        className="secondary-button compact-button"
+        onClick={() => onChange(failed ? true : !hosted.downloadEnabled)}
+      >
+        {failed ? <RotateCcw size={11} /> : null}
+        {failed ? "Retry missing" : hosted.downloadEnabled ? "Stop sync" : "Download"}
+      </button>
+    </section>
+  );
 }
 
 function browserId(prefix: string): string {

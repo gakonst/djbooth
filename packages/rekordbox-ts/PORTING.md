@@ -32,6 +32,20 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — acquisition status and live deck stem mixing
+
+- Hosted playlist rows now expose Download/Syncing/Ready/Retry state and durable item progress; the
+  selected playlist adds explicit retry/stop controls and explains the verified-file reuse policy.
+  Disabling a running subscription cancels its active worker without deleting completed media.
+  Re-enabling coalesces active jobs, then relies on the shared Tracks artifact preflight and
+  `resume-fast-path`: valid canonical recordings cause no downloader call, while invalid duration,
+  identity, or media still repairs safely. The latest job lookup is indexed by provider/playlist.
+- Completed MLX four-source jobs now attach same-origin streaming media elements to the playing
+  deck's Web Audio graph. Orig/All/V/D/B/O controls switch or mute synchronized parts through short
+  gain ramps, follow play/pause/seek/rate/volume, and correct drift without full-file decoding.
+  Low/mid/high/trim controls are rotary vertical-drag sliders with complete keyboard semantics and
+  double-click reset. The separate full audition dialog remains available for detailed comparison.
+
 ### 2026-07-29 — zero-stall provider reads and release-payload pass
 
 - Converted expired hosted playlist and track cache reads to stale-while-revalidate. Known data
