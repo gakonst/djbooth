@@ -223,6 +223,8 @@ function recordingVariant(
     metadata.comment = `${metadata.comment}\n[Individual acquisition failed; recovered from verified set cue ${String(fallbackClip.startSeconds)}–${String(fallbackClip.endSeconds)}s]`;
     metadata.grouping = "music-ts set extract";
   }
+  const preferredCandidate =
+    !local && !fallbackClip ? exactMediaCandidate(entry, identity) : undefined;
   return {
     ...(identity.spotifyId ? { spotifyId: identity.spotifyId } : {}),
     ...(identity.isrc ? { isrc: identity.isrc } : {}),
@@ -241,6 +243,12 @@ function recordingVariant(
     }),
     metadata,
     searchQuery: identity.searchQuery,
+    ...(preferredCandidate
+      ? {
+          preferredCandidate,
+          preferredCandidatePlacement: "backend-fallback" as const,
+        }
+      : {}),
     ...(local
       ? {
           localArtifact: {
@@ -250,6 +258,34 @@ function recordingVariant(
         }
       : {}),
     ...(fallbackClip ? { sourceClip: fallbackClip } : {}),
+  };
+}
+
+function exactMediaCandidate(
+  entry: ResolvedTrack,
+  identity: RecordingIdentity,
+): AcquisitionRecordingVariant["preferredCandidate"] {
+  if (identity.relationship) return undefined;
+  const media = entry.identity.mediaLinks ?? [];
+  if (
+    identity.spotifyId &&
+    !media.some((link) => link.platform === "spotify" && link.sourceId === identity.spotifyId)
+  ) {
+    return undefined;
+  }
+  const youtube = media.find((link) => link.platform === "youtube");
+  if (!youtube) return undefined;
+  return {
+    backend: "ytdlp",
+    id: youtube.sourceId,
+    source: youtube.url,
+    title: identity.title,
+    artist: identity.artists.join(", "),
+    ...(youtube.durationSeconds === undefined && identity.durationMs === undefined
+      ? {}
+      : {
+          durationSeconds: youtube.durationSeconds ?? Math.round(identity.durationMs! / 1000),
+        }),
   };
 }
 

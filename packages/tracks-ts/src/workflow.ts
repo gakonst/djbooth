@@ -8,7 +8,7 @@ import {
   DEFAULT_ANALYZER_THREAD_BUDGET,
   type AnalyzeTracksOptions,
   type AnalyzeTracksResult,
-} from "@gakonst/rekordbox";
+} from "@gakonst/rekordbox/analyzer";
 
 import {
   acquireManifest,

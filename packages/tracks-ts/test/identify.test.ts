@@ -34,7 +34,18 @@ describe("identify", () => {
       event: { name: "Set", lineup: [] },
       tracks: [
         { order: 1, artist: "DJ", title: "Intro Mix" },
-        { order: 2, artist: "Artist", title: "Known" },
+        {
+          order: 2,
+          artist: "Artist",
+          title: "Known",
+          media: [
+            {
+              platform: "spotify",
+              sourceId: "spotify-known",
+              url: "https://open.spotify.com/track/spotify-known",
+            },
+          ],
+        },
         { order: 3, artist: "Guest", title: "Acapella (Edit)" },
         { order: 4, artist: "Guest", title: "Acapella" },
         { order: 5, artist: "Enamour", title: "That's Just Jazz!" },
@@ -48,7 +59,20 @@ describe("identify", () => {
       url: "https://www.1001tracklists.com/tracklist/set.html",
       tracks: [
         { order: 1, startSeconds: 0, endSeconds: 60, artist: "DJ", title: "Intro Mix" },
-        { order: 2, startSeconds: 60, endSeconds: 120, artist: "Artist", title: "Known" },
+        {
+          order: 2,
+          startSeconds: 60,
+          endSeconds: 120,
+          artist: "Artist",
+          title: "Known",
+          mediaLinks: [
+            {
+              platform: "spotify",
+              sourceId: "spotify-known",
+              url: "https://open.spotify.com/track/spotify-known",
+            },
+          ],
+        },
         { order: 3, startSeconds: 120, endSeconds: 180, artist: "Primary", title: "Around" },
         {
           order: 4,
@@ -64,6 +88,9 @@ describe("identify", () => {
     });
     expect(result.warnings).toContain(
       "Enriched 2 unresolved timestamped description entries from 1001Tracklists; retained description cue boundaries.",
+    );
+    expect(result.warnings).toContain(
+      "Attached exact 1001Tracklists media identities to 1 aligned description entries.",
     );
   });
 
@@ -134,7 +161,7 @@ describe("identify", () => {
         url: "https://www.1001tracklists.com/tracklist/set.html",
       },
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   test("searches 1001Tracklists by inspected title after media URL lookup misses", async () => {
@@ -146,7 +173,7 @@ describe("identify", () => {
         return Response.json({ data: { found: false } });
       }
       if (url.pathname.endsWith("/search_tracklists")) {
-        expect(JSON.parse(String(init?.body))).toEqual({
+        expect(Object.fromEntries(url.searchParams)).toEqual({
           title: "Brunello @ Lightning in a Bottle 2026",
           uploader: "Brunello",
         });
@@ -234,7 +261,7 @@ describe("identify", () => {
           },
         });
       }
-      expect(JSON.parse(String(init?.body))).toEqual({
+      expect(Object.fromEntries(url.searchParams)).toEqual({
         url: "https://www.1001tracklists.com/tracklist/right.html",
       });
       return Response.json({

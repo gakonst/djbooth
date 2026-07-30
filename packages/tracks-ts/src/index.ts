@@ -194,6 +194,8 @@ export {
   databaseTracklistToEntries,
   isDatabaseMediaUrl,
   normalizeMediaUrl,
+  parse1001TracklistHtml,
+  type Tracklists1001BrowserOptions,
   type Tracklists1001ClientOptions,
 } from "./providers/tracklists1001.js";
 export {

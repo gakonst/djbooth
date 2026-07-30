@@ -92,6 +92,15 @@ const providerEnv = z.object({
   PARSE_API_KEY: z.string().optional().describe("Parse API key for 1001Tracklists access"),
   PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
   PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
+  TRACKS_1001_BROWSER_PATH: z
+    .string()
+    .optional()
+    .describe("NanoCodex profile-session executable for headed 1001 fallback"),
+  TRACKS_1001_BROWSER_SOURCE: z
+    .enum(["brave", "chrome"])
+    .optional()
+    .describe("Source browser for allowlisted 1001 cookies"),
+  TRACKS_1001_BROWSER_PROFILE: z.string().optional().describe("Source browser profile directory"),
   AUDD_API_TOKEN: z.string().optional().describe("AudD API token"),
   ACR_HOST: z.string().optional().describe("ACRCloud identification project host"),
   ACR_ACCESS_KEY: z.string().optional().describe("ACRCloud identification access key"),
@@ -105,6 +114,12 @@ const parseEnv = z.object({
   PARSE_API_KEY: z.string().optional().describe("Parse API key from https://parse.bot"),
   PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
   PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
+  TRACKS_1001_BROWSER_PATH: z
+    .string()
+    .optional()
+    .describe("NanoCodex profile-session executable for headed 1001 fallback"),
+  TRACKS_1001_BROWSER_SOURCE: z.enum(["brave", "chrome"]).optional(),
+  TRACKS_1001_BROWSER_PROFILE: z.string().optional(),
 });
 
 const importSetEnv = providerEnv.extend({
@@ -220,6 +235,14 @@ const overlapOutput = z.object({
   confidence: z.number().min(0).max(100).optional(),
 });
 
+const mediaLinkOutput = z.object({
+  platform: z.string(),
+  sourceId: z.string(),
+  url: z.string(),
+  embedUrl: z.string().optional(),
+  durationSeconds: z.number().int().positive().optional(),
+});
+
 const identityMetadataOutput = {
   isId: z.boolean().optional(),
   artist: z.string().optional(),
@@ -231,6 +254,7 @@ const identityMetadataOutput = {
   isrc: z.string().optional(),
   upc: z.string().optional(),
   songLink: z.string().optional(),
+  mediaLinks: z.array(mediaLinkOutput).optional(),
   confidence: z.number().min(0).max(100).optional(),
   overlaps: z.array(overlapOutput).optional(),
 };
@@ -400,6 +424,20 @@ const manifestOutput = z.object({
     complete: z.boolean(),
     sampledEverySeconds: z.number().positive().optional(),
     matches: z.array(z.unknown()).optional(),
+    suggestions: z
+      .array(
+        z.object({
+          id: z.string(),
+          position: z.number().int().positive(),
+          positionId: z.string(),
+          type: z.number().int().nonnegative(),
+          text: z.string(),
+          timestamp: z.string().optional(),
+          startSeconds: z.number().nonnegative().optional(),
+          submitter: z.string().optional(),
+        }),
+      )
+      .optional(),
   }),
   entries: z.array(
     z.object({
@@ -453,12 +491,18 @@ const manifestOutput = z.object({
 const databaseTrackOutput = z.object({
   order: z.number().int().positive(),
   isId: z.boolean().optional(),
+  positionId: z.string().optional(),
+  trackId: z.string().optional(),
+  mediaItemId: z.string().optional(),
+  kind: z.enum(["position", "mashup-part"]).optional(),
+  durationSeconds: z.number().int().positive().optional(),
   artist: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
   label: z.string().nullable().optional(),
   mix: z.string().nullable().optional(),
   timestamp: z.string().nullable().optional(),
   links: z.union([z.record(z.string(), z.string()), z.array(z.string()), z.null()]).optional(),
+  media: z.array(mediaLinkOutput).optional(),
 });
 
 const databaseTracklistOutput = z.object({
@@ -471,6 +515,20 @@ const databaseTracklistOutput = z.object({
     lineup: z.array(z.string()),
   }),
   tracks: z.array(databaseTrackOutput),
+  suggestions: z
+    .array(
+      z.object({
+        id: z.string(),
+        position: z.number().int().positive(),
+        positionId: z.string(),
+        type: z.number().int(),
+        text: z.string(),
+        timestamp: z.string().optional(),
+        startSeconds: z.number().nonnegative().optional(),
+        submitter: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 const summaryOutput = z.object({
@@ -1111,11 +1169,13 @@ tracksCli.command("resolve", {
 });
 
 const one001 = Cli.create("1001", {
-  description: "Read 1001Tracklists through the managed Parse wrapper.",
+  description:
+    "Resolve and cache 1001Tracklists through Parse, with headed page recovery and exact per-track media links.",
 });
 
 one001.command("get", {
-  description: "Get a complete tracklist by 1001Tracklists URL.",
+  description:
+    "Get an ordered tracklist plus all available Spotify, SoundCloud, YouTube, and store identities.",
   args: z.object({ url: z.url().describe("1001Tracklists tracklist URL") }),
   env: parseEnv,
   options: z.object({ cacheMode: cacheModeOption }),
@@ -1342,6 +1402,9 @@ function parseClient(
     PARSE_API_KEY?: string | undefined;
     PARSE_API_BASE?: string | undefined;
     PARSE_SCRAPER_ID?: string | undefined;
+    TRACKS_1001_BROWSER_PATH?: string | undefined;
+    TRACKS_1001_BROWSER_SOURCE?: "brave" | "chrome" | undefined;
+    TRACKS_1001_BROWSER_PROFILE?: string | undefined;
   },
   cacheMode: "default" | "refresh" | "off" = "default",
 ): Tracklists1001Client {
@@ -1358,6 +1421,17 @@ function parseClient(
         ? `https://api.parse.bot/scraper/${env.PARSE_SCRAPER_ID}`
         : DEFAULT_PARSE_API_BASE),
     cacheMode,
+    ...(env.TRACKS_1001_BROWSER_PATH
+      ? {
+          browser: {
+            command: env.TRACKS_1001_BROWSER_PATH,
+            sourceBrowser: env.TRACKS_1001_BROWSER_SOURCE ?? "chrome",
+            ...(env.TRACKS_1001_BROWSER_PROFILE
+              ? { profile: env.TRACKS_1001_BROWSER_PROFILE }
+              : {}),
+          },
+        }
+      : {}),
   });
 }
 
@@ -1370,8 +1444,14 @@ function providerStatus(env: Environment) {
     },
     tracklists1001: {
       configured: Boolean(env.PARSE_API_KEY),
-      env: ["PARSE_API_KEY"],
-      capability: "Existing 1001Tracklists lookup, search, latest, and charts",
+      env: [
+        "PARSE_API_KEY",
+        "TRACKS_1001_BROWSER_PATH",
+        "TRACKS_1001_BROWSER_SOURCE",
+        "TRACKS_1001_BROWSER_PROFILE",
+      ],
+      capability:
+        "Cached 1001 lookup plus exact per-track media URLs; headed NanoCodex fallback when Parse cannot render a page",
     },
     audd: {
       configured: Boolean(env.AUDD_API_TOKEN),

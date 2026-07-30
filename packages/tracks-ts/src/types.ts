@@ -40,9 +40,19 @@ export interface TracklistEntry {
   isrc?: string;
   upc?: string;
   songLink?: string;
+  mediaLinks?: TrackMediaLink[];
   confidence?: number;
   overlaps?: TracklistOverlap[];
 }
+
+/** One exact catalog/media identity attached to a resolved tracklist row. */
+export type TrackMediaLink = {
+  platform: string;
+  sourceId: string;
+  url: string;
+  embedUrl?: string;
+  durationSeconds?: number;
+};
 
 export interface TracklistOverlap {
   artist: string;
@@ -63,6 +73,7 @@ export interface Tracklist {
   sampledEverySeconds?: number;
   complete: boolean;
   tracks: TracklistEntry[];
+  suggestions?: DatabaseTrackSuggestion[];
   warnings?: string[];
   matches?: RecognitionMoment[];
 }
@@ -111,13 +122,30 @@ export interface IdentifyStageTiming {
 export interface DatabaseTrack {
   order: number;
   isId?: boolean;
+  positionId?: string;
+  trackId?: string;
+  mediaItemId?: string;
+  kind?: "position" | "mashup-part";
+  durationSeconds?: number;
   artist?: string | null;
   title?: string | null;
   label?: string | null;
   mix?: string | null;
   timestamp?: string | null;
   links?: Record<string, string> | string[] | null;
+  media?: TrackMediaLink[];
 }
+
+export type DatabaseTrackSuggestion = {
+  id: string;
+  position: number;
+  positionId: string;
+  type: number;
+  text: string;
+  timestamp?: string;
+  startSeconds?: number;
+  submitter?: string;
+};
 
 export interface DatabaseTracklist {
   url: string;
@@ -129,6 +157,7 @@ export interface DatabaseTracklist {
     lineup: string[];
   };
   tracks: DatabaseTrack[];
+  suggestions?: DatabaseTrackSuggestion[];
 }
 
 export interface TracklistSummary {

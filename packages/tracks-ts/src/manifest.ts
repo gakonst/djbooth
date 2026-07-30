@@ -2,10 +2,12 @@ import { TracksError } from "./errors.js";
 import { is1001Url, isHttpUrl } from "./media.js";
 import { parseTimestamp } from "./time.js";
 import type {
+  DatabaseTrackSuggestion,
   RecognitionMoment,
   RecognitionProvider,
   Tracklist,
   TracklistEntry,
+  TrackMediaLink,
   TracklistOverlap,
 } from "./types.js";
 
@@ -45,6 +47,7 @@ export type ManifestTracklist = {
   complete: boolean;
   sampledEverySeconds?: number;
   matches?: RecognitionMoment[];
+  suggestions?: DatabaseTrackSuggestion[];
 };
 
 export type TrackCue = {
@@ -64,6 +67,7 @@ type IdentityMetadata = {
   isrc?: string;
   upc?: string;
   songLink?: string;
+  mediaLinks?: TrackMediaLink[];
   confidence?: number;
   overlaps?: TracklistOverlap[];
 };
@@ -291,6 +295,10 @@ export function createManifest(tracklist: Tracklist): SetManifest {
   const entries = tracklist.tracks.map((track) => {
     const status = isUnidentified(track) ? "unidentified" : "identified";
     const searchQuery = status === "identified" ? trackSearchQuery(track)! : undefined;
+    const spotifyId =
+      status === "identified"
+        ? track.mediaLinks?.find((link) => link.platform === "spotify")?.sourceId
+        : undefined;
     const identityMetadata = copyIdentityMetadata(track);
     const identity: TrackIdentity =
       status === "identified"
@@ -311,7 +319,16 @@ export function createManifest(tracklist: Tracklist): SetManifest {
         ...(track.endSeconds === undefined ? {} : { endSeconds: track.endSeconds }),
       },
       identity,
-      spotify: { status: "pending" as const, ...(searchQuery ? { query: searchQuery } : {}) },
+      spotify: spotifyId
+        ? {
+            status: "matched" as const,
+            query: `spotify:id:${spotifyId}`,
+            score: 1,
+            id: spotifyId,
+            uri: `spotify:track:${spotifyId}`,
+            url: `https://open.spotify.com/track/${spotifyId}`,
+          }
+        : { status: "pending" as const, ...(searchQuery ? { query: searchQuery } : {}) },
       acquisition: {
         status: "pending" as const,
         ...(searchQuery ? { query: searchQuery } : {}),
@@ -345,6 +362,9 @@ export function createManifest(tracklist: Tracklist): SetManifest {
         ? {}
         : { sampledEverySeconds: tracklist.sampledEverySeconds }),
       ...(tracklist.matches === undefined ? {} : { matches: copyMatches(tracklist.matches) }),
+      ...(tracklist.suggestions === undefined
+        ? {}
+        : { suggestions: tracklist.suggestions.map((suggestion) => ({ ...suggestion })) }),
     },
     entries,
     warnings: [...(tracklist.warnings ?? [])],
@@ -443,6 +463,9 @@ function copyIdentityMetadata(track: TracklistEntry): IdentityMetadata {
     ...(track.isrc === undefined ? {} : { isrc: track.isrc }),
     ...(track.upc === undefined ? {} : { upc: track.upc }),
     ...(track.songLink === undefined ? {} : { songLink: track.songLink }),
+    ...(track.mediaLinks === undefined
+      ? {}
+      : { mediaLinks: track.mediaLinks.map((link) => ({ ...link })) }),
     ...(track.confidence === undefined ? {} : { confidence: track.confidence }),
     ...(track.overlaps === undefined
       ? {}
@@ -490,6 +513,7 @@ function validateTracklist(value: unknown, path: string): void {
     "complete",
     "sampledEverySeconds",
     "matches",
+    "suggestions",
   ]);
   oneOf(record.provider, ["description", "1001tracklists", "audd", "acrcloud"], `${path}.provider`);
   optionalString(record, "url", path);
@@ -497,6 +521,33 @@ function validateTracklist(value: unknown, path: string): void {
   if (record.sampledEverySeconds !== undefined)
     positiveNumber(record.sampledEverySeconds, `${path}.sampledEverySeconds`);
   if (record.matches !== undefined) validateMatches(record.matches, `${path}.matches`);
+  if (record.suggestions !== undefined)
+    validateSuggestions(record.suggestions, `${path}.suggestions`);
+}
+
+function validateSuggestions(value: unknown, path: string): void {
+  array(value, path).forEach((suggestion, index) => {
+    const itemPath = `${path}[${index}]`;
+    const item = strictObject(suggestion, itemPath, [
+      "id",
+      "position",
+      "positionId",
+      "type",
+      "text",
+      "timestamp",
+      "startSeconds",
+      "submitter",
+    ]);
+    nonemptyString(item.id, `${itemPath}.id`);
+    positiveInteger(item.position, `${itemPath}.position`);
+    nonemptyString(item.positionId, `${itemPath}.positionId`);
+    nonnegativeInteger(item.type, `${itemPath}.type`);
+    nonemptyString(item.text, `${itemPath}.text`);
+    optionalString(item, "timestamp", itemPath);
+    if (item.startSeconds !== undefined)
+      nonnegativeNumber(item.startSeconds, `${itemPath}.startSeconds`);
+    optionalString(item, "submitter", itemPath);
+  });
 }
 
 function validateMatches(value: unknown, path: string): void {
@@ -608,6 +659,7 @@ function validateIdentity(value: unknown, path: string): void {
     "isrc",
     "upc",
     "songLink",
+    "mediaLinks",
     "confidence",
     "overlaps",
     "searchQuery",
@@ -626,6 +678,7 @@ function validateIdentity(value: unknown, path: string): void {
     "songLink",
   ])
     optionalString(record, key, path);
+  if (record.mediaLinks !== undefined) validateMediaLinks(record.mediaLinks, `${path}.mediaLinks`);
   if (record.confidence !== undefined) score100(record.confidence, `${path}.confidence`);
   if (record.overlaps !== undefined) validateOverlaps(record.overlaps, `${path}.overlaps`);
   if (record.status === "identified") {
@@ -642,6 +695,25 @@ function validateIdentity(value: unknown, path: string): void {
   } else if (record.searchQuery !== undefined) {
     invalid(`${path}.searchQuery`, "is not allowed for an unidentified entry");
   }
+}
+
+function validateMediaLinks(value: unknown, path: string): void {
+  array(value, path).forEach((link, index) => {
+    const itemPath = `${path}[${index}]`;
+    const item = strictObject(link, itemPath, [
+      "platform",
+      "sourceId",
+      "url",
+      "embedUrl",
+      "durationSeconds",
+    ]);
+    nonemptyString(item.platform, `${itemPath}.platform`);
+    nonemptyString(item.sourceId, `${itemPath}.sourceId`);
+    nonemptyString(item.url, `${itemPath}.url`);
+    optionalString(item, "embedUrl", itemPath);
+    if (item.durationSeconds !== undefined)
+      positiveInteger(item.durationSeconds, `${itemPath}.durationSeconds`);
+  });
 }
 
 function validateOverlaps(value: unknown, path: string): void {

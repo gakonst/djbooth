@@ -6,7 +6,7 @@ import {
   type AnalyzeTracksOptions,
   type AnalyzeTracksResult,
   type RekordboxAnalysisResult,
-} from "@gakonst/rekordbox";
+} from "@gakonst/rekordbox/analyzer";
 
 import {
   acquirePipelineManifestLock,

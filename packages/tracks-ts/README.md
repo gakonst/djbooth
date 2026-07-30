@@ -117,7 +117,11 @@ YouTube / SoundCloud URL
    └─ AudD Standard / ACRCloud → local-file clips only
 
 1001Tracklists URL
-└─ Parse-managed 1001 wrapper → manifest
+└─ normalized cache
+   └─ miss → Parse GET
+      └─ page-render failure → headed NanoCodex profile session
+         └─ expand every row's Spotify/SoundCloud/YouTube/store identities
+            └─ raw page + raw media + normalized result caches → manifest
 
 Local audio file
 └─ 1001 lookup skipped
@@ -129,7 +133,7 @@ Provider summary:
 | Provider                   | Purpose                                      | Credential                                        | Reads remote set bytes locally?    |
 | -------------------------- | -------------------------------------------- | ------------------------------------------------- | ---------------------------------- |
 | Description via `ytdlp-ts` | Free first pass for timestamped descriptions | None                                              | No; metadata only                  |
-| 1001Tracklists via Parse   | Existing community tracklist                 | `PARSE_API_KEY`                                   | No; JSON only                      |
+| 1001Tracklists             | Existing community tracklist + media links   | `PARSE_API_KEY`; optional headed browser fallback | No set audio                       |
 | AudD Enterprise            | Long-set recognition for URL or local file   | `AUDD_API_TOKEN` with Enterprise access           | No for URLs; AudD receives the URL |
 | AudD Standard samples      | Cost-bounded recognition of a local file     | `AUDD_API_TOKEN`                                  | Local files only                   |
 | ACRCloud samples           | Alternative recognition of a local file      | `ACR_HOST`, `ACR_ACCESS_KEY`, `ACR_ACCESS_SECRET` | Local files only                   |
@@ -146,10 +150,12 @@ Description inspection may use `--cookies path.txt` or `--cookies-from-browser c
 
 ## 1001Tracklists
 
-1001Tracklists has no public developer API. `tracks` uses [Parse's maintained unofficial wrapper](https://parse.bot/marketplace/ec03e43b-6798-40ce-86c9-02832adedc4c/1001tracklists-com-api), rather than embedding a challenge-bypassing scraper.
+1001Tracklists has no public developer API. `tracks` first uses [Parse's maintained unofficial wrapper](https://parse.bot/marketplace/ec03e43b-6798-40ce-86c9-02832adedc4c/1001tracklists-com-api). When Parse finds the record but cannot render its page, an optional headed NanoCodex profile session can load the ordinary page with an allowlisted copy of the user's existing site cookies. It does not solve or bypass challenges; if the site requests verification, complete it in the visible browser once.
 
 ```sh
 export PARSE_API_KEY='…'
+export TRACKS_1001_BROWSER_PATH='/path/to/browser-brave-session'
+export TRACKS_1001_BROWSER_SOURCE='chrome'
 
 tracks 1001 find "$SET_URL"
 tracks 1001 get 'https://www.1001tracklists.com/tracklist/…'
@@ -158,10 +164,16 @@ tracks 1001 latest
 tracks 1001 charts --type trending
 ```
 
-Exact tracklists are cached for seven days by default, avoiding repeated Parse credits. Use
-`--cache-mode refresh` after a tracklist edit or `--cache-mode off` for a diagnostic network call.
-The wrapper follows Parse's generated-endpoint contract: `POST` with endpoint parameters in a JSON
-body and `X-API-Key` authentication.
+The resolver preserves ordered rows, accepted and unresolved identities, mashup parts, suggestions,
+row durations, and every media candidate returned by 1001Tracklists. A duration-nearest Spotify
+candidate becomes the exact Spotify handoff; all alternate Spotify, SoundCloud, YouTube, Apple
+Music, Beatport, Traxsource, and Bandcamp links remain in the manifest.
+
+Raw rendered pages, raw per-row media responses, and the final normalized tracklist are cached
+separately. A warm `resolve` or `1001 get` therefore performs no Parse, browser, or media requests.
+Use `--cache-mode refresh` after a tracklist edit or `--cache-mode off` for a diagnostic network
+call. The wrapper follows Parse's generated-endpoint contract: `GET` query parameters and
+`X-API-Key` authentication.
 
 Optional endpoint pinning:
 
@@ -457,7 +469,9 @@ or malformed entries.
 
 | Namespace                       | Default freshness |
 | ------------------------------- | ----------------- |
-| Exact 1001 tracklist            | 7 days            |
+| Expanded 1001 tracklist         | 7 days            |
+| Raw headed 1001 page            | 7 days            |
+| Raw per-track 1001 media links  | 30 days           |
 | 1001 media lookup/search        | 6 hours           |
 | 1001 latest/charts              | 15 minutes        |
 | Spotify search                  | 6 hours           |
@@ -565,7 +579,7 @@ Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManife
 
 The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject module objects when running it elsewhere.
 
-Provider clients and pure parsers remain exported for custom orchestration: `Tracklists1001Client`, `AudDClient`, `AcrCloudClient`, `parseDescriptionTracklist`, `parseEnterpriseResult`, `buildTimeline`, `createManifest`, and `parseManifest`.
+Provider clients and pure parsers remain exported for custom orchestration: `Tracklists1001Client`, `parse1001TracklistHtml`, `AudDClient`, `AcrCloudClient`, `parseDescriptionTracklist`, `parseEnterpriseResult`, `buildTimeline`, `createManifest`, and `parseManifest`.
 
 ## Accuracy and safety
 
@@ -574,7 +588,7 @@ Provider clients and pure parsers remain exported for custom orchestration: `Tra
 - Fingerprinting can return a source release rather than the exact edit played. Confident simultaneous matches remain in `overlaps`.
 - ACRCloud/AudD sample timestamps have interval-level precision and can miss short edits.
 - `complete` means the selected resolution strategy covered its intended input; it is not a guarantee that every track was identified.
-- Parse is independent from 1001Tracklists. The project contains no CAPTCHA or access-control bypass.
+- Parse is independent from 1001Tracklists. Headed fallback reuses an explicitly allowlisted local profile session; the project contains no CAPTCHA or access-control bypass.
 - Only submit media you are authorized to process, and follow provider/platform terms.
 
 ## Development

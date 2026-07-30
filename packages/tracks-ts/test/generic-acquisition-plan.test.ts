@@ -33,6 +33,20 @@ function manifest(sourcePath: string): SetManifest {
         endSeconds: 240,
         artist: "Artist One",
         title: "Track: One?",
+        mediaLinks: [
+          {
+            platform: "spotify",
+            sourceId: "match-1",
+            url: "https://open.spotify.com/track/match-1",
+            durationSeconds: 240,
+          },
+          {
+            platform: "youtube",
+            sourceId: "exact-video",
+            url: "https://www.youtube.com/watch?v=exact-video",
+            durationSeconds: 240,
+          },
+        ],
       },
       {
         order: 2,
@@ -114,6 +128,16 @@ describe("buildAcquisitionPlan", () => {
       join(outputDirectory, "Artist One", "Singles", "Track One [spotify-match-1].m4a"),
     );
     expect(plan.recordings[0]!.variants[0]!.outputPath).not.toContain("001 -");
+    expect(plan.recordings[0]!.variants[0]).toMatchObject({
+      preferredCandidate: {
+        backend: "ytdlp",
+        id: "exact-video",
+        source: "https://www.youtube.com/watch?v=exact-video",
+        durationSeconds: 240,
+      },
+      preferredCandidatePlacement: "backend-fallback",
+    });
+    expect(plan.recordings[0]!.variants[1]).not.toHaveProperty("preferredCandidate");
     expect(plan.stagingDirectory).toBe(join(outputDirectory, ".staging"));
   });
 

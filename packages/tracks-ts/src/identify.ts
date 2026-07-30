@@ -119,7 +119,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
               message: "Searching 1001Tracklists by media URL",
             });
             const result = await client.findByMediaUrl(source);
-            return result.found ? result : undefined;
+            return result.found ? client.get(result.url) : undefined;
           },
           (result) => (result ? "matched" : "missed"),
         ),
@@ -131,7 +131,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
     if (metadata.status === "fulfilled") {
       const described = tracklistFromDescription(source, metadata.value);
       if (described) {
-        if (client && exactPromise && described.tracks.some(isUnresolvedTracklistEntry)) {
+        if (client && exactPromise) {
           const titlePromise = settleTitleLookup(metadataPromise, client, options);
           const enrichment = await firstDatabaseMatch(exactPromise, titlePromise);
           if (enrichment.status === "matched") {
@@ -261,7 +261,7 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
   };
 }
 
-/** Keep authoritative description cues while filling its unresolved rows from a database sequence. */
+/** Keep authoritative description cues while attaching aligned 1001 identities and media links. */
 export function mergeDescriptionWithDatabase(
   described: Tracklist,
   database: DatabaseTracklist,
@@ -269,40 +269,74 @@ export function mergeDescriptionWithDatabase(
   const databaseEntries = databaseTracklistToEntries(database);
   const alignment = alignTracklists(described.tracks, databaseEntries);
   let enriched = 0;
+  let linked = 0;
   const tracks = described.tracks.map((entry, index) => {
-    if (!isUnresolvedTracklistEntry(entry)) return entry;
     const databaseIndex = alignment.get(index);
     const candidate = databaseIndex === undefined ? undefined : databaseEntries[databaseIndex];
+    if (!candidate) return entry;
+    const mediaLinks = mergeMediaLinks(entry.mediaLinks, candidate.mediaLinks);
+    if (mediaLinks.length > (entry.mediaLinks?.length ?? 0)) linked += 1;
     if (
-      !candidate ||
-      isUnresolvedTracklistEntry(candidate) ||
-      !candidate.artist ||
-      !candidate.title
+      isUnresolvedTracklistEntry(entry) &&
+      !isUnresolvedTracklistEntry(candidate) &&
+      candidate.artist &&
+      candidate.title
     ) {
-      return entry;
+      enriched += 1;
+      return {
+        ...entry,
+        isId: false,
+        artist: candidate.artist,
+        title: candidate.title,
+        ...(candidate.mix ? { mix: candidate.mix } : {}),
+        ...(candidate.label ? { label: candidate.label } : {}),
+        ...(candidate.songLink ? { songLink: candidate.songLink } : {}),
+        ...(mediaLinks.length ? { mediaLinks } : {}),
+      };
     }
-    enriched += 1;
     return {
       ...entry,
-      isId: false,
-      artist: candidate.artist,
-      title: candidate.title,
-      ...(candidate.mix ? { mix: candidate.mix } : {}),
-      ...(candidate.label ? { label: candidate.label } : {}),
-      ...(candidate.songLink ? { songLink: candidate.songLink } : {}),
+      ...(entry.mix || !candidate.mix ? {} : { mix: candidate.mix }),
+      ...(entry.label || !candidate.label ? {} : { label: candidate.label }),
+      ...(entry.songLink || !candidate.songLink ? {} : { songLink: candidate.songLink }),
+      ...(mediaLinks.length ? { mediaLinks } : {}),
     };
   });
-  if (!enriched) return described;
+  const suggestions = database.suggestions?.map((suggestion) => ({ ...suggestion }));
+  if (!enriched && !linked && suggestions === undefined) return described;
   return {
     ...described,
     provider: "1001tracklists",
     url: database.url,
     tracks,
+    ...(suggestions === undefined ? {} : { suggestions }),
     warnings: [
       ...(described.warnings ?? []),
-      `Enriched ${String(enriched)} unresolved timestamped description entries from 1001Tracklists; retained description cue boundaries.`,
+      ...(enriched
+        ? [
+            `Enriched ${String(enriched)} unresolved timestamped description entries from 1001Tracklists; retained description cue boundaries.`,
+          ]
+        : []),
+      ...(linked
+        ? [
+            `Attached exact 1001Tracklists media identities to ${String(linked)} aligned description entries.`,
+          ]
+        : []),
     ],
   };
+}
+
+function mergeMediaLinks(
+  existing: TracklistEntry["mediaLinks"],
+  incoming: TracklistEntry["mediaLinks"],
+): NonNullable<TracklistEntry["mediaLinks"]> {
+  const links = [...(existing ?? []), ...(incoming ?? [])];
+  return links.filter(
+    (link, index) =>
+      links.findIndex(
+        (candidate) => candidate.platform === link.platform && candidate.sourceId === link.sourceId,
+      ) === index,
+  );
 }
 
 function alignTracklists(
@@ -642,6 +676,18 @@ function create1001Client(
     ...(baseUrl ? { baseUrl } : {}),
     ...(signal ? { signal } : {}),
     ...(cacheMode ? { cacheMode } : {}),
+    ...(env.TRACKS_1001_BROWSER_PATH
+      ? {
+          browser: {
+            command: env.TRACKS_1001_BROWSER_PATH,
+            sourceBrowser:
+              env.TRACKS_1001_BROWSER_SOURCE === "brave" ? ("brave" as const) : ("chrome" as const),
+            ...(env.TRACKS_1001_BROWSER_PROFILE
+              ? { profile: env.TRACKS_1001_BROWSER_PROFILE }
+              : {}),
+          },
+        }
+      : {}),
   });
 }
 
@@ -662,5 +708,8 @@ function fromDatabase(
       : { durationSeconds: tracklist.durationSeconds }),
     complete: true,
     tracks: databaseTracklistToEntries(tracklist),
+    ...(tracklist.suggestions === undefined
+      ? {}
+      : { suggestions: tracklist.suggestions.map((suggestion) => ({ ...suggestion })) }),
   };
 }

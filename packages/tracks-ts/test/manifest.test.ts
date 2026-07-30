@@ -183,10 +183,64 @@ describe("pipeline manifests", () => {
       source: "https://soundcloud.com/dj/example-set",
       provider: "1001tracklists",
       url: "https://www.1001tracklists.com/tracklist/example.html",
+      suggestions: [
+        {
+          id: "suggestion-1",
+          position: 2,
+          positionId: "position-2",
+          type: 0,
+          text: "Artist - Possible ID",
+          timestamp: "00:03:30",
+          startSeconds: 210,
+          submitter: "listener",
+        },
+      ],
     });
 
     expect(manifest.source.url).toBe("https://soundcloud.com/dj/example-set");
     expect(manifest.tracklist.url).toBe("https://www.1001tracklists.com/tracklist/example.html");
+    expect(manifest.tracklist.suggestions).toEqual([
+      {
+        id: "suggestion-1",
+        position: 2,
+        positionId: "position-2",
+        type: 0,
+        text: "Artist - Possible ID",
+        timestamp: "00:03:30",
+        startSeconds: 210,
+        submitter: "listener",
+      },
+    ]);
+  });
+
+  test("carries exact media identities into the manifest and skips Spotify search", () => {
+    const source = tracklist();
+    source.tracks[0]!.mediaLinks = [
+      {
+        platform: "spotify",
+        sourceId: "5wptlXe6PweNiihKvbHIV8",
+        url: "https://open.spotify.com/track/5wptlXe6PweNiihKvbHIV8",
+        durationSeconds: 326,
+      },
+      {
+        platform: "soundcloud",
+        sourceId: "2134256460",
+        url: "https://api.soundcloud.com/tracks/2134256460",
+        durationSeconds: 242,
+      },
+    ];
+
+    const manifest = createManifest(source);
+
+    expect(manifest.entries[0]?.identity.mediaLinks).toEqual(source.tracks[0]?.mediaLinks);
+    expect(manifest.entries[0]?.spotify).toEqual({
+      status: "matched",
+      query: "spotify:id:5wptlXe6PweNiihKvbHIV8",
+      score: 1,
+      id: "5wptlXe6PweNiihKvbHIV8",
+      uri: "spotify:track:5wptlXe6PweNiihKvbHIV8",
+      url: "https://open.spotify.com/track/5wptlXe6PweNiihKvbHIV8",
+    });
   });
 
   test("does not mislabel a directly requested 1001Tracklists page as source media", () => {

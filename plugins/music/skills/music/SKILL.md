@@ -13,6 +13,10 @@ CLI for interactive work, diagnostics, Skills, and MCP registration.
 When one request asks to find a set's tracks, acquire and analyze them, and create its Rekordbox
 playlist, run `music tracks import-set` once after the required approvals. Do not decompose that
 request into separate CLI commands unless the user asks for a stage-only workflow.
+Treat any supported set URL as the complete resolver input. The resolver must locate the exact
+1001Tracklists record when available, preserve ordered rows and suggestions, expand every
+Spotify/SoundCloud/YouTube/store identity, and persist raw plus normalized caches. Do not ask the
+user to supply the 1001Tracklists URL or manually extract per-track links.
 When the same request includes a connected deck, continue after import with one
 `music djlink rekordbox <track>`; use `djlink run` only before the recording is in master.db.
 
@@ -184,6 +188,9 @@ Require provider credentials only for the stage that needs them. Resolution can 
 timestamped YouTube or SoundCloud description without credentials. Set `PARSE_API_KEY` for
 1001Tracklists, Spotify credentials for enrichment, and `SLSK_USERNAME` plus `SLSK_PASSWORD` for
 Soulseek acquisition. Require ffmpeg and ffprobe only for media verification or cue extraction.
+When configured, `TRACKS_1001_BROWSER_PATH` supplies the headed NanoCodex profile fallback;
+`TRACKS_1001_BROWSER_SOURCE` and `TRACKS_1001_BROWSER_PROFILE` select the allowlisted source
+profile. Never cache a challenge, placeholder, or identity-mismatched page.
 The CLI loads `MUSIC_ENV_FILE` first, then a nearest ancestor `.env`, then
 `~/.config/music-ts/.env`; do not ask the user to export a root-workspace credential again when one
 of those files already contains it.
@@ -200,8 +207,13 @@ Parse and validate the returned manifest through `@gakonst/music/tracks` before 
 durable state. Resolution order: timestamped description, configured 1001Tracklists lookup, then
 configured recognition. Report identified, unresolved, overlap-only, and ambiguous counts before
 acquisition. Stop and repair implausible ordering or cue boundaries.
-The maintained Parse wrapper uses `POST /scraper/{scraper_id}/{endpoint}` with endpoint parameters
-in a JSON body and `X-API-Key`; do not reconstruct the obsolete query-string request.
+The maintained Parse wrapper uses `GET /scraper/{scraper_id}/{endpoint}` with query parameters and
+`X-API-Key`. A successful media lookup must still hydrate the canonical tracklist page so it cannot
+skip per-row media expansion. Cache raw headed HTML, raw media responses, and the normalized
+expanded tracklist separately; a warm repeat must perform no Parse, browser, or media requests.
+Use the headed allowlisted-profile fallback only when Parse cannot render the canonical page. It
+does not solve challenges: reject forwarding/challenge shells and decoy identities, allow one
+visible human verification when required, then persist the verified result.
 
 For a Spotify playlist, page through playlist items with one authenticated `SpotifyClient`. Preserve
 playlist order, duplicates, unavailable rows, Spotify IDs/URIs/URLs, ISRC, artists, title, mix,
