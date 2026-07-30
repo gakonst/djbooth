@@ -16,6 +16,7 @@ describe('FileSessionStore', () => {
       version: 1,
       grantType: 'authorization_code',
       clientId: 'client-id',
+      clientSecret: 'client-secret',
       redirectUri: 'http://127.0.0.1:8788/callback',
       token: {
         accessToken: 'access-token',

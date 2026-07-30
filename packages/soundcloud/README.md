@@ -8,7 +8,10 @@ commands are generated from SoundCloud's official OpenAPI schema.
 
 - Every official OpenAPI path through typed `GET`, `POST`, `PUT`, and `DELETE` methods.
 - OAuth 2.1 Authorization Code with required PKCE and client secret for account access.
-- Secure mode-`0600` saved sessions and atomic, cross-process refresh-token rotation.
+- Secure mode-`0600` saved sessions and atomic, cross-process refresh-token rotation. Interactive
+  login also retains the confidential app credential in that private session so packaged desktop
+  consumers can refresh without inheriting a shell environment; existing sessions migrate after
+  one login or `auth refresh` with `SOUNDCLOUD_CLIENT_SECRET` supplied.
 - Persistent Client Credentials tokens for public search and URL resolution.
 - Automatic one-time 401 refresh plus coordinated, bounded 429 and transient-read retries.
 - Safe linked pagination through opaque `next_href` URLs.

@@ -107,6 +107,33 @@ describe('SoundCloudOAuth', () => {
     })
   })
 
+  it('optionally retains the confidential app credential for local desktop refreshes', async () => {
+    const store = new MemorySessionStore()
+    const oauth = new SoundCloudOAuth({
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      redirectUri,
+      store,
+      persistClientSecret: true,
+      fetch: vi.fn().mockResolvedValue(
+        Response.json({
+          access_token: 'access-1',
+          expires_in: 3600,
+          refresh_token: 'refresh-1',
+          scope: '',
+        }),
+      ),
+    })
+
+    await oauth.exchangeCode('authorization-code', 'pkce-verifier')
+
+    expect(await store.load()).toMatchObject({
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      token: { refreshToken: 'refresh-1' },
+    })
+  })
+
   it('singleflights refresh and persists every rotated refresh token', async () => {
     const expiredSession: StoredSession = {
       version: 1,

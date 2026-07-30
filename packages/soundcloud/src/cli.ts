@@ -108,6 +108,7 @@ auth.command('login', {
       clientSecret,
       redirectUri,
       store,
+      persistClientSecret: true,
     })
 
     const token = await loginWithBrowser({
@@ -165,16 +166,19 @@ auth.command('refresh', {
         'Not logged in to SoundCloud; run `soundcloud auth login`',
       )
     }
-    if (!context.env.SOUNDCLOUD_CLIENT_SECRET) {
+    const clientSecret =
+      context.env.SOUNDCLOUD_CLIENT_SECRET?.trim() || session.clientSecret
+    if (!clientSecret) {
       throw new Error(
-        'SoundCloud client secret required via SOUNDCLOUD_CLIENT_SECRET',
+        'SoundCloud client secret required once via SOUNDCLOUD_CLIENT_SECRET; `auth refresh` will retain it in the private session for desktop use',
       )
     }
     const oauth = new SoundCloudOAuth({
       clientId: session.clientId,
-      clientSecret: context.env.SOUNDCLOUD_CLIENT_SECRET,
+      clientSecret,
       redirectUri: session.redirectUri,
       store,
+      persistClientSecret: true,
     })
     const token = await oauth.refresh(true)
     return {
@@ -664,17 +668,20 @@ export async function createSoundCloudClient(): Promise<SoundCloudClient> {
   const store = new FileSessionStore()
   const session = await store.load()
   if (session?.grantType === 'authorization_code') {
-    if (!process.env.SOUNDCLOUD_CLIENT_SECRET || !session.redirectUri) {
+    const clientSecret =
+      process.env.SOUNDCLOUD_CLIENT_SECRET?.trim() || session.clientSecret
+    if (!clientSecret || !session.redirectUri) {
       throw new Error(
-        'Saved SoundCloud login requires SOUNDCLOUD_CLIENT_SECRET to refresh its user token',
+        'Saved SoundCloud login cannot refresh: run `soundcloud auth login` again or provide SOUNDCLOUD_CLIENT_SECRET once to migrate its private desktop credential',
       )
     }
     return new SoundCloudClient({
       auth: new SoundCloudOAuth({
         clientId: session.clientId,
-        clientSecret: process.env.SOUNDCLOUD_CLIENT_SECRET,
+        clientSecret,
         redirectUri: session.redirectUri,
         store,
+        persistClientSecret: true,
       }),
     })
   }

@@ -52,6 +52,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   fallback, 512 entries, 8 MiB per value) so app restarts and provider outages do not force repeat
   web fetches. Explicit downloads remain the durable cache for complete recordings; transient
   byte-range playback is still streamed rather than silently duplicating media.
+- SoundCloud's confidential-client refresh requirement no longer breaks Finder-launched bundles.
+  Interactive login opts into retaining the locally supplied app secret beside its rotating tokens
+  in the existing atomic mode-`0600` session; old sessions migrate after one authenticated refresh.
+  Environment values still override the saved value when non-empty, and secrets never enter the
+  browser or repository.
 - Added bounded local processing jobs for selected library tracks. Analysis and stems outputs are
   isolated under `~/Music/Rekordbox Derived/`; four-source results can be auditioned against the
   original on one Web Audio clock before any explicit library-import workflow is introduced.

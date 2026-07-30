@@ -40,18 +40,20 @@ export async function createSoundCloudUserClient(
       'SoundCloud user authentication required; run `soundcloud auth login` or set a user SOUNDCLOUD_ACCESS_TOKEN',
     )
   }
-  if (!clientSecret) {
+  const refreshSecret = clientSecret?.trim() || session.clientSecret
+  if (!refreshSecret) {
     throw new Error(
-      'Saved SoundCloud login requires SOUNDCLOUD_CLIENT_SECRET to refresh its user token',
+      'Saved SoundCloud login cannot refresh: run `soundcloud auth login` again or provide SOUNDCLOUD_CLIENT_SECRET once to migrate its private desktop credential',
     )
   }
   return new SoundCloudClient({
     ...clientOptions,
     auth: new SoundCloudOAuth({
       clientId: session.clientId,
-      clientSecret,
+      clientSecret: refreshSecret,
       redirectUri: session.redirectUri,
       store,
+      persistClientSecret: true,
       ...(clientOptions.fetch ? { fetch: clientOptions.fetch } : {}),
     }),
   })

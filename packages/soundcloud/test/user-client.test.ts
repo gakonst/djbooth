@@ -62,4 +62,39 @@ describe('createSoundCloudUserClient', () => {
       'SoundCloud user authentication required; run `soundcloud auth login`',
     )
   })
+
+  it('reuses the private app credential retained by an interactive login', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'soundcloud-user-client-'))
+    temporaryDirectories.push(directory)
+    const credentialsPath = join(directory, 'credentials.json')
+    await new FileSessionStore(credentialsPath).save({
+      version: 1,
+      grantType: 'authorization_code',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      redirectUri: 'http://127.0.0.1:8788/callback',
+      token: {
+        accessToken: 'user-token',
+        refreshToken: 'refresh-token',
+        expiresAt: Date.now() + 60_000,
+        scope: '',
+      },
+    })
+    const fetch = vi.fn((input: string | URL | Request) => {
+      expect((input as Request).headers.get('authorization')).toBe(
+        'OAuth user-token',
+      )
+      return Promise.resolve(Response.json({ urn: 'soundcloud:users:1' }))
+    })
+    const client = await createSoundCloudUserClient({
+      accessToken: '',
+      clientSecret: '',
+      credentialsPath,
+      fetch,
+    })
+
+    await expect(client.getMe()).resolves.toMatchObject({
+      urn: 'soundcloud:users:1',
+    })
+  })
 })

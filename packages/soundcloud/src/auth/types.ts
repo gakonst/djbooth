@@ -11,6 +11,11 @@ export interface StoredSession {
   version: 1
   grantType: SoundCloudGrantType
   clientId: string
+  /**
+   * Confidential OAuth app credential retained only when an interactive local
+   * login explicitly opts in. FileSessionStore protects the session as 0600.
+   */
+  clientSecret?: string
   redirectUri?: string
   token: TokenSet
 }

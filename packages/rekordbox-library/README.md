@@ -58,7 +58,10 @@ The workstation provides:
   each verified recording immediately, then checkpoint and import the completed playlist. Provider
   sections are collapsed by default and remember their expansion state. Playlist/track metadata is
   cached in the bounded local control database for five minutes and remains available as a
-  seven-day offline fallback; downloaded recordings are already durable local media;
+  seven-day offline fallback; downloaded recordings are already durable local media. Because
+  SoundCloud currently treats every OAuth client as confidential, `soundcloud auth login` retains
+  that locally supplied app secret alongside rotating tokens in the same mode-`0600` session so a
+  packaged app can refresh without inheriting shell environment variables;
 - session-scoped undo/redo for reversible library edits, with toolbar controls and standard
   `Cmd/Ctrl+Z`, `Cmd+Shift+Z`, and `Ctrl+Y` shortcuts;
 - a persistent infinite set canvas whose connected track chain becomes playlist order;

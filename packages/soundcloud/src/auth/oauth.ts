@@ -16,6 +16,8 @@ export interface SoundCloudOAuthOptions {
   store: SessionStore
   fetch?: FetchLike
   refreshLeewayMs?: number
+  /** Retain the supplied app secret in the private session for desktop refreshes. */
+  persistClientSecret?: boolean
 }
 
 export interface AuthorizationRequest {
@@ -31,6 +33,7 @@ export class SoundCloudOAuth implements AccessTokenProvider {
   readonly #clientSecret: string
   readonly #fetch: FetchLike
   readonly #refreshLeewayMs: number
+  readonly #persistClientSecret: boolean
   #refreshing: Promise<TokenSet> | undefined
 
   constructor(options: SoundCloudOAuthOptions) {
@@ -40,6 +43,7 @@ export class SoundCloudOAuth implements AccessTokenProvider {
     this.#clientSecret = options.clientSecret
     this.#fetch = options.fetch ?? globalThis.fetch
     this.#refreshLeewayMs = options.refreshLeewayMs ?? 30_000
+    this.#persistClientSecret = options.persistClientSecret ?? false
   }
 
   createAuthorizationRequest(
@@ -157,6 +161,9 @@ export class SoundCloudOAuth implements AccessTokenProvider {
       version: 1,
       grantType: 'authorization_code',
       clientId: this.clientId,
+      ...(this.#persistClientSecret
+        ? { clientSecret: this.#clientSecret }
+        : {}),
       redirectUri: this.redirectUri,
       token,
     })

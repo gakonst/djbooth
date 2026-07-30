@@ -184,6 +184,8 @@ function isStoredSession(value: unknown): value is StoredSession {
     (session.grantType === 'authorization_code' ||
       session.grantType === 'client_credentials') &&
     typeof session.clientId === 'string' &&
+    (session.clientSecret === undefined ||
+      typeof session.clientSecret === 'string') &&
     (session.redirectUri === undefined ||
       typeof session.redirectUri === 'string') &&
     typeof token?.accessToken === 'string' &&
