@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -28,7 +29,8 @@ export class ProcessingJobManager {
   readonly #dependencies: ProcessingJobDependencies;
   readonly #jobs = new Map<string, ProcessingJob>();
   readonly #listeners = new Set<(job: ProcessingJob) => void>();
-  #tail = Promise.resolve();
+  #analysisTail = Promise.resolve();
+  #stemsTail = Promise.resolve();
 
   constructor(dependencies: ProcessingJobDependencies) {
     this.#dependencies = dependencies;
@@ -50,11 +52,23 @@ export class ProcessingJobManager {
     const track = this.#dependencies.getTrack(request.contentId);
     if (!track.path || !track.fileExists)
       throw new TypeError(`Track '${track.title}' does not have a readable local audio file`);
+    const stem = request.operation === "stems" ? (request.stem ?? "all") : undefined;
+    const existing = this.list().find(
+      (candidate) =>
+        candidate.contentId === track.id &&
+        candidate.operation === request.operation &&
+        candidate.stem === stem &&
+        (candidate.status === "queued" ||
+          candidate.status === "running" ||
+          (candidate.status === "completed" && artifactsExist(candidate, track.path!))),
+    );
+    if (existing) return existing;
     const job: ProcessingJob = {
       id: randomUUID(),
       contentId: track.id,
       trackTitle: track.title,
       operation: request.operation,
+      ...(stem ? { stem } : {}),
       status: "queued",
       createdAt: new Date().toISOString(),
       message:
@@ -63,7 +77,10 @@ export class ProcessingJobManager {
     this.#jobs.set(job.id, job);
     this.#trim();
     this.#emit(job);
-    this.#tail = this.#tail.then(() => this.#run(job.id, track, request)).catch(() => undefined);
+    const lane = request.operation === "stems" ? this.#stemsTail : this.#analysisTail;
+    const next = lane.then(() => this.#run(job.id, track, request)).catch(() => undefined);
+    if (request.operation === "stems") this.#stemsTail = next;
+    else this.#analysisTail = next;
     return job;
   }
 
@@ -113,6 +130,19 @@ export class ProcessingJobManager {
       }
 
       const selected = selectedStems(request.stem);
+      const cached = cachedStemArtifacts(outputDirectory, request.stem, track.path!);
+      if (cached) {
+        this.#update(id, {
+          status: "completed",
+          finishedAt: new Date().toISOString(),
+          message: "Reused cached MLX stems",
+          artifacts: cached.map((artifact) => ({
+            ...artifact,
+            url: `/api/processing/jobs/${encodeURIComponent(id)}/audio/${encodeURIComponent(artifact.stem)}`,
+          })),
+        });
+        return;
+      }
       const separate =
         this.#dependencies.separate ??
         ((audioPath: string, destination: string, stems: StemName[] | undefined) =>
@@ -169,6 +199,36 @@ export class ProcessingJobManager {
 function selectedStems(stem: ProcessingJobRequest["stem"]): StemName[] | undefined {
   if (!stem || stem === "all") return undefined;
   return [stem];
+}
+
+function cachedStemArtifacts(
+  outputDirectory: string,
+  stem: ProcessingJobRequest["stem"],
+  audioPath: string,
+): Array<{ label: string; stem: string; path: string }> | undefined {
+  const names =
+    stem === "vocals"
+      ? ["vocals"]
+      : stem === "instrumental"
+        ? ["instrumental"]
+        : ["vocals", "drums", "bass", "other"];
+  const artifacts = names.map((name) => ({
+    label: name,
+    stem: name,
+    path: join(outputDirectory, `${name}.wav`),
+  }));
+  if (!artifacts.every((artifact) => existsSync(artifact.path))) return undefined;
+  const sourceModifiedAt = statSync(audioPath).mtimeMs;
+  return artifacts.every((artifact) => statSync(artifact.path).mtimeMs >= sourceModifiedAt)
+    ? artifacts
+    : undefined;
+}
+
+function artifactsExist(job: ProcessingJob, audioPath: string): boolean {
+  if (!job.artifacts?.length || !job.artifacts.every((artifact) => existsSync(artifact.path)))
+    return false;
+  const sourceModifiedAt = statSync(audioPath).mtimeMs;
+  return job.artifacts.every((artifact) => statSync(artifact.path).mtimeMs >= sourceModifiedAt);
 }
 
 function safeName(value: string): string {

@@ -63,6 +63,7 @@ Never claim that an action happened: tools only stage a plan which the applicati
 Use Code Mode to compose multi-step requests. Fan out independent tool calls with Promise.all; keep dependent or explicitly ordered actions sequential.
 For mood, vibe, occasion, energy, warm-up, set-building, or recommendation requests, NEVER use searchTracks. Inspect the library, retrieve structured candidates, curate an ordered selection, then show one temporary crate. A semantic crate normally contains 12–30 tracks.
 Use searchTracks only for a literal title, artist, album, filename, or other text the user expects to appear in track metadata.
+For transition practice, load local tracks onto Deck A and Deck B, adjust EQ or crossfader when requested, then use transitionDecks. Never claim to hear or judge the resulting audio.
 Use IDs exactly as supplied in the current context. Prefer one action; use multiple only when explicitly requested.
 Do not use tools for unsupported destructive operations. If the request cannot be represented, explain why without calling a tool.`,
       thinking: "medium",
@@ -348,6 +349,92 @@ function planningTools(): ToolMap {
         return { staged: true, operation: "stems", stem };
       },
     },
+    loadCurrentTrackToDeck: {
+      description:
+        "Stage loading the selected local track onto Deck A or Deck B for auditioning or transition practice.",
+      parameters: objectSchema({ deck: { type: "string", enum: ["A", "B"] } }, ["deck"]),
+      handler(input) {
+        const contentId = requireContext().trackId;
+        if (!contentId) throw new TypeError("Select a local track first");
+        const deck = deckField(input, "deck");
+        stage({
+          type: "load-deck",
+          deck,
+          contentId,
+          label: `Load selected track on Deck ${deck}`,
+        });
+        return { staged: true, deck, contentId };
+      },
+    },
+    setDeckEq: {
+      description:
+        "Stage a three-band DJ EQ or trim change for one local-audio deck. Values are decibels from -24 to +12; omitted bands retain their current values.",
+      parameters: objectSchema(
+        {
+          deck: { type: "string", enum: ["A", "B"] },
+          lowDb: { type: "number", minimum: -24, maximum: 12 },
+          midDb: { type: "number", minimum: -24, maximum: 12 },
+          highDb: { type: "number", minimum: -24, maximum: 12 },
+          trimDb: { type: "number", minimum: -24, maximum: 12 },
+        },
+        ["deck"],
+      ),
+      handler(input) {
+        const record = objectValue(input);
+        const deck = deckField(record, "deck");
+        const decks = requireContext().decks;
+        const current = deck === "A" ? decks?.aEq : decks?.bEq;
+        const eq = {
+          lowDb: optionalNumberField(record, "lowDb") ?? current?.lowDb ?? 0,
+          midDb: optionalNumberField(record, "midDb") ?? current?.midDb ?? 0,
+          highDb: optionalNumberField(record, "highDb") ?? current?.highDb ?? 0,
+          trimDb: optionalNumberField(record, "trimDb") ?? current?.trimDb ?? 0,
+        };
+        stage({ type: "set-deck-eq", deck, eq, label: `Set Deck ${deck} EQ` });
+        return { staged: true, deck, eq };
+      },
+    },
+    setCrossfader: {
+      description:
+        "Stage the equal-power crossfader position. Use 0 for Deck A, 0.5 for center, and 1 for Deck B.",
+      parameters: objectSchema({ position: { type: "number", minimum: 0, maximum: 1 } }, [
+        "position",
+      ]),
+      handler(input) {
+        const position = numberField(input, "position");
+        stage({
+          type: "set-crossfader",
+          position,
+          label: `Move crossfader to ${position.toFixed(2)}`,
+        });
+        return { staged: true, position };
+      },
+    },
+    transitionDecks: {
+      description:
+        "Stage starting the target deck and smoothly crossfading to it over a bounded duration.",
+      parameters: objectSchema(
+        {
+          target: { type: "string", enum: ["A", "B"] },
+          durationSeconds: { type: "number", minimum: 0.25, maximum: 120 },
+        },
+        ["target", "durationSeconds"],
+      ),
+      handler(input) {
+        const target = deckField(input, "target");
+        const durationSeconds = numberField(input, "durationSeconds");
+        const trackId =
+          target === "A" ? requireContext().decks?.aTrackId : requireContext().decks?.bTrackId;
+        if (!trackId) throw new TypeError(`Deck ${target} does not have a track loaded`);
+        stage({
+          type: "transition-decks",
+          target,
+          durationSeconds,
+          label: `Transition to Deck ${target} over ${durationSeconds.toFixed(1)}s`,
+        });
+        return { staged: true, target, durationSeconds };
+      },
+    },
   };
 }
 
@@ -430,6 +517,19 @@ function optionalStringField(input: unknown, name: string): string | undefined {
 function optionalNumberField(input: Record<string, unknown>, name: string): number | undefined {
   const value = input[name];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function numberField(input: unknown, name: string): number {
+  const value = objectValue(input)[name];
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new TypeError(`${name} must be a finite number`);
+  return value;
+}
+
+function deckField(input: unknown, name: string): "A" | "B" {
+  const value = objectValue(input)[name];
+  if (value !== "A" && value !== "B") throw new TypeError(`${name} must be A or B`);
+  return value;
 }
 
 function stringArrayField(input: Record<string, unknown>, name: string): string[] {

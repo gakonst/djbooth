@@ -327,6 +327,13 @@ export type PromptContext = {
   playlistId: string | null;
   trackId: string | null;
   playheadSeconds: number | null;
+  decks?: {
+    aTrackId: string | null;
+    bTrackId: string | null;
+    crossfader: number;
+    aEq: { lowDb: number; midDb: number; highDb: number; trimDb: number };
+    bEq: { lowDb: number; midDb: number; highDb: number; trimDb: number };
+  };
 };
 
 export type PromptAction =
@@ -347,6 +354,15 @@ export type PromptAction =
       stem?: "vocals" | "instrumental" | "all";
       label: string;
     }
+  | { type: "load-deck"; deck: "A" | "B"; contentId: string; label: string }
+  | {
+      type: "set-deck-eq";
+      deck: "A" | "B";
+      eq: { lowDb: number; midDb: number; highDb: number; trimDb: number };
+      label: string;
+    }
+  | { type: "set-crossfader"; position: number; label: string }
+  | { type: "transition-decks"; target: "A" | "B"; durationSeconds: number; label: string }
   | { type: "mutate"; mutation: LibraryMutation; label: string };
 
 export type PromptPlan = {
@@ -363,6 +379,8 @@ export type ProcessingJob = {
   contentId: string;
   trackTitle: string;
   operation: "analyze" | "stems";
+  /** Requested source set; used to deduplicate expensive MLX work. */
+  stem?: "vocals" | "instrumental" | "all";
   status: ProcessingJobStatus;
   createdAt: string;
   startedAt?: string;

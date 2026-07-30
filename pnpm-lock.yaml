@@ -164,45 +164,18 @@ importers:
       '@gakonst/tracks':
         specifier: workspace:*
         version: link:../tracks-ts
-      '@tanstack/react-query':
-        specifier: ^5.101.2
-        version: 5.101.2(react@19.2.7)
-      '@tauri-apps/api':
-        specifier: 2.11.1
-        version: 2.11.1
-      '@tauri-apps/plugin-shell':
-        specifier: 2.3.5
-        version: 2.3.5
       better-sqlite3-multiple-ciphers:
         specifier: ^12.11.1
         version: 12.11.1
-      hls.js:
-        specifier: ^1.6.16
-        version: 1.6.16
       incur:
         specifier: 0.4.13
         version: 0.4.13
-      lucide-react:
-        specifier: ^1.24.0
-        version: 1.24.0(react@19.2.7)
       music-metadata:
         specifier: 11.13.0
         version: 11.13.0
-      nanocodex:
-        specifier: 0.3.0
-        version: 0.3.0
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
       slsk-ts:
         specifier: workspace:*
         version: link:../slsk-ts
-      wavesurfer.js:
-        specifier: 7.12.10
-        version: 7.12.10
       ws:
         specifier: 8.18.3
         version: 8.18.3
@@ -210,9 +183,18 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
+      '@tauri-apps/api':
+        specifier: 2.11.1
+        version: 2.11.1
       '@tauri-apps/cli':
         specifier: 2.11.4
         version: 2.11.4
+      '@tauri-apps/plugin-shell':
+        specifier: 2.3.5
+        version: 2.3.5
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -231,12 +213,27 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^6.0.3
         version: 6.0.3(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      hls.js:
+        specifier: ^1.6.16
+        version: 1.6.16
+      lucide-react:
+        specifier: ^1.24.0
+        version: 1.24.0(react@19.2.7)
+      nanocodex:
+        specifier: 0.3.0
+        version: 0.3.0
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
       oxlint:
         specifier: ^1.50.0
         version: 1.73.0
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
       tsx:
         specifier: ^4.21.0
         version: 4.23.0
@@ -249,6 +246,9 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      wavesurfer.js:
+        specifier: 7.12.10
+        version: 7.12.10
 
   packages/rekordbox-ts:
     dependencies:

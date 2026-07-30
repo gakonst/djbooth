@@ -8,7 +8,7 @@ export default defineConfig({
   build: {
     emptyOutDir: true,
     outDir: "dist/client",
-    sourcemap: true,
+    sourcemap: process.env.NODE_ENV !== "production",
   },
   server: {
     host: "127.0.0.1",

@@ -123,6 +123,7 @@ import {
   restoreLibraryCache,
 } from "./optimistic-library.js";
 import { useLibraryUrlState } from "./url-state.js";
+import { equalPowerGains, FLAT_DECK_EQ, type DeckEq } from "./deck-audio.js";
 
 const PAGE_SIZE = 100;
 const HISTORY_LIMIT = 50;
@@ -253,6 +254,13 @@ export function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [playerTrackId, setPlayerTrackId] = useState<string | null>(urlState.trackId);
   const [playerSummary, setPlayerSummary] = useState<TrackSummary>();
+  const [dualDeck, setDualDeck] = useState(true);
+  const [deckBTrackId, setDeckBTrackId] = useState<string | null>(null);
+  const [deckBSummary, setDeckBSummary] = useState<TrackSummary>();
+  const [deckAEq, setDeckAEq] = useState<DeckEq>(FLAT_DECK_EQ);
+  const [deckBEq, setDeckBEq] = useState<DeckEq>(FLAT_DECK_EQ);
+  const [crossfader, setCrossfader] = useState(0);
+  const [transitionSeconds, setTransitionSeconds] = useState(8);
   const [canvasPlaylistId, setCanvasPlaylistId] = useState<string>();
   const [canvasState, setCanvasState] = useState<CanvasState>({ nodes: [], connections: [] });
   const [canvasExpectedMembershipIds, setCanvasExpectedMembershipIds] = useState<string[]>([]);
@@ -262,6 +270,8 @@ export function App() {
   const [history, setHistory] = useState<LibraryHistoryState>({ undo: [], redo: [] });
   const searchRef = useRef<HTMLInputElement>(null);
   const playerRef = useRef<PlayerPanelHandle>(null);
+  const deckBRef = useRef<PlayerPanelHandle>(null);
+  const transitionFrameRef = useRef<number | undefined>(undefined);
   const autoPlayTrackIdRef = useRef<string | undefined>(undefined);
   const playheadSecondsRef = useRef<number | null>(null);
   const selectedTrackIdRef = useRef<string | null>(urlState.trackId);
@@ -391,6 +401,11 @@ export function App() {
     queryKey: ["track", playerTrackId],
     queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
     enabled: Boolean(playerTrackId && !playerTrackId.startsWith("hosted-track:")),
+  });
+  const deckBDetailQuery = useQuery({
+    queryKey: ["track", deckBTrackId],
+    queryFn: ({ signal }) => getTrackDetail(deckBTrackId!, signal),
+    enabled: Boolean(deckBTrackId && !deckBTrackId.startsWith("hosted-track:")),
   });
   const metadataDetailQuery = useQuery({
     queryKey: ["track", metadataTarget?.id],
@@ -870,6 +885,22 @@ export function App() {
     [bootstrapQuery.data?.csrfToken, clearHistory, queryClient],
   );
 
+  const openHostedPlaylist = useCallback(
+    (playlist: PlaylistItem) => {
+      setTemporaryCrate(undefined);
+      updateUrl({ playlistId: playlist.id, trackId: null, filter: "all" });
+      setViewMode("table");
+      if (!playlist.hosted?.downloadEnabled) {
+        applyHostedMutation({
+          type: "set-hosted-playlist-download",
+          playlistId: playlist.id,
+          enabled: true,
+        });
+      }
+    },
+    [applyHostedMutation, updateUrl],
+  );
+
   const commitHostedPlaylistTracks = useCallback(
     (playlist: PlaylistItem, items: readonly TrackSummary[]) => {
       const hosted = playlist.hosted;
@@ -976,9 +1007,8 @@ export function App() {
       selectedTrackIdRef.current = track.id;
       updateUrl({ trackId: track.id });
       if (!activate) return;
-      const playableId = track.hosted?.localContentId ?? track.id;
-      const playableTrack =
-        playableId === track.id ? track : { ...track, id: playableId, hosted: undefined };
+      const playableTrack = localPlayableTrack(track);
+      const playableId = playableTrack.id;
       const sameTrack = playerTrackId === playableId;
       setPlayerTrackId(playableId);
       setPlayerSummary(playableTrack);
@@ -992,6 +1022,42 @@ export function App() {
       }
     },
     [playerTrackId, updateUrl],
+  );
+
+  const loadDeckB = useCallback((track: TrackSummary) => {
+    const playableTrack = localPlayableTrack(track);
+    setDualDeck(true);
+    setDeckBTrackId(playableTrack.id);
+    setDeckBSummary(playableTrack);
+  }, []);
+
+  const transitionTo = useCallback(
+    async (target: 0 | 1, requestedSeconds = transitionSeconds) => {
+      if (target === 1) await deckBRef.current?.play();
+      else await playerRef.current?.play();
+      if (transitionFrameRef.current !== undefined)
+        window.cancelAnimationFrame(transitionFrameRef.current);
+      const source = crossfader;
+      const startedAt = performance.now();
+      const durationMs = Math.max(0.25, requestedSeconds) * 1_000;
+      const tick = (now: number) => {
+        const progress = Math.min(1, (now - startedAt) / durationMs);
+        const eased = progress * progress * (3 - 2 * progress);
+        setCrossfader(source + (target - source) * eased);
+        if (progress < 1) transitionFrameRef.current = window.requestAnimationFrame(tick);
+        else transitionFrameRef.current = undefined;
+      };
+      transitionFrameRef.current = window.requestAnimationFrame(tick);
+    },
+    [crossfader, transitionSeconds],
+  );
+
+  useEffect(
+    () => () => {
+      if (transitionFrameRef.current !== undefined)
+        window.cancelAnimationFrame(transitionFrameRef.current);
+    },
+    [],
   );
 
   const quickCue = useCallback(
@@ -1152,6 +1218,15 @@ export function App() {
   }, [canvasTracksQuery.data, pendingCanvasTrack, viewMode]);
 
   const playerTrack = playerDetailQuery.data ?? playerSummary;
+  const deckBTrack = deckBDetailQuery.data ?? deckBSummary;
+  const deckGains = equalPowerGains(dualDeck ? crossfader : 0);
+  const pendingStemTrackIds = new Set(
+    (processingJobsQuery.data ?? [])
+      .filter(
+        (job) => job.operation === "stems" && (job.status === "queued" || job.status === "running"),
+      )
+      .map((job) => job.contentId),
+  );
   const playerIndex = activeTrackIndex(tracks, playerTrackId ?? playerTrack?.id);
   const previousTrack = playerIndex > 0 ? tracks[playerIndex - 1] : undefined;
   const nextTrack = playerIndex >= 0 ? tracks[playerIndex + 1] : undefined;
@@ -1253,9 +1328,13 @@ export function App() {
         return;
       }
       if (action.type === "open-playlist") {
-        setTemporaryCrate(undefined);
-        updateUrl({ playlistId: action.playlistId, trackId: null, filter: "all" });
-        setViewMode("table");
+        const playlist = allPlaylists.find((candidate) => candidate.id === action.playlistId);
+        if (playlist?.hosted) openHostedPlaylist(playlist);
+        else {
+          setTemporaryCrate(undefined);
+          updateUrl({ playlistId: action.playlistId, trackId: null, filter: "all" });
+          setViewMode("table");
+        }
         return;
       }
       if (action.type === "search-tracks") {
@@ -1282,9 +1361,47 @@ export function App() {
         await enqueueProcessingJob(action.contentId, action.operation, action.stem ?? "all");
         return;
       }
+      if (action.type === "load-deck") {
+        const track = await queryClient.ensureQueryData({
+          queryKey: ["track", action.contentId],
+          queryFn: ({ signal }) => getTrackDetail(action.contentId, signal),
+        });
+        setDualDeck(true);
+        if (action.deck === "A") {
+          setPlayerTrackId(track.id);
+          setPlayerSummary(track);
+        } else {
+          setDeckBTrackId(track.id);
+          setDeckBSummary(track);
+        }
+        return;
+      }
+      if (action.type === "set-deck-eq") {
+        if (action.deck === "A") setDeckAEq(action.eq);
+        else setDeckBEq(action.eq);
+        return;
+      }
+      if (action.type === "set-crossfader") {
+        setCrossfader(action.position);
+        return;
+      }
+      if (action.type === "transition-decks") {
+        setTransitionSeconds(action.durationSeconds);
+        await transitionTo(action.target === "A" ? 0 : 1, action.durationSeconds);
+        return;
+      }
       openCanvas();
     },
-    [applyMutationAsync, enqueueProcessingJob, openCanvas, updateUrl],
+    [
+      allPlaylists,
+      applyMutationAsync,
+      enqueueProcessingJob,
+      openCanvas,
+      openHostedPlaylist,
+      queryClient,
+      transitionTo,
+      updateUrl,
+    ],
   );
 
   const submitLibraryPrompt = useCallback(
@@ -1299,6 +1416,13 @@ export function App() {
             ? selectedTrack.hosted.localContentId
             : (selectedTrack?.id ?? null),
           playheadSeconds: playheadSecondsRef.current,
+          decks: {
+            aTrackId: playerTrack?.id ?? null,
+            bTrackId: deckBTrack?.id ?? null,
+            crossfader,
+            aEq: deckAEq,
+            bEq: deckBEq,
+          },
           playlists: allPlaylists,
         },
         submission.report,
@@ -1314,8 +1438,13 @@ export function App() {
     [
       allPlaylists,
       canWrite,
+      crossfader,
+      deckAEq,
+      deckBEq,
+      deckBTrack?.id,
       executePromptAction,
       nanocodexPlanner,
+      playerTrack?.id,
       selectedTrack,
       urlState.playlistId,
     ],
@@ -1720,7 +1849,13 @@ export function App() {
     );
     return [
       { kind: "heading", label: track.title },
-      { id: "play-track", label: "Play", icon: <Play size={14} />, shortcut: "Space" },
+      {
+        id: "play-track",
+        label: "Load & play on Deck A",
+        icon: <Play size={14} />,
+        shortcut: "Space",
+      },
+      { id: "load-deck-b", label: "Load on Deck B", icon: <Play size={14} /> },
       {
         id: "edit-track",
         label: "Edit metadata…",
@@ -1849,6 +1984,7 @@ export function App() {
       const playlist = target.playlist;
       if (id === "open-playlist") {
         if (playlist.type === "folder") target.toggleFolder?.();
+        else if (playlist.hosted) openHostedPlaylist(playlist);
         else {
           updateUrl({ playlistId: playlist.id, filter: "all", trackId: null });
           setViewMode("table");
@@ -1882,6 +2018,7 @@ export function App() {
     const track = target.kind === "track" ? target.track : node?.track;
     if (!track) return;
     if (id === "play-track") selectTrack(track, true);
+    if (id === "load-deck-b") loadDeckB(track);
     if (id === "edit-track" && !track.hosted) {
       selectTrack(track);
       setMetadataTarget(track);
@@ -2000,11 +2137,7 @@ export function App() {
           setPlaylistDialog({ mode: "create", defaultParentId })
         }
         onEditPlaylist={openPlaylistEditor}
-        onSelectHostedPlaylist={(playlist) => {
-          setTemporaryCrate(undefined);
-          updateUrl({ playlistId: playlist.id, trackId: null, filter: "all" });
-          setViewMode("table");
-        }}
+        onSelectHostedPlaylist={openHostedPlaylist}
         onEditHostedPlaylist={openPlaylistEditor}
         onToggleHostedDownload={(playlist, enabled) =>
           applyHostedMutation({
@@ -2058,6 +2191,16 @@ export function App() {
             </nav>
           </div>
           <div className="topbar-actions">
+            <button
+              className={`split-editor-button ${dualDeck ? "is-active" : ""}`}
+              type="button"
+              onClick={() => setDualDeck((current) => !current)}
+              aria-pressed={dualDeck}
+              title="Toggle two-deck practice mode"
+            >
+              <AudioLines size={14} />
+              <span>{dualDeck ? "2 decks" : "1 deck"}</span>
+            </button>
             <button
               className={`split-editor-button ${editorOpen ? "is-active" : ""}`}
               type="button"
@@ -2141,12 +2284,17 @@ export function App() {
           </div>
         </header>
 
-        <div className="player-dock">
+        <div className={`player-dock${dualDeck ? " is-dual" : ""}`}>
           <PlayerPanel
             ref={playerRef}
             adapter={playerAdapter}
             track={playerTrack}
             cues={playerDetailQuery.data?.cues ?? []}
+            compact={dualDeck}
+            deckLabel={dualDeck ? "A" : undefined}
+            eq={deckAEq}
+            outputGain={deckGains.a}
+            stemsPending={Boolean(playerTrack && pendingStemTrackIds.has(playerTrack.id))}
             canEditCues={canWrite && !playerTrack?.hosted}
             cueMutationPending={false}
             previousDisabled={!previousTrack}
@@ -2176,8 +2324,98 @@ export function App() {
             onDeleteCue={(cue) =>
               applyMutation({ type: "delete-cue", contentId: cue.contentId, cueId: cue.id })
             }
+            onEqChange={setDeckAEq}
+            onSeparateStems={() => {
+              if (!playerTrack) return;
+              void enqueueProcessingJob(playerTrack.id, "stems").catch((error) =>
+                setToast({ tone: "error", message: errorMessage(error) }),
+              );
+            }}
             onError={(error) => setToast({ tone: "error", message: error.message })}
           />
+          {dualDeck ? (
+            <>
+              <section className="deck-mixer" aria-label="Deck mixer">
+                <span className="deck-mixer-label">Mixer</span>
+                <div className="deck-transition-buttons">
+                  <button type="button" disabled={!deckBTrack} onClick={() => void transitionTo(1)}>
+                    A → B
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!playerTrack}
+                    onClick={() => void transitionTo(0)}
+                  >
+                    B → A
+                  </button>
+                </div>
+                <label className="deck-transition-time">
+                  <span>Transition</span>
+                  <select
+                    value={transitionSeconds}
+                    onChange={(event) => setTransitionSeconds(Number(event.target.value))}
+                  >
+                    {[2, 4, 8, 16, 32].map((seconds) => (
+                      <option key={seconds} value={seconds}>
+                        {seconds}s
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="deck-crossfader">
+                  <span>
+                    <b>A</b> Crossfader <b>B</b>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.001"
+                    value={crossfader}
+                    onChange={(event) => {
+                      if (transitionFrameRef.current !== undefined)
+                        window.cancelAnimationFrame(transitionFrameRef.current);
+                      transitionFrameRef.current = undefined;
+                      setCrossfader(Number(event.target.value));
+                    }}
+                  />
+                </label>
+                <button
+                  className="deck-reset-button"
+                  type="button"
+                  onClick={() => {
+                    setDeckAEq(FLAT_DECK_EQ);
+                    setDeckBEq(FLAT_DECK_EQ);
+                  }}
+                >
+                  Reset EQ
+                </button>
+              </section>
+              <PlayerPanel
+                ref={deckBRef}
+                adapter={playerAdapter}
+                track={deckBTrack}
+                cues={deckBDetailQuery.data?.cues ?? []}
+                compact
+                deckLabel="B"
+                eq={deckBEq}
+                outputGain={deckGains.b}
+                mediaSessionEnabled={false}
+                stemsPending={Boolean(deckBTrack && pendingStemTrackIds.has(deckBTrack.id))}
+                canEditCues={false}
+                previousDisabled
+                nextDisabled
+                onEqChange={setDeckBEq}
+                onSeparateStems={() => {
+                  if (!deckBTrack) return;
+                  void enqueueProcessingJob(deckBTrack.id, "stems").catch((error) =>
+                    setToast({ tone: "error", message: errorMessage(error) }),
+                  );
+                }}
+                onError={(error) => setToast({ tone: "error", message: error.message })}
+              />
+            </>
+          ) : null}
         </div>
 
         {bootstrapQuery.isError ? (
@@ -2730,6 +2968,11 @@ function optimisticHostedPlaylists(
       };
     }),
   };
+}
+
+function localPlayableTrack(track: TrackSummary): TrackSummary {
+  const localContentId = track.hosted?.localContentId;
+  return localContentId ? { ...track, id: localContentId, hosted: undefined } : track;
 }
 
 function settleHostedPlaylist(

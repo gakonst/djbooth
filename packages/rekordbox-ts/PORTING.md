@@ -32,6 +32,30 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — automatic acquisition and agent-controllable dual decks
+
+- Opening any Spotify or SoundCloud playlist now enables its durable acquisition subscription.
+  The workbench delegates to the existing music-ts pipeline: provider metadata identifies the
+  recording, Soulseek/native fallback acquires independent local media, and each verified file
+  enters bounded clean analysis immediately. Provider streams are neither captured nor described
+  as downloads. Hosted metadata freshness increased from five to 30 minutes while retaining the
+  seven-day persistent stale/offline fallback and immediate local-state invalidation.
+- Added two simultaneous local decks with streaming ANLZ waveforms, independent low/mid/high
+  biquads, trim, equal-power crossfader gains, and 2–32 second smooth transitions. A provider track
+  switches to the local content ID as soon as acquisition resolves; Spotify embeds remain outside
+  the Web Audio mixer. Context actions load Deck B, and visible per-deck Stems controls enqueue the
+  existing MLX path.
+- Nanocodex now receives bounded deck state and typed tools for loading the selected local track,
+  setting EQ, positioning the crossfader, and starting a timed transition. The agent can operate
+  the mixer but is explicitly prohibited from claiming it heard or judged the output.
+- Interactive processing deduplicates identical queued/running jobs, reuses complete stem files,
+  and separates CPU analysis from the serialized MLX GPU lane so one of each may overlap. Production
+  source maps are no longer shipped, and HLS loads only when SoundCloud needs it. The client bundle
+  fell from 6.9 to 3.3 MiB; initial JavaScript fell from 948 to 460 KiB. Browser-only packages no
+  longer duplicate into the Node sidecar, reducing the release app from 324 to 242 MiB. Browser
+  smoke loaded two real library tracks into A/B with no runtime/player errors; all 173 package tests
+  passed.
+
 ### 2026-07-29 — Tauri workstation and browser-WASM Nanocodex consumer
 
 - Wrapped the existing local-first React library workstation in a Tauri 2 macOS shell. Release
@@ -48,7 +72,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   tokens nor a direct database handle. Synthetic WebSocket close codes are normalized before relay,
   avoiding the packaged-backend crash observed with browser code `1005`.
 - Collapsed Spotify/SoundCloud sections now remember their expansion state. Remote playlist and
-  track metadata uses a bounded SQLite-backed cache (five-minute freshness, seven-day stale/offline
+  track metadata uses a bounded SQLite-backed cache (30-minute freshness, seven-day stale/offline
   fallback, 512 entries, 8 MiB per value) so app restarts and provider outages do not force repeat
   web fetches. Explicit downloads remain the durable cache for complete recordings; transient
   byte-range playback is still streamed rather than silently duplicating media.

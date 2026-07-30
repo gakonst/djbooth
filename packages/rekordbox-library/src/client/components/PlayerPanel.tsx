@@ -1,4 +1,5 @@
 import {
+  AudioLines,
   Flag,
   LoaderCircle,
   Pause,
@@ -12,7 +13,6 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import Hls, { ErrorTypes, Events as HlsEvents } from "hls.js";
 import {
   forwardRef,
   useCallback,
@@ -28,6 +28,7 @@ import type { HostedTrack, HotCueSlot, TrackCue, TrackWaveform } from "../../sha
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
 import { formatBpm } from "../format.js";
+import { connectDeckAudio, FLAT_DECK_EQ, type DeckAudioGraph, type DeckEq } from "../deck-audio.js";
 import {
   trackSourcesFromComment,
   type TrackSource,
@@ -97,6 +98,12 @@ export type PlayerPanelProps = {
   /** Controlled, authoritative cue list from the library API. */
   cues?: ReadonlyArray<PlayerCue>;
   adapter?: PlayerAdapter;
+  compact?: boolean;
+  deckLabel?: "A" | "B";
+  eq?: DeckEq;
+  outputGain?: number;
+  mediaSessionEnabled?: boolean;
+  stemsPending?: boolean;
   canEditCues?: boolean;
   cueMutationPending?: boolean;
   previousDisabled?: boolean;
@@ -111,6 +118,8 @@ export type PlayerPanelProps = {
   onAddHotCue?(slot: HotCueSlot, seconds: number): void;
   onDeleteCue?(cue: PlayerCue): void;
   onEditCue?(cue: PlayerCue): void;
+  onEqChange?(eq: DeckEq): void;
+  onSeparateStems?(): void;
   onError?(error: Error): void;
 };
 
@@ -141,6 +150,12 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     track,
     cues = [],
     adapter = defaultPlayerAdapter,
+    compact = false,
+    deckLabel,
+    eq,
+    outputGain = 1,
+    mediaSessionEnabled = true,
+    stemsPending = false,
     canEditCues = false,
     cueMutationPending = false,
     previousDisabled = false,
@@ -155,6 +170,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     onAddHotCue,
     onDeleteCue,
     onEditCue,
+    onEqChange,
+    onSeparateStems,
     onError,
   },
   forwardedRef,
@@ -162,9 +179,11 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   const waveformElementRef = useRef<HTMLDivElement>(null);
   const waveSurferRef = useRef<WaveSurfer | undefined>(undefined);
   const spotifyPlayerRef = useRef<SpotifyEmbedPlayerHandle>(null);
+  const audioGraphRef = useRef<DeckAudioGraph | undefined>(undefined);
+  const mixRef = useRef({ eq: eq ?? FLAT_DECK_EQ, outputGain });
   const spotifyWasPlayingRef = useRef(false);
   const currentTimeRef = useRef(0);
-  const hlsRef = useRef<Hls | undefined>(undefined);
+  const hlsRef = useRef<import("hls.js").default | undefined>(undefined);
   const soundCloudReadyRef = useRef(false);
   const soundCloudPlayPendingRef = useRef(false);
   const callbacksRef = useRef({ onEnded, onReady, onTimeChange, onPlayStateChange, onError });
@@ -182,6 +201,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 
   callbacksRef.current = { onEnded, onReady, onTimeChange, onPlayStateChange, onError };
   currentTimeRef.current = currentTime;
+  mixRef.current = { eq: eq ?? FLAT_DECK_EQ, outputGain };
 
   const audioUrl = useMemo(
     () => (track ? adapter.getAudioUrl(track) : undefined),
@@ -261,6 +281,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     }
     if ((!track?.fileExists && !soundCloudStreaming) || !waveSurferRef.current) return;
     try {
+      await audioGraphRef.current?.resume();
       await waveSurferRef.current?.play();
     } catch (error) {
       reportError(error);
@@ -329,10 +350,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     )
       return;
     const controller = new AbortController();
-    const media = soundCloudStreaming ? document.createElement("audio") : undefined;
-    if (media) {
-      media.preload = "metadata";
-    }
+    const media = document.createElement("audio");
+    media.preload = "metadata";
     const waveSurfer = WaveSurfer.create({
       container,
       backend: "MediaElement",
@@ -341,10 +360,11 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       progressColor: "transparent",
       cursorWidth: 0,
       interact: false,
-      ...(media ? { media } : {}),
+      media,
       mediaControls: false,
     });
     waveSurferRef.current = waveSurfer;
+    audioGraphRef.current = connectDeckAudio(media, mixRef.current.eq, mixRef.current.outputGain);
     waveSurfer.setVolume(volume);
     waveSurfer.setMuted(muted);
 
@@ -352,7 +372,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       // Hls.js owns MSE recovery for SoundCloud. Chromium can emit a transient MEDIA_ERR_SRC_NOT_SUPPORTED
       // while a MediaSource is being replaced; surfacing that generic element error races Hls.js recovery
       // and produces the misleading "no supported source" toast.
-      if (!soundCloudStreaming || soundCloudProgressive || !Hls.isSupported()) reportError(error);
+      if (!soundCloudStreaming || soundCloudProgressive || !hlsRef.current) reportError(error);
     };
     let readyNotified = false;
     const notifyReady = () => {
@@ -442,6 +462,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
             finitePositive(track.durationSeconds),
           );
         } else if (soundCloudStreaming && media) {
+          const { default: Hls, ErrorTypes, Events: HlsEvents } = await import("hls.js");
+          if (controller.signal.aborted) return;
           if (Hls.isSupported()) {
             let recoveredMediaError = false;
             const hls = new Hls({
@@ -495,6 +517,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       hlsRef.current?.destroy();
       hlsRef.current = undefined;
       waveSurfer.destroy();
+      audioGraphRef.current?.dispose();
+      audioGraphRef.current = undefined;
       if (waveSurferRef.current === waveSurfer) waveSurferRef.current = undefined;
     };
     // Media is keyed by URL/track. Callback updates are routed through callbacksRef.
@@ -509,6 +533,10 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     track?.fileExists,
     track?.id,
   ]);
+
+  useEffect(() => {
+    audioGraphRef.current?.update(eq ?? FLAT_DECK_EQ, outputGain);
+  }, [eq, outputGain]);
 
   useEffect(() => setLoadAttempt(0), [track?.id]);
   useEffect(() => {
@@ -532,7 +560,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
   }, [track?.id]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !track) return;
+    if (!mediaSessionEnabled || !("mediaSession" in navigator) || !track) return;
     navigator.mediaSession.metadata = new MediaMetadata({
       title: track.title,
       artist: track.artist ?? undefined,
@@ -579,7 +607,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         }
       }
     };
-  }, [artworkUrl, onNext, onPrevious, pause, play, seekTo, track]);
+  }, [artworkUrl, mediaSessionEnabled, onNext, onPrevious, pause, play, seekTo, track]);
 
   const hotCues = useMemo(
     () =>
@@ -597,7 +625,10 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     !track || (track.fileExists === false && !spotifyStreaming && !soundCloudStreaming);
 
   return (
-    <section className="player-panel" aria-label="Track player">
+    <section
+      className={`player-panel${compact ? " is-compact" : ""}`}
+      aria-label={deckLabel ? `Deck ${deckLabel}` : "Track player"}
+    >
       {spotifyStreaming && track?.hosted ? (
         <SpotifyEmbedPlayer
           key={`${track.id}:${String(loadAttempt)}`}
@@ -636,6 +667,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
         <div className="player-overview-header">
           <div className="player-track-copy">
             <div className="player-track-title-row">
+              {deckLabel ? (
+                <span className={`deck-label is-${deckLabel.toLowerCase()}`}>{deckLabel}</span>
+              ) : null}
               <strong title={track?.title}>{track?.title || "No track selected"}</strong>
               {trackSources.length ? (
                 <div className="player-source-links" aria-label="Track sources">
@@ -667,6 +701,24 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
                     );
                   })}
                 </div>
+              ) : null}
+              {onSeparateStems ? (
+                <button
+                  className="player-stems-button"
+                  type="button"
+                  disabled={
+                    !track || track.fileExists === false || Boolean(track.hosted) || stemsPending
+                  }
+                  onClick={onSeparateStems}
+                  title="Generate four MLX stems"
+                >
+                  {stemsPending ? (
+                    <LoaderCircle size={11} className="spin" />
+                  ) : (
+                    <AudioLines size={11} />
+                  )}
+                  Stems
+                </button>
               ) : null}
             </div>
             <span title={[track?.artist, track?.album].filter(Boolean).join(" · ") || undefined}>
@@ -813,37 +865,64 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       </div>
 
       <div className="player-volume">
-        <span className="player-volume-label">Level</span>
-        <button
-          className="player-control-button"
-          type="button"
-          disabled={!track}
-          onClick={() => {
-            const nextMuted = !muted;
-            waveSurferRef.current?.setMuted(nextMuted);
-            setMuted(nextMuted);
-          }}
-          aria-label={muted ? "Unmute" : "Mute"}
-          title={muted ? "Unmute" : "Mute"}
-        >
-          {muted || volume === 0 ? (
-            <VolumeX size={17} />
-          ) : volume < 0.5 ? (
-            <Volume1 size={17} />
-          ) : (
-            <Volume2 size={17} />
-          )}
-        </button>
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={muted ? 0 : volume}
-          disabled={!track}
-          onChange={(event) => setVolume(Number(event.target.value))}
-          aria-label="Volume"
-        />
+        <span className="player-volume-label">{eq ? "Deck EQ" : "Level"}</span>
+        {eq && onEqChange ? (
+          <div className="player-eq-controls">
+            <EqControl
+              label="Low"
+              value={eq.lowDb}
+              onChange={(lowDb) => onEqChange({ ...eq, lowDb })}
+            />
+            <EqControl
+              label="Mid"
+              value={eq.midDb}
+              onChange={(midDb) => onEqChange({ ...eq, midDb })}
+            />
+            <EqControl
+              label="High"
+              value={eq.highDb}
+              onChange={(highDb) => onEqChange({ ...eq, highDb })}
+            />
+            <EqControl
+              label="Trim"
+              value={eq.trimDb}
+              onChange={(trimDb) => onEqChange({ ...eq, trimDb })}
+            />
+          </div>
+        ) : (
+          <>
+            <button
+              className="player-control-button"
+              type="button"
+              disabled={!track}
+              onClick={() => {
+                const nextMuted = !muted;
+                waveSurferRef.current?.setMuted(nextMuted);
+                setMuted(nextMuted);
+              }}
+              aria-label={muted ? "Unmute" : "Mute"}
+              title={muted ? "Unmute" : "Mute"}
+            >
+              {muted || volume === 0 ? (
+                <VolumeX size={17} />
+              ) : volume < 0.5 ? (
+                <Volume1 size={17} />
+              ) : (
+                <Volume2 size={17} />
+              )}
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={muted ? 0 : volume}
+              disabled={!track}
+              onChange={(event) => setVolume(Number(event.target.value))}
+              aria-label="Volume"
+            />
+          </>
+        )}
       </div>
 
       <div className="player-cues" aria-label="Cue points">
@@ -991,6 +1070,31 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     </section>
   );
 });
+
+function EqControl({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange(value: number): void;
+}) {
+  return (
+    <label title={`${label}: ${value > 0 ? "+" : ""}${value.toFixed(1)} dB`}>
+      <span>{label}</span>
+      <input
+        type="range"
+        min="-24"
+        max="12"
+        step="0.5"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        aria-label={`${label} EQ`}
+      />
+    </label>
+  );
+}
 
 function sourceLabel(source: TrackSource): string {
   const provider = {

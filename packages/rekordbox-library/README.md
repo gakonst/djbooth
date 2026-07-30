@@ -46,19 +46,23 @@ post-write verification passes.
 The workstation provides:
 
 - playlist hierarchy and search, health filters, ordered and column-sortable track browsing;
-- a compact persistent top player with key track metadata, RGB Rekordbox waveform previews, and
-  allowlisted Spotify/SoundCloud/YouTube source links (plus a non-clickable Soulseek marker), backed
-  by HTTP range playback and bounded ANLZ peaks (never a full-file browser decode);
+- a persistent one/two-deck practice surface with key track metadata, RGB Rekordbox waveform
+  previews, three-band Web Audio EQ, trim, equal-power crossfader, and timed A↔B transitions.
+  Allowlisted Spotify/SoundCloud/YouTube source links (plus a non-clickable Soulseek marker) retain
+  provenance. Local playback uses HTTP ranges and bounded ANLZ peaks, never a full-file browser
+  decode; provider embeds remain unmodified until an independently acquired local match exists;
 - an independently pinned, collapsible, resizable edit-playlist split for editing one playlist
   while browsing another;
 - Rekordbox artwork with embedded audio-tag cover fallback;
 - memory-cue and Hot Cue A–P creation, editing, deletion, comments, colors, and loop ranges;
 - guarded playlist create, rename, delete, membership, reorder, and atomic visual-order replacement;
-- hosted Spotify/SoundCloud download subscriptions that start bounded native Rekordbox analysis for
-  each verified recording immediately, then checkpoint and import the completed playlist. Provider
-  sections are collapsed by default and remember their expansion state. Playlist/track metadata is
-  cached in the bounded local control database for five minutes and remains available as a
-  seven-day offline fallback; downloaded recordings are already durable local media. Because
+- hosted Spotify/SoundCloud acquisition subscriptions that start automatically when a playlist is
+  opened and run through the shared music-ts identity, Soulseek/native fallback, verification,
+  clean analysis, checkpoint, and import pipeline. Analysis begins for each verified recording
+  immediately. Provider sections are collapsed by default and remember their expansion state.
+  Playlist/track metadata is cached in the bounded local control database for 30 minutes and remains
+  available as a seven-day offline fallback; acquired recordings are already durable local media.
+  Because
   SoundCloud currently treats every OAuth client as confidential, `soundcloud auth login` retains
   that locally supplied app secret alongside rotating tokens in the same mode-`0600` session so a
   packaged app can refresh without inheriting shell environment variables;
@@ -75,14 +79,17 @@ The workstation provides:
   dedicated Worker, whose stricter response policy allows only same-origin fetches and the local
   Responses socket;
 - typed, validated assistant tools for literal lookup, semantic library discovery, playlist and cue
-  writes, clean-room analysis, and MLX stems. Mood, occasion, energy, and set-building prompts first
+  writes, clean-room analysis, MLX stems, deck loading, EQ, crossfader placement, and timed
+  transitions. Mood, occasion, energy, and set-building prompts first
   inspect bounded genre/BPM facets, then curate real playable IDs into a temporary, filterable crate;
   literal title/artist searches remain ordinary search. Filesystem paths are stripped from model
   candidate results. The model stages bounded plans; the normal application layer remains the sole
   executor of library mutations;
-- a local analyzer/MLX job queue plus synchronized Web Audio audition of the original, four-stem
-  sum, or any solo stem. Generated artifacts live under `~/Music/Rekordbox Derived/` and are not
-  silently imported into the live Rekordbox database.
+- visible per-deck MLX stems controls and a local analyzer/MLX job queue. Duplicate active requests
+  collapse, complete stem files are reused, and CPU analysis may overlap the serialized GPU lane.
+  Generated artifacts live under `~/Music/Rekordbox Derived/` and are not silently imported into
+  the live Rekordbox database; the audition view can compare the original, four-stem sum, or any
+  solo stem.
 
 Canvas layout and loose candidates stay in browser-local state until **Apply order** is pressed.
 Connections determine order; loose candidates remain outside the playlist, while existing playlist

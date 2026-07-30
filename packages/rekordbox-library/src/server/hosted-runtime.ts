@@ -141,9 +141,9 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   constructor(options: HostedPlaylistRuntimeOptions) {
     this.#catalog = options.catalog;
     this.#state = options.state;
-    this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 5 * 60_000);
+    this.#playlistCacheMs = positiveDuration(options.playlistCacheMs, 30 * 60_000);
     this.#playlistRetryCacheMs = positiveDuration(options.playlistRetryCacheMs, 5_000);
-    this.#trackCacheMs = positiveDuration(options.trackCacheMs, 5 * 60_000);
+    this.#trackCacheMs = positiveDuration(options.trackCacheMs, 30 * 60_000);
     this.#outboxMaxAttempts = positiveInteger(options.outboxMaxAttempts, 4, "Outbox attempts");
     this.#outboxRetryBaseMs = positiveDuration(options.outboxRetryBaseMs, 250);
     this.#outboxRetryMaxMs = positiveDuration(options.outboxRetryMaxMs, 5_000);
