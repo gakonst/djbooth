@@ -90,6 +90,52 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
     expect(getTracks).not.toHaveBeenCalled();
   });
 
+  it("serves expired track metadata immediately while one refresh runs", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const root = mkdtempSync(join(tmpdir(), "hosted-runtime-track-swr-"));
+    roots.push(root);
+    const state = new HostedPlaylistStateStore(join(root, "state.sqlite"));
+    const playlistId = hostedPlaylistId("spotify", "playlist-one");
+    const cached = localTrack("hosted-track:spotify:track:one", 1);
+    const fresh = { ...cached, title: "Fresh title" };
+    let resolveRefresh!: (tracks: TrackSummary[]) => void;
+    const getTracks = vi
+      .fn<() => Promise<TrackSummary[]>>()
+      .mockResolvedValueOnce([cached])
+      .mockImplementationOnce(
+        () => new Promise<TrackSummary[]>((resolve) => (resolveRefresh = resolve)),
+      );
+    const runtime = new CachedHostedPlaylistRuntime({
+      catalog: {
+        listPlaylists: async () => ({ items: [], providers: [] }),
+        getTracks,
+        streamTrack: async () => ({ kind: "hls", response: new Response() }),
+        mutate: async (mutation) => ({
+          operation: mutation.type,
+          playlistId: "playlistId" in mutation ? mutation.playlistId : playlistId,
+          revision: null,
+          queuedAt: "2026-07-29T00:00:00.000Z",
+        }),
+      },
+      state,
+      trackCacheMs: 1_000,
+      createAcquisitionWorker: idleAcquisitionWorker,
+    });
+    runtimes.push(runtime);
+
+    await expect(runtime.getTracks(playlistId)).resolves.toMatchObject([{ id: cached.id }]);
+    now += 1_000;
+    await expect(runtime.getTracks(playlistId)).resolves.toMatchObject([{ title: cached.title }]);
+    expect(getTracks).toHaveBeenCalledTimes(2);
+    await expect(runtime.getTracks(playlistId)).resolves.toMatchObject([{ title: cached.title }]);
+    expect(getTracks).toHaveBeenCalledTimes(2);
+    resolveRefresh([fresh]);
+    await vi.waitFor(async () =>
+      expect(await runtime.getTracks(playlistId)).toMatchObject([{ title: "Fresh title" }]),
+    );
+  });
+
   it("forwards hosted stream byte-range requests without caching them", async () => {
     const root = mkdtempSync(join(tmpdir(), "hosted-runtime-stream-"));
     roots.push(root);
@@ -380,6 +426,9 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
       items: [{ name: "Spotify cached" }, { name: "SoundCloud cached" }],
     });
     now += 60_000;
+    const stale = await runtime.listPlaylists();
+    expect(stale.items.map((item) => item.name)).toEqual(["Spotify cached", "SoundCloud cached"]);
+    await vi.waitFor(() => expect(listPlaylists).toHaveBeenCalledTimes(2));
     const degraded = await runtime.listPlaylists();
     expect(degraded.items.map((item) => item.name)).toEqual(["Spotify cached", "SoundCloud fresh"]);
     expect(degraded.providers).toEqual([
@@ -397,6 +446,8 @@ describe("CachedHostedPlaylistRuntime acquisition lifecycle", () => {
     await runtime.listPlaylists();
     expect(listPlaylists).toHaveBeenCalledTimes(2);
     now += 1;
+    await runtime.listPlaylists();
+    await vi.waitFor(() => expect(listPlaylists).toHaveBeenCalledTimes(3));
     const recovered = await runtime.listPlaylists();
     expect(recovered.items.map((item) => item.name)).toEqual([
       "Spotify recovered",

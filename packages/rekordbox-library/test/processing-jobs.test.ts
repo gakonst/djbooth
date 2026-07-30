@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ProcessingJobManager } from "../src/server/processing-jobs.js";
 import type { TrackDetail } from "../src/shared/types.js";
@@ -111,11 +111,53 @@ describe("ProcessingJobManager", () => {
     releaseAnalysis();
     await waitFor(() => manager.get(analysis.id).status === "completed");
   });
+
+  it("coalesces rapid compatible stem jobs into one model-loading batch", async () => {
+    const secondTrack = {
+      ...track,
+      id: "track-43",
+      title: "Night Drive Two",
+      path: "/music/night-drive-two.wav",
+    };
+    const separateBatch = vi.fn(
+      async (jobs: Array<{ audioPath: string; outputDirectory: string }>) => ({
+        backend: "mlx" as const,
+        layout: "four-stem" as const,
+        model: "mel-band-roformer",
+        modelLoadSeconds: 2.5,
+        modelRevision: "pinned",
+        processingSeconds: 8,
+        results: jobs.map((job) => stemsResult(job.outputDirectory, job.audioPath)),
+        selectedStems: ["vocals" as const],
+        trackCount: jobs.length,
+      }),
+    );
+    const manager = new ProcessingJobManager({
+      getTrack: (id) => (id === secondTrack.id ? secondTrack : track),
+      separateBatch,
+    });
+
+    const first = manager.start({ contentId: track.id, operation: "stems", stem: "vocals" });
+    const second = manager.start({
+      contentId: secondTrack.id,
+      operation: "stems",
+      stem: "vocals",
+    });
+    await waitFor(
+      () =>
+        manager.get(first.id).status === "completed" &&
+        manager.get(second.id).status === "completed",
+    );
+
+    expect(separateBatch).toHaveBeenCalledOnce();
+    expect(separateBatch.mock.calls[0]![0]).toHaveLength(2);
+    expect(manager.get(first.id).message).toContain("shared one model load across 2 tracks");
+  });
 });
 
-function stemsResult(outputDirectory: string) {
+function stemsResult(outputDirectory: string, audioPath = track.path!) {
   return {
-    audioPath: track.path!,
+    audioPath,
     backend: "mlx" as const,
     device: "gpu",
     durationSeconds: 45,
@@ -141,7 +183,7 @@ function stemsResult(outputDirectory: string) {
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 1));
   }

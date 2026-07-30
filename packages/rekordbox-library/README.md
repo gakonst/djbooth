@@ -19,7 +19,10 @@ webview or WASM worker. `OPENAI_API_KEY` remains a fallback for machines without
 self-contained: it carries Node.js 22, the production dependency tree and encrypted SQLite addon,
 the clean analyzer, uv, and the built web/WASM assets. Python 3.12, locked MLX wheels, and the pinned
 model are installed into the existing user cache on first stems use rather than inflating every app
-download. macOS signing/notarization credentials are intentionally left to the release environment.
+download. Release preparation strips the copied Node sidecar and removes type maps, source maps,
+native-addon build inputs, and browser-only YouTube bundles from the generated runtime tree; package
+licenses and executable code remain. macOS signing/notarization credentials are intentionally left
+to the release environment.
 
 ```sh
 music library status --format json
@@ -61,7 +64,9 @@ The workstation provides:
   clean analysis, checkpoint, and import pipeline. Analysis begins for each verified recording
   immediately. Provider sections are collapsed by default and remember their expansion state.
   Playlist/track metadata is cached in the bounded local control database for 30 minutes and remains
-  available as a seven-day offline fallback; acquired recordings are already durable local media.
+  available as a seven-day offline fallback. Expired rows return immediately while one background
+  refresh updates them, so provider latency never blocks revisiting a known playlist; acquired
+  recordings are already durable local media.
   Because
   SoundCloud currently treats every OAuth client as confidential, `soundcloud auth login` retains
   that locally supplied app secret alongside rotating tokens in the same mode-`0600` session so a
@@ -87,6 +92,8 @@ The workstation provides:
   executor of library mutations;
 - visible per-deck MLX stems controls and a local analyzer/MLX job queue. Duplicate active requests
   collapse, complete stem files are reused, and CPU analysis may overlap the serialized GPU lane.
+  Compatible stem requests arriving in the same 50 ms burst run as one batch and share a single
+  model load.
   Generated artifacts live under `~/Music/Rekordbox Derived/` and are not silently imported into
   the live Rekordbox database; the audition view can compare the original, four-stem sum, or any
   solo stem.

@@ -128,8 +128,10 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   readonly #outboxRetryMaxMs: number;
   readonly #jobListeners = new Set<(event: { playlistId: string }) => void>();
   #playlistCache: { expiresAt: number; promise: Promise<HostedPlaylistsResponse> } | undefined;
+  #playlistRefresh: Promise<void> | undefined;
   #playlistSuccess: HostedPlaylistsResponse | undefined;
   readonly #trackCache = new Map<string, { expiresAt: number; promise: Promise<TrackSummary[]> }>();
+  readonly #trackRefreshes = new Map<string, Promise<void>>();
   #playlistStateDirty = false;
   readonly #trackStateDirty = new Set<string>();
   #outboxDrain: Promise<void> | undefined;
@@ -170,20 +172,16 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   listPlaylists(): Promise<HostedPlaylistsResponse> {
     const now = Date.now();
     const cached = this.#playlistCache;
-    if (cached && cached.expiresAt > now) {
-      if (!this.#playlistStateDirty || !this.#catalog.refreshPlaylistState) return cached.promise;
-      this.#playlistStateDirty = false;
-      const promise = cached.promise
-        .then((response) => this.#catalog.refreshPlaylistState!(response))
-        .catch((error: unknown) => {
-          if (this.#playlistCache?.promise === promise) this.#playlistCache = undefined;
-          throw error;
-        });
-      this.#playlistCache = { ...cached, promise };
+    if (cached) {
+      const promise = this.#refreshCachedPlaylistState(cached);
+      if (cached.expiresAt <= now) this.#startPlaylistRefresh();
       return promise;
     }
-    const persisted = this.#state.getWebCache<HostedPlaylistsResponse>(REMOTE_PLAYLIST_CACHE_KEY);
-    if (!cached && persisted && isHostedPlaylistsResponse(persisted.value)) {
+    const persisted = this.#state.getWebCache<HostedPlaylistsResponse>(REMOTE_PLAYLIST_CACHE_KEY, {
+      allowExpired: true,
+      maxStaleMs: REMOTE_CACHE_STALE_MS,
+    });
+    if (persisted && isHostedPlaylistsResponse(persisted.value)) {
       this.#playlistSuccess = persisted.value;
       const promise = (
         this.#catalog.refreshPlaylistState
@@ -191,29 +189,17 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
           : Promise.resolve(persisted.value)
       ).then((response) => this.#scheduleChangedDownloads(response));
       this.#playlistCache = { expiresAt: persisted.expiresAt, promise };
+      if (persisted.expiresAt <= now) this.#startPlaylistRefresh();
       return promise;
     }
     this.#playlistStateDirty = false;
-    const promise = this.#catalog
-      .listPlaylists()
+    let promise: Promise<HostedPlaylistsResponse>;
+    promise = this.#fetchPlaylists()
       .then((fresh) => {
-        const degraded = fresh.providers.some((provider) => !provider.connected);
-        const merged = mergeHostedProviderFallbacks(fresh, this.#playlistSuccess);
-        const response = this.#scheduleChangedDownloads(merged);
-        this.#playlistSuccess = successfulHostedProviderSnapshot(
-          response,
-          fresh,
-          this.#playlistSuccess,
-        );
-        if (this.#playlistSuccess.items.length || this.#playlistSuccess.providers.length)
-          this.#cacheWebResponse(
-            REMOTE_PLAYLIST_CACHE_KEY,
-            this.#playlistSuccess,
-            this.#playlistCacheMs,
-          );
+        if (this.#playlistCache?.promise !== promise) return fresh;
+        const { response, ttlMs } = this.#acceptPlaylists(fresh);
         if (this.#playlistCache?.promise === promise) {
-          this.#playlistCache.expiresAt =
-            Date.now() + (degraded ? this.#playlistRetryCacheMs : this.#playlistCacheMs);
+          this.#playlistCache.expiresAt = Date.now() + ttlMs;
         }
         return response;
       })
@@ -228,46 +214,32 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
   getTracks(playlistId: string): Promise<TrackSummary[]> {
     const now = Date.now();
     const cached = this.#trackCache.get(playlistId);
-    if (cached && cached.expiresAt > now) {
-      if (!this.#trackStateDirty.has(playlistId) || !this.#catalog.refreshTrackState)
-        return cached.promise;
-      this.#trackStateDirty.delete(playlistId);
-      const promise = cached.promise
-        .then((tracks) => this.#catalog.refreshTrackState!(playlistId, tracks))
-        .catch((error: unknown) => {
-          if (this.#trackCache.get(playlistId)?.promise === promise)
-            this.#trackCache.delete(playlistId);
-          throw error;
-        });
-      this.#trackCache.set(playlistId, { ...cached, promise });
+    if (cached) {
+      const promise = this.#refreshCachedTrackState(playlistId, cached);
+      if (cached.expiresAt <= now) this.#startTrackRefresh(playlistId);
       return promise;
     }
     const persistentKey = remoteTrackCacheKey(playlistId);
-    const persisted = this.#state.getWebCache<TrackSummary[]>(persistentKey);
-    if (!cached && persisted && Array.isArray(persisted.value)) {
+    const persisted = this.#state.getWebCache<TrackSummary[]>(persistentKey, {
+      allowExpired: true,
+      maxStaleMs: REMOTE_CACHE_STALE_MS,
+    });
+    if (persisted && Array.isArray(persisted.value)) {
       const promise = this.#catalog.refreshTrackState
         ? this.#catalog.refreshTrackState(playlistId, persisted.value)
         : Promise.resolve(persisted.value);
       this.#trackCache.set(playlistId, { expiresAt: persisted.expiresAt, promise });
+      if (persisted.expiresAt <= now) this.#startTrackRefresh(playlistId);
       return promise;
     }
     this.#trackStateDirty.delete(playlistId);
-    const stale = this.#state.getWebCache<TrackSummary[]>(persistentKey, {
-      allowExpired: true,
-      maxStaleMs: REMOTE_CACHE_STALE_MS,
-    });
     const promise = this.#catalog
       .getTracks(playlistId)
       .then((tracks) => {
         this.#cacheWebResponse(persistentKey, tracks, this.#trackCacheMs);
         return tracks;
       })
-      .catch(async (error: unknown) => {
-        if (stale && Array.isArray(stale.value)) {
-          return this.#catalog.refreshTrackState
-            ? this.#catalog.refreshTrackState(playlistId, stale.value)
-            : stale.value;
-        }
+      .catch((error: unknown) => {
         if (this.#trackCache.get(playlistId)?.promise === promise)
           this.#trackCache.delete(playlistId);
         throw error;
@@ -363,10 +335,12 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     const priorPlaylists = this.#playlistCache?.promise;
     const receipt = await this.#catalog.mutate(mutation);
     this.#playlistCache = undefined;
+    this.#playlistRefresh = undefined;
     this.#state.deleteWebCache(REMOTE_PLAYLIST_CACHE_KEY);
     this.#playlistStateDirty = false;
     if ("playlistId" in mutation) {
       this.#trackCache.delete(mutation.playlistId);
+      this.#trackRefreshes.delete(mutation.playlistId);
       this.#state.deleteWebCache(remoteTrackCacheKey(mutation.playlistId));
     }
     if ("playlistId" in mutation) this.#trackStateDirty.delete(mutation.playlistId);
@@ -417,8 +391,10 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#outboxRetryTimer = undefined;
     this.#jobListeners.clear();
     this.#trackCache.clear();
+    this.#trackRefreshes.clear();
     this.#trackStateDirty.clear();
     this.#playlistCache = undefined;
+    this.#playlistRefresh = undefined;
     this.#playlistSuccess = undefined;
     this.#playlistStateDirty = false;
     try {
@@ -667,6 +643,115 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
     this.#outboxRetryTimer.unref?.();
   }
 
+  #refreshCachedPlaylistState(cached: {
+    expiresAt: number;
+    promise: Promise<HostedPlaylistsResponse>;
+  }): Promise<HostedPlaylistsResponse> {
+    if (!this.#playlistStateDirty || !this.#catalog.refreshPlaylistState) return cached.promise;
+    this.#playlistStateDirty = false;
+    const promise = cached.promise
+      .then((response) => this.#catalog.refreshPlaylistState!(response))
+      .catch((error: unknown) => {
+        if (this.#playlistCache?.promise === promise) this.#playlistCache = undefined;
+        throw error;
+      });
+    this.#playlistCache = { ...cached, promise };
+    return promise;
+  }
+
+  #fetchPlaylists(): Promise<HostedPlaylistsResponse> {
+    return this.#catalog.listPlaylists();
+  }
+
+  #acceptPlaylists(fresh: HostedPlaylistsResponse): {
+    response: HostedPlaylistsResponse;
+    ttlMs: number;
+  } {
+    const degraded = fresh.providers.some((provider) => !provider.connected);
+    const merged = mergeHostedProviderFallbacks(fresh, this.#playlistSuccess);
+    const response = this.#scheduleChangedDownloads(merged);
+    this.#playlistSuccess = successfulHostedProviderSnapshot(
+      response,
+      fresh,
+      this.#playlistSuccess,
+    );
+    if (this.#playlistSuccess.items.length || this.#playlistSuccess.providers.length)
+      this.#cacheWebResponse(
+        REMOTE_PLAYLIST_CACHE_KEY,
+        this.#playlistSuccess,
+        this.#playlistCacheMs,
+      );
+    return {
+      response,
+      ttlMs: degraded ? this.#playlistRetryCacheMs : this.#playlistCacheMs,
+    };
+  }
+
+  #startPlaylistRefresh(): void {
+    if (this.#playlistRefresh || this.#closing) return;
+    let refresh: Promise<void>;
+    refresh = this.#fetchPlaylists()
+      .then((fresh) => {
+        if (this.#playlistRefresh !== refresh) return;
+        const { response, ttlMs } = this.#acceptPlaylists(fresh);
+        this.#playlistCache = {
+          expiresAt: Date.now() + ttlMs,
+          promise: Promise.resolve(response),
+        };
+      })
+      .catch(() => {
+        if (this.#playlistRefresh === refresh && this.#playlistCache)
+          this.#playlistCache.expiresAt = Date.now() + this.#playlistRetryCacheMs;
+      })
+      .finally(() => {
+        if (this.#playlistRefresh === refresh) this.#playlistRefresh = undefined;
+      });
+    this.#playlistRefresh = refresh;
+  }
+
+  #refreshCachedTrackState(
+    playlistId: string,
+    cached: { expiresAt: number; promise: Promise<TrackSummary[]> },
+  ): Promise<TrackSummary[]> {
+    if (!this.#trackStateDirty.has(playlistId) || !this.#catalog.refreshTrackState)
+      return cached.promise;
+    this.#trackStateDirty.delete(playlistId);
+    const promise = cached.promise
+      .then((tracks) => this.#catalog.refreshTrackState!(playlistId, tracks))
+      .catch((error: unknown) => {
+        if (this.#trackCache.get(playlistId)?.promise === promise)
+          this.#trackCache.delete(playlistId);
+        throw error;
+      });
+    this.#trackCache.set(playlistId, { ...cached, promise });
+    return promise;
+  }
+
+  #startTrackRefresh(playlistId: string): void {
+    if (this.#trackRefreshes.has(playlistId) || this.#closing) return;
+    let refresh: Promise<void>;
+    refresh = this.#catalog
+      .getTracks(playlistId)
+      .then((tracks) => {
+        if (this.#trackRefreshes.get(playlistId) !== refresh) return;
+        this.#cacheWebResponse(remoteTrackCacheKey(playlistId), tracks, this.#trackCacheMs);
+        this.#trackCache.set(playlistId, {
+          expiresAt: Date.now() + this.#trackCacheMs,
+          promise: Promise.resolve(tracks),
+        });
+      })
+      .catch(() => {
+        if (this.#trackRefreshes.get(playlistId) !== refresh) return;
+        const cached = this.#trackCache.get(playlistId);
+        if (cached) cached.expiresAt = Date.now() + this.#playlistRetryCacheMs;
+      })
+      .finally(() => {
+        if (this.#trackRefreshes.get(playlistId) === refresh)
+          this.#trackRefreshes.delete(playlistId);
+      });
+    this.#trackRefreshes.set(playlistId, refresh);
+  }
+
   #cacheWebResponse(key: string, value: unknown, ttlMs: number): void {
     try {
       this.#state.setWebCache(key, value, ttlMs);
@@ -677,9 +762,11 @@ export class CachedHostedPlaylistRuntime implements HostedPlaylistApi {
 
   #invalidateHostedPlaylist(playlistId: string): void {
     this.#playlistCache = undefined;
+    this.#playlistRefresh = undefined;
     this.#state.deleteWebCache(REMOTE_PLAYLIST_CACHE_KEY);
     this.#playlistStateDirty = false;
     this.#trackCache.delete(playlistId);
+    this.#trackRefreshes.delete(playlistId);
     this.#state.deleteWebCache(remoteTrackCacheKey(playlistId));
     this.#trackStateDirty.delete(playlistId);
   }

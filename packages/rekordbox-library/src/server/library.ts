@@ -75,6 +75,8 @@ type PlaylistExpectation = {
   attribute: number;
 };
 
+const processStateCacheMs = 1_000;
+
 type MutationResult = { changedId: string; membershipIds?: string[] };
 
 type WaveformCacheEntry = {
@@ -411,6 +413,7 @@ export class RekordboxLibraryService {
   private readonly audioPathCache = new Map<string, string>();
   private readonly waveformCache = new Map<string, WaveformCacheEntry>();
   private readonly fileExistenceCache = new Map<string, { checkedAt: number; exists: boolean }>();
+  private processStateCache: { checkedAt: number; value: LibraryProcesses } | undefined;
   private bootstrapProjection: BootstrapProjection | undefined;
   private playlistProjection: PlaylistItem[] | undefined;
   private database: MasterDatabase | undefined;
@@ -648,7 +651,7 @@ export class RekordboxLibraryService {
       csrfToken,
       library: {
         ...projection,
-        processes: this.getProcessState(),
+        processes: this.getCachedProcessState(),
       },
     };
   }
@@ -1162,7 +1165,18 @@ export class RekordboxLibraryService {
   }
 
   private assertStopped(): void {
-    assertRekordboxStopped(this.getProcessState());
+    const processes = this.getProcessState();
+    this.processStateCache = { checkedAt: Date.now(), value: processes };
+    assertRekordboxStopped(processes);
+  }
+
+  private getCachedProcessState(): LibraryProcesses {
+    const now = Date.now();
+    if (this.processStateCache && now - this.processStateCache.checkedAt < processStateCacheMs)
+      return this.processStateCache.value;
+    const value = this.getProcessState();
+    this.processStateCache = { checkedAt: now, value };
+    return value;
   }
 
   private assertMutationPrecondition(db: MasterDatabase, mutation: LibraryMutation): void {

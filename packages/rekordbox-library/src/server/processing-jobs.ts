@@ -4,7 +4,15 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
 import { analyzeTrackAsync, type RekordboxAnalysisResult } from "@gakonst/rekordbox/analyzer";
-import { separateStems, type StemName, type StemsSeparationResult } from "@gakonst/rekordbox/stems";
+import {
+  separateStems,
+  separateStemsBatch,
+  type StemName,
+  type StemsBatchJob,
+  type StemsBatchResult,
+  type StemsLayout,
+  type StemsSeparationResult,
+} from "@gakonst/rekordbox/stems";
 
 import type { ProcessingJob, TrackDetail } from "../shared/types.js";
 
@@ -22,15 +30,30 @@ export type ProcessingJobDependencies = {
     outputDirectory: string,
     stems: StemName[] | undefined,
   ): Promise<StemsSeparationResult>;
+  separateBatch?(
+    jobs: StemsBatchJob[],
+    stems: StemName[] | undefined,
+    layout: StemsLayout,
+  ): Promise<StemsBatchResult>;
 };
+
+type QueuedStemJob = {
+  id: string;
+  request: ProcessingJobRequest;
+  track: TrackDetail;
+};
+
+const STEM_BATCH_WINDOW_MS = 50;
 
 /** Own bounded analyzer/stems jobs and keep generated assets outside the live Rekordbox library. */
 export class ProcessingJobManager {
   readonly #dependencies: ProcessingJobDependencies;
   readonly #jobs = new Map<string, ProcessingJob>();
   readonly #listeners = new Set<(job: ProcessingJob) => void>();
+  readonly #stemQueue: QueuedStemJob[] = [];
   #analysisTail = Promise.resolve();
   #stemsTail = Promise.resolve();
+  #stemBatchTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(dependencies: ProcessingJobDependencies) {
     this.#dependencies = dependencies;
@@ -77,10 +100,18 @@ export class ProcessingJobManager {
     this.#jobs.set(job.id, job);
     this.#trim();
     this.#emit(job);
-    const lane = request.operation === "stems" ? this.#stemsTail : this.#analysisTail;
-    const next = lane.then(() => this.#run(job.id, track, request)).catch(() => undefined);
-    if (request.operation === "stems") this.#stemsTail = next;
-    else this.#analysisTail = next;
+    if (
+      request.operation === "stems" &&
+      (!this.#dependencies.separate || this.#dependencies.separateBatch)
+    ) {
+      this.#stemQueue.push({ id: job.id, request, track });
+      this.#scheduleStemBatch();
+    } else {
+      const lane = request.operation === "stems" ? this.#stemsTail : this.#analysisTail;
+      const next = lane.then(() => this.#run(job.id, track, request)).catch(() => undefined);
+      if (request.operation === "stems") this.#stemsTail = next;
+      else this.#analysisTail = next;
+    }
     return job;
   }
 
@@ -97,13 +128,7 @@ export class ProcessingJobManager {
   }
 
   async #run(id: string, track: TrackDetail, request: ProcessingJobRequest): Promise<void> {
-    const outputRoot = join(
-      homedir(),
-      "Music",
-      "Rekordbox Derived",
-      `${safeName(track.title || basename(track.path!))} [${safeName(track.id)}]`,
-    );
-    const outputDirectory = join(outputRoot, request.operation);
+    const outputDirectory = processingOutputDirectory(track, request.operation);
     this.#update(id, {
       status: "running",
       startedAt: new Date().toISOString(),
@@ -153,17 +178,7 @@ export class ProcessingJobManager {
             uvBinary: process.env.REKORDBOX_STEMS_UV_BINARY,
           }));
       const result = await separate(track.path!, outputDirectory, selected);
-      this.#update(id, {
-        status: "completed",
-        finishedAt: new Date().toISOString(),
-        message: `MLX separation completed in ${result.processingSeconds.toFixed(1)}s`,
-        artifacts: result.outputs.map((artifact) => ({
-          label: artifact.stem,
-          stem: artifact.stem,
-          path: artifact.path,
-          url: `/api/processing/jobs/${encodeURIComponent(id)}/audio/${encodeURIComponent(artifact.stem)}`,
-        })),
-      });
+      this.#completeStemJob(id, result);
     } catch (error) {
       this.#update(id, {
         status: "failed",
@@ -172,6 +187,101 @@ export class ProcessingJobManager {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  #scheduleStemBatch(): void {
+    if (this.#stemBatchTimer) return;
+    this.#stemBatchTimer = setTimeout(() => {
+      this.#stemBatchTimer = undefined;
+      const queued = this.#stemQueue.splice(0);
+      for (const group of groupStemJobs(queued)) {
+        this.#stemsTail = this.#stemsTail
+          .then(() => this.#runStemBatch(group))
+          .catch(() => undefined);
+      }
+    }, STEM_BATCH_WINDOW_MS);
+  }
+
+  async #runStemBatch(group: QueuedStemJob[]): Promise<void> {
+    const pending = group.filter(({ id, request, track }) => {
+      const outputDirectory = processingOutputDirectory(track, "stems");
+      const cached = cachedStemArtifacts(outputDirectory, request.stem, track.path!);
+      if (!cached) {
+        this.#update(id, {
+          status: "running",
+          startedAt: new Date().toISOString(),
+          outputDirectory,
+          message:
+            group.length > 1
+              ? `Separating ${String(group.length)} tracks with one MLX model load`
+              : "Separating on Apple GPU with MLX",
+        });
+        return true;
+      }
+      this.#update(id, {
+        status: "completed",
+        finishedAt: new Date().toISOString(),
+        outputDirectory,
+        message: "Reused cached MLX stems",
+        artifacts: cached.map((artifact) => ({
+          ...artifact,
+          url: processingAudioUrl(id, artifact.stem),
+        })),
+      });
+      return false;
+    });
+    if (!pending.length) return;
+
+    const layout = stemLayout(pending[0]!.request.stem);
+    const stems = selectedStems(pending[0]!.request.stem);
+    const jobs = pending.map(({ track }) => ({
+      audioPath: track.path!,
+      outputDirectory: processingOutputDirectory(track, "stems"),
+    }));
+    const separateBatch =
+      this.#dependencies.separateBatch ??
+      ((batchJobs: StemsBatchJob[], selected: StemName[] | undefined, batchLayout: StemsLayout) =>
+        separateStemsBatch(batchJobs, {
+          layout: batchLayout,
+          force: true,
+          stems: selected,
+          uvBinary: process.env.REKORDBOX_STEMS_UV_BINARY,
+        }));
+    try {
+      const batch = await separateBatch(jobs, stems, layout);
+      if (batch.results.length !== pending.length)
+        throw new Error(
+          `MLX returned ${String(batch.results.length)} results for ${String(pending.length)} jobs`,
+        );
+      for (const [index, queued] of pending.entries())
+        this.#completeStemJob(queued.id, batch.results[index]!, pending.length);
+    } catch (error) {
+      for (const { id } of pending) {
+        this.#update(id, {
+          status: "failed",
+          finishedAt: new Date().toISOString(),
+          message: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  #completeStemJob(id: string, result: StemsSeparationResult, batchSize = 1): void {
+    this.#update(id, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+      message:
+        batchSize > 1
+          ? `MLX separation completed in ${result.processingSeconds.toFixed(1)}s; shared one model load across ${String(batchSize)} tracks`
+          : `MLX separation completed in ${result.processingSeconds.toFixed(1)}s`,
+      artifacts: result.outputs.map((artifact) => ({
+        label: artifact.stem,
+        stem: artifact.stem,
+        path: artifact.path,
+        url: processingAudioUrl(id, artifact.stem),
+      })),
+    });
   }
 
   #update(id: string, patch: Partial<ProcessingJob>): void {
@@ -194,6 +304,38 @@ export class ProcessingJobManager {
       this.#jobs.delete(oldest.id);
     }
   }
+}
+
+function groupStemJobs(jobs: QueuedStemJob[]): QueuedStemJob[][] {
+  const groups = new Map<ProcessingJobRequest["stem"], QueuedStemJob[]>();
+  for (const job of jobs) {
+    const key = job.request.stem ?? "all";
+    const group = groups.get(key) ?? [];
+    group.push(job);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
+function processingOutputDirectory(
+  track: TrackDetail,
+  operation: ProcessingJobRequest["operation"],
+): string {
+  const outputRoot = join(
+    homedir(),
+    "Music",
+    "Rekordbox Derived",
+    `${safeName(track.title || basename(track.path!))} [${safeName(track.id)}]`,
+  );
+  return join(outputRoot, operation);
+}
+
+function processingAudioUrl(id: string, stem: string): string {
+  return `/api/processing/jobs/${encodeURIComponent(id)}/audio/${encodeURIComponent(stem)}`;
+}
+
+function stemLayout(stem: ProcessingJobRequest["stem"]): StemsLayout {
+  return stem === "instrumental" ? "rekordbox" : "four-stem";
 }
 
 function selectedStems(stem: ProcessingJobRequest["stem"]): StemName[] | undefined {

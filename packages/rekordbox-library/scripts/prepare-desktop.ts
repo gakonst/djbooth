@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { execFile, spawn } from "node:child_process";
-import { chmod, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { chmod, copyFile, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -29,6 +29,12 @@ await rm(toolsDirectory, { force: true, recursive: true });
 await mkdir(toolsDirectory, { recursive: true });
 await copyFile(nodePath, sidecarPath);
 await chmod(sidecarPath, 0o755);
+if (targetTriple.endsWith("-apple-darwin")) {
+  await run("strip", ["-x", sidecarPath]);
+  const strippedNodeVersion = await commandOutput(sidecarPath, ["-p", "process.versions.node"]);
+  if (strippedNodeVersion !== nodeVersion)
+    throw new Error(`Stripped Node.js sidecar failed validation; found ${strippedNodeVersion}`);
+}
 await run("pnpm", [
   "--filter",
   "@gakonst/rekordbox-library",
@@ -37,6 +43,12 @@ await run("pnpm", [
   "--legacy",
   backendDirectory,
 ]);
+const pruned = await pruneRuntimeMetadata(backendDirectory);
+process.stdout.write(
+  `Pruned ${pruned.files.toLocaleString()} runtime-dead metadata files (${formatBytes(pruned.bytes)})\n`,
+);
+const buildInputs = await pruneRuntimeBuildInputs(backendDirectory);
+process.stdout.write(`Pruned runtime-dead build inputs (${formatBytes(buildInputs)})\n`);
 
 const analyzerSource = resolve(
   workspaceRoot,
@@ -98,4 +110,66 @@ async function isFile(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function pruneRuntimeMetadata(directory: string): Promise<{ bytes: number; files: number }> {
+  let bytes = 0;
+  let files = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      const nested = await pruneRuntimeMetadata(path);
+      bytes += nested.bytes;
+      files += nested.files;
+      continue;
+    }
+    if (!isRuntimeMetadata(entry.name)) continue;
+    bytes += (await stat(path)).size;
+    files += 1;
+    await rm(path);
+  }
+  return { bytes, files };
+}
+
+function isRuntimeMetadata(name: string): boolean {
+  return name.endsWith(".map") || /\.d\.(?:c|m)?ts$/u.test(name);
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / 1_048_576).toFixed(1)} MiB`;
+}
+
+async function pruneRuntimeBuildInputs(directory: string): Promise<number> {
+  let bytes = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const path = resolve(directory, entry.name);
+    if (isRuntimeBuildInput(path)) {
+      bytes += await directorySize(path);
+      await rm(path, { force: true, recursive: true });
+    } else {
+      bytes += await pruneRuntimeBuildInputs(path);
+    }
+  }
+  return bytes;
+}
+
+function isRuntimeBuildInput(path: string): boolean {
+  const packageName = basename(dirname(path));
+  const directoryName = basename(path);
+  return (
+    (packageName === "better-sqlite3-multiple-ciphers" &&
+      (directoryName === "deps" || directoryName === "src")) ||
+    (packageName === "youtubei.js" && directoryName === "bundle")
+  );
+}
+
+async function directorySize(directory: string): Promise<number> {
+  let bytes = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) bytes += await directorySize(path);
+    else if (entry.isFile()) bytes += (await stat(path)).size;
+  }
+  return bytes;
 }

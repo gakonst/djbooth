@@ -250,7 +250,7 @@ describe("RekordboxLibraryService", () => {
     expect(listPlaylists).toHaveBeenCalledTimes(2);
   });
 
-  it("caches bootstrap database aggregates but keeps process state live", async () => {
+  it("caches bootstrap aggregates and display process state without weakening commit checks", async () => {
     const fixture = copiedFixture();
     const getProcessState = vi.fn(() => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }));
     const selectRawRows = vi.spyOn(MasterDatabase.prototype, "selectRawRows");
@@ -266,12 +266,13 @@ describe("RekordboxLibraryService", () => {
     const aggregateReadCount = selectRawRows.mock.calls.length;
     const second = library.getBootstrap("second-token");
     expect(selectRawRows).toHaveBeenCalledTimes(aggregateReadCount);
-    expect(getProcessState).toHaveBeenCalledTimes(2);
+    expect(getProcessState).toHaveBeenCalledOnce();
     expect(second.csrfToken).toBe("second-token");
     expect(second.library.stats).toBe(first.library.stats);
     expect(Object.isFrozen(first.library.stats)).toBe(true);
 
     await library.mutate({ type: "create-playlist", name: "Fresh stats" });
+    expect(getProcessState).toHaveBeenCalledTimes(2);
     const refreshed = library.getBootstrap("third-token");
     expect(refreshed.library.stats).not.toBe(first.library.stats);
     expect(refreshed.library.stats.playlists).toBe(first.library.stats.playlists + 1);

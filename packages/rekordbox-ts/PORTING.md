@@ -32,6 +32,27 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-29 — zero-stall provider reads and release-payload pass
+
+- Converted expired hosted playlist and track cache reads to stale-while-revalidate. Known data
+  returns immediately, one single-flight provider refresh updates memory and the bounded SQLite
+  cache, failures retain stale rows with a short retry window, and mutation invalidation prevents
+  an older in-flight refresh from repopulating a changed playlist. Warm bootstrap process display
+  state is cached for one second; every write still takes a fresh process snapshot immediately
+  before commit. Packaged warm `/api/bootstrap` requests measured `0.58–0.94 ms`, down from roughly
+  `35 ms`; 100-track pages remained `12.9–17.9 ms`.
+- Interactive compatible stems requests now coalesce over a 50 ms window and call
+  `separateStemsBatch`, retaining one 3.76 GB MLX model load across the burst. Different output
+  selections remain serialized separately, cached outputs short-circuit before inference, and the
+  CPU analyzer lane remains independent.
+- Release preparation strips the copied macOS Node 22 sidecar after validating it, removes 21.8 MiB
+  of source maps/type declarations, and prunes runtime-dead native-addon build sources and
+  browser-only YouTube bundles while retaining licenses. Thin LTO, one codegen unit, abort-on-panic,
+  and symbol stripping apply to the small Tauri release shell, reducing it from 12.1 to 7.1 MiB.
+  The final real app bundle measured 168 MiB versus 242 MiB at the previous checkpoint: 74 MiB
+  removed (`30.6%`). Packaged encrypted-SQLite queries, YouTube extractor imports, Node 22 startup,
+  and read-only Rekordbox status all passed after pruning.
+
 ### 2026-07-29 — automatic acquisition and agent-controllable dual decks
 
 - Opening any Spotify or SoundCloud playlist now enables its durable acquisition subscription.
