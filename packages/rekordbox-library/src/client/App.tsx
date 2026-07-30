@@ -203,6 +203,12 @@ type OptimisticWriteSession = {
   snapshot: LibraryCacheSnapshot;
 };
 
+type TemporaryCrate = {
+  name: string;
+  description: string;
+  tracks: TrackSummary[];
+};
+
 export function App() {
   const queryClient = useQueryClient();
   const [nanocodexPlanner] = useState(() => new NanocodexPlanner());
@@ -233,6 +239,7 @@ export function App() {
   );
   const [sort, setSort] = useState<TrackSort>();
   const [searchInput, setSearchInput] = useState(urlState.query);
+  const [temporaryCrate, setTemporaryCrate] = useState<TemporaryCrate>();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [editingPlaylistId, setEditingPlaylistId] = useState<string>();
   const [editorOpen, setEditorOpen] = useState(false);
@@ -370,7 +377,16 @@ export function App() {
     enabled: editorOpen && Boolean(editingPlaylist) && !isOptimisticPlaylistId(editingPlaylist?.id),
   });
 
-  const tracks = tracksQuery.data?.items ?? [];
+  const tracks = useMemo(() => {
+    if (!temporaryCrate) return tracksQuery.data?.items ?? [];
+    const query = searchInput.trim().toLocaleLowerCase();
+    if (!query) return temporaryCrate.tracks;
+    return temporaryCrate.tracks.filter((track) =>
+      [track.title, track.artist, track.album, track.genre, track.key]
+        .filter((value): value is string => Boolean(value))
+        .some((value) => value.toLocaleLowerCase().includes(query)),
+    );
+  }, [searchInput, temporaryCrate, tracksQuery.data?.items]);
   const playerDetailQuery = useQuery({
     queryKey: ["track", playerTrackId],
     queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
@@ -998,15 +1014,18 @@ export function App() {
     [applyMutation, playerTrackId],
   );
 
-  useEffect(() => setSearchInput(urlState.query), [urlState.query]);
+  useEffect(() => {
+    if (!temporaryCrate) setSearchInput(urlState.query);
+  }, [temporaryCrate, urlState.query]);
 
   useEffect(() => {
+    if (temporaryCrate) return;
     const timeout = window.setTimeout(() => {
       if (searchInput !== urlState.query)
         updateUrl({ query: searchInput, trackId: null }, { replace: true });
     }, 250);
     return () => window.clearTimeout(timeout);
-  }, [searchInput, updateUrl, urlState.query]);
+  }, [searchInput, temporaryCrate, updateUrl, urlState.query]);
 
   useEffect(() => {
     setPage((current) =>
@@ -1234,13 +1253,28 @@ export function App() {
         return;
       }
       if (action.type === "open-playlist") {
+        setTemporaryCrate(undefined);
         updateUrl({ playlistId: action.playlistId, trackId: null, filter: "all" });
         setViewMode("table");
         return;
       }
       if (action.type === "search-tracks") {
+        setTemporaryCrate(undefined);
         setSearchInput(action.query);
         updateUrl({ query: action.query, trackId: null });
+        setViewMode("table");
+        return;
+      }
+      if (action.type === "show-temporary-crate") {
+        setTemporaryCrate({
+          name: action.name,
+          description: action.description,
+          tracks: action.tracks,
+        });
+        setSearchInput("");
+        setSort(undefined);
+        setOffset(0);
+        updateUrl({ playlistId: null, query: "", trackId: null, filter: "all" });
         setViewMode("table");
         return;
       }
@@ -1538,7 +1572,10 @@ export function App() {
   const selectedTitle =
     viewMode === "canvas"
       ? (canvasPlaylist?.name ?? "Set canvas")
-      : (selectedPlaylist?.name ?? filterLabels[urlState.filter] ?? "All tracks");
+      : (temporaryCrate?.name ??
+        selectedPlaylist?.name ??
+        filterLabels[urlState.filter] ??
+        "All tracks");
   const addTrackToCanvas = (track: TrackSummary) => {
     const target = canvasPlaylist ?? normalPlaylist;
     if (!target) {
@@ -1950,10 +1987,12 @@ export function App() {
         canWrite={canWrite}
         onClose={() => setSidebarOpen(false)}
         onSelectPlaylist={(playlistId) => {
+          setTemporaryCrate(undefined);
           updateUrl({ playlistId, trackId: null, ...(playlistId ? { filter: "all" } : {}) });
           setViewMode("table");
         }}
         onSelectFilter={(filter) => {
+          setTemporaryCrate(undefined);
           updateUrl({ filter, playlistId: null, trackId: null });
           setViewMode("table");
         }}
@@ -1962,6 +2001,7 @@ export function App() {
         }
         onEditPlaylist={openPlaylistEditor}
         onSelectHostedPlaylist={(playlist) => {
+          setTemporaryCrate(undefined);
           updateUrl({ playlistId: playlist.id, trackId: null, filter: "all" });
           setViewMode("table");
         }}
@@ -2161,6 +2201,31 @@ export function App() {
           <section className="browser-workspace" aria-label={`Browsing ${selectedTitle}`}>
             {viewMode === "table" ? (
               <>
+                {temporaryCrate ? (
+                  <section className="semantic-crate-banner" aria-label="Temporary smart crate">
+                    <span className="semantic-crate-icon">
+                      <Sparkles size={16} aria-hidden="true" />
+                    </span>
+                    <div>
+                      <strong>{temporaryCrate.name}</strong>
+                      <span>{temporaryCrate.description}</span>
+                      <small>
+                        {temporaryCrate.tracks.length} curated tracks · temporary and
+                        non-destructive
+                      </small>
+                    </div>
+                    <button
+                      className="secondary-button compact-button"
+                      type="button"
+                      onClick={() => {
+                        setTemporaryCrate(undefined);
+                        setSearchInput("");
+                      }}
+                    >
+                      Back to library
+                    </button>
+                  </section>
+                ) : null}
                 <section className="search-toolbar" aria-label="Track search">
                   <label className="track-search">
                     <Search size={15} aria-hidden="true" />
@@ -2169,7 +2234,11 @@ export function App() {
                       value={searchInput}
                       onChange={(event) => setSearchInput(event.target.value)}
                       type="search"
-                      placeholder="Search title, artist, album, genre…"
+                      placeholder={
+                        temporaryCrate
+                          ? "Filter this temporary crate…"
+                          : "Search title, artist, album, genre…"
+                      }
                       aria-label="Search tracks"
                     />
                     {searchInput ? (
@@ -2188,13 +2257,21 @@ export function App() {
 
                 <TrackTable
                   items={tracks}
-                  count={tracksQuery.data?.count ?? 0}
-                  limit={tracksQuery.data?.limit ?? PAGE_SIZE}
-                  offset={tracksQuery.data?.offset ?? offset}
-                  loading={tracksQuery.isLoading}
-                  error={tracksQuery.isError ? errorMessage(tracksQuery.error) : undefined}
+                  count={temporaryCrate ? tracks.length : (tracksQuery.data?.count ?? 0)}
+                  limit={
+                    temporaryCrate
+                      ? Math.max(tracks.length, 1)
+                      : (tracksQuery.data?.limit ?? PAGE_SIZE)
+                  }
+                  offset={temporaryCrate ? 0 : (tracksQuery.data?.offset ?? offset)}
+                  loading={temporaryCrate ? false : tracksQuery.isLoading}
+                  error={
+                    temporaryCrate || !tracksQuery.isError
+                      ? undefined
+                      : errorMessage(tracksQuery.error)
+                  }
                   selectedTrackId={urlState.trackId}
-                  ordered={Boolean(normalPlaylist || selectedHostedPlaylist)}
+                  ordered={Boolean(temporaryCrate || normalPlaylist || selectedHostedPlaylist)}
                   canEdit={canWrite && !selectedHostedPlaylist}
                   canWrite={
                     selectedPlaylistCanWrite &&
@@ -2204,6 +2281,7 @@ export function App() {
                   }
                   sort={sort}
                   onSort={(nextSort) => {
+                    setTemporaryCrate(undefined);
                     setSort(nextSort);
                     setOffset(0);
                   }}
@@ -2212,7 +2290,9 @@ export function App() {
                   onContextMenu={(point, track, returnFocus) =>
                     contextMenu.openAt(point, { kind: "track", track }, returnFocus)
                   }
-                  onPage={setOffset}
+                  onPage={(nextOffset) => {
+                    if (!temporaryCrate) setOffset(nextOffset);
+                  }}
                   onRetry={() => void tracksQuery.refetch()}
                   onColorChange={(track, colorId) =>
                     applyMutation({ type: "set-track-color", contentId: track.id, colorId })
@@ -2589,7 +2669,7 @@ export function App() {
         }
         disabled={assistantAuthQuery.data?.mode === "unavailable"}
         disabledReason={assistantAuthQuery.data?.message}
-        playlistName={selectedPlaylist?.name}
+        playlistName={temporaryCrate?.name ?? selectedPlaylist?.name}
         globalShortcutEnabled={!modalOpen}
         jobs={processingJobsQuery.data ?? []}
         onAudition={(job) => setAuditionJob(job)}

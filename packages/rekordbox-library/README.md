@@ -71,9 +71,12 @@ The workstation provides:
   explicitly permitting Nanocodex's generated JavaScript code cells; those cells execute in the
   dedicated Worker, whose stricter response policy allows only same-origin fetches and the local
   Responses socket;
-- typed, validated assistant tools for playlist navigation/search, playlist and cue writes,
-  clean-room analysis, and MLX stems. The model stages bounded plans; the normal application layer
-  remains the sole executor of library mutations;
+- typed, validated assistant tools for literal lookup, semantic library discovery, playlist and cue
+  writes, clean-room analysis, and MLX stems. Mood, occasion, energy, and set-building prompts first
+  inspect bounded genre/BPM facets, then curate real playable IDs into a temporary, filterable crate;
+  literal title/artist searches remain ordinary search. Filesystem paths are stripped from model
+  candidate results. The model stages bounded plans; the normal application layer remains the sole
+  executor of library mutations;
 - a local analyzer/MLX job queue plus synchronized Web Audio audition of the original, four-stem
   sum, or any solo stem. Generated artifacts live under `~/Music/Rekordbox Derived/` and are not
   silently imported into the live Rekordbox database.

@@ -9,18 +9,29 @@ import type {
   PromptAction,
   PromptPlan,
   TrackCueInput,
+  TrackSummary,
+  TracksResponse,
 } from "../shared/types.js";
 import type {
   NanocodexLibraryContext,
   NanocodexWorkerCommand,
   NanocodexWorkerMessage,
 } from "./nanocodex-protocol.js";
+import {
+  isSemanticDiscoveryRequest,
+  modelTrack,
+  resolveTemporaryCrateTracks,
+  selectLibraryCandidates,
+  summarizeLibraryCatalog,
+} from "./semantic-library.js";
 
 const worker = self as DedicatedWorkerGlobalScope;
 let agent: DefaultAgent | undefined;
 let activeContext: NanocodexLibraryContext | undefined;
 let activeActions: PromptAction[] = [];
 let activePlanId: string | undefined;
+let activeDiscoveryIntent = false;
+let catalogCache: { loadedAt: number; tracks: TrackSummary[] } | undefined;
 let commands = Promise.resolve();
 
 worker.onmessage = ({ data }: MessageEvent<NanocodexWorkerCommand>) => {
@@ -50,6 +61,8 @@ async function handle(command: NanocodexWorkerCommand): Promise<void> {
 Use the supplied planning tools to turn the user's request into bounded application actions.
 Never claim that an action happened: tools only stage a plan which the application validates and executes.
 Use Code Mode to compose multi-step requests. Fan out independent tool calls with Promise.all; keep dependent or explicitly ordered actions sequential.
+For mood, vibe, occasion, energy, warm-up, set-building, or recommendation requests, NEVER use searchTracks. Inspect the library, retrieve structured candidates, curate an ordered selection, then show one temporary crate. A semantic crate normally contains 12–30 tracks.
+Use searchTracks only for a literal title, artist, album, filename, or other text the user expects to appear in track metadata.
 Use IDs exactly as supplied in the current context. Prefer one action; use multiple only when explicitly requested.
 Do not use tools for unsupported destructive operations. If the request cannot be represented, explain why without calling a tool.`,
       thinking: "medium",
@@ -68,6 +81,7 @@ Do not use tools for unsupported destructive operations. If the request cannot b
   activeContext = command.context;
   activeActions = [];
   activePlanId = command.id;
+  activeDiscoveryIntent = isSemanticDiscoveryRequest(command.prompt);
   let turn: Turn | undefined;
   try {
     turn = agent.turn.prompt({ input: plannerPrompt(command.prompt, command.context) });
@@ -84,6 +98,7 @@ Do not use tools for unsupported destructive operations. If the request cannot b
     activeContext = undefined;
     activeActions = [];
     activePlanId = undefined;
+    activeDiscoveryIntent = false;
   }
 }
 
@@ -103,13 +118,90 @@ function planningTools(): ToolMap {
       },
     },
     searchTracks: {
-      description: "Stage a library text search.",
+      description:
+        "Stage a literal metadata substring search for a known title, artist, album, or filename. Never use for moods, vibes, occasions, energy, recommendations, warm-ups, or set building.",
       parameters: objectSchema({ query: stringSchema() }, ["query"]),
       handler(input) {
+        if (activeDiscoveryIntent)
+          throw new TypeError(
+            "This is a semantic discovery request. Use inspectLibrary, findLibraryCandidates, and showTemporaryCrate instead of literal search.",
+          );
         const query = stringField(input, "query").trim();
         if (!query) throw new TypeError("Search query cannot be empty");
         stage({ type: "search-tracks", query, label: `Search for “${query}”` });
         return { staged: true, query };
+      },
+    },
+    inspectLibrary: {
+      description:
+        "Inspect bounded local-library genre counts and BPM distribution before curating tracks for a mood, occasion, energy profile, warm-up, or DJ set.",
+      parameters: objectSchema({}, []),
+      async handler() {
+        return summarizeLibraryCatalog(await libraryCatalog());
+      },
+    },
+    findLibraryCandidates: {
+      description:
+        "Return real playable local tracks for semantic curation. Choose genre terms from inspectLibrary and infer an appropriate BPM window from the user's intent. This reads candidates; it does not stage a UI action.",
+      parameters: objectSchema(
+        {
+          bpmMin: { type: "number", minimum: 30, maximum: 300 },
+          bpmMax: { type: "number", minimum: 30, maximum: 300 },
+          genreTerms: stringArraySchema(12),
+          textTerms: stringArraySchema(12),
+          limit: { type: "integer", minimum: 8, maximum: 120 },
+        },
+        [],
+      ),
+      async handler(input) {
+        const record = objectValue(input);
+        const bpmMin = optionalNumberField(record, "bpmMin");
+        const bpmMax = optionalNumberField(record, "bpmMax");
+        if (bpmMin !== undefined && bpmMax !== undefined && bpmMin > bpmMax)
+          throw new RangeError("bpmMin must be less than or equal to bpmMax");
+        const candidates = selectLibraryCandidates(await libraryCatalog(), {
+          ...(bpmMin === undefined ? {} : { bpmMin }),
+          ...(bpmMax === undefined ? {} : { bpmMax }),
+          genreTerms: stringArrayField(record, "genreTerms"),
+          textTerms: stringArrayField(record, "textTerms"),
+          ...(optionalNumberField(record, "limit") === undefined
+            ? {}
+            : { limit: optionalNumberField(record, "limit") }),
+        });
+        return {
+          count: candidates.length,
+          tracks: candidates.map(modelTrack),
+          guidance:
+            "Choose an ordered 12–30 track subset and pass only its IDs to showTemporaryCrate.",
+        };
+      },
+    },
+    showTemporaryCrate: {
+      description:
+        "Stage a temporary, non-destructive crate of real candidate IDs for auditioning. Use after inspecting and finding candidates; order IDs as a useful musical progression.",
+      parameters: objectSchema(
+        {
+          name: stringSchema(),
+          description: stringSchema(),
+          trackIds: stringArraySchema(50, 3),
+        },
+        ["name", "description", "trackIds"],
+      ),
+      async handler(input) {
+        const name = stringField(input, "name").trim();
+        const description = stringField(input, "description").trim();
+        const trackIds = stringArrayField(objectValue(input), "trackIds");
+        const tracks = resolveTemporaryCrateTracks(await libraryCatalog(), trackIds);
+        if (tracks.length < 3)
+          throw new RangeError("A temporary crate needs at least three tracks");
+        stage({
+          type: "show-temporary-crate",
+          name,
+          description,
+          tracks,
+          label: `Open temporary crate “${name}” (${String(tracks.length)} tracks)`,
+        });
+        return { staged: true, name, trackCount: tracks.length };
       },
     },
     showSetCanvas: {
@@ -314,6 +406,10 @@ function stringSchema(): Record<string, unknown> {
   return { type: "string", minLength: 1 };
 }
 
+function stringArraySchema(maxItems: number, minItems = 0): Record<string, unknown> {
+  return { type: "array", items: stringSchema(), minItems, maxItems };
+}
+
 function objectValue(input: unknown): Record<string, unknown> {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new TypeError("Tool input must be an object");
@@ -329,6 +425,32 @@ function stringField(input: unknown, name: string): string {
 function optionalStringField(input: unknown, name: string): string | undefined {
   const value = objectValue(input)[name];
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function optionalNumberField(input: Record<string, unknown>, name: string): number | undefined {
+  const value = input[name];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stringArrayField(input: Record<string, unknown>, name: string): string[] {
+  const value = input[name];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim()))
+    throw new TypeError(`${name} must be an array of non-empty strings`);
+  return value.map((item) => String(item).trim());
+}
+
+async function libraryCatalog(): Promise<TrackSummary[]> {
+  if (catalogCache && Date.now() - catalogCache.loadedAt < 60_000) return catalogCache.tracks;
+  const response = await fetch("/api/tracks?limit=10000&sort=plays&direction=desc", {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok)
+    throw new Error(`Library catalog request failed: HTTP ${String(response.status)}`);
+  const body = (await response.json()) as Partial<TracksResponse>;
+  if (!Array.isArray(body.items)) throw new TypeError("Library catalog response is invalid");
+  catalogCache = { loadedAt: Date.now(), tracks: body.items };
+  return body.items;
 }
 
 function post(message: NanocodexWorkerMessage): void {

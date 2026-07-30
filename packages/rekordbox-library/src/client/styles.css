@@ -784,6 +784,62 @@ select:focus-visible,
   border-bottom: 1px solid var(--border);
 }
 
+.semantic-crate-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0.75rem 0.9rem 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-raised));
+}
+
+.semantic-crate-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  color: var(--accent-bright);
+  border-radius: 0.55rem;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.semantic-crate-banner div {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.semantic-crate-banner strong,
+.semantic-crate-banner span,
+.semantic-crate-banner small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-crate-banner span {
+  color: var(--text-soft);
+  font-size: 0.78rem;
+}
+
+.semantic-crate-banner small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+@media (max-width: 720px) {
+  .semantic-crate-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .semantic-crate-banner > button {
+    grid-column: 1 / -1;
+  }
+}
+
 .track-search {
   display: flex;
   min-width: 180px;

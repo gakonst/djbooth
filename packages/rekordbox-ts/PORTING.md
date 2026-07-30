@@ -55,6 +55,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - Added bounded local processing jobs for selected library tracks. Analysis and stems outputs are
   isolated under `~/Music/Rekordbox Derived/`; four-source results can be auditioned against the
   original on one Web Audio clock before any explicit library-import workflow is introduced.
+- Split literal catalog search from semantic discovery. Mood, energy, occasion, warm-up, and
+  set-building requests now inspect bounded local genre/BPM facets, retrieve quality-ranked and
+  artist-diverse playable candidates, and resolve a model-curated 3–50 ID sequence into an
+  in-memory temporary crate. The model never receives local paths, cannot invent unresolved IDs,
+  and does not mutate Rekordbox while exploring a recommendation.
 
 ### 2026-07-29 — library-scale MLX model reuse and selected stem output
 

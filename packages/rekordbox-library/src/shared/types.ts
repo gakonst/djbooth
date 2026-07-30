@@ -332,6 +332,13 @@ export type PromptContext = {
 export type PromptAction =
   | { type: "open-playlist"; playlistId: string; label: string }
   | { type: "search-tracks"; query: string; label: string }
+  | {
+      type: "show-temporary-crate";
+      name: string;
+      description: string;
+      tracks: TrackSummary[];
+      label: string;
+    }
   | { type: "show-canvas"; label: string }
   | {
       type: "process-track";
