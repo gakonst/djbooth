@@ -12,8 +12,6 @@ This file is the durable project journal: source pins, compatibility scope, deci
 - `deezer/spleeter`: v1.4.0 `4stems.tar.gz`, SHA-256 `3adb4a50ad4eb18c7c4d65fcf4cf2367a07d48408a5eb7d03cd20067429dfaa8` (public model provenance check)
 - `ssmall256/mlx-audio-separator`: PyPI 0.1.5, source commit `0ddc8cf5507906b52ac45a9cd9e6d26e881a93f8` (MLX-native separation and checkpoint conversion)
 - `SYH99999/MelBandRoformer4StemFTLarge`: `62371baf060e8205915b4e6e3f9459fc016b6dd1`, checkpoint SHA-256 `590358e6abe3255d87d7173ca2e4005de082f14cbb466ea4c5ffedbcc3964506` (Apache-2.0 four-source model)
-- `zed-industries/zed` GPUI: crates.io `0.2.2` (Apache-2.0 native GPU UI framework)
-- `longbridge/gpui-component`: crates.io `0.5.1` (Apache-2.0 GPUI component library)
 
 The Python source at the pinned revision is the behavioral specification. Tests are ported or replaced with equivalent fixtures as each area lands.
 
@@ -34,23 +32,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
-### 2026-07-30 — stacked decks and GPUI native-shell checkpoint
+### 2026-07-30 — stacked deck checkpoint
 
 - The production two-deck dock now places Deck A above Deck B, retaining one narrow mixer that
   spans both rows. Compact waveform, metadata, cue, live-stem, and rotary EQ controls remain visible
   while returning horizontal space to each track.
-- Added a real native prototype on Zed GPUI 0.2.2 plus `gpui-component` 0.5.1. It renders the current
-  library snapshot, collapsible local/hosted playlist navigation, stacked deck surfaces, track
-  selection and component-backed deck loading, plus a full-height assistant rail. It consumes the
-  existing loopback API and may start the packaged Node sidecar read-only; it does not duplicate
-  provider, encrypted-SQLite, caching, or library-write logic.
-- GPUI's `runtime_shaders` feature avoids the build-time `xcrun metal` requirement on this
-  Command-Line-Tools-only machine. Both crates compile from crates.io with Rust 1.91.1. GPUI remains
-  pre-1.0, but the stripped native prototype is only 9.4 MiB versus the current 168 MiB self-contained
-  Tauri bundle. The Tauri/React workstation stays the release surface until native audio transport,
-  ANLZ waveform streaming, acquisitions, MLX stems, mutations, and Nanocodex execution reach behavioral
-  parity. The component library is used selectively for root/theme, buttons, and collapsible navigation;
-  its virtual table/list primitives are the intended library-scale path.
 
 ### 2026-07-29 — acquisition status and live deck stem mixing
 

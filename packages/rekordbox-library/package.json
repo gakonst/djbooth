@@ -47,8 +47,6 @@
     "desktop:prepare": "pnpm build && tsx scripts/prepare-desktop.ts",
     "format": "oxfmt --write src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",
     "format:check": "oxfmt --check src test scripts index.html vite.config.ts package.json tsconfig.json tsconfig.build.json README.md",
-    "gpui:check": "cargo check --manifest-path gpui/Cargo.toml",
-    "gpui:run": "pnpm build && cargo run --manifest-path gpui/Cargo.toml",
     "lint": "oxlint src test scripts vite.config.ts",
     "prepack": "pnpm build",
     "serve": "tsx src/cli.ts serve",
