@@ -12,6 +12,19 @@ pnpm --filter @gakonst/rekordbox-library desktop:build
 pnpm --filter @gakonst/rekordbox-library desktop:dmg # optional Finder-styled DMG
 ```
 
+An incremental native shell is also available using Zed's GPUI 0.2.2 and Longbridge's
+`gpui-component` 0.5.1. It starts the same read-only loopback sidecar and renders hosted/local
+playlists, collapsible navigation, stacked Deck A/Deck B surfaces, a selectable track browser, and
+the full-height assistant boundary without a webview:
+
+```sh
+pnpm --filter @gakonst/rekordbox-library gpui:run
+```
+
+The GPUI shell is an evaluation target, not yet the release workstation. Audio, mutations,
+acquisition, stems, and Nanocodex execution remain in the Tauri client until native equivalents can
+reuse the existing typed API and pass the same behavior checks.
+
 The loopback host owns and refreshes the shared Codex ChatGPT credential; tokens never enter the
 webview or WASM worker. `OPENAI_API_KEY` remains a fallback for machines without a ChatGPT login.
 
@@ -49,7 +62,8 @@ post-write verification passes.
 The workstation provides:
 
 - playlist hierarchy and search, health filters, ordered and column-sortable track browsing;
-- a persistent one/two-deck practice surface with key track metadata, RGB Rekordbox waveform
+- a persistent one/two-deck practice surface with Deck A stacked above Deck B, key track metadata,
+  RGB Rekordbox waveform
   previews, accessible rotary three-band Web Audio EQ/trim controls, equal-power crossfader, and
   timed A↔B transitions. Completed four-source jobs expose synchronized Orig/All/Vocal/Drums/Bass/
   Other switches directly on each playing deck without decoding the full stem set into memory.

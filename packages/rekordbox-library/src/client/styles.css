@@ -6051,3 +6051,74 @@ select:focus-visible,
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+
+/* Dual-deck precedence: full-width players stack vertically; one mixer spans both rows. */
+.player-dock.is-dual {
+  display: grid;
+  height: 324px;
+  grid-template-columns: minmax(0, 1fr) 112px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.player-dock.is-dual .player-panel.is-compact {
+  min-width: 0;
+  grid-column: 1;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  grid-template-rows: 38px 58px 50px;
+  gap: 3px 7px;
+  padding: 5px 8px;
+}
+
+.player-dock.is-dual .player-panel.is-compact:first-child {
+  grid-row: 1;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.player-dock.is-dual .player-panel.is-compact:last-child {
+  grid-row: 2;
+}
+
+.player-dock.is-dual .deck-mixer {
+  position: static;
+  height: 100%;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  border: 0;
+  border-left: 1px solid var(--border-strong);
+}
+
+.player-dock.is-dual .player-panel.is-compact .player-overview {
+  height: 38px;
+  grid-template-rows: 17px 16px;
+}
+
+.player-dock.is-dual .player-panel.is-compact .player-overview-waveform,
+.player-dock.is-dual .player-panel.is-compact .player-overview-waveform-canvas {
+  height: 16px;
+}
+
+.player-dock.is-dual .player-panel.is-compact .player-waveform-wrap {
+  height: 58px;
+  padding: 3px 7px 13px;
+}
+
+.player-dock.is-dual .player-panel.is-compact .player-waveform {
+  height: 42px;
+}
+
+@media (max-width: 900px) {
+  .player-dock.is-dual {
+    height: min(324px, 48vh);
+    grid-template-columns: minmax(0, 1fr) 88px;
+  }
+
+  .player-dock.is-dual .player-panel.is-compact {
+    grid-template-columns: minmax(0, 1fr) 122px;
+  }
+
+  .player-dock.is-dual .player-overview .player-track-copy > span,
+  .player-dock.is-dual .player-source-links {
+    display: none;
+  }
+}
