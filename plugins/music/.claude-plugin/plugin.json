@@ -1,7 +1,7 @@
 {
   "name": "music",
   "version": "0.2.0",
-  "description": "Resolve sets and playlists, acquire tracks, analyze audio, and maintain Rekordbox libraries.",
+  "description": "Resolve music, analyze audio, and operate a local Rekordbox browser workbench.",
   "author": {
     "name": "gakonst",
     "url": "https://github.com/gakonst"

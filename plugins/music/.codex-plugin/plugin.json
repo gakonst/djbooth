@@ -1,7 +1,7 @@
 {
   "name": "music",
   "version": "0.2.0",
-  "description": "Resolve sets and playlists, acquire tracks, analyze audio, and maintain Rekordbox libraries.",
+  "description": "Resolve music, analyze audio, and operate a local Rekordbox browser workbench.",
   "author": {
     "name": "gakonst",
     "url": "https://github.com/gakonst"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Music",
     "shortDescription": "Build and maintain a DJ music library",
-    "longDescription": "Music provides auditable workflows for resolving DJ sets and playlists, enriching track identities, acquiring individual recordings, analyzing audio, and importing verified playlists into Rekordbox.",
+    "longDescription": "Music provides auditable workflows for resolving DJ sets and playlists, acquiring and analyzing recordings, importing verified playlists into Rekordbox, and operating the complete local browser workbench beside Codex without a duplicate AI interface.",
     "developerName": "gakonst",
     "category": "Productivity",
     "capabilities": [
@@ -32,7 +32,8 @@
     "defaultPrompt": [
       "Resolve this DJ set and build a reviewed track manifest.",
       "Show my SoundCloud likes and playlists.",
-      "Analyze these tracks and add them to Rekordbox."
+      "Analyze these tracks and add them to Rekordbox.",
+      "Open my local Rekordbox workbench beside this chat."
     ],
     "brandColor": "#FF5500"
   }

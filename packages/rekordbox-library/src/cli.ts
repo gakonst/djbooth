@@ -10,6 +10,7 @@ import { z } from "zod";
 
 import { RekordboxLibraryService } from "./server/library.js";
 import { startLibraryServer } from "./server/server.js";
+import { workbenchUrl } from "./workbench-mode.js";
 
 const version = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -82,6 +83,10 @@ libraryCli.command("status", {
 libraryCli.command("serve", {
   description: "Serve the loopback-only Rekordbox library workbench until interrupted.",
   options: z.object({
+    assistant: z
+      .boolean()
+      .default(true)
+      .describe("Show the embedded assistant; disable when Codex or Claude hosts the chat"),
     host: z.enum(["127.0.0.1", "localhost", "::1"]).default("127.0.0.1"),
     open: z.boolean().default(false).describe("Open the workbench in the default browser"),
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
@@ -90,24 +95,38 @@ libraryCli.command("serve", {
   }),
   output: z.object({
     action: z.literal("stopped"),
+    assistantEnabled: z.boolean(),
     signal: z.enum(["SIGINT", "SIGTERM"]),
     url: z.string(),
     writeEnabled: z.boolean(),
   }),
   async run(c) {
     const server = await startLibraryServer({
+      assistantEnabled: c.options.assistant,
       dbPath: c.options.path,
       host: c.options.host,
       port: c.options.port,
       writeEnabled: c.options.write,
     });
+    const url = workbenchUrl(server.url, c.options.assistant);
     process.stderr.write(
-      `${JSON.stringify({ action: "started", url: server.url, writeEnabled: c.options.write })}\n`,
+      `${JSON.stringify({
+        action: "started",
+        assistantEnabled: c.options.assistant,
+        url,
+        writeEnabled: c.options.write,
+      })}\n`,
     );
-    if (c.options.open) openBrowser(server.url);
+    if (c.options.open) openBrowser(url);
     const signal = await waitForShutdown();
     await server.close();
-    return { action: "stopped" as const, signal, url: server.url, writeEnabled: c.options.write };
+    return {
+      action: "stopped" as const,
+      assistantEnabled: c.options.assistant,
+      signal,
+      url,
+      writeEnabled: c.options.write,
+    };
   },
 });
 

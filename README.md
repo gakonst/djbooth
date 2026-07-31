@@ -131,6 +131,7 @@ database or shelling through another CLI:
 ```sh
 pnpm music library status --format json
 pnpm music library serve --open
+pnpm music library serve --open --no-assistant # use Codex or Claude as the chat surface
 pnpm library:dev # repository checkout: writes + Vite HMR on 127.0.0.1:4179
 ```
 
@@ -159,6 +160,11 @@ claude plugin install music@music-ts
 The plugin does not install executables or start a background MCP server. Agents call the same Incur
 CLI; `music mcp add` remains an explicit opt-in. During development, rebuild and verify the generated
 plugin payload with `pnpm plugin:build` and `pnpm plugin:check`.
+
+Ask the installed skill to “open my local Rekordbox workbench,” or run `music library serve --open
+--no-assistant`. The full browser UI remains available beside the host agent while its duplicate
+Nanocodex rail, auth route, and Responses socket stay disabled. The Tauri app remains the
+assistant-enabled native touchpoint.
 
 Package-scoped iteration remains available:
 

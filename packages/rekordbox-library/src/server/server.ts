@@ -220,6 +220,7 @@ export type HostedPlaylistApi = {
 
 export type LibraryServerOptions = {
   api?: LibraryApi;
+  assistantEnabled?: boolean;
   dbPath?: string;
   host?: string;
   key?: string;
@@ -825,9 +826,12 @@ export async function startLibraryServer(
     for (const client of eventClients) writeEvent(client, ": keepalive\n\n");
   }, 20_000);
   heartbeat.unref();
-  const responsesCredentials = createResponsesCredentialProvider({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
+  const responsesCredentials =
+    options.assistantEnabled === false
+      ? undefined
+      : createResponsesCredentialProvider({
+          apiKey: process.env.OPENAI_API_KEY,
+        });
 
   const server = createServer(async (request, response) => {
     setSecurityHeaders(response);
@@ -841,6 +845,12 @@ export async function startLibraryServer(
       }
       if (url.pathname === "/api/assistant/auth") {
         assertMethod(request, ["GET", "HEAD"]);
+        if (!responsesCredentials) {
+          json(request, response, 404, {
+            error: { code: "NOT_FOUND", message: "The embedded assistant is disabled" },
+          });
+          return;
+        }
         json(request, response, 200, await responsesCredentials.status());
         return;
       }
@@ -1120,7 +1130,9 @@ export async function startLibraryServer(
       json(request, response, responseError.status, responseError.body);
     }
   });
-  const responsesProxy = attachResponsesProxy(server, { credentials: responsesCredentials });
+  const responsesProxy = responsesCredentials
+    ? attachResponsesProxy(server, { credentials: responsesCredentials })
+    : { close: () => undefined };
 
   try {
     await new Promise<void>((resolveListen, reject) => {

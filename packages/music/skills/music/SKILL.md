@@ -1,6 +1,6 @@
 ---
 name: music
-description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; analyze Normal, Dynamic, or Auto Rekordbox beat grids; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; serve analyzed local recordings to connected CDJs over Pro DJ Link; synchronize CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, connected-CDJ loading, front-USB sync or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
+description: Resolve YouTube, SoundCloud, 1001Tracklists, local DJ sets, or Spotify playlists into durable track manifests; enrich identities through Spotify; create ordered playlists on Spotify or SoundCloud; acquire individual recordings with Soulseek or selected ytdlp sources; analyze Normal, Dynamic, or Auto Rekordbox beat grids; recover unavailable tracks from cue-bounded set clips; import verified playlists into the normal Rekordbox database; open an agent-hosted browser workbench; serve analyzed local recordings to connected CDJs over Pro DJ Link; synchronize CDJ-3000 front-USB media; and control a read-only Linux USB appliance. Use for DJ-set resolution, music metadata, platform playlist publishing, individual-track downloads, Rekordbox library maintenance, local visual library work, connected-CDJ loading, front-USB sync or transport inspection, or one-shot resolve-download-analyze-playlist music-ts workflows.
 ---
 
 # Music
@@ -127,6 +127,20 @@ between CLIs or exposing the database to a hosted service:
 music library status --format json
 music library serve --open
 ```
+
+When Codex or Claude Code is the conversation surface, launch the same workbench without its
+embedded assistant:
+
+```sh
+music library serve --open --no-assistant
+```
+
+Keep that process running while working. The browser remains the visual surface for playlists,
+provider acquisition and cache state, analysis, on-demand stems, dual decks, EQ, cues, and set
+canvas operations; use the agent conversation for intent and the `music` CLI or exported libraries
+for automation. `--no-assistant` suppresses only the Nanocodex rail, auth probe, and worker. It does
+not start a reduced backend or disable any music capability. Use `--write --no-assistant` only after
+the user explicitly authorizes live Rekordbox mutations.
 
 The server binds to loopback, opens the database read-only by default, streams only audio paths
 already indexed by Rekordbox, and requires a per-run request token. Playlist mutations are disabled
@@ -628,4 +642,6 @@ edits, and completed stages.
 Use `music skills add` for the lightest local integration. Use `music mcp add` or `music --mcp` when
 a normal MCP client needs the same typed command map. Keep hosted, CodeMode, and plugin adapters
 thin: call the exported CLI command map and subpath libraries rather than reimplementing pipeline
-logic.
+logic. For the Codex or Claude marketplace plugin, prefer `music library serve --open
+--no-assistant`: the host agent owns chat and tools while the loopback browser workbench owns visual
+inspection and direct manipulation. Do not launch a second embedded AI surface.

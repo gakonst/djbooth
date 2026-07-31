@@ -91,6 +91,7 @@ music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]" --json
 music library status --format json
 music library serve --open
+music library serve --open --no-assistant
 music djlink rekordbox --format json
 music djlink search "Science Fiction" --mode track --format json
 music djlink run ./set/manifest.json 1 --player 3 --format json

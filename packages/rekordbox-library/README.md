@@ -27,8 +27,13 @@ to the release environment.
 ```sh
 music library status --format json
 music library serve --open
+music library serve --open --no-assistant # Codex/Claude hosts the conversation
 music library serve --write
 ```
+
+Agent-hosted mode keeps the complete visual workbench and processing backend while omitting the
+Nanocodex rail, browser worker, Responses authorization endpoint, and WebSocket proxy. Use the
+marketplace Music skill to let Codex or Claude Code launch this mode beside its own chat surface.
 
 For repository development, one command starts the SQLite/API server on an ephemeral loopback port
 and the Vite client with HMR on `http://127.0.0.1:4179/`:

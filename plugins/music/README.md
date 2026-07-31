@@ -29,6 +29,19 @@ claude plugin install music@music-ts
 The plugin intentionally contains no `.mcp.json`. Its only agent component is the versioned Music
 skill, keeping provider behavior identical and avoiding an automatic local process at session start.
 
+## Agent-hosted workbench
+
+Ask Codex or Claude Code to open the music workbench, or launch it directly:
+
+```sh
+music library serve --open --no-assistant
+```
+
+This opens the complete loopback-only library UI without its embedded Nanocodex rail. The host
+agent remains the conversation and tool surface; the browser provides playlists, cached provider
+acquisition, analysis, stems, dual decks, EQ, cues, and the set canvas. Add `--write` only when live
+Rekordbox mutations are intended and safe.
+
 ## Development
 
 The canonical source is `packages/music/skills/music`. Do not edit the generated copy under this

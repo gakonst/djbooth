@@ -213,9 +213,16 @@ type TemporaryCrate = {
   tracks: TrackSummary[];
 };
 
-export function App() {
+type AppProps = {
+  assistantEnabled?: boolean;
+};
+
+/** Render the local library workbench, optionally without its embedded assistant surface. */
+export function App({ assistantEnabled = true }: AppProps) {
   const queryClient = useQueryClient();
-  const [nanocodexPlanner] = useState(() => new NanocodexPlanner());
+  const [nanocodexPlanner] = useState(() =>
+    assistantEnabled ? new NanocodexPlanner() : undefined,
+  );
   const playerAdapter = useMemo<PlayerAdapter>(
     () => ({
       getAudioUrl: (track) =>
@@ -302,7 +309,7 @@ export function App() {
   );
   const contextMenu = useContextMenu<ContextTarget>();
 
-  useEffect(() => () => nanocodexPlanner.dispose(), [nanocodexPlanner]);
+  useEffect(() => () => nanocodexPlanner?.dispose(), [nanocodexPlanner]);
 
   const bootstrapQuery = useQuery({
     queryKey: ["bootstrap"],
@@ -311,6 +318,7 @@ export function App() {
   const assistantAuthQuery = useQuery({
     queryKey: ["assistant-auth"],
     queryFn: ({ signal }) => getAssistantAuth(signal),
+    enabled: assistantEnabled,
     staleTime: 30_000,
   });
   const playlistsQuery = useQuery({
@@ -1420,6 +1428,7 @@ export function App() {
 
   const submitLibraryPrompt = useCallback(
     async (submission: PromptSubmission): Promise<PromptActionResult> => {
+      if (!nanocodexPlanner) throw new Error("The embedded assistant is disabled");
       const plan = await nanocodexPlanner.plan(
         submission.id,
         submission.prompt,
@@ -2124,7 +2133,7 @@ export function App() {
   };
 
   return (
-    <div className={`workbench view-${viewMode}`}>
+    <div className={`workbench view-${viewMode}${assistantEnabled ? "" : " is-agent-workbench"}`}>
       <LibrarySidebar
         bootstrap={bootstrapQuery.data}
         items={playlists}
@@ -2928,25 +2937,27 @@ export function App() {
         onSelect={(entry) => handleContextAction(entry.id)}
       />
 
-      <PromptDock
-        authLabel={
-          assistantAuthQuery.data?.mode === "chatgpt"
-            ? `ChatGPT${assistantAuthQuery.data.plan ? ` ${assistantAuthQuery.data.plan}` : ""}`
-            : assistantAuthQuery.data?.message
-        }
-        disabled={assistantAuthQuery.data?.mode === "unavailable"}
-        disabledReason={assistantAuthQuery.data?.message}
-        playlistName={temporaryCrate?.name ?? selectedPlaylist?.name}
-        globalShortcutEnabled={!modalOpen}
-        jobs={processingJobsQuery.data ?? []}
-        onAudition={(job) => setAuditionJob(job)}
-        suggestions={[
-          "Find tracks for a late-night warm-up",
-          "Set a memory cue here",
-          "Open the set canvas",
-        ]}
-        onSubmit={submitLibraryPrompt}
-      />
+      {assistantEnabled ? (
+        <PromptDock
+          authLabel={
+            assistantAuthQuery.data?.mode === "chatgpt"
+              ? `ChatGPT${assistantAuthQuery.data.plan ? ` ${assistantAuthQuery.data.plan}` : ""}`
+              : assistantAuthQuery.data?.message
+          }
+          disabled={assistantAuthQuery.data?.mode === "unavailable"}
+          disabledReason={assistantAuthQuery.data?.message}
+          playlistName={temporaryCrate?.name ?? selectedPlaylist?.name}
+          globalShortcutEnabled={!modalOpen}
+          jobs={processingJobsQuery.data ?? []}
+          onAudition={(job) => setAuditionJob(job)}
+          suggestions={[
+            "Find tracks for a late-night warm-up",
+            "Set a memory cue here",
+            "Open the set canvas",
+          ]}
+          onSubmit={submitLibraryPrompt}
+        />
+      ) : null}
 
       {auditionJob ? (
         <StemAudition job={auditionJob} onClose={() => setAuditionJob(undefined)} />

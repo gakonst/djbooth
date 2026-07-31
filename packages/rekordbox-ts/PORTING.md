@@ -32,6 +32,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-07-30 — agent-hosted browser workbench checkpoint
+
+- Added `music library serve --open --no-assistant` for Codex and Claude Code sessions. It launches
+  the complete loopback workbench while omitting the Nanocodex rail and preventing its browser
+  worker, auth request, authorization route, and Responses WebSocket proxy from starting. Native
+  Tauri and ordinary browser launches retain the embedded assistant by default.
+- Updated the canonical Music skill, generated marketplace payload, Codex/Claude manifests, and
+  install documentation around one thin integration boundary. The host agent owns conversation and
+  invokes the existing `music` command map; the browser remains the visual/direct-manipulation
+  surface. No pipeline logic or automatic MCP daemon is duplicated inside the plugin.
+
 ### 2026-07-30 — stacked deck checkpoint
 
 - The production two-deck dock now places Deck A above Deck B, retaining one narrow mixer that

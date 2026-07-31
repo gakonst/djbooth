@@ -12,7 +12,7 @@
     {
       "name": "music",
       "source": "./plugins/music",
-      "description": "Resolve sets and playlists, acquire tracks, analyze audio, and maintain Rekordbox libraries.",
+      "description": "Resolve music, analyze audio, and operate a local Rekordbox browser workbench.",
       "version": "0.2.0",
       "author": {
         "name": "gakonst"

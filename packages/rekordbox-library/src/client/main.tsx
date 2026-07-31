@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "./App.js";
+import { assistantEnabledFromSearch } from "../workbench-mode.js";
 import "./styles.css";
 import "./assistant.css";
 
@@ -23,11 +24,12 @@ const queryClient = new QueryClient({
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root mount point");
+const assistantEnabled = assistantEnabledFromSearch(window.location.search);
 
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <App assistantEnabled={assistantEnabled} />
     </QueryClientProvider>
   </StrictMode>,
 );

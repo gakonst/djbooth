@@ -129,6 +129,23 @@ function mockApi(
 }
 
 describe("library server", () => {
+  it("does not expose assistant authorization in agent-hosted mode", async () => {
+    const files = fixture();
+    const server = await startLibraryServer({
+      api: mockApi(files.audioPath),
+      assistantEnabled: false,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+
+    const response = await fetch(new URL("api/assistant/auth", server.url));
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "NOT_FOUND", message: "The embedded assistant is disabled" },
+    });
+  });
+
   it("closes its owned persistent SQLite service idempotently", async () => {
     const files = fixture();
     const dbPath = join(files.root, "master.db");
