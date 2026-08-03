@@ -16,6 +16,7 @@ import {
   PlaylistContent,
   Property,
   TABLES,
+  writeOneLibraryPlaylist,
 } from "../src/devicelib-plus/index.js";
 import { deobfuscate } from "../src/utils.js";
 
@@ -203,6 +204,85 @@ describe("DeviceLibraryPlus queries", () => {
 });
 
 describe("DeviceLibraryPlus mutations", () => {
+  it("creates an encrypted hardware-shaped OneLibrary and appends ordered playlists", () => {
+    const root = mkdtempSync(join(tmpdir(), "rekordbox-ts-onelibrary-export-"));
+    roots.push(root);
+    const dbPath = join(root, "exportLibrary.db");
+    const tracks = [
+      {
+        masterContentId: "91",
+        title: "First",
+        artist: "Artist",
+        key: "4B",
+        bpmHundredths: 12500,
+        durationSeconds: 300,
+        fileName: "first.m4a",
+        fileSize: 123,
+        fileType: FileType.M4A,
+        bitrate: 256,
+        bitDepth: 16,
+        samplingRate: 44100,
+        analysedBits: 105,
+        usbAudioPath: "/Contents/music-ts/00000001/first.m4a",
+        usbAnalysisPath: "/PIONEER/USBANLZ/P001/00000001/ANLZ0000.DAT",
+      },
+      {
+        masterContentId: "92",
+        title: "Second",
+        artist: "Other",
+        key: "5A",
+        fileName: "second.flac",
+        fileSize: 456,
+        fileType: FileType.FLAC,
+        usbAudioPath: "/Contents/music-ts/00000002/second.flac",
+        usbAnalysisPath: "/PIONEER/USBANLZ/P002/00000002/ANLZ0000.DAT",
+      },
+    ];
+    const first = writeOneLibraryPlaylist({
+      create: true,
+      folderName: "DJ Sets I Like",
+      generatedAt: new Date("2026-08-02T12:00:00Z"),
+      path: dbPath,
+      playlistName: "First Set",
+      tracks,
+    });
+    expect(first).toMatchObject({ contents: 2, playlists: 2, contentIds: [1, 2] });
+
+    const second = writeOneLibraryPlaylist({
+      folderName: "DJ Sets I Like",
+      path: dbPath,
+      playlistName: "Second Set",
+      tracks: [tracks[0]!],
+    });
+    expect(second).toMatchObject({ contents: 2, playlists: 3, contentIds: [1] });
+
+    const db = new DeviceLibraryPlus(dbPath);
+    expect(db.tableNames).toHaveLength(22);
+    expect(db.executeSql("SELECT COUNT(*) AS count FROM menuItem")).toEqual([{ count: 27 }]);
+    expect(db.executeSql("SELECT numberOfContents FROM property")).toEqual([
+      { numberOfContents: 2 },
+    ]);
+    expect(
+      db.executeSql(
+        "SELECT title, path, analysisDataFilePath, analysedBits FROM content ORDER BY content_id",
+      ),
+    ).toEqual([
+      {
+        title: "First",
+        path: tracks[0]!.usbAudioPath,
+        analysisDataFilePath: tracks[0]!.usbAnalysisPath,
+        analysedBits: 105,
+      },
+      {
+        title: "Second",
+        path: tracks[1]!.usbAudioPath,
+        analysisDataFilePath: tracks[1]!.usbAnalysisPath,
+        analysedBits: 105,
+      },
+    ]);
+    db.close();
+  });
+
   it("creates autoincrement rows, content, playlists, tags, and properties", () => {
     const { audioPath, dbPath } = fixture();
     const db = new DeviceLibraryPlus({

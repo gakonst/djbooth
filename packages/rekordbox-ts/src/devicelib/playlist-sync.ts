@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, posix, resolve } from "node:path";
+import { basename, dirname, extname, join, posix, resolve } from "node:path";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
+import {
+  DeviceLibraryPlus,
+  type OneLibraryExportTrack,
+  writeOneLibraryPlaylist,
+} from "../devicelib-plus/index.js";
 import {
   assertRekordboxWriteStopped,
   DjmdContent,
@@ -13,6 +19,7 @@ import {
 import { inspectLegacyDevicePdb, LegacyDevicePdbWriter } from "./pdb.js";
 
 const EXPORT_PDB = join("PIONEER", "rekordbox", "export.pdb");
+const ONE_LIBRARY_DB = join("PIONEER", "rekordbox", "exportLibrary.db");
 const PLAYLIST_MARKER = ".music-cdj-playlist-sync.json";
 
 type PlaylistSyncRecord = {
@@ -22,12 +29,15 @@ type PlaylistSyncRecord = {
   usbFolderId: number;
   usbPlaylistId: number;
   trackIds: number[];
+  oneLibraryFolderId?: number;
+  oneLibraryPlaylistId?: number;
+  oneLibraryContentIds?: number[];
   syncedAt: string;
 };
 
 type PlaylistSyncMarker = {
-  schemaVersion: 1;
-  format: "legacy-device-playlist-sync";
+  schemaVersion: 1 | 2;
+  format: "legacy-device-playlist-sync" | "dual-device-playlist-sync";
   records: PlaylistSyncRecord[];
 };
 
@@ -39,6 +49,8 @@ export type SyncLegacyDevicePlaylistOptions = {
   targetDirectory: string;
   /** Exact normal Rekordbox playlist ID. */
   playlistId: string;
+  /** Initialize an empty stick with traditional Device Library plus OneLibrary. */
+  fresh?: boolean;
   /** Rekordbox `master.db`; defaults to the configured Rekordbox 6/7 database. */
   databasePath?: string;
   /** Optional SQLCipher key override. */
@@ -51,10 +63,10 @@ export type SyncLegacyDevicePlaylistOptions = {
   getProcessState?: () => RekordboxWriteProcessState;
 };
 
-/** Result of one scoped, append-only legacy Device Library playlist synchronization. */
+/** Result of one scoped, dual-format Device Library playlist synchronization. */
 export type SyncLegacyDevicePlaylistResult = {
-  schemaVersion: 1;
-  format: "legacy-device-playlist-sync";
+  schemaVersion: 2;
+  format: "dual-device-playlist-sync";
   databasePath: string;
   targetDirectory: string;
   playlistId: string;
@@ -62,19 +74,23 @@ export type SyncLegacyDevicePlaylistResult = {
   folderName: string;
   usbFolderId: number;
   usbPlaylistId: number;
+  oneLibraryFolderId: number | null;
+  oneLibraryPlaylistId: number | null;
+  oneLibraryPath: string | null;
   tracks: number;
   audioFiles: number;
   analysisFiles: number;
   bytesCopied: number;
   backupPath: string | null;
+  oneLibraryBackupPath: string | null;
   changed: boolean;
 };
 
 /**
- * Append one playlist to a Rekordbox-created legacy USB export without rebuilding existing rows.
+ * Synchronize one playlist to both USB library formats without rebuilding unrelated rows.
  *
- * Existing tracks and playlists remain in place. New audio and rewritten ANLZ files are staged
- * first, the prior PDB is backed up, and the validated replacement PDB is published last.
+ * Fresh mode initializes an empty target. Existing mode preserves both databases. Audio and
+ * rewritten ANLZ are staged once and shared by traditional Device Library and OneLibrary.
  */
 export async function syncLegacyDevicePlaylist(
   options: SyncLegacyDevicePlaylistOptions,
@@ -86,7 +102,13 @@ export async function syncLegacyDevicePlaylist(
   if (!Number.isFinite(now.getTime())) throw new TypeError("Sync clock is invalid");
   const targetDirectory = await realpath(resolve(options.targetDirectory));
   const pdbPath = join(targetDirectory, EXPORT_PDB);
-  const originalPdb = await readFile(pdbPath);
+  const oneLibraryPath = join(targetDirectory, ONE_LIBRARY_DB);
+  if (options.fresh) assertFreshTarget(targetDirectory);
+  if (!options.fresh && !existsSync(oneLibraryPath))
+    throw new Error(
+      "Scoped dual-library sync requires exportLibrary.db; use --fresh on an empty stick",
+    );
+  const originalPdb = options.fresh ? new LegacyDevicePdbWriter().build() : await readFile(pdbPath);
   const original = inspectLegacyDevicePdb(originalPdb);
   if (original.histories.length)
     throw new Error(
@@ -107,12 +129,15 @@ export async function syncLegacyDevicePlaylist(
     const parent = database.listPlaylists().find(({ id }) => id === summary.parentId);
     const folderName = parent?.type === "folder" ? parent.name : "DJ Sets I Like";
     const markerPath = join(targetDirectory, PLAYLIST_MARKER);
-    const marker = await readPlaylistMarker(markerPath);
+    const marker = options.fresh
+      ? ({ schemaVersion: 2, format: "dual-device-playlist-sync", records: [] } as const)
+      : await readPlaylistMarker(markerPath);
     const prior = marker.records.find(
       (record) => record.databasePath === databasePath && record.playlistId === summary.id,
     );
     if (prior) {
       verifyPriorRecord(original, prior);
+      verifyPriorOneLibrary(oneLibraryPath, prior);
       return result({
         databasePath,
         targetDirectory,
@@ -148,9 +173,12 @@ export async function syncLegacyDevicePlaylist(
     const stagedInstalls: Array<{ staged: string; target: string }> = [];
     let bytesCopied = 0;
     let analysisFiles = 0;
-    let published = false;
+    let oneLibraryFolderId: number | undefined;
+    let oneLibraryPlaylistId: number | undefined;
+    let oneLibraryContentIds: number[] | undefined;
     try {
       const trackIds: number[] = [];
+      const oneLibraryTracks: OneLibraryExportTrack[] = [];
       for (const [index, track] of tracks.entries()) {
         const content = database.query(DjmdContent).where({ ID: track.contentId }).one();
         const audioPath = requiredString(track.path, `Track '${track.contentId}' audio path`);
@@ -202,6 +230,33 @@ export async function syncLegacyDevicePlaylist(
           releaseDate: dateValue(content.get("ReleaseDate")),
         });
         trackIds.push(pdbId);
+        oneLibraryTracks.push({
+          masterContentId: track.contentId,
+          title: track.title ?? filename,
+          artist: track.artist,
+          key: track.key,
+          subtitle: stringValue(content.get("Subtitle")),
+          bpmHundredths: track.bpm === null ? 0 : Math.round(track.bpm * 100),
+          durationSeconds: track.durationSeconds,
+          trackNumber: integerValue(content.get("TrackNo")),
+          discNumber: integerValue(content.get("DiscNo")),
+          comment: stringValue(content.get("Commnt")),
+          rating: integerValue(content.get("Rating")),
+          releaseYear: integerValue(content.get("ReleaseYear")),
+          releaseDate: dateValue(content.get("ReleaseDate")),
+          dateAdded: dateValue(content.get("StockDate")),
+          fileName: filename,
+          fileSize: audio.size,
+          fileType: resolveFileType(track.fileType, filename),
+          bitrate: integerValue(content.get("BitRate")),
+          bitDepth: integerValue(content.get("BitDepth")),
+          samplingRate: integerValue(content.get("SampleRate"), 44_100),
+          isrc: stringValue(content.get("ISRC")),
+          playCount: integerValue(content.get("DJPlayCount")),
+          analysedBits: integerValue(content.get("Analysed"), 105),
+          usbAudioPath,
+          usbAnalysisPath: `${usbAnalysisDirectory}/ANLZ0000.DAT`,
+        });
 
         const stagedAudio = mediaPath(stagingRoot, usbAudioPath);
         await mkdir(dirname(stagedAudio), { recursive: true });
@@ -255,54 +310,91 @@ export async function syncLegacyDevicePlaylist(
       await mkdir(dirname(stagedPdb), { recursive: true });
       await writeFile(stagedPdb, nextPdb);
 
+      const stagedOneLibrary = join(stagingRoot, ONE_LIBRARY_DB);
+      await mkdir(dirname(stagedOneLibrary), { recursive: true });
+      if (!options.fresh) await copyFile(oneLibraryPath, stagedOneLibrary);
+      const oneLibrary = writeOneLibraryPlaylist({
+        create: options.fresh,
+        folderName,
+        generatedAt: now,
+        path: stagedOneLibrary,
+        playlistName: summary.name,
+        tracks: oneLibraryTracks,
+      });
+      oneLibraryFolderId = oneLibrary.folderId;
+      oneLibraryPlaylistId = oneLibrary.playlistId;
+      oneLibraryContentIds = oneLibrary.contentIds;
+
       const timestamp = now.toISOString().replaceAll(/[-:.]/gu, "").replace("Z", "Z");
-      const backupPath = join(
-        targetDirectory,
-        "PIONEER",
-        "rekordbox",
-        `export.pdb.music-ts-backup-${timestamp}`,
-      );
-      await copyFile(pdbPath, backupPath);
+      const backupPath = options.fresh
+        ? null
+        : join(targetDirectory, "PIONEER", "rekordbox", `export.pdb.music-ts-backup-${timestamp}`);
+      const oneLibraryBackupPath = options.fresh
+        ? null
+        : join(
+            targetDirectory,
+            "PIONEER",
+            "rekordbox",
+            `exportLibrary.db.music-ts-backup-${timestamp}`,
+          );
+      if (backupPath) await copyFile(pdbPath, backupPath);
+      if (oneLibraryBackupPath) await copyFile(oneLibraryPath, oneLibraryBackupPath);
       const installed: string[] = [];
+      let oneLibraryPublished = false;
+      let pdbPublished = false;
       try {
         for (const install of stagedInstalls) {
           await mkdir(dirname(install.target), { recursive: true });
           await rename(install.staged, install.target);
           installed.push(install.target);
         }
+        await mkdir(dirname(oneLibraryPath), { recursive: true });
+        await rename(stagedOneLibrary, oneLibraryPath);
+        oneLibraryPublished = true;
         await rename(stagedPdb, pdbPath);
-        published = true;
+        pdbPublished = true;
+
+        const record: PlaylistSyncRecord = {
+          databasePath,
+          playlistId: summary.id,
+          playlistName: summary.name,
+          usbFolderId,
+          usbPlaylistId,
+          trackIds,
+          oneLibraryFolderId,
+          oneLibraryPlaylistId,
+          oneLibraryContentIds,
+          syncedAt: now.toISOString(),
+        };
+        verifyPriorRecord(inspectLegacyDevicePdb(await readFile(pdbPath)), record);
+        verifyPriorOneLibrary(oneLibraryPath, record);
+        await verifyInstalledMedia(
+          targetDirectory,
+          stagedInstalls.map(({ target }) => target),
+        );
+        await writePlaylistMarker(markerPath, { ...marker, records: [...marker.records, record] });
+        return result({
+          databasePath,
+          targetDirectory,
+          summary,
+          folderName,
+          record,
+          tracks: tracks.length,
+          audioFiles: tracks.length,
+          analysisFiles,
+          bytesCopied,
+          backupPath: backupPath ?? undefined,
+          oneLibraryBackupPath: oneLibraryBackupPath ?? undefined,
+          changed: true,
+        });
       } catch (error) {
-        if (!published)
-          await Promise.all(
-            installed.map((path) => rm(path, { force: true }).catch(() => undefined)),
-          );
+        if (pdbPublished) await restorePublishedFile(pdbPath, backupPath);
+        if (oneLibraryPublished) await restorePublishedFile(oneLibraryPath, oneLibraryBackupPath);
+        await Promise.all(
+          installed.map((path) => rm(path, { force: true }).catch(() => undefined)),
+        );
         throw error;
       }
-
-      const record: PlaylistSyncRecord = {
-        databasePath,
-        playlistId: summary.id,
-        playlistName: summary.name,
-        usbFolderId,
-        usbPlaylistId,
-        trackIds,
-        syncedAt: now.toISOString(),
-      };
-      await writePlaylistMarker(markerPath, { ...marker, records: [...marker.records, record] });
-      return result({
-        databasePath,
-        targetDirectory,
-        summary,
-        folderName,
-        record,
-        tracks: tracks.length,
-        audioFiles: tracks.length,
-        analysisFiles,
-        bytesCopied,
-        backupPath,
-        changed: true,
-      });
     } finally {
       await rm(stagingRoot, { force: true, recursive: true });
     }
@@ -322,11 +414,12 @@ function result(input: {
   analysisFiles?: number;
   bytesCopied?: number;
   backupPath?: string;
+  oneLibraryBackupPath?: string;
   changed: boolean;
 }): SyncLegacyDevicePlaylistResult {
   return {
-    schemaVersion: 1,
-    format: "legacy-device-playlist-sync",
+    schemaVersion: 2,
+    format: "dual-device-playlist-sync",
     databasePath: input.databasePath,
     targetDirectory: input.targetDirectory,
     playlistId: input.summary.id,
@@ -334,11 +427,17 @@ function result(input: {
     folderName: input.folderName,
     usbFolderId: input.record.usbFolderId,
     usbPlaylistId: input.record.usbPlaylistId,
+    oneLibraryFolderId: input.record.oneLibraryFolderId ?? null,
+    oneLibraryPlaylistId: input.record.oneLibraryPlaylistId ?? null,
+    oneLibraryPath: input.record.oneLibraryPlaylistId
+      ? join(input.targetDirectory, ONE_LIBRARY_DB)
+      : null,
     tracks: input.tracks,
     audioFiles: input.audioFiles ?? 0,
     analysisFiles: input.analysisFiles ?? 0,
     bytesCopied: input.bytesCopied ?? 0,
     backupPath: input.backupPath ?? null,
+    oneLibraryBackupPath: input.oneLibraryBackupPath ?? null,
     changed: input.changed,
   };
 }
@@ -381,19 +480,45 @@ function verifyPriorRecord(
     throw new Error(`USB sync receipt for '${record.playlistName}' has stale track order`);
 }
 
+function verifyPriorOneLibrary(path: string, record: PlaylistSyncRecord): void {
+  if (!record.oneLibraryFolderId || !record.oneLibraryPlaylistId || !record.oneLibraryContentIds)
+    throw new Error(
+      `USB sync receipt for '${record.playlistName}' predates OneLibrary; rebuild the stick with --fresh`,
+    );
+  const database = new DeviceLibraryPlus(path);
+  try {
+    const rows = database.executeSql<{ content_id: number }>(
+      `SELECT pc.content_id
+       FROM playlist_content pc
+       JOIN playlist p ON p.playlist_id = pc.playlist_id
+       WHERE p.playlist_id = ? AND p.playlist_id_parent = ?
+       ORDER BY pc.sequenceNo`,
+      [record.oneLibraryPlaylistId, record.oneLibraryFolderId],
+    );
+    if (
+      !Array.isArray(rows) ||
+      JSON.stringify(rows.map(({ content_id }) => content_id)) !==
+        JSON.stringify(record.oneLibraryContentIds)
+    )
+      throw new Error(`USB sync receipt for '${record.playlistName}' no longer matches OneLibrary`);
+  } finally {
+    database.close();
+  }
+}
+
 async function readPlaylistMarker(path: string): Promise<PlaylistSyncMarker> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as Partial<PlaylistSyncMarker>;
     if (
-      value.schemaVersion !== 1 ||
-      value.format !== "legacy-device-playlist-sync" ||
+      ![1, 2].includes(value.schemaVersion ?? 0) ||
+      !["legacy-device-playlist-sync", "dual-device-playlist-sync"].includes(value.format ?? "") ||
       !Array.isArray(value.records)
     )
       throw new TypeError(`Invalid scoped playlist sync marker '${path}'`);
     return value as PlaylistSyncMarker;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
-      return { schemaVersion: 1, format: "legacy-device-playlist-sync", records: [] };
+      return { schemaVersion: 2, format: "dual-device-playlist-sync", records: [] };
     throw error;
   }
 }
@@ -414,6 +539,50 @@ function mediaPath(root: string, path: string): string {
   if (!relative || relative.split("/").some((segment) => !segment || segment === ".."))
     throw new TypeError(`Unsafe USB media path '${path}'`);
   return join(root, ...relative.split(posix.sep));
+}
+
+function assertFreshTarget(targetDirectory: string): void {
+  const managed = ["Contents", "PIONEER", PLAYLIST_MARKER, ".music-cdj-export.json"];
+  const existing = managed.filter((name) => existsSync(join(targetDirectory, name)));
+  if (existing.length)
+    throw new Error(
+      `--fresh requires an empty CDJ target; found ${existing.map((name) => `'${name}'`).join(", ")}`,
+    );
+}
+
+function resolveFileType(value: number | null, filename: string): number {
+  if (value && [1, 4, 5, 11, 12].includes(value)) return value;
+  const inferred: Readonly<Record<string, number>> = {
+    ".aif": 12,
+    ".aiff": 12,
+    ".flac": 5,
+    ".m4a": 4,
+    ".mp3": 1,
+    ".wav": 11,
+  };
+  const fileType = inferred[extname(filename).toLowerCase()];
+  if (!fileType) throw new TypeError(`Unsupported OneLibrary audio file '${filename}'`);
+  return fileType;
+}
+
+async function verifyInstalledMedia(
+  targetDirectory: string,
+  paths: readonly string[],
+): Promise<void> {
+  for (const path of paths) {
+    const installed = await stat(path);
+    if (!installed.isFile()) throw new Error(`USB publication did not install '${path}'`);
+    if (!/\/ANLZ\d{4}\.(?:DAT|EXT|2EX)$/u.test(path)) continue;
+    const analysis = AnlzFile.parseFile(path);
+    const audioPath = requiredString(analysis.get("PPTH"), `ANLZ '${path}' PPTH`);
+    const audio = await stat(mediaPath(targetDirectory, audioPath));
+    if (!audio.isFile()) throw new Error(`ANLZ '${path}' points to missing audio '${audioPath}'`);
+  }
+}
+
+async function restorePublishedFile(path: string, backupPath: string | null): Promise<void> {
+  if (backupPath) await copyFile(backupPath, path);
+  else await rm(path, { force: true });
 }
 
 function safeFilename(value: string, trackId: number): string {

@@ -27,10 +27,22 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Smart playlists              | implemented    | `smartlist ...` | 7 tests      | complete                    |
 | Master database              | implemented    | `db ...`        | 5 tests      | complete                    |
 | Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete                    |
-| Device Library Plus          | implemented    | `device ...`    | 4 tests      | complete                    |
-| Legacy Device Library PDB    | implemented    | `music usb ...` | 9 tests      | hardware validation pending |
+| OneLibrary / Device Lib Plus | implemented    | `device ...`    | 5 tests      | hardware validation pending |
+| Legacy Device Library PDB    | implemented    | `music usb ...` | 10 tests     | hardware validation pending |
 
 ## Decisions
+
+### 2026-08-02 — fresh dual-library USB checkpoint
+
+- Changed scoped USB sync to initialize a freshly formatted stick with both traditional Device
+  Library `export.pdb` and encrypted OneLibrary `exportLibrary.db`; the two indexes reference one
+  shared audio and DAT/EXT/2EX tree.
+- Added a clean OneLibrary writer for the observed 22-table schema, required browse/sort/color
+  defaults, ordered folders/playlists, content-path reuse, SQLCipher legacy mode 4, content counts,
+  and reopen-time SQLite/hierarchy verification.
+- Real-data rehearsal and physical FAT32 export both produced the ordered 18-track Lee Burridge b2b
+  Patricio LIB 2026 playlist in each index. All 18 audio files and 54 ANLZ files verified, both
+  orders matched, OneLibrary `quick_check` returned `ok`, and the warm command copied zero bytes.
 
 ### 2026-08-02 — scoped existing-USB playlist sync checkpoint
 

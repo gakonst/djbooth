@@ -3,9 +3,9 @@
 A TypeScript port of [dylanljones/pyrekordbox](https://github.com/dylanljones/pyrekordbox), with a synchronous typed database API and an agent-friendly CLI built on [wevm/incur](https://github.com/wevm/incur).
 
 The primary workflow is direct access to encrypted Rekordbox 6/7 `master.db` libraries through
-`MasterDatabase`. The package can compile that SQLite library into the legacy `export.pdb` Device
-Library used by CDJ-3000 media without using Device Library Plus. It also covers Device Library
-Plus databases, ANLZ analysis files, My Settings binaries, smart playlists,
+`MasterDatabase`. The package can compile that SQLite library into legacy `export.pdb` and create
+or append encrypted OneLibrary `exportLibrary.db` databases for dual-format USB media. It also
+covers ANLZ analysis files, My Settings binaries, smart playlists,
 `masterPlaylists6.xml`, and collection XML interchange. The pinned source revisions, compatibility
 policy, verification evidence, and implementation decisions are recorded in
 [PORTING.md](./PORTING.md).
@@ -92,11 +92,12 @@ Top-level command families:
 | `db`        | Query and mutate the Rekordbox 6/7 master database            |
 | `device`    | Query and mutate Device Library Plus `exportLibrary.db` files |
 
-The composed `music` CLI exposes legacy CDJ-3000 mounted-media synchronization separately from the
-`device` Device Library Plus commands:
+The composed `music` CLI exposes mounted-media synchronization separately from the low-level
+`device` OneLibrary commands:
 
 ```sh
 music usb sync /mnt/cdj --database /path/to/master.db --write --format json
+music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --fresh --write --format json
 ```
 
 The destination is a mounted FAT/exFAT root or a staging directory. Sync imports every unseen CDJ
@@ -306,6 +307,11 @@ export time.
 `LegacyDevicePdbWriter` and `inspectLegacyDevicePdb` expose the lower-level binary compiler and a
 bounded semantic verifier. Generated output is tested against the package parser and independently
 against the pinned Rust `rekordbox-pdb` parser.
+
+`writeOneLibraryPlaylist` creates the observed 22-table encrypted OneLibrary schema, initializes
+the hardware browse/sort metadata, deduplicates shared content paths, preserves ordered playlist
+membership, updates the content count, and reopens the result for `quick_check` plus hierarchy
+verification.
 
 ### ANLZ and My Settings
 

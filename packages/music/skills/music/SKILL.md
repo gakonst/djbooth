@@ -95,12 +95,11 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
   use Spotify APIs for DJ mixing, segueing, or overlapping playback.
 - Treat `music djlink load` as remote load/cue, not transport control. Keep deck PLAY physical;
   CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.
-- Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb sync --write` for the
-  normal day-to-day mounted-media workflow: import unseen histories into SQLite, then
-  differentially reconcile legacy `export.pdb`, audio, and rewritten ANLZ. Do not use Device
-  Library Plus. For a Rekordbox-created stick that must retain its selected library, use `music usb
-sync-playlist <media> <playlist-id> --write`; do not run complete-library sync or replace the
-  unowned export. Never change gadget media while configured, and require physical USB STOP/eject
+- Treat `music usb` as front-panel block storage, not DJ Link. For a freshly formatted stick, use
+  `music usb sync-playlist <media> <playlist-id> --fresh --write`; it creates traditional Device
+  Library plus OneLibrary with one shared audio/ANLZ tree. Omit `--fresh` for an existing verified
+  dual-library stick. Complete-library `music usb sync --write` retains the legacy history-import
+  round trip. Never change gadget media while configured, and require physical USB STOP/eject
   before `detach --confirm-host-ejected`.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
@@ -586,18 +585,18 @@ directory:
 music usb sync "$MEDIA_ROOT" --database "$MASTER_DB" --write --format json
 ```
 
-When the mounted stick was created by Rekordbox and only one playlist should be added, keep the
-existing library and use its exact normal playlist ID:
+For a freshly formatted stick, initialize both USB library formats with the exact normal playlist
+ID:
 
 ```sh
 music usb sync-playlist "$MEDIA_ROOT" "$PLAYLIST_ID" \
-  --database "$MASTER_DB" --write --format json
+  --database "$MASTER_DB" --fresh --write --format json
 ```
 
-Scoped sync refuses unimported histories, preserves existing PDB rows, reuses the matching parent
-folder, stages new audio and rewritten DAT/EXT/2EX before metadata, backs up `export.pdb`, and
-publishes the validated PDB last. Its receipt makes an unchanged rerun a zero-copy no-op. Device
-Library Plus remains untouched.
+Scoped sync stages one shared audio and rewritten DAT/EXT/2EX tree before publishing traditional
+`export.pdb` and encrypted OneLibrary `exportLibrary.db`. It verifies both playlist orders, SQLite
+integrity, ANLZ paths, and audio before writing its receipt. Omit `--fresh` on later runs; unchanged
+media is a zero-copy no-op, and existing dual-library databases are backed up before append.
 
 Sync first imports every unseen nonempty CDJ history as a root-level `DJ Set YYYY-MM-DD` playlist,
 preserving order and duplicates and incrementing play counts exactly once. It then writes

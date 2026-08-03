@@ -10,11 +10,13 @@ CDJ HISTORY 001 ───────> DJ Set YYYY-MM-DD + play counts
                                   |
                            music usb sync
                                   |
-master.db + audio + ANLZ ─> changed USB files + export.pdb
+master.db + audio + ANLZ ─> changed USB files + both library indexes
 ```
 
-This is the legacy Device Library format used by CDJ-3000 media. It does not create Device Library
-Plus or require a disk-image file. `sync --write` mutates the normal master library only when the
+Complete-library `sync` retains the legacy Device Library round trip used by CDJ-3000 media.
+Scoped `sync-playlist` creates and updates both traditional Device Library and OneLibrary so one
+stick works across legacy and current players. Neither workflow requires a disk-image file.
+`sync --write` mutates the normal master library only when the
 USB contains an unseen play history, behind the shared lock, stopped-Rekordbox check, checksummed
 backup, one transaction, and post-commit verification.
 
@@ -40,8 +42,8 @@ The mounted-media synchronizer:
 - removes media for tracks no longer active in the master library;
 - materializes regular and smart playlists while preserving order and duplicate memberships;
 - refuses to replace unowned media or erase a history it cannot map exactly;
-- can append one analyzed playlist to a Rekordbox-created legacy export without rebuilding its
-  existing PDB rows or modifying Device Library Plus.
+- can initialize an empty stick with one analyzed playlist in both traditional Device Library and
+  OneLibrary, or append to an existing dual-format export without rebuilding unrelated rows.
 
 The current low-level gadget controller:
 
@@ -141,28 +143,37 @@ For a new or previously music-ts-owned mounted FAT/exFAT volume:
 music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
-For an existing Rekordbox-created stick that must retain its current library, append one normal
-playlist by exact ID:
+For a freshly formatted stick, initialize both USB library formats with one normal playlist by
+exact ID:
+
+```sh
+music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+  --database /path/to/master.db --fresh --write --format json
+```
+
+Run the same command without `--fresh` for an existing music-ts dual-library stick:
 
 ```sh
 music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
   --database /path/to/master.db --write --format json
 ```
 
-Scoped sync preserves every existing track and playlist row, reuses an existing parent folder,
-stages new audio plus rewritten DAT/EXT/2EX first, writes a timestamped `export.pdb` backup, and
-publishes the validated PDB last. Its receipt makes an unchanged rerun a zero-copy no-op. It refuses
-unimported CDJ histories and does not modify `exportLibrary.db`.
+Scoped sync writes one shared audio/ANLZ tree plus traditional `export.pdb` and encrypted OneLibrary
+`exportLibrary.db`. It verifies both playlist hierarchies and orders, SQLite integrity, ANLZ paths,
+and installed audio before writing its receipt. Existing dual-library media gets timestamped
+backups; an unchanged rerun is a zero-copy no-op.
 
 The result contains:
 
 ```text
 /mnt/cdj/
-├── .music-cdj-export.json
+├── .music-cdj-playlist-sync.json
 ├── Contents/...
 └── PIONEER/
     ├── USBANLZ/...
-    └── rekordbox/export.pdb
+    └── rekordbox/
+        ├── export.pdb
+        └── exportLibrary.db
 ```
 
 The first sync copies the complete active library. Later syncs retain stable DeviceSQL IDs and copy
