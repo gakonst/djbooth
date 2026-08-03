@@ -402,11 +402,25 @@ describe("master.db to legacy Device Library export", () => {
       readFileSync(join(fixture.output, "PIONEER", "rekordbox", "export.pdb")),
     );
     expect(legacy.tracks).toHaveLength(2);
+    expect(legacy.tracks.map(({ analyzePath }) => analyzePath)).toEqual([
+      "/PIONEER/USBANLZ/BBB/two/ANLZ0000.DAT",
+      "/PIONEER/USBANLZ/AAA/one/ANLZ0000.DAT",
+    ]);
+    for (const track of legacy.tracks)
+      expect(existsSync(join(fixture.output, track.analyzePath.slice(1)))).toBe(true);
     expect(legacy.playlists.map(({ name }) => name)).toEqual(["Gigs", "Tonight"]);
     const oneLibrary = new DeviceLibraryPlus(first.oneLibraryPath!);
-    expect(oneLibrary.executeSql("SELECT title FROM content ORDER BY content_id")).toEqual([
-      { title: "Second" },
-      { title: "First" },
+    expect(
+      oneLibrary.executeSql("SELECT title, analysisDataFilePath FROM content ORDER BY content_id"),
+    ).toEqual([
+      {
+        title: "Second",
+        analysisDataFilePath: "/PIONEER/USBANLZ/BBB/two/ANLZ0000.DAT",
+      },
+      {
+        title: "First",
+        analysisDataFilePath: "/PIONEER/USBANLZ/AAA/one/ANLZ0000.DAT",
+      },
     ]);
     expect(oneLibrary.executeSql("SELECT name FROM playlist ORDER BY playlist_id")).toEqual([
       { name: "Gigs" },

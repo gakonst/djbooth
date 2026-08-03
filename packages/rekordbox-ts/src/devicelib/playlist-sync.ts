@@ -201,8 +201,8 @@ export async function syncLegacyDevicePlaylist(
           throw new Error(
             `Track '${track.contentId}' has no ANLZ0000.DAT in '${analysisDirectory}'`,
           );
-        const analysisGroup = `P${String(pdbId % 1000).padStart(3, "0")}`;
-        const usbAnalysisDirectory = `/PIONEER/USBANLZ/${analysisGroup}/${idHex}`;
+        const usbAnalysisDatPath = canonicalUsbAnalysisPath(analysisPath, track.contentId);
+        const usbAnalysisDirectory = posix.dirname(usbAnalysisDatPath);
         writer.addTrack({
           id: pdbId,
           title: track.title ?? filename,
@@ -210,7 +210,7 @@ export async function syncLegacyDevicePlaylist(
           key: track.key,
           filePath: usbAudioPath,
           filename,
-          analyzePath: `${usbAnalysisDirectory}/ANLZ0000.DAT`,
+          analyzePath: usbAnalysisDatPath,
           tempo: track.bpm === null ? 0 : Math.round(track.bpm * 100),
           duration: track.durationSeconds ?? 0,
           fileSize: audio.size,
@@ -231,6 +231,7 @@ export async function syncLegacyDevicePlaylist(
         });
         trackIds.push(pdbId);
         oneLibraryTracks.push({
+          masterDbId: stringValue(content.get("MasterDBID")),
           masterContentId: track.contentId,
           title: track.title ?? filename,
           artist: track.artist,
@@ -254,8 +255,10 @@ export async function syncLegacyDevicePlaylist(
           isrc: stringValue(content.get("ISRC")),
           playCount: integerValue(content.get("DJPlayCount")),
           analysedBits: integerValue(content.get("Analysed"), 105),
+          analysisDataUpdateCount: integerValue(content.get("AnalysisUpdated"), 2),
+          informationUpdateCount: integerValue(content.get("TrackInfoUpdated"), 2),
           usbAudioPath,
-          usbAnalysisPath: `${usbAnalysisDirectory}/ANLZ0000.DAT`,
+          usbAnalysisPath: usbAnalysisDatPath,
         });
 
         const stagedAudio = mediaPath(stagingRoot, usbAudioPath);
@@ -270,14 +273,8 @@ export async function syncLegacyDevicePlaylist(
         for (const type of ["DAT", "EXT", "2EX"] as const) {
           const source = analysis[type];
           if (!source) continue;
-          const staged = join(
-            stagingRoot,
-            "PIONEER",
-            "USBANLZ",
-            analysisGroup,
-            idHex,
-            `ANLZ0000.${type}`,
-          );
+          const usbAnalysisPath = `${usbAnalysisDirectory}/ANLZ0000.${type}`;
+          const staged = mediaPath(stagingRoot, usbAnalysisPath);
           await mkdir(dirname(staged), { recursive: true });
           const file = AnlzFile.parseFile(source);
           file.setPath(usbAudioPath);
@@ -287,14 +284,7 @@ export async function syncLegacyDevicePlaylist(
           analysisFiles++;
           stagedInstalls.push({
             staged,
-            target: join(
-              targetDirectory,
-              "PIONEER",
-              "USBANLZ",
-              analysisGroup,
-              idHex,
-              `ANLZ0000.${type}`,
-            ),
+            target: mediaPath(targetDirectory, usbAnalysisPath),
           });
         }
       }
@@ -539,6 +529,19 @@ function mediaPath(root: string, path: string): string {
   if (!relative || relative.split("/").some((segment) => !segment || segment === ".."))
     throw new TypeError(`Unsafe USB media path '${path}'`);
   return join(root, ...relative.split(posix.sep));
+}
+
+function canonicalUsbAnalysisPath(path: string, contentId: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  const segments = normalized.split("/");
+  if (
+    !normalized.startsWith("/PIONEER/USBANLZ/") ||
+    posix.basename(normalized) !== "ANLZ0000.DAT" ||
+    segments.includes(".") ||
+    segments.includes("..")
+  )
+    throw new TypeError(`Track '${contentId}' has a non-canonical USB analysis path '${path}'`);
+  return normalized;
 }
 
 function assertFreshTarget(targetDirectory: string): void {

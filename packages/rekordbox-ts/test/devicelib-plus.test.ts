@@ -210,6 +210,7 @@ describe("DeviceLibraryPlus mutations", () => {
     const dbPath = join(root, "exportLibrary.db");
     const tracks = [
       {
+        masterDbId: "3940580985",
         masterContentId: "91",
         title: "First",
         artist: "Artist",
@@ -223,6 +224,8 @@ describe("DeviceLibraryPlus mutations", () => {
         bitDepth: 16,
         samplingRate: 44100,
         analysedBits: 105,
+        analysisDataUpdateCount: 2,
+        informationUpdateCount: 2,
         usbAudioPath: "/Contents/music-ts/00000001/first.m4a",
         usbAnalysisPath: "/PIONEER/USBANLZ/P001/00000001/ANLZ0000.DAT",
       },
@@ -264,7 +267,9 @@ describe("DeviceLibraryPlus mutations", () => {
     ]);
     expect(
       db.executeSql(
-        "SELECT title, path, analysisDataFilePath, analysedBits FROM content ORDER BY content_id",
+        `SELECT title, path, analysisDataFilePath, analysedBits, masterDbId,
+                analysisDataUpdateCount, informationUpdateCount
+         FROM content ORDER BY content_id`,
       ),
     ).toEqual([
       {
@@ -272,12 +277,18 @@ describe("DeviceLibraryPlus mutations", () => {
         path: tracks[0]!.usbAudioPath,
         analysisDataFilePath: tracks[0]!.usbAnalysisPath,
         analysedBits: 105,
+        masterDbId: 3940580985,
+        analysisDataUpdateCount: 2,
+        informationUpdateCount: 2,
       },
       {
         title: "Second",
         path: tracks[1]!.usbAudioPath,
         analysisDataFilePath: tracks[1]!.usbAnalysisPath,
         analysedBits: 105,
+        masterDbId: null,
+        analysisDataUpdateCount: 2,
+        informationUpdateCount: 2,
       },
     ]);
     db.close();

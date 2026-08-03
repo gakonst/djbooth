@@ -32,6 +32,18 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-03 — hardware waveform lookup correction
+
+- Physical media exposed a split result: CDJ metadata (key/BPM) loaded, but waveforms did not,
+  while DJ Link rendered the source analyses. DAT/EXT/2EX comparison proved every non-path tag on
+  the stick was byte-identical to its working source and every rewritten PPTH resolved to audio.
+- Removed the synthetic `P001/00000001` ANLZ destination mapping. Both legacy `export.pdb` and
+  OneLibrary now retain each master row's canonical `/PIONEER/USBANLZ/<bucket>/<uuid>/ANLZ0000.DAT`
+  path, and the files are installed at that exact location.
+- OneLibrary exports now retain `MasterDBID` and source analysis/information revision counters,
+  defaulting analyzed rows to Rekordbox's observed revision 2. Regression tests require both USB
+  indexes and the filesystem to resolve the same canonical analysis paths.
+
 ### 2026-08-02 — fresh dual-library USB checkpoint
 
 - Changed scoped USB sync to initialize a freshly formatted stick with both traditional Device

@@ -113,6 +113,7 @@ const COLORS = ["Pink", "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Pur
 
 /** Track metadata required by a OneLibrary USB export. */
 export type OneLibraryExportTrack = {
+  masterDbId?: string | null;
   masterContentId: string;
   title: string;
   artist?: string | null;
@@ -136,6 +137,8 @@ export type OneLibraryExportTrack = {
   isrc?: string | null;
   playCount?: number | null;
   analysedBits?: number | null;
+  analysisDataUpdateCount?: number | null;
+  informationUpdateCount?: number | null;
   usbAudioPath: string;
   usbAnalysisPath: string;
 };
@@ -299,7 +302,7 @@ function insertContent(
         cueUpdateCount, analysisDataUpdateCount, informationUpdateCount
       ) VALUES (
         ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, NULL, ?, 0, NULL,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, '', NULL, ?, ?, ?, NULL, 0, '', 1, 1
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, '', ?, ?, ?, ?, NULL, 0, '', ?, ?
       )`,
     )
     .run(
@@ -327,9 +330,12 @@ function insertContent(
       track.samplingRate ?? 0,
       track.isrc ?? "",
       track.playCount ?? 0,
+      safeInteger(track.masterDbId),
       safeInteger(track.masterContentId),
       track.usbAnalysisPath,
       track.analysedBits ?? 105,
+      track.analysisDataUpdateCount ?? 2,
+      track.informationUpdateCount ?? 2,
     );
   return contentId;
 }
@@ -410,7 +416,8 @@ function count(database: Database.Database, table: string): number {
   return row.count;
 }
 
-function safeInteger(value: string): number | null {
+function safeInteger(value: string | null | undefined): number | null {
+  if (!value) return null;
   const number = Number(value);
   return Number.isSafeInteger(number) ? number : null;
 }
