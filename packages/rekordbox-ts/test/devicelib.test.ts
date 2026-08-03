@@ -13,6 +13,7 @@ import {
   LegacyDevicePdbWriter,
   readLegacyDeviceExportMarker,
   syncLegacyDeviceLibrary,
+  syncLegacyDevicePlaylist,
 } from "../src/devicelib/index.js";
 import { MasterDatabase } from "../src/masterdb/index.js";
 
@@ -143,6 +144,48 @@ async function writePlayedHistory(
 }
 
 describe("legacy Device Library PDB", () => {
+  it("appends tracks and playlists without rebuilding existing rows", () => {
+    const initial = new LegacyDevicePdbWriter();
+    const existingTrack = initial.addTrack({
+      id: 40,
+      title: "Existing",
+      artist: "Original Artist",
+      filePath: "/Contents/original.mp3",
+    });
+    const existingFolder = initial.createPlaylist("Existing Folder", { folder: true });
+    const existingPlaylist = initial.createPlaylist("Existing Playlist", {
+      parentId: existingFolder,
+    });
+    initial.addToPlaylist(existingPlaylist, existingTrack);
+
+    const appended = new LegacyDevicePdbWriter(initial.build());
+    const newTrack = appended.addTrack({
+      title: "New",
+      artist: "New Artist",
+      filePath: "/Contents/music-ts/new.m4a",
+    });
+    const newFolder = appended.createPlaylist("DJ Sets I Like", { folder: true });
+    const newPlaylist = appended.createPlaylist("Lee Burridge", { parentId: newFolder });
+    appended.addToPlaylist(newPlaylist, newTrack);
+
+    const inspection = inspectLegacyDevicePdb(appended.build());
+    expect(newTrack).toBe(41);
+    expect(inspection.tracks).toEqual([
+      expect.objectContaining({ id: 40, title: "Existing", artist: "Original Artist" }),
+      expect.objectContaining({ id: 41, title: "New", artist: "New Artist" }),
+    ]);
+    expect(inspection.playlists).toEqual([
+      expect.objectContaining({ id: existingFolder, name: "Existing Folder", folder: true }),
+      expect.objectContaining({
+        id: existingPlaylist,
+        name: "Existing Playlist",
+        trackIds: [40],
+      }),
+      expect.objectContaining({ id: newFolder, name: "DJ Sets I Like", folder: true }),
+      expect.objectContaining({ id: newPlaylist, name: "Lee Burridge", trackIds: [41] }),
+    ]);
+  });
+
   it("writes tracks, lookup metadata, folders, and ordered playlists", () => {
     const writer = new LegacyDevicePdbWriter();
     const first = writer.addTrack({
@@ -247,6 +290,66 @@ describe("legacy Device Library PDB", () => {
 });
 
 describe("master.db to legacy Device Library export", () => {
+  it("appends one playlist to an unowned existing export and reuses its receipt", async () => {
+    const fixture = exportFixture();
+    const rekordboxDirectory = join(fixture.output, "PIONEER", "rekordbox");
+    mkdirSync(rekordboxDirectory, { recursive: true });
+    const existing = new LegacyDevicePdbWriter();
+    const existingTrack = existing.addTrack({
+      id: 90,
+      title: "Keep Me",
+      filePath: "/Contents/existing/keep.mp3",
+    });
+    const existingPlaylist = existing.createPlaylist("Existing");
+    existing.addToPlaylist(existingPlaylist, existingTrack);
+    writeFileSync(join(rekordboxDirectory, "export.pdb"), existing.build());
+
+    const first = await syncLegacyDevicePlaylist({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      playlistId: "playlist",
+      now: new Date("2026-08-02T12:00:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(first).toMatchObject({
+      changed: true,
+      folderName: "Gigs",
+      playlistName: "Tonight",
+      tracks: 2,
+      audioFiles: 2,
+      analysisFiles: 6,
+    });
+    expect(first.backupPath && existsSync(first.backupPath)).toBe(true);
+    const inspection = inspectLegacyDevicePdb(readFileSync(join(rekordboxDirectory, "export.pdb")));
+    expect(inspection.tracks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 90, title: "Keep Me" }),
+        expect.objectContaining({ id: 91, title: "Second" }),
+        expect.objectContaining({ id: 92, title: "First" }),
+      ]),
+    );
+    expect(inspection.playlists).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: existingPlaylist, name: "Existing", trackIds: [90] }),
+        expect.objectContaining({ name: "Gigs", folder: true }),
+        expect.objectContaining({ name: "Tonight", trackIds: [91, 92] }),
+      ]),
+    );
+
+    const second = await syncLegacyDevicePlaylist({
+      approved: true,
+      targetDirectory: fixture.output,
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      playlistId: "playlist",
+      now: new Date("2026-08-02T12:05:00Z"),
+      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
+    });
+    expect(second).toMatchObject({ changed: false, tracks: 2, bytesCopied: 0 });
+  });
+
   it("keeps SQLite authoritative and emits audio, rewritten ANLZ, playlists, and export.pdb", async () => {
     const fixture = exportFixture();
     const before = createHash("sha256").update(readFileSync(fixture.databasePath)).digest("hex");

@@ -98,7 +98,9 @@ music ytdlp-ts music "$TRACK_URL" --engine native --format json
 - Treat `music usb` as front-panel block storage, not DJ Link. Use `music usb sync --write` for the
   normal day-to-day mounted-media workflow: import unseen histories into SQLite, then
   differentially reconcile legacy `export.pdb`, audio, and rewritten ANLZ. Do not use Device
-  Library Plus. Never change gadget media while configured, and require physical USB STOP/eject
+  Library Plus. For a Rekordbox-created stick that must retain its selected library, use `music usb
+sync-playlist <media> <playlist-id> --write`; do not run complete-library sync or replace the
+  unowned export. Never change gadget media while configured, and require physical USB STOP/eject
   before `detach --confirm-host-ejected`.
 - When discovery is empty, use `music djlink probe <known-ip>` as the bounded physical-presence
   check. Do not send speculative DJ Link control packets to undiscovered devices.
@@ -583,6 +585,19 @@ directory:
 ```sh
 music usb sync "$MEDIA_ROOT" --database "$MASTER_DB" --write --format json
 ```
+
+When the mounted stick was created by Rekordbox and only one playlist should be added, keep the
+existing library and use its exact normal playlist ID:
+
+```sh
+music usb sync-playlist "$MEDIA_ROOT" "$PLAYLIST_ID" \
+  --database "$MASTER_DB" --write --format json
+```
+
+Scoped sync refuses unimported histories, preserves existing PDB rows, reuses the matching parent
+folder, stages new audio and rewritten DAT/EXT/2EX before metadata, backs up `export.pdb`, and
+publishes the validated PDB last. Its receipt makes an unchanged rerun a zero-copy no-op. Device
+Library Plus remains untouched.
 
 Sync first imports every unseen nonempty CDJ history as a root-level `DJ Set YYYY-MM-DD` playlist,
 preserving order and duplicates and incrementing play counts exactly once. It then writes

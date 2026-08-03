@@ -1,10 +1,13 @@
 export {
   exportLegacyDeviceLibrary,
   syncLegacyDeviceLibrary,
+  syncLegacyDevicePlaylist,
   type ExportLegacyDeviceLibraryOptions,
   type LegacyDeviceLibraryExportResult,
   type SyncLegacyDeviceLibraryOptions,
   type SyncLegacyDeviceLibraryResult,
+  type SyncLegacyDevicePlaylistOptions,
+  type SyncLegacyDevicePlaylistResult,
 } from "@gakonst/rekordbox/devicelib";
 export {
   attachCdjUsb,

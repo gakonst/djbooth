@@ -98,6 +98,7 @@ music djlink run ./set/manifest.json 1 --player 3 --format json
 music djlink probe 169.254.7.4 --format json
 music djlink stop --format json
 music usb sync /mnt/cdj --database /path/to/master.db --write --format json
+music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --database /path/to/master.db --write --format json
 music usb doctor ./rekordbox-usb.img --format json
 ```
 
@@ -146,6 +147,11 @@ active library into legacy `PIONEER/rekordbox/export.pdb`, local audio, rewritte
 analysis, and playlists. SQLite stays authoritative and Device Library Plus is not involved. The
 destination is a mounted FAT/exFAT media root or staging directory; no image is created by the sync
 command. `music usb export` remains available for an outbound-only initial compile.
+
+For a Rekordbox-created stick that must retain its current selected library, `music usb
+sync-playlist` appends one analyzed playlist to the existing legacy PDB. It preserves prior rows,
+backs up `export.pdb`, stages media before publishing metadata, and leaves Device Library Plus
+untouched.
 
 The lower-level `doctor`, `publish`, `attach`, `detach`, `status`, and `run` commands control the
 current immutable-image Linux gadget transport. Publication is forbidden while configured, and

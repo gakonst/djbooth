@@ -6,4 +6,5 @@
 
 export * from "./export.js";
 export * from "./pdb.js";
+export * from "./playlist-sync.js";
 export * from "./sync.js";

@@ -28,6 +28,7 @@ describe("CDJ USB CLI", () => {
       expect.arrayContaining([
         "export",
         "sync",
+        "sync-playlist",
         "doctor",
         "status",
         "publish",
@@ -77,6 +78,17 @@ describe("CDJ USB CLI", () => {
     expect(output).toContain("DJ Set YYYY-MM-DD");
     expect(output).toContain("play counts advance exactly once");
     expect(output).toContain("unchanged audio is not recopied");
+    expect(output).toContain("--write");
+  });
+
+  it("exposes scoped sync for a Rekordbox-created stick", async () => {
+    const { output, exitCode } = await serve(cdjUsbCli, ["sync-playlist", "--help"]);
+
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("usb sync-playlist <target> <playlist>");
+    expect(output).toContain("existing mounted legacy USB export");
+    expect(output).toContain("old PDB is backed up");
+    expect(output).toContain("Device Library Plus is not modified");
     expect(output).toContain("--write");
   });
 });

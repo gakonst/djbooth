@@ -32,6 +32,20 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-02 — scoped existing-USB playlist sync checkpoint
+
+- Added `music usb sync-playlist <media> <playlist-id> --write` for a Rekordbox-created legacy USB
+  that must retain its current selected library. The DeviceSQL writer can append to an existing PDB
+  while preserving prior semantic rows, seeding all IDs and parent sort state from the source.
+- Scoped sync reads `master.db` without mutation, rejects unimported CDJ history, reuses an existing
+  parent folder, stages audio and rewritten DAT/EXT/2EX first, validates the appended PDB, backs up
+  the original, and publishes metadata last. A durable receipt makes warm reruns zero-copy; Device
+  Library Plus is not modified.
+- Live validation appended the 18-track Lee Burridge b2b Patricio LIB 2026 playlist to an existing
+  982-track/65-node Rekordbox stick. The resulting 1,000-track/66-node PDB retained all prior rows;
+  18 audio and 54 ANLZ files verified, every PPTH matched its USB path, and the rerun copied zero
+  bytes.
+
 ### 2026-07-30 — agent-hosted browser workbench checkpoint
 
 - Added `music library serve --open --no-assistant` for Codex and Claude Code sessions. It launches

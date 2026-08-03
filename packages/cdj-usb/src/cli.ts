@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { Cli } from "incur";
 import { z } from "zod";
 
-import { exportLegacyDeviceLibrary, syncLegacyDeviceLibrary } from "@gakonst/rekordbox/devicelib";
+import {
+  exportLegacyDeviceLibrary,
+  syncLegacyDeviceLibrary,
+  syncLegacyDevicePlaylist,
+} from "@gakonst/rekordbox/devicelib";
 
 import {
   attachCdjUsb,
@@ -115,6 +119,24 @@ const syncOutput = z.object({
   playCountIncrements: z.number().int().nonnegative(),
   backupDirectory: z.string().nullable(),
   export: exportOutput,
+});
+
+const playlistSyncOutput = z.object({
+  schemaVersion: z.literal(1),
+  format: z.literal("legacy-device-playlist-sync"),
+  databasePath: z.string(),
+  targetDirectory: z.string(),
+  playlistId: z.string(),
+  playlistName: z.string(),
+  folderName: z.string(),
+  usbFolderId: z.number().int().positive(),
+  usbPlaylistId: z.number().int().positive(),
+  tracks: z.number().int().positive(),
+  audioFiles: z.number().int().nonnegative(),
+  analysisFiles: z.number().int().nonnegative(),
+  bytesCopied: z.number().int().nonnegative(),
+  backupPath: z.string().nullable(),
+  changed: z.boolean(),
 });
 
 const runtimeOptions = {
@@ -243,6 +265,39 @@ cdjUsbCli.command("sync", {
         databaseUnlock: !c.options.plain,
         backupRoot: c.options.backupRoot,
         copyConcurrency: c.options.copyConcurrency,
+      });
+    } catch (error) {
+      return failSync(c, error);
+    }
+  },
+});
+
+cdjUsbCli.command("sync-playlist", {
+  description: "Append one analyzed Rekordbox playlist to an existing mounted legacy USB export.",
+  hint: "Use this for a Rekordbox-created stick that must retain its current library. Existing PDB rows remain intact; new audio and rewritten ANLZ are staged first, the old PDB is backed up, and the validated PDB is published last. Device Library Plus is not modified.",
+  args: z.object({
+    target: z.string().min(1).describe("Mounted CDJ media root"),
+    playlist: z.string().min(1).describe("Exact normal Rekordbox playlist ID"),
+  }),
+  options: z.object({
+    database: z
+      .string()
+      .optional()
+      .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
+    databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
+    plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
+    write: z.boolean().default(false).describe("Required acknowledgement for USB mutation"),
+  }),
+  output: playlistSyncOutput,
+  async run(c) {
+    try {
+      return await syncLegacyDevicePlaylist({
+        approved: c.options.write,
+        targetDirectory: c.args.target,
+        playlistId: c.args.playlist,
+        databasePath: c.options.database,
+        databaseKey: c.options.databaseKey,
+        databaseUnlock: !c.options.plain,
       });
     } catch (error) {
       return failSync(c, error);

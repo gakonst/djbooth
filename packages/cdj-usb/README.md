@@ -39,7 +39,9 @@ The mounted-media synchronizer:
   `PPTH`;
 - removes media for tracks no longer active in the master library;
 - materializes regular and smart playlists while preserving order and duplicate memberships;
-- refuses to replace unowned media or erase a history it cannot map exactly.
+- refuses to replace unowned media or erase a history it cannot map exactly;
+- can append one analyzed playlist to a Rekordbox-created legacy export without rebuilding its
+  existing PDB rows or modifying Device Library Plus.
 
 The current low-level gadget controller:
 
@@ -139,6 +141,19 @@ For a new or previously music-ts-owned mounted FAT/exFAT volume:
 music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
+For an existing Rekordbox-created stick that must retain its current library, append one normal
+playlist by exact ID:
+
+```sh
+music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+  --database /path/to/master.db --write --format json
+```
+
+Scoped sync preserves every existing track and playlist row, reuses an existing parent folder,
+stages new audio plus rewritten DAT/EXT/2EX first, writes a timestamped `export.pdb` backup, and
+publishes the validated PDB last. Its receipt makes an unchanged rerun a zero-copy no-op. It refuses
+unimported CDJ histories and does not modify `exportLibrary.db`.
+
 The result contains:
 
 ```text
@@ -236,11 +251,19 @@ import {
   publishCdjUsbImage,
   statusCdjUsb,
   syncLegacyDeviceLibrary,
+  syncLegacyDevicePlaylist,
 } from "@gakonst/cdj-usb";
 
 await syncLegacyDeviceLibrary({
   approved: true,
   databasePath: "/path/to/master.db",
+  targetDirectory: "/mnt/cdj",
+});
+
+await syncLegacyDevicePlaylist({
+  approved: true,
+  databasePath: "/path/to/master.db",
+  playlistId: "86387235",
   targetDirectory: "/mnt/cdj",
 });
 

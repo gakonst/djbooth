@@ -110,6 +110,10 @@ function requireUnsigned(name: string, value: number, bytes: 1 | 2 | 4): number 
   return value;
 }
 
+function nextEntityId(ids: ReadonlyMap<string, number>): number {
+  return Math.max(0, ...ids.values()) + 1;
+}
+
 function encodeDeviceSqlString(text: string): Buffer {
   if ([...text].every((character) => character.codePointAt(0)! <= 0x7f)) {
     const bytes = Buffer.from(text, "ascii");
@@ -163,7 +167,7 @@ function inferredFileType(path: string): number {
  * callers create a new writer for each export.
  */
 export class LegacyDevicePdbWriter {
-  private data = createEmptyLegacyDevicePdb();
+  private data: Buffer;
   private readonly pageSize: number;
   private readonly originalSlots = new Map<number, number>();
   private readonly appendedSlots = new Map<number, number>();
@@ -186,10 +190,13 @@ export class LegacyDevicePdbWriter {
   private nextHistoryId = 0;
   private finalized = false;
 
-  constructor() {
+  /** Create a fresh database or append rows to an existing legacy Device Library. */
+  constructor(existing?: Buffer) {
+    this.data = existing ? Buffer.from(existing) : createEmptyLegacyDevicePdb();
     this.pageSize = this.data.readUInt32LE(4);
     if (this.pageSize !== 4096)
       throw new TypeError(`Unsupported DeviceSQL page size ${String(this.pageSize)}`);
+    if (existing) this.seedExistingRows();
   }
 
   /** Append one track and return its generated DeviceSQL track ID. */
@@ -448,10 +455,62 @@ export class LegacyDevicePdbWriter {
     return this.nextHistoryId;
   }
 
+  private seedExistingRows(): void {
+    const inspection = inspectLegacyDevicePdb(this.data);
+    for (const track of inspection.tracks) this.trackIds.add(track.id);
+    this.trackCount = inspection.tracks.length;
+    this.nextTrackId = Math.max(0, ...inspection.tracks.map(({ id }) => id));
+    this.playlistCount = Math.max(0, ...inspection.playlists.map(({ id }) => id));
+    for (const playlist of inspection.playlists) {
+      this.playlistFolders.set(playlist.id, playlist.folder);
+      this.playlistEntryCounts.set(playlist.id, playlist.trackIds.length);
+    }
+    for (const offset of tableRows(this.data, TABLE.PLAYLIST_TREE)) {
+      const parentId = this.data.readUInt32LE(offset);
+      const sortOrder = this.data.readUInt32LE(offset + 8);
+      this.playlistSortOrders.set(
+        parentId,
+        Math.max(this.playlistSortOrders.get(parentId) ?? 0, sortOrder + 1),
+      );
+    }
+    for (const history of inspection.histories) {
+      this.historyIds.add(history.id);
+      this.historyEntryCounts.set(history.id, history.trackIds.length);
+      this.nextHistoryId = Math.max(this.nextHistoryId, history.id);
+    }
+    for (const offset of tableRows(this.data, TABLE.ARTISTS)) {
+      const subtype = this.data.readUInt16LE(offset);
+      const nameOffset =
+        subtype === 0x64 ? this.data.readUInt16LE(offset + 0x0a) : this.data[offset + 9]!;
+      this.artistIds.set(
+        decodeDeviceSqlString(this.data, offset + nameOffset),
+        this.data.readUInt32LE(offset + 4),
+      );
+    }
+    for (const offset of tableRows(this.data, TABLE.ALBUMS)) {
+      const artistId = this.data.readUInt32LE(offset + 8);
+      const id = this.data.readUInt32LE(offset + 12);
+      const name = decodeDeviceSqlString(this.data, offset + this.data[offset + 0x15]!);
+      this.albumIds.set(`${String(artistId)}\0${name}`, id);
+    }
+    this.seedNamedRows(TABLE.GENRES, this.genreIds, 4);
+    this.seedNamedRows(TABLE.LABELS, this.labelIds, 4);
+    for (const offset of tableRows(this.data, TABLE.KEYS))
+      this.keyIds.set(decodeDeviceSqlString(this.data, offset + 8), this.data.readUInt32LE(offset));
+  }
+
+  private seedNamedRows(table: number, ids: Map<string, number>, nameOffset: number): void {
+    for (const offset of tableRows(this.data, table))
+      ids.set(
+        decodeDeviceSqlString(this.data, offset + nameOffset),
+        this.data.readUInt32LE(offset),
+      );
+  }
+
   private getOrCreateArtist(name: string): number {
     const existing = this.artistIds.get(name);
     if (existing) return existing;
-    const id = this.artistIds.size + 1;
+    const id = nextEntityId(this.artistIds);
     const encoded = encodeDeviceSqlString(name);
     const row = Buffer.concat([
       Buffer.from([0x60, 0, 0, 0]),
@@ -468,7 +527,7 @@ export class LegacyDevicePdbWriter {
     const key = `${String(artistId)}\0${name}`;
     const existing = this.albumIds.get(key);
     if (existing) return existing;
-    const id = this.albumIds.size + 1;
+    const id = nextEntityId(this.albumIds);
     const encoded = encodeDeviceSqlString(name);
     const row = Buffer.concat([
       Buffer.from([0x80, 0, 0, 0]),
@@ -487,7 +546,7 @@ export class LegacyDevicePdbWriter {
   private getOrCreateNamed(table: number, name: string, ids: Map<string, number>): number {
     const existing = ids.get(name);
     if (existing) return existing;
-    const id = ids.size + 1;
+    const id = nextEntityId(ids);
     const encoded = encodeDeviceSqlString(name);
     const row = Buffer.concat([u32Buffer(id), encoded]);
     this.appendRow(table, row, align4(row.length));
@@ -498,7 +557,7 @@ export class LegacyDevicePdbWriter {
   private getOrCreateKey(name: string): number {
     const existing = this.keyIds.get(name);
     if (existing) return existing;
-    const id = this.keyIds.size + 1;
+    const id = nextEntityId(this.keyIds);
     const encoded = encodeDeviceSqlString(name);
     const row = Buffer.concat([u32Buffer(id), u32Buffer(id), encoded]);
     this.appendRow(TABLE.KEYS, row, align4(row.length));
