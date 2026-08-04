@@ -31,6 +31,11 @@ avoid downloading files you already own, analyze BPM/key/beat grids/phrases/wave
 stems, create playlists, prepare a Rekordbox-compatible USB, and serve or cue tracks over Pro DJ
 Link.
 
+The key is compatibility: djbooth.ai automates and opens up the workflow while targeting 1:1
+Rekordbox compatibility at the boundary that matters—the files, databases, analysis, USB layouts,
+and network behavior consumed by Pioneer DJ/AlphaTheta hardware. Prepared media works with
+club-standard CDJs and newer XDJ all-in-one systems, including the CDJ-3000 and XDJ-AZ.
+
 Prefer to work directly? Open the same system as a local web or native Tauri app. Browse providers,
 edit playlists, inspect analysis, toggle stems while a track plays, practice on two decks, shape EQ,
 and audition transitions manually. Agent and UI operate on the same cached library and tools.
@@ -71,6 +76,31 @@ Provider credentials live in the ignored root `.env`; see [`.env.example`](.env.
 audio, sessions, cookies, databases, and model caches stay outside Git.
 
 ## Why djbooth.ai
+
+### Rekordbox is the bridge to the booth
+
+Rekordbox is the de facto preparation layer for professional DJs because of its tight integration
+with Pioneer DJ/AlphaTheta hardware. Its [USB Export](https://rekordbox.com/en/feature/professional/)
+moves prepared tracks and playlists onto standalone players; its
+[PRO DJ LINK](https://rekordbox.com/en/support/link/) loads the same library and analysis over the
+network. That workflow is embedded in the CDJ/XDJ hardware DJs encounter in clubs, festivals, and
+touring setups.
+
+This creates a hard product requirement. A better agent, library manager, analyzer, or stem
+workflow is not enough if its output stops working when the USB reaches the booth. djbooth.ai's
+selling point is that you get a programmable, local-first, agent-native system without giving up
+the Rekordbox interchange contract.
+
+The target is 1:1 compatibility at that contract—not a pixel-for-pixel clone of the Rekordbox UI.
+A djbooth.ai-prepared track should look like a Rekordbox-prepared track to supported hardware:
+compatible database rows, paths, playlists, DAT/EXT/2EX analysis, waveforms, beat grids, cues, USB
+layouts, and DJ Link behavior. Differential fixtures and physical CDJ validation keep that claim
+grounded in what the players actually consume.
+
+djbooth.ai emits both legacy Device Library exports and the newer OneLibrary/Device Library Plus
+artifacts used across the Pioneer DJ/AlphaTheta range. The same library can therefore move from
+CDJ players such as the CDJ-2000NXS2 and CDJ-3000 to all-in-one systems such as the XDJ-XZ and
+XDJ-AZ without rebuilding the workflow around another library manager.
 
 ### The DJ workflow is one job
 
@@ -121,8 +151,8 @@ analyzer produces compatible DAT/EXT/2EX analysis, the library tools read and wr
 databases, USB sync emits the layouts players expect, and the DJ Link runtime serves local audio
 and metadata directly.
 
-That means the workflow can be automated and inspected end to end while the resulting media still
-works with existing DJ hardware.
+That means the workflow can be automated and inspected end to end while the output remains native
+to the hardware ecosystem DJs already rely on.
 
 ### Human control remains first-class
 
