@@ -212,15 +212,15 @@ const codeMode = await createDjBoothCodeMcpServer({
 
 ## Packages
 
-- [`@gakonst/tracks`](https://github.com/gakonst/music-ts/tree/main/packages/tracks-ts): DJ-set resolution, manifests, enrichment, and pipeline coordination.
-- [`@gakonst/spots`](https://github.com/gakonst/music-ts/tree/main/packages/spots): Spotify OAuth and Web API.
-- [`@gakonst/soundcloud`](https://github.com/gakonst/music-ts/tree/main/packages/soundcloud): SoundCloud OAuth and Public API.
-- [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts): Soulseek protocol, search, and transfers.
-- [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts): YouTube/SoundCloud extraction and selected downloads.
-- [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox-compatible database and file formats.
-- [`@gakonst/djbooth-app`](https://github.com/gakonst/music-ts/tree/main/apps/djbooth): Local djbooth.ai workstation and guarded library mutations.
-- [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink): Native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
-- [`@gakonst/cdj-usb`](https://github.com/gakonst/music-ts/tree/main/packages/cdj-usb): CDJ-3000 mounted-media synchronizer and Linux USB mass-storage gadget.
+- [`@gakonst/tracks`](https://github.com/gakonst/djbooth/tree/main/packages/tracks-ts): DJ-set resolution, manifests, enrichment, and pipeline coordination.
+- [`@gakonst/spots`](https://github.com/gakonst/djbooth/tree/main/packages/spots): Spotify OAuth and Web API.
+- [`@gakonst/soundcloud`](https://github.com/gakonst/djbooth/tree/main/packages/soundcloud): SoundCloud OAuth and Public API.
+- [`slsk-ts`](https://github.com/gakonst/djbooth/tree/main/packages/slsk-ts): Soulseek protocol, search, and transfers.
+- [`@gakonst/ytdlp-ts`](https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts): YouTube/SoundCloud extraction and selected downloads.
+- [`@gakonst/rekordbox`](https://github.com/gakonst/djbooth/tree/main/packages/rekordbox-ts): Rekordbox-compatible database and file formats.
+- [`@gakonst/djbooth-app`](https://github.com/gakonst/djbooth/tree/main/apps/djbooth): Local djbooth.ai workstation and guarded library mutations.
+- [`@gakonst/djlink`](https://github.com/gakonst/djbooth/tree/main/packages/djlink): Native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
+- [`@gakonst/cdj-usb`](https://github.com/gakonst/djbooth/tree/main/packages/cdj-usb): CDJ-3000 mounted-media synchronizer and Linux USB mass-storage gadget.
 
 ## Development
 

@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 
 pub use gadget::{GadgetFs, SystemGadgetFs};
 
-use crate::gadget::GadgetController;
+use self::gadget::GadgetController;
 
 const ACTIVE_SCHEMA_VERSION: u8 = 1;
 const ACTIVE_FILE_NAME: &str = "active.json";

@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
+use crate::usb::{Appliance, AppliancePaths, SystemGadgetFs, UsbIdentity};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use djbooth_cdj_usb::{Appliance, AppliancePaths, SystemGadgetFs, UsbIdentity};
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "djbooth-cdj-usb",
+    name = "djbooth-rs usb",
     version,
     about = "Safely publish a CDJ-compatible image through Linux USB mass storage"
 )]
@@ -99,8 +99,8 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
+pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
+    let cli = Cli::parse_from(std::iter::once("djbooth-rs usb".to_string()).chain(args));
     let paths = AppliancePaths::new(
         cli.state_dir,
         cli.configfs_root,

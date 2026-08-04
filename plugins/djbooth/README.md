@@ -18,11 +18,11 @@ From the repository marketplace:
 
 ```sh
 # Codex
-codex plugin marketplace add gakonst/music-ts
+codex plugin marketplace add gakonst/djbooth
 codex plugin add djbooth@djbooth-ai
 
 # Claude Code
-claude plugin marketplace add gakonst/music-ts
+claude plugin marketplace add gakonst/djbooth
 claude plugin install djbooth@djbooth-ai
 ```
 

@@ -20,8 +20,8 @@ import { z } from "zod";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
-const cleanHelperName = "djbooth-analyzer";
-const legacyCleanHelperName = "rekordbox-analyzer";
+const cleanHelperName = "djbooth-rs";
+const legacyCleanHelperNames = ["djbooth-analyzer", "rekordbox-analyzer"];
 const referenceHelperName = "rekordbox-analyzer-reference";
 const analyzerThreadsEnvironment = "REKORDBOX_ANALYZER_THREADS";
 const analyzerRhythmModeEnvironment = "REKORDBOX_ANALYZER_RHYTHM_MODE";
@@ -671,14 +671,18 @@ export function getAnalyzerBinary(explicit?: string, engine: AnalyzerEngine = "c
   const candidates =
     engine === "clean"
       ? [
-          fileURLToPath(new URL(`../../.djbooth-analyzer/${cleanHelperName}`, import.meta.url)),
+          fileURLToPath(new URL(`../../.djbooth-rs/${cleanHelperName}`, import.meta.url)),
           fileURLToPath(
             new URL(`../../../../rust/target/release/${cleanHelperName}`, import.meta.url),
           ),
-          ...pathCandidates.map((candidate) => join(dirname(candidate), legacyCleanHelperName)),
-          join(homedir(), ".local/bin", legacyCleanHelperName),
-          `/opt/homebrew/bin/${legacyCleanHelperName}`,
-          `/usr/local/bin/${legacyCleanHelperName}`,
+          ...pathCandidates.flatMap((candidate) =>
+            legacyCleanHelperNames.map((name) => join(dirname(candidate), name)),
+          ),
+          ...legacyCleanHelperNames.flatMap((name) => [
+            join(homedir(), ".local/bin", name),
+            `/opt/homebrew/bin/${name}`,
+            `/usr/local/bin/${name}`,
+          ]),
           ...installedCandidates,
         ]
       : installedCandidates;
@@ -1333,7 +1337,8 @@ function analyzerInvocation(
   if (engine === "reference" && process.arch === "arm64") {
     return { args: ["-x86_64", analyzerBinary, ...args], command: "/usr/bin/arch" };
   }
-  return { args, command: analyzerBinary };
+  const usesUnifiedRuntime = engine === "clean" && basename(analyzerBinary) === cleanHelperName;
+  return { args: usesUnifiedRuntime ? ["analyzer", ...args] : args, command: analyzerBinary };
 }
 
 function runAnalyzerDoctor(

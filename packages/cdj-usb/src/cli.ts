@@ -144,7 +144,7 @@ const playlistSyncOutput = z.object({
 });
 
 const runtimeOptions = {
-  binary: z.string().optional().describe("Native djbooth-cdj-usb helper override"),
+  binary: z.string().optional().describe("Native djbooth-rs helper override"),
   configfsRoot: z
     .string()
     .optional()

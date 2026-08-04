@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use rekordbox_analyzer::backend::diagnose_rekordbox_backend;
 use rekordbox_analyzer::rehost::{RehostOptions, bundle_rekordbox_templates, run_rehost};
 use rekordbox_analyzer::stems::{run_stems_probe, run_stems_separation};
-use rekordbox_analyzer_core::{
+use djbooth_analyzer::{
     AnlzFile, DatAnalysis, ExtAnalysis, ThreeBandAnalysis, compare_output_directories,
 };
 

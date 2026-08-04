@@ -1,13 +1,13 @@
 [package]
-name = "rekordbox-analyzer-core"
+name = "djbooth-analyzer"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
-description = "Clean-room audio DSP, Rekordbox DAT/EXT/2EX generation, and differential tooling"
-homepage = "https://github.com/gakonst/music-ts"
+description = "Clean-room audio DSP and Rekordbox-compatible DAT/EXT/2EX generation"
+homepage = "https://djbooth.ai"
 readme = "ANLZ_COMPATIBILITY.md"
-repository = "https://github.com/gakonst/music-ts"
+repository = "https://github.com/gakonst/djbooth"
 include = [
   "Cargo.toml",
   "Cargo.lock",

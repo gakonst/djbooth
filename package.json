@@ -14,7 +14,7 @@
     "djbooth": "pnpm --filter @gakonst/djbooth cli",
     "djbooth:mcp": "pnpm --silent --filter @gakonst/djbooth exec tsx --tsconfig tsconfig.cli.json src/bin.ts --mcp",
     "djbooth:mcp:code": "pnpm --silent --filter @gakonst/djbooth exec tsx --tsconfig tsconfig.cli.json src/bin.ts --codemode-mcp",
-    "djlink:lab": "cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink --",
+    "djlink:lab": "cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- link",
     "djlink:native": "pnpm --filter @gakonst/djlink native:build",
     "format": "pnpm -r --if-present run format",
     "format:check": "pnpm -r --if-present run format:check",

@@ -51,8 +51,8 @@ pnpm add @gakonst/spots
 For development in the monorepo:
 
 ```sh
-gh repo clone gakonst/music-ts
-cd music-ts
+gh repo clone gakonst/djbooth
+cd djbooth
 pnpm install
 pnpm --filter @gakonst/spots build
 pnpm --filter @gakonst/spots cli -- --help

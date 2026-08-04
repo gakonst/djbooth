@@ -52,13 +52,10 @@ process.stdout.write(
 const buildInputs = await pruneRuntimeBuildInputs(backendDirectory);
 process.stdout.write(`Pruned runtime-dead build inputs (${formatBytes(buildInputs)})\n`);
 
-const analyzerSource = resolve(
-  workspaceRoot,
-  "packages/rekordbox-ts/.djbooth-analyzer/djbooth-analyzer",
-);
+const analyzerSource = resolve(workspaceRoot, "packages/rekordbox-ts/.djbooth-rs/djbooth-rs");
 if (!(await isFile(analyzerSource)))
   await run("pnpm", ["--filter", "@gakonst/rekordbox", "build:analyzer"]);
-const analyzerDestination = resolve(toolsDirectory, "djbooth-analyzer");
+const analyzerDestination = resolve(toolsDirectory, "djbooth-rs");
 await copyFile(analyzerSource, analyzerDestination);
 await chmod(analyzerDestination, 0o755);
 

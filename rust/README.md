@@ -4,10 +4,8 @@ All active Rust code lives in this Cargo workspace.
 
 | Path                             | Responsibility                                       |
 | -------------------------------- | ---------------------------------------------------- |
-| `bin/djbooth-analyzer`           | Clean-room analyzer CLI                              |
-| `bin/djbooth-djlink`             | Native DJ Link CLI consumed by `packages/djlink`     |
-| `bin/djbooth-cdj-usb`            | Linux USB gadget CLI and runtime                     |
-| `crates/rekordbox-analyzer-core` | Clean-room audio analysis and DAT/EXT/2EX generation |
+| `bin/djbooth-rs`             | Unified analyzer, USB, and DJ Link CLI                |
+| `crates/djbooth-analyzer`    | Clean-room audio analysis and DAT/EXT/2EX generation  |
 | `crates/djtools-core`            | Shared DJ Link support library                       |
 | `crates/djtools-link`            | Pro DJ Link, RemoteDB, and NFS implementation        |
 

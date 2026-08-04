@@ -1,8 +1,8 @@
-//! Clean-room Rekordbox analysis-file primitives.
+//! Clean-room analyzer producing Rekordbox-compatible analysis artifacts.
 //!
 //! This crate contains no Rekordbox executable bytes, JUCE ABI calls, or
 //! proprietary runtime dependencies. The proprietary analyzer can be used as
-//! a local differential oracle by the sibling `rekordbox-analyzer` crate.
+//! a local differential oracle during compatibility research.
 
 pub mod analysis;
 pub mod anlz;

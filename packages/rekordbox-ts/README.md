@@ -42,11 +42,11 @@ command discovery works but database commands cannot load the native binding.
 
 ## Development
 
-The source package lives in the `gakonst/music-ts` pnpm workspace:
+The source package lives in the `gakonst/djbooth` pnpm workspace:
 
 ```sh
-gh repo clone gakonst/music-ts ~/github/gakonst/music-ts
-cd ~/github/gakonst/music-ts
+gh repo clone gakonst/djbooth ~/github/gakonst/djbooth
+cd ~/github/gakonst/djbooth
 pnpm install
 pnpm --filter @gakonst/rekordbox validate
 pnpm --filter @gakonst/rekordbox cli --help
@@ -342,7 +342,7 @@ Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and
 
 ### Audio analysis and database installation
 
-Analysis defaults to the releasable `djbooth-analyzer` Rust binary. It decodes local audio and
+Analysis defaults to the `djbooth-rs analyzer` Rust command. It decodes local audio and
 produces deterministic `ANLZ0000.DAT`, `.EXT`, and `.2EX` files without opening Rekordbox or
 `master.db`. The clean engine requires no Rekordbox/JUCE/runtime bytes and runs directly on supported
 platforms.
@@ -496,7 +496,7 @@ Both `--concurrency` and `--threads` still accept explicit values through 64. Ex
 slots helped modestly; extra processes did not. Treat all numbers as host-specific and lower either
 limit when analysis competes with live DJ software.
 
-Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `djbooth-analyzer` on `PATH`, or pass
+Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `djbooth-rs` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains
 reference-only so an old proprietary helper cannot be selected by the clean default. For an explicit
 reference run, set `REKORDBOX_REFERENCE_ANALYZER_BINARY` or place

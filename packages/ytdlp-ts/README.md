@@ -26,11 +26,11 @@ pnpm add @gakonst/ytdlp-ts
 
 ## Development
 
-The source package lives in the `gakonst/music-ts` pnpm workspace:
+The source package lives in the `gakonst/djbooth` pnpm workspace:
 
 ```sh
-gh repo clone gakonst/music-ts ~/github/gakonst/music-ts
-cd ~/github/gakonst/music-ts
+gh repo clone gakonst/djbooth ~/github/gakonst/djbooth
+cd ~/github/gakonst/djbooth
 pnpm install
 pnpm --filter @gakonst/ytdlp-ts check
 pnpm --filter @gakonst/ytdlp-ts dev --help

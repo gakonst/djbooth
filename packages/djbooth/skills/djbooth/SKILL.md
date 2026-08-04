@@ -406,7 +406,7 @@ djbooth rekordbox analyze phrase-features \
   --format json
 ```
 
-Require a successful clean doctor check before analysis. Discover `djbooth-analyzer` through
+Require a successful clean doctor check before analysis. Discover `djbooth-rs` through
 `REKORDBOX_CLEAN_ANALYZER_BINARY`, `PATH`, or the repository build. Treat the legacy
 `REKORDBOX_ANALYZER_BINARY` override as reference-only so it cannot contaminate the clean default.
 The output directory must contain parseable `ANLZ0000.DAT`, `ANLZ0000.EXT`, `ANLZ0000.2EX`,

@@ -9,14 +9,14 @@
     "rekordbox",
     "typescript"
   ],
-  "homepage": "https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts#readme",
+  "homepage": "https://github.com/gakonst/djbooth/tree/main/packages/rekordbox-ts#readme",
   "bugs": {
-    "url": "https://github.com/gakonst/music-ts/issues"
+    "url": "https://github.com/gakonst/djbooth/issues"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/music-ts",
+    "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/rekordbox-ts"
   },
   "bin": {
@@ -89,7 +89,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "build:analyzer": "../../scripts/build-djbooth-analyzer.sh",
+    "build:analyzer": "../../scripts/build-djbooth-rs.sh",
     "check": "oxlint src test && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",

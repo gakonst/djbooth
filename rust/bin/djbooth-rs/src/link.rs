@@ -20,7 +20,7 @@ use tokio::task::JoinSet;
 
 #[derive(Parser)]
 #[command(
-    name = "djbooth-djlink",
+    name = "djbooth-rs link",
     version,
     about = "Native DJ Link runtime for djbooth.ai"
 )]
@@ -343,9 +343,8 @@ struct PacketShape {
     bytes: usize,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
+pub async fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
+    let cli = Cli::parse_from(std::iter::once("djbooth-rs link".to_string()).chain(args));
     match cli.command {
         Command::Doctor(args) => doctor(args).await,
         Command::Serve(args) => serve(args).await,
@@ -818,7 +817,7 @@ fn has_shared_static_payload(
 
 fn decode_strict_hex(input: &str) -> Result<Vec<u8>> {
     let input = input.trim();
-    if input.len() % 2 != 0 {
+    if !input.len().is_multiple_of(2) {
         bail!("odd-length hex payload");
     }
     input

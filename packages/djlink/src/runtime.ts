@@ -241,6 +241,7 @@ async function startDjLinkSource(
   }
 
   const args = [
+    "link",
     "serve",
     ...nativeSourceArgs,
     "--socket",
@@ -556,9 +557,9 @@ export async function resolveDjLinkBinary(
     override,
     env.DJBOOTH_DJLINK_BINARY,
     env.MUSIC_DJLINK_BINARY,
-    resolve(packageRoot, "native-bin/djbooth-djlink"),
-    resolve(packageRoot, "../../rust/target/release/djbooth-djlink"),
-    resolve(packageRoot, "../../rust/target/debug/djbooth-djlink"),
+    resolve(packageRoot, "native-bin/djbooth-rs"),
+    resolve(packageRoot, "../../rust/target/release/djbooth-rs"),
+    resolve(packageRoot, "../../rust/target/debug/djbooth-rs"),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     const absolute = resolve(candidate);
@@ -609,7 +610,12 @@ async function runNativeDoctor(
   requireAnalysis: boolean,
   env: NodeJS.ProcessEnv,
 ): Promise<NativeDoctorOutput> {
-  const args = ["doctor", ...sourceArgs, ...(requireAnalysis ? ["--require-analysis"] : [])];
+  const args = [
+    "link",
+    "doctor",
+    ...sourceArgs,
+    ...(requireAnalysis ? ["--require-analysis"] : []),
+  ];
   const result = await runProcess(binaryPath, args, env);
   const line = result.stdout
     .trim()

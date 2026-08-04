@@ -8,5 +8,5 @@ Rekordbox 6.8.2 application bundle used during reverse engineering.
 - `artifacts/rekordbox/`: proprietary executable, dylibs, metadata, hashes, and provenance report
 
 These files are not release dependencies. Production analysis uses
-`rust/crates/rekordbox-analyzer-core`; MLX source separation uses `python/stems-mlx`. Explicit
+`rust/crates/djbooth-analyzer`; MLX source separation uses `python/stems-mlx`. Explicit
 reference analysis now requires `REKORDBOX_REFERENCE_ANALYZER_BINARY` or a PATH-installed helper.

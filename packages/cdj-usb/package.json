@@ -6,7 +6,7 @@
   "author": "Georgios Konstantopoulos",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/music-ts",
+    "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/cdj-usb"
   },
   "bin": {
@@ -15,7 +15,7 @@
   "files": [
     "deploy",
     "dist",
-    "native-bin/djbooth-cdj-usb",
+    "native-bin/djbooth-rs",
     "README.md",
     "LICENSE"
   ],
@@ -38,9 +38,9 @@
     "cli": "tsx src/bin.ts",
     "format": "oxfmt --write src test scripts package.json tsconfig.json tsconfig.build.json README.md deploy && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all",
     "format:check": "oxfmt --check src test scripts package.json tsconfig.json tsconfig.build.json README.md deploy && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all -- --check",
-    "lint": "oxlint src test scripts && cargo clippy --manifest-path ../../rust/Cargo.toml -p djbooth-cdj-usb --all-targets -- -D warnings",
+    "lint": "oxlint src test scripts && cargo clippy --manifest-path ../../rust/Cargo.toml -p djbooth-rs --all-targets --no-deps -- -D warnings",
     "native:build": "node scripts/build-native.mjs",
-    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djbooth-cdj-usb",
+    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djbooth-rs",
     "prepack": "pnpm build && pnpm native:build",
     "test": "vitest run && pnpm native:test",
     "typecheck": "tsc --noEmit",

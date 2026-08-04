@@ -6,16 +6,16 @@
   "author": "Georgios Konstantopoulos",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/music-ts",
+    "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/djlink"
   },
   "bin": {
-    "djbooth-djlink-native": "./native-bin/djbooth-djlink",
+    "djbooth-rs": "./native-bin/djbooth-rs",
     "djlink": "./dist/bin.js"
   },
   "files": [
     "dist",
-    "native-bin/djbooth-djlink",
+    "native-bin/djbooth-rs",
     "README.md"
   ],
   "os": [
@@ -42,8 +42,8 @@
     "format:check": "oxfmt --check src test scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all -- --check",
     "lint": "oxlint src test scripts",
     "native:build": "node scripts/build-native.mjs",
-    "native:run": "cargo run --manifest-path ../../rust/Cargo.toml -p djbooth-djlink --",
-    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djtools-core -p djtools-link -p djbooth-djlink",
+    "native:run": "cargo run --manifest-path ../../rust/Cargo.toml -p djbooth-rs -- link",
+    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djtools-core -p djtools-link -p djbooth-rs",
     "prepack": "pnpm build && pnpm native:build",
     "test": "vitest run && pnpm native:test",
     "typecheck": "tsc --noEmit",

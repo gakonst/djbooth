@@ -4,13 +4,13 @@
   "description": "A music-first TypeScript yt-dlp port with an agent-native incur CLI",
   "type": "module",
   "license": "Unlicense",
-  "homepage": "https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts#readme",
+  "homepage": "https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts#readme",
   "bugs": {
-    "url": "https://github.com/gakonst/music-ts/issues"
+    "url": "https://github.com/gakonst/djbooth/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/music-ts",
+    "url": "https://github.com/gakonst/djbooth",
     "directory": "packages/ytdlp-ts"
   },
   "publishConfig": {

@@ -34,6 +34,11 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ### 2026-08-03 — djbooth.ai identity and runtime layout separation
 
+- Replaced the three native executables with one `rust/bin/djbooth-rs` package and binary. Its
+  `analyzer`, `usb`, and `link` subcommands preserve the existing TypeScript APIs while reducing
+  native build, bundle, discovery, and release handling to one artifact.
+- Renamed the reusable clean-room DSP crate to `rust/crates/djbooth-analyzer`; no active package or
+  source path retains the former analyzer-core identity.
 - Moved the React/Vite workbench and its conventional standalone Tauri shell to
   `apps/djbooth/src-tauri`, with an app-local toolchain, lockfile, and target directory.
 - Consolidated reusable Rust under `rust/crates` and CLI packages under `rust/bin`, all through one
@@ -729,7 +734,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 - Do not publish the repository's analyzer helper or any AlphaTheta/Rekordbox binary in the public
   npm package. Analysis discovers an explicit `analyzerBinary`, `REKORDBOX_ANALYZER_BINARY`, a
-  `djbooth-analyzer` on `PATH`, a user-local helper, or the repository-built development helper.
+  `djbooth-rs` on `PATH`, a user-local helper, or the repository-built development helper.
 - Database, ANLZ parsing, locking, metadata, and web-library orchestration remain TypeScript-owned.
 
 ### 2026-07-10 — Runtime and packaging
@@ -1116,7 +1121,7 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 
 ## Clean-room analyzer checkpoint (2026-07-27)
 
-- Split a releasable `rust/crates/rekordbox-analyzer-core` crate from the private Rekordbox rehost.
+- Split a releasable `rust/crates/djbooth-analyzer` crate from the private Rekordbox rehost.
   The
   core has no Rekordbox/JUCE bytes, loader offsets, patched application cache, or native framework
   dependency.

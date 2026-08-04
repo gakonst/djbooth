@@ -50,7 +50,7 @@ fn start_packaged_backend(app: &mut tauri::App) -> Result<(), Box<dyn std::error
     let backend = resources.join("backend");
     let script = backend.join("dist/desktop-sidecar.js");
     let static_directory = backend.join("dist/client");
-    let analyzer = resources.join("tools/djbooth-analyzer");
+    let analyzer = resources.join("tools/djbooth-rs");
     let uv = resources.join("tools/uv");
     let stems_project = resources.join("tools/stems-mlx");
     let (mut events, child) = app

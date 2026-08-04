@@ -119,8 +119,8 @@ Install the native controller on the target Linux board:
 
 ```sh
 sudo install -m 0755 \
-  packages/cdj-usb/native-bin/djbooth-cdj-usb \
-  /usr/local/bin/djbooth-cdj-usb
+  packages/cdj-usb/native-bin/djbooth-rs \
+  /usr/local/bin/djbooth-rs
 ```
 
 Enable the board's USB controller in peripheral mode according to its device tree, then make

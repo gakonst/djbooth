@@ -166,8 +166,8 @@ Cli.create('music').command(slskCli)
 ## Development
 
 ```sh
-gh repo clone gakonst/music-ts
-cd music-ts
+gh repo clone gakonst/djbooth
+cd djbooth
 pnpm install
 pnpm --filter slsk-ts check             # types + lint + 100% coverage
 pnpm --filter slsk-ts build

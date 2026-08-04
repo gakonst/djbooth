@@ -1,4 +1,4 @@
-use rekordbox_analyzer_core::{
+use djbooth_analyzer::{
     ExpandedBeat, UnitEnvelopeAdjustment, UnitEnvelopeNumbering, apply_unit_envelope_adjustment,
     extract_unit_envelope_feature, select_unit_envelope_phase,
 };

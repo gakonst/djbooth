@@ -96,8 +96,8 @@ Use two captures:
 Start the vendored source directly:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
-  serve \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- \
+  link serve \
   --snapshot /Users/gakonst/.local/state/djbooth.ai/djlink/library.json \
   --socket /tmp/djbooth-djlink-lab.sock \
   --bind-ip 169.254.253.33 \
@@ -124,14 +124,14 @@ Recover the original native Rekordbox capture by immutable git object; the simil
 git -C /Users/gakonst/github/gakonst/djtools \
   show 123e84e:rb-tracks.pcap > /tmp/rekordbox-rb-tracks-native.pcap
 
-cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
-  audit-pcap \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- \
+  link audit-pcap \
   --pcap /tmp/djbooth-djlink-source.pcap \
   --reference /tmp/rekordbox-rb-tracks-native.pcap \
   --require-core
 
-cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
-  audit-pcap \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- \
+  link audit-pcap \
   --pcap /tmp/djbooth-djlink-live.pcap \
   --require-remote-db-cursors
 ```

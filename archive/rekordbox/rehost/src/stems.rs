@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use rekordbox_analyzer_core::{STEMS_CHUNK_SAMPLES, plan_stems_chunks};
+use djbooth_analyzer::{STEMS_CHUNK_SAMPLES, plan_stems_chunks};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use rekordbox_analyzer_core::{
+use djbooth_analyzer::{
     ANALYSIS_SAMPLE_RATE, AnalysisOptions, AnlzFile, AnlzTag, COLOR_PREVIEW_COLUMNS,
     DETAIL_FRAME_SAMPLES, DatAnalysis, ExtAnalysis, RhythmMode, WaveformData,
     analyze_to_directory_with_options, build_flac_pvb2, compare_beat_grids, compare_waveforms,
@@ -228,7 +228,8 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
     }));
 
     let explicit_directory = fixture_dir.path().join("explicit-threads");
-    let explicit = Command::new(env!("CARGO_BIN_EXE_djbooth-analyzer"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_djbooth-rs"))
+        .arg("analyzer")
         .args(["analyze"])
         .arg(&fixture)
         .arg(&explicit_directory)
@@ -248,7 +249,8 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
         );
     }
 
-    let invalid_threads = Command::new(env!("CARGO_BIN_EXE_djbooth-analyzer"))
+    let invalid_threads = Command::new(env!("CARGO_BIN_EXE_djbooth-rs"))
+        .arg("analyzer")
         .args(["analyze"])
         .arg(&fixture)
         .arg(fixture_dir.path().join("invalid-threads"))
@@ -263,7 +265,8 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
 
     let dat = first_directory.join("ANLZ0000.DAT");
     let dat_before = std::fs::read(&dat).expect("DAT before in-place rejection");
-    let in_place = Command::new(env!("CARGO_BIN_EXE_djbooth-analyzer"))
+    let in_place = Command::new(env!("CARGO_BIN_EXE_djbooth-rs"))
+        .arg("analyzer")
         .args(["rebuild-anlz"])
         .arg(&dat)
         .arg(&dat)
@@ -278,7 +281,8 @@ fn synthetic_tonal_click_track_produces_deterministic_full_analysis() {
 
     let directory_output = fixture_dir.path().join("rebuild-output-directory");
     std::fs::create_dir(&directory_output).expect("rebuild output directory");
-    let directory_target = Command::new(env!("CARGO_BIN_EXE_djbooth-analyzer"))
+    let directory_target = Command::new(env!("CARGO_BIN_EXE_djbooth-rs"))
+        .arg("analyzer")
         .args(["rebuild-anlz"])
         .arg(&dat)
         .arg(&directory_output)

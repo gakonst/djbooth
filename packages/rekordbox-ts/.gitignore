@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .rekordbox-analyzer/
+.djbooth-rs/
 .djbooth-analyzer/
 .DS_Store
 *.log

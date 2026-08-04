@@ -6,7 +6,7 @@
   "author": "Georgios Konstantopoulos",
   "repository": {
     "type": "git",
-    "url": "https://github.com/gakonst/music-ts",
+    "url": "https://github.com/gakonst/djbooth",
     "directory": "apps/djbooth"
   },
   "bin": {

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
-use rekordbox_analyzer_core::{
+use djbooth_analyzer::{
     AnalysisOptions, AnalysisSampleRateConverter, AnlzFile, DatAnalysis, ExtAnalysis, RhythmMode,
     ThreeBandAnalysis, analyze_beat_sensor_events, analyze_linked_rhythm_with_reader_padding,
     analyze_to_directory_with_options, compare_beat_grids, compare_output_directories,
@@ -18,31 +18,24 @@ const PCM_PROBE_MAX_FRAMES: usize = 262_144;
 const DIAGNOSTIC_PREVIEW_ITEMS: usize = 16;
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error:#}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<()> {
-    let mut args = std::env::args().skip(1);
+pub fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
+    let mut args = args.into_iter();
     match args.next().as_deref() {
         Some("-h" | "--help" | "help") => {
             ensure_exhausted(args, "help")?;
             println!(
                 "Clean-room audio-to-Rekordbox analyzer\n\n\
                  Usage:\n  \
-                   djbooth-analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]\n  \
-                   djbooth-analyzer beat-sensor-events AUDIO [--sample-rate HZ]\n  \
-                   djbooth-analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
-                   djbooth-analyzer doctor\n  \
-                   djbooth-analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
-                   djbooth-analyzer pcm-probe AUDIO [--start N] [--frames N]\n  \
-                   djbooth-analyzer phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]\n  \
-                   djbooth-analyzer unit-envelope AUDIO [--stages] [--values]\n  \
-                   djbooth-analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
-                   djbooth-analyzer rebuild-anlz INPUT OUTPUT\n\n\
+                   djbooth-rs analyzer analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]\n  \
+                   djbooth-rs analyzer beat-sensor-events AUDIO [--sample-rate HZ]\n  \
+                   djbooth-rs analyzer beat-grid-diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   djbooth-rs analyzer doctor\n  \
+                   djbooth-rs analyzer diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   djbooth-rs analyzer pcm-probe AUDIO [--start N] [--frames N]\n  \
+                   djbooth-rs analyzer phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]\n  \
+                   djbooth-rs analyzer unit-envelope AUDIO [--stages] [--values]\n  \
+                   djbooth-rs analyzer waveform-diff REFERENCE_DIR CANDIDATE_DIR\n  \
+                   djbooth-rs analyzer rebuild-anlz INPUT OUTPUT\n\n\
                  Commands:\n  \
                    analyze       Emit beat grids, key, waveforms, seek maps, and song structure\n  \
                    beat-sensor-events  Emit the causal six-band peak-event stream as JSON\n  \
@@ -63,7 +56,7 @@ fn run() -> Result<()> {
         }
         Some("-V" | "--version") => {
             ensure_exhausted(args, "version")?;
-            println!("djbooth-analyzer {}", env!("CARGO_PKG_VERSION"));
+            println!("djbooth-rs analyzer {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some("analyze") => {
@@ -494,7 +487,7 @@ fn run() -> Result<()> {
         }
         Some(command) => bail!("unknown command '{command}'"),
         None => bail!(
-            "usage: djbooth-analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|pcm-probe AUDIO [--start N] [--frames N]|phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]|unit-envelope AUDIO [--stages] [--values]|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
+            "usage: djbooth-rs analyzer <analyze AUDIO OUTPUT_DIR [LOG] [--threads N] [--rhythm-mode normal|dynamic|auto]|beat-sensor-events AUDIO [--sample-rate HZ]|beat-grid-diff REFERENCE_DIR CANDIDATE_DIR|doctor|diff REFERENCE_DIR CANDIDATE_DIR|pcm-probe AUDIO [--start N] [--frames N]|phrase-features AUDIO REFERENCE_DAT [--offset N] [--limit N]|unit-envelope AUDIO [--stages] [--values]|waveform-diff REFERENCE_DIR CANDIDATE_DIR|rebuild-anlz INPUT OUTPUT>"
         ),
     }
 }

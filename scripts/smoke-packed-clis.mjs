@@ -25,7 +25,7 @@ const packages = [
   {
     name: "@gakonst/djlink",
     prefix: "gakonst-djlink-",
-    bins: ["djlink", "djbooth-djlink-native"],
+    bins: ["djlink", "djbooth-rs"],
   },
   {
     name: "@gakonst/cdj-usb",

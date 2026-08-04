@@ -14,8 +14,8 @@ Give `tracks` a public YouTube/SoundCloud set URL, a 1001Tracklists URL, or a lo
 Node.js 22+ and the pnpm version pinned by the music-ts workspace are required.
 
 ```sh
-gh repo clone gakonst/music-ts
-cd music-ts
+gh repo clone gakonst/djbooth
+cd djbooth
 pnpm install
 pnpm build
 pnpm --filter @gakonst/tracks cli -- doctor
@@ -374,14 +374,14 @@ Spotify playlists ── spots ─────────┤
                    djlink RemoteDB/NFS → connected CDJ
 ```
 
-| Workspace package                                                                           | Responsibility                                                                      |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [`@gakonst/spots`](https://github.com/gakonst/music-ts/tree/main/packages/spots)            | Pull the user's Spotify playlists; enrich or verify track metadata                  |
-| `@gakonst/tracks`                                                                           | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
-| [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts)                 | Preferred search and resumable download of each individual track                    |
-| [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
-| [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
-| [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink)          | Serve completed local media/ANLZ and load or cue it on a connected CDJ              |
+| Workspace package                                                                          | Responsibility                                                                      |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| [`@gakonst/spots`](https://github.com/gakonst/djbooth/tree/main/packages/spots)            | Pull the user's Spotify playlists; enrich or verify track metadata                  |
+| `@gakonst/tracks`                                                                          | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
+| [`slsk-ts`](https://github.com/gakonst/djbooth/tree/main/packages/slsk-ts)                 | Preferred search and resumable download of each individual track                    |
+| [`@gakonst/ytdlp-ts`](https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
+| [`@gakonst/rekordbox`](https://github.com/gakonst/djbooth/tree/main/packages/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
+| [`@gakonst/djlink`](https://github.com/gakonst/djbooth/tree/main/packages/djlink)          | Serve completed local media/ANLZ and load or cue it on a connected CDJ              |
 
 The boundary is deliberate:
 
@@ -602,7 +602,7 @@ Tests use fixtures and injected HTTP transports; they consume no provider credit
 
 Primary documentation:
 
-- [@gakonst/ytdlp-ts](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts)
+- [@gakonst/ytdlp-ts](https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts)
 - [incur](https://github.com/wevm/incur)
 - [Parse 1001Tracklists wrapper](https://parse.bot/marketplace/ec03e43b-6798-40ce-86c9-02832adedc4c/1001tracklists-com-api)
 - [AudD recognition](https://docs.audd.io/)
