@@ -1,48 +1,84 @@
 <div align="center">
 
+<img src="apps/djbooth/src-tauri/icons/128x128@2x.png" width="128" alt="djbooth.ai" />
+
 <h1>djbooth.ai</h1>
 
 <p><strong>Give your agent a DJ booth.</strong></p>
 
-<p>
-One local system for finding music, acquiring recordings, analyzing tracks, separating stems,<br>
-building playlists, preparing USBs, and playing through CDJs.
-</p>
+&nbsp;
 
-[![CI](https://img.shields.io/github/actions/workflow/status/gakonst/djbooth/main.yml?branch=main)][ci]
-[![Node](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)][node]
-[![Rust](https://img.shields.io/badge/native-Rust-black?logo=rust)][rust]
-[![Local first](https://img.shields.io/badge/data-local--first-7c3aed)][local-first]
+[![Github Actions][gha-badge]][gha-url] [![Node][node-badge]][node-url] [![Rust][rust-badge]][rust-url]
 
-**[Install](#install)** · **[Why](#why-djboothai)** · **[Agent workflow](#the-agent-workflow)** ·
-**[Workbench](#the-workbench)** · **[Hardware](#from-library-to-hardware)** ·
-**[Architecture](#architecture)**
+[gha-badge]: https://img.shields.io/github/actions/workflow/status/gakonst/djbooth/main.yml?branch=main&style=flat-square
+[gha-url]: https://github.com/gakonst/djbooth/actions
+[node-badge]: https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white&style=flat-square
+[node-url]: https://nodejs.org/
+[rust-badge]: https://img.shields.io/badge/native-Rust-black?logo=rust&style=flat-square
+[rust-url]: https://www.rust-lang.org/
 
-[ci]: https://github.com/gakonst/djbooth/actions/workflows/main.yml
-[node]: https://nodejs.org/
-[rust]: https://www.rust-lang.org/
-[local-first]: #local-first-by-design
+**[Install](#installation)**
+| [Why djbooth.ai](#why-djboothai)
+| [Getting Started](#getting-started)
+| [Workbench](#workbench)
+| [Architecture](#architecture)
+| [Compatibility Journal](packages/rekordbox-ts/PORTING.md)
 
 </div>
 
-Install djbooth.ai, add its Skill to Codex or Claude Code, and your agent can run the complete DJ
-workflow—not merely suggest what you should do next. It can resolve a set, find the recordings,
-avoid downloading files you already own, analyze BPM/key/beat grids/phrases/waveforms, generate
-stems, create playlists, prepare a Rekordbox-compatible USB, and serve or cue tracks over Pro DJ
-Link.
+---
 
-The key is compatibility: djbooth.ai automates and opens up the workflow while targeting 1:1
-Rekordbox compatibility at the boundary that matters—the files, databases, analysis, USB layouts,
-and network behavior consumed by Pioneer DJ/AlphaTheta hardware. Prepared media works with
-club-standard CDJs and newer XDJ all-in-one systems, including the CDJ-3000 and XDJ-AZ.
+Agentic, local-first toolkit for taking music from discovery to a prepared DJ set, with 1:1
+Rekordbox compatibility at the Pioneer DJ/AlphaTheta hardware boundary.
 
-Prefer to work directly? Open the same system as a local web or native Tauri app. Browse providers,
-edit playlists, inspect analysis, toggle stems while a track plays, practice on two decks, shape EQ,
-and audition transitions manually. Agent and UI operate on the same cached library and tools.
+- **Agent** — Give Codex or Claude a playlist, set URL, or outcome; it finds recordings, reuses what
+  you own, analyzes tracks, separates stems, builds playlists, and prepares playback end to end.
+- **Workbench** — Browse and manage the same library manually in a local web or native Tauri app,
+  with playlists, waveforms, live stems, two decks, EQ, cues, and transition auditioning.
+- **djbooth** — One typed CLI, Skill, MCP server, and Code Mode surface spanning providers, local
+  acquisition, analysis, library management, USB export, and Pro DJ Link.
+- **djbooth-rs** — Unified native analyzer, USB, and DJ Link runtime.
+- **stems-mlx** — Apple Silicon Mel-Band-RoFormer four-stem separation through a standalone uv/MLX
+  runtime.
 
-## Install
+```text
+"Import this playlist, acquire anything I do not own, analyze it, build a compatible playlist,
+and open it so I can audition the transitions."
 
-The npm release is not public yet. Install from source on Node.js 22:
+    prompt → recordings → analysis/stems → library → USB/CDJ
+```
+
+## Why djbooth.ai
+
+Rekordbox is the de facto preparation layer for professional DJs because it is tightly integrated
+with the Pioneer DJ/AlphaTheta hardware found in booths. [USB Export][rekordbox-professional]
+moves prepared tracks and playlists onto standalone players; [PRO DJ LINK][rekordbox-link] loads
+the same library and analysis over the network.
+
+[rekordbox-professional]: https://rekordbox.com/en/feature/professional/
+[rekordbox-link]: https://rekordbox.com/en/support/link/
+
+A better agent or library manager is not useful if its output stops working when the USB reaches
+the booth. djbooth.ai opens and automates the workflow without giving up that interchange contract.
+
+The compatibility target is 1:1 at the boundary the hardware consumes—not a pixel clone of the
+Rekordbox UI. djbooth.ai produces compatible database rows, paths, playlists, DAT/EXT/2EX analysis,
+waveforms, beat grids, cues, USB layouts, and DJ Link behavior. It emits both legacy Device Library
+and newer OneLibrary/Device Library Plus artifacts.
+
+Prepared media works across club-standard CDJs and newer XDJ all-in-one systems, including the
+CDJ-2000NXS2, CDJ-3000, XDJ-XZ, and XDJ-AZ. Differential fixtures and physical-player validation
+keep compatibility grounded in what the hardware actually reads.
+
+The other half of the thesis is agency. “Find tracks for a late-night warm-up” should create a
+playlist you can hear—not stage a literal search for that phrase. The agent can inspect local and
+hosted catalogs, acquire missing recordings, parallelize analysis, cache completed work, and carry
+the result through to a workbench, USB, or connected player. Every operation remains available to
+you directly through the same CLI and UI.
+
+## Installation
+
+The npm release is not public yet. Install from source with Node.js 22:
 
 ```sh
 gh repo clone gakonst/djbooth ~/github/gakonst/djbooth
@@ -53,7 +89,12 @@ pnpm build
 djbooth --version
 ```
 
-Add the agent plugin:
+Copy [`.env.example`](.env.example) to the ignored root `.env` for provider credentials. Audio,
+sessions, cookies, databases, and model caches remain local and outside Git.
+
+## Getting Started
+
+Add djbooth.ai to your agent:
 
 ```sh
 # Codex
@@ -65,224 +106,81 @@ claude plugin marketplace add gakonst/djbooth
 claude plugin install djbooth@djbooth-ai
 ```
 
-Or install the Skill/MCP map from the CLI:
+Or install the Skill and MCP command map directly:
 
 ```sh
 djbooth skills add
 djbooth mcp add
 ```
 
-Provider credentials live in the ignored root `.env`; see [`.env.example`](.env.example). Local
-audio, sessions, cookies, databases, and model caches stay outside Git.
-
-## Why djbooth.ai
-
-### Rekordbox is the bridge to the booth
-
-Rekordbox is the de facto preparation layer for professional DJs because of its tight integration
-with Pioneer DJ/AlphaTheta hardware. Its [USB Export](https://rekordbox.com/en/feature/professional/)
-moves prepared tracks and playlists onto standalone players; its
-[PRO DJ LINK](https://rekordbox.com/en/support/link/) loads the same library and analysis over the
-network. That workflow is embedded in the CDJ/XDJ hardware DJs encounter in clubs, festivals, and
-touring setups.
-
-This creates a hard product requirement. A better agent, library manager, analyzer, or stem
-workflow is not enough if its output stops working when the USB reaches the booth. djbooth.ai's
-selling point is that you get a programmable, local-first, agent-native system without giving up
-the Rekordbox interchange contract.
-
-The target is 1:1 compatibility at that contract—not a pixel-for-pixel clone of the Rekordbox UI.
-A djbooth.ai-prepared track should look like a Rekordbox-prepared track to supported hardware:
-compatible database rows, paths, playlists, DAT/EXT/2EX analysis, waveforms, beat grids, cues, USB
-layouts, and DJ Link behavior. Differential fixtures and physical CDJ validation keep that claim
-grounded in what the players actually consume.
-
-djbooth.ai emits both legacy Device Library exports and the newer OneLibrary/Device Library Plus
-artifacts used across the Pioneer DJ/AlphaTheta range. The same library can therefore move from
-CDJ players such as the CDJ-2000NXS2 and CDJ-3000 to all-in-one systems such as the XDJ-XZ and
-XDJ-AZ without rebuilding the workflow around another library manager.
-
-### The DJ workflow is one job
-
-Music tooling is usually a pile of disconnected steps: identify a tracklist in one place, search
-for files somewhere else, analyze them in another application, rebuild the playlist, export it,
-then discover at the decks that an artifact is missing.
-
-An agent cannot reliably finish that job if it only has search results and chat. It needs typed,
-composable tools spanning the whole lifecycle, durable state between steps, and enough validation
-to know whether the result will actually play.
-
-djbooth.ai makes the entire preparation loop one system:
+Then ask for the outcome:
 
 ```text
-prompt, playlist, or set URL
-  → resolve identities and ordering
-  → reuse or acquire canonical local recordings
-  → analyze audio and generate player-compatible artifacts
-  → separate stems when requested
-  → create or update the local library and playlists
-  → practice in the workbench, sync a USB, or serve connected CDJs
-```
+Import this Spotify playlist. Reuse tracks already in my library, acquire the missing recordings,
+analyze BPM, key, grids, phrases, and waveforms, then create a Rekordbox-compatible playlist.
 
-### Agents should do the work
+Find 20 deep late-night warm-up tracks in my library. Build a rising-energy temporary playlist and
+open it so I can audition it.
 
-“Find tracks for a late-night warm-up” should not produce a search query named
-`late-night warm-up`. The agent should inspect the library semantically, consider tempo, key,
-energy, history, and availability, then assemble a temporary or durable playlist that can be heard,
-edited, analyzed, and exported.
-
-The Skill teaches Codex and Claude the workflow and safety contracts. The Incur CLI and MCP/Code
-Mode surfaces provide bounded structured tools. The agent can parallelize independent searches,
-downloads, analysis, and preparation while preserving ordered playlist results.
-
-### Local-first by design
-
-The valuable state is local: recordings, Rekordbox-compatible databases, analysis files, stems,
-credentials, USB contents, listening history, and nearby hardware. djbooth.ai keeps that state on
-your machine and treats hosted providers as inputs—not as the source of truth for your library.
-
-Downloads, metadata, provider responses, model weights, analysis, stems, and playlist acquisition
-are cached. Warm runs reuse completed work instead of redownloading or reanalyzing tracks.
-
-### Compatibility without surrendering the workflow
-
-Rekordbox and CDJs are compatibility targets, not djbooth.ai's product surface. The clean-room
-analyzer produces compatible DAT/EXT/2EX analysis, the library tools read and write compatible
-databases, USB sync emits the layouts players expect, and the DJ Link runtime serves local audio
-and metadata directly.
-
-That means the workflow can be automated and inspected end to end while the output remains native
-to the hardware ecosystem DJs already rely on.
-
-### Human control remains first-class
-
-Agentic does not mean invisible. Every useful operation is also available through the CLI or
-workbench. Destructive library writes remain explicit; the normal workbench opens the active
-database read-only unless write access is requested.
-
-## The agent workflow
-
-Ask in outcomes:
-
-```text
-Import this Spotify playlist, acquire anything I do not already have, analyze every track,
-and build me a Rekordbox-compatible playlist.
-
-Find 20 tracks in my library for a deep late-night warm-up. Keep the energy rising, avoid tracks
-I played last weekend, and open the result so I can audition it.
-
-Create four-stem versions of these tracks, then suggest and audition three transitions on deck A/B.
-
-Start this playlist fresh on my USB, verify every waveform artifact, and tell me when it is safe to
+Sync this playlist fresh to my USB, verify every waveform artifact, and tell me when it is safe to
 eject.
 
 Serve my library to the CDJs and cue "Apathy" on player 3 without starting playback.
 ```
 
-The agent composes the same `djbooth` commands available to humans. One representative explicit
-pipeline:
+Run the same workflows explicitly:
 
 ```sh
-djbooth tracks import-set "$SET_URL" \
-  --manifest "$MANIFEST_PATH" \
-  --write \
-  --format json
+# Resolve, acquire, analyze, and import one set.
+djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --write --format json
+
+# Analyze and separate one track.
+djbooth rekordbox analyze track ./track.flac --output-directory ./analysis --format json
+djbooth rekordbox stems separate ./track.flac ./stems --layout four-stem --format json
+
+# Sync one compatible USB and serve connected players.
+djbooth usb sync /Volumes/CDJ --database /path/to/master.db --write --format json
+djbooth djlink rekordbox --format json
+djbooth djlink rekordbox "Apathy" --player 3 --format json
 ```
 
-It resolves the ordered tracklist, acquires missing local recordings, runs the clean-room analyzer,
-and writes verified playlist membership. Recordings are shared under `~/.djtools/tracks/` by
-default, so multiple playlists reuse the same files.
+Downloads, provider responses, model weights, analysis, stems, and playlist acquisition are cached.
+Warm runs do not redownload or reanalyze unchanged tracks.
 
-## The workbench
+## Workbench
 
-Open the browser workstation:
+Open the local workstation:
 
 ```sh
 djbooth library serve --open
 ```
 
-Use Codex or Claude as the chat surface and omit the embedded assistant rail:
+Keep Codex or Claude as the conversation surface and open the UI without its embedded assistant:
 
 ```sh
 djbooth library serve --open --no-assistant
 ```
 
-The same workbench is packaged as the `djbooth.ai` Tauri desktop app. It provides:
-
-- Local, Spotify, and SoundCloud browsing with collapsed provider controls and cached acquisition.
-- Automatic download and analysis when hosted playlists enter the local workflow.
-- Playlist creation, ordering, metadata editing, semantic search, and temporary set building.
-- RGB waveforms, BPM/key/phrase inspection, cues, and on-demand MLX Mel-Band-RoFormer stems.
-- Live stem enable/mute controls, two stacked decks, EQ/volume controls, and transition auditioning.
-- USB synchronization and DJ Link status from the same library state.
-
-## From library to hardware
-
-### Analyze and separate stems
-
-```sh
-djbooth rekordbox analyze track ./track.flac \
-  --output-directory ./analysis \
-  --format json
-
-djbooth rekordbox stems separate ./track.flac ./stems \
-  --layout four-stem \
-  --format json
-```
-
-Native analysis, USB, and DJ Link operations ship as one `djbooth-rs` binary with `analyzer`, `usb`,
-and `link` subcommands. Apple Silicon stem separation is a standalone uv/MLX project invoked through
-the same typed CLI.
-
-### Sync a USB
-
-```sh
-djbooth usb sync-playlist /Volumes/CDJ "$PLAYLIST_ID" \
-  --database /path/to/master.db \
-  --fresh \
-  --write \
-  --format json
-```
-
-Warm reruns reuse unchanged audio and analysis. Full-library sync and CDJ history import are also
-available:
-
-```sh
-djbooth usb sync /Volumes/CDJ --database /path/to/master.db --write --format json
-```
-
-### Serve connected CDJs
-
-```sh
-djbooth djlink rekordbox --format json
-djbooth djlink rekordbox "Apathy" --player 3 --format json
-```
-
-DJ Link serves verified local recordings and ANLZ data. Spotify identities remain metadata; hosted
-streaming audio is not exported over Link. Loading a track cues it and intentionally does not press
-PLAY.
+The same workbench ships as the `djbooth.ai` Tauri desktop app. Agent and UI share one local library,
+cache, processing queue, and toolchain. Library writes remain explicit; the normal workbench opens
+the active database read-only unless write access is requested.
 
 ## Architecture
 
 ```text
-Codex / Claude / Nanocodex             djbooth.ai workbench
-              │                                  │
-              └──────── Skill · MCP · CLI ───────┘
-                                 │
-                    typed TypeScript orchestration
-                   ┌─────────────┼──────────────┐
-                   │             │              │
-          providers/library   djbooth-rs     MLX stems
-                   │      analyzer·usb·link     │
-                   └─────────────┼──────────────┘
-                                 │
-             local library · compatible artifacts · CDJs
+Codex / Claude / Nanocodex                djbooth.ai workbench
+              │                                    │
+              └────────── Skill · MCP · CLI ───────┘
+                                    │
+                       TypeScript orchestration
+                      ┌─────────────┼──────────────┐
+                      │             │              │
+             providers/library   djbooth-rs     MLX stems
+                      │      analyzer·usb·link     │
+                      └─────────────┼──────────────┘
+                                    │
+                local library · compatible artifacts · CDJs
 ```
-
-The TypeScript layer owns workflow composition, validation, caching, structured output, and public
-APIs. Rust owns latency-sensitive DSP, USB appliance behavior, and DJ Link. Python/uv owns the MLX
-model runtime. The focused implementations remain directly runnable, but normal users and agents
-enter through `djbooth`.
 
 | Path                                          | Responsibility                                      |
 | --------------------------------------------- | --------------------------------------------------- |
@@ -292,18 +190,20 @@ enter through `djbooth`.
 | [`rust/bin/djbooth-rs/`](rust/bin/djbooth-rs) | Unified native CLI                                  |
 | [`rust/crates/`](rust/crates)                 | Reusable analyzer, core, and DJ Link libraries      |
 | [`python/stems-mlx/`](python/stems-mlx)       | Standalone uv/MLX stem separator                    |
-| [`archive/rekordbox/`](archive/rekordbox)     | Retired compatibility research artifacts            |
 
-## Development
-
-Requires Node.js 22, pnpm 10.30.2, Rust nightly, uv, and ffmpeg/ffprobe.
+## Contributing
 
 ```sh
 pnpm install
 pnpm validate
 cargo test --manifest-path rust/Cargo.toml --workspace
-pnpm djbooth --help
+pnpm test:pack
 ```
 
-See [`packages/rekordbox-ts/PORTING.md`](packages/rekordbox-ts/PORTING.md) for the durable clean-room
-compatibility and verification journal.
+Contributions are welcome. For compatibility work, update the
+[porting journal](packages/rekordbox-ts/PORTING.md) with the evidence, fixtures, and hardware scope.
+
+## Support
+
+Having trouble? [Open an issue](https://github.com/gakonst/djbooth/issues/new) with the command,
+bounded output, platform, target player, and whether the library path was USB or Pro DJ Link.
