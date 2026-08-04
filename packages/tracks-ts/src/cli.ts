@@ -642,7 +642,7 @@ const metadataCoverageOutput = z.object({
 
 metadataCli.command("backfill", {
   description:
-    "Backfill one Rekordbox playlist folder from local duplicates, durable manifests, embedded tags, and cached MusicBrainz release metadata.",
+    "Repair identities and backfill one Rekordbox playlist folder from local duplicates, manifests, embedded tags, Deezer, and MusicBrainz.",
   options: z.object({
     folder: z.string().default("DJ Sets I Like").describe("Direct-child playlist folder"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
@@ -653,8 +653,8 @@ metadataCli.command("backfill", {
       .describe("Manifest search root; repeat as needed; defaults to ~/.djtools and ~/Music"),
     catalogSearch: z
       .boolean()
-      .default(false)
-      .describe("Allow conservative MusicBrainz artist/title search for tracks without ISRC"),
+      .default(true)
+      .describe("Allow strict Deezer and MusicBrainz artist/title search for tracks without ISRC"),
     cacheMode: cacheModeOption,
     probeConcurrency: z.number().int().min(1).max(32).default(8),
     backupRoot: z.string().optional().describe("Pre-write backup directory root"),
@@ -671,24 +671,88 @@ metadataCli.command("backfill", {
     coverageBefore: metadataCoverageOutput,
     coverageAfter: metadataCoverageOutput,
     sources: z.object({
-      catalog: z.number().int().nonnegative(),
+      deezer: z.number().int().nonnegative(),
       embedded: z.number().int().nonnegative(),
+      filename: z.number().int().nonnegative(),
       local: z.number().int().nonnegative(),
+      "local-artist": z.number().int().nonnegative(),
       manifest: z.number().int().nonnegative(),
+      musicbrainz: z.number().int().nonnegative(),
+      sanitized: z.number().int().nonnegative(),
     }),
     catalogQueries: z.number().int().nonnegative(),
     catalogMatches: z.number().int().nonnegative(),
+    providers: z.record(
+      z.string(),
+      z.object({
+        queries: z.number().int().nonnegative(),
+        matches: z.number().int().nonnegative(),
+        fields: z.number().int().nonnegative(),
+        cache: cacheStatsOutput.optional(),
+      }),
+    ),
+    unresolvedSummary: z.object({
+      tracks: z.number().int().nonnegative(),
+      fields: z.number().int().nonnegative(),
+      byField: z.object({
+        album: z.number().int().nonnegative(),
+        label: z.number().int().nonnegative(),
+        genre: z.number().int().nonnegative(),
+      }),
+      byReason: z.object({
+        "catalog-miss": z.number().int().nonnegative(),
+        "catalog-genre-too-broad": z.number().int().nonnegative(),
+        "edit-or-unreleased": z.number().int().nonnegative(),
+        "genre-taxonomy-missing": z.number().int().nonnegative(),
+        "identity-unparsed": z.number().int().nonnegative(),
+        "no-isrc": z.number().int().nonnegative(),
+        "set-extract": z.number().int().nonnegative(),
+      }),
+    }),
+    unresolved: z.array(
+      z.object({
+        contentId: z.string(),
+        title: z.string(),
+        artist: z.string().optional(),
+        missing: z.array(z.enum(["album", "label", "genre"])),
+        reasons: z.array(
+          z.enum([
+            "catalog-miss",
+            "catalog-genre-too-broad",
+            "edit-or-unreleased",
+            "genre-taxonomy-missing",
+            "identity-unparsed",
+            "no-isrc",
+            "set-extract",
+          ]),
+        ),
+      }),
+    ),
     changes: z.array(
       z.object({
         contentId: z.string(),
         title: z.string(),
         artist: z.string().optional(),
-        album: z.string().optional(),
-        label: z.string().optional(),
-        genre: z.string().optional(),
-        isrc: z.string().optional(),
-        releaseDate: z.string().optional(),
-        sources: z.record(z.string(), z.enum(["catalog", "embedded", "local", "manifest"])),
+        updatedTitle: z.string().optional(),
+        updatedArtist: z.string().optional(),
+        album: z.string().nullable().optional(),
+        label: z.string().nullable().optional(),
+        genre: z.string().nullable().optional(),
+        isrc: z.string().nullable().optional(),
+        releaseDate: z.string().nullable().optional(),
+        sources: z.record(
+          z.string(),
+          z.enum([
+            "deezer",
+            "embedded",
+            "filename",
+            "local",
+            "local-artist",
+            "manifest",
+            "musicbrainz",
+            "sanitized",
+          ]),
+        ),
       }),
     ),
   }),
@@ -703,6 +767,7 @@ metadataCli.command("backfill", {
         folderName: context.options.folder,
         catalogSearch: context.options.catalogSearch,
         catalogOptions: { cacheMode: context.options.cacheMode },
+        deezerOptions: { cacheMode: context.options.cacheMode },
         probeConcurrency: context.options.probeConcurrency,
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
@@ -738,6 +803,9 @@ metadataCli.command("backfill", {
         sources: result.sources,
         catalogQueries: result.catalogQueries,
         catalogMatches: result.catalogMatches,
+        providers: result.providers,
+        unresolvedSummary: result.unresolvedSummary,
+        unresolved: result.unresolved,
         changes: result.changes,
       };
     } catch (error) {

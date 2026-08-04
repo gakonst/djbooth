@@ -19,7 +19,9 @@ export type CatalogMetadata = {
   album?: string;
   label?: string;
   genre?: string;
+  isrc?: string;
   releaseDate?: string;
+  provider: "deezer" | "musicbrainz";
   recordingId: string;
   releaseId?: string;
   matchedBy: "isrc" | "artist-title";
@@ -36,6 +38,7 @@ export type MusicBrainzMetadataClientOptions = {
 
 /** Conservative, cached release-metadata lookup using MusicBrainz's open catalog. */
 export class MusicBrainzMetadataClient {
+  readonly provider = "musicbrainz" as const;
   readonly #baseUrl: string;
   readonly #cache: JsonDiskCache | undefined;
   readonly #fetch: typeof globalThis.fetch;
@@ -89,7 +92,7 @@ export class MusicBrainzMetadataClient {
           },
         )
       : await load();
-    return value ?? undefined;
+    return value ? { ...value, provider: this.provider } : undefined;
   }
 
   async #lookup(query: CatalogMetadataQuery): Promise<CatalogMetadata | undefined> {
@@ -105,9 +108,9 @@ export class MusicBrainzMetadataClient {
       }),
     );
     const release = selectRelease(detail, query.album);
-    if (!release) return { recordingId: recording.id, matchedBy };
+    if (!release) return { provider: this.provider, recordingId: recording.id, matchedBy };
     const releaseId = stringValue(release.id);
-    if (!releaseId) return { recordingId: recording.id, matchedBy };
+    if (!releaseId) return { provider: this.provider, recordingId: recording.id, matchedBy };
     const releaseDetail = asRecord(
       await this.#get(`release/${encodeURIComponent(releaseId)}`, {
         inc: "labels+release-groups+genres+tags",
@@ -122,6 +125,7 @@ export class MusicBrainzMetadataClient {
       ...(label ? { label } : {}),
       ...(genre ? { genre } : {}),
       ...(releaseDate ? { releaseDate } : {}),
+      provider: this.provider,
       recordingId: recording.id,
       releaseId,
       matchedBy,

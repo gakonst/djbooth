@@ -50,6 +50,24 @@ The Python source at the pinned revision is the behavioral specification. Tests 
   details, edits, optimistic updates, and history. Provider metadata remains additive: SoundCloud,
   Spotify, local tags, and open catalog recovery can each fill fields without becoming mandatory.
 
+### 2026-08-04 — conservative metadata repair checkpoint
+
+- Added cached Deezer lookup as a second provider: exact ISRC first, then strict title/artist plus
+  measured-duration search. Album detail contributes release title, label, date, and genre without
+  requiring Spotify credentials.
+- Recovered malformed local identities only from duration-compatible or uniquely named library
+  copies. Duration-bucketed local consensus prevents radio/extended versions from sharing ISRCs.
+- Added conservative artist-level genre consensus from the existing library, rejected Deezer's
+  broad `Dance`, `Electro`, and `Electronic` buckets, and removed known warez/ad metadata instead of
+  treating it as coverage.
+- `tracks metadata backfill` now reports provider/cache contribution counters plus unresolved totals
+  grouped by field and cause. Dry-run remains the default; one guarded write still creates a backup
+  and verifies every mutation after reopening the encrypted database.
+- Applied the workflow to 187 tracks below `DJ Sets I Like`: trustworthy album coverage moved
+  129→143, label 96→116, genre 52→87, and ISRC 76→86. The 60-row metadata/identity commit and
+  7-row Deezer-ISRC follow-up were backed up under `rekordbox-20260804T153926-407Z` and
+  `rekordbox-20260804T154322-870Z`; a final warm dry-run proposed zero changes.
+
 ### 2026-08-03 — djbooth.ai identity and runtime layout separation
 
 - Replaced the three native executables with one `rust/bin/djbooth-rs` package and binary. Its

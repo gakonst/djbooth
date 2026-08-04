@@ -66,6 +66,7 @@ describe("MusicBrainzMetadataClient", () => {
       label: "Night Records",
       genre: "House",
       releaseDate: "2026-07-14",
+      provider: "musicbrainz",
       recordingId: "recording-1",
       releaseId: "release-1",
       matchedBy: "isrc",

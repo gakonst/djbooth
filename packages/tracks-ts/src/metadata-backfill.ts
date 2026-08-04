@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 import {
   DjmdAlbum,
+  DjmdArtist,
   DjmdContent,
   DjmdGenre,
   DjmdLabel,
@@ -14,12 +15,13 @@ import {
 } from "@gakonst/rekordbox/masterdb";
 import { getRekordboxProcessState } from "@gakonst/rekordbox/utils";
 
-import { probeAudio } from "./acquisition.js";
+import { normalizeMatchText, probeAudio } from "./acquisition.js";
 import {
   MusicBrainzMetadataClient,
   type CatalogMetadata,
   type MusicBrainzMetadataClientOptions,
 } from "./catalog-metadata.js";
+import { DeezerMetadataClient, type DeezerMetadataClientOptions } from "./deezer-metadata.js";
 import { TracksError } from "./errors.js";
 import { mapConcurrent } from "./process.js";
 import {
@@ -35,6 +37,8 @@ export type RekordboxMetadataBackfillOptions = {
   backupRoot?: string;
   catalog?: MusicBrainzMetadataClient;
   catalogOptions?: MusicBrainzMetadataClientOptions;
+  deezer?: DeezerMetadataClient;
+  deezerOptions?: DeezerMetadataClientOptions;
   /** Include conservative artist/title catalog search when no ISRC exists. */
   catalogSearch?: boolean;
   dbDirectory?: string;
@@ -48,26 +52,67 @@ export type RekordboxMetadataBackfillOptions = {
 };
 
 export type RekordboxMetadataBackfillProgress = {
-  phase: "inventory" | "embedded" | "catalog" | "write" | "verify";
+  phase: "inventory" | "embedded" | "identity" | "catalog" | "write" | "verify";
   current: number;
   total: number;
   message: string;
 };
 
-export type MetadataFieldSource = "catalog" | "embedded" | "local" | "manifest";
+export type MetadataFieldSource =
+  | "deezer"
+  | "embedded"
+  | "filename"
+  | "local"
+  | "local-artist"
+  | "manifest"
+  | "musicbrainz"
+  | "sanitized";
+
+type RepairableMetadataField = "album" | "label" | "genre" | "isrc" | "releaseDate";
+type RepairableIdentityField = "updatedTitle" | "updatedArtist";
 
 export type RekordboxMetadataBackfillChange = {
   contentId: string;
   title: string;
   artist?: string;
-  album?: string;
-  label?: string;
-  genre?: string;
-  isrc?: string;
-  releaseDate?: string;
-  sources: Partial<
-    Record<"album" | "label" | "genre" | "isrc" | "releaseDate", MetadataFieldSource>
+  updatedTitle?: string;
+  updatedArtist?: string;
+  album?: string | null;
+  label?: string | null;
+  genre?: string | null;
+  isrc?: string | null;
+  releaseDate?: string | null;
+  sources: Partial<Record<RepairableMetadataField | RepairableIdentityField, MetadataFieldSource>>;
+};
+
+export type MetadataProviderStats = {
+  queries: number;
+  matches: number;
+  fields: number;
+  cache?: CacheSnapshot;
+};
+
+export type RekordboxMetadataGap = {
+  contentId: string;
+  title: string;
+  artist?: string;
+  missing: Array<"album" | "label" | "genre">;
+  reasons: Array<
+    | "catalog-miss"
+    | "catalog-genre-too-broad"
+    | "edit-or-unreleased"
+    | "genre-taxonomy-missing"
+    | "identity-unparsed"
+    | "no-isrc"
+    | "set-extract"
   >;
+};
+
+export type RekordboxMetadataGapSummary = {
+  tracks: number;
+  fields: number;
+  byField: Record<"album" | "label" | "genre", number>;
+  byReason: Record<RekordboxMetadataGap["reasons"][number], number>;
 };
 
 export type RekordboxMetadataBackfillResult = {
@@ -82,8 +127,13 @@ export type RekordboxMetadataBackfillResult = {
   sources: Record<MetadataFieldSource, number>;
   catalogQueries: number;
   catalogMatches: number;
+  providers: Record<"deezer" | "musicbrainz", MetadataProviderStats>;
+  unresolvedSummary: RekordboxMetadataGapSummary;
+  unresolved: RekordboxMetadataGap[];
   changes: RekordboxMetadataBackfillChange[];
 };
+
+type CacheSnapshot = ReturnType<MusicBrainzMetadataClient["cacheStats"]>;
 
 type MetadataCoverage = {
   album: number;
@@ -103,9 +153,12 @@ type LibraryTrack = {
   isrc?: string | undefined;
   releaseDate?: string | undefined;
   durationSeconds?: number | undefined;
+  invalidFields: RepairableMetadataField[];
 };
 
 type MetadataCandidate = {
+  title?: string | undefined;
+  artist?: string | undefined;
   album?: string | undefined;
   label?: string | undefined;
   genre?: string | undefined;
@@ -114,6 +167,14 @@ type MetadataCandidate = {
 };
 
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
+
+type MetadataCatalogClient = {
+  provider: "deezer" | "musicbrainz";
+  lookup(
+    query: Parameters<MusicBrainzMetadataClient["lookup"]>[0],
+  ): Promise<CatalogMetadata | undefined>;
+  cacheStats(): CacheSnapshot;
+};
 
 /** Backfill one Rekordbox playlist folder without overwriting trustworthy existing metadata. */
 export async function backfillRekordboxMetadata(
@@ -156,6 +217,8 @@ export async function backfillRekordboxMetadata(
     try {
       const tags = (await probeAudio(path)).tags;
       embeddedMetadata.set(path, {
+        title: clean(tags.title),
+        artist: clean(tags.artist),
         album: clean(tags.album),
         label: clean(tags.publisher) ?? clean(tags.label),
         genre: clean(tags.genre),
@@ -175,55 +238,95 @@ export async function backfillRekordboxMetadata(
     }
   });
   const localMetadata = localConsensus(allTracks);
+  const localArtistGenres = localArtistGenreConsensus(allTracks);
   const drafts = tracks.map((track) =>
-    createDraft(track, manifestMetadata, embeddedMetadata, localMetadata),
+    createDraft(
+      track,
+      manifestMetadata,
+      embeddedMetadata,
+      localMetadata,
+      localArtistGenres,
+      allTracks,
+    ),
   );
-  const catalog = options.catalog ?? new MusicBrainzMetadataClient(options.catalogOptions);
-  let catalogQueries = 0;
-  let catalogMatches = 0;
+  const identityRepairs = drafts.filter(
+    (draft) => draft.sources.updatedArtist || draft.sources.updatedTitle,
+  ).length;
+  options.onProgress?.({
+    phase: "identity",
+    current: identityRepairs,
+    total: tracks.length,
+    message: `Recovered ${String(identityRepairs)} local identities`,
+  });
+  const catalogs: MetadataCatalogClient[] = [
+    options.catalog ?? new MusicBrainzMetadataClient(options.catalogOptions),
+    options.deezer ?? new DeezerMetadataClient(options.deezerOptions),
+  ];
+  const providers = Object.fromEntries(
+    catalogs.map((catalog) => [catalog.provider, { queries: 0, matches: 0, fields: 0 }]),
+  ) as Record<"deezer" | "musicbrainz", MetadataProviderStats>;
   const catalogTargets = drafts.filter(
-    ({ track, value }) =>
+    ({ value }) =>
       needsMetadata(value) &&
-      !isSetExtract(track) &&
-      Boolean(value.isrc || (options.catalogSearch && isCatalogSearchSafe(track))),
+      !isSetExtract(value) &&
+      Boolean(value.isrc || (options.catalogSearch && isCatalogSearchSafe(value))),
   );
-  for (const [index, draft] of catalogTargets.entries()) {
+  let completedCatalogTargets = 0;
+  await mapConcurrent(catalogTargets, 4, async (draft) => {
+    const index = completedCatalogTargets;
     options.onProgress?.({
       phase: "catalog",
       current: index,
       total: catalogTargets.length,
       message: `Catalog lookup: ${draft.track.artist ?? "Unknown Artist"} — ${draft.track.title}`,
     });
-    catalogQueries += 1;
-    let metadata: CatalogMetadata | undefined;
-    try {
-      metadata = await catalog.lookup({
-        title: draft.track.title,
-        artists: draft.track.artist ? splitArtists(draft.track.artist) : ["Unknown Artist"],
-        ...(draft.value.album ? { album: draft.value.album } : {}),
-        ...(draft.value.isrc ? { isrc: draft.value.isrc } : {}),
-        ...(draft.track.durationSeconds ? { durationSeconds: draft.track.durationSeconds } : {}),
-      });
-    } catch (error) {
-      options.onProgress?.({
-        phase: "catalog",
-        current: index + 1,
-        total: catalogTargets.length,
-        message: `Catalog miss: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      continue;
+    draft.catalogAttempted = true;
+    const query = {
+      title: draft.value.title,
+      artists: draft.value.artist ? splitArtists(draft.value.artist) : ["Unknown Artist"],
+      ...(draft.value.album ? { album: draft.value.album } : {}),
+      ...(draft.value.isrc ? { isrc: draft.value.isrc } : {}),
+      ...(draft.value.durationSeconds ? { durationSeconds: draft.value.durationSeconds } : {}),
+    };
+    const results = await Promise.all(
+      catalogs.map(async (catalog) => {
+        providers[catalog.provider].queries += 1;
+        try {
+          return await catalog.lookup(query);
+        } catch (error) {
+          options.onProgress?.({
+            phase: "catalog",
+            current: index,
+            total: catalogTargets.length,
+            message: `${catalog.provider} miss: ${error instanceof Error ? error.message : String(error)}`,
+          });
+          return undefined;
+        }
+      }),
+    );
+    for (const metadata of results
+      .filter((value): value is CatalogMetadata => value !== undefined)
+      .toSorted((left, right) =>
+        left.provider === right.provider ? 0 : left.provider === "musicbrainz" ? -1 : 1,
+      )) {
+      const before = metadataFieldCount(draft.value);
+      mergeMissing(draft, metadata, metadata.provider);
+      const fields = metadataFieldCount(draft.value) - before;
+      providers[metadata.provider].matches += 1;
+      providers[metadata.provider].fields += fields;
+      draft.catalogMatched = true;
     }
-    if (metadata) {
-      const before = JSON.stringify(draft.value);
-      mergeMissing(draft, metadata, "catalog");
-      if (JSON.stringify(draft.value) !== before) catalogMatches += 1;
-    }
+    completedCatalogTargets += 1;
     options.onProgress?.({
       phase: "catalog",
-      current: index + 1,
+      current: completedCatalogTargets,
       total: catalogTargets.length,
-      message: `Catalog lookup ${String(index + 1)}/${String(catalogTargets.length)}`,
+      message: `Catalog lookup ${String(completedCatalogTargets)}/${String(catalogTargets.length)}`,
     });
+  });
+  for (const catalog of catalogs) {
+    const cache = catalog.cacheStats();
+    if (cache) providers[catalog.provider].cache = cache;
   }
   const changes = drafts.flatMap((draft) => changedDraft(draft));
   const projected = tracks.map(
@@ -231,6 +334,10 @@ export async function backfillRekordboxMetadata(
   );
   const coverageAfter = metadataCoverage(projected);
   const sources = countSources(changes);
+  const unresolved = unresolvedGaps(drafts);
+  const unresolvedSummary = summarizeGaps(unresolved);
+  const catalogQueries = Object.values(providers).reduce((sum, stats) => sum + stats.queries, 0);
+  const catalogMatches = Object.values(providers).reduce((sum, stats) => sum + stats.matches, 0);
   if (!options.write || !changes.length) {
     return {
       dbPath,
@@ -243,6 +350,9 @@ export async function backfillRekordboxMetadata(
       sources,
       catalogQueries,
       catalogMatches,
+      providers,
+      unresolvedSummary,
+      unresolved,
       changes,
     };
   }
@@ -262,36 +372,54 @@ export async function backfillRekordboxMetadata(
       unlock: true,
     });
     try {
+      const artists = namedRows(writer, DjmdArtist);
       const albums = namedRows(writer, DjmdAlbum);
       const labels = namedRows(writer, DjmdLabel);
       const genres = namedRows(writer, DjmdGenre);
       for (const [index, change] of changes.entries()) {
         const content = writer.query(DjmdContent).where({ ID: change.contentId }).one();
-        if (change.album) {
-          const key = metadataKey(change.album);
-          const album =
-            albums.get(key) ??
-            writer.addAlbum(change.album, content.Artist ? { artist: content.Artist } : {});
-          albums.set(key, album);
-          content.set("AlbumID", album.ID);
+        let artist = content.Artist;
+        if (change.updatedArtist) {
+          const key = metadataKey(change.updatedArtist);
+          artist = artists.get(key) ?? writer.addArtist(change.updatedArtist);
+          artists.set(key, artist);
+          content.set("ArtistID", artist.ID);
         }
-        if (change.label) {
-          const key = metadataKey(change.label);
-          const label = labels.get(key) ?? writer.addLabel(change.label);
-          labels.set(key, label);
-          content.set("LabelID", label.ID);
+        if (change.updatedTitle) content.set("Title", change.updatedTitle);
+        if (change.album !== undefined) {
+          if (change.album === null) content.set("AlbumID", null);
+          else {
+            const key = metadataKey(change.album);
+            const album =
+              albums.get(key) ?? writer.addAlbum(change.album, artist ? { artist } : {});
+            albums.set(key, album);
+            content.set("AlbumID", album.ID);
+          }
         }
-        if (change.genre) {
-          const key = metadataKey(change.genre);
-          const genre = genres.get(key) ?? writer.addGenre(change.genre);
-          genres.set(key, genre);
-          content.set("GenreID", genre.ID);
+        if (change.label !== undefined) {
+          if (change.label === null) content.set("LabelID", null);
+          else {
+            const key = metadataKey(change.label);
+            const label = labels.get(key) ?? writer.addLabel(change.label);
+            labels.set(key, label);
+            content.set("LabelID", label.ID);
+          }
         }
-        if (change.isrc) content.set("ISRC", change.isrc);
-        if (change.releaseDate) {
+        if (change.genre !== undefined) {
+          if (change.genre === null) content.set("GenreID", null);
+          else {
+            const key = metadataKey(change.genre);
+            const genre = genres.get(key) ?? writer.addGenre(change.genre);
+            genres.set(key, genre);
+            content.set("GenreID", genre.ID);
+          }
+        }
+        if (change.isrc !== undefined) content.set("ISRC", change.isrc);
+        if (change.releaseDate !== undefined) {
           content.set("ReleaseDate", change.releaseDate);
-          const year = /^\d{4}/u.exec(change.releaseDate)?.[0];
+          const year = change.releaseDate ? /^\d{4}/u.exec(change.releaseDate)?.[0] : undefined;
           if (year) content.set("ReleaseYear", Number(year));
+          else if (change.releaseDate === null) content.set("ReleaseYear", null);
         }
         if (writer.hasColumn(content.tableName, "TrackInfoUpdated")) content.TrackInfoUpdated = "2";
         if (writer.hasColumn(content.tableName, "updated_at"))
@@ -334,6 +462,9 @@ export async function backfillRekordboxMetadata(
     sources,
     catalogQueries,
     catalogMatches,
+    providers,
+    unresolvedSummary,
+    unresolved,
     changes,
   };
 }
@@ -382,19 +513,32 @@ function databaseTracks(db: MasterDatabase): LibraryTrack[] {
 }
 
 function libraryTrack(row: Record<string, unknown>): LibraryTrack {
+  const rawMetadata: Record<RepairableMetadataField, unknown> = {
+    album: row.album,
+    label: row.label,
+    genre: row.genre,
+    isrc: row.isrc,
+    releaseDate: row.releaseDate,
+  };
+  const metadata = Object.fromEntries(
+    (Object.keys(rawMetadata) as RepairableMetadataField[]).flatMap((field) => {
+      const value = sanitizeField(field, rawMetadata[field]);
+      return value ? [[field, value]] : [];
+    }),
+  ) as MetadataCandidate;
+  const invalidFields = (Object.keys(rawMetadata) as RepairableMetadataField[]).filter(
+    (field) => clean(rawMetadata[field]) && !metadata[field],
+  );
   return {
     id: String(row.id),
-    title: clean(row.title) ?? "Untitled",
     ...(clean(row.path) ? { path: clean(row.path) } : {}),
-    ...(clean(row.artist) ? { artist: clean(row.artist) } : {}),
-    ...(trustedMetadata(row.album) ? { album: clean(row.album) } : {}),
-    ...(trustedMetadata(row.label) ? { label: clean(row.label) } : {}),
-    ...(trustedMetadata(row.genre) ? { genre: clean(row.genre) } : {}),
-    ...(clean(row.isrc) ? { isrc: clean(row.isrc) } : {}),
-    ...(clean(row.releaseDate) ? { releaseDate: clean(row.releaseDate) } : {}),
+    ...metadata,
+    title: clean(row.title) ?? "Untitled",
+    ...(trustedArtist(row.artist) ? { artist: trustedArtist(row.artist) } : {}),
     ...(positiveNumber(row.durationSeconds)
       ? { durationSeconds: positiveNumber(row.durationSeconds) }
       : {}),
+    invalidFields,
   };
 }
 
@@ -402,6 +546,9 @@ type Draft = {
   track: LibraryTrack;
   value: LibraryTrack;
   sources: RekordboxMetadataBackfillChange["sources"];
+  broadCatalogGenreRejected: boolean;
+  catalogAttempted: boolean;
+  catalogMatched: boolean;
 };
 
 function createDraft(
@@ -409,12 +556,62 @@ function createDraft(
   manifests: Map<string, MetadataCandidate>,
   embedded: Map<string, MetadataCandidate>,
   local: Map<string, MetadataCandidate>,
+  localArtistGenres: Map<string, MetadataCandidate>,
+  allTracks: LibraryTrack[],
 ): Draft {
-  const draft: Draft = { track, value: { ...track }, sources: {} };
-  if (track.path) mergeMissing(draft, manifests.get(resolve(track.path)), "manifest");
-  if (track.path) mergeMissing(draft, embedded.get(resolve(track.path)), "embedded");
-  for (const key of identityKeys(track)) mergeMissing(draft, local.get(key), "local");
+  const draft: Draft = {
+    track,
+    value: { ...track },
+    sources: {},
+    broadCatalogGenreRejected: false,
+    catalogAttempted: false,
+    catalogMatched: false,
+  };
+  let trustedLocalIdentity = false;
+  if (track.path) mergeCandidate(draft, manifests.get(resolve(track.path)), "manifest");
+  if (track.path) mergeCandidate(draft, embedded.get(resolve(track.path)), "embedded");
+  if (!draft.value.artist) {
+    const repair = inferLocalIdentity(draft.value, allTracks);
+    if (repair) {
+      mergeCandidate(draft, repair, "filename");
+      trustedLocalIdentity = true;
+    } else {
+      mergeCandidate(draft, inferNamedIdentity(draft.value, allTracks), "filename");
+    }
+  }
+  if (!draft.sources.updatedArtist || trustedLocalIdentity) {
+    for (const key of identityKeys(draft.value)) mergeMissing(draft, local.get(key), "local");
+  }
+  if (draft.value.artist) {
+    mergeMissing(
+      draft,
+      localArtistGenres.get(identityArtistKey(draft.value.artist)),
+      "local-artist",
+    );
+  }
   return draft;
+}
+
+function mergeCandidate(
+  draft: Draft,
+  candidate: MetadataCandidate | undefined,
+  source: MetadataFieldSource,
+): void {
+  if (!candidate) return;
+  const candidateArtist = trustedArtist(candidate.artist);
+  if (!draft.value.artist && candidateArtist) {
+    draft.value.artist = candidateArtist;
+    draft.sources.updatedArtist = source;
+  }
+  if (
+    candidate.title?.trim() &&
+    Boolean(draft.sources.updatedArtist) &&
+    metadataKey(candidate.title) !== metadataKey(draft.value.title)
+  ) {
+    draft.value.title = candidate.title.trim();
+    draft.sources.updatedTitle = source;
+  }
+  mergeMissing(draft, candidate, source);
 }
 
 function mergeMissing(
@@ -425,6 +622,10 @@ function mergeMissing(
   if (!metadata) return;
   for (const field of ["album", "label", "genre", "isrc", "releaseDate"] as const) {
     const value = sanitizeField(field, (metadata as MetadataCandidate)[field]);
+    if (field === "genre" && source === "deezer" && value && isBroadCatalogGenre(value)) {
+      draft.broadCatalogGenreRejected = true;
+      continue;
+    }
     if (!draft.value[field] && value) {
       draft.value[field] = value;
       draft.sources[field] = source;
@@ -433,18 +634,38 @@ function mergeMissing(
 }
 
 function changedDraft(draft: Draft): RekordboxMetadataBackfillChange[] {
-  const fields = ["album", "label", "genre", "isrc", "releaseDate"] as const;
-  if (!fields.some((field) => draft.value[field] && !draft.track[field])) return [];
+  const fields: RepairableMetadataField[] = ["album", "label", "genre", "isrc", "releaseDate"];
+  const entries: Array<[RepairableMetadataField, string | null]> = [];
+  for (const field of fields) {
+    const current = draft.track[field];
+    const value = draft.value[field];
+    if (value && (!current || !metadataFieldEqual(field, current, value)))
+      entries.push([field, value]);
+    else if (!value && draft.track.invalidFields.includes(field)) {
+      draft.sources[field] = "sanitized";
+      entries.push([field, null]);
+    }
+  }
+  const metadataChanges = Object.fromEntries(entries) as Partial<
+    Record<RepairableMetadataField, string | null>
+  >;
+  const updatedTitle =
+    metadataKey(draft.value.title) !== metadataKey(draft.track.title)
+      ? draft.value.title
+      : undefined;
+  const updatedArtist =
+    draft.value.artist && metadataKey(draft.value.artist) !== metadataKey(draft.track.artist ?? "")
+      ? draft.value.artist
+      : undefined;
+  if (!updatedTitle && !updatedArtist && !Object.keys(metadataChanges).length) return [];
   return [
     {
       contentId: draft.track.id,
       title: draft.track.title,
       ...(draft.track.artist ? { artist: draft.track.artist } : {}),
-      ...Object.fromEntries(
-        fields.flatMap((field) =>
-          draft.value[field] && !draft.track[field] ? [[field, draft.value[field]]] : [],
-        ),
-      ),
+      ...(updatedTitle ? { updatedTitle } : {}),
+      ...(updatedArtist ? { updatedArtist } : {}),
+      ...metadataChanges,
       sources: draft.sources,
     },
   ];
@@ -463,7 +684,16 @@ function localConsensus(tracks: LibraryTrack[]): Map<string, MetadataCandidate> 
     [...grouped].flatMap(([key, values]) => {
       const metadata: MetadataCandidate = {};
       for (const field of ["album", "label", "genre", "isrc", "releaseDate"] as const) {
-        const candidates = [...new Set(values.map((value) => value[field]).filter(Boolean))];
+        const candidates = [
+          ...new Set(
+            values
+              .map((value) => value[field])
+              .filter(
+                (candidate): candidate is string =>
+                  Boolean(candidate) && (field !== "album" || !isSourceCollectionAlbum(candidate!)),
+              ),
+          ),
+        ];
         if (candidates.length === 1) metadata[field] = candidates[0]!;
       }
       return Object.keys(metadata).length ? [[key, metadata]] : [];
@@ -471,10 +701,171 @@ function localConsensus(tracks: LibraryTrack[]): Map<string, MetadataCandidate> 
   );
 }
 
-function identityKeys(track: Pick<LibraryTrack, "title" | "artist" | "isrc">): string[] {
+function localArtistGenreConsensus(tracks: LibraryTrack[]): Map<string, MetadataCandidate> {
+  const grouped = new Map<string, string[]>();
+  for (const track of tracks) {
+    if (!track.artist || !track.genre || isBroadCatalogGenre(track.genre)) continue;
+    const key = identityArtistKey(track.artist);
+    const values = grouped.get(key) ?? [];
+    values.push(track.genre);
+    grouped.set(key, values);
+  }
+  return new Map(
+    [...grouped].flatMap(([artist, values]) => {
+      const counts = new Map<string, { genre: string; count: number }>();
+      for (const genre of values) {
+        const key = metadataKey(genre);
+        const prior = counts.get(key);
+        counts.set(key, { genre: prior?.genre ?? genre, count: (prior?.count ?? 0) + 1 });
+      }
+      const ranked = [...counts.values()].toSorted(
+        (left, right) => right.count - left.count || left.genre.localeCompare(right.genre),
+      );
+      const best = ranked[0];
+      if (!best || best.count < 2 || best.count / values.length < 0.75) return [];
+      return [[artist, { genre: best.genre }]];
+    }),
+  );
+}
+
+function isSourceCollectionAlbum(value: string): boolean {
+  return /\s@\s|\blive\s*@\b|—\s*reviewed recordings$/iu.test(value);
+}
+
+function inferLocalIdentity(
+  track: LibraryTrack,
+  allTracks: LibraryTrack[],
+): MetadataCandidate | undefined {
+  if (track.artist) return undefined;
+  const candidates = filenameIdentityCandidates(track.title);
+  const matches = candidates
+    .flatMap((candidate) =>
+      allTracks.flatMap((known) => {
+        if (!known.artist || known.id === track.id) return [];
+        if (identityTitle(candidate.title) !== identityTitle(known.title)) return [];
+        const artistScore = identitySimilarity(candidate.artist, known.artist);
+        if (artistScore < 0.6) return [];
+        const durationScore = durationSimilarity(track.durationSeconds, known.durationSeconds);
+        if (durationScore < 0.6) return [];
+        return [{ known, score: artistScore * 0.75 + durationScore * 0.25 }];
+      }),
+    )
+    .toSorted((left, right) => right.score - left.score);
+  const unique = matches.filter(
+    (match, index, values) =>
+      values.findIndex(
+        (candidate) =>
+          identityArtistKey(candidate.known.artist ?? "") ===
+            identityArtistKey(match.known.artist ?? "") &&
+          identityTitle(candidate.known.title) === identityTitle(match.known.title),
+      ) === index,
+  );
+  const best = unique[0];
+  if (!best || best.score < 0.72 || best.score - (unique[1]?.score ?? 0) < 0.08) return undefined;
+  return {
+    title: best.known.title,
+    artist: best.known.artist,
+    ...(best.known.album ? { album: best.known.album } : {}),
+    ...(best.known.label ? { label: best.known.label } : {}),
+    ...(best.known.genre ? { genre: best.known.genre } : {}),
+    ...(best.known.isrc ? { isrc: best.known.isrc } : {}),
+    ...(best.known.releaseDate ? { releaseDate: best.known.releaseDate } : {}),
+  };
+}
+
+function inferNamedIdentity(
+  track: LibraryTrack,
+  allTracks: LibraryTrack[],
+): MetadataCandidate | undefined {
+  const matches = filenameIdentityCandidates(track.title)
+    .flatMap((candidate) =>
+      allTracks.flatMap((known) => {
+        if (!known.artist || known.id === track.id) return [];
+        if (identityTitle(candidate.title) !== identityTitle(known.title)) return [];
+        const score = identitySimilarity(candidate.artist, known.artist);
+        return score >= 0.75 ? [{ known, score }] : [];
+      }),
+    )
+    .toSorted((left, right) => right.score - left.score);
+  const unique = matches.filter(
+    (match, index, values) =>
+      values.findIndex(
+        (candidate) =>
+          identityArtistKey(candidate.known.artist ?? "") ===
+            identityArtistKey(match.known.artist ?? "") &&
+          identityTitle(candidate.known.title) === identityTitle(match.known.title),
+      ) === index,
+  );
+  const best = unique[0];
+  if (!best || best.score - (unique[1]?.score ?? 0) < 0.08) return undefined;
+  return { title: best.known.title, artist: best.known.artist };
+}
+
+function filenameIdentityCandidates(value: string): Array<{ artist: string; title: string }> {
+  const parts = value
+    .split(/\s+-\s+/u)
+    .map(cleanIdentityFragment)
+    .filter(Boolean);
+  const candidates: Array<{ artist: string; title: string }> = [];
+  for (let index = 1; index < parts.length; index += 1) {
+    const left = parts.slice(0, index).join(" - ");
+    const right = parts.slice(index).join(" - ");
+    candidates.push({ artist: left, title: right }, { artist: right, title: left });
+  }
+  return candidates;
+}
+
+function cleanIdentityFragment(value: string): string {
+  return value
+    .replace(/\s+(?:https?:\/\/|www\.).*$/iu, "")
+    .replace(/\s+\d{2,3}\s*$/u, "")
+    .trim();
+}
+
+function identityTitle(value: string): string {
+  return normalizeMatchText(cleanTitle(cleanIdentityFragment(value)))
+    .replace(/\b(?:original|extended|radio)\s+(?:mix|edit)\b/gu, "")
+    .trim();
+}
+
+function identitySimilarity(left: string, right: string): number {
+  const expected = normalizeMatchText(left);
+  const actual = normalizeMatchText(right);
+  if (!expected || !actual) return 0;
+  if (expected === actual) return 1;
+  const expectedTokens = new Set(expected.split(" ").filter((token) => token !== "and"));
+  const actualTokens = new Set(actual.split(" ").filter((token) => token !== "and"));
+  const matched = [...expectedTokens].filter((token) => actualTokens.has(token)).length;
+  return matched / Math.max(expectedTokens.size, actualTokens.size);
+}
+
+function identityArtistKey(value: string): string {
+  return normalizeMatchText(value)
+    .split(" ")
+    .filter((token) => token && token !== "and")
+    .toSorted()
+    .join(" ");
+}
+
+function durationSimilarity(left: number | undefined, right: number | undefined): number {
+  if (!left || !right) return 0;
+  const difference = Math.abs(left - right);
+  return Math.max(0, 1 - difference / Math.max(10, Math.max(left, right) * 0.04));
+}
+
+function identityKeys(
+  track: Pick<LibraryTrack, "title" | "artist" | "isrc" | "durationSeconds">,
+): string[] {
   const isrc = normalizeIsrc(track.isrc);
+  const durationBucket = track.durationSeconds
+    ? `:duration:${String(Math.round(track.durationSeconds / 5) * 5)}`
+    : undefined;
   return [
-    `text:${metadataKey(track.artist ?? "")}:${metadataKey(cleanTitle(track.title))}`,
+    ...(durationBucket
+      ? [
+          `text:${metadataKey(track.artist ?? "")}:${metadataKey(cleanTitle(track.title))}${durationBucket}`,
+        ]
+      : []),
     ...(isrc ? [`isrc:${isrc}`] : []),
   ];
 }
@@ -497,6 +888,9 @@ async function metadataFromManifestRoots(roots: string[]): Promise<Map<string, M
         const acquisition = record(entry.acquisition);
         if (acquisition.status !== "downloaded") continue;
         const candidate: MetadataCandidate = {
+          title: clean(identity.title) ?? clean(spotify.name),
+          artist:
+            clean(identity.artist) ?? array(spotify.artists).map(clean).filter(Boolean).join(", "),
           album: clean(spotify.album) ?? clean(identity.album),
           label: clean(identity.label),
           genre: clean(identity.genre),
@@ -549,6 +943,7 @@ function isSetExtract(track: LibraryTrack): boolean {
 function isCatalogSearchSafe(track: LibraryTrack): boolean {
   return (
     Boolean(track.artist) &&
+    Boolean(track.durationSeconds) &&
     !/^unknown artist$/iu.test(track.artist!) &&
     !/\b(?:edit|bootleg|unreleased|candidate|mashup)\b|https?:|www\./iu.test(track.title)
   );
@@ -566,7 +961,16 @@ function metadataCoverage(tracks: Array<MetadataCandidate>): MetadataCoverage {
 function countSources(
   changes: RekordboxMetadataBackfillChange[],
 ): Record<MetadataFieldSource, number> {
-  const counts = { catalog: 0, embedded: 0, local: 0, manifest: 0 };
+  const counts: Record<MetadataFieldSource, number> = {
+    deezer: 0,
+    embedded: 0,
+    filename: 0,
+    local: 0,
+    "local-artist": 0,
+    manifest: 0,
+    musicbrainz: 0,
+    sanitized: 0,
+  };
   for (const change of changes) {
     for (const source of Object.values(change.sources)) if (source) counts[source] += 1;
   }
@@ -591,12 +995,81 @@ function verifyChanges(db: MasterDatabase, changes: RekordboxMetadataBackfillCha
   for (const change of changes) {
     const track = verified.find((candidate) => candidate.id === change.contentId);
     if (!track) throw new Error(`Metadata verification lost content ${change.contentId}`);
+    if (change.updatedTitle && metadataKey(track.title) !== metadataKey(change.updatedTitle)) {
+      throw new Error(`Metadata verification failed for ${change.contentId}: title`);
+    }
+    if (
+      change.updatedArtist &&
+      metadataKey(track.artist ?? "") !== metadataKey(change.updatedArtist)
+    ) {
+      throw new Error(`Metadata verification failed for ${change.contentId}: artist`);
+    }
     for (const field of ["album", "label", "genre", "isrc", "releaseDate"] as const) {
-      if (change[field] && !metadataFieldEqual(field, track[field], change[field])) {
+      if (change[field] === undefined) continue;
+      const matches =
+        change[field] === null
+          ? track[field] === undefined
+          : metadataFieldEqual(field, track[field], change[field]);
+      if (!matches) {
         throw new Error(`Metadata verification failed for ${change.contentId}: ${field}`);
       }
     }
   }
+}
+
+function metadataFieldCount(track: MetadataCandidate): number {
+  return [track.album, track.label, track.genre, track.isrc, track.releaseDate].filter(Boolean)
+    .length;
+}
+
+function unresolvedGaps(drafts: Draft[]): RekordboxMetadataGap[] {
+  return drafts.flatMap((draft) => {
+    const missing = (["album", "label", "genre"] as const).filter((field) => !draft.value[field]);
+    if (!missing.length) return [];
+    const reasons = new Set<RekordboxMetadataGap["reasons"][number]>();
+    if (!draft.value.artist) reasons.add("identity-unparsed");
+    if (isSetExtract(draft.value)) reasons.add("set-extract");
+    if (/\b(?:edit|bootleg|unreleased|candidate|mashup)\b/iu.test(draft.value.title))
+      reasons.add("edit-or-unreleased");
+    if (!draft.value.isrc) reasons.add("no-isrc");
+    if (draft.catalogAttempted && !draft.catalogMatched) reasons.add("catalog-miss");
+    if (missing.includes("genre") && draft.broadCatalogGenreRejected)
+      reasons.add("catalog-genre-too-broad");
+    if (missing.includes("genre")) reasons.add("genre-taxonomy-missing");
+    return [
+      {
+        contentId: draft.track.id,
+        title: draft.value.title,
+        ...(draft.value.artist ? { artist: draft.value.artist } : {}),
+        missing: [...missing],
+        reasons: [...reasons],
+      },
+    ];
+  });
+}
+
+function summarizeGaps(gaps: RekordboxMetadataGap[]): RekordboxMetadataGapSummary {
+  const byField: RekordboxMetadataGapSummary["byField"] = { album: 0, label: 0, genre: 0 };
+  const byReason: RekordboxMetadataGapSummary["byReason"] = {
+    "catalog-miss": 0,
+    "catalog-genre-too-broad": 0,
+    "edit-or-unreleased": 0,
+    "genre-taxonomy-missing": 0,
+    "identity-unparsed": 0,
+    "no-isrc": 0,
+    "set-extract": 0,
+  };
+  let fields = 0;
+  for (const gap of gaps) {
+    fields += gap.missing.length;
+    for (const field of gap.missing) byField[field] += 1;
+    for (const reason of gap.reasons) byReason[reason] += 1;
+  }
+  return { tracks: gaps.length, fields, byField, byReason };
+}
+
+function isBroadCatalogGenre(value: string): boolean {
+  return /^(?:dance|electro|electronic)$/iu.test(value.trim());
 }
 
 function metadataFieldEqual(
@@ -626,10 +1099,27 @@ function normalizeIsrc(value: string | undefined): string | undefined {
   return normalized && /^[A-Z]{2}[A-Z0-9]{3}\d{7}$/u.test(normalized) ? normalized : undefined;
 }
 
-function trustedMetadata(value: unknown): string | undefined {
+function trustedMetadata(
+  field: Exclude<RepairableMetadataField, "isrc" | "releaseDate">,
+  value: unknown,
+): string | undefined {
   const cleaned = clean(value);
   if (!cleaned || /^(?:unknown|none|n\/a)$/iu.test(cleaned)) return undefined;
-  if (/^(?:https?:\/\/)?(?:www\.)?[\w-]+\.(?:com|net|org)$/iu.test(cleaned)) return undefined;
+  if (
+    /https?:|www\.|\b(?:djsoundtop|electronicfresh|fordjonly|iptorrents)\b|whatsapp|contatos|acesse:|drive(?:dos)?djs/iu.test(
+      cleaned,
+    )
+  )
+    return undefined;
+  if (field === "genre" && (cleaned.length > 80 || (cleaned.match(/,/gu)?.length ?? 0) > 3))
+    return undefined;
+  if (field === "label" && cleaned.length > 100) return undefined;
+  return cleaned;
+}
+
+function trustedArtist(value: unknown): string | undefined {
+  const cleaned = clean(value);
+  if (!cleaned || /^(?:id|unknown artist|none|n\/a|\d{1,3})$/iu.test(cleaned)) return undefined;
   return cleaned;
 }
 
@@ -639,10 +1129,7 @@ function sanitizeField(
 ): string | undefined {
   if (field === "isrc") return normalizeIsrc(clean(value));
   if (field === "releaseDate") return normalizeReleaseDate(clean(value));
-  const trusted = trustedMetadata(value);
-  if (field === "album" && trusted && /\s@\s|\[set extract[^\]]*\]/iu.test(trusted))
-    return undefined;
-  return trusted;
+  return trustedMetadata(field, value);
 }
 
 function normalizeReleaseDate(value: string | undefined): string | undefined {

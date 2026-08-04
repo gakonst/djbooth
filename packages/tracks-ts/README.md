@@ -448,6 +448,20 @@ ytdlp-ts download "$SELECTED_TRACK_URL" \
 
 Use acquisition backends only for media you are authorized to download.
 
+Repair metadata already in the compatible library with the same local-first workflow. The command
+normalizes recoverable artist/title identities, rejects ad spam and low-value catalog genres, then
+fills album, label, genre, ISRC, and release date from duration-compatible local copies, manifests,
+embedded tags, MusicBrainz, and Deezer. It is a dry run unless `--write` is supplied; output includes
+coverage deltas, per-provider/cache counters, field/reason summaries, and every proposed mutation.
+
+```sh
+djbooth tracks metadata backfill --folder 'DJ Sets I Like' --format json
+djbooth tracks metadata backfill --folder 'DJ Sets I Like' --write --format json
+```
+
+Writes require Rekordbox to be stopped, create a checksummed backup, commit once, and reopen the
+database to verify every changed field.
+
 After `import-set` commits the verified files and playlist, serve the complete master.db and cue an
 imported track in the same command:
 
@@ -476,6 +490,7 @@ or malformed entries.
 | 1001 latest/charts              | 15 minutes        |
 | Spotify search                  | 6 hours           |
 | Spotify track metadata          | 24 hours          |
+| MusicBrainz/Deezer metadata     | 30 days           |
 | YouTube/SoundCloud set metadata | 6 hours           |
 | YouTube search/exact metadata   | 6/24 hours        |
 | Stat-keyed audio verification   | 30 days           |

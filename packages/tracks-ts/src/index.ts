@@ -78,6 +78,7 @@ export {
   type CatalogMetadataQuery,
   type MusicBrainzMetadataClientOptions,
 } from "./catalog-metadata.js";
+export { DeezerMetadataClient, type DeezerMetadataClientOptions } from "./deezer-metadata.js";
 export {
   JsonDiskCache,
   cacheDigest,
@@ -96,7 +97,10 @@ export { isAbortError, TracksError, type TracksErrorCode } from "./errors.js";
 export {
   backfillRekordboxMetadata,
   type MetadataFieldSource,
+  type MetadataProviderStats,
   type RekordboxMetadataBackfillChange,
+  type RekordboxMetadataGap,
+  type RekordboxMetadataGapSummary,
   type RekordboxMetadataBackfillOptions,
   type RekordboxMetadataBackfillProgress,
   type RekordboxMetadataBackfillResult,
