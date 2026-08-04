@@ -24,7 +24,7 @@ export type CatalogMetadata = {
   isrc?: string;
   releaseDate?: string;
   durationSeconds?: number;
-  provider: "deezer" | "musicbrainz";
+  provider: "apple" | "deezer" | "discogs" | "musicbrainz" | "spotify";
   recordingId: string;
   releaseId?: string;
   matchedBy: "isrc" | "artist-title" | "source-url";
@@ -88,7 +88,7 @@ export class MusicBrainzMetadataClient {
     const load = async () => (await this.#lookup(normalizedQuery)) ?? null;
     const value = this.#cache
       ? await this.#cache.getOrLoad(
-          { operation: "metadata-lookup-v2", query: normalizedQuery },
+          { operation: "metadata-lookup-v3", query: normalizedQuery },
           load,
           {
             ttlMs: (result) => (result === null ? 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000),
@@ -121,7 +121,16 @@ export class MusicBrainzMetadataClient {
     );
     const album = cleanValue(releaseDetail.title) ?? cleanValue(release.title);
     const label = releaseLabel(releaseDetail);
-    const genre = consensusGenre([detail, releaseDetail, asRecord(releaseDetail["release-group"])]);
+    let genre = consensusGenre([detail, releaseDetail, asRecord(releaseDetail["release-group"])]);
+    if (!genre) {
+      const artistId = primaryArtistId(detail);
+      if (artistId) {
+        const artist = asRecord(
+          await this.#get(`artist/${encodeURIComponent(artistId)}`, { inc: "genres+tags" }),
+        );
+        genre = consensusGenre([artist]);
+      }
+    }
     const releaseDate = cleanValue(releaseDetail.date) ?? cleanValue(release.date);
     return {
       ...(album ? { album } : {}),
@@ -297,6 +306,11 @@ function artistNames(recording: Record<string, unknown>): string[] {
     .map(asRecord)
     .map((credit) => cleanValue(credit.name) ?? cleanValue(asRecord(credit.artist).name))
     .filter((name): name is string => name !== undefined);
+}
+
+function primaryArtistId(recording: Record<string, unknown>): string | undefined {
+  const credit = asRecord(arrayValue(recording["artist-credit"])[0]);
+  return stringValue(asRecord(credit.artist).id);
 }
 
 function identitySimilarity(left: string, right: string): number {

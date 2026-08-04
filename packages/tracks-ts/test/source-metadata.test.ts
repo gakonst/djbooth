@@ -50,6 +50,7 @@ describe("exact source metadata", () => {
           label_name: "Night Records",
           release_date: "2026-07-14T00:00:00Z",
           purchase_url: "https://label.example/track",
+          description: "Listen & download: https://label.lnk.to/release",
           publisher_metadata: { artist: "Artist", isrc: "USAAA2600001" },
         },
       },
@@ -68,7 +69,7 @@ describe("exact source metadata", () => {
       isrc: "USAAA2600001",
       releaseDate: "2026-07-14",
       durationSeconds: 241,
-      relatedUrls: ["https://label.example/track"],
+      relatedUrls: ["https://label.example/track", "https://label.lnk.to/release"],
     });
   });
 
@@ -110,6 +111,55 @@ describe("exact source metadata", () => {
     expect(raw).toHaveBeenCalledTimes(3);
   });
 
+  test("uses strict Spotify search as a catalog fallback", async () => {
+    const raw = vi.fn(async (_method: string, path: string) => {
+      if (path === "search") {
+        return {
+          tracks: {
+            items: [
+              {
+                id: "abc123",
+                name: "Track",
+                duration_ms: 240_000,
+                external_ids: { isrc: "USAAA2600001" },
+                artists: [{ id: "artist-1", name: "Artist" }],
+                album: { id: "album-1", name: "Track", release_date: "2026" },
+              },
+            ],
+          },
+        };
+      }
+      if (path === "tracks/abc123") {
+        return {
+          name: "Track",
+          duration_ms: 240_000,
+          external_ids: { isrc: "USAAA2600001" },
+          artists: [{ id: "artist-1", name: "Artist" }],
+          album: { id: "album-1", name: "Track", release_date: "2026" },
+        };
+      }
+      if (path === "albums/album-1") {
+        return { name: "Track", label: "Night Records", release_date: "2026-07-14" };
+      }
+      return { genres: ["minimal tech house"] };
+    });
+    const client = new SpotifySourceMetadataClient({
+      raw: async <T>(method: string, path: string) => (await raw(method, path)) as T,
+    });
+
+    await expect(
+      client.lookupCatalog({ title: "Track", artists: ["Artist"], durationSeconds: 240 }),
+    ).resolves.toMatchObject({
+      album: "Track",
+      label: "Night Records",
+      genre: "minimal tech house",
+      isrc: "USAAA2600001",
+      provider: "spotify",
+      recordingId: "abc123",
+      matchedBy: "artist-title",
+    });
+  });
+
   test("finds relocated sidecars by canonical source URL", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-sidecars-"));
     const nested = join(root, "relocated");
@@ -145,6 +195,7 @@ describe("exact source metadata", () => {
         new Response(
           [
             'scanUrl:\\"upc:199538098419\\"',
+            '<a href="https://music.apple.com/us/album/release/202?i=101&at=affiliate">Apple</a>',
             '<a href="https://open.spotify.com/track/spotify-id?si=abc">Spotify</a>',
             '<a href="https://www.deezer.com/track/3979074551?app_id=1">Deezer</a>',
           ].join(""),
@@ -154,7 +205,9 @@ describe("exact source metadata", () => {
 
     await expect(client.lookup("https://label.lnk.to/release")).resolves.toEqual({
       relatedUrls: [
+        "apple:upc:199538098419",
         "deezer:upc:199538098419",
+        "https://music.apple.com/us/album/release/202?i=101",
         "https://www.deezer.com/track/3979074551?app_id=1",
         "https://open.spotify.com/track/spotify-id",
       ],

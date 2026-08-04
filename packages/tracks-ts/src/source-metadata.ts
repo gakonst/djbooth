@@ -5,10 +5,14 @@ import { join, resolve } from "node:path";
 import { parseSoundcloudHydration, type MediaInfo, type ReferenceClient } from "@gakonst/ytdlp-ts";
 
 import { JsonDiskCache, type CacheMode, type CacheStats } from "./cache.js";
+import { AppleMetadataClient } from "./apple-metadata.js";
+import type { CatalogMetadata, CatalogMetadataQuery } from "./catalog-metadata.js";
 import { DeezerMetadataClient } from "./deezer-metadata.js";
 import type { SpotifyRawClient } from "./integrations/spotify-cache.js";
+import { parseSpotifySearchTracks, scoreSpotifyCandidates } from "./spotify-enrichment.js";
 
 export type ExactSourceProvider =
+  | "apple"
   | "bandcamp"
   | "deezer"
   | "linkpage"
@@ -39,6 +43,7 @@ export type ExactSourceMetadataClient = {
   provider: ExactSourceProvider;
   supports(url: string): boolean;
   lookup(url: string): Promise<ExactSourceMetadata | undefined>;
+  lookupCatalog?(query: CatalogMetadataQuery): Promise<CatalogMetadata | undefined>;
   cacheStats(): CacheStats | undefined;
 };
 
@@ -62,7 +67,7 @@ export class SoundCloudMetadataClient implements ExactSourceMetadataClient {
         ? undefined
         : (options.cache ??
           new JsonDiskCache({
-            namespace: "soundcloud-source-metadata-v2",
+            namespace: "soundcloud-source-metadata-v3",
             defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
             ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }));
@@ -82,7 +87,7 @@ export class SoundCloudMetadataClient implements ExactSourceMetadataClient {
     const url = canonicalSourceUrl(source);
     const load = async () => (await this.#lookup(url)) ?? null;
     const value = this.#cache
-      ? await this.#cache.getOrLoad({ operation: "soundcloud-track", url }, load, {
+      ? await this.#cache.getOrLoad({ operation: "soundcloud-track-v2", url }, load, {
           ttlMs: (result) => (result === null ? 6 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000),
         })
       : await load();
@@ -105,6 +110,9 @@ export class SoundCloudMetadataClient implements ExactSourceMetadataClient {
     const user = record(track.user);
     const releaseDate = dateOnly(track.release_date);
     const purchaseUrl = httpUrl(track.purchase_url);
+    const descriptionUrls = clean(track.description)
+      ? purchaseLinks(clean(track.description)!)
+      : [];
     return compactMetadata({
       title: clean(track.title),
       artist: clean(track.metadata_artist) ?? clean(publisher.artist) ?? clean(user.username),
@@ -114,7 +122,9 @@ export class SoundCloudMetadataClient implements ExactSourceMetadataClient {
       isrc: clean(track.isrc) ?? clean(publisher.isrc),
       releaseDate,
       durationSeconds: milliseconds(track.full_duration) ?? milliseconds(track.duration),
-      ...(purchaseUrl ? { relatedUrls: [purchaseUrl] } : {}),
+      ...(purchaseUrl || descriptionUrls.length
+        ? { relatedUrls: [...new Set([...(purchaseUrl ? [purchaseUrl] : []), ...descriptionUrls])] }
+        : {}),
     });
   }
 }
@@ -172,6 +182,70 @@ export class SpotifySourceMetadataClient implements ExactSourceMetadataClient {
       durationSeconds: milliseconds(track.duration_ms),
     });
   }
+
+  async lookupCatalog(query: CatalogMetadataQuery): Promise<CatalogMetadata | undefined> {
+    const response = await this.#client.raw("GET", "search", {
+      query: {
+        q: query.isrc
+          ? `isrc:${query.isrc}`
+          : `track:"${spotifySearchTerm(query.title)}" artist:"${spotifySearchTerm(query.artists.join(" "))}"`,
+        type: "track",
+        limit: 10,
+      },
+    });
+    const matches = scoreSpotifyCandidates(
+      {
+        title: query.title,
+        artist: query.artists.join(", "),
+        ...(query.isrc ? { isrc: query.isrc } : {}),
+        ...(query.durationSeconds ? { durationMs: query.durationSeconds * 1_000 } : {}),
+      },
+      parseSpotifySearchTracks(response),
+    );
+    const best = matches[0];
+    if (!best || best.score < 0.9 || best.score - (matches[1]?.score ?? 0) < 0.05) return undefined;
+    const metadata = await this.lookup(`https://open.spotify.com/track/${best.id}`);
+    if (!metadata) return undefined;
+    return {
+      ...(metadata.title ? { title: metadata.title } : {}),
+      ...(metadata.artist ? { artist: metadata.artist } : {}),
+      ...(metadata.album ? { album: metadata.album } : {}),
+      ...(metadata.label ? { label: metadata.label } : {}),
+      ...(metadata.genre ? { genre: metadata.genre } : {}),
+      ...(metadata.isrc ? { isrc: metadata.isrc } : {}),
+      ...(metadata.releaseDate ? { releaseDate: metadata.releaseDate } : {}),
+      ...(metadata.durationSeconds ? { durationSeconds: metadata.durationSeconds } : {}),
+      provider: this.provider,
+      recordingId: best.id,
+      matchedBy: query.isrc ? "isrc" : "artist-title",
+    };
+  }
+}
+
+/** Exact Apple Music/iTunes metadata from smart-link track IDs and UPCs. */
+export class AppleSourceMetadataClient implements ExactSourceMetadataClient {
+  readonly provider = "apple" as const;
+  readonly #client: AppleMetadataClient;
+
+  constructor(client: AppleMetadataClient) {
+    this.#client = client;
+  }
+
+  supports(url: string): boolean {
+    return sourceProvider(url) === this.provider || /^apple:upc:\d{8,14}$/u.test(url);
+  }
+
+  cacheStats(): CacheStats | undefined {
+    return this.#client.cacheStats();
+  }
+
+  async lookup(url: string): Promise<ExactSourceMetadata | undefined> {
+    const upc = /^apple:upc:(\d{8,14})$/u.exec(url)?.[1];
+    const metadata = upc
+      ? await this.#client.lookupUpc(upc)
+      : await this.#client.lookupTrackUrl(url);
+    return metadata ? compactMetadata(metadata) : undefined;
+  }
 }
 
 /** Exact Deezer metadata reached through a provider or smart-link track URL. */
@@ -219,7 +293,7 @@ export class LinkPageMetadataClient implements ExactSourceMetadataClient {
         ? undefined
         : (options.cache ??
           new JsonDiskCache({
-            namespace: "music-linkpage-metadata-v2",
+            namespace: "music-linkpage-metadata-v3",
             defaultTtlMs: 7 * 24 * 60 * 60 * 1000,
             ...(options.cacheMode ? { mode: options.cacheMode } : {}),
           }));
@@ -246,7 +320,7 @@ export class LinkPageMetadataClient implements ExactSourceMetadataClient {
     const url = canonicalSourceUrl(source);
     const load = async () => (await this.#lookup(url)) ?? null;
     const value = this.#cache
-      ? await this.#cache.getOrLoad({ operation: "music-linkpage", url }, load, {
+      ? await this.#cache.getOrLoad({ operation: "music-linkpage-v2", url }, load, {
           ttlMs: (result) => (result === null ? 6 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000),
         })
       : await load();
@@ -279,7 +353,10 @@ export class LinkPageMetadataClient implements ExactSourceMetadataClient {
       .toSorted((left, right) => sourcePriority(left) - sourcePriority(right))
       .slice(0, 8);
     const upc = /\bscanUrl\s*:\s*\\?["']upc:(\d{8,14})/iu.exec(html)?.[1];
-    const relatedUrls = [...(upc ? [`deezer:upc:${upc}`] : []), ...providerUrls].slice(0, 8);
+    const relatedUrls = [
+      ...(upc ? [`apple:upc:${upc}`, `deezer:upc:${upc}`] : []),
+      ...providerUrls,
+    ].slice(0, 8);
     const releaseDate = dateOnly(/\breleaseDate\\?"?\s*:\s*\\?"([^"\\]+)/iu.exec(html)?.[1]);
     if (!relatedUrls.length && !releaseDate) return undefined;
     return compactMetadata({ releaseDate, relatedUrls });
@@ -407,6 +484,11 @@ export function sourceProvider(
     return undefined;
   }
   if (hostname === "soundcloud.com" || hostname === "snd.sc") return "soundcloud";
+  if (
+    (hostname === "music.apple.com" || hostname === "itunes.apple.com") &&
+    /^\d+$/u.test(new URL(source).searchParams.get("i") ?? "")
+  )
+    return "apple";
   if (hostname === "open.spotify.com") return "spotify";
   if (hostname === "deezer.com" && /^\/track\/\d+/u.test(new URL(source).pathname)) return "deezer";
   if (hostname === "youtube.com" || hostname === "youtu.be" || hostname === "music.youtube.com")
@@ -505,17 +587,23 @@ function spotifyTrackId(source: string): string | undefined {
 }
 
 function sourcePriority(source: string): number {
-  if (source.startsWith("deezer:upc:")) return 0;
+  if (source.startsWith("apple:upc:") || source.startsWith("deezer:upc:")) return 0;
   const provider = sourceProvider(source);
-  return provider === "deezer"
+  return provider === "apple"
     ? 0
-    : provider === "spotify"
+    : provider === "deezer"
       ? 1
-      : provider === "bandcamp"
+      : provider === "spotify"
         ? 2
-        : provider === "soundcloud"
+        : provider === "bandcamp"
           ? 3
-          : 4;
+          : provider === "soundcloud"
+            ? 4
+            : 5;
+}
+
+function spotifySearchTerm(value: string): string {
+  return value.replaceAll(/["\\]/gu, " ").replace(/\s+/gu, " ").trim();
 }
 
 function sourceGenre(primary: unknown, tags: unknown): string | undefined {

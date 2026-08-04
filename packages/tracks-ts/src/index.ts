@@ -72,6 +72,7 @@ export {
   type YoutubeSearchCandidate,
   type YoutubeTarget,
 } from "./acquisition.js";
+export { AppleMetadataClient, type AppleMetadataClientOptions } from "./apple-metadata.js";
 export {
   MusicBrainzMetadataClient,
   type CatalogMetadata,
@@ -79,6 +80,7 @@ export {
   type MusicBrainzMetadataClientOptions,
 } from "./catalog-metadata.js";
 export { DeezerMetadataClient, type DeezerMetadataClientOptions } from "./deezer-metadata.js";
+export { DiscogsMetadataClient, type DiscogsMetadataClientOptions } from "./discogs-metadata.js";
 export {
   JsonDiskCache,
   cacheDigest,
@@ -106,6 +108,7 @@ export {
   type RekordboxMetadataBackfillResult,
 } from "./metadata-backfill.js";
 export {
+  AppleSourceMetadataClient,
   canonicalSourceUrl,
   DeezerSourceMetadataClient,
   exactSourcesFromRekordboxComment,
@@ -247,6 +250,7 @@ export {
   MAX_SPOTIFY_ENRICHMENT_CONCURRENCY,
   scoreSpotifyCandidate,
   scoreSpotifyCandidates,
+  parseSpotifySearchTracks,
   spotifySearchQuery,
   type SpotifyEnrichmentOptions,
   type SpotifyEnrichmentProgress,

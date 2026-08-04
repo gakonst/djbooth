@@ -99,4 +99,46 @@ describe("MusicBrainzMetadataClient", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(client.cacheStats()).toMatchObject({ hits: 1, misses: 2, writes: 2 });
   });
+
+  test("uses the primary credited artist genre when the recording and release lack taxonomy", async () => {
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      if (url.pathname.includes("/recording/") && !url.pathname.endsWith("/recording")) {
+        return json({
+          id: "recording-1",
+          title: "Exact Mix",
+          "artist-credit": [{ artist: { id: "artist-1", name: "Artist One" } }],
+          releases: [
+            {
+              id: "release-1",
+              title: "Exact Mix",
+              status: "Official",
+              "release-group": { "primary-type": "Single" },
+            },
+          ],
+        });
+      }
+      if (url.pathname.includes("/release/")) {
+        return json({ id: "release-1", title: "Exact Mix" });
+      }
+      if (url.pathname.includes("/artist/")) {
+        return json({ genres: [{ name: "Progressive House", count: 4 }] });
+      }
+      return json({
+        recordings: [
+          {
+            id: "recording-1",
+            score: 100,
+            title: "Exact Mix",
+            "artist-credit": [{ name: "Artist One" }],
+          },
+        ],
+      });
+    });
+    const client = new MusicBrainzMetadataClient({ cache: false, fetch, requestIntervalMs: 0 });
+
+    await expect(
+      client.lookup({ title: "Exact Mix", artists: ["Artist One"] }),
+    ).resolves.toMatchObject({ genre: "Progressive House" });
+  });
 });

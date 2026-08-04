@@ -643,11 +643,12 @@ const metadataCoverageOutput = z.object({
   label: z.number().int().nonnegative(),
   genre: z.number().int().nonnegative(),
   isrc: z.number().int().nonnegative(),
+  releaseDate: z.number().int().nonnegative(),
 });
 
 metadataCli.command("backfill", {
   description:
-    "Repair identities and backfill one Rekordbox playlist folder from exact acquisition sources, local metadata, Deezer, and MusicBrainz.",
+    "Repair identities and backfill one Rekordbox playlist folder from exact acquisition sources, local metadata, Apple, Spotify, Discogs, Deezer, and MusicBrainz.",
   options: z.object({
     folder: z.string().default("DJ Sets I Like").describe("Direct-child playlist folder"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
@@ -659,7 +660,9 @@ metadataCli.command("backfill", {
     catalogSearch: z
       .boolean()
       .default(true)
-      .describe("Allow strict Deezer and MusicBrainz artist/title search for tracks without ISRC"),
+      .describe(
+        "Allow strict Apple, Spotify, Discogs, Deezer, and MusicBrainz artist/title search for tracks without ISRC",
+      ),
     cacheMode: cacheModeOption,
     probeConcurrency: z.number().int().min(1).max(32).default(8),
     backupRoot: z.string().optional().describe("Pre-write backup directory root"),
@@ -676,19 +679,23 @@ metadataCli.command("backfill", {
     coverageBefore: metadataCoverageOutput,
     coverageAfter: metadataCoverageOutput,
     sources: z.object({
+      apple: z.number().int().nonnegative(),
       bandcamp: z.number().int().nonnegative(),
       deezer: z.number().int().nonnegative(),
+      discogs: z.number().int().nonnegative(),
       embedded: z.number().int().nonnegative(),
       filename: z.number().int().nonnegative(),
       linkpage: z.number().int().nonnegative(),
       local: z.number().int().nonnegative(),
       "local-artist": z.number().int().nonnegative(),
+      "local-release": z.number().int().nonnegative(),
       manifest: z.number().int().nonnegative(),
       musicbrainz: z.number().int().nonnegative(),
       sanitized: z.number().int().nonnegative(),
       sidecar: z.number().int().nonnegative(),
       soundcloud: z.number().int().nonnegative(),
       spotify: z.number().int().nonnegative(),
+      title: z.number().int().nonnegative(),
       youtube: z.number().int().nonnegative(),
     }),
     catalogQueries: z.number().int().nonnegative(),
@@ -763,19 +770,23 @@ metadataCli.command("backfill", {
         sources: z.record(
           z.string(),
           z.enum([
+            "apple",
             "deezer",
+            "discogs",
             "bandcamp",
             "embedded",
             "filename",
             "linkpage",
             "local",
             "local-artist",
+            "local-release",
             "manifest",
             "musicbrainz",
             "sanitized",
             "sidecar",
             "soundcloud",
             "spotify",
+            "title",
             "youtube",
           ]),
         ),
@@ -794,7 +805,9 @@ metadataCli.command("backfill", {
         folderName: context.options.folder,
         catalogSearch: context.options.catalogSearch,
         catalogOptions: { cacheMode: context.options.cacheMode },
+        appleOptions: { cacheMode: context.options.cacheMode },
         deezerOptions: { cacheMode: context.options.cacheMode },
+        discogsOptions: { cacheMode: context.options.cacheMode },
         sourceClients,
         probeConcurrency: context.options.probeConcurrency,
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),

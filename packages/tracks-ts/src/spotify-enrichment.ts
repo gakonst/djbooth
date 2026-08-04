@@ -395,10 +395,11 @@ async function searchSpotify(
     },
     ...(options.signal ? { signal: options.signal } : {}),
   });
-  return parseSearchTracks(response);
+  return parseSpotifySearchTracks(response);
 }
 
-function parseSearchTracks(value: unknown): SpotifyTrackCandidate[] {
+/** Parse Spotify Search's track page into the stable candidate shape used by strict matchers. */
+export function parseSpotifySearchTracks(value: unknown): SpotifyTrackCandidate[] {
   const body = asRecord(value);
   const tracks = asRecord(body.tracks);
   const items = Array.isArray(tracks.items) ? tracks.items : [];

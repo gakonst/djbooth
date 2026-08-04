@@ -452,9 +452,11 @@ Repair metadata already in the compatible library with the same local-first work
 normalizes recoverable artist/title identities, rejects ad spam and low-value catalog genres, then
 fills album, label, genre, ISRC, and release date from duration-compatible local copies, manifests,
 embedded tags, and exact acquisition provenance retained in Rekordbox comments. Exact SoundCloud,
-Spotify, YouTube, Bandcamp, and relocated yt-dlp sidecars run before MusicBrainz/Deezer search.
-SoundCloud purchase links and other public smart links may resolve to an exact downstream catalog
-record; title, artist, and duration checks prevent radio/extended/remix metadata crossing versions.
+Spotify, YouTube, Bandcamp, Apple Music, and relocated yt-dlp sidecars run before strict Spotify,
+MusicBrainz, Apple, Deezer, and Discogs catalog search. SoundCloud description/purchase links and
+other public smart links may resolve to an exact downstream catalog record; title, artist, tracklist,
+and duration checks prevent radio/extended/remix metadata crossing versions. Unanimous local release
+families may share album, label, genre, and date, but never a version-specific ISRC.
 It is a dry run unless `--write` is supplied; output includes provenance coverage, provider/cache
 counters, unresolved reasons, coverage deltas, and every proposed mutation.
 
@@ -494,7 +496,7 @@ or malformed entries.
 | 1001 latest/charts                  | 15 minutes        |
 | Spotify search                      | 6 hours           |
 | Spotify track metadata              | 24 hours          |
-| MusicBrainz/Deezer metadata         | 30 days           |
+| MusicBrainz/Apple/Deezer/Discogs    | 30 days           |
 | Source pages and public smart links | 7 days            |
 | YouTube/SoundCloud set metadata     | 6 hours           |
 | YouTube search/exact metadata       | 6/24 hours        |
