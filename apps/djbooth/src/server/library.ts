@@ -12,6 +12,7 @@ import {
   DjmdContent,
   DjmdGenre,
   DjmdKey,
+  DjmdLabel,
   DjmdPlaylist,
   DjmdSongPlaylist,
   MasterDatabase,
@@ -206,6 +207,7 @@ function mapTrack(
     title: stringValue(row.title, "Untitled"),
     artist: nullableString(row.artist),
     album: nullableString(row.album),
+    label: nullableString(row.label),
     genre: nullableString(row.genre),
     key: nullableString(row.keyName),
     colorId: trackColorId(row.colorId),
@@ -874,10 +876,11 @@ export class RekordboxLibraryService {
                 content."DJPlayCount" AS playCount, content."AnalysisDataPath" AS analysisPath,
                 content."Analysed" AS analysed, artist."Name" AS artist,
                 album."Name" AS album, album."ImagePath" AS artworkPath,
-                genre."Name" AS genre, keyRow."ScaleName" AS keyName
+                label."Name" AS label, genre."Name" AS genre, keyRow."ScaleName" AS keyName
          FROM "djmdContent" content
          LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"
          LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
+         LEFT JOIN "djmdLabel" label ON label."ID" = content."LabelID"
          LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"
          LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"
          WHERE content."ID" IN (${placeholders})
@@ -907,10 +910,11 @@ export class RekordboxLibraryService {
                 content."FileSize" AS fileSize,
                 CAST(content."updated_at" AS TEXT) AS revision, artist."Name" AS artist,
                 album."Name" AS album, album."ImagePath" AS artworkPath,
-                genre."Name" AS genre, keyRow."ScaleName" AS keyName
+                label."Name" AS label, genre."Name" AS genre, keyRow."ScaleName" AS keyName
          FROM "djmdContent" content
          LEFT JOIN "djmdArtist" artist ON artist."ID" = content."ArtistID"
          LEFT JOIN "djmdAlbum" album ON album."ID" = content."AlbumID"
+         LEFT JOIN "djmdLabel" label ON label."ID" = content."LabelID"
          LEFT JOIN "djmdGenre" genre ON genre."ID" = content."GenreID"
          LEFT JOIN "djmdKey" keyRow ON keyRow."ID" = content."KeyID"
          WHERE content."ID" = ? AND ${this.active(db, "djmdContent", "content")}`,
@@ -1262,6 +1266,8 @@ export class RekordboxLibraryService {
         const metadata = normalizeTrackMetadataInput(mutation.metadata);
         const artistName = metadata.artist;
         const albumName = metadata.album;
+        const labelName = metadata.label;
+        const labelProvided = labelName !== undefined;
         const genreName = metadata.genre;
         const keyName = metadata.key;
         const currentArtist = content.Artist;
@@ -1285,6 +1291,16 @@ export class RekordboxLibraryService {
             ? currentGenre
             : (this.findActiveNamedRow(db, DjmdGenre, genreName) ?? db.addGenre(genreName))
           : undefined;
+        const currentLabel = content.Label;
+        const label = !labelProvided
+          ? currentLabel
+          : labelName
+            ? currentLabel &&
+              this.isActiveRow(db, currentLabel) &&
+              this.metadataNamesEqual(currentLabel.get("Name"), labelName)
+              ? currentLabel
+              : (this.findActiveNamedRow(db, DjmdLabel, labelName) ?? db.addLabel(labelName))
+            : undefined;
         const currentAlbum = content.Album;
         const album = albumName
           ? currentAlbum &&
@@ -1311,6 +1327,7 @@ export class RekordboxLibraryService {
         content.Title = metadata.title;
         content.set("ArtistID", artist?.ID ?? null);
         content.set("AlbumID", album?.ID ?? null);
+        if (labelProvided) content.set("LabelID", label?.ID ?? null);
         content.set("GenreID", genre?.ID ?? null);
         content.KeyID = key?.ID ?? null;
         content.BPM = metadata.bpm === null ? null : Math.round(metadata.bpm * 100);

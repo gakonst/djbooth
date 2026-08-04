@@ -73,6 +73,12 @@ export {
   type YoutubeTarget,
 } from "./acquisition.js";
 export {
+  MusicBrainzMetadataClient,
+  type CatalogMetadata,
+  type CatalogMetadataQuery,
+  type MusicBrainzMetadataClientOptions,
+} from "./catalog-metadata.js";
+export {
   JsonDiskCache,
   cacheDigest,
   defaultCacheRoot,
@@ -87,6 +93,14 @@ export {
   type DescriptionParseResult,
 } from "./description.js";
 export { isAbortError, TracksError, type TracksErrorCode } from "./errors.js";
+export {
+  backfillRekordboxMetadata,
+  type MetadataFieldSource,
+  type RekordboxMetadataBackfillChange,
+  type RekordboxMetadataBackfillOptions,
+  type RekordboxMetadataBackfillProgress,
+  type RekordboxMetadataBackfillResult,
+} from "./metadata-backfill.js";
 export { identify, mergeDescriptionWithDatabase } from "./identify.js";
 export {
   getYtdlpTsCommand,

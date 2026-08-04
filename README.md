@@ -35,11 +35,24 @@ Rekordbox compatibility at the Pioneer DJ/AlphaTheta hardware boundary.
   you own, analyzes tracks, separates stems, builds playlists, and prepares playback end to end.
 - **Workbench** — Browse and manage the same library manually in a local web or native Tauri app,
   with playlists, waveforms, live stems, two decks, EQ, cues, and transition auditioning.
-- **djbooth** — One typed CLI, Skill, MCP server, and Code Mode surface spanning providers, local
-  acquisition, analysis, library management, USB export, and Pro DJ Link.
-- **djbooth-rs** — Unified native analyzer, USB, and DJ Link runtime.
-- **stems-mlx** — Apple Silicon Mel-Band-RoFormer four-stem separation through a standalone uv/MLX
-  runtime.
+
+Every layer is also a focused command:
+
+| CLI                         | What it does                                                            |
+| --------------------------- | ----------------------------------------------------------------------- |
+| `djbooth`                   | Agent Skill, MCP, Code Mode, and umbrella workflow router               |
+| `tracks`                    | Resolve sets, acquire recordings, enrich metadata, analyze, and import  |
+| `spots`                     | Spotify authentication, catalog lookup, and playlist management         |
+| `soundcloud`                | SoundCloud authentication, search, likes, playlists, and exact sources  |
+| `slsk`                      | Soulseek search, ranking, and lossless acquisition                       |
+| `ytdlp-ts`                  | Inspect, search, and acquire web-hosted audio                            |
+| `rekordbox`                 | Read/write compatible databases, ANLZ, settings, XML, analysis, stems   |
+| `cdj-usb`                   | Sync playlists, media, analysis, and history to mounted player media    |
+| `djlink`                    | Discover players and serve/search/control libraries over Pro DJ Link    |
+| `djbooth-rs analyzer`       | Native BPM, key, grid, phrase, and waveform analysis                     |
+| `djbooth-rs usb`            | Native USB export runtime                                                |
+| `djbooth-rs link`           | Native Pro DJ Link runtime                                               |
+| `djbooth-stems-mlx`         | Apple Silicon Mel-Band-RoFormer vocals/drums/bass/other separation       |
 
 ```text
 "Import this playlist, acquire anything I do not own, analyze it, build a compatible playlist,

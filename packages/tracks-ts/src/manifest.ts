@@ -63,6 +63,7 @@ type IdentityMetadata = {
   mix?: string;
   album?: string;
   label?: string;
+  genre?: string;
   releaseDate?: string;
   isrc?: string;
   upc?: string;
@@ -478,6 +479,7 @@ function copyIdentityMetadata(track: TracklistEntry): IdentityMetadata {
     ...(track.mix === undefined ? {} : { mix: track.mix }),
     ...(track.album === undefined ? {} : { album: track.album }),
     ...(track.label === undefined ? {} : { label: track.label }),
+    ...(track.genre === undefined ? {} : { genre: track.genre }),
     ...(track.releaseDate === undefined ? {} : { releaseDate: track.releaseDate }),
     ...(track.isrc === undefined ? {} : { isrc: track.isrc }),
     ...(track.upc === undefined ? {} : { upc: track.upc }),
@@ -584,6 +586,7 @@ function validateMatches(value: unknown, path: string): void {
         "title",
         "album",
         "label",
+        "genre",
         "releaseDate",
         "isrc",
         "upc",
@@ -597,7 +600,7 @@ function validateMatches(value: unknown, path: string): void {
       nonnegativeNumber(item.scanSeconds, `${matchPath}.scanSeconds`);
       nonemptyString(item.artist, `${matchPath}.artist`);
       nonemptyString(item.title, `${matchPath}.title`);
-      for (const key of ["album", "label", "releaseDate", "isrc", "upc", "songLink"])
+      for (const key of ["album", "label", "genre", "releaseDate", "isrc", "upc", "songLink"])
         optionalString(item, key, matchPath);
       if (item.confidence !== undefined) score100(item.confidence, `${matchPath}.confidence`);
       oneOf(item.provider, ["audd", "acrcloud"], `${matchPath}.provider`);
@@ -674,6 +677,7 @@ function validateIdentity(value: unknown, path: string): void {
     "mix",
     "album",
     "label",
+    "genre",
     "releaseDate",
     "isrc",
     "upc",
@@ -691,6 +695,7 @@ function validateIdentity(value: unknown, path: string): void {
     "mix",
     "album",
     "label",
+    "genre",
     "releaseDate",
     "isrc",
     "upc",

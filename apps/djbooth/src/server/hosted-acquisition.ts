@@ -663,6 +663,8 @@ function spotifyManifestTrack(track: TrackSummary, index: number) {
     title: track.title,
     artists: [track.artist ?? "Unknown Artist"],
     ...(track.album ? { album: track.album } : {}),
+    ...(track.label ? { label: track.label } : {}),
+    ...(track.genre ? { genre: track.genre } : {}),
     ...(track.hosted?.albumArtists ? { albumArtists: track.hosted.albumArtists } : {}),
     ...(track.hosted?.releaseDate ? { releaseDate: track.hosted.releaseDate } : {}),
     ...(track.hosted?.isrc ? { isrc: track.hosted.isrc } : {}),
@@ -687,6 +689,8 @@ function soundCloudManifestTrack(track: TrackSummary, index: number) {
     title: track.title,
     artists: [track.artist ?? "Unknown Artist"],
     ...(track.album ? { album: track.album } : {}),
+    ...(track.label ? { label: track.label } : {}),
+    ...(track.genre ? { genre: track.genre } : {}),
     ...(track.hosted?.isrc ? { isrc: track.hosted.isrc } : {}),
     ...(durationMs(track.durationSeconds) === undefined
       ? {}

@@ -101,6 +101,9 @@ describe("buildAcquisitionPlan", () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-plan-"));
     const outputDirectory = join(directory, "output");
     const value = manifest(join(directory, "set.mp3"));
+    if (value.entries[0]!.identity.status !== "identified") throw new Error("test identity");
+    value.entries[0]!.identity.label = "Night Records";
+    value.entries[0]!.identity.genre = "House";
 
     const plan = await buildAcquisitionPlan(value, { outputDirectory });
 
@@ -136,6 +139,7 @@ describe("buildAcquisitionPlan", () => {
         durationSeconds: 240,
       },
       preferredCandidatePlacement: "backend-fallback",
+      metadata: { label: "Night Records", genre: "House" },
     });
     expect(plan.recordings[0]!.variants[1]).not.toHaveProperty("preferredCandidate");
     expect(plan.stagingDirectory).toBe(join(outputDirectory, ".staging"));

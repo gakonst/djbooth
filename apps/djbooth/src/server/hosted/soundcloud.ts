@@ -434,6 +434,7 @@ function soundCloudTrackSummary(
       stringField(publisher, "artist") ??
       stringField(user, "username"),
     album,
+    label: stringField(track, "label_name"),
     genre: stringField(track, "genre"),
     key: stringField(track, "key_signature"),
     colorId: null,

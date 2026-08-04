@@ -37,6 +37,7 @@ export function TrackMetadataDialog({
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState("");
   const [album, setAlbum] = useState("");
+  const [label, setLabel] = useState("");
   const [genre, setGenre] = useState("");
   const [key, setKey] = useState("");
   const [bpm, setBpm] = useState("");
@@ -58,6 +59,7 @@ export function TrackMetadataDialog({
     setTitle(track.title);
     setArtist(track.artist ?? "");
     setAlbum(track.album ?? "");
+    setLabel(track.label ?? "");
     setGenre(track.genre ?? "");
     setKey(track.key ?? "");
     setBpm(track.bpm == null ? "" : String(track.bpm));
@@ -136,6 +138,7 @@ export function TrackMetadataDialog({
                   title: title.trim(),
                   artist: optionalText(artist),
                   album: optionalText(album),
+                  label: optionalText(label),
                   genre: optionalText(genre),
                   key: optionalText(key),
                   bpm: bpmValue,
@@ -161,6 +164,7 @@ export function TrackMetadataDialog({
               </label>
               <MetadataField label="Artist" value={artist} onChange={setArtist} />
               <MetadataField label="Album" value={album} onChange={setAlbum} />
+              <MetadataField label="Label" value={label} onChange={setLabel} />
               <MetadataField label="Genre" value={genre} onChange={setGenre} />
               <MetadataField label="Key" value={key} onChange={setKey} maxLength={64} />
               <label className="field-label">

@@ -91,6 +91,7 @@ export type TrackSummary = {
   title: string;
   artist: string | null;
   album: string | null;
+  label?: string | null;
   genre: string | null;
   key: string | null;
   colorId: TrackColorId | null;
@@ -200,6 +201,7 @@ export type TrackMetadataInput = {
   title: string;
   artist: string | null;
   album: string | null;
+  label?: string | null;
   genre: string | null;
   key: string | null;
   bpm: number | null;

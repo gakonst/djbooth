@@ -12,6 +12,7 @@ export function normalizeTrackMetadataInput(metadata: TrackMetadataInput): Track
     title: metadata.title.trim(),
     artist: cleanMetadataValue(metadata.artist),
     album: cleanMetadataValue(metadata.album),
+    ...(metadata.label === undefined ? {} : { label: cleanMetadataValue(metadata.label) }),
     genre: cleanMetadataValue(metadata.genre),
     key: cleanMetadataValue(metadata.key),
     bpm: metadata.bpm === null ? null : Math.round(metadata.bpm * 100) / 100,

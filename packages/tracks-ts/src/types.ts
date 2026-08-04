@@ -12,6 +12,7 @@ export interface TrackMatch {
   title: string;
   album?: string;
   label?: string;
+  genre?: string;
   releaseDate?: string;
   isrc?: string;
   upc?: string;
@@ -36,6 +37,7 @@ export interface TracklistEntry {
   mix?: string;
   album?: string;
   label?: string;
+  genre?: string;
   releaseDate?: string;
   isrc?: string;
   upc?: string;

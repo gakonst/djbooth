@@ -461,6 +461,7 @@ function metadataFromTrack(track: TrackDetail): TrackMetadataInput {
     title: track.title,
     artist: track.artist,
     album: track.album,
+    label: track.label,
     genre: track.genre,
     key: track.key,
     bpm: track.bpm,

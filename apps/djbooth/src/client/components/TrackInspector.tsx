@@ -182,6 +182,7 @@ export function TrackInspector({
               <InspectorSection title="Recording" icon={<Gauge size={14} />}>
                 <DefinitionList
                   items={[
+                    ["Label", detail.label ?? "—"],
                     ["Genre", detail.genre ?? "—"],
                     ["Release year", detail.releaseYear ? String(detail.releaseYear) : "—"],
                     ["ISRC", detail.isrc ?? "—"],

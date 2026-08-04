@@ -11,6 +11,9 @@ export type AudioMetadata = {
   title: string;
   artists: string[];
   album?: string;
+  albumArtists?: string[];
+  label?: string;
+  genre?: string;
   releaseDate?: string;
   isrc?: string;
   comment: string;
@@ -439,8 +442,10 @@ export async function retagAudio(options: {
       "-c:a",
       options.audioCodec ?? "copy",
       ...(options.audioCodec === "aac" ? ["-b:a", "320k"] : []),
+      // Preserve useful source tags that the catalog could not supply, then overwrite every
+      // canonical field below. This keeps album/label/genre from high-quality acquisitions.
       "-map_metadata",
-      "-1",
+      "0",
       ...metadataArguments(outputMetadata, extname(outputPath)),
       temporary,
     ]);
@@ -556,6 +561,9 @@ function metadataArguments(metadata: AudioMetadata, extension: string): string[]
     ["title", metadata.title],
     ["artist", metadata.artists.join("; ")],
     ["album", metadata.album],
+    ["album_artist", metadata.albumArtists?.join("; ")],
+    ["publisher", metadata.label],
+    ["genre", metadata.genre],
     ["date", metadata.releaseDate],
     ["ISRC", metadata.isrc],
     ["comment", metadata.comment],
@@ -586,6 +594,8 @@ function normalizeTags(value: Record<string, unknown>): Record<string, string> {
   if (!tags.isrc && tags["tsrc"]) tags.isrc = tags["tsrc"];
   if (!tags.date && tags.year) tags.date = tags.year;
   if (!tags.track && tags.tracknumber) tags.track = tags.tracknumber;
+  if (!tags.album_artist && tags.albumartist) tags.album_artist = tags.albumartist;
+  if (!tags.publisher && tags.label) tags.publisher = tags.label;
   if (!tags.grouping && tags.group) tags.grouping = tags.group;
   if (!tags.comment && tags.description) tags.comment = tags.description;
   return tags;
@@ -600,6 +610,9 @@ function verifyAudioTags(
     ["title", metadata.title],
     ["artist", metadata.artists.join("; ")],
     ["album", metadata.album],
+    ["album_artist", metadata.albumArtists?.join("; ")],
+    ["publisher", metadata.label],
+    ["genre", metadata.genre],
     ["date", metadata.releaseDate],
     ["isrc", metadata.isrc],
     ["comment", metadata.comment],

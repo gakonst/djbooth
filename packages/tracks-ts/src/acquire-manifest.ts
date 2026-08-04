@@ -92,6 +92,8 @@ export type AcquisitionRecordingVariant = {
   artists: string[];
   album?: string;
   albumArtists?: string[];
+  label?: string;
+  genre?: string;
   releaseDate?: string;
   durationMs?: number;
   outputPath: string;
@@ -757,6 +759,43 @@ export async function acquireManifest(
                   ...(priorCandidate ? { candidate: priorCandidate } : {}),
                 };
                 resumed.push(variant.outputPath);
+              } else if (
+                prior &&
+                (await isCheckpointedAudioIntact(prior, variant, verificationCache))
+              ) {
+                // Metadata schemas evolve independently of the recording bytes. Retag a verified
+                // checkpoint in place instead of reacquiring the same audio from the network.
+                const tagged = await retagAudio({
+                  sourcePath: variant.outputPath,
+                  outputPath: variant.outputPath,
+                  metadata: variant.metadata,
+                  ...(prior.backend === "local" || !prior.source
+                    ? {}
+                    : {
+                        acquisitionSource: {
+                          backend: prior.backend,
+                          source: prior.source,
+                        },
+                      }),
+                  ...(variant.durationMs === undefined
+                    ? {}
+                    : { expectedDurationSeconds: variant.durationMs / 1000 }),
+                });
+                verificationReceipts.set(
+                  variant.outputPath,
+                  await verificationReceipt(variant.outputPath, tagged.sha256),
+                );
+                const priorCandidate = candidateFromDownload(
+                  prior,
+                  state.priorAcquisition,
+                  variant,
+                );
+                completed = {
+                  download: { ...prior, sha256: tagged.sha256 },
+                  ...(priorCandidate ? { candidate: priorCandidate } : {}),
+                };
+                warnings.push(`${variantLabel(variant)} refreshed embedded metadata`);
+                downloaded.push(variant.outputPath);
               } else if (localArtifact) {
                 const tagged = await retagAudio({
                   sourcePath: localArtifact.sourcePath,
@@ -1824,6 +1863,31 @@ async function verifyAudioCached(
     () => verifyAudioFile(path, options),
     { ttlMs: 30 * 24 * 60 * 60 * 1000 },
   );
+}
+
+async function isCheckpointedAudioIntact(
+  download: AcquisitionDownload,
+  variant: AcquisitionRecordingVariant,
+  cache?: JsonDiskCache,
+): Promise<boolean> {
+  if (!download.sha256) return false;
+  try {
+    const durationSeconds = expectedVariantDurationSeconds(variant);
+    await verifyAudioCached(
+      variant.outputPath,
+      {
+        expectedSha256: download.sha256,
+        ...(durationSeconds === undefined ? {} : { expectedDurationSeconds: durationSeconds }),
+        durationToleranceSeconds: variant.sourceClip
+          ? 2
+          : Math.max(10, ((variant.durationMs ?? 0) / 1000) * 0.035),
+      },
+      cache,
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function replaceEntry(manifest: SetManifest, replacement: ResolvedTrack): void {

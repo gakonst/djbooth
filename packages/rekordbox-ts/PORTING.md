@@ -32,6 +32,24 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-03 — provider-independent release metadata checkpoint
+
+- Added album artist, label, and genre to the durable acquisition identity and audio-tag contract.
+  FFmpeg retagging preserves unknown source tags, then writes canonical `album_artist`, `publisher`,
+  and `genre` values; intact checkpointed downloads can be retagged without reacquisition.
+- Added cached MusicBrainz enrichment keyed first by ISRC and, only when explicitly enabled, by an
+  exact title plus conservative artist match. Official non-compilation releases provide album,
+  label, release date, and consensus genre; positive and negative lookup results persist locally.
+- Added `tracks metadata backfill`, dry-run by default, combining the active database, local
+  duplicates, manifests, embedded tags, and MusicBrainz. Writes require Rekordbox to be stopped,
+  take a checksummed backup, commit once, and reopen the database for verification.
+- Backfilled the 187 unique tracks below `DJ Sets I Like` without requiring Spotify. Trustworthy
+  coverage moved from album 100→129, label 82→97, genre 31→54, and ISRC 64→76. The pre-write backup
+  is `tracks-ts-backups/rekordbox-20260804T063830-391Z` beside the active database.
+- Exposed label alongside album and genre in hosted acquisition, Rekordbox imports, workbench
+  details, edits, optimistic updates, and history. Provider metadata remains additive: SoundCloud,
+  Spotify, local tags, and open catalog recovery can each fill fields without becoming mandatory.
+
 ### 2026-08-03 — djbooth.ai identity and runtime layout separation
 
 - Replaced the three native executables with one `rust/bin/djbooth-rs` package and binary. Its

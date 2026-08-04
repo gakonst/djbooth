@@ -353,6 +353,7 @@ function spotifyTrackSummary(
     title: stringField(track, "name") ?? "Unavailable Spotify track",
     artist: artists.length > 0 ? artists.join(", ") : null,
     album: stringField(album, "name"),
+    label: stringField(album, "label"),
     genre: null,
     key: null,
     colorId: null,

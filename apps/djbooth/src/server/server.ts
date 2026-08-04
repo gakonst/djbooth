@@ -114,6 +114,7 @@ const mutationSchema = z.discriminatedUnion("type", [
       title: z.string().trim().min(1).max(255),
       artist: z.string().trim().max(255).nullable(),
       album: z.string().trim().max(255).nullable(),
+      label: z.string().trim().max(255).nullable().optional(),
       genre: z.string().trim().max(255).nullable(),
       key: z.string().trim().max(64).nullable(),
       bpm: z.number().finite().positive().max(999).nullable(),
@@ -669,7 +670,7 @@ function hostedTracksResponse(
     if (options.filter === "analyzed" && !track.analyzed) return false;
     if (options.filter === "attention" && track.analyzed) return false;
     if (!query) return true;
-    return [track.title, track.artist, track.album, track.genre]
+    return [track.title, track.artist, track.album, track.label, track.genre]
       .filter((value): value is string => Boolean(value))
       .some((value) => value.toLocaleLowerCase().includes(query));
   });

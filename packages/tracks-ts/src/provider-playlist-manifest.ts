@@ -14,6 +14,8 @@ type ProviderPlaylistTrackBase = {
   title: string;
   artists: readonly string[];
   album?: string;
+  label?: string;
+  genre?: string;
   releaseDate?: string;
   durationMs?: number;
   isrc?: string;
@@ -129,6 +131,8 @@ function tracklistEntry(track: ProviderPlaylistTrack): TracklistEntry {
     artist: track.artists.join(", "),
     title: track.title,
     ...(track.album === undefined ? {} : { album: track.album }),
+    ...(track.label === undefined ? {} : { label: track.label }),
+    ...(track.genre === undefined ? {} : { genre: track.genre }),
     ...(track.releaseDate === undefined ? {} : { releaseDate: track.releaseDate }),
     ...(track.isrc === undefined ? {} : { isrc: track.isrc }),
     songLink: track.provider === "spotify" ? track.url : track.permalinkUrl,
@@ -163,6 +167,8 @@ function validatePlaylist(playlist: ProviderPlaylistManifestInput): void {
     );
     for (const [key, value] of [
       ["album", track.album],
+      ["label", track.label],
+      ["genre", track.genre],
       ["releaseDate", track.releaseDate],
       ["isrc", track.isrc],
     ] as const) {

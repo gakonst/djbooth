@@ -37,6 +37,7 @@ import {
 } from "./integrations/ytdlp-library.js";
 import { defaultTrackLibraryRoot } from "./library-paths.js";
 import { createManifest, parseManifest } from "./manifest.js";
+import { backfillRekordboxMetadata } from "./metadata-backfill.js";
 import { runProcess } from "./process.js";
 import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
 import {
@@ -627,6 +628,125 @@ export const tracksCli = Cli.create("tracks", {
     ],
   },
 });
+
+const metadataCli = Cli.create("metadata", {
+  description: "Recover album, label, genre, ISRC, and release metadata without Spotify lock-in.",
+});
+
+const metadataCoverageOutput = z.object({
+  album: z.number().int().nonnegative(),
+  label: z.number().int().nonnegative(),
+  genre: z.number().int().nonnegative(),
+  isrc: z.number().int().nonnegative(),
+});
+
+metadataCli.command("backfill", {
+  description:
+    "Backfill one Rekordbox playlist folder from local duplicates, durable manifests, embedded tags, and cached MusicBrainz release metadata.",
+  options: z.object({
+    folder: z.string().default("DJ Sets I Like").describe("Direct-child playlist folder"),
+    dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
+    dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
+    manifestRoot: z
+      .array(z.string())
+      .default([])
+      .describe("Manifest search root; repeat as needed; defaults to ~/.djtools and ~/Music"),
+    catalogSearch: z
+      .boolean()
+      .default(false)
+      .describe("Allow conservative MusicBrainz artist/title search for tracks without ISRC"),
+    cacheMode: cacheModeOption,
+    probeConcurrency: z.number().int().min(1).max(32).default(8),
+    backupRoot: z.string().optional().describe("Pre-write backup directory root"),
+    write: z.boolean().default(false).describe("Apply one backed-up, verified database commit"),
+    progress: z.enum(["auto", "always", "never"]).default("auto"),
+  }),
+  output: z.object({
+    dbPath: z.string(),
+    folderName: z.string(),
+    tracks: z.number().int().nonnegative(),
+    changed: z.number().int().nonnegative(),
+    written: z.boolean(),
+    backupDirectory: z.string().optional(),
+    coverageBefore: metadataCoverageOutput,
+    coverageAfter: metadataCoverageOutput,
+    sources: z.object({
+      catalog: z.number().int().nonnegative(),
+      embedded: z.number().int().nonnegative(),
+      local: z.number().int().nonnegative(),
+      manifest: z.number().int().nonnegative(),
+    }),
+    catalogQueries: z.number().int().nonnegative(),
+    catalogMatches: z.number().int().nonnegative(),
+    changes: z.array(
+      z.object({
+        contentId: z.string(),
+        title: z.string(),
+        artist: z.string().optional(),
+        album: z.string().optional(),
+        label: z.string().optional(),
+        genre: z.string().optional(),
+        isrc: z.string().optional(),
+        releaseDate: z.string().optional(),
+        sources: z.record(z.string(), z.enum(["catalog", "embedded", "local", "manifest"])),
+      }),
+    ),
+  }),
+  async run(context) {
+    try {
+      const showProgress =
+        context.options.progress === "always" ||
+        (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
+      const result = await backfillRekordboxMetadata({
+        approved: context.options.write,
+        write: context.options.write,
+        folderName: context.options.folder,
+        catalogSearch: context.options.catalogSearch,
+        catalogOptions: { cacheMode: context.options.cacheMode },
+        probeConcurrency: context.options.probeConcurrency,
+        ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+        ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+        ...(context.options.backupRoot ? { backupRoot: context.options.backupRoot } : {}),
+        ...(context.options.manifestRoot.length
+          ? { manifestRoots: context.options.manifestRoot }
+          : {}),
+        ...(showProgress
+          ? {
+              onProgress(progress) {
+                if (
+                  progress.phase === "inventory" ||
+                  progress.phase === "verify" ||
+                  progress.current === 0 ||
+                  progress.current === progress.total ||
+                  progress.current % 10 === 0
+                ) {
+                  process.stderr.write(`[metadata:${progress.phase}] ${progress.message}\n`);
+                }
+              },
+            }
+          : {}),
+      });
+      return {
+        dbPath: result.dbPath,
+        folderName: result.folderName,
+        tracks: result.tracks,
+        changed: result.changed,
+        written: result.written,
+        ...(result.backup ? { backupDirectory: result.backup.directory } : {}),
+        coverageBefore: result.coverageBefore,
+        coverageAfter: result.coverageAfter,
+        sources: result.sources,
+        catalogQueries: result.catalogQueries,
+        catalogMatches: result.catalogMatches,
+        changes: result.changes,
+      };
+    } catch (error) {
+      return fail(context, error);
+    }
+  },
+});
+
+tracksCli.command(metadataCli);
 
 tracksCli.command("import-existing", {
   description:

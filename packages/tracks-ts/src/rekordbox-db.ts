@@ -56,6 +56,7 @@ type DatabaseRow = {
 type DjmdArtist = DatabaseRow & { Name: string | null };
 type DjmdAlbum = DatabaseRow & { Name: string | null };
 type DjmdLabel = DatabaseRow & { Name: string | null };
+type DjmdGenre = DatabaseRow & { Name: string | null };
 type DjmdContent = DatabaseRow & {
   Title: string | null;
   FolderPath: string | null;
@@ -89,6 +90,7 @@ export type RekordboxMasterDatabase = {
   addArtist(name: string): DjmdArtist;
   addAlbum(name: string, options?: { artist?: DjmdArtist }): DjmdAlbum;
   addLabel(name: string): DjmdLabel;
+  addGenre(name: string): DjmdGenre;
   addContent(path: string, values?: Record<string, DatabaseValue>): DjmdContent;
   createPlaylist(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
   createPlaylistFolder(name: string, options?: { parent?: DjmdPlaylist }): DjmdPlaylist;
@@ -139,6 +141,7 @@ export type RekordboxLibrary = {
   DjmdArtist: RekordboxModel<DjmdArtist>;
   DjmdAlbum: RekordboxModel<DjmdAlbum>;
   DjmdLabel: RekordboxModel<DjmdLabel>;
+  DjmdGenre: RekordboxModel<DjmdGenre>;
   DjmdContent: RekordboxModel<DjmdContent>;
   DjmdPlaylist: RekordboxModel<DjmdPlaylist>;
   DjmdSongPlaylist: RekordboxModel<DjmdSongPlaylist>;
@@ -159,6 +162,7 @@ export type RekordboxTrackMetadata = {
   album?: string;
   albumArtist?: string;
   label?: string;
+  genre?: string;
   releaseDate?: string;
   releaseYear?: number;
   isrc?: string;
@@ -964,6 +968,7 @@ function metadataForDownload(
     ...(album ? { album } : {}),
     ...(albumArtist ? { albumArtist } : {}),
     ...(entry.identity.label?.trim() ? { label: entry.identity.label.trim() } : {}),
+    ...(entry.identity.genre?.trim() ? { genre: entry.identity.genre.trim() } : {}),
     ...(releaseDate ? { releaseDate } : {}),
     ...(releaseYear === undefined ? {} : { releaseYear }),
     ...(isrc ? { isrc } : {}),
@@ -1422,6 +1427,7 @@ export function writeRekordboxPlan(
   const artists = new Map<string, DjmdArtist>();
   const albums = new Map<string, DjmdAlbum>();
   const labels = new Map<string, DjmdLabel>();
+  const genres = new Map<string, DjmdGenre>();
   const existingMemberships = db
     .query(rekordbox.DjmdSongPlaylist)
     .where({ PlaylistID: playlist.ID })
@@ -1490,11 +1496,17 @@ export function writeRekordboxPlan(
           db.addLabel(item.metadata.label!),
         )
       : undefined;
+    const genre = item.metadata.genre
+      ? findOrCreateNamed(db, rekordbox.DjmdGenre, item.metadata.genre, genres, () =>
+          db.addGenre(item.metadata.genre!),
+        )
+      : undefined;
     const values: Record<string, DatabaseValue> = {
       Title: item.metadata.title,
       ArtistID: artist.ID,
       AlbumID: album?.ID ?? null,
       LabelID: label?.ID ?? null,
+      GenreID: genre?.ID ?? null,
       Length: requireMeasuredDuration(item),
       ISRC: item.metadata.isrc ?? null,
       ReleaseDate: item.metadata.releaseDate ?? null,
@@ -1866,6 +1878,15 @@ function verifyContentMetadata(
     content.get("LabelID"),
     metadata.label,
     "Label",
+    planned,
+    relationCache,
+  );
+  verifyNamedRelation(
+    db,
+    rekordbox.DjmdGenre,
+    content.get("GenreID"),
+    metadata.genre,
+    "Genre",
     planned,
     relationCache,
   );

@@ -32,6 +32,8 @@ type RecordingIdentity = {
   artists: string[];
   album?: string;
   albumArtists?: string[];
+  label?: string;
+  genre?: string;
   releaseDate?: string;
   durationMs?: number;
   searchQuery: string;
@@ -150,6 +152,8 @@ function tracklistIdentity(entry: ResolvedTrack): RecordingIdentity {
     title,
     artists: [entry.identity.artist],
     ...(entry.identity.album ? { album: entry.identity.album } : {}),
+    ...(entry.identity.label ? { label: entry.identity.label } : {}),
+    ...(entry.identity.genre ? { genre: entry.identity.genre } : {}),
     ...(entry.identity.releaseDate ? { releaseDate: entry.identity.releaseDate } : {}),
     searchQuery: entry.identity.searchQuery,
   };
@@ -169,6 +173,8 @@ function spotifyIdentity(
     artists: [...artists],
     ...(candidate.album ? { album: candidate.album } : {}),
     ...(candidate.albumArtists ? { albumArtists: [...candidate.albumArtists] } : {}),
+    ...(entry.identity.label ? { label: entry.identity.label } : {}),
+    ...(entry.identity.genre ? { genre: entry.identity.genre } : {}),
     ...(candidate.releaseDate ? { releaseDate: candidate.releaseDate } : {}),
     ...(candidate.durationMs === undefined ? {} : { durationMs: candidate.durationMs }),
     searchQuery: `${artists.join(" ")} ${title}`,
@@ -206,6 +212,9 @@ function recordingVariant(
     title: identity.title,
     artists: [...identity.artists],
     ...(identity.album ? { album: identity.album } : {}),
+    ...(identity.albumArtists?.length ? { albumArtists: [...identity.albumArtists] } : {}),
+    ...(identity.label ? { label: identity.label } : {}),
+    ...(identity.genre ? { genre: identity.genre } : {}),
     ...(identity.releaseDate ? { releaseDate: identity.releaseDate } : {}),
     ...(identity.isrc ? { isrc: identity.isrc } : {}),
     comment: recordingComment(manifest, identity),
@@ -232,6 +241,8 @@ function recordingVariant(
     artists: [...identity.artists],
     ...(identity.album ? { album: identity.album } : {}),
     ...(identity.albumArtists ? { albumArtists: [...identity.albumArtists] } : {}),
+    ...(identity.label ? { label: identity.label } : {}),
+    ...(identity.genre ? { genre: identity.genre } : {}),
     ...(identity.releaseDate ? { releaseDate: identity.releaseDate } : {}),
     ...(identity.durationMs === undefined ? {} : { durationMs: identity.durationMs }),
     outputPath: canonicalTrackPath(outputDirectory, {

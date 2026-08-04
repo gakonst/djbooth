@@ -67,6 +67,9 @@ function copiedFixture(): Fixture {
     CREATE TABLE djmdGenre (
       ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_deleted INTEGER
     );
+    CREATE TABLE djmdLabel (
+      ID TEXT PRIMARY KEY, Name TEXT, UUID TEXT, rb_local_deleted INTEGER
+    );
     CREATE TABLE djmdColor (
       ID TEXT PRIMARY KEY, ColorCode INTEGER, SortKey INTEGER, Commnt TEXT,
       rb_local_deleted INTEGER
@@ -74,7 +77,7 @@ function copiedFixture(): Fixture {
     CREATE TABLE djmdKey (ID TEXT PRIMARY KEY, ScaleName TEXT, rb_local_deleted INTEGER);
     CREATE TABLE djmdContent (
       ID TEXT PRIMARY KEY, FolderPath TEXT, FileNameL TEXT, Title TEXT, ArtistID TEXT,
-      AlbumID TEXT, GenreID TEXT, KeyID TEXT, ColorID TEXT, BPM INTEGER, Length INTEGER,
+      AlbumID TEXT, GenreID TEXT, LabelID TEXT, KeyID TEXT, ColorID TEXT, BPM INTEGER, Length INTEGER,
       Rating INTEGER,
       DJPlayCount INTEGER, AnalysisDataPath TEXT, Analysed INTEGER, Commnt TEXT, ISRC TEXT,
       ReleaseYear INTEGER, BitRate INTEGER, SampleRate INTEGER, FileSize INTEGER, UUID TEXT,
@@ -108,6 +111,7 @@ function copiedFixture(): Fixture {
       '150', 'Test Album', NULL, 'album-150', '100', NULL, NULL, NULL
     );
     INSERT INTO djmdGenre VALUES ('200', 'House', 'genre-200', NULL);
+    INSERT INTO djmdLabel VALUES ('250', 'Test Label', 'label-250', NULL);
     INSERT INTO djmdColor VALUES ('1', NULL, 1, 'Pink', NULL);
     INSERT INTO djmdColor VALUES ('2', NULL, 2, 'Red', NULL);
     INSERT INTO djmdColor VALUES ('3', NULL, 3, 'Orange', NULL);
@@ -119,12 +123,12 @@ function copiedFixture(): Fixture {
     INSERT INTO djmdKey VALUES ('300', 'Fm', NULL);
     INSERT INTO djmdKey VALUES ('301', '4A', NULL);
     INSERT INTO djmdContent VALUES (
-      '1', '/Music/One.mp3', 'One.mp3', 'One', '100', '150', '200', '300', '7',
+      '1', '/Music/One.mp3', 'One.mp3', 'One', '100', '150', '200', '250', '300', '7',
       12400, 180, 3, 2, '/PIONEER/USBANLZ/001/ANLZ0000.DAT', 105, 'First',
       'TEST00000001', 2025, 320, 44100, 1000, 'content-1', 1, NULL, '${now}', '${now}', NULL
     );
     INSERT INTO djmdContent VALUES (
-      '2', '/Music/Two.mp3', 'Two.mp3', 'Two', '100', '150', '200', '300', NULL,
+      '2', '/Music/Two.mp3', 'Two.mp3', 'Two', '100', '150', '200', '250', '300', NULL,
       12600, 200, 4, 0, '/PIONEER/USBANLZ/002/ANLZ0000.DAT', 105, 'Second',
       'TEST00000002', 2026, 320, 48000, 2000, 'content-2', 2, NULL, '${now}', '${now}', NULL
     );
@@ -786,6 +790,7 @@ describe("RekordboxLibraryService", () => {
         title: "  Updated title  ",
         artist: "Test Artist",
         album: "Test Album",
+        label: "Night Records",
         genre: "House",
         key: "F minor",
         bpm: 128.25,
@@ -804,6 +809,7 @@ describe("RekordboxLibraryService", () => {
       bpm: 128.25,
       comment: "Peak time",
       genre: "House",
+      label: "Night Records",
       isrc: "NEW000000001",
       key: "4A",
       rating: 5,
@@ -981,6 +987,7 @@ describe("RekordboxLibraryService", () => {
         title: "One",
         artist: "New Artist",
         album: "New Album",
+        label: "New Label",
         genre: "New Genre",
         key: "Fm",
         bpm: 124,
@@ -996,6 +1003,7 @@ describe("RekordboxLibraryService", () => {
       album: "New Album",
       artist: "New Artist",
       genre: "New Genre",
+      label: "New Label",
     });
   });
 
