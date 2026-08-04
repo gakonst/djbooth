@@ -1,0 +1,16 @@
+[Unit]
+Description=djbooth.ai read-only CDJ USB appliance
+After=local-fs.target
+ConditionPathExists=/var/lib/djbooth-cdj-usb/active.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/sbin/modprobe libcomposite
+ExecStart=/usr/local/bin/djbooth-cdj-usb attach
+ExecStop=/usr/local/bin/djbooth-cdj-usb detach --confirm-host-ejected
+TimeoutStartSec=30
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 ---
-"@gakonst/rekordbox-library": minor
-"@gakonst/music": minor
+"@gakonst/djbooth-app": minor
+"@gakonst/djbooth": minor
 "@gakonst/rekordbox": patch
 "@gakonst/tracks": patch
 ---

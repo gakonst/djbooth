@@ -160,7 +160,7 @@ export async function doctorDjLink(options: DoctorDjLinkOptions): Promise<DjLink
   const sourcePath = resolve(options.manifestPath);
   const env = options.env ?? process.env;
   const binaryPath = await resolveDjLinkBinary(options.binaryPath, env);
-  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "music-djlink-doctor-"));
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "djbooth-djlink-doctor-"));
   const snapshotPath = resolve(temporaryRoot, "library.json");
   try {
     await writeDjLinkSnapshot(snapshotPath, snapshot);
@@ -554,10 +554,11 @@ export async function resolveDjLinkBinary(
   const packageRoot = resolve(import.meta.dirname, "..");
   const candidates = [
     override,
+    env.DJBOOTH_DJLINK_BINARY,
     env.MUSIC_DJLINK_BINARY,
-    resolve(packageRoot, "native-bin/music-djlink"),
-    resolve(packageRoot, "../../rust/target/release/music-djlink"),
-    resolve(packageRoot, "../../rust/target/debug/music-djlink"),
+    resolve(packageRoot, "native-bin/djbooth-djlink"),
+    resolve(packageRoot, "../../rust/target/release/djbooth-djlink"),
+    resolve(packageRoot, "../../rust/target/debug/djbooth-djlink"),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     const absolute = resolve(candidate);
@@ -722,8 +723,9 @@ async function socketResponds(socketPath: string): Promise<boolean> {
 
 function runtimePaths(env: NodeJS.ProcessEnv): RuntimePaths {
   const root = resolve(
-    env.MUSIC_DJLINK_STATE_DIR ??
-      resolve(env.XDG_STATE_HOME ?? resolve(homedir(), ".local/state"), "music-ts/djlink"),
+    env.DJBOOTH_DJLINK_STATE_DIR ??
+      env.MUSIC_DJLINK_STATE_DIR ??
+      resolve(env.XDG_STATE_HOME ?? resolve(homedir(), ".local/state"), "djbooth/djlink"),
   );
   return {
     root,

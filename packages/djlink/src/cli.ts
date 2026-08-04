@@ -129,7 +129,7 @@ const browseOutput = z.object({
 export const djlinkCli = Cli.create("djlink", {
   version: DJLINK_VERSION,
   description:
-    "Serve the complete Rekordbox master.db or acquired music-ts recordings to CDJs over Pro DJ Link.",
+    "Serve compatible master.db content or acquired djbooth recordings to CDJs over Pro DJ Link.",
   hint: "Start the full browsable library: music djlink rekordbox. Add a track selector to validate, start, discover, and cue it in one shot. PLAY stays physical.",
   mcp: {
     instructions:
@@ -167,7 +167,7 @@ djlinkCli.command("rekordbox", {
       .boolean()
       .default(true)
       .describe("Permit served tracks without complete Rekordbox analysis"),
-    binary: z.string().optional().describe("Native music-djlink helper override"),
+    binary: z.string().optional().describe("Native djbooth-djlink helper override"),
     bindIp: z.string().optional().describe("DJ Link interface IPv4 address; auto-detected"),
     broadcastIp: z.string().optional().describe("DJ Link broadcast IPv4 address; auto-derived"),
     intervalMs: z.number().int().min(10).max(5_000).default(250),
@@ -239,7 +239,7 @@ djlinkCli.command("doctor-rekordbox", {
     "Validate direct read-only master.db ingestion, local audio, playlists, and Rekordbox analysis.",
   options: z.object({
     allowMissingAnalysis: z.boolean().default(false),
-    binary: z.string().optional().describe("Native music-djlink helper override"),
+    binary: z.string().optional().describe("Native djbooth-djlink helper override"),
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
   }),
   output: doctorOutput,
@@ -272,7 +272,7 @@ djlinkCli.command("run", {
       .boolean()
       .default(false)
       .describe("Permit tracks without complete Rekordbox analysis"),
-    binary: z.string().optional().describe("Native music-djlink helper override"),
+    binary: z.string().optional().describe("Native djbooth-djlink helper override"),
     bindIp: z.string().optional().describe("DJ Link interface IPv4 address; auto-detected"),
     broadcastIp: z.string().optional().describe("DJ Link broadcast IPv4 address; auto-derived"),
     intervalMs: z.number().int().min(10).max(5_000).default(250),
@@ -339,7 +339,7 @@ djlinkCli.command("doctor", {
       .boolean()
       .default(false)
       .describe("Permit tracks without complete Rekordbox analysis"),
-    binary: z.string().optional().describe("Native music-djlink helper override"),
+    binary: z.string().optional().describe("Native djbooth-djlink helper override"),
   }),
   output: doctorOutput,
   async run(c) {
@@ -365,7 +365,7 @@ djlinkCli.command("start", {
       .boolean()
       .default(false)
       .describe("Permit tracks without complete Rekordbox analysis"),
-    binary: z.string().optional().describe("Native music-djlink helper override"),
+    binary: z.string().optional().describe("Native djbooth-djlink helper override"),
     bindIp: z.string().optional().describe("DJ Link interface IPv4 address; auto-detected"),
     broadcastIp: z.string().optional().describe("DJ Link broadcast IPv4 address; auto-derived"),
     name: z.string().min(1).default("music").describe("Source name shown on the CDJ"),

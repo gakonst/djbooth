@@ -6,13 +6,13 @@ import { fileURLToPath } from "node:url";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = resolve(packageRoot, "../..");
 const manifest = resolve(workspaceRoot, "rust/Cargo.toml");
-const source = resolve(workspaceRoot, "rust/target/release/music-cdj-usb");
-const destination = resolve(packageRoot, "native-bin/music-cdj-usb");
+const source = resolve(workspaceRoot, "rust/target/release/djbooth-cdj-usb");
+const destination = resolve(packageRoot, "native-bin/djbooth-cdj-usb");
 
 await new Promise((resolveBuild, rejectBuild) => {
   const child = spawn(
     "cargo",
-    ["build", "--release", "--manifest-path", manifest, "-p", "music-cdj-usb"],
+    ["build", "--release", "--manifest-path", manifest, "-p", "djbooth-cdj-usb"],
     {
       cwd: packageRoot,
       stdio: "inherit",

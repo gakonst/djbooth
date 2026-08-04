@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .rekordbox-analyzer/
+.djbooth-analyzer/
 .DS_Store
 *.log
 *.db-shm

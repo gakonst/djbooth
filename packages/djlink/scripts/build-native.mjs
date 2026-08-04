@@ -6,13 +6,13 @@ import { spawn } from "node:child_process";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = resolve(packageRoot, "../..");
 const manifest = resolve(workspaceRoot, "rust/Cargo.toml");
-const source = resolve(workspaceRoot, "rust/target/release/music-djlink");
-const destination = resolve(packageRoot, "native-bin/music-djlink");
+const source = resolve(workspaceRoot, "rust/target/release/djbooth-djlink");
+const destination = resolve(packageRoot, "native-bin/djbooth-djlink");
 
 await new Promise((resolveBuild, rejectBuild) => {
   const child = spawn(
     "cargo",
-    ["build", "--release", "--manifest-path", manifest, "-p", "music-djlink"],
+    ["build", "--release", "--manifest-path", manifest, "-p", "djbooth-djlink"],
     {
       cwd: packageRoot,
       stdio: "inherit",

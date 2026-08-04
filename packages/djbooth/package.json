@@ -1,0 +1,117 @@
+{
+  "name": "@gakonst/djbooth",
+  "version": "0.2.0",
+  "description": "Agentic DJ workflow API and CLI for acquisition, analysis, stems, library management, and compatible exports",
+  "license": "MIT",
+  "author": "Georgios Konstantopoulos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gakonst/music-ts",
+    "directory": "packages/djbooth"
+  },
+  "bin": {
+    "djbooth": "./dist/bin.js",
+    "music": "./dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tracks": {
+      "types": "./dist/tracks.d.ts",
+      "import": "./dist/tracks.js"
+    },
+    "./djlink": {
+      "types": "./dist/djlink.d.ts",
+      "import": "./dist/djlink.js"
+    },
+    "./usb": {
+      "types": "./dist/usb.d.ts",
+      "import": "./dist/usb.js"
+    },
+    "./spots": {
+      "types": "./dist/spots.d.ts",
+      "import": "./dist/spots.js"
+    },
+    "./soundcloud": {
+      "types": "./dist/soundcloud.d.ts",
+      "import": "./dist/soundcloud.js"
+    },
+    "./slsk": {
+      "types": "./dist/slsk.d.ts",
+      "import": "./dist/slsk.js"
+    },
+    "./ytdlp": {
+      "types": "./dist/ytdlp.d.ts",
+      "import": "./dist/ytdlp.js"
+    },
+    "./rekordbox": {
+      "types": "./dist/rekordbox.d.ts",
+      "import": "./dist/rekordbox.js"
+    },
+    "./library": {
+      "types": "./dist/library.d.ts",
+      "import": "./dist/library.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "cli": "tsx --tsconfig tsconfig.cli.json src/cli.ts",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint src test",
+    "prepack": "pnpm build",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "validate": "pnpm check && pnpm build"
+  },
+  "dependencies": {
+    "@cloudflare/codemode": "0.4.2",
+    "@gakonst/cdj-usb": "workspace:*",
+    "@gakonst/djbooth-app": "workspace:*",
+    "@gakonst/djlink": "workspace:*",
+    "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/soundcloud": "workspace:*",
+    "@gakonst/spots": "workspace:*",
+    "@gakonst/tracks": "workspace:*",
+    "@gakonst/ytdlp-ts": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "incur": "0.4.13",
+    "secure-exec": "0.3.3",
+    "slsk-ts": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.7",
+    "@vitest/coverage-v8": "^4.1.10",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

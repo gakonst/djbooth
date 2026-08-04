@@ -18,14 +18,14 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const suppliedPackDirectory = process.argv[2];
 const packDirectory = suppliedPackDirectory
   ? resolve(suppliedPackDirectory)
-  : mkdtempSync(join(tmpdir(), "music-ts-packs-"));
+  : mkdtempSync(join(tmpdir(), "djbooth-ts-packs-"));
 
 const packages = [
-  { name: "@gakonst/music", prefix: "gakonst-music-", bins: ["music"] },
+  { name: "@gakonst/djbooth", prefix: "gakonst-djbooth-", bins: ["djbooth", "music"] },
   {
     name: "@gakonst/djlink",
     prefix: "gakonst-djlink-",
-    bins: ["djlink", "music-djlink-native"],
+    bins: ["djlink", "djbooth-djlink-native"],
   },
   {
     name: "@gakonst/cdj-usb",
@@ -33,9 +33,9 @@ const packages = [
     bins: ["cdj-usb"],
   },
   {
-    name: "@gakonst/rekordbox-library",
-    prefix: "gakonst-rekordbox-library-",
-    bins: ["rekordbox-library"],
+    name: "@gakonst/djbooth-app",
+    prefix: "gakonst-djbooth-app-",
+    bins: ["djbooth-app"],
   },
   {
     name: "@gakonst/tracks",
@@ -104,7 +104,7 @@ function createPlaylistFixture(path, packageRoot) {
       INSERT INTO djmdArtist VALUES ('artist-1', 'Packed Artist');
       INSERT INTO djmdKey VALUES ('key-1', '10A');
       INSERT INTO djmdContent VALUES (
-        'content-1', '/Music/Packed.flac', 'Packed Track', 'artist-1', 12801, 'key-1', 165, 5, 105
+        'content-1', '/djbooth.ai/Packed.flac', 'Packed Track', 'artist-1', 12801, 'key-1', 165, 5, 105
       );
       INSERT INTO djmdSongPlaylist VALUES ('membership-1', 'playlist-1', 'content-1', 1);
     `);
@@ -146,13 +146,13 @@ try {
     join(consumer, "package.json"),
     `${JSON.stringify(
       {
-        name: "music-ts-pack-smoke",
+        name: "djbooth-ts-pack-smoke",
         private: true,
         dependencies,
         pnpm: {
           onlyBuiltDependencies: ["better-sqlite3-multiple-ciphers"],
           overrides: Object.fromEntries(
-            Object.entries(dependencies).filter(([name]) => name !== "@gakonst/music"),
+            Object.entries(dependencies).filter(([name]) => name !== "@gakonst/djbooth"),
           ),
         },
       },
@@ -178,47 +178,47 @@ try {
     }
   }
 
-  const music = join(consumer, "node_modules", ".bin", "music");
-  const libraryHelp = run(music, ["library", "--help"], {
+  const djbooth = join(consumer, "node_modules", ".bin", "djbooth");
+  const libraryHelp = run(djbooth, ["library", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !libraryHelp.stdout.includes("music library") ||
+    !libraryHelp.stdout.includes("djbooth library") ||
     !libraryHelp.stdout.includes("status") ||
     !libraryHelp.stdout.includes("serve")
   ) {
-    throw new Error("Packed music CLI did not compose the Rekordbox library workbench");
+    throw new Error("Packed djbooth CLI did not compose the djbooth.ai library workbench");
   }
-  process.stdout.write("✓ music library composed CLI\n");
+  process.stdout.write("✓ djbooth library composed CLI\n");
 
-  const djlinkHelp = run(music, ["djlink", "--help"], {
+  const djlinkHelp = run(djbooth, ["djlink", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !djlinkHelp.stdout.includes("music djlink") ||
+    !djlinkHelp.stdout.includes("djbooth djlink") ||
     !djlinkHelp.stdout.includes("devices") ||
     !djlinkHelp.stdout.includes("load") ||
     !djlinkHelp.stdout.includes("search")
   ) {
-    throw new Error("Packed music CLI did not compose the DJ Link workflow");
+    throw new Error("Packed djbooth CLI did not compose the DJ Link workflow");
   }
-  process.stdout.write("✓ music djlink composed CLI\n");
+  process.stdout.write("✓ djbooth djlink composed CLI\n");
 
-  const usbHelp = run(music, ["usb", "--help"], {
+  const usbHelp = run(djbooth, ["usb", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !usbHelp.stdout.includes("music usb") ||
+    !usbHelp.stdout.includes("djbooth usb") ||
     !usbHelp.stdout.includes("sync") ||
     !usbHelp.stdout.includes("export") ||
     !usbHelp.stdout.includes("doctor")
   ) {
-    throw new Error("Packed music CLI did not compose the CDJ front-USB workflow");
+    throw new Error("Packed djbooth CLI did not compose the CDJ front-USB workflow");
   }
-  const usbSyncHelp = run(music, ["usb", "sync", "--help"], {
+  const usbSyncHelp = run(djbooth, ["usb", "sync", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -228,9 +228,9 @@ try {
     !usbSyncHelp.stdout.includes("unseen CDJ histories") ||
     !usbSyncHelp.stdout.includes("DJ Set YYYY-MM-DD")
   ) {
-    throw new Error("Packed music CLI did not expose differential CDJ USB synchronization");
+    throw new Error("Packed djbooth CLI did not expose differential CDJ USB synchronization");
   }
-  const usbExportHelp = run(music, ["usb", "export", "--help"], {
+  const usbExportHelp = run(djbooth, ["usb", "export", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -239,11 +239,11 @@ try {
     !usbExportHelp.stdout.includes("--replace") ||
     !usbExportHelp.stdout.includes("export.pdb")
   ) {
-    throw new Error("Packed music CLI did not expose the legacy Device Library exporter");
+    throw new Error("Packed djbooth CLI did not expose the legacy Device Library exporter");
   }
-  process.stdout.write("✓ music usb sync/export composed CLI\n");
+  process.stdout.write("✓ djbooth usb sync/export composed CLI\n");
 
-  const analyzeHelp = run(music, ["rekordbox", "analyze", "--help"], {
+  const analyzeHelp = run(djbooth, ["rekordbox", "analyze", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -251,30 +251,30 @@ try {
     !analyzeHelp.stdout.includes("beat-grid-diff") ||
     !analyzeHelp.stdout.includes("waveform-diff")
   ) {
-    throw new Error("Packed music CLI did not expose semantic analysis comparisons");
+    throw new Error("Packed djbooth CLI did not expose semantic analysis comparisons");
   }
-  process.stdout.write("✓ music rekordbox analyze composed CLI\n");
+  process.stdout.write("✓ djbooth rekordbox analyze composed CLI\n");
 
-  const skills = run(music, ["skills", "list"], {
+  const skills = run(djbooth, ["skills", "list"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
     !skills.stdout.includes("10 skills") ||
-    !skills.stdout.includes("music-djlink") ||
-    !skills.stdout.includes("music-library") ||
-    !skills.stdout.includes("music-rekordbox") ||
-    !skills.stdout.includes("music-usb")
+    !skills.stdout.includes("djbooth-djlink") ||
+    !skills.stdout.includes("djbooth-library") ||
+    !skills.stdout.includes("djbooth-rekordbox") ||
+    !skills.stdout.includes("djbooth-usb")
   ) {
-    throw new Error("Packed music CLI did not expose its workflow and typed command-group skills");
+    throw new Error("Packed djbooth CLI did not expose its workflow and typed command-group skills");
   }
-  process.stdout.write("✓ music skills list\n");
+  process.stdout.write("✓ djbooth skills list\n");
 
-  run(music, ["skills", "add", "--no-global"], {
+  run(djbooth, ["skills", "add", "--no-global"], {
     cwd: consumer,
     stdio: "ignore",
   });
-  const installedSkill = join(consumer, ".agents", "skills", "music", "SKILL.md");
+  const installedSkill = join(consumer, ".agents", "skills", "djbooth", "SKILL.md");
   const installedSkillSource = readFileSync(installedSkill, "utf8");
   const workflowContracts = [
     "## ytdlp engine contract",
@@ -283,56 +283,56 @@ try {
     "shared cross-process database lock",
     "offline bulk workflows",
     "reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact",
-    "music rekordbox analyze beat-grid-diff",
-    "music rekordbox analyze waveform-diff",
+    "djbooth rekordbox analyze beat-grid-diff",
+    "djbooth rekordbox analyze waveform-diff",
     "## 8. Serve and load connected CDJs",
-    "music usb sync",
+    "djbooth usb sync",
     "Spotify streaming tracks cannot be LINK EXPORTed",
-    "music djlink search <query>",
+    "djbooth djlink search <query>",
   ];
   if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {
-    throw new Error("Installed Music workflow skill is missing a safety contract");
+    throw new Error("Installed djbooth.ai workflow skill is missing a safety contract");
   }
   const generatedSkills = [
-    ["music-djlink", ["# music djlink doctor", "# music djlink load", "# music djlink search"]],
-    ["music-library", ["# music library serve"]],
-    ["music-tracks", ["# music tracks resolve"]],
-    ["music-spots", ["# music spots api search"]],
-    ["music-soundcloud", ["# music soundcloud resolve"]],
-    ["music-slsk", ["# music slsk download"]],
-    ["music-usb", ["# music usb doctor", "# music usb export", "# music usb sync"]],
-    ["music-ytdlp-ts", ["# music ytdlp-ts download"]],
+    ["djbooth-djlink", ["# djbooth djlink doctor", "# djbooth djlink load", "# djbooth djlink search"]],
+    ["djbooth-library", ["# djbooth library serve"]],
+    ["djbooth-tracks", ["# djbooth tracks resolve"]],
+    ["djbooth-spots", ["# djbooth spots api search"]],
+    ["djbooth-soundcloud", ["# djbooth soundcloud resolve"]],
+    ["djbooth-slsk", ["# djbooth slsk download"]],
+    ["djbooth-usb", ["# djbooth usb doctor", "# djbooth usb export", "# djbooth usb sync"]],
+    ["djbooth-ytdlp-ts", ["# djbooth ytdlp-ts download"]],
     [
-      "music-rekordbox",
+      "djbooth-rekordbox",
       [
-        "# music rekordbox analyze beat-grid-diff",
-        "# music rekordbox analyze waveform-diff",
-        "# music rekordbox db playlist create",
-        "# music rekordbox db playlist list",
-        "# music rekordbox db playlist show",
+        "# djbooth rekordbox analyze beat-grid-diff",
+        "# djbooth rekordbox analyze waveform-diff",
+        "# djbooth rekordbox db playlist create",
+        "# djbooth rekordbox db playlist list",
+        "# djbooth rekordbox db playlist show",
       ],
     ],
   ];
   for (const [skill, commands] of generatedSkills) {
     const source = readFileSync(join(consumer, ".agents", "skills", skill, "SKILL.md"), "utf8");
     if (
-      !source.includes("requires_bin: music") ||
+      !source.includes("requires_bin: djbooth") ||
       commands.some((command) => !source.includes(command))
     )
       throw new Error(`Installed ${skill} skill is missing generated Incur command metadata`);
   }
-  process.stdout.write("✓ music skills add --no-global\n");
+  process.stdout.write("✓ djbooth skills add --no-global\n");
 
   run(
     process.execPath,
     [
       "--input-type=module",
       "--eval",
-      'await Promise.all(["@gakonst/music", "@gakonst/music/djlink", "@gakonst/music/usb", "@gakonst/music/library", "@gakonst/music/mcp", "@gakonst/music/tracks", "@gakonst/music/spots", "@gakonst/music/soundcloud", "@gakonst/music/slsk", "@gakonst/music/ytdlp", "@gakonst/music/rekordbox", "@gakonst/djlink", "@gakonst/djlink/cli", "@gakonst/cdj-usb", "@gakonst/cdj-usb/cli", "@gakonst/rekordbox-library", "@gakonst/rekordbox-library/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli", "@gakonst/rekordbox/devicelib"].map((specifier) => import(specifier)))',
+      'await Promise.all(["@gakonst/djbooth", "@gakonst/djbooth/djlink", "@gakonst/djbooth/usb", "@gakonst/djbooth/library", "@gakonst/djbooth/mcp", "@gakonst/djbooth/tracks", "@gakonst/djbooth/spots", "@gakonst/djbooth/soundcloud", "@gakonst/djbooth/slsk", "@gakonst/djbooth/ytdlp", "@gakonst/djbooth/rekordbox", "@gakonst/djlink", "@gakonst/djlink/cli", "@gakonst/cdj-usb", "@gakonst/cdj-usb/cli", "@gakonst/djbooth-app", "@gakonst/djbooth-app/cli", "@gakonst/tracks/cli", "@gakonst/spots/cli", "@gakonst/soundcloud/cli", "slsk-ts/cli", "@gakonst/ytdlp-ts/cli", "@gakonst/rekordbox/cli", "@gakonst/rekordbox/devicelib"].map((specifier) => import(specifier)))',
     ],
     { cwd: consumer, stdio: "ignore" },
   );
-  process.stdout.write("✓ @gakonst/music exports\n");
+  process.stdout.write("✓ @gakonst/djbooth exports\n");
 
   const installedRekordbox = join(consumer, "node_modules", "@gakonst", "rekordbox");
   const rekordbox = join(consumer, "node_modules", ".bin", "rekordbox");
@@ -341,6 +341,7 @@ try {
   );
   const forbiddenRekordboxPayloads = [
     join(installedRekordbox, "vendor"),
+    join(consumer, "node_modules", ".bin", "djbooth-analyzer"),
     join(consumer, "node_modules", ".bin", "rekordbox-analyzer"),
   ];
   if (
@@ -369,7 +370,7 @@ try {
     throw new Error("Packed Rekordbox CLI did not list the fixture playlist hierarchy as JSON");
   }
   const playlistListTable = run(
-    music,
+    djbooth,
     ["rekordbox", "db", "playlist", "list", "--path", playlistFixture, "--plain"],
     { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -377,7 +378,7 @@ try {
     !playlistListTable.stdout.includes("| path") ||
     !playlistListTable.stdout.includes("Packed Sets › Packed Festival Set")
   ) {
-    throw new Error("Packed music CLI did not render the fixture playlist hierarchy table");
+    throw new Error("Packed djbooth CLI did not render the fixture playlist hierarchy table");
   }
   const playlistJson = run(
     rekordbox,
@@ -402,7 +403,7 @@ try {
     throw new Error("Packed Rekordbox CLI did not return the fixture playlist as JSON");
   }
   const playlistTable = run(
-    music,
+    djbooth,
     [
       "rekordbox",
       "db",
@@ -419,7 +420,7 @@ try {
     !playlistTable.stdout.includes("| position | artist") ||
     !playlistTable.stdout.includes("Packed Track")
   ) {
-    throw new Error("Packed music CLI did not render the fixture playlist table");
+    throw new Error("Packed djbooth CLI did not render the fixture playlist table");
   }
   process.stdout.write("✓ packed Rekordbox playlist JSON and table\n");
 
@@ -431,7 +432,7 @@ try {
       params: {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "music-ts-pack-smoke", version: "1.0.0" },
+        clientInfo: { name: "djbooth-ts-pack-smoke", version: "1.0.0" },
       },
     },
     { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
@@ -464,7 +465,7 @@ try {
       },
     },
   ];
-  const mcp = run(music, ["--mcp"], {
+  const mcp = run(djbooth, ["--mcp"], {
     cwd: consumer,
     input: `${mcpInput.map((request) => JSON.stringify(request)).join("\n")}\n`,
     stdio: ["pipe", "pipe", "pipe"],
@@ -502,7 +503,7 @@ try {
   const playlistListCall = responses.find((response) => response.id === 4)?.result;
   const playlistShowCall = responses.find((response) => response.id === 3)?.result;
   if (
-    initialize?.result?.serverInfo?.name !== "music" ||
+    initialize?.result?.serverInfo?.name !== "djbooth" ||
     !tools ||
     tools?.length < 50 ||
     !tools.some((tool) => tool.name === "slsk_download") ||
@@ -523,11 +524,11 @@ try {
     playlistListCall?.structuredContent?.entries?.[1]?.id !== "playlist-1" ||
     playlistListCall?.structuredContent?.entries?.[1]?.trackCount !== 1
   ) {
-    throw new Error("Packed music MCP did not initialize with the composable tool surface");
+    throw new Error("Packed djbooth MCP did not initialize with the composable tool surface");
   }
-  process.stdout.write(`✓ music stdio MCP (${tools.length} composable tools)\n`);
+  process.stdout.write(`✓ djbooth stdio MCP (${tools.length} composable tools)\n`);
 
-  const codeMcp = run(music, ["--codemode-mcp"], {
+  const codeMcp = run(djbooth, ["--codemode-mcp"], {
     cwd: consumer,
     input: `${[
       ...mcpDiscoveryInput,
@@ -559,9 +560,9 @@ try {
     codeTools[0]?.name !== "code" ||
     typeof codeResult?.runtime !== "string"
   ) {
-    throw new Error("Packed music CodeMode MCP did not execute in the local sandbox");
+    throw new Error("Packed djbooth CodeMode MCP did not execute in the local sandbox");
   }
-  process.stdout.write("✓ music local CodeMode MCP (1 sandboxed tool)\n");
+  process.stdout.write("✓ djbooth local CodeMode MCP (1 sandboxed tool)\n");
 } finally {
   if (!suppliedPackDirectory) rmSync(packDirectory, { recursive: true, force: true });
 }

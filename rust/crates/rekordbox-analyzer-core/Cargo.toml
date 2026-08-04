@@ -17,10 +17,6 @@ include = [
   "THIRD_PARTY_LICENSES.md",
 ]
 
-[[bin]]
-name = "rekordbox-analyzer"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1"
 rayon = "1"

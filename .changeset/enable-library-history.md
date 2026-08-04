@@ -1,5 +1,5 @@
 ---
-"@gakonst/rekordbox-library": minor
+"@gakonst/djbooth-app": minor
 ---
 
 Add server-backed session undo and redo for reversible Rekordbox library edits, including toolbar

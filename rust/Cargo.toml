@@ -1,10 +1,10 @@
 [workspace]
 members = [
-  "apps/music-djlink",
-  "apps/rekordbox-library-desktop",
+  "bin/djbooth-analyzer",
+  "bin/djbooth-cdj-usb",
+  "bin/djbooth-djlink",
   "crates/djtools-core",
   "crates/djtools-link",
-  "crates/music-cdj-usb",
   "crates/rekordbox-analyzer-core",
 ]
 resolver = "3"
@@ -25,6 +25,7 @@ djtools-link = { path = "crates/djtools-link" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 libc = "0.2"
+rekordbox-analyzer-core = { path = "crates/rekordbox-analyzer-core" }
 rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

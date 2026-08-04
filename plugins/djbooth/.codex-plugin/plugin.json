@@ -1,0 +1,40 @@
+{
+  "name": "djbooth",
+  "version": "0.2.0",
+  "description": "Agentically prepare music and produce Rekordbox-compatible DJ artifacts.",
+  "author": {
+    "name": "gakonst",
+    "url": "https://github.com/gakonst"
+  },
+  "homepage": "https://djbooth.ai",
+  "repository": "https://github.com/gakonst/music-ts",
+  "license": "MIT",
+  "keywords": [
+    "music",
+    "dj",
+    "rekordbox",
+    "soundcloud",
+    "spotify",
+    "soulseek"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "djbooth.ai",
+    "shortDescription": "Agentically prepare and operate your DJ library",
+    "longDescription": "djbooth.ai drives auditable workflows for resolving sets, acquiring and analyzing recordings, generating stems, producing Rekordbox-compatible artifacts, and operating the local workstation beside Codex without a duplicate AI interface.",
+    "developerName": "gakonst",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://djbooth.ai",
+    "defaultPrompt": [
+      "Resolve this DJ set and build a reviewed track manifest.",
+      "Show my SoundCloud likes and playlists.",
+      "Analyze these tracks and produce Rekordbox-compatible artifacts.",
+      "Open my local djbooth.ai workstation beside this chat."
+    ],
+    "brandColor": "#FF5500"
+  }
+}

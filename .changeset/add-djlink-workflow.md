@@ -1,6 +1,6 @@
 ---
 "@gakonst/djlink": minor
-"@gakonst/music": minor
+"@gakonst/djbooth": minor
 "@gakonst/rekordbox": patch
 "@gakonst/soundcloud": patch
 "@gakonst/spots": patch

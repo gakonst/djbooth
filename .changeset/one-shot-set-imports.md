@@ -1,5 +1,5 @@
 ---
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 "@gakonst/tracks": patch
 ---
 

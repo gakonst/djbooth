@@ -1,14 +1,14 @@
 {
-  "name": "music-ts",
+  "name": "djbooth-ai",
   "interface": {
-    "displayName": "Music TS"
+    "displayName": "djbooth.ai"
   },
   "plugins": [
     {
-      "name": "music",
+      "name": "djbooth",
       "source": {
         "source": "local",
-        "path": "./plugins/music"
+        "path": "./plugins/djbooth"
       },
       "policy": {
         "installation": "AVAILABLE",

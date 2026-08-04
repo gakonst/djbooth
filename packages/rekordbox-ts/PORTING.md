@@ -28,22 +28,24 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 | Master database              | implemented    | `db ...`        | 5 tests      | complete                    |
 | Master DB registry/aux files | implemented    | via `db ...`    | 1 test       | complete                    |
 | OneLibrary / Device Lib Plus | implemented    | `device ...`    | 5 tests      | hardware validation pending |
-| Legacy Device Library PDB    | implemented    | `music usb ...` | 10 tests     | hardware validation pending |
+| Legacy Device Library PDB    | implemented    | `djbooth usb …` | 10 tests     | hardware validation pending |
 
 ## Decisions
 
-### 2026-08-03 — runtime layout separation
+### 2026-08-03 — djbooth.ai identity and runtime layout separation
 
-- Moved the React/Vite workbench to `apps/rekordbox-library` and its Tauri shell into the shared
-  `rust/` workspace. The app retains a relative `src-tauri` symlink so standard Tauri commands keep
-  working while Rust ownership remains explicit.
-- Consolidated all active Rust crates and binaries under one `rust/Cargo.toml`; TypeScript package
-  scripts still expose the same public CLIs and build their native helpers from that workspace.
+- Moved the React/Vite workbench and its conventional standalone Tauri shell to
+  `apps/djbooth/src-tauri`, with an app-local toolchain, lockfile, and target directory.
+- Consolidated reusable Rust under `rust/crates` and CLI packages under `rust/bin`, all through one
+  `rust/Cargo.toml`; TypeScript packages still expose the same public wrappers.
+- Renamed the product, umbrella package/CLI, app, plugin, Skill, and native helpers to djbooth.ai.
+  Product copy treats Rekordbox as a compatibility target: djbooth produces compatible database,
+  analysis, and USB artifacts while agentically driving the complete preparation workflow.
 - Kept direct focused/native CLIs for development while routing every Rust/Python operation through
-  its package-owned Incur wrapper under the umbrella `music` command and Code Mode tool tree.
+  its package-owned Incur wrapper under the umbrella `djbooth` command and Code Mode tool tree.
 - Extracted the current MLX Mel-Band-RoFormer separator into the standalone uv project at
   `python/stems-mlx`. Desktop bundles copy that project as a resource; npm callers can select it
-  with `MUSIC_STEMS_MLX_PROJECT` or the CLI project-directory option.
+  with `DJBOOTH_STEMS_MLX_PROJECT` or the CLI project-directory option.
 - Moved the retired proprietary Rekordbox rehost, application bytes, and sanitized reference seed
   files to `archive/rekordbox`. The clean-room analyzer no longer discovers the rehost implicitly.
 
@@ -708,7 +710,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ### 2026-07-26 — Composed CLI runtime
 
-- Pin Incur `0.4.13` across every package mounted by `@gakonst/music`. Clean consumers must not
+- Pin Incur `0.4.13` across every package mounted by `@gakonst/djbooth`. Clean consumers must not
   resolve structurally incompatible Incur copies for parent and child CLI definitions.
 - Restore the hardware-proven periodic UDP/50002 `LINK_REPLY(0x06)` media
   announcement in the vendored DJ Link server. A live USB replug changed the
@@ -727,7 +729,7 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 - Do not publish the repository's analyzer helper or any AlphaTheta/Rekordbox binary in the public
   npm package. Analysis discovers an explicit `analyzerBinary`, `REKORDBOX_ANALYZER_BINARY`, a
-  `rekordbox-analyzer` on `PATH`, a user-local helper, or the repository-built development helper.
+  `djbooth-analyzer` on `PATH`, a user-local helper, or the repository-built development helper.
 - Database, ANLZ parsing, locking, metadata, and web-library orchestration remain TypeScript-owned.
 
 ### 2026-07-10 — Runtime and packaging

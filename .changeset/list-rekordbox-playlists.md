@@ -1,7 +1,7 @@
 ---
 "@gakonst/rekordbox": patch
-"@gakonst/rekordbox-library": patch
-"@gakonst/music": patch
+"@gakonst/djbooth-app": patch
+"@gakonst/djbooth": patch
 ---
 
 List the complete active Rekordbox playlist hierarchy with regular and smart-playlist track counts,

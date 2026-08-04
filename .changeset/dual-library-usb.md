@@ -1,7 +1,7 @@
 ---
 "@gakonst/rekordbox": minor
 "@gakonst/cdj-usb": minor
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 ---
 
 Initialize freshly formatted scoped USB exports with both traditional Device Library and encrypted

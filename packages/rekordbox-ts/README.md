@@ -21,7 +21,7 @@ policy, verification evidence, and implementation decisions are recorded in
 
 The optional `stems` backend is the standalone [`python/stems-mlx`](../../python/stems-mlx) uv
 project. It requires an Apple Silicon Mac and
-[uv](https://docs.astral.sh/uv/getting-started/installation/). Set `MUSIC_STEMS_MLX_PROJECT` when
+[uv](https://docs.astral.sh/uv/getting-started/installation/). Set `DJBOOTH_STEMS_MLX_PROJECT` when
 using an installed npm package outside this repository.
 
 ```sh
@@ -151,7 +151,7 @@ root.command(rekordboxCli);
 
 ```sh
 # Standalone Python boundary
-uv run --project python/stems-mlx music-stems-mlx doctor
+uv run --project python/stems-mlx djbooth-stems-mlx doctor
 
 # One-time 3.76 GB download, SHA-256 check, and PyTorch-to-MLX conversion
 rekordbox stems setup --format json
@@ -275,11 +275,11 @@ writes a durable intent/outcome journal, commits once, then reopens read-only fo
 `--clear-color`, or `--clear-color-table-index` for explicit clearing.
 
 ```sh
-music rekordbox db content cues CONTENT_ID --format json
-music rekordbox db content set-cue CONTENT_ID 32 --write
-music rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
+djbooth rekordbox db content cues CONTENT_ID --format json
+djbooth rekordbox db content set-cue CONTENT_ID 32 --write
+djbooth rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
   --type loop --end-seconds 72 --active-loop --comment "Drop loop" --write
-music rekordbox db content delete-cue CONTENT_ID CUE_ID --write
+djbooth rekordbox db content delete-cue CONTENT_ID CUE_ID --write
 ```
 
 For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.
@@ -342,7 +342,7 @@ Untouched ANLZ tags and opaque My Settings bytes round-trip losslessly. PQTZ and
 
 ### Audio analysis and database installation
 
-Analysis defaults to the releasable `rekordbox-analyzer` Rust binary. It decodes local audio and
+Analysis defaults to the releasable `djbooth-analyzer` Rust binary. It decodes local audio and
 produces deterministic `ANLZ0000.DAT`, `.EXT`, and `.2EX` files without opening Rekordbox or
 `master.db`. The clean engine requires no Rekordbox/JUCE/runtime bytes and runs directly on supported
 platforms.
@@ -496,7 +496,7 @@ Both `--concurrency` and `--threads` still accept explicit values through 64. Ex
 slots helped modestly; extra processes did not. Treat all numbers as host-specific and lower either
 limit when analysis competes with live DJ software.
 
-Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `rekordbox-analyzer` on `PATH`, or pass
+Set `REKORDBOX_CLEAN_ANALYZER_BINARY`, place `djbooth-analyzer` on `PATH`, or pass
 `analyzerBinary` to select the clean binary. The legacy `REKORDBOX_ANALYZER_BINARY` override remains
 reference-only so an old proprietary helper cannot be selected by the clean default. For an explicit
 reference run, set `REKORDBOX_REFERENCE_ANALYZER_BINARY` or place

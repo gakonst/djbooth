@@ -706,7 +706,8 @@ packaged. The reference helper, Rekordbox application bytes, generated cache,
 captures, and local goldens stay outside release artifacts.
 
 The npm package's explicit `files` allowlist excludes `vendor/`, and the helper
-build script compiles only `rust/crates/rekordbox-analyzer-core`. A release therefore
+build script compiles only `rust/bin/djbooth-analyzer` and its clean-room core dependency. A
+release therefore
 does not require or copy the local reference rehost.
 
 Universal helper builds place `LICENSE` and `THIRD_PARTY_LICENSES.md` beside

@@ -180,10 +180,11 @@ export async function resolveCdjUsbBinary(
 ): Promise<string> {
   const candidates = [
     explicit,
+    env.DJBOOTH_CDJ_USB_BINARY,
     env.MUSIC_CDJ_USB_BINARY,
-    fileURLToPath(new URL("../native-bin/music-cdj-usb", import.meta.url)),
-    fileURLToPath(new URL("../../../rust/target/release/music-cdj-usb", import.meta.url)),
-    fileURLToPath(new URL("../../../rust/target/debug/music-cdj-usb", import.meta.url)),
+    fileURLToPath(new URL("../native-bin/djbooth-cdj-usb", import.meta.url)),
+    fileURLToPath(new URL("../../../rust/target/release/djbooth-cdj-usb", import.meta.url)),
+    fileURLToPath(new URL("../../../rust/target/debug/djbooth-cdj-usb", import.meta.url)),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {
@@ -197,7 +198,7 @@ export async function resolveCdjUsbBinary(
   }
   throw new CdjUsbError(
     "NATIVE_MISSING",
-    "music-cdj-usb native helper is missing; build it with pnpm --filter @gakonst/cdj-usb native:build",
+    "djbooth-cdj-usb native helper is missing; build it with pnpm --filter @gakonst/cdj-usb native:build",
   );
 }
 
@@ -225,7 +226,7 @@ async function runNative(args: string[], options: CdjUsbRuntimeOptions): Promise
   if (exitCode !== 0) {
     throw new CdjUsbError(
       "NATIVE_FAILED",
-      stderr.trim() || `music-cdj-usb exited with status ${String(exitCode)}`,
+      stderr.trim() || `djbooth-cdj-usb exited with status ${String(exitCode)}`,
     );
   }
   try {
@@ -233,7 +234,7 @@ async function runNative(args: string[], options: CdjUsbRuntimeOptions): Promise
   } catch (error) {
     throw new CdjUsbError(
       "INVALID_OUTPUT",
-      `music-cdj-usb returned invalid JSON: ${stdout.slice(0, 240)}`,
+      `djbooth-cdj-usb returned invalid JSON: ${stdout.slice(0, 240)}`,
       { cause: error },
     );
   }
@@ -265,7 +266,7 @@ async function spawnBounded(
         rejectProcess(
           new CdjUsbError(
             "NATIVE_FAILED",
-            `music-cdj-usb exceeded ${String(MAX_NATIVE_OUTPUT_BYTES)} output bytes`,
+            `djbooth-cdj-usb exceeded ${String(MAX_NATIVE_OUTPUT_BYTES)} output bytes`,
           ),
         );
         return;
@@ -278,7 +279,7 @@ async function spawnBounded(
     child.once("error", (error) => {
       options.signal?.removeEventListener("abort", abort);
       rejectProcess(
-        new CdjUsbError("NATIVE_FAILED", "failed to start music-cdj-usb", { cause: error }),
+        new CdjUsbError("NATIVE_FAILED", "failed to start djbooth-cdj-usb", { cause: error }),
       );
     });
     child.once("close", (exitCode) => {

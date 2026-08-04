@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
+export const DJBOOTH_LIBRARY_ROOT_ENV = "DJBOOTH_LIBRARY_ROOT";
 export const MUSIC_LIBRARY_ROOT_ENV = "MUSIC_LIBRARY_ROOT";
 
 export type CanonicalTrackPathOptions = {
@@ -16,7 +17,8 @@ export function defaultTrackLibraryRoot(
   environment: NodeJS.ProcessEnv = process.env,
   homeDirectory = homedir(),
 ): string {
-  const configured = environment[MUSIC_LIBRARY_ROOT_ENV]?.trim();
+  const configured =
+    environment[DJBOOTH_LIBRARY_ROOT_ENV]?.trim() || environment[MUSIC_LIBRARY_ROOT_ENV]?.trim();
   if (!configured) return join(homeDirectory, ".djtools", "tracks");
   if (configured === "~") return homeDirectory;
   if (configured.startsWith("~/")) return resolve(homeDirectory, configured.slice(2));

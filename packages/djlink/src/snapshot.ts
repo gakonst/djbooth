@@ -64,7 +64,7 @@ export async function buildDjLinkSnapshot(manifestPath: string): Promise<DjLinkS
     const dateAdded = file.birthtimeMs > 0 ? file.birthtime : file.mtime;
     const spotifyId = entry.spotify.status === "matched" ? entry.spotify.id : undefined;
     const commentParts = [
-      entry.acquisition.download.kind === "source-set-clip" ? "music-ts set extract" : "music-ts",
+      entry.acquisition.download.kind === "source-set-clip" ? "djbooth set extract" : "djbooth.ai",
       spotifyId ? `spotify:${spotifyId}` : undefined,
       entry.acquisition.download.source ? `source:${entry.acquisition.download.source}` : undefined,
     ].filter((value): value is string => Boolean(value));
@@ -106,7 +106,7 @@ export async function buildDjLinkSnapshot(manifestPath: string): Promise<DjLinkS
   }
   const playlistName =
     manifest.artifacts.rekordbox?.playlistName ??
-    `${manifest.source.title ?? basename(absoluteManifestPath, extname(absoluteManifestPath))} [music-ts]`;
+    `${manifest.source.title ?? basename(absoluteManifestPath, extname(absoluteManifestPath))} [djbooth.ai]`;
 
   return {
     schemaVersion: DJLINK_SNAPSHOT_SCHEMA_VERSION,

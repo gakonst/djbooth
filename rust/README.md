@@ -2,18 +2,21 @@
 
 All active Rust code lives in this Cargo workspace.
 
-| Path | Responsibility |
-| --- | --- |
+| Path                             | Responsibility                                       |
+| -------------------------------- | ---------------------------------------------------- |
+| `bin/djbooth-analyzer`           | Clean-room analyzer CLI                              |
+| `bin/djbooth-djlink`             | Native DJ Link CLI consumed by `packages/djlink`     |
+| `bin/djbooth-cdj-usb`            | Linux USB gadget CLI and runtime                     |
 | `crates/rekordbox-analyzer-core` | Clean-room audio analysis and DAT/EXT/2EX generation |
-| `crates/music-cdj-usb` | Linux USB gadget runtime |
-| `crates/djtools-core` | Shared DJ Link support library |
-| `crates/djtools-link` | Pro DJ Link, RemoteDB, and NFS implementation |
-| `apps/music-djlink` | Native DJ Link executable consumed by `packages/djlink` |
-| `apps/rekordbox-library-desktop` | Tauri shell packaging `apps/rekordbox-library` |
+| `crates/djtools-core`            | Shared DJ Link support library                       |
+| `crates/djtools-link`            | Pro DJ Link, RemoteDB, and NFS implementation        |
+
+The standalone Tauri application and its lockfile live with the frontend at
+`apps/djbooth/src-tauri`.
 
 TypeScript packages invoke these through package build scripts and copy release binaries into their
 `native-bin/` or packaged application resources. The binaries keep direct development CLIs, while
-the package-owned Incur commands wrap them under the top-level `music` CLI for normal use and agent
+the package-owned Incur commands wrap them under the top-level `djbooth` CLI for normal use and agent
 tooling. Rust source is never nested inside `packages/`.
 
 ```sh

@@ -1,6 +1,6 @@
 ---
 "@gakonst/tracks": minor
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 ---
 
 Store acquired recordings in one canonical artist/album library and make the end-to-end Rekordbox

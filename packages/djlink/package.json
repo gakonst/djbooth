@@ -1,7 +1,7 @@
 {
   "name": "@gakonst/djlink",
   "version": "0.1.0",
-  "description": "Typed music-ts bridge to the native Pro DJ Link server",
+  "description": "Typed djbooth.ai bridge to the native Pro DJ Link server",
   "license": "UNLICENSED",
   "author": "Georgios Konstantopoulos",
   "repository": {
@@ -10,12 +10,12 @@
     "directory": "packages/djlink"
   },
   "bin": {
-    "djlink": "./dist/bin.js",
-    "music-djlink-native": "./native-bin/music-djlink"
+    "djbooth-djlink-native": "./native-bin/djbooth-djlink",
+    "djlink": "./dist/bin.js"
   },
   "files": [
     "dist",
-    "native-bin",
+    "native-bin/djbooth-djlink",
     "README.md"
   ],
   "os": [
@@ -42,8 +42,8 @@
     "format:check": "oxfmt --check src test scripts package.json tsconfig.json tsconfig.build.json README.md && cargo +nightly fmt --manifest-path ../../rust/Cargo.toml --all -- --check",
     "lint": "oxlint src test scripts",
     "native:build": "node scripts/build-native.mjs",
-    "native:run": "cargo run --manifest-path ../../rust/Cargo.toml -p music-djlink --",
-    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djtools-core -p djtools-link -p music-djlink",
+    "native:run": "cargo run --manifest-path ../../rust/Cargo.toml -p djbooth-djlink --",
+    "native:test": "cargo test --manifest-path ../../rust/Cargo.toml -p djtools-core -p djtools-link -p djbooth-djlink",
     "prepack": "pnpm build && pnpm native:build",
     "test": "vitest run && pnpm native:test",
     "typecheck": "tsc --noEmit",

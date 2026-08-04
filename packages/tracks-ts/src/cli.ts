@@ -61,8 +61,10 @@ const { version: VERSION } = createRequire(import.meta.url)("../package.json") a
 
 function loadWorkspaceEnvironment(): void {
   const candidates = [
+    process.env.DJBOOTH_ENV_FILE,
     process.env.MUSIC_ENV_FILE,
     ...ancestorEnvironmentFiles(process.cwd()),
+    resolve(homedir(), ".config/djbooth/.env"),
     resolve(homedir(), ".config/music-ts/.env"),
     resolve(import.meta.dirname, "../../../.env"),
   ].filter(
@@ -125,10 +127,11 @@ const parseEnv = z.object({
 const importSetEnv = providerEnv.extend({
   SLSK_USERNAME: z.string().optional().describe("Soulseek username"),
   SLSK_PASSWORD: z.string().optional().describe("Soulseek password"),
-  MUSIC_LIBRARY_ROOT: z
+  DJBOOTH_LIBRARY_ROOT: z
     .string()
     .optional()
     .describe("Canonical artist/album recording root; default ~/.djtools/tracks"),
+  MUSIC_LIBRARY_ROOT: z.string().optional().describe("Legacy alias for DJBOOTH_LIBRARY_ROOT"),
 });
 
 const cacheModeOption = z
@@ -839,7 +842,7 @@ tracksCli.command("import-set", {
       .string()
       .optional()
       .describe(
-        "Canonical artist/album library root; defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks",
+        "Canonical artist/album library root; defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks",
       ),
     localDirectory: z
       .array(z.string())

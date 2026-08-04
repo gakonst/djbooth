@@ -203,6 +203,29 @@ wheels = [
 ]
 
 [[package]]
+name = "djbooth-stems-mlx"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "huggingface-hub", extra = ["hf-xet"] },
+    { name = "mlx-audio-separator", extra = ["convert"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "huggingface-hub", extras = ["hf-xet"], specifier = "==1.25.1" },
+    { name = "mlx-audio-separator", extras = ["convert"], specifier = "==0.1.5" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = "==0.12.7" }]
+
+[[package]]
 name = "dora-search"
 version = "0.1.12"
 source = { registry = "https://pypi.org/simple" }
@@ -521,29 +544,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/e0/47/dd32fa426cc721143
 wheels = [
     { url = "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl", hash = "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c", size = 536198, upload-time = "2023-03-07T16:47:09.197Z" },
 ]
-
-[[package]]
-name = "music-stems-mlx"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "huggingface-hub", extra = ["hf-xet"] },
-    { name = "mlx-audio-separator", extra = ["convert"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "huggingface-hub", extras = ["hf-xet"], specifier = "==1.25.1" },
-    { name = "mlx-audio-separator", extras = ["convert"], specifier = "==0.1.5" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = "==0.12.7" }]
 
 [[package]]
 name = "networkx"

@@ -1,7 +1,7 @@
 ---
 "@gakonst/tracks": minor
 "@gakonst/rekordbox": minor
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 "@gakonst/ytdlp-ts": patch
 ---
 

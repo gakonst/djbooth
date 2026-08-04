@@ -12,7 +12,7 @@ importers:
         specifier: latest
         version: 2.31.0(@types/node@24.13.3)
 
-  apps/rekordbox-library:
+  apps/djbooth:
     dependencies:
       '@gakonst/rekordbox':
         specifier: workspace:*
@@ -146,17 +146,47 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
-  packages/djlink:
+  packages/djbooth:
     dependencies:
+      '@cloudflare/codemode':
+        specifier: 0.4.2
+        version: 0.4.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(zod@4.4.3)
+      '@gakonst/cdj-usb':
+        specifier: workspace:*
+        version: link:../cdj-usb
+      '@gakonst/djbooth-app':
+        specifier: workspace:*
+        version: link:../../apps/djbooth
+      '@gakonst/djlink':
+        specifier: workspace:*
+        version: link:../djlink
       '@gakonst/rekordbox':
         specifier: workspace:*
         version: link:../rekordbox-ts
+      '@gakonst/soundcloud':
+        specifier: workspace:*
+        version: link:../soundcloud
+      '@gakonst/spots':
+        specifier: workspace:*
+        version: link:../spots
       '@gakonst/tracks':
         specifier: workspace:*
         version: link:../tracks-ts
+      '@gakonst/ytdlp-ts':
+        specifier: workspace:*
+        version: link:../ytdlp-ts
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       incur:
         specifier: 0.4.13
         version: 0.4.13
+      secure-exec:
+        specifier: 0.3.3
+        version: 0.3.3
+      slsk-ts:
+        specifier: workspace:*
+        version: link:../slsk-ts
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -183,47 +213,17 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
 
-  packages/music:
+  packages/djlink:
     dependencies:
-      '@cloudflare/codemode':
-        specifier: 0.4.2
-        version: 0.4.2(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(zod@4.4.3)
-      '@gakonst/cdj-usb':
-        specifier: workspace:*
-        version: link:../cdj-usb
-      '@gakonst/djlink':
-        specifier: workspace:*
-        version: link:../djlink
       '@gakonst/rekordbox':
         specifier: workspace:*
         version: link:../rekordbox-ts
-      '@gakonst/rekordbox-library':
-        specifier: workspace:*
-        version: link:../../apps/rekordbox-library
-      '@gakonst/soundcloud':
-        specifier: workspace:*
-        version: link:../soundcloud
-      '@gakonst/spots':
-        specifier: workspace:*
-        version: link:../spots
       '@gakonst/tracks':
         specifier: workspace:*
         version: link:../tracks-ts
-      '@gakonst/ytdlp-ts':
-        specifier: workspace:*
-        version: link:../ytdlp-ts
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.29.0
-        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       incur:
         specifier: 0.4.13
         version: 0.4.13
-      secure-exec:
-        specifier: 0.3.3
-        version: 0.3.3
-      slsk-ts:
-        specifier: workspace:*
-        version: link:../slsk-ts
       zod:
         specifier: ^4.4.3
         version: 4.4.3

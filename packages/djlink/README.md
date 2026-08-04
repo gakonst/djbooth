@@ -1,6 +1,6 @@
 # @gakonst/djlink
 
-Typed `music-ts` bridge to the native Pro DJ Link implementation imported from `djskills`.
+Typed `djbooth.ai` bridge to the native Pro DJ Link implementation imported from `djskills`.
 It projects a completed Tracks manifest into a DJ Link library, serves each verified local
 recording plus its Rekordbox ANLZ files through RemoteDB/NFS, discovers CDJs, and sends bounded
 track-load requests.
@@ -22,8 +22,8 @@ private packet replay.
 Use the complete direct Rekordbox library by default:
 
 ```sh
-music djlink rekordbox --format json
-music djlink rekordbox "Artist - Track" --player 3 --format json
+djbooth djlink rekordbox --format json
+djbooth djlink rekordbox "Artist - Track" --player 3 --format json
 ```
 
 Without a selector, `rekordbox` validates direct read-only master.db ingestion, starts or resumes,
@@ -33,16 +33,16 @@ ad-hoc manifest before its recordings are imported. Both leave PLAY physical. St
 for partial workflows and diagnosis:
 
 ```sh
-music djlink run ./set/manifest.json 4 --player 3 --format json
-music djlink doctor ./set/manifest.json --format json
-music djlink start ./set/manifest.json --format json
-music djlink status --format json
-music djlink devices --wait-ms 5000 --format json
-music djlink probe 169.254.7.4 --format json
-music djlink load 4 --player 3 --format json
-music djlink search "Science Fiction" --mode track --format json
-music djlink monitor --player 3 --format json
-music djlink stop --format json
+djbooth djlink run ./set/manifest.json 4 --player 3 --format json
+djbooth djlink doctor ./set/manifest.json --format json
+djbooth djlink start ./set/manifest.json --format json
+djbooth djlink status --format json
+djbooth djlink devices --wait-ms 5000 --format json
+djbooth djlink probe 169.254.7.4 --format json
+djbooth djlink load 4 --player 3 --format json
+djbooth djlink search "Science Fiction" --mode track --format json
+djbooth djlink monitor --player 3 --format json
+djbooth djlink stop --format json
 ```
 
 `doctor` validates the native helper, local audio, and DAT/EXT/2EX paths without joining the DJ
@@ -54,7 +54,7 @@ order, native ID, Spotify ID, title, or artist-title; it cues the local recordin
 the CDJ, without changing deck or library state, so index failures can be separated from deck UI
 activation failures. Press PLAY on the physical deck.
 
-`MUSIC_DJLINK_STATE_DIR` changes the daemon state directory. `MUSIC_DJLINK_BINARY` selects an
+`DJBOOTH_DJLINK_STATE_DIR` changes the daemon state directory. `DJBOOTH_DJLINK_BINARY` selects an
 explicit native helper. `--bind-ip` and `--broadcast-ip` are diagnostic overrides.
 
 ## Spotify boundary
@@ -96,16 +96,16 @@ Use two captures:
 Start the vendored source directly:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
   serve \
-  --snapshot /Users/gakonst/.local/state/music-ts/djlink/library.json \
-  --socket /tmp/music-djlink-lab.sock \
+  --snapshot /Users/gakonst/.local/state/djbooth.ai/djlink/library.json \
+  --socket /tmp/djbooth-djlink-lab.sock \
   --bind-ip 169.254.253.33 \
   --broadcast-ip 169.254.255.255 \
   --name music \
   --model rekordbox \
-  --log-path /tmp/music-djlink-source.log \
-  --wire-pcap /tmp/music-djlink-source.pcap \
+  --log-path /tmp/djbooth-djlink-source.log \
+  --wire-pcap /tmp/djbooth-djlink-source.pcap \
   --require-analysis
 ```
 
@@ -113,7 +113,7 @@ Capture deck ingress separately, replacing `en11` with the selected wired interf
 
 ```sh
 sudo tcpdump -ni en11 -U \
-  -w /tmp/music-djlink-live.pcap \
+  -w /tmp/djbooth-djlink-live.pcap \
   'udp port 50000 or udp port 50001 or udp port 50002'
 ```
 
@@ -124,15 +124,15 @@ Recover the original native Rekordbox capture by immutable git object; the simil
 git -C /Users/gakonst/github/gakonst/djtools \
   show 123e84e:rb-tracks.pcap > /tmp/rekordbox-rb-tracks-native.pcap
 
-cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
   audit-pcap \
-  --pcap /tmp/music-djlink-source.pcap \
+  --pcap /tmp/djbooth-djlink-source.pcap \
   --reference /tmp/rekordbox-rb-tracks-native.pcap \
   --require-core
 
-cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p djbooth-djlink -- \
   audit-pcap \
-  --pcap /tmp/music-djlink-live.pcap \
+  --pcap /tmp/djbooth-djlink-live.pcap \
   --require-remote-db-cursors
 ```
 

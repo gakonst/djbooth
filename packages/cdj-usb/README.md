@@ -8,7 +8,7 @@ ordinary Rekordbox `master.db`:
 CDJ HISTORY 001 ───────> DJ Set YYYY-MM-DD + play counts
                              in master.db
                                   |
-                           music usb sync
+                           djbooth usb sync
                                   |
 master.db + audio + ANLZ ─> changed USB files + both library indexes
 ```
@@ -70,7 +70,7 @@ USB host. Check the running kernel before buying more hardware:
 ls -1 /sys/class/udc
 ```
 
-At least one name must appear. `music usb doctor` performs the same check.
+At least one name must appear. `djbooth usb doctor` performs the same check.
 
 Orange Pi model names matter:
 
@@ -119,8 +119,8 @@ Install the native controller on the target Linux board:
 
 ```sh
 sudo install -m 0755 \
-  packages/cdj-usb/native-bin/music-cdj-usb \
-  /usr/local/bin/music-cdj-usb
+  packages/cdj-usb/native-bin/djbooth-cdj-usb \
+  /usr/local/bin/djbooth-cdj-usb
 ```
 
 Enable the board's USB controller in peripheral mode according to its device tree, then make
@@ -137,24 +137,24 @@ board's actual OTG controller/device-tree configuration.
 
 ## Sync a CDJ-3000 USB
 
-For a new or previously music-ts-owned mounted FAT/exFAT volume:
+For a new or previously djbooth.ai-owned mounted FAT/exFAT volume:
 
 ```sh
-music usb sync /mnt/cdj --database /path/to/master.db --write --format json
+djbooth usb sync /mnt/cdj --database /path/to/master.db --write --format json
 ```
 
 For a freshly formatted stick, initialize both USB library formats with one normal playlist by
 exact ID:
 
 ```sh
-music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
   --database /path/to/master.db --fresh --write --format json
 ```
 
-Run the same command without `--fresh` for an existing music-ts dual-library stick:
+Run the same command without `--fresh` for an existing djbooth.ai dual-library stick:
 
 ```sh
-music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
   --database /path/to/master.db --write --format json
 ```
 
@@ -185,7 +185,7 @@ If the CDJ added a history, sync imports it first and creates a normal playlist 
 checksummed and verified, and an interrupted retry recognizes the deterministic playlist receipt
 instead of applying play counts again.
 
-`music usb export` remains available for an outbound-only initial compile. It refuses to overwrite
+`djbooth usb export` remains available for an outbound-only initial compile. It refuses to overwrite
 unimported history and requires `--replace` for an existing exporter-owned volume. `sync` is the
 normal day-to-day command.
 
@@ -194,22 +194,22 @@ normal day-to-day command.
 The current configfs controller starts with a detached appliance and a complete backing image:
 
 ```sh
-music usb doctor ./rekordbox-usb.img --format json
-sudo music usb publish ./rekordbox-usb.img --format json
-sudo music usb attach --format json
-music usb status --format json
+djbooth usb doctor ./rekordbox-usb.img --format json
+sudo djbooth usb publish ./rekordbox-usb.img --format json
+sudo djbooth usb attach --format json
+djbooth usb status --format json
 ```
 
 `publish` validates a regular, non-empty, 512-byte-aligned file, hashes it, copies it into
-`/var/lib/music-cdj-usb/generations/<sha256>.img`, makes that generation non-writable, fsyncs it,
+`/var/lib/djbooth-cdj-usb/generations/<sha256>.img`, makes that generation non-writable, fsyncs it,
 and atomically replaces `active.json`. `attach` re-hashes the active generation before pointing
 configfs at it.
 
-The default USB identity is `music-ts / CDJ USB`; the machine ID supplies a stable serial. Select a
+The default USB identity is `djbooth.ai / CDJ USB`; the machine ID supplies a stable serial. Select a
 specific device controller only when the board exposes more than one:
 
 ```sh
-sudo music usb attach --udc 5020000.usb --product "music USB" --format json
+sudo djbooth usb attach --udc 5020000.usb --product "music USB" --format json
 ```
 
 Before changing generations:
@@ -221,9 +221,9 @@ Before changing generations:
 5. Attach again.
 
 ```sh
-sudo music usb detach --confirm-host-ejected --format json
-sudo music usb publish ./next-rekordbox-usb.img --format json
-sudo music usb attach --format json
+sudo djbooth usb detach --confirm-host-ejected --format json
+sudo djbooth usb publish ./next-rekordbox-usb.img --format json
+sudo djbooth usb attach --format json
 ```
 
 The kernel UDC can remain `configured` after a deck UI eject, so the confirmation is intentionally
@@ -233,20 +233,20 @@ configured.
 `run` is a locked first-boot convenience for a known-detached board:
 
 ```sh
-sudo music usb run ./rekordbox-usb.img --format json
+sudo djbooth usb run ./rekordbox-usb.img --format json
 ```
 
 ## systemd
 
-[`deploy/music-cdj-usb.service`](./deploy/music-cdj-usb.service) binds an already-published active
+[`deploy/djbooth-cdj-usb.service`](./deploy/djbooth-cdj-usb.service) binds an already-published active
 image at boot. Install it only after `doctor` passes:
 
 ```sh
 sudo install -m 0644 \
-  packages/cdj-usb/deploy/music-cdj-usb.service \
-  /etc/systemd/system/music-cdj-usb.service
+  packages/cdj-usb/deploy/djbooth-cdj-usb.service \
+  /etc/systemd/system/djbooth-cdj-usb.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now music-cdj-usb.service
+sudo systemctl enable --now djbooth-cdj-usb.service
 ```
 
 Stopping the unit unbinds the gadget and is electrically equivalent to unplugging it. Stop it
@@ -286,5 +286,5 @@ await attachCdjUsb();
 console.log(await statusCdjUsb());
 ```
 
-`MUSIC_CDJ_USB_BINARY` selects an explicit native helper. Tests and board bring-up can override
+`DJBOOTH_CDJ_USB_BINARY` selects an explicit native helper. Tests and board bring-up can override
 `stateDir`, `configfsRoot`, and `udcRoot`; normal deployments should retain the root-owned defaults.

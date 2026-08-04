@@ -89,7 +89,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "build:analyzer": "../../scripts/build-rekordbox-analyzer.sh",
+    "build:analyzer": "../../scripts/build-djbooth-analyzer.sh",
     "check": "oxlint src test && oxfmt --check .",
     "cli": "tsx src/cli.ts",
     "format": "oxfmt --write .",

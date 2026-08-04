@@ -1,0 +1,26 @@
+[package]
+name = "djbooth-desktop"
+version = "0.1.0"
+description = "Native agentic DJ workstation by djbooth.ai"
+authors = ["Georgios Konstantopoulos"]
+edition = "2024"
+license = "MIT"
+
+[lib]
+name = "djbooth_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-shell = "2.3.5"
+url = "2.5"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

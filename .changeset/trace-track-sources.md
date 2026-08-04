@@ -1,7 +1,7 @@
 ---
 "@gakonst/tracks": patch
-"@gakonst/rekordbox-library": patch
-"@gakonst/music": patch
+"@gakonst/djbooth-app": patch
+"@gakonst/djbooth": patch
 ---
 
 Retain each remote recording's canonical download source in its embedded audio comment and show

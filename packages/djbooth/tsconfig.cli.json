@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@gakonst/rekordbox": ["packages/rekordbox-ts/src/index.ts"],
+      "@gakonst/rekordbox/cli": ["packages/rekordbox-ts/src/cli.ts"],
+      "@gakonst/djbooth-app": ["apps/djbooth/src/index.ts"],
+      "@gakonst/djbooth-app/cli": ["apps/djbooth/src/cli.ts"],
+      "@gakonst/soundcloud": ["packages/soundcloud/src/index.ts"],
+      "@gakonst/soundcloud/cli": ["packages/soundcloud/src/cli.ts"],
+      "@gakonst/spots": ["packages/spots/src/index.ts"],
+      "@gakonst/spots/cli": ["packages/spots/src/cli.ts"],
+      "@gakonst/tracks": ["packages/tracks-ts/src/index.ts"],
+      "@gakonst/tracks/cli": ["packages/tracks-ts/src/cli.ts"],
+      "@gakonst/ytdlp-ts": ["packages/ytdlp-ts/src/index.ts"],
+      "@gakonst/ytdlp-ts/cli": ["packages/ytdlp-ts/src/cli.ts"],
+      "slsk-ts": ["packages/slsk-ts/src/index.ts"],
+      "slsk-ts/cli": ["packages/slsk-ts/src/cli.ts"]
+    }
+  }
+}

@@ -12,7 +12,7 @@ import { canonicalTrackPath, defaultTrackLibraryRoot, latinize } from "./library
 import type { ResolvedTrack, SetManifest, SpotifyCandidate } from "./manifest.js";
 
 export type BuildAcquisitionPlanOptions = {
-  /** Canonical library root. Defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks. */
+  /** Canonical library root. Defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks. */
   outputDirectory?: string;
   /** Absolute directories searched recursively for explicitly adopted local recordings. */
   localDirectories?: readonly string[];

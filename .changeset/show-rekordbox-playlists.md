@@ -1,6 +1,6 @@
 ---
 "@gakonst/rekordbox": patch
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 ---
 
 Add an ordered playlist-by-name view with joined DJ metadata, a default aligned table, chainable JSON

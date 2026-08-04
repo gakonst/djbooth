@@ -211,7 +211,7 @@ async function runPython(
     "--locked",
     "--no-dev",
     "python",
-    join(resolvePythonProjectDirectory(options.pythonProjectDirectory), "music_stems_mlx.py"),
+    join(resolvePythonProjectDirectory(options.pythonProjectDirectory), "djbooth_stems_mlx.py"),
     ...helperArgs,
   ];
   const command = options.uvBinary ?? "uv";
@@ -263,6 +263,7 @@ async function runPython(
 function resolvePythonProjectDirectory(explicit?: string): string {
   return resolve(
     explicit ??
+      process.env.DJBOOTH_STEMS_MLX_PROJECT ??
       process.env.MUSIC_STEMS_MLX_PROJECT ??
       process.env.REKORDBOX_STEMS_MLX_PROJECT ??
       repositoryPythonProjectDirectory,

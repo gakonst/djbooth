@@ -144,7 +144,7 @@ const playlistSyncOutput = z.object({
 });
 
 const runtimeOptions = {
-  binary: z.string().optional().describe("Native music-cdj-usb helper override"),
+  binary: z.string().optional().describe("Native djbooth-cdj-usb helper override"),
   configfsRoot: z
     .string()
     .optional()
@@ -153,7 +153,7 @@ const runtimeOptions = {
   stateDir: z
     .string()
     .optional()
-    .describe("Immutable generation state; defaults to /var/lib/music-cdj-usb"),
+    .describe("Immutable generation state; defaults to /var/lib/djbooth-cdj-usb"),
   udcRoot: z
     .string()
     .optional()
@@ -205,7 +205,7 @@ cdjUsbCli.command("export", {
     replace: z
       .boolean()
       .default(false)
-      .describe("Replace only a prior export carrying the music-ts ownership marker"),
+      .describe("Replace only a prior export carrying a djbooth ownership marker"),
     copyConcurrency: z
       .number()
       .int()

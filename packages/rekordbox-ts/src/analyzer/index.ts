@@ -20,7 +20,8 @@ import { z } from "zod";
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 
-const cleanHelperName = "rekordbox-analyzer";
+const cleanHelperName = "djbooth-analyzer";
+const legacyCleanHelperName = "rekordbox-analyzer";
 const referenceHelperName = "rekordbox-analyzer-reference";
 const analyzerThreadsEnvironment = "REKORDBOX_ANALYZER_THREADS";
 const analyzerRhythmModeEnvironment = "REKORDBOX_ANALYZER_RHYTHM_MODE";
@@ -670,10 +671,14 @@ export function getAnalyzerBinary(explicit?: string, engine: AnalyzerEngine = "c
   const candidates =
     engine === "clean"
       ? [
-          fileURLToPath(new URL(`../../.rekordbox-analyzer/${cleanHelperName}`, import.meta.url)),
+          fileURLToPath(new URL(`../../.djbooth-analyzer/${cleanHelperName}`, import.meta.url)),
           fileURLToPath(
             new URL(`../../../../rust/target/release/${cleanHelperName}`, import.meta.url),
           ),
+          ...pathCandidates.map((candidate) => join(dirname(candidate), legacyCleanHelperName)),
+          join(homedir(), ".local/bin", legacyCleanHelperName),
+          `/opt/homebrew/bin/${legacyCleanHelperName}`,
+          `/usr/local/bin/${legacyCleanHelperName}`,
           ...installedCandidates,
         ]
       : installedCandidates;

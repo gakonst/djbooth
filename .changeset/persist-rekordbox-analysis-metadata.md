@@ -1,7 +1,7 @@
 ---
 "@gakonst/rekordbox": patch
 "@gakonst/tracks": patch
-"@gakonst/music": patch
+"@gakonst/djbooth": patch
 ---
 
 Persist validated native-analyzer BPM and musical key metadata in normal Rekordbox content rows,

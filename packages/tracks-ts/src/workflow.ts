@@ -108,7 +108,7 @@ export type WorkflowImportOptions = Omit<
 export type RunSetToRekordboxOptions = {
   source: string;
   manifestPath: string;
-  /** Canonical library root. Defaults to MUSIC_LIBRARY_ROOT or ~/.djtools/tracks. */
+  /** Canonical library root. Defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks. */
   outputDirectory?: string;
   /** Required acknowledgement: the final stage mutates the normal encrypted master.db. */
   approved: true;

@@ -290,7 +290,7 @@ requires `--allow-set-clips` and an existing `--source-set-path`; external refer
 `--reference-ytdlp`. Individual-track acquisition always registers the TypeScript-native YouTube
 search/extractor/downloader after Soulseek; the external executable is neither constructed nor
 invoked by the default path. Final recordings default to
-`~/.djtools/tracks/<artist>/<album>/<title> [identity].ext`; set `MUSIC_LIBRARY_ROOT` or pass
+`~/.djtools/tracks/<artist>/<album>/<title> [identity].ext`; set `DJBOOTH_LIBRARY_ROOT` or pass
 `--output-directory` to change the shared root. The root is scanned automatically, so later set
 imports reuse a matching canonical recording. Playlist order is written directly to the normal
 Rekordbox database under the source-derived playlist name; no playlist-specific audio copies are

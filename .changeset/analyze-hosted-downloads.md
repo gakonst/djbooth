@@ -1,5 +1,5 @@
 ---
-"@gakonst/rekordbox-library": patch
+"@gakonst/djbooth-app": patch
 ---
 
 Start bounded native Rekordbox analysis for each hosted-playlist recording as soon as its download

@@ -44,7 +44,7 @@ export type DjLinkSnapshotPlaylist = {
   tracks: number[];
 };
 
-/** Native-runtime library document projected from music-ts state. */
+/** Native-runtime library document projected from djbooth state. */
 export type DjLinkSnapshot = {
   schemaVersion: typeof DJLINK_SNAPSHOT_SCHEMA_VERSION;
   sourceManifest: string;

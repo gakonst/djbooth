@@ -1,0 +1,54 @@
+# djbooth.ai plugin
+
+Claude Code and Codex packaging for the djbooth.ai agent workflow.
+
+## Prerequisite
+
+Install `@gakonst/djbooth` separately and ensure `djbooth --version` succeeds. The plugin does not run a
+package manager or install executables on the user's behalf. The bundled skill calls the Incur CLI;
+users who prefer MCP can register the same command map separately with `djbooth mcp add`.
+
+Until the package's first npm release, use the cloned workspace with `pnpm djbooth` (or link its built
+`@gakonst/djbooth` package globally). The marketplace installs agent instructions, not the repository's
+native dependencies.
+
+## Install
+
+From the repository marketplace:
+
+```sh
+# Codex
+codex plugin marketplace add gakonst/music-ts
+codex plugin add djbooth@djbooth-ai
+
+# Claude Code
+claude plugin marketplace add gakonst/music-ts
+claude plugin install djbooth@djbooth-ai
+```
+
+The plugin intentionally contains no `.mcp.json`. Its only agent component is the versioned djbooth
+skill, keeping provider behavior identical and avoiding an automatic local process at session start.
+
+## Agent-hosted workbench
+
+Ask Codex or Claude Code to open the djbooth.ai workstation, or launch it directly:
+
+```sh
+djbooth library serve --open --no-assistant
+```
+
+This opens the complete loopback-only library UI without its embedded Nanocodex rail. The host
+agent remains the conversation and tool surface; the browser provides playlists, cached provider
+acquisition, analysis, stems, dual decks, EQ, cues, and the set canvas. Add `--write` only when live
+Rekordbox mutations are intended and safe.
+
+## Development
+
+The canonical source is `packages/djbooth/skills/djbooth`. Do not edit the generated copy under this
+directory directly. The build also synchronizes plugin metadata to the `@gakonst/djbooth` version;
+`changeset:version` invokes it after package versioning.
+
+```sh
+node scripts/build-djbooth-plugin.mjs
+node scripts/build-djbooth-plugin.mjs --check
+```

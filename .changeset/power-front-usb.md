@@ -1,6 +1,6 @@
 ---
 "@gakonst/cdj-usb": minor
-"@gakonst/music": minor
+"@gakonst/djbooth": minor
 "@gakonst/rekordbox": minor
 ---
 
