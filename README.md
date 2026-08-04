@@ -147,7 +147,7 @@ Run the same workflows explicitly:
 # Resolve, acquire, analyze, and import one set.
 djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --write --format json
 
-# Audit release metadata, then apply one backed-up repair after review.
+# Audit exact acquisition links, sidecars, provider catalogs, and local metadata; then apply one backed-up repair.
 djbooth tracks metadata backfill --folder 'DJ Sets I Like' --format json
 djbooth tracks metadata backfill --folder 'DJ Sets I Like' --write --format json
 

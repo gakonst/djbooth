@@ -8,7 +8,7 @@ import { JsonDiskCache } from "../src/cache.js";
 import { CachedSpotifyClient, type SpotifyRawClient } from "../src/integrations/spotify-cache.js";
 
 describe("CachedSpotifyClient", () => {
-  test("caches public search and single-track metadata", async () => {
+  test("caches public search, track, album, and artist metadata", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-spotify-cache-"));
     const raw = vi.fn(async (_method: string, path: string) => ({ path }));
     const rawClient: SpotifyRawClient = {
@@ -25,8 +25,12 @@ describe("CachedSpotifyClient", () => {
     await client.raw("GET", "search", { query: { type: "track", q: "track" } });
     await client.raw("GET", "tracks/abc");
     await client.raw("GET", "/tracks/abc/");
-    expect(raw).toHaveBeenCalledTimes(2);
-    expect(client.cacheStats()).toMatchObject({ hits: 2, misses: 2, writes: 2 });
+    await client.raw("GET", "albums/album");
+    await client.raw("GET", "albums/album");
+    await client.raw("GET", "artists/artist");
+    await client.raw("GET", "artists/artist");
+    expect(raw).toHaveBeenCalledTimes(4);
+    expect(client.cacheStats()).toMatchObject({ hits: 4, misses: 4, writes: 4 });
   });
 
   test("does not cache user-specific or mutating calls", async () => {

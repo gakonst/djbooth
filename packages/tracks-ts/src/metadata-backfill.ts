@@ -31,6 +31,18 @@ import {
   backupRekordboxDatabase,
   type RekordboxBackup,
 } from "./rekordbox-db.js";
+import {
+  exactSourcesFromRekordboxComment,
+  exactSourcesFromUrls,
+  DeezerSourceMetadataClient,
+  LinkPageMetadataClient,
+  SidecarMetadataClient,
+  SoundCloudMetadataClient,
+  type ExactSourceMetadataClient,
+  type ExactSourceMetadata,
+  type ExactSourceProvider,
+  type ExactTrackSource,
+} from "./source-metadata.js";
 
 export type RekordboxMetadataBackfillOptions = {
   approved?: boolean;
@@ -47,26 +59,33 @@ export type RekordboxMetadataBackfillOptions = {
   folderName?: string;
   manifestRoots?: string[];
   probeConcurrency?: number;
+  sourceClients?: ExactSourceMetadataClient[];
   write?: boolean;
   onProgress?: (progress: RekordboxMetadataBackfillProgress) => void;
 };
 
 export type RekordboxMetadataBackfillProgress = {
-  phase: "inventory" | "embedded" | "identity" | "catalog" | "write" | "verify";
+  phase: "inventory" | "embedded" | "identity" | "source" | "catalog" | "write" | "verify";
   current: number;
   total: number;
   message: string;
 };
 
 export type MetadataFieldSource =
+  | "bandcamp"
   | "deezer"
   | "embedded"
   | "filename"
   | "local"
   | "local-artist"
+  | "linkpage"
   | "manifest"
   | "musicbrainz"
-  | "sanitized";
+  | "sanitized"
+  | "sidecar"
+  | "soundcloud"
+  | "spotify"
+  | "youtube";
 
 type RepairableMetadataField = "album" | "label" | "genre" | "isrc" | "releaseDate";
 type RepairableIdentityField = "updatedTitle" | "updatedArtist";
@@ -104,6 +123,8 @@ export type RekordboxMetadataGap = {
     | "genre-taxonomy-missing"
     | "identity-unparsed"
     | "no-isrc"
+    | "no-exact-source"
+    | "source-metadata-miss"
     | "set-extract"
   >;
 };
@@ -127,7 +148,12 @@ export type RekordboxMetadataBackfillResult = {
   sources: Record<MetadataFieldSource, number>;
   catalogQueries: number;
   catalogMatches: number;
-  providers: Record<"deezer" | "musicbrainz", MetadataProviderStats>;
+  providers: Record<string, MetadataProviderStats>;
+  provenance: {
+    tracks: number;
+    links: number;
+    byProvider: Partial<Record<Exclude<ExactSourceProvider, "sidecar">, number>>;
+  };
   unresolvedSummary: RekordboxMetadataGapSummary;
   unresolved: RekordboxMetadataGap[];
   changes: RekordboxMetadataBackfillChange[];
@@ -153,6 +179,7 @@ type LibraryTrack = {
   isrc?: string | undefined;
   releaseDate?: string | undefined;
   durationSeconds?: number | undefined;
+  exactSources: ExactTrackSource[];
   invalidFields: RepairableMetadataField[];
 };
 
@@ -167,6 +194,11 @@ type MetadataCandidate = {
 };
 
 const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
+
+type ManifestMetadataIndex = {
+  metadata: Map<string, MetadataCandidate>;
+  sources: Map<string, ExactTrackSource[]>;
+};
 
 type MetadataCatalogClient = {
   provider: "deezer" | "musicbrainz";
@@ -205,9 +237,8 @@ export async function backfillRekordboxMetadata(
     message: `${String(tracks.length)} unique tracks in ${folderName}`,
   });
   const coverageBefore = metadataCoverage(tracks);
-  const manifestMetadata = await metadataFromManifestRoots(
-    options.manifestRoots ?? defaultManifestRoots(),
-  );
+  const manifestRoots = options.manifestRoots ?? defaultManifestRoots();
+  const manifestMetadata = await metadataFromManifestRoots(manifestRoots);
   const embeddedMetadata = new Map<string, MetadataCandidate>();
   const paths = tracks.flatMap((track) =>
     track.path && existsSync(track.path) ? [track.path] : [],
@@ -258,13 +289,87 @@ export async function backfillRekordboxMetadata(
     total: tracks.length,
     message: `Recovered ${String(identityRepairs)} local identities`,
   });
+  const deezer = options.deezer ?? new DeezerMetadataClient(options.deezerOptions);
+  const sourceClients = [
+    new SidecarMetadataClient(manifestRoots),
+    new SoundCloudMetadataClient(
+      options.catalogOptions?.cacheMode ? { cacheMode: options.catalogOptions.cacheMode } : {},
+    ),
+    new LinkPageMetadataClient(
+      options.catalogOptions?.cacheMode ? { cacheMode: options.catalogOptions.cacheMode } : {},
+    ),
+    new DeezerSourceMetadataClient(deezer),
+    ...(options.sourceClients ?? []).filter(
+      (client) => client.provider !== "sidecar" && client.provider !== "soundcloud",
+    ),
+  ];
   const catalogs: MetadataCatalogClient[] = [
     options.catalog ?? new MusicBrainzMetadataClient(options.catalogOptions),
-    options.deezer ?? new DeezerMetadataClient(options.deezerOptions),
+    deezer,
   ];
-  const providers = Object.fromEntries(
-    catalogs.map((catalog) => [catalog.provider, { queries: 0, matches: 0, fields: 0 }]),
-  ) as Record<"deezer" | "musicbrainz", MetadataProviderStats>;
+  const providers: Record<string, MetadataProviderStats> = Object.fromEntries(
+    [...sourceClients, ...catalogs].map((provider) => [
+      provider.provider,
+      { queries: 0, matches: 0, fields: 0 },
+    ]),
+  );
+  const sourceTargets = drafts.filter(
+    (draft) =>
+      needsMetadata(draft.value) && !isSetExtract(draft.value) && draft.exactSources.length,
+  );
+  let completedSourceTargets = 0;
+  await mapConcurrent(sourceTargets, 4, async (draft) => {
+    const index = completedSourceTargets;
+    const queue = draft.exactSources.map((source) => ({ url: source.url, depth: 0 }));
+    const visited = new Set<string>();
+    while (queue.length && visited.size < 16) {
+      if (!needsMetadata(draft.value)) break;
+      const source = queue.shift()!;
+      if (visited.has(source.url)) continue;
+      visited.add(source.url);
+      for (const client of sourceClients) {
+        if (!client.supports(source.url)) continue;
+        const stats = providers[client.provider]!;
+        stats.queries += 1;
+        draft.sourceAttempted = true;
+        try {
+          const metadata = await client.lookup(source.url);
+          if (!metadata) continue;
+          if (source.depth > 0 && !relatedSourceMatches(draft.value, metadata)) continue;
+          const before = metadataFieldCount(draft.value);
+          mergeMissing(draft, metadata, client.provider);
+          stats.matches += 1;
+          stats.fields += metadataFieldCount(draft.value) - before;
+          draft.sourceMatched = true;
+          for (const related of metadata.relatedUrls ?? []) {
+            if (
+              !visited.has(related) &&
+              sourceClients.some((candidate) => candidate.supports(related))
+            )
+              queue.push({ url: related, depth: source.depth + 1 });
+          }
+        } catch (error) {
+          options.onProgress?.({
+            phase: "source",
+            current: index,
+            total: sourceTargets.length,
+            message: `${client.provider} miss: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+    }
+    completedSourceTargets += 1;
+    options.onProgress?.({
+      phase: "source",
+      current: completedSourceTargets,
+      total: sourceTargets.length,
+      message: `Exact-source lookup ${String(completedSourceTargets)}/${String(sourceTargets.length)}`,
+    });
+  });
+  for (const client of sourceClients) {
+    const cache = client.cacheStats();
+    if (cache) providers[client.provider]!.cache = cache;
+  }
   const catalogTargets = drafts.filter(
     ({ value }) =>
       needsMetadata(value) &&
@@ -272,6 +377,8 @@ export async function backfillRekordboxMetadata(
       Boolean(value.isrc || (options.catalogSearch && isCatalogSearchSafe(value))),
   );
   let completedCatalogTargets = 0;
+  let catalogQueries = 0;
+  let catalogMatches = 0;
   await mapConcurrent(catalogTargets, 4, async (draft) => {
     const index = completedCatalogTargets;
     options.onProgress?.({
@@ -290,7 +397,8 @@ export async function backfillRekordboxMetadata(
     };
     const results = await Promise.all(
       catalogs.map(async (catalog) => {
-        providers[catalog.provider].queries += 1;
+        providers[catalog.provider]!.queries += 1;
+        catalogQueries += 1;
         try {
           return await catalog.lookup(query);
         } catch (error) {
@@ -312,8 +420,9 @@ export async function backfillRekordboxMetadata(
       const before = metadataFieldCount(draft.value);
       mergeMissing(draft, metadata, metadata.provider);
       const fields = metadataFieldCount(draft.value) - before;
-      providers[metadata.provider].matches += 1;
-      providers[metadata.provider].fields += fields;
+      providers[metadata.provider]!.matches += 1;
+      providers[metadata.provider]!.fields += fields;
+      catalogMatches += 1;
       draft.catalogMatched = true;
     }
     completedCatalogTargets += 1;
@@ -326,7 +435,7 @@ export async function backfillRekordboxMetadata(
   });
   for (const catalog of catalogs) {
     const cache = catalog.cacheStats();
-    if (cache) providers[catalog.provider].cache = cache;
+    if (cache) providers[catalog.provider]!.cache = cache;
   }
   const changes = drafts.flatMap((draft) => changedDraft(draft));
   const projected = tracks.map(
@@ -334,10 +443,9 @@ export async function backfillRekordboxMetadata(
   );
   const coverageAfter = metadataCoverage(projected);
   const sources = countSources(changes);
+  const provenance = summarizeProvenance(drafts);
   const unresolved = unresolvedGaps(drafts);
   const unresolvedSummary = summarizeGaps(unresolved);
-  const catalogQueries = Object.values(providers).reduce((sum, stats) => sum + stats.queries, 0);
-  const catalogMatches = Object.values(providers).reduce((sum, stats) => sum + stats.matches, 0);
   if (!options.write || !changes.length) {
     return {
       dbPath,
@@ -351,6 +459,7 @@ export async function backfillRekordboxMetadata(
       catalogQueries,
       catalogMatches,
       providers,
+      provenance,
       unresolvedSummary,
       unresolved,
       changes,
@@ -463,6 +572,7 @@ export async function backfillRekordboxMetadata(
     catalogQueries,
     catalogMatches,
     providers,
+    provenance,
     unresolvedSummary,
     unresolved,
     changes,
@@ -472,7 +582,8 @@ export async function backfillRekordboxMetadata(
 function folderTracks(db: MasterDatabase, folderName: string): LibraryTrack[] {
   const rows = db.selectRawRows(
     `SELECT DISTINCT content."ID" AS id, content."Title" AS title,
-            content."FolderPath" AS path, content."ISRC" AS isrc,
+            content."FolderPath" AS path, content."Commnt" AS comment,
+            content."ISRC" AS isrc,
             content."ReleaseDate" AS releaseDate, content."Length" AS durationSeconds,
             artist."Name" AS artist, album."Name" AS album,
             label."Name" AS label, genre."Name" AS genre
@@ -499,7 +610,8 @@ function databaseTracks(db: MasterDatabase): LibraryTrack[] {
   return db
     .selectRawRows(
       `SELECT content."ID" AS id, content."Title" AS title,
-              content."FolderPath" AS path, content."ISRC" AS isrc,
+              content."FolderPath" AS path, content."Commnt" AS comment,
+              content."ISRC" AS isrc,
               content."ReleaseDate" AS releaseDate, content."Length" AS durationSeconds,
               artist."Name" AS artist, album."Name" AS album,
               label."Name" AS label, genre."Name" AS genre
@@ -538,6 +650,7 @@ function libraryTrack(row: Record<string, unknown>): LibraryTrack {
     ...(positiveNumber(row.durationSeconds)
       ? { durationSeconds: positiveNumber(row.durationSeconds) }
       : {}),
+    exactSources: exactSourcesFromRekordboxComment(clean(row.comment)),
     invalidFields,
   };
 }
@@ -549,11 +662,14 @@ type Draft = {
   broadCatalogGenreRejected: boolean;
   catalogAttempted: boolean;
   catalogMatched: boolean;
+  exactSources: ExactTrackSource[];
+  sourceAttempted: boolean;
+  sourceMatched: boolean;
 };
 
 function createDraft(
   track: LibraryTrack,
-  manifests: Map<string, MetadataCandidate>,
+  manifests: ManifestMetadataIndex,
   embedded: Map<string, MetadataCandidate>,
   local: Map<string, MetadataCandidate>,
   localArtistGenres: Map<string, MetadataCandidate>,
@@ -566,9 +682,19 @@ function createDraft(
     broadCatalogGenreRejected: false,
     catalogAttempted: false,
     catalogMatched: false,
+    exactSources: [...track.exactSources],
+    sourceAttempted: false,
+    sourceMatched: false,
   };
   let trustedLocalIdentity = false;
-  if (track.path) mergeCandidate(draft, manifests.get(resolve(track.path)), "manifest");
+  if (track.path) {
+    const path = resolve(track.path);
+    mergeCandidate(draft, manifests.metadata.get(path), "manifest");
+    draft.exactSources = uniqueTrackSources([
+      ...draft.exactSources,
+      ...(manifests.sources.get(path) ?? []),
+    ]);
+  }
   if (track.path) mergeCandidate(draft, embedded.get(resolve(track.path)), "embedded");
   if (!draft.value.artist) {
     const repair = inferLocalIdentity(draft.value, allTracks);
@@ -839,6 +965,17 @@ function identitySimilarity(left: string, right: string): number {
   return matched / Math.max(expectedTokens.size, actualTokens.size);
 }
 
+function relatedSourceMatches(track: LibraryTrack, metadata: ExactSourceMetadata): boolean {
+  if (track.durationSeconds && metadata.durationSeconds) {
+    const difference = Math.abs(track.durationSeconds - metadata.durationSeconds);
+    if (difference > Math.max(10, track.durationSeconds * 0.06)) return false;
+  }
+  if (metadata.title && identitySimilarity(track.title, metadata.title) < 0.5) return false;
+  if (track.artist && metadata.artist && identitySimilarity(track.artist, metadata.artist) < 0.45)
+    return false;
+  return true;
+}
+
 function identityArtistKey(value: string): string {
   return normalizeMatchText(value)
     .split(" ")
@@ -870,8 +1007,9 @@ function identityKeys(
   ];
 }
 
-async function metadataFromManifestRoots(roots: string[]): Promise<Map<string, MetadataCandidate>> {
+async function metadataFromManifestRoots(roots: string[]): Promise<ManifestMetadataIndex> {
   const metadata = new Map<string, MetadataCandidate>();
+  const sources = new Map<string, ExactTrackSource[]>();
   for (const root of roots) {
     if (!existsSync(root)) continue;
     for (const path of await manifestFiles(root)) {
@@ -898,13 +1036,25 @@ async function metadataFromManifestRoots(roots: string[]): Promise<Map<string, M
           releaseDate: clean(spotify.releaseDate) ?? clean(identity.releaseDate),
         };
         for (const rawDownload of [acquisition.download, ...array(acquisition.alternatives)]) {
-          const mediaPath = clean(record(rawDownload).mediaPath);
-          if (mediaPath) metadata.set(resolve(mediaPath), candidate);
+          const download = record(rawDownload);
+          const mediaPath = clean(download.mediaPath);
+          if (!mediaPath) continue;
+          const resolvedPath = resolve(mediaPath);
+          metadata.set(resolvedPath, candidate);
+          if (!record(download.clip).sourceSetUrl) {
+            const spotifyUrl =
+              clean(spotify.url) ??
+              (clean(download.spotifyId)
+                ? `https://open.spotify.com/track/${clean(download.spotifyId)!}`
+                : undefined);
+            const exactSources = exactSourcesFromUrls([clean(download.source), spotifyUrl]);
+            if (exactSources.length) sources.set(resolvedPath, exactSources);
+          }
         }
       }
     }
   }
-  return metadata;
+  return { metadata, sources };
 }
 
 async function manifestFiles(root: string): Promise<string[]> {
@@ -962,14 +1112,20 @@ function countSources(
   changes: RekordboxMetadataBackfillChange[],
 ): Record<MetadataFieldSource, number> {
   const counts: Record<MetadataFieldSource, number> = {
+    bandcamp: 0,
     deezer: 0,
     embedded: 0,
     filename: 0,
+    linkpage: 0,
     local: 0,
     "local-artist": 0,
     manifest: 0,
     musicbrainz: 0,
     sanitized: 0,
+    sidecar: 0,
+    soundcloud: 0,
+    spotify: 0,
+    youtube: 0,
   };
   for (const change of changes) {
     for (const source of Object.values(change.sources)) if (source) counts[source] += 1;
@@ -1032,6 +1188,8 @@ function unresolvedGaps(drafts: Draft[]): RekordboxMetadataGap[] {
     if (/\b(?:edit|bootleg|unreleased|candidate|mashup)\b/iu.test(draft.value.title))
       reasons.add("edit-or-unreleased");
     if (!draft.value.isrc) reasons.add("no-isrc");
+    if (!draft.exactSources.length) reasons.add("no-exact-source");
+    if (draft.sourceAttempted && !draft.sourceMatched) reasons.add("source-metadata-miss");
     if (draft.catalogAttempted && !draft.catalogMatched) reasons.add("catalog-miss");
     if (missing.includes("genre") && draft.broadCatalogGenreRejected)
       reasons.add("catalog-genre-too-broad");
@@ -1057,6 +1215,8 @@ function summarizeGaps(gaps: RekordboxMetadataGap[]): RekordboxMetadataGapSummar
     "genre-taxonomy-missing": 0,
     "identity-unparsed": 0,
     "no-isrc": 0,
+    "no-exact-source": 0,
+    "source-metadata-miss": 0,
     "set-extract": 0,
   };
   let fields = 0;
@@ -1066,6 +1226,29 @@ function summarizeGaps(gaps: RekordboxMetadataGap[]): RekordboxMetadataGapSummar
     for (const reason of gap.reasons) byReason[reason] += 1;
   }
   return { tracks: gaps.length, fields, byField, byReason };
+}
+
+function summarizeProvenance(drafts: Draft[]): RekordboxMetadataBackfillResult["provenance"] {
+  const byProvider: RekordboxMetadataBackfillResult["provenance"]["byProvider"] = {};
+  let links = 0;
+  let tracks = 0;
+  for (const draft of drafts) {
+    if (!draft.exactSources.length) continue;
+    tracks += 1;
+    links += draft.exactSources.length;
+    for (const provider of new Set(draft.exactSources.map((source) => source.provider))) {
+      byProvider[provider] = (byProvider[provider] ?? 0) + 1;
+    }
+  }
+  return { tracks, links, byProvider };
+}
+
+function uniqueTrackSources(sources: ExactTrackSource[]): ExactTrackSource[] {
+  return [
+    ...new Map(
+      sources.map((source) => [`${source.provider}:${source.url}`, source] as const),
+    ).values(),
+  ];
 }
 
 function isBroadCatalogGenre(value: string): boolean {

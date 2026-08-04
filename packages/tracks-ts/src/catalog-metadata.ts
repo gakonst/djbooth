@@ -16,15 +16,18 @@ export type CatalogMetadataQuery = {
 };
 
 export type CatalogMetadata = {
+  title?: string;
+  artist?: string;
   album?: string;
   label?: string;
   genre?: string;
   isrc?: string;
   releaseDate?: string;
+  durationSeconds?: number;
   provider: "deezer" | "musicbrainz";
   recordingId: string;
   releaseId?: string;
-  matchedBy: "isrc" | "artist-title";
+  matchedBy: "isrc" | "artist-title" | "source-url";
 };
 
 export type MusicBrainzMetadataClientOptions = {

@@ -451,8 +451,12 @@ Use acquisition backends only for media you are authorized to download.
 Repair metadata already in the compatible library with the same local-first workflow. The command
 normalizes recoverable artist/title identities, rejects ad spam and low-value catalog genres, then
 fills album, label, genre, ISRC, and release date from duration-compatible local copies, manifests,
-embedded tags, MusicBrainz, and Deezer. It is a dry run unless `--write` is supplied; output includes
-coverage deltas, per-provider/cache counters, field/reason summaries, and every proposed mutation.
+embedded tags, and exact acquisition provenance retained in Rekordbox comments. Exact SoundCloud,
+Spotify, YouTube, Bandcamp, and relocated yt-dlp sidecars run before MusicBrainz/Deezer search.
+SoundCloud purchase links and other public smart links may resolve to an exact downstream catalog
+record; title, artist, and duration checks prevent radio/extended/remix metadata crossing versions.
+It is a dry run unless `--write` is supplied; output includes provenance coverage, provider/cache
+counters, unresolved reasons, coverage deltas, and every proposed mutation.
 
 ```sh
 djbooth tracks metadata backfill --folder 'DJ Sets I Like' --format json
@@ -481,19 +485,20 @@ URLs are never cached. Native YouTube search caches only bounded, sanitized resu
 extraction remains fresh for every download. A bounded, persisted sweep periodically removes expired
 or malformed entries.
 
-| Namespace                       | Default freshness |
-| ------------------------------- | ----------------- |
-| Expanded 1001 tracklist         | 7 days            |
-| Raw headed 1001 page            | 7 days            |
-| Raw per-track 1001 media links  | 30 days           |
-| 1001 media lookup/search        | 6 hours           |
-| 1001 latest/charts              | 15 minutes        |
-| Spotify search                  | 6 hours           |
-| Spotify track metadata          | 24 hours          |
-| MusicBrainz/Deezer metadata     | 30 days           |
-| YouTube/SoundCloud set metadata | 6 hours           |
-| YouTube search/exact metadata   | 6/24 hours        |
-| Stat-keyed audio verification   | 30 days           |
+| Namespace                           | Default freshness |
+| ----------------------------------- | ----------------- |
+| Expanded 1001 tracklist             | 7 days            |
+| Raw headed 1001 page                | 7 days            |
+| Raw per-track 1001 media links      | 30 days           |
+| 1001 media lookup/search            | 6 hours           |
+| 1001 latest/charts                  | 15 minutes        |
+| Spotify search                      | 6 hours           |
+| Spotify track metadata              | 24 hours          |
+| MusicBrainz/Deezer metadata         | 30 days           |
+| Source pages and public smart links | 7 days            |
+| YouTube/SoundCloud set metadata     | 6 hours           |
+| YouTube search/exact metadata       | 6/24 hours        |
+| Stat-keyed audio verification       | 30 days           |
 
 Spotify metadata remains temporary, consistent with [Spotify's caching requirements](https://developer.spotify.com/terms). Spotify's
 [February 2026 Development Mode migration](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide)

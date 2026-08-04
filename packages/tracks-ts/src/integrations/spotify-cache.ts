@@ -84,6 +84,6 @@ function cacheTtl(
 ): number | undefined {
   if (method !== "GET") return undefined;
   if (path === "search") return searchTtlMs;
-  if (/^tracks\/[^/]+$/u.test(path)) return trackTtlMs;
+  if (/^(?:albums|artists|tracks)\/[^/]+$/u.test(path)) return trackTtlMs;
   return undefined;
 }

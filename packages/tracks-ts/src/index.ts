@@ -105,6 +105,22 @@ export {
   type RekordboxMetadataBackfillProgress,
   type RekordboxMetadataBackfillResult,
 } from "./metadata-backfill.js";
+export {
+  canonicalSourceUrl,
+  DeezerSourceMetadataClient,
+  exactSourcesFromRekordboxComment,
+  exactSourcesFromUrls,
+  LinkPageMetadataClient,
+  ReferenceSourceMetadataClient,
+  SidecarMetadataClient,
+  SoundCloudMetadataClient,
+  sourceProvider,
+  SpotifySourceMetadataClient,
+  type ExactSourceMetadata,
+  type ExactSourceMetadataClient,
+  type ExactSourceProvider,
+  type ExactTrackSource,
+} from "./source-metadata.js";
 export { identify, mergeDescriptionWithDatabase } from "./identify.js";
 export {
   getYtdlpTsCommand,

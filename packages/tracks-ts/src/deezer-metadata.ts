@@ -72,17 +72,64 @@ export class DeezerMetadataClient {
     return value ?? undefined;
   }
 
+  /** Resolve a direct Deezer track URL without fuzzy catalog search. */
+  async lookupTrackUrl(source: string): Promise<CatalogMetadata | undefined> {
+    let id: string | undefined;
+    try {
+      const url = new URL(source);
+      id = /^\/track\/(\d+)(?:\/|$)/u.exec(url.pathname)?.[1];
+    } catch {
+      return undefined;
+    }
+    if (!id) return undefined;
+    const match = asRecord(await this.#get(`track/${id}`));
+    return this.#metadataFromTrack(match, "source-url");
+  }
+
+  /** Resolve release metadata from an exact UPC exposed by a release smart link. */
+  async lookupAlbumUpc(upc: string): Promise<CatalogMetadata | undefined> {
+    if (!/^\d{8,14}$/u.test(upc)) return undefined;
+    const album = asRecord(await this.#get(`album/upc:${upc}`));
+    const albumId = positiveId(album.id);
+    if (!albumId) return undefined;
+    const title = clean(album.title);
+    const label = clean(album.label);
+    const genre = array(album.genres)
+      .map(asRecord)
+      .map((value) => clean(value.name))
+      .find(Boolean);
+    const releaseDate = clean(album.release_date);
+    return {
+      ...(title ? { album: title } : {}),
+      ...(label ? { label } : {}),
+      ...(genre ? { genre } : {}),
+      ...(releaseDate ? { releaseDate } : {}),
+      provider: this.provider,
+      recordingId: `upc:${upc}`,
+      releaseId: String(albumId),
+      matchedBy: "source-url",
+    };
+  }
+
   async #lookup(query: CatalogMetadataQuery): Promise<CatalogMetadata | undefined> {
     const isrc = normalizeIsrc(query.isrc);
     const match = isrc ? await this.#trackByIsrc(isrc) : await this.#trackBySearch(query);
     if (!match) return undefined;
+    return this.#metadataFromTrack(match, isrc ? "isrc" : "artist-title");
+  }
+
+  async #metadataFromTrack(
+    match: Record<string, unknown>,
+    matchedBy: CatalogMetadata["matchedBy"],
+  ): Promise<CatalogMetadata | undefined> {
     const trackId = positiveId(match.id);
     const albumId = positiveId(asRecord(match.album).id);
     if (!trackId || !albumId) return undefined;
-    const [track, album] = await Promise.all([
-      isrc ? match : this.#get(`track/${trackId}`).then(asRecord),
+    const [trackDetail, album] = await Promise.all([
+      this.#get(`track/${trackId}`).then(asRecord),
       this.#get(`album/${albumId}`).then(asRecord),
     ]);
+    const track = { ...match, ...trackDetail };
     const albumTitle = clean(album.title) ?? clean(asRecord(match.album).title);
     const label = clean(album.label);
     const genre = array(album.genres)
@@ -91,16 +138,22 @@ export class DeezerMetadataClient {
       .find(Boolean);
     const releaseDate = clean(album.release_date);
     const matchedIsrc = normalizeIsrc(clean(track.isrc));
+    const sourceTitle = clean(track.title_short) ?? clean(track.title);
+    const sourceArtist = clean(asRecord(track.artist).name);
+    const sourceDuration = number(track.duration);
     return {
+      ...(matchedBy === "source-url" && sourceTitle ? { title: sourceTitle } : {}),
+      ...(matchedBy === "source-url" && sourceArtist ? { artist: sourceArtist } : {}),
       ...(albumTitle ? { album: albumTitle } : {}),
       ...(label ? { label } : {}),
       ...(genre ? { genre } : {}),
       ...(matchedIsrc ? { isrc: matchedIsrc } : {}),
       ...(releaseDate ? { releaseDate } : {}),
+      ...(matchedBy === "source-url" && sourceDuration ? { durationSeconds: sourceDuration } : {}),
       provider: this.provider,
       recordingId: String(trackId),
       releaseId: String(albumId),
-      matchedBy: isrc ? "isrc" : "artist-title",
+      matchedBy,
     };
   }
 

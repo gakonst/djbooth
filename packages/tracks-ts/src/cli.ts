@@ -49,6 +49,11 @@ import { importManifestToRekordbox } from "./rekordbox-db.js";
 import { requireTimestamp } from "./time.js";
 import type { Environment } from "./types.js";
 import {
+  ReferenceSourceMetadataClient,
+  SpotifySourceMetadataClient,
+  type ExactSourceMetadataClient,
+} from "./source-metadata.js";
+import {
   DEFAULT_NATIVE_ANALYSIS_CONCURRENCY,
   DEFAULT_NATIVE_ANALYSIS_THREAD_BUDGET,
   MAX_NATIVE_ANALYSIS_CONCURRENCY,
@@ -642,7 +647,7 @@ const metadataCoverageOutput = z.object({
 
 metadataCli.command("backfill", {
   description:
-    "Repair identities and backfill one Rekordbox playlist folder from local duplicates, manifests, embedded tags, Deezer, and MusicBrainz.",
+    "Repair identities and backfill one Rekordbox playlist folder from exact acquisition sources, local metadata, Deezer, and MusicBrainz.",
   options: z.object({
     folder: z.string().default("DJ Sets I Like").describe("Direct-child playlist folder"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
@@ -671,14 +676,20 @@ metadataCli.command("backfill", {
     coverageBefore: metadataCoverageOutput,
     coverageAfter: metadataCoverageOutput,
     sources: z.object({
+      bandcamp: z.number().int().nonnegative(),
       deezer: z.number().int().nonnegative(),
       embedded: z.number().int().nonnegative(),
       filename: z.number().int().nonnegative(),
+      linkpage: z.number().int().nonnegative(),
       local: z.number().int().nonnegative(),
       "local-artist": z.number().int().nonnegative(),
       manifest: z.number().int().nonnegative(),
       musicbrainz: z.number().int().nonnegative(),
       sanitized: z.number().int().nonnegative(),
+      sidecar: z.number().int().nonnegative(),
+      soundcloud: z.number().int().nonnegative(),
+      spotify: z.number().int().nonnegative(),
+      youtube: z.number().int().nonnegative(),
     }),
     catalogQueries: z.number().int().nonnegative(),
     catalogMatches: z.number().int().nonnegative(),
@@ -691,6 +702,11 @@ metadataCli.command("backfill", {
         cache: cacheStatsOutput.optional(),
       }),
     ),
+    provenance: z.object({
+      tracks: z.number().int().nonnegative(),
+      links: z.number().int().nonnegative(),
+      byProvider: z.record(z.string(), z.number().int().nonnegative()),
+    }),
     unresolvedSummary: z.object({
       tracks: z.number().int().nonnegative(),
       fields: z.number().int().nonnegative(),
@@ -706,6 +722,8 @@ metadataCli.command("backfill", {
         "genre-taxonomy-missing": z.number().int().nonnegative(),
         "identity-unparsed": z.number().int().nonnegative(),
         "no-isrc": z.number().int().nonnegative(),
+        "no-exact-source": z.number().int().nonnegative(),
+        "source-metadata-miss": z.number().int().nonnegative(),
         "set-extract": z.number().int().nonnegative(),
       }),
     }),
@@ -723,6 +741,8 @@ metadataCli.command("backfill", {
             "genre-taxonomy-missing",
             "identity-unparsed",
             "no-isrc",
+            "no-exact-source",
+            "source-metadata-miss",
             "set-extract",
           ]),
         ),
@@ -744,13 +764,19 @@ metadataCli.command("backfill", {
           z.string(),
           z.enum([
             "deezer",
+            "bandcamp",
             "embedded",
             "filename",
+            "linkpage",
             "local",
             "local-artist",
             "manifest",
             "musicbrainz",
             "sanitized",
+            "sidecar",
+            "soundcloud",
+            "spotify",
+            "youtube",
           ]),
         ),
       }),
@@ -758,6 +784,7 @@ metadataCli.command("backfill", {
   }),
   async run(context) {
     try {
+      const sourceClients = await metadataSourceClients(context.options.cacheMode);
       const showProgress =
         context.options.progress === "always" ||
         (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
@@ -768,6 +795,7 @@ metadataCli.command("backfill", {
         catalogSearch: context.options.catalogSearch,
         catalogOptions: { cacheMode: context.options.cacheMode },
         deezerOptions: { cacheMode: context.options.cacheMode },
+        sourceClients,
         probeConcurrency: context.options.probeConcurrency,
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
@@ -804,6 +832,7 @@ metadataCli.command("backfill", {
         catalogQueries: result.catalogQueries,
         catalogMatches: result.catalogMatches,
         providers: result.providers,
+        provenance: result.provenance,
         unresolvedSummary: result.unresolvedSummary,
         unresolved: result.unresolved,
         changes: result.changes,
@@ -1685,6 +1714,37 @@ async function workflowSpotifyClient(
       credential,
     }),
   });
+}
+
+async function metadataSourceClients(cacheMode: CacheMode): Promise<ExactSourceMetadataClient[]> {
+  const reference = new ReferenceClient();
+  const clients: ExactSourceMetadataClient[] = [
+    new ReferenceSourceMetadataClient("youtube", reference, { cacheMode }),
+    new ReferenceSourceMetadataClient("bandcamp", reference, { cacheMode }),
+  ];
+  try {
+    const store = new FileSessionStore();
+    const session = await store.load();
+    if (!session) return clients;
+    const credential = session.token.refreshToken ?? session.token.accessToken;
+    const spotify = new CachedSpotifyClient(
+      new SpotifyClient({
+        auth: new SpotifyOAuth({
+          clientId: session.clientId,
+          redirectUri: session.redirectUri,
+          store,
+        }),
+      }),
+      {
+        cacheMode,
+        cacheScope: cacheDigest({ provider: "spotify", clientId: session.clientId, credential }),
+      },
+    );
+    clients.push(new SpotifySourceMetadataClient(spotify));
+  } catch {
+    // Source-specific lookup is additive; damaged or absent provider auth must not block repair.
+  }
+  return clients;
 }
 
 async function toolStatus(command: string, args: string[]) {
