@@ -16,6 +16,7 @@ import {
   MasterDatabase,
   type RekordboxWriteProcessState,
 } from "../masterdb/index.js";
+import { legacyUsbAnalysisPath } from "./anlz-path.js";
 import { inspectLegacyDevicePdb, LegacyDevicePdbWriter } from "./pdb.js";
 
 const EXPORT_PDB = join("PIONEER", "rekordbox", "export.pdb");
@@ -114,6 +115,7 @@ export async function syncLegacyDevicePlaylist(
     throw new Error(
       `USB contains ${String(original.histories.length)} unimported CDJ history item(s); import them before scoped playlist sync`,
     );
+  if (!options.fresh) checkpointOneLibrary(oneLibraryPath);
 
   const database = new MasterDatabase({
     ...(options.databasePath ? { path: options.databasePath } : {}),
@@ -201,7 +203,7 @@ export async function syncLegacyDevicePlaylist(
           throw new Error(
             `Track '${track.contentId}' has no ANLZ0000.DAT in '${analysisDirectory}'`,
           );
-        const usbAnalysisDatPath = canonicalUsbAnalysisPath(analysisPath, track.contentId);
+        const usbAnalysisDatPath = legacyUsbAnalysisPath(usbAudioPath);
         const usbAnalysisDirectory = posix.dirname(usbAnalysisDatPath);
         writer.addTrack({
           id: pdbId,
@@ -228,6 +230,10 @@ export async function syncLegacyDevicePlaylist(
           mixName: stringValue(content.get("Subtitle")) ?? "",
           dateAdded: dateValue(content.get("StockDate")),
           releaseDate: dateValue(content.get("ReleaseDate")),
+          masterContentId: integerValue(content.get("ID")),
+          masterDbId: integerValue(content.get("MasterDBID")),
+          analysisDataUpdateCount: integerValue(content.get("AnalysisUpdated"), 2),
+          informationUpdateCount: integerValue(content.get("TrackInfoUpdated"), 2),
         });
         trackIds.push(pdbId);
         oneLibraryTracks.push({
@@ -339,6 +345,7 @@ export async function syncLegacyDevicePlaylist(
           installed.push(install.target);
         }
         await mkdir(dirname(oneLibraryPath), { recursive: true });
+        await removeOneLibrarySidecars(oneLibraryPath);
         await rename(stagedOneLibrary, oneLibraryPath);
         oneLibraryPublished = true;
         await rename(stagedPdb, pdbPath);
@@ -496,6 +503,25 @@ function verifyPriorOneLibrary(path: string, record: PlaylistSyncRecord): void {
   }
 }
 
+function checkpointOneLibrary(path: string): void {
+  const database = new DeviceLibraryPlus(path, { readonly: false });
+  try {
+    const result = database.connection?.pragma("wal_checkpoint(TRUNCATE)") as
+      | Array<{ busy?: number }>
+      | undefined;
+    if (result?.some(({ busy }) => busy))
+      throw new Error(`OneLibrary WAL checkpoint is busy for '${path}'`);
+    if (!database.hasTable("playlist"))
+      throw new Error(`OneLibrary checkpoint for '${path}' has no playlist table`);
+  } finally {
+    database.close();
+  }
+}
+
+async function removeOneLibrarySidecars(path: string): Promise<void> {
+  await Promise.all([rm(`${path}-wal`, { force: true }), rm(`${path}-shm`, { force: true })]);
+}
+
 async function readPlaylistMarker(path: string): Promise<PlaylistSyncMarker> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as Partial<PlaylistSyncMarker>;
@@ -529,19 +555,6 @@ function mediaPath(root: string, path: string): string {
   if (!relative || relative.split("/").some((segment) => !segment || segment === ".."))
     throw new TypeError(`Unsafe USB media path '${path}'`);
   return join(root, ...relative.split(posix.sep));
-}
-
-function canonicalUsbAnalysisPath(path: string, contentId: string): string {
-  const normalized = path.replaceAll("\\", "/");
-  const segments = normalized.split("/");
-  if (
-    !normalized.startsWith("/PIONEER/USBANLZ/") ||
-    posix.basename(normalized) !== "ANLZ0000.DAT" ||
-    segments.includes(".") ||
-    segments.includes("..")
-  )
-    throw new TypeError(`Track '${contentId}' has a non-canonical USB analysis path '${path}'`);
-  return normalized;
 }
 
 function assertFreshTarget(targetDirectory: string): void {

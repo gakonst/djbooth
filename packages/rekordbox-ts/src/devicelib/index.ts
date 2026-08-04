@@ -5,6 +5,7 @@
  */
 
 export * from "./export.js";
+export * from "./anlz-path.js";
 export * from "./pdb.js";
 export * from "./playlist-sync.js";
 export * from "./sync.js";

@@ -11,6 +11,7 @@ import { DeviceLibraryPlus, writeOneLibraryPlaylist } from "../src/devicelib-plu
 import {
   exportLegacyDeviceLibrary,
   inspectLegacyDevicePdb,
+  legacyUsbAnalysisPath,
   LegacyDevicePdbWriter,
   readLegacyDeviceExportMarker,
   syncLegacyDeviceLibrary,
@@ -145,6 +146,17 @@ async function writePlayedHistory(
 }
 
 describe("legacy Device Library PDB", () => {
+  it("derives the hardware ANLZ lookup path from the USB audio path", () => {
+    expect(
+      legacyUsbAnalysisPath(
+        "/Contents/Brunello_Hilel Lev/Apathy/Brunello & Hilel Lev - Apathy.mp3",
+      ),
+    ).toBe("/PIONEER/USBANLZ/P03E/0000EAC4/ANLZ0000.DAT");
+    expect(legacyUsbAnalysisPath("/Contents/Leo Portela/Bon Vibrant - Leo Portela.flac")).toBe(
+      "/PIONEER/USBANLZ/P00E/000281CE/ANLZ0000.DAT",
+    );
+  });
+
   it("appends tracks and playlists without rebuilding existing rows", () => {
     const initial = new LegacyDevicePdbWriter();
     const existingTrack = initial.addTrack({
@@ -403,8 +415,8 @@ describe("master.db to legacy Device Library export", () => {
     );
     expect(legacy.tracks).toHaveLength(2);
     expect(legacy.tracks.map(({ analyzePath }) => analyzePath)).toEqual([
-      "/PIONEER/USBANLZ/BBB/two/ANLZ0000.DAT",
-      "/PIONEER/USBANLZ/AAA/one/ANLZ0000.DAT",
+      legacyUsbAnalysisPath("/Contents/music-ts/00000001/two.flac"),
+      legacyUsbAnalysisPath("/Contents/music-ts/00000002/one.mp3"),
     ]);
     for (const track of legacy.tracks)
       expect(existsSync(join(fixture.output, track.analyzePath.slice(1)))).toBe(true);
@@ -415,11 +427,11 @@ describe("master.db to legacy Device Library export", () => {
     ).toEqual([
       {
         title: "Second",
-        analysisDataFilePath: "/PIONEER/USBANLZ/BBB/two/ANLZ0000.DAT",
+        analysisDataFilePath: legacyUsbAnalysisPath("/Contents/music-ts/00000001/two.flac"),
       },
       {
         title: "First",
-        analysisDataFilePath: "/PIONEER/USBANLZ/AAA/one/ANLZ0000.DAT",
+        analysisDataFilePath: legacyUsbAnalysisPath("/Contents/music-ts/00000002/one.mp3"),
       },
     ]);
     expect(oneLibrary.executeSql("SELECT name FROM playlist ORDER BY playlist_id")).toEqual([

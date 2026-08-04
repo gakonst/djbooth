@@ -104,9 +104,10 @@ The destination is a mounted FAT/exFAT root or a staging directory. Sync imports
 history as a dated `DJ Set` playlist with exact-once play-count updates, then differentially
 reconciles the complete active library. It writes `PIONEER/rekordbox/export.pdb`, copies supported
 audio beneath `Contents/`, copies DAT/EXT/2EX beneath `PIONEER/USBANLZ/`, rewrites every ANLZ `PPTH`
-path, and materializes the playlist tree. Later runs retain stable device IDs and copy only changed
-files. The source SQLite database remains authoritative. `music usb export` is retained for an
-outbound-only initial compile.
+path, and materializes the playlist tree. Analysis destinations use Rekordbox's hardware lookup hash
+of the final USB audio path; CDJs do not trust the PDB analysis-path field alone. Later runs retain
+stable device IDs and copy only changed files. The source SQLite database remains authoritative.
+`music usb export` is retained for an outbound-only initial compile.
 
 Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 

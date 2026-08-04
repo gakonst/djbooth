@@ -16,6 +16,7 @@ import { basename, dirname, extname, join, parse, posix, resolve, sep } from "no
 
 import { AnlzFile, getAnlzPaths } from "../anlz/index.js";
 import { MasterDatabase, type PlaylistSummary } from "../masterdb/index.js";
+import { legacyUsbAnalysisPath } from "./anlz-path.js";
 import { inspectLegacyDevicePdb, LegacyDevicePdbWriter } from "./pdb.js";
 
 const EXPORT_MARKER = ".music-cdj-export.json";
@@ -33,6 +34,7 @@ const FILE_TYPE_BY_EXTENSION: Readonly<Record<string, number>> = {
 
 type RawExportTrack = {
   album: unknown;
+  analysisDataUpdateCount: unknown;
   analysisPath: unknown;
   artist: unknown;
   bitDepth: unknown;
@@ -47,9 +49,11 @@ type RawExportTrack = {
   fileType: unknown;
   genre: unknown;
   id: unknown;
+  informationUpdateCount: unknown;
   key: unknown;
   label: unknown;
   mixName: unknown;
+  masterDbId: unknown;
   path: unknown;
   playCount: unknown;
   rating: unknown;
@@ -306,8 +310,8 @@ async function exportOpenDatabase(
         prior && extname(prior.usbAudioPath).toLowerCase() === extname(filename).toLowerCase()
           ? prior.usbAudioPath
           : `/Contents/${idHex}/${filename}`;
-      const analysisGroup = `P${String(pdbId % 1000).padStart(3, "0")}`;
-      const usbAnalysisDirectory = `/PIONEER/USBANLZ/${analysisGroup}/${idHex}`;
+      const usbAnalysisDatPath = legacyUsbAnalysisPath(usbAudioPath);
+      const usbAnalysisDirectory = posix.dirname(usbAnalysisDatPath);
       const analysisSources: ExportTrackJob["analysisSources"] = {};
       for (const type of ["DAT", "EXT", "2EX"] as const) {
         const path = sourceAnalysis[type];
@@ -335,7 +339,7 @@ async function exportOpenDatabase(
         comment: stringValue(row.comment) ?? "",
         mixName: stringValue(row.mixName) ?? "",
         releaseDate: dateValue(row.releaseDate),
-        analyzePath: `${usbAnalysisDirectory}/ANLZ0000.DAT`,
+        analyzePath: usbAnalysisDatPath,
         dateAdded: dateValue(row.stockDate) || dateValue(row.createdAt),
         tempo: integerValue(row.tempo),
         duration: integerValue(row.duration),
@@ -350,18 +354,19 @@ async function exportOpenDatabase(
         rating: integerValue(row.rating),
         colorId: integerValue(row.colorId),
         fileType: supportedFileType(row.fileType, filename, contentId),
+        masterContentId: integerValue(row.id),
+        masterDbId: integerValue(row.masterDbId),
+        analysisDataUpdateCount: integerValue(row.analysisDataUpdateCount, 2),
+        informationUpdateCount: integerValue(row.informationUpdateCount, 2),
       });
       trackIds.set(contentId, pdbTrackId);
       jobs.push({
         analysisSources,
         analysisPaths: sourceAnalysis,
-        analysisTargetDirectory: join(targetDirectory, "PIONEER", "USBANLZ", analysisGroup, idHex),
+        analysisTargetDirectory: mediaPath(targetDirectory, usbAnalysisDirectory),
         analysisStagingDirectory: join(
           stagingDirectory,
-          "PIONEER",
-          "USBANLZ",
-          analysisGroup,
-          idHex,
+          ...usbAnalysisDirectory.replace(/^\/+/, "").split("/"),
         ),
         audioSource,
         audioPath,
@@ -538,6 +543,7 @@ function readExportTracks(database: MasterDatabase): RawExportTrack[] {
       ${label.expression("Name")} AS label,
       ${content("Commnt")} AS comment,
       ${content("Subtitle")} AS mixName,
+      ${content("MasterDBID")} AS masterDbId,
       ${content("AnalysisDataPath")} AS analysisPath,
       ${content("BPM")} AS tempo,
       ${content("Length")} AS duration,
@@ -554,7 +560,9 @@ function readExportTracks(database: MasterDatabase): RawExportTrack[] {
       ${content("ColorID")} AS colorId,
       ${content("ReleaseDate")} AS releaseDate,
       ${content("StockDate")} AS stockDate,
-      ${content("created_at")} AS createdAt
+      ${content("created_at")} AS createdAt,
+      ${content("AnalysisUpdated")} AS analysisDataUpdateCount,
+      ${content("TrackInfoUpdated")} AS informationUpdateCount
     FROM "djmdContent" content
     ${artist.sql}
     ${album.sql}
@@ -970,17 +978,46 @@ function mediaPath(root: string, usbPath: string): string {
   return target;
 }
 
-function analysisFilePath(root: string, pdbId: number, type: "2EX" | "DAT" | "EXT"): string {
-  const idHex = pdbId.toString(16).toUpperCase().padStart(8, "0");
-  const group = `P${String(pdbId % 1000).padStart(3, "0")}`;
-  return join(root, "PIONEER", "USBANLZ", group, idHex, `ANLZ0000.${type}`);
+function analysisFilePath(
+  root: string,
+  mapping: LegacyDeviceTrackMapping,
+  type: "2EX" | "DAT" | "EXT",
+): string {
+  return mediaPath(
+    root,
+    legacyUsbAnalysisPath(mapping.usbAudioPath).replace(/\.DAT$/u, `.${type}`),
+  );
+}
+
+function obsoleteAnalysisFilePaths(
+  root: string,
+  mapping: LegacyDeviceTrackMapping,
+  type: "2EX" | "DAT" | "EXT",
+): string[] {
+  const idHex = mapping.pdbId.toString(16).toUpperCase().padStart(8, "0");
+  const syntheticGroup = `P${String(mapping.pdbId % 1000).padStart(3, "0")}`;
+  const paths = [join(root, "PIONEER", "USBANLZ", syntheticGroup, idHex, `ANLZ0000.${type}`)];
+  const sourceMarker = `${sep}PIONEER${sep}USBANLZ${sep}`;
+  const sourcePath = mapping.analysis[type]?.path;
+  const markerIndex = sourcePath?.lastIndexOf(sourceMarker) ?? -1;
+  if (sourcePath && markerIndex >= 0) {
+    const usbPath = sourcePath.slice(markerIndex).split(sep).join("/");
+    paths.push(mediaPath(root, usbPath));
+  }
+  return paths;
 }
 
 function desiredGeneratedFiles(
   root: string,
   mappings: readonly LegacyDeviceTrackMapping[],
 ): Set<string> {
-  return new Set(previousGeneratedFiles(root, mappings));
+  const paths: string[] = [];
+  for (const mapping of mappings) {
+    paths.push(mediaPath(root, mapping.usbAudioPath));
+    for (const type of Object.keys(mapping.analysis) as Array<"2EX" | "DAT" | "EXT">)
+      paths.push(analysisFilePath(root, mapping, type));
+  }
+  return new Set(paths);
 }
 
 function previousGeneratedFiles(
@@ -990,8 +1027,10 @@ function previousGeneratedFiles(
   const paths: string[] = [];
   for (const mapping of mappings) {
     paths.push(mediaPath(root, mapping.usbAudioPath));
-    for (const type of Object.keys(mapping.analysis) as Array<"2EX" | "DAT" | "EXT">)
-      paths.push(analysisFilePath(root, mapping.pdbId, type));
+    for (const type of Object.keys(mapping.analysis) as Array<"2EX" | "DAT" | "EXT">) {
+      paths.push(analysisFilePath(root, mapping, type));
+      paths.push(...obsoleteAnalysisFilePaths(root, mapping, type));
+    }
   }
   return paths;
 }

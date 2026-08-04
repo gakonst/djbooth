@@ -57,6 +57,14 @@ export type LegacyDeviceTrackInput = {
   colorId?: number;
   artworkId?: number;
   fileType?: number;
+  /** Desktop master-library content ID retained by Rekordbox's legacy export. */
+  masterContentId?: number;
+  /** Desktop master database ID split across the legacy row's two 16-bit fields. */
+  masterDbId?: number;
+  /** Source analysis revision string; defaults to Rekordbox's analyzed-row value. */
+  analysisDataUpdateCount?: number;
+  /** Source metadata revision string; defaults to Rekordbox's analyzed-row value. */
+  informationUpdateCount?: number;
 };
 
 /** Parsed track fields used to verify a generated legacy Device Library. */
@@ -241,8 +249,8 @@ export class LegacyDevicePdbWriter {
     const strings = [
       "",
       "",
-      "2",
-      "2",
+      String(input.analysisDataUpdateCount ?? 2),
+      String(input.informationUpdateCount ?? 2),
       "",
       "",
       "ON",
@@ -281,6 +289,10 @@ export class LegacyDevicePdbWriter {
     this.trackIds.add(trackId);
     this.trackCount++;
     this.nextTrackId = Math.max(this.nextTrackId, trackId);
+    const masterContentId = input.masterContentId ?? 0x0010_0000 + trackId;
+    const masterDbId = input.masterDbId ?? 0x03dd_ae49;
+    requireUnsigned("master content id", masterContentId, 4);
+    requireUnsigned("master database id", masterDbId, 4);
 
     const fixed = Buffer.alloc(0x5e);
     let offset = 0;
@@ -298,9 +310,9 @@ export class LegacyDevicePdbWriter {
     put32(values.sampleRate);
     put32(0);
     put32(values.fileSize);
-    put32(0x0010_0000 + trackId);
-    put16(0xae49);
-    put16(0x03dd);
+    put32(masterContentId);
+    put16(masterDbId & 0xffff);
+    put16(masterDbId >>> 16);
     put32(values.artworkId);
     put32(keyId);
     put32(0);

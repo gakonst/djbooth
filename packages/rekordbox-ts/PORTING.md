@@ -35,14 +35,21 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 ### 2026-08-03 — hardware waveform lookup correction
 
 - Physical media exposed a split result: CDJ metadata (key/BPM) loaded, but waveforms did not,
-  while DJ Link rendered the source analyses. DAT/EXT/2EX comparison proved every non-path tag on
-  the stick was byte-identical to its working source and every rewritten PPTH resolved to audio.
-- Removed the synthetic `P001/00000001` ANLZ destination mapping. Both legacy `export.pdb` and
-  OneLibrary now retain each master row's canonical `/PIONEER/USBANLZ/<bucket>/<uuid>/ANLZ0000.DAT`
-  path, and the files are installed at that exact location.
+  while DJ Link rendered the source analyses. A one-track Rekordbox 6.8.2 export of Brunello's
+  `Apathy` established the missing contract: players independently hash the USB audio path and
+  ignore the PDB `analyze_path` when locating DAT/EXT files. The published hash algorithm reproduces
+  Rekordbox's exact `P03E/0000EAC4` destination for that track.
+- Both full and scoped exports now derive `/PIONEER/USBANLZ/Pxxx/yyyyyyyy` from the final
+  `/Contents/...` path, place DAT/EXT/2EX there, write the same path into legacy and OneLibrary
+  indexes, and retain the null-terminated rewritten PPTH audio path.
+- Legacy track rows now also retain the desktop content ID, `MasterDBID`, and source analysis and
+  metadata revision counters observed in the Rekordbox reference export.
+- Scoped append checkpoints an existing Rekordbox OneLibrary WAL before staging and removes stale
+  WAL/SHM sidecars when publishing the checkpointed replacement. This preserves official exports
+  whose 4 KiB main database file has its complete schema and rows in the WAL.
 - OneLibrary exports now retain `MasterDBID` and source analysis/information revision counters,
   defaulting analyzed rows to Rekordbox's observed revision 2. Regression tests require both USB
-  indexes and the filesystem to resolve the same canonical analysis paths.
+  indexes and the filesystem to resolve the same hardware-computed analysis paths.
 
 ### 2026-08-02 — fresh dual-library USB checkpoint
 
