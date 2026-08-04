@@ -32,6 +32,21 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-03 — runtime layout separation
+
+- Moved the React/Vite workbench to `apps/rekordbox-library` and its Tauri shell into the shared
+  `rust/` workspace. The app retains a relative `src-tauri` symlink so standard Tauri commands keep
+  working while Rust ownership remains explicit.
+- Consolidated all active Rust crates and binaries under one `rust/Cargo.toml`; TypeScript package
+  scripts still expose the same public CLIs and build their native helpers from that workspace.
+- Kept direct focused/native CLIs for development while routing every Rust/Python operation through
+  its package-owned Incur wrapper under the umbrella `music` command and Code Mode tool tree.
+- Extracted the current MLX Mel-Band-RoFormer separator into the standalone uv project at
+  `python/stems-mlx`. Desktop bundles copy that project as a resource; npm callers can select it
+  with `MUSIC_STEMS_MLX_PROJECT` or the CLI project-directory option.
+- Moved the retired proprietary Rekordbox rehost, application bytes, and sanitized reference seed
+  files to `archive/rekordbox`. The clean-room analyzer no longer discovers the rehost implicitly.
+
 ### 2026-08-03 — hardware waveform lookup correction
 
 - Physical media exposed a split result: CDJ metadata (key/BPM) loaded, but waveforms did not,
@@ -986,7 +1001,7 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 
 ## Pro DJ Link source/pcap lab checkpoint (2026-07-26)
 
-- Kept the provenance-tracked Rust implementation in `packages/djlink/native` and made direct
+- Kept the provenance-tracked Rust implementation, now in `rust/`, and made direct
   `cargo run -p music-djlink` the protocol iteration path. Added `audit-pcap` for bounded JSON
   packet-shape reports, mandatory source-discovery gates, reference diffs, and exact static-payload
   checks against `/Users/gakonst/github/gakonst/djtools/rb-tracks.pcap`
@@ -1099,7 +1114,8 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
 
 ## Clean-room analyzer checkpoint (2026-07-27)
 
-- Split a releasable `native/rekordbox-analyzer-core` crate from the private Rekordbox rehost. The
+- Split a releasable `rust/crates/rekordbox-analyzer-core` crate from the private Rekordbox rehost.
+  The
   core has no Rekordbox/JUCE bytes, loader offsets, patched application cache, or native framework
   dependency.
 - Added a strict PMAI/tag parser and writer that preserves unknown headers, repeated/unknown tags,

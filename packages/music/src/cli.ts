@@ -60,6 +60,7 @@ export const MUSIC_MCP_TOOL_FILTER = {
     "ytdlp_download",
     "rekordbox_status",
     "rekordbox_analyze_*",
+    "rekordbox_stems_*",
     "rekordbox_db_info",
     "rekordbox_db_search",
     "rekordbox_db_content_*",
@@ -69,7 +70,12 @@ export const MUSIC_MCP_TOOL_FILTER = {
   ],
 };
 
-/** Compose every package-owned Incur CLI without duplicating its command definitions. */
+/**
+ * Compose every package-owned Incur CLI without duplicating its command definitions.
+ *
+ * Native Rust and Python executables remain directly usable implementation CLIs. Their owning
+ * TypeScript commands provide the typed Incur wrapper and route execution to those helpers.
+ */
 export function createMusicCli(): ReturnType<typeof Cli.create> {
   const cli = Cli.create("music", {
     version: MUSIC_VERSION,

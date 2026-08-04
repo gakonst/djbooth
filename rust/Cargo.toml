@@ -1,0 +1,54 @@
+[workspace]
+members = [
+  "apps/music-djlink",
+  "apps/rekordbox-library-desktop",
+  "crates/djtools-core",
+  "crates/djtools-link",
+  "crates/music-cdj-usb",
+  "crates/rekordbox-analyzer-core",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+clap = { version = "4.5", features = ["derive"] }
+deunicode = "1"
+dirs = "6"
+djtools-core = { path = "crates/djtools-core" }
+djtools-link = { path = "crates/djtools-link" }
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+libc = "0.2"
+rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+socket2 = { version = "0.6", features = ["all"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = [
+  "fs",
+  "io-util",
+  "macros",
+  "net",
+  "rt-multi-thread",
+  "signal",
+  "sync",
+  "time",
+] }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "std"] }
+walkdir = "2"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

@@ -70,7 +70,9 @@ import { exportLegacyDeviceLibrary } from "@gakonst/music/usb";
 
 The umbrella mounts the package-owned Incur CLI definitions directly. Every specialist command
 and schema remains defined once, in its owning package; `music` adds only the common root and agent
-Skill.
+Skill. Focused package CLIs and native/Python implementation CLIs remain available for development
+and diagnosis. Normal user and agent flows enter through `music`; the owning Incur command validates
+arguments, invokes its Rust or Python helper, and returns bounded structured output.
 
 ```sh
 music tracks resolve "https://youtu.be/example" --format json
@@ -85,6 +87,8 @@ music slsk search "artist track" --timeout 8 --format json
 music ytdlp-ts engines --format json
 music ytdlp-ts inspect "https://youtu.be/example" --format json
 music rekordbox status --format json
+music rekordbox analyze track ./track.flac --output-directory ./analysis --format json
+music rekordbox stems separate ./track.flac ./stems --layout four-stem --format json
 music rekordbox db playlist list
 music rekordbox db playlist list --json
 music rekordbox db playlist show "Adam Ten — Burning Man 2025 [music-ts E2E]"
@@ -215,7 +219,7 @@ const codeMode = await createMusicCodeMcpServer({
 - [`slsk-ts`](https://github.com/gakonst/music-ts/tree/main/packages/slsk-ts): Soulseek protocol, search, and transfers.
 - [`@gakonst/ytdlp-ts`](https://github.com/gakonst/music-ts/tree/main/packages/ytdlp-ts): YouTube/SoundCloud extraction and selected downloads.
 - [`@gakonst/rekordbox`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-ts): Rekordbox database and file formats.
-- [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/packages/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
+- [`@gakonst/rekordbox-library`](https://github.com/gakonst/music-ts/tree/main/apps/rekordbox-library): Local, read-only-by-default Rekordbox library workbench and guarded playlist mutations.
 - [`@gakonst/djlink`](https://github.com/gakonst/music-ts/tree/main/packages/djlink): Manifest-backed native Pro DJ Link RemoteDB/NFS server and bounded CDJ load control.
 - [`@gakonst/cdj-usb`](https://github.com/gakonst/music-ts/tree/main/packages/cdj-usb): CDJ-3000 mounted-media synchronizer and Linux USB mass-storage gadget.
 

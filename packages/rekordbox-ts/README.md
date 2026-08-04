@@ -19,9 +19,10 @@ policy, verification evidence, and implementation decisions are recorded in
 - pnpm 10
 - macOS, Windows, or Linux; automatic Rekordbox installation discovery is implemented for macOS and Windows
 
-The optional `stems` backend additionally requires an Apple Silicon Mac and
-[uv](https://docs.astral.sh/uv/getting-started/installation/). Its Python and MLX dependencies are
-locked separately and do not affect database-only use.
+The optional `stems` backend is the standalone [`python/stems-mlx`](../../python/stems-mlx) uv
+project. It requires an Apple Silicon Mac and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). Set `MUSIC_STEMS_MLX_PROJECT` when
+using an installed npm package outside this repository.
 
 ```sh
 pnpm add --global --allow-build=better-sqlite3-multiple-ciphers @gakonst/rekordbox
@@ -149,6 +150,9 @@ root.command(rekordboxCli);
 ### MLX stems
 
 ```sh
+# Standalone Python boundary
+uv run --project python/stems-mlx music-stems-mlx doctor
+
 # One-time 3.76 GB download, SHA-256 check, and PyTorch-to-MLX conversion
 rekordbox stems setup --format json
 

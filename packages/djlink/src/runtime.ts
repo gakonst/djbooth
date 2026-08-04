@@ -556,8 +556,8 @@ export async function resolveDjLinkBinary(
     override,
     env.MUSIC_DJLINK_BINARY,
     resolve(packageRoot, "native-bin/music-djlink"),
-    resolve(packageRoot, "native/target/release/music-djlink"),
-    resolve(packageRoot, "native/target/debug/music-djlink"),
+    resolve(packageRoot, "../../rust/target/release/music-djlink"),
+    resolve(packageRoot, "../../rust/target/debug/music-djlink"),
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     const absolute = resolve(candidate);

@@ -1,0 +1,25 @@
+[project]
+name = "music-stems-mlx"
+version = "0.1.0"
+description = "Standalone MLX Mel-Band-RoFormer four-stem separator"
+requires-python = ">=3.12,<3.13"
+dependencies = ["huggingface-hub[hf-xet]==1.25.1", "mlx-audio-separator[convert]==0.1.5"]
+
+[project.scripts]
+music-stems-mlx = "music_stems_mlx:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["music_stems_mlx"]
+
+[dependency-groups]
+dev = ["ruff==0.12.7"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

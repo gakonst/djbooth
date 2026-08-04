@@ -1,0 +1,1241 @@
+use std::ffi::{CStr, CString};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::os::fd::AsRawFd;
+use std::os::raw::{c_char, c_int, c_void};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+
+use crate::DEFAULT_ANLZ_STEM;
+use crate::backend::{ENV_REKORDBOX_ANALYZER_ROOT, RekordboxOffsets, prepare_rekordbox_backend};
+use crate::trace::{begin_reference_trace, finish_reference_trace, install_reference_trace};
+
+const TEMPLATE_SUFFIX: &str = "Library/Pioneer/rekordbox/share/PIONEER/USBANLZ";
+const VENDORED_TEMPLATE_SUFFIX: &str = "archive/rekordbox/reference/anlz-templates";
+const WAIT_SECONDS: u64 = 90;
+const COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CALLBACK_STABILITY_WINDOW: Duration = Duration::from_millis(100);
+const OUTPUT_STABILITY_WINDOW: Duration = Duration::from_millis(500);
+const ANALYZER_RHYTHM_MODE_ENV: &str = "REKORDBOX_ANALYZER_RHYTHM_MODE";
+static CONTENT_SEQUENCE: AtomicU32 = AtomicU32::new(1);
+
+pub const REHOST_WORKER_SUBCOMMAND: &str = "__rekordbox-rehost";
+
+type GetAnalyzer = unsafe extern "C" fn() -> *mut c_void;
+type JuceStringDefault = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+type JuceStringCstr = unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void;
+type JuceStringDtor = unsafe extern "C" fn(*mut c_void);
+type JuceStringToRawUtf8 = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+type StartAnalyze = unsafe extern "C" fn(
+    *mut c_void,
+    i64,
+    *mut c_void,
+    *mut c_void,
+    *mut c_void,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    *mut c_void,
+    c_int,
+    c_int,
+    *mut c_void,
+) -> c_int;
+
+#[derive(Debug, Clone)]
+pub struct RehostOptions {
+    pub audio_path: PathBuf,
+    pub output_dir: PathBuf,
+    pub native_log_path: Option<PathBuf>,
+    pub trace_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RehostResult {
+    pub backend: String,
+    pub binary: String,
+    #[serde(rename = "audioPath")]
+    pub audio_path: String,
+    #[serde(rename = "analyzePath")]
+    pub analyze_path: String,
+    #[serde(rename = "contentId")]
+    pub content_id: i64,
+    #[serde(rename = "startResult")]
+    pub start_result: i32,
+    #[serde(rename = "callbackStatus")]
+    pub callback_status: Option<i32>,
+    #[serde(rename = "callbackError")]
+    pub callback_error: Option<String>,
+    #[serde(rename = "nativeLog")]
+    pub native_log: String,
+    #[serde(rename = "rhythmMode")]
+    pub rhythm_mode: String,
+    #[serde(rename = "rhythmModeRequested")]
+    pub rhythm_mode_requested: String,
+    #[serde(rename = "tracePath", skip_serializing_if = "Option::is_none")]
+    pub trace_path: Option<String>,
+    pub outputs: Vec<(String, u64)>,
+    pub summary: OutputSummary,
+    pub timings: RehostTimings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RehostTimings {
+    pub backend_ms: u64,
+    pub output_prepare_ms: u64,
+    pub load_ms: u64,
+    pub analyze_start_ms: u64,
+    pub completion_ms: u64,
+    pub summarize_ms: u64,
+    pub total_ms: u64,
+}
+
+impl RehostResult {
+    pub fn success(&self) -> bool {
+        self.start_result == 0
+            && self
+                .outputs
+                .iter()
+                .any(|(path, size)| path.to_ascii_uppercase().ends_with(".EXT") && *size > 4096)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputSummary {
+    pub files: Vec<AnlzFileSummary>,
+    pub tempo_bpm: Option<f64>,
+    pub beat_grid: Option<BeatGridSummary>,
+    pub key: Option<String>,
+    pub key_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnlzFileSummary {
+    pub path: String,
+    pub size: u64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatGridSummary {
+    pub beat_count: usize,
+    pub avg_bpm: f64,
+    pub min_bpm: f64,
+    pub max_bpm: f64,
+    pub first_downbeat_ms: u32,
+    pub last_beat_ms: u32,
+    pub first_beats: Vec<BeatEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BeatEntry {
+    pub beat: u16,
+    pub bpm: f64,
+    pub time_ms: u32,
+}
+
+#[derive(Debug)]
+struct AnlzTag {
+    tag: String,
+    offset: usize,
+    total_len: usize,
+}
+
+pub fn run_rehost(options: RehostOptions) -> Result<RehostResult> {
+    let total_started = Instant::now();
+    ensure_x86_64_worker()?;
+    let rhythm_mode = reference_rhythm_mode()?;
+
+    let audio_path = options
+        .audio_path
+        .canonicalize()
+        .with_context(|| format!("audio file not found: {}", options.audio_path.display()))?;
+    if !audio_path.is_file() {
+        bail!("audio file not found: {}", audio_path.display());
+    }
+
+    let output_dir = expand_home(&options.output_dir);
+    let native_log = options
+        .native_log_path
+        .as_ref()
+        .map(|path| expand_home(path))
+        .unwrap_or_else(|| output_dir.join("rehost-native.log"));
+    let content_id = content_id();
+    let backend_started = Instant::now();
+    let backend = prepare_rekordbox_backend()?;
+    let backend_ms = elapsed_ms(backend_started);
+    let binary = backend.cache.cached_binary.clone();
+    let output_prepare_started = Instant::now();
+    let (dat_path, initial_mtimes) = prepare_output(
+        &default_template_dir()?,
+        &output_dir,
+        DEFAULT_ANLZ_STEM,
+        &audio_path,
+    )?;
+    let output_prepare_ms = elapsed_ms(output_prepare_started);
+
+    let mut rehost_output = NativeOutputRedirect::start(&native_log)?;
+    let load_started = Instant::now();
+    let trace_path = options.trace_path.as_ref().map(|path| expand_home(path));
+    let mut rehost = unsafe { Rehost::load(&binary, backend.offsets, trace_path.is_some())? };
+    let load_ms = elapsed_ms(load_started);
+    if trace_path.is_some() {
+        begin_reference_trace();
+    }
+    let analyze_started = Instant::now();
+    let start_result = unsafe { rehost.analyze(&audio_path, &dat_path, content_id, rhythm_mode)? };
+    let analyze_start_ms = elapsed_ms(analyze_started);
+    if start_result != 0 {
+        rehost_output.restore()?;
+        bail!("Rekordbox startAnalyze failed with status {start_result}");
+    }
+    let completion_started = Instant::now();
+    let outputs = match wait_for_completion(
+        &dat_path,
+        &initial_mtimes,
+        Duration::from_secs(WAIT_SECONDS),
+        &rehost.callback,
+    ) {
+        Ok(outputs) => outputs,
+        Err(error) => {
+            rehost_output.restore()?;
+            std::mem::forget(rehost);
+            return Err(error);
+        }
+    };
+    let completion_ms = elapsed_ms(completion_started);
+    let callback = rehost.callback.snapshot();
+    let callback_status = callback.status;
+    let callback_error = callback.error;
+    let key = callback.key;
+    rehost_output.restore()?;
+    let summarize_started = Instant::now();
+    let summary = summarize_outputs(&dat_path, key)?;
+    if let Some(trace_path) = &trace_path {
+        finish_reference_trace(
+            trace_path,
+            summary.beat_grid.clone(),
+            parse_pqtz_entries(&dat_path)?,
+        )?;
+    }
+    let summarize_ms = elapsed_ms(summarize_started);
+
+    Ok(RehostResult {
+        backend: "rekordbox-dlopen-rehost".to_string(),
+        binary: binary.display().to_string(),
+        audio_path: audio_path.display().to_string(),
+        analyze_path: dat_path.display().to_string(),
+        content_id,
+        start_result,
+        callback_status,
+        callback_error,
+        native_log: native_log.display().to_string(),
+        rhythm_mode: rhythm_mode.as_str().to_string(),
+        rhythm_mode_requested: rhythm_mode.as_str().to_string(),
+        trace_path: trace_path.map(|path| path.display().to_string()),
+        outputs,
+        summary,
+        timings: RehostTimings {
+            backend_ms,
+            output_prepare_ms,
+            load_ms,
+            analyze_start_ms,
+            completion_ms,
+            summarize_ms,
+            total_ms: elapsed_ms(total_started),
+        },
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReferenceRhythmMode {
+    Normal,
+    Dynamic,
+}
+
+impl ReferenceRhythmMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Dynamic => "dynamic",
+        }
+    }
+
+    const fn variable_tempo(self) -> c_int {
+        match self {
+            Self::Normal => 0,
+            Self::Dynamic => 1,
+        }
+    }
+}
+
+fn reference_rhythm_mode() -> Result<ReferenceRhythmMode> {
+    match std::env::var(ANALYZER_RHYTHM_MODE_ENV) {
+        Ok(value) => parse_reference_rhythm_mode(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_reference_rhythm_mode(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            bail!("{ANALYZER_RHYTHM_MODE_ENV} must contain normal or dynamic")
+        }
+    }
+}
+
+fn parse_reference_rhythm_mode(value: Option<&str>) -> Result<ReferenceRhythmMode> {
+    match value {
+        Some("normal") => Ok(ReferenceRhythmMode::Normal),
+        Some("dynamic") | None => Ok(ReferenceRhythmMode::Dynamic),
+        Some("auto") => bail!(
+            "{ANALYZER_RHYTHM_MODE_ENV}=auto is unavailable for the reference analyzer; select normal or dynamic"
+        ),
+        Some(value) => bail!(
+            "{ANALYZER_RHYTHM_MODE_ENV} must be normal or dynamic for the reference analyzer; received '{value}'"
+        ),
+    }
+}
+
+pub fn bundle_rekordbox_templates(output_dir: &Path) -> Result<Vec<PathBuf>> {
+    let source_dir = dirs::home_dir()
+        .map(|home| home.join(TEMPLATE_SUFFIX))
+        .context("failed to resolve home directory")?;
+    let output_dir = expand_home(output_dir);
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let mut outputs = Vec::new();
+    for (suffix, template) in find_template_files(&source_dir)? {
+        let output = output_dir.join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"));
+        clean_seed_from_template(
+            &template,
+            &output,
+            Path::new("rekordbox-template-source.wav"),
+        )?;
+        outputs.push(output);
+    }
+    Ok(outputs)
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn ensure_x86_64_worker() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn ensure_x86_64_worker() -> Result<()> {
+    bail!("Rekordbox rehost must run inside the x86_64 worker process")
+}
+
+struct NativeOutputRedirect {
+    stdout_copy: c_int,
+    stderr_copy: c_int,
+    restored: bool,
+}
+
+impl NativeOutputRedirect {
+    fn start(log_path: &Path) -> Result<Self> {
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .with_context(|| format!("failed to open {}", log_path.display()))?;
+        let stdout_copy = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        let stderr_copy = unsafe { libc::dup(libc::STDERR_FILENO) };
+        if stdout_copy < 0 || stderr_copy < 0 {
+            bail!("failed to duplicate stdout/stderr");
+        }
+        if unsafe { libc::dup2(log.as_raw_fd(), libc::STDOUT_FILENO) } < 0 {
+            bail!("failed to redirect stdout");
+        }
+        if unsafe { libc::dup2(log.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
+            bail!("failed to redirect stderr");
+        }
+        Ok(Self {
+            stdout_copy,
+            stderr_copy,
+            restored: false,
+        })
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+        unsafe {
+            libc::fflush(std::ptr::null_mut());
+            if libc::dup2(self.stdout_copy, libc::STDOUT_FILENO) < 0 {
+                bail!("failed to restore stdout");
+            }
+            if libc::dup2(self.stderr_copy, libc::STDERR_FILENO) < 0 {
+                bail!("failed to restore stderr");
+            }
+            libc::close(self.stdout_copy);
+            libc::close(self.stderr_copy);
+        }
+        self.restored = true;
+        Ok(())
+    }
+}
+
+impl Drop for NativeOutputRedirect {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+struct Rehost {
+    _handle: *mut c_void,
+    get_analyzer: GetAnalyzer,
+    string_default: JuceStringDefault,
+    string_cstr: JuceStringCstr,
+    string_dtor: JuceStringDtor,
+    start_analyze: StartAnalyze,
+    callback: AnalyzerCallback,
+}
+
+impl Rehost {
+    unsafe fn load(binary: &Path, offsets: RekordboxOffsets, trace: bool) -> Result<Self> {
+        let c_path = CString::new(binary.to_string_lossy().as_bytes())?;
+        let handle = unsafe { libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        if handle.is_null() {
+            let error = unsafe {
+                let raw = libc::dlerror();
+                if raw.is_null() {
+                    "unknown dlopen error".to_string()
+                } else {
+                    CStr::from_ptr(raw).to_string_lossy().to_string()
+                }
+            };
+            bail!("failed to dlopen {}: {error}", binary.display());
+        }
+        let base = unsafe { find_image_base(binary)? };
+        let string_to_raw_utf8: JuceStringToRawUtf8 =
+            unsafe { function_at(base + offsets.juce_string_to_raw_utf8) };
+        let rehost = Self {
+            _handle: handle,
+            get_analyzer: unsafe { function_at(base + offsets.get_analyzer) },
+            string_default: unsafe { function_at(base + offsets.juce_string_default) },
+            string_cstr: unsafe { function_at(base + offsets.juce_string_cstr) },
+            string_dtor: unsafe { function_at(base + offsets.juce_string_dtor) },
+            start_analyze: unsafe { function_at(base + offsets.start_analyze) },
+            callback: AnalyzerCallback::new(string_to_raw_utf8),
+        };
+        unsafe { force_key_analysis(base, offsets.force_key_analysis_patch)? };
+        if trace {
+            unsafe { install_reference_trace(base)? };
+        }
+        Ok(rehost)
+    }
+
+    unsafe fn analyze(
+        &mut self,
+        audio_path: &Path,
+        dat_path: &Path,
+        content_id: i64,
+        rhythm_mode: ReferenceRhythmMode,
+    ) -> Result<i32> {
+        let analyzer = unsafe { (self.get_analyzer)() };
+        if analyzer.is_null() {
+            bail!("CAnalyzerIF::getInstance returned null");
+        }
+
+        let mut audio = unsafe {
+            JuceString::new(
+                self.string_default,
+                self.string_cstr,
+                self.string_dtor,
+                Some(&audio_path.display().to_string()),
+            )?
+        };
+        let mut anlz = unsafe {
+            JuceString::new(
+                self.string_default,
+                self.string_cstr,
+                self.string_dtor,
+                Some(&dat_path.display().to_string()),
+            )?
+        };
+        let mut aux = unsafe {
+            JuceString::new(
+                self.string_default,
+                self.string_cstr,
+                self.string_dtor,
+                None,
+            )?
+        };
+        let mut cloud = [0u8; 16];
+        let result = unsafe {
+            (self.start_analyze)(
+                analyzer,
+                content_id,
+                audio.as_mut_ptr(),
+                anlz.as_mut_ptr(),
+                aux.as_mut_ptr(),
+                rhythm_mode.variable_tempo(),
+                1,
+                1,
+                0,
+                1,
+                1,
+                0,
+                0,
+                cloud.as_mut_ptr().cast(),
+                0,
+                0,
+                self.callback.as_mut_ptr(),
+            )
+        };
+        Ok(result)
+    }
+}
+
+impl Drop for Rehost {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dlclose(self._handle);
+        }
+    }
+}
+
+unsafe fn function_at<T>(address: usize) -> T {
+    unsafe { std::mem::transmute_copy::<usize, T>(&address) }
+}
+
+unsafe extern "C" {
+    fn _dyld_image_count() -> u32;
+    fn _dyld_get_image_name(image_index: u32) -> *const c_char;
+    fn _dyld_get_image_header(image_index: u32) -> *const c_void;
+}
+
+unsafe fn find_image_base(binary: &Path) -> Result<usize> {
+    let target = binary
+        .canonicalize()
+        .unwrap_or_else(|_| binary.to_path_buf())
+        .display()
+        .to_string();
+    let private_target = target
+        .strip_prefix("/tmp/")
+        .map(|rest| format!("/private/tmp/{rest}"));
+    for index in 0..unsafe { _dyld_image_count() } {
+        let raw_name = unsafe { _dyld_get_image_name(index) };
+        if raw_name.is_null() {
+            continue;
+        }
+        let name = unsafe { CStr::from_ptr(raw_name) }.to_string_lossy();
+        if name == target || private_target.as_deref() == Some(name.as_ref()) {
+            let header = unsafe { _dyld_get_image_header(index) };
+            if header.is_null() {
+                bail!("dyld image header is null for {}", binary.display());
+            }
+            return Ok(header as usize);
+        }
+    }
+    bail!("dyld image not found for {}", binary.display())
+}
+
+unsafe fn force_key_analysis(base: usize, patch_offset: usize) -> Result<()> {
+    let address = base + patch_offset;
+    let current = unsafe { std::slice::from_raw_parts(address as *const u8, 3) };
+    if current == [0xb0, 0x01, 0x90] {
+        return Ok(());
+    }
+    if current != [0x8a, 0x45, 0xd7] {
+        bail!(
+            "unexpected start_analyze key patch bytes at {address:#x}: {:02x}{:02x}{:02x}",
+            current[0],
+            current[1],
+            current[2]
+        );
+    }
+
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        bail!("failed to resolve system page size");
+    }
+    let page_size = page_size as usize;
+    let page = address & !(page_size - 1);
+    if unsafe {
+        libc::mprotect(
+            page as *mut c_void,
+            page_size,
+            libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+        )
+    } != 0
+    {
+        bail!("mprotect failed for key-analysis patch");
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping([0xb0, 0x01, 0x90].as_ptr(), address as *mut u8, 3);
+    }
+    Ok(())
+}
+
+struct JuceString {
+    buffer: [u8; 8],
+    dtor: JuceStringDtor,
+}
+
+impl JuceString {
+    unsafe fn new(
+        default: JuceStringDefault,
+        cstr: JuceStringCstr,
+        dtor: JuceStringDtor,
+        text: Option<&str>,
+    ) -> Result<Self> {
+        let mut string = Self {
+            buffer: [0; 8],
+            dtor,
+        };
+        match text {
+            Some(text) => {
+                let c_text = CString::new(text)?;
+                unsafe { cstr(string.as_mut_ptr(), c_text.as_ptr()) };
+            }
+            None => {
+                unsafe { default(string.as_mut_ptr()) };
+            }
+        }
+        Ok(string)
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut c_void {
+        self.buffer.as_mut_ptr().cast()
+    }
+}
+
+impl Drop for JuceString {
+    fn drop(&mut self) {
+        unsafe {
+            (self.dtor)(self.as_mut_ptr());
+        }
+    }
+}
+
+#[repr(C)]
+struct CallbackObject {
+    vtable: *mut *const c_void,
+    shared: *mut CallbackShared,
+}
+
+struct CallbackShared {
+    string_to_raw_utf8: JuceStringToRawUtf8,
+    snapshot: Mutex<CallbackSnapshot>,
+}
+
+#[derive(Clone, Default)]
+struct CallbackSnapshot {
+    status: Option<i32>,
+    key: Option<String>,
+    error: Option<String>,
+}
+
+struct AnalyzerCallback {
+    object: Box<CallbackObject>,
+    _vtable: Box<[*const c_void; 24]>,
+    shared: Box<CallbackShared>,
+}
+
+impl AnalyzerCallback {
+    fn new(string_to_raw_utf8: JuceStringToRawUtf8) -> Self {
+        let mut shared = Box::new(CallbackShared {
+            string_to_raw_utf8,
+            snapshot: Mutex::new(CallbackSnapshot::default()),
+        });
+        let mut vtable = Box::new([generic_callback as *const c_void; 24]);
+        vtable[2] = progress_callback as *const c_void;
+        vtable[5] = complete_callback as *const c_void;
+        let object = Box::new(CallbackObject {
+            vtable: vtable.as_mut_ptr(),
+            shared: shared.as_mut() as *mut CallbackShared,
+        });
+        Self {
+            object,
+            _vtable: vtable,
+            shared,
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut c_void {
+        self.object.as_mut() as *mut CallbackObject as *mut c_void
+    }
+
+    fn snapshot(&self) -> CallbackSnapshot {
+        self.shared
+            .snapshot
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+extern "C" fn generic_callback(
+    _a: *mut c_void,
+    _b: *mut c_void,
+    _c: *mut c_void,
+    _d: *mut c_void,
+    _e: *mut c_void,
+    _f: *mut c_void,
+    _g: *mut c_void,
+    _h: *mut c_void,
+    _i: *mut c_void,
+    _j: *mut c_void,
+) {
+}
+
+extern "C" fn progress_callback(_this: *mut c_void, _content_id: *mut c_void) {}
+
+extern "C" fn complete_callback(
+    this: *mut c_void,
+    _content_id: i64,
+    _cloud_name: *mut c_void,
+    status: c_int,
+    _beat_info: *mut c_void,
+    key_string: *mut c_void,
+) {
+    if this.is_null() {
+        return;
+    }
+    let object = unsafe { &mut *(this as *mut CallbackObject) };
+    if object.shared.is_null() {
+        return;
+    }
+    let shared = unsafe { &*object.shared };
+    let key_result = if key_string.is_null() {
+        None
+    } else {
+        let raw = unsafe { (shared.string_to_raw_utf8)(key_string) };
+        if raw.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(raw) }
+                    .to_str()
+                    .map(str::to_owned)
+                    .map_err(|error| error.to_string()),
+            )
+        }
+    };
+    let mut snapshot = shared
+        .snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    snapshot.status = Some(status);
+    match key_result {
+        Some(Ok(value)) if !value.is_empty() => snapshot.key = Some(value),
+        Some(Err(error)) => snapshot.error = Some(error),
+        _ => {}
+    }
+}
+
+fn be16(data: &[u8], offset: usize) -> Option<u16> {
+    data.get(offset..offset + 2)
+        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+}
+
+fn be32(data: &[u8], offset: usize) -> Option<u32> {
+    data.get(offset..offset + 4)
+        .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn iter_anlz_tags(path: &Path) -> Result<Vec<AnlzTag>> {
+    let data = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    iter_anlz_tags_from_bytes(&data)
+        .with_context(|| format!("not a valid ANLZ file: {}", path.display()))
+}
+
+fn iter_anlz_tags_from_bytes(data: &[u8]) -> Result<Vec<AnlzTag>> {
+    if data.get(..4) != Some(b"PMAI") {
+        bail!("missing PMAI header");
+    }
+    let mut offset = be32(data, 4).context("missing PMAI tag start")? as usize;
+    let mut tags = Vec::new();
+    while offset + 12 <= data.len() {
+        let tag = String::from_utf8_lossy(&data[offset..offset + 4]).to_string();
+        let header_len = be32(data, offset + 4).context("missing tag header length")? as usize;
+        let total_len = be32(data, offset + 8).context("missing tag total length")? as usize;
+        if header_len < 12 || total_len < header_len || offset + total_len > data.len() {
+            break;
+        }
+        tags.push(AnlzTag {
+            tag,
+            offset,
+            total_len,
+        });
+        offset += total_len;
+    }
+    Ok(tags)
+}
+
+fn parse_pqtz(path: &Path) -> Result<Option<BeatGridSummary>> {
+    let entries = parse_pqtz_entries(path)?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let sum = entries.iter().map(|entry| entry.bpm).sum::<f64>();
+    let avg = (sum / entries.len() as f64 * 1_000_000.0).round() / 1_000_000.0;
+    let min = entries
+        .iter()
+        .map(|entry| entry.bpm)
+        .fold(f64::INFINITY, f64::min);
+    let max = entries
+        .iter()
+        .map(|entry| entry.bpm)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let first_downbeat_ms = entries
+        .iter()
+        .find(|entry| entry.beat == 1)
+        .unwrap_or(&entries[0])
+        .time_ms;
+    let last_beat_ms = entries
+        .last()
+        .map(|entry| entry.time_ms)
+        .unwrap_or_default();
+    Ok(Some(BeatGridSummary {
+        beat_count: entries.len(),
+        avg_bpm: avg,
+        min_bpm: min,
+        max_bpm: max,
+        first_downbeat_ms,
+        last_beat_ms,
+        first_beats: entries.into_iter().take(8).collect(),
+    }))
+}
+
+fn parse_pqtz_entries(path: &Path) -> Result<Vec<BeatEntry>> {
+    let data = std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    for tag in iter_anlz_tags_from_bytes(&data)? {
+        if tag.tag != "PQTZ" {
+            continue;
+        }
+        let count = be32(&data, tag.offset + 20).unwrap_or(0) as usize;
+        let entry_offset = tag.offset + 24;
+        let max_count = tag.total_len.saturating_sub(24) / 8;
+        let mut entries = Vec::new();
+        for index in 0..count.min(max_count) {
+            let offset = entry_offset + (index * 8);
+            let Some(beat) = be16(&data, offset) else {
+                break;
+            };
+            let Some(bpm) = be16(&data, offset + 2) else {
+                break;
+            };
+            let Some(time_ms) = be32(&data, offset + 4) else {
+                break;
+            };
+            entries.push(BeatEntry {
+                beat,
+                bpm: f64::from(bpm) / 100.0,
+                time_ms,
+            });
+        }
+        return Ok(entries);
+    }
+    Ok(Vec::new())
+}
+
+fn summarize_outputs(dat_path: &Path, key: Option<String>) -> Result<OutputSummary> {
+    let mut files = Vec::new();
+    for suffix in ["DAT", "EXT", "2EX"] {
+        let path = dat_path.with_extension(suffix);
+        if !path.exists() {
+            continue;
+        }
+        files.push(AnlzFileSummary {
+            path: path.display().to_string(),
+            size: path.metadata()?.len(),
+            tags: iter_anlz_tags(&path)?
+                .into_iter()
+                .map(|tag| tag.tag)
+                .collect(),
+        });
+    }
+    let beat_grid = if dat_path.exists() {
+        parse_pqtz(dat_path)?
+    } else {
+        None
+    };
+    Ok(OutputSummary {
+        tempo_bpm: beat_grid.as_ref().map(|grid| grid.avg_bpm),
+        files,
+        beat_grid,
+        key_source: key
+            .as_ref()
+            .map(|_| "rekordbox-notify-complete".to_string()),
+        key,
+    })
+}
+
+fn find_template_files(template_dir: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
+    let mut out = Vec::new();
+    for suffix in ["DAT", "EXT"] {
+        let standard_path = template_dir.join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"));
+        if standard_path.is_file() {
+            out.push((suffix, standard_path));
+            continue;
+        }
+        let mut matches = walkdir::WalkDir::new(template_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+            .map(|entry| entry.into_path())
+            .filter(|path| {
+                path.extension()
+                    .and_then(|value| value.to_str())
+                    .map(|value| value.eq_ignore_ascii_case(suffix))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        matches.sort();
+        let Some(path) = matches.into_iter().next() else {
+            bail!(
+                "missing ANLZ template file in {}: {suffix}",
+                template_dir.display()
+            );
+        };
+        out.push((suffix, path));
+    }
+    Ok(out)
+}
+
+fn ppth_tag(audio_path: &Path) -> Vec<u8> {
+    let name = audio_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let mut text = Vec::new();
+    for unit in format!("?/{name}\0").encode_utf16() {
+        text.extend(unit.to_be_bytes());
+    }
+    let total_len = 16 + text.len();
+    let mut out = Vec::with_capacity(total_len);
+    out.extend(b"PPTH");
+    out.extend(16u32.to_be_bytes());
+    out.extend((total_len as u32).to_be_bytes());
+    out.extend((text.len() as u32).to_be_bytes());
+    out.extend(text);
+    out
+}
+
+fn clean_seed_from_template(template: &Path, output: &Path, audio_path: &Path) -> Result<()> {
+    let data = std::fs::read(template)
+        .with_context(|| format!("failed to read {}", template.display()))?;
+    if data.get(..4) != Some(b"PMAI") {
+        bail!("not an ANLZ template: {}", template.display());
+    }
+
+    let header_len = be32(&data, 4).context("missing PMAI tag start")? as usize;
+    let mut seed_header = data
+        .get(..header_len)
+        .context("invalid PMAI header length")?
+        .to_vec();
+    let mut offset = header_len;
+    let mut tags = Vec::<Vec<u8>>::new();
+    while offset + 12 <= data.len() {
+        let tag = String::from_utf8_lossy(&data[offset..offset + 4]).to_string();
+        let header_len = be32(&data, offset + 4).context("missing tag header length")? as usize;
+        let total_len = be32(&data, offset + 8).context("missing tag total length")? as usize;
+        if header_len < 12 || total_len < header_len || offset + total_len > data.len() {
+            break;
+        }
+
+        if tag == "PPTH" {
+            tags.push(ppth_tag(audio_path));
+        } else if tag == "PCOB" || tag == "PCO2" {
+            tags.push(data[offset..offset + total_len].to_vec());
+        } else {
+            let mut cleaned = data[offset..offset + header_len].to_vec();
+            cleaned.extend(std::iter::repeat_n(0, total_len - header_len));
+            tags.push(cleaned);
+        }
+        offset += total_len;
+    }
+
+    let file_len = seed_header.len() + tags.iter().map(Vec::len).sum::<usize>();
+    seed_header[8..12].copy_from_slice(&(file_len as u32).to_be_bytes());
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut file =
+        File::create(output).with_context(|| format!("failed to write {}", output.display()))?;
+    file.write_all(&seed_header)?;
+    for tag in tags {
+        file.write_all(&tag)?;
+    }
+    Ok(())
+}
+
+fn prepare_output(
+    template_dir: &Path,
+    output_dir: &Path,
+    stem: &str,
+    audio_path: &Path,
+) -> Result<(PathBuf, Vec<(&'static str, SystemTime)>)> {
+    let templates = find_template_files(template_dir)?;
+    std::fs::create_dir_all(output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let stale_twoex = output_dir.join(format!("{stem}.2EX"));
+    if stale_twoex.exists() {
+        std::fs::remove_file(&stale_twoex)
+            .with_context(|| format!("failed to remove {}", stale_twoex.display()))?;
+    }
+
+    let seed_mtime = UNIX_EPOCH + Duration::from_secs(631_180_800);
+    let mut initial_mtimes = Vec::new();
+    for (suffix, template) in templates {
+        let output = output_dir.join(format!("{stem}.{suffix}"));
+        clean_seed_from_template(&template, &output, audio_path)?;
+        set_mtime(&output, seed_mtime)?;
+        initial_mtimes.push((suffix, output.metadata()?.modified()?));
+    }
+    Ok((output_dir.join(format!("{stem}.DAT")), initial_mtimes))
+}
+
+fn wait_for_completion(
+    dat_path: &Path,
+    initial_mtimes: &[(&str, SystemTime)],
+    timeout: Duration,
+    callback: &AnalyzerCallback,
+) -> Result<Vec<(String, u64)>> {
+    let started = Instant::now();
+    let paths = ["DAT", "EXT", "2EX"]
+        .into_iter()
+        .map(|suffix| (suffix, dat_path.with_extension(suffix)))
+        .collect::<Vec<_>>();
+    let mut last = Vec::new();
+    let mut previous_primary_sizes = None;
+    let mut stable_since = None;
+
+    while started.elapsed() < timeout {
+        last = paths
+            .iter()
+            .filter(|(_, path)| path.exists())
+            .filter_map(|(_, path)| {
+                path.metadata()
+                    .ok()
+                    .map(|metadata| (path.display().to_string(), metadata.len()))
+            })
+            .collect();
+        let changed = |suffix: &str| -> bool {
+            let Some((_, initial_mtime)) = initial_mtimes
+                .iter()
+                .find(|(initial_suffix, _)| *initial_suffix == suffix)
+            else {
+                return false;
+            };
+            let path = dat_path.with_extension(suffix);
+            path.exists()
+                && path
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .map(|mtime| mtime != *initial_mtime)
+                    .unwrap_or(false)
+        };
+        let primary_changed = changed("DAT") && changed("EXT");
+        let all_outputs_exist = paths.iter().all(|(_, path)| {
+            path.metadata()
+                .map(|metadata| metadata.len() > 28)
+                .unwrap_or(false)
+        });
+        if primary_changed && all_outputs_exist {
+            let primary_sizes = paths
+                .iter()
+                .filter_map(|(suffix, path)| {
+                    path.metadata()
+                        .ok()
+                        .map(|metadata| ((*suffix).to_string(), metadata.len()))
+                })
+                .collect::<Vec<_>>();
+            if previous_primary_sizes.as_ref() == Some(&primary_sizes) {
+                stable_since.get_or_insert_with(Instant::now);
+            } else {
+                previous_primary_sizes = Some(primary_sizes);
+                stable_since = Some(Instant::now());
+            }
+            let required_stability = if callback.snapshot().status.is_some() {
+                CALLBACK_STABILITY_WINDOW
+            } else {
+                OUTPUT_STABILITY_WINDOW
+            };
+            if stable_since.is_some_and(|started| started.elapsed() >= required_stability) {
+                return Ok(last);
+            }
+        } else {
+            previous_primary_sizes = None;
+            stable_since = None;
+        }
+        std::thread::sleep(COMPLETION_POLL_INTERVAL);
+    }
+    bail!(
+        "Rekordbox analysis timed out after {}ms; outputs: {:?}",
+        timeout.as_millis(),
+        last
+    )
+}
+
+fn default_template_dir() -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(TEMPLATE_SUFFIX));
+    }
+    if let Ok(root) = std::env::var(ENV_REKORDBOX_ANALYZER_ROOT) {
+        candidates.push(PathBuf::from(root).join(VENDORED_TEMPLATE_SUFFIX));
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        candidates.push(parent.join("rekordbox-analyzer-templates"));
+    }
+    candidates
+        .into_iter()
+        .find(|candidate| {
+            ["DAT", "EXT"].into_iter().all(|suffix| {
+                candidate
+                    .join(format!("{DEFAULT_ANLZ_STEM}.{suffix}"))
+                    .is_file()
+            })
+        })
+        .context("no Rekordbox DAT/EXT templates found locally or in the packaged analyzer")
+}
+
+fn content_id() -> i64 {
+    let process = (std::process::id() & 0x7fff) << 16;
+    let sequence = CONTENT_SEQUENCE.fetch_add(1, Ordering::Relaxed) & 0xffff;
+    i64::from((process | sequence).max(1))
+}
+
+fn expand_home(path: &Path) -> PathBuf {
+    if path == Path::new("~") {
+        return dirs::home_dir().unwrap_or_else(|| path.to_path_buf());
+    }
+    let raw = path.to_string_lossy();
+    if let Some(rest) = raw.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(target_os = "macos")]
+fn set_mtime(path: &Path, mtime: SystemTime) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes())?;
+    let seconds = mtime.duration_since(UNIX_EPOCH)?.as_secs() as libc::time_t;
+    let times = [
+        libc::timespec {
+            tv_sec: seconds,
+            tv_nsec: 0,
+        },
+        libc::timespec {
+            tv_sec: seconds,
+            tv_nsec: 0,
+        },
+    ];
+    if unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) } != 0 {
+        bail!("failed to set mtime for {}", path.display());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ppth_tag_uses_utf16_be_audio_basename() {
+        let tag = ppth_tag(Path::new("/tmp/Artist - Track.mp3"));
+        assert_eq!(&tag[..4], b"PPTH");
+        assert_eq!(be32(&tag, 4), Some(16));
+        assert_eq!(be32(&tag, 8), Some(tag.len() as u32));
+        assert_eq!(be32(&tag, 12), Some((tag.len() - 16) as u32));
+        assert!(tag.windows(2).any(|window| window == b"m\0"));
+    }
+
+    #[test]
+    fn iter_anlz_tags_reads_valid_tags() {
+        let data = fixture_anlz_with_pqtz();
+        let tags = iter_anlz_tags_from_bytes(&data).expect("tags");
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].tag, "PQTZ");
+        assert_eq!(tags[0].total_len, 40);
+    }
+
+    #[test]
+    fn parse_pqtz_summarizes_beat_grid() {
+        let temp = tempfile::NamedTempFile::new().expect("temp");
+        std::fs::write(temp.path(), fixture_anlz_with_pqtz()).expect("write");
+        let summary = parse_pqtz(temp.path()).expect("parse").expect("beat grid");
+        assert_eq!(summary.beat_count, 2);
+        assert_eq!(summary.avg_bpm, 120.0);
+        assert_eq!(summary.first_downbeat_ms, 100);
+        assert_eq!(summary.last_beat_ms, 600);
+    }
+
+    #[test]
+    fn content_ids_are_positive_and_unique() {
+        let first = content_id();
+        let second = content_id();
+        assert!(first > 0);
+        assert!(second > 0);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn reference_rhythm_mode_maps_to_the_native_variable_tempo_flag() {
+        assert_eq!(
+            parse_reference_rhythm_mode(Some("normal")).unwrap(),
+            ReferenceRhythmMode::Normal
+        );
+        assert_eq!(ReferenceRhythmMode::Normal.variable_tempo(), 0);
+        assert_eq!(
+            parse_reference_rhythm_mode(Some("dynamic")).unwrap(),
+            ReferenceRhythmMode::Dynamic
+        );
+        assert_eq!(ReferenceRhythmMode::Dynamic.variable_tempo(), 1);
+        assert_eq!(
+            parse_reference_rhythm_mode(None).unwrap(),
+            ReferenceRhythmMode::Dynamic
+        );
+        assert!(
+            parse_reference_rhythm_mode(Some("auto"))
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable")
+        );
+    }
+
+    fn fixture_anlz_with_pqtz() -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend(b"PMAI");
+        data.extend(12u32.to_be_bytes());
+        data.extend(52u32.to_be_bytes());
+        data.extend(b"PQTZ");
+        data.extend(24u32.to_be_bytes());
+        data.extend(40u32.to_be_bytes());
+        data.extend([0u8; 8]);
+        data.extend(2u32.to_be_bytes());
+        data.extend(1u16.to_be_bytes());
+        data.extend(12000u16.to_be_bytes());
+        data.extend(100u32.to_be_bytes());
+        data.extend(2u16.to_be_bytes());
+        data.extend(12000u16.to_be_bytes());
+        data.extend(600u32.to_be_bytes());
+        data
+    }
+}

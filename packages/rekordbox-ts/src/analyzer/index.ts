@@ -672,17 +672,11 @@ export function getAnalyzerBinary(explicit?: string, engine: AnalyzerEngine = "c
       ? [
           fileURLToPath(new URL(`../../.rekordbox-analyzer/${cleanHelperName}`, import.meta.url)),
           fileURLToPath(
-            new URL(
-              `../../../../native/rekordbox-analyzer-core/target/release/${cleanHelperName}`,
-              import.meta.url,
-            ),
+            new URL(`../../../../rust/target/release/${cleanHelperName}`, import.meta.url),
           ),
           ...installedCandidates,
         ]
-      : [
-          ...installedCandidates,
-          fileURLToPath(new URL(`../../vendor/${cleanHelperName}`, import.meta.url)),
-        ];
+      : installedCandidates;
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 

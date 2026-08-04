@@ -2,8 +2,8 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-manifest="$repo_root/native/rekordbox-analyzer-core/Cargo.toml"
-target_dir="$repo_root/native/rekordbox-analyzer-core/target"
+manifest="$repo_root/rust/Cargo.toml"
+target_dir="$repo_root/rust/target"
 output_dir="$repo_root/packages/rekordbox-ts/.rekordbox-analyzer"
 output="$output_dir/rekordbox-analyzer"
 
@@ -17,4 +17,4 @@ lipo -create \
 chmod +x "$output"
 codesign --force --sign - "$output"
 cp "$repo_root/packages/rekordbox-ts/LICENSE" "$output_dir/LICENSE"
-cp "$repo_root/native/rekordbox-analyzer-core/THIRD_PARTY_LICENSES.md" "$output_dir/"
+cp "$repo_root/rust/crates/rekordbox-analyzer-core/THIRD_PARTY_LICENSES.md" "$output_dir/"

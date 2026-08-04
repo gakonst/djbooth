@@ -182,8 +182,8 @@ export async function resolveCdjUsbBinary(
     explicit,
     env.MUSIC_CDJ_USB_BINARY,
     fileURLToPath(new URL("../native-bin/music-cdj-usb", import.meta.url)),
-    fileURLToPath(new URL("../native/target/release/music-cdj-usb", import.meta.url)),
-    fileURLToPath(new URL("../native/target/debug/music-cdj-usb", import.meta.url)),
+    fileURLToPath(new URL("../../../rust/target/release/music-cdj-usb", import.meta.url)),
+    fileURLToPath(new URL("../../../rust/target/debug/music-cdj-usb", import.meta.url)),
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   for (const candidate of candidates) {

@@ -321,6 +321,7 @@ const stemsCli = Cli.create("stems", {
 
 const stemsRuntimeOptions = z.object({
   cacheDirectory: z.string().optional().describe("Persistent model cache override"),
+  pythonProjectDirectory: z.string().optional().describe("Standalone stems-mlx uv project"),
   uvBinary: z.string().optional().describe("uv executable override"),
 });
 const stemName = z.enum(["instrumental", "vocals", "drums", "bass", "other"]);
@@ -331,6 +332,7 @@ stemsCli.command("doctor", {
   async run(c) {
     return await diagnoseStems({
       cacheDirectory: c.options.cacheDirectory,
+      pythonProjectDirectory: c.options.pythonProjectDirectory,
       uvBinary: c.options.uvBinary,
     });
   },
@@ -345,6 +347,7 @@ stemsCli.command("setup", {
       onLog(message) {
         process.stderr.write(message);
       },
+      pythonProjectDirectory: c.options.pythonProjectDirectory,
       uvBinary: c.options.uvBinary,
     });
   },
@@ -372,6 +375,7 @@ stemsCli.command("separate", {
       onLog(message) {
         process.stderr.write(message);
       },
+      pythonProjectDirectory: c.options.pythonProjectDirectory,
       stems: c.options.stem,
       uvBinary: c.options.uvBinary,
     });
@@ -430,6 +434,7 @@ stemsCli.command("playlist", {
       onLog(message) {
         process.stderr.write(message);
       },
+      pythonProjectDirectory: c.options.pythonProjectDirectory,
       stems: c.options.stem,
       uvBinary: c.options.uvBinary,
     });

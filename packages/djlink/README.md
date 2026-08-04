@@ -96,7 +96,7 @@ Use two captures:
 Start the vendored source directly:
 
 ```sh
-cargo run --manifest-path packages/djlink/native/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
   serve \
   --snapshot /Users/gakonst/.local/state/music-ts/djlink/library.json \
   --socket /tmp/music-djlink-lab.sock \
@@ -124,13 +124,13 @@ Recover the original native Rekordbox capture by immutable git object; the simil
 git -C /Users/gakonst/github/gakonst/djtools \
   show 123e84e:rb-tracks.pcap > /tmp/rekordbox-rb-tracks-native.pcap
 
-cargo run --manifest-path packages/djlink/native/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
   audit-pcap \
   --pcap /tmp/music-djlink-source.pcap \
   --reference /tmp/rekordbox-rb-tracks-native.pcap \
   --require-core
 
-cargo run --manifest-path packages/djlink/native/Cargo.toml -p music-djlink -- \
+cargo run --manifest-path rust/Cargo.toml -p music-djlink -- \
   audit-pcap \
   --pcap /tmp/music-djlink-live.pcap \
   --require-remote-db-cursors

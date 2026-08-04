@@ -12,6 +12,106 @@ importers:
         specifier: latest
         version: 2.31.0(@types/node@24.13.3)
 
+  apps/rekordbox-library:
+    dependencies:
+      '@gakonst/rekordbox':
+        specifier: workspace:*
+        version: link:../../packages/rekordbox-ts
+      '@gakonst/soundcloud':
+        specifier: workspace:*
+        version: link:../../packages/soundcloud
+      '@gakonst/spots':
+        specifier: workspace:*
+        version: link:../../packages/spots
+      '@gakonst/tracks':
+        specifier: workspace:*
+        version: link:../../packages/tracks-ts
+      better-sqlite3-multiple-ciphers:
+        specifier: ^12.11.1
+        version: 12.11.1
+      incur:
+        specifier: 0.4.13
+        version: 0.4.13
+      music-metadata:
+        specifier: 11.13.0
+        version: 11.13.0
+      slsk-ts:
+        specifier: workspace:*
+        version: link:../../packages/slsk-ts
+      ws:
+        specifier: 8.18.3
+        version: 8.18.3
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
+      '@tauri-apps/api':
+        specifier: 2.11.1
+        version: 2.11.1
+      '@tauri-apps/cli':
+        specifier: 2.11.4
+        version: 2.11.4
+      '@tauri-apps/plugin-shell':
+        specifier: 2.3.5
+        version: 2.3.5
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      '@vitejs/plugin-react':
+        specifier: ^6.0.3
+        version: 6.0.3(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      hls.js:
+        specifier: ^1.6.16
+        version: 1.6.16
+      lucide-react:
+        specifier: ^1.24.0
+        version: 1.24.0(react@19.2.7)
+      nanocodex:
+        specifier: 0.3.0
+        version: 0.3.0
+      oxfmt:
+        specifier: ^0.35.0
+        version: 0.35.0
+      oxlint:
+        specifier: ^1.50.0
+        version: 1.73.0
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      tsx:
+        specifier: ^4.21.0
+        version: 4.23.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: ^8.1.4
+        version: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
+      wavesurfer.js:
+        specifier: 7.12.10
+        version: 7.12.10
+
   packages/cdj-usb:
     dependencies:
       '@gakonst/rekordbox':
@@ -99,7 +199,7 @@ importers:
         version: link:../rekordbox-ts
       '@gakonst/rekordbox-library':
         specifier: workspace:*
-        version: link:../rekordbox-library
+        version: link:../../apps/rekordbox-library
       '@gakonst/soundcloud':
         specifier: workspace:*
         version: link:../soundcloud
@@ -149,106 +249,6 @@ importers:
       vitest:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-
-  packages/rekordbox-library:
-    dependencies:
-      '@gakonst/rekordbox':
-        specifier: workspace:*
-        version: link:../rekordbox-ts
-      '@gakonst/soundcloud':
-        specifier: workspace:*
-        version: link:../soundcloud
-      '@gakonst/spots':
-        specifier: workspace:*
-        version: link:../spots
-      '@gakonst/tracks':
-        specifier: workspace:*
-        version: link:../tracks-ts
-      better-sqlite3-multiple-ciphers:
-        specifier: ^12.11.1
-        version: 12.11.1
-      incur:
-        specifier: 0.4.13
-        version: 0.4.13
-      music-metadata:
-        specifier: 11.13.0
-        version: 11.13.0
-      slsk-ts:
-        specifier: workspace:*
-        version: link:../slsk-ts
-      ws:
-        specifier: 8.18.3
-        version: 8.18.3
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@tanstack/react-query':
-        specifier: ^5.101.2
-        version: 5.101.2(react@19.2.7)
-      '@tauri-apps/api':
-        specifier: 2.11.1
-        version: 2.11.1
-      '@tauri-apps/cli':
-        specifier: 2.11.4
-        version: 2.11.4
-      '@tauri-apps/plugin-shell':
-        specifier: 2.3.5
-        version: 2.3.5
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
-      '@types/node':
-        specifier: ^22.19.7
-        version: 22.20.1
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      '@types/ws':
-        specifier: 8.18.1
-        version: 8.18.1
-      '@vitejs/plugin-react':
-        specifier: ^6.0.3
-        version: 6.0.3(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-      hls.js:
-        specifier: ^1.6.16
-        version: 1.6.16
-      lucide-react:
-        specifier: ^1.24.0
-        version: 1.24.0(react@19.2.7)
-      nanocodex:
-        specifier: 0.3.0
-        version: 0.3.0
-      oxfmt:
-        specifier: ^0.35.0
-        version: 0.35.0
-      oxlint:
-        specifier: ^1.50.0
-        version: 1.73.0
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      tsx:
-        specifier: ^4.21.0
-        version: 4.23.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^8.1.4
-        version: 8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0)
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@22.20.1)(@vitest/coverage-v8@4.1.10)(vite@8.1.4(@types/node@22.20.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.0)(yaml@2.9.0))
-      wavesurfer.js:
-        specifier: 7.12.10
-        version: 7.12.10
 
   packages/rekordbox-ts:
     dependencies:

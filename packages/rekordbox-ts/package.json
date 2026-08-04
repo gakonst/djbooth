@@ -26,7 +26,6 @@
   "files": [
     "demo",
     "dist",
-    "python",
     "PORTING.md",
     "THIRD_PARTY_NOTICES.md",
     "README.md",

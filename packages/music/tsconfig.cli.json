@@ -5,8 +5,8 @@
     "paths": {
       "@gakonst/rekordbox": ["packages/rekordbox-ts/src/index.ts"],
       "@gakonst/rekordbox/cli": ["packages/rekordbox-ts/src/cli.ts"],
-      "@gakonst/rekordbox-library": ["packages/rekordbox-library/src/index.ts"],
-      "@gakonst/rekordbox-library/cli": ["packages/rekordbox-library/src/cli.ts"],
+      "@gakonst/rekordbox-library": ["apps/rekordbox-library/src/index.ts"],
+      "@gakonst/rekordbox-library/cli": ["apps/rekordbox-library/src/cli.ts"],
       "@gakonst/soundcloud": ["packages/soundcloud/src/index.ts"],
       "@gakonst/soundcloud/cli": ["packages/soundcloud/src/cli.ts"],
       "@gakonst/spots": ["packages/spots/src/index.ts"],

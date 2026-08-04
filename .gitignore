@@ -1,10 +1,13 @@
 node_modules/
 dist/
 coverage/
-packages/rekordbox-ts/python/.venv/
-packages/rekordbox-ts/python/__pycache__/
-native/rekordbox-analyzer/target/
-native/rekordbox-analyzer-core/target/
+/rust/target/
+/archive/rekordbox/rehost/target/
+/archive/rekordbox/rehost/.rekordbox-analyzer/
+/python/stems-mlx/.venv/
+/python/stems-mlx/.ruff_cache/
+/python/stems-mlx/__pycache__/
+/python/stems-mlx/*.egg-info/
 packages/rekordbox-ts/.rekordbox-analyzer/
 .rekordbox-analyzer/
 downloads/

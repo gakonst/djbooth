@@ -4,8 +4,9 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const manifest = resolve(packageRoot, "native/Cargo.toml");
-const source = resolve(packageRoot, "native/target/release/music-djlink");
+const workspaceRoot = resolve(packageRoot, "../..");
+const manifest = resolve(workspaceRoot, "rust/Cargo.toml");
+const source = resolve(workspaceRoot, "rust/target/release/music-djlink");
 const destination = resolve(packageRoot, "native-bin/music-djlink");
 
 await new Promise((resolveBuild, rejectBuild) => {

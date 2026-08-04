@@ -550,7 +550,7 @@ per-keystroke reconnects identify server rejection, while no request identifies 
 activation.
 
 For protocol implementation work only, iterate on the provenance-tracked Rust source in
-`packages/djlink/native`:
+`rust/`:
 
 ```sh
 pnpm djlink:lab serve --help

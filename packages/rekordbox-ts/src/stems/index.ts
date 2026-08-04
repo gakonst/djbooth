@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
 
-const pythonProjectDirectory = fileURLToPath(new URL("../../python/", import.meta.url));
-const pythonScript = fileURLToPath(new URL("../../python/rekordbox_stems_mlx.py", import.meta.url));
+const repositoryPythonProjectDirectory = fileURLToPath(
+  new URL("../../../../python/stems-mlx/", import.meta.url),
+);
 const defaultPythonEnvironmentDirectory = join(
   homedir(),
   "Library",
@@ -123,6 +124,8 @@ export type StemsRuntimeOptions = {
   cacheDirectory?: string;
   /** Receives bounded setup and inference logs from stderr. */
   onLog?: (message: string) => void;
+  /** Standalone `python/stems-mlx` uv project override. */
+  pythonProjectDirectory?: string;
   /** `uv` executable override, primarily for controlled environments. */
   uvBinary?: string;
 };
@@ -204,11 +207,11 @@ async function runPython(
     "--python",
     "3.12",
     "--project",
-    pythonProjectDirectory,
+    resolvePythonProjectDirectory(options.pythonProjectDirectory),
     "--locked",
     "--no-dev",
     "python",
-    pythonScript,
+    join(resolvePythonProjectDirectory(options.pythonProjectDirectory), "music_stems_mlx.py"),
     ...helperArgs,
   ];
   const command = options.uvBinary ?? "uv";
@@ -255,4 +258,13 @@ async function runPython(
       }
     });
   });
+}
+
+function resolvePythonProjectDirectory(explicit?: string): string {
+  return resolve(
+    explicit ??
+      process.env.MUSIC_STEMS_MLX_PROJECT ??
+      process.env.REKORDBOX_STEMS_MLX_PROJECT ??
+      repositoryPythonProjectDirectory,
+  );
 }

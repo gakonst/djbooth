@@ -1,8 +1,21 @@
 # music-ts
 
-One TypeScript workspace for resolving DJ sets, enriching their metadata, publishing playlists to
-Spotify or SoundCloud, acquiring individual recordings, and maintaining Rekordbox playlists. The
-five original repositories retain their full Git histories under `packages/`.
+A multi-runtime music workspace for resolving DJ sets, acquiring and analyzing recordings,
+maintaining Rekordbox libraries, serving CDJs, and running a local desktop workbench.
+
+## Repository layout
+
+| Path | Runtime | Responsibility |
+| --- | --- | --- |
+| [`packages/`](packages) | TypeScript | Publishable libraries and CLIs; no Rust or Python source |
+| [`apps/rekordbox-library/`](apps/rekordbox-library) | React/Vite + TypeScript | Browser/loopback library workbench |
+| [`rust/`](rust) | Rust/Cargo | Native analyzers, DJ Link, USB gadget, and Tauri desktop shell |
+| [`python/stems-mlx/`](python/stems-mlx) | Python/uv/MLX | Standalone Mel-Band-RoFormer stem separator |
+| [`archive/`](archive) | Inactive artifacts | Retired rehosts and proprietary reverse-engineering inputs |
+
+The Tauri shell is `rust/apps/rekordbox-library-desktop`; it packages the web app from
+`apps/rekordbox-library`. The app retains a conventional `src-tauri` symlink solely for Tauri CLI
+discovery.
 
 End-to-end set imports keep one shared on-disk library at
 `~/.djtools/tracks/<artist>/<album>/<title> [identity].ext` by default. Playlist order lives in the
@@ -20,7 +33,7 @@ playlist-specific file copies. Set `MUSIC_LIBRARY_ROOT` to move the shared root.
 | [`slsk-ts`](packages/slsk-ts)                              | `slsk`              | Soulseek protocol, search, shares, individual-file downloads           |
 | [`@gakonst/ytdlp-ts`](packages/ytdlp-ts)                   | `ytdlp-ts`          | YouTube/SoundCloud inspection and resilient media acquisition          |
 | [`@gakonst/rekordbox`](packages/rekordbox-ts)              | `rekordbox`         | Normal encrypted Rekordbox database and format APIs                    |
-| [`@gakonst/rekordbox-library`](packages/rekordbox-library) | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
+| [`@gakonst/rekordbox-library`](apps/rekordbox-library)     | `rekordbox-library` | Loopback-only Rekordbox library workbench                              |
 | [`@gakonst/djlink`](packages/djlink)                       | `djlink`            | Manifest-backed Pro DJ Link RemoteDB/NFS source and CDJ load control   |
 | [`@gakonst/cdj-usb`](packages/cdj-usb)                     | `cdj-usb`           | Differential CDJ-3000 media sync and read-only Linux USB gadget        |
 
@@ -67,8 +80,9 @@ music usb sync /mnt/cdj --database /path/to/master.db --write --format json
 
 `tracks` imports the other four packages through `workspace:*` dependencies. Independent recording
 jobs run concurrently; manifest checkpoints and Rekordbox mutations stay serialized and fail closed.
-The umbrella CLI mounts each package's exported Incur CLI definition; it neither shells out nor
-maintains a second set of command schemas.
+The umbrella CLI mounts each package's exported Incur CLI definition and maintains no second set of
+command schemas. The owning TypeScript handler shells out only when an operation crosses into its
+Rust or Python implementation helper.
 
 After explicit Rekordbox-write approval, the complete local set flow is one resumable command:
 
@@ -94,7 +108,8 @@ Rekordbox analysis; it never streams Spotify audio, and loading/cueing does not 
 
 ## Development
 
-Requirements: Node.js 22 or 24, pnpm 10.30.2, plus ffmpeg/ffprobe for media integration tests.
+Requirements: Node.js 22 or 24, pnpm 10.30.2, Rust nightly, uv, plus ffmpeg/ffprobe for media
+integration tests.
 
 Copy `.env.example` to the ignored workspace-root `.env`. `music` and `tracks` discover the nearest
 ancestor `.env` when invoked from a nested package; `MUSIC_ENV_FILE` and

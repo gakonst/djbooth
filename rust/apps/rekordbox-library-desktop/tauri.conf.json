@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rekordbox Library",
+  "version": "0.1.0",
+  "identifier": "com.gakonst.rekordbox-library",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../../../apps/rekordbox-library dev",
+    "beforeBuildCommand": "pnpm --dir ../../../apps/rekordbox-library build:client",
+    "devUrl": "http://127.0.0.1:4179",
+    "frontendDist": "../../../apps/rekordbox-library/dist/client"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

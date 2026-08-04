@@ -54,6 +54,8 @@ describe("music CLI", () => {
         "djlink search",
         "djlink start",
         "rekordbox analyze track",
+        "rekordbox stems doctor",
+        "rekordbox stems separate",
         "rekordbox db playlist create",
         "rekordbox db playlist list",
         "rekordbox status",
@@ -111,6 +113,22 @@ describe("music CLI", () => {
     ]) {
       expect(output).toMatch(new RegExp(`^  ${command}\\s{2,}`, "m"));
     }
+  });
+
+  test("routes native and Python helpers through the umbrella Incur tree", async () => {
+    const analyzer = await serve(["rekordbox", "analyze", "track", "--help"]);
+    expect(analyzer.output).toContain("music rekordbox analyze track <audioPath>");
+    expect(analyzer.output).toContain("--analyzer-binary");
+
+    const stems = await serve(["rekordbox", "stems", "separate", "--help"]);
+    expect(stems.output).toContain("music rekordbox stems separate <audioPath> <outputDirectory>");
+    expect(stems.output).toContain("--python-project-directory");
+
+    const djlink = await serve(["djlink", "doctor", "--help"]);
+    expect(djlink.output).toContain("--binary");
+
+    const usb = await serve(["usb", "doctor", "--help"]);
+    expect(usb.output).toContain("--binary");
   });
 
   test("preserves the full-library DJ Link one-shot guidance", async () => {
