@@ -1,0 +1,33 @@
+[project]
+name = "djbooth-a2sb-mlx"
+version = "0.1.0"
+description = "Noncommercial NVIDIA A2SB audio restoration on Apple Silicon with MLX"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "huggingface-hub[hf-xet]==1.25.1",
+  "mlx==0.31.2",
+  "numpy==2.3.2",
+  "safetensors==0.6.2",
+  "scipy==1.16.1",
+  "soundfile==0.13.1",
+  "torch==2.8.0",
+]
+
+[project.scripts]
+djbooth-a2sb-mlx = "djbooth_a2sb_mlx:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["a2sb_mlx", "djbooth_a2sb_mlx"]
+
+[dependency-groups]
+dev = ["ruff==0.12.7"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

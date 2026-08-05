@@ -15,6 +15,7 @@ export * from "./analyzer/index.js";
 export * from "./config/index.js";
 export * from "./devicelib/index.js";
 export { DeviceLibraryPlus, type DeviceLibraryPlusOptions } from "./devicelib-plus/index.js";
+export * from "./enhancement/index.js";
 export * from "./masterdb/index.js";
 export * from "./mysettings/index.js";
 export * from "./stems/index.js";

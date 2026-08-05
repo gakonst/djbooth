@@ -16,6 +16,15 @@ const backendDirectory = resolve(resourcesDirectory, "backend");
 const toolsDirectory = resolve(resourcesDirectory, "tools");
 const stemsProjectDirectory = resolve(workspaceRoot, "python/stems-mlx");
 const stemsProjectFiles = ["djbooth_stems_mlx.py", "pyproject.toml", "uv.lock", "README.md"];
+const enhancementProjectDirectory = resolve(workspaceRoot, "python/a2sb-mlx");
+const enhancementProjectFiles = [
+  "a2sb_mlx.py",
+  "djbooth_a2sb_mlx.py",
+  "NVIDIA-A2SB-LICENSE",
+  "pyproject.toml",
+  "uv.lock",
+  "README.md",
+];
 const sidecarPath = resolve(binariesDirectory, `djbooth-node-${targetTriple}`);
 
 if (!supportedTarget(targetTriple))
@@ -71,6 +80,13 @@ for (const file of stemsProjectFiles)
   await copyFile(
     resolve(stemsProjectDirectory, file),
     resolve(packagedStemsProjectDirectory, file),
+  );
+const packagedEnhancementProjectDirectory = resolve(toolsDirectory, "a2sb-mlx");
+await mkdir(packagedEnhancementProjectDirectory, { recursive: true });
+for (const file of enhancementProjectFiles)
+  await copyFile(
+    resolve(enhancementProjectDirectory, file),
+    resolve(packagedEnhancementProjectDirectory, file),
   );
 
 const nodeLicense = resolve(dirname(dirname(nodePath)), "LICENSE");
