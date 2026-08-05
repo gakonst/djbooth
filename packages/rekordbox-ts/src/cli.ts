@@ -20,6 +20,7 @@ import {
   extractPhraseFeatures,
   createMySettingFile,
   diagnoseAnalyzer,
+  diagnoseEnhancement,
   getAnlzPaths,
   getMySettingPaths,
   LogicalOperator,
@@ -29,11 +30,13 @@ import {
   DjmdPlaylist,
   DjmdSongPlaylist,
   diagnoseStems,
+  enhanceAudio,
   readMySettingFile,
   RekordboxXml,
   separateStems,
   separateStemsBatch,
   setupStems,
+  setupEnhancement,
   SmartList,
   updateConfig,
   version,
@@ -447,6 +450,107 @@ stemsGroupCli.command("playlist", {
 });
 
 rekordboxCli.command(stemsGroupCli);
+
+const enhancementRuntimeOptions = z.object({
+  cacheDirectory: z.string().optional().describe("Persistent A2SB model cache override"),
+  pythonProjectDirectory: z.string().optional().describe("Standalone a2sb-mlx uv project"),
+  uvBinary: z.string().optional().describe("uv executable override"),
+});
+
+export const enhancementGroupCli = Cli.create("enhancement", {
+  description: "Restore bandwidth in low-quality music with NVIDIA A2SB on Apple Silicon.",
+  hint: "A2SB is licensed only for noncommercial research or evaluation. One-split is the local AAC benchmark winner; two-split retains NVIDIA's official time-partitioned ensemble for comparison.",
+});
+
+enhancementGroupCli.command("doctor", {
+  description: "Inspect MLX and local A2SB checkpoint readiness.",
+  options: enhancementRuntimeOptions,
+  async run(c) {
+    return await diagnoseEnhancement(c.options);
+  },
+});
+
+enhancementGroupCli.command("setup", {
+  description:
+    "Download, authenticate, and convert pinned A2SB checkpoints to float16 MLX weights.",
+  options: enhancementRuntimeOptions.extend({
+    force: z.boolean().default(false).describe("Reconvert existing authenticated checkpoints"),
+    profile: z
+      .enum(["one-split", "two-split", "all"])
+      .default("one-split")
+      .describe("Benchmark-default single model, official two-model ensemble, or both"),
+  }),
+  async run(c) {
+    return await setupEnhancement({
+      ...c.options,
+      onLog(message) {
+        process.stderr.write(message);
+      },
+    });
+  },
+});
+
+function createEnhanceCli<const Name extends string>(name: Name) {
+  return Cli.create(name, {
+    description: "Restore lossy high-frequency content with noncommercial A2SB MLX inference.",
+    hint: "Writes a new 44.1 kHz float WAV (or 24-bit FLAC) and never replaces the source. Start with a short --max-seconds trial before a full track.",
+    args: z.object({
+      audioPath: z.string().describe("Existing local audio file"),
+      outputPath: z.string().describe("New .wav or .flac destination"),
+    }),
+    options: enhancementRuntimeOptions.extend({
+      batchSize: z
+        .number()
+        .int()
+        .min(1)
+        .max(2)
+        .default(1)
+        .describe("MLX window batch size; 1 avoids unified-memory pressure on a 32 GB M2 Max"),
+      channelMode: z
+        .enum(["mid-side", "independent"])
+        .default("mid-side")
+        .describe("Stereo representation presented to the mono-trained model"),
+      cutoffHz: z
+        .number()
+        .int()
+        .min(2_000)
+        .max(21_500)
+        .optional()
+        .describe("Explicit cutoff; defaults to codec-edge detection, then 99% spectral rolloff"),
+      force: z.boolean().default(false).describe("Replace an existing destination file"),
+      maxSeconds: z.number().positive().optional().describe("Process only an initial test excerpt"),
+      ode: z.boolean().default(false).describe("Deterministic ODE sampling instead of release SDE"),
+      overlap: z
+        .boolean()
+        .default(true)
+        .describe("Use 50% MultiDiffusion overlap to suppress seams"),
+      profile: z
+        .enum(["one-split", "two-split"])
+        .default("one-split")
+        .describe("Benchmark-default one-model restoration or official two-model ensemble"),
+      seed: z.number().int().default(0).describe("Reproducible bridge noise seed"),
+      startSeconds: z
+        .number()
+        .nonnegative()
+        .default(0)
+        .describe("Start time for a bounded excerpt"),
+      steps: z.number().int().min(2).max(100).default(50).describe("Bridge sampling steps"),
+    }),
+    async run(c) {
+      return await enhanceAudio(c.args.audioPath, c.args.outputPath, {
+        ...c.options,
+        onLog(message) {
+          process.stderr.write(message);
+        },
+      });
+    },
+  });
+}
+
+/** Root workflow route for one local audio restoration. */
+export const enhanceCli = createEnhanceCli("enhance");
+enhancementGroupCli.command(createEnhanceCli("run"));
+rekordboxCli.command(enhancementGroupCli);
 
 const configCli = Cli.create("config", {
   description: "Discover Rekordbox installations and library paths.",

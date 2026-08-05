@@ -8,6 +8,10 @@ coverage/
 /python/stems-mlx/.ruff_cache/
 /python/stems-mlx/__pycache__/
 /python/stems-mlx/*.egg-info/
+/python/a2sb-mlx/.venv/
+/python/a2sb-mlx/.ruff_cache/
+/python/a2sb-mlx/__pycache__/
+/python/a2sb-mlx/*.egg-info/
 packages/rekordbox-ts/.rekordbox-analyzer/
 .rekordbox-analyzer/
 downloads/

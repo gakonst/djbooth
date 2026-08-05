@@ -63,6 +63,10 @@
       "types": "./dist/devicelib/index.d.ts",
       "default": "./dist/devicelib/index.js"
     },
+    "./enhancement": {
+      "types": "./dist/enhancement/index.d.ts",
+      "default": "./dist/enhancement/index.js"
+    },
     "./masterdb": {
       "types": "./dist/masterdb/index.d.ts",
       "default": "./dist/masterdb/index.js"

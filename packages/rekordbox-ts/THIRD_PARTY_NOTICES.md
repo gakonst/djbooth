@@ -30,3 +30,17 @@ user's cache and are not redistributed with this project.
 
 The MIT and Apache-2.0 license texts are available at <https://opensource.org/license/mit> and
 <https://www.apache.org/licenses/LICENSE-2.0>.
+
+## Optional A2SB MLX enhancement runtime
+
+The optional enhancement adapter contains an MLX port of the `AttnUNetF` architecture and bridge
+sampler from NVIDIA's `diffusion-audio-restoration` project. NVIDIA's implementation and the A2SB
+model checkpoints are Copyright (c) 2025 NVIDIA Corporation and licensed under the NVIDIA Source
+Code License for A2SB. That license limits the work and derivatives to noncommercial research or
+evaluation. A complete copy is shipped with the standalone Python helper as
+`NVIDIA-A2SB-LICENSE`.
+
+The adapter downloads `nvidia/audio_to_audio_schrodinger_bridge` revision
+`c3d0f52831b3c1c216ad98736dc9fd9253d38342` from Hugging Face and authenticates each release
+checkpoint before conversion. Model weights remain in the user's cache and are not redistributed
+with this package.
