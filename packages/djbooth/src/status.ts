@@ -1,9 +1,9 @@
-import { RekordboxLibraryService } from "@gakonst/djbooth-app";
-import { statusDjLink } from "@gakonst/djlink";
-import { inspectRekordboxImports } from "@gakonst/tracks";
+import { statusDjLink } from "@gakonst/djlink/control";
+import { MasterDatabase } from "@gakonst/rekordbox/masterdb";
+import { inspectRekordboxImports } from "@gakonst/tracks/pipeline-state";
 import { Cli, z } from "incur";
 
-import { statusDjBoothRuntime, stopManagedDjBoothServer } from "./runtime.js";
+import { statusDjBoothRuntime } from "./runtime.js";
 
 const serveStatusOutput = z.discriminatedUnion("running", [
   z.object({
@@ -85,13 +85,21 @@ export const statusCli = Cli.create("status", {
     imports: importStatusOutput,
   }),
   async run(c) {
-    const service = new RekordboxLibraryService(
-      c.options.path ? { dbPath: c.options.path } : undefined,
-    );
+    const database = new MasterDatabase({
+      ...(c.options.path ? { path: c.options.path } : {}),
+      playlistXml: false,
+      readonly: true,
+      unlock: true,
+    });
     try {
       const [serve, link] = await Promise.all([statusDjBoothRuntime(), statusDjLink()]);
-      const library = service.getBootstrap("").library;
-      const imports = inspectRekordboxImports({ dbPath: library.dbPath }).imports;
+      const library = {
+        dbPath: database.path,
+        dbDirectory: database.dbDirectory,
+        writeEnabled: true,
+        stats: database.getLibraryHealth(),
+      };
+      const imports = inspectRekordboxImports({ database }).imports;
       return {
         ...library,
         serve: serve.running
@@ -131,7 +139,7 @@ export const statusCli = Cli.create("status", {
         },
       };
     } finally {
-      service.close();
+      database.close();
     }
   },
 });
@@ -142,15 +150,3 @@ function sum(
 ): number {
   return imports.reduce((total, item) => total + item[key], 0);
 }
-
-export const stopCli = Cli.create("stop", {
-  description: "Stop the managed djbooth workstation/API and its owned Pro DJ Link runtime.",
-  output: z.object({
-    stopped: z.boolean(),
-    wasRunning: z.boolean(),
-    pid: z.number().int().positive().optional(),
-  }),
-  async run() {
-    return stopManagedDjBoothServer();
-  },
-});

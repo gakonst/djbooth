@@ -1,7 +1,7 @@
 export { DJLINK_VERSION, djlinkCli } from "./cli.js";
+export { DjLinkError, statusDjLink } from "./control.js";
 export {
   browseRekordboxDjLink,
-  DjLinkError,
   doctorDjLink,
   doctorRekordboxDjLink,
   listDjLinkDevices,
@@ -15,7 +15,6 @@ export {
   resolveRekordboxDatabasePath,
   startDjLink,
   startRekordboxDjLink,
-  statusDjLink,
   stopDjLink,
   type DoctorDjLinkOptions,
   type DoctorRekordboxDjLinkOptions,

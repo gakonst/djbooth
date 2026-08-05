@@ -221,6 +221,7 @@ export async function enrichRekordboxMetadata(
   const reader = new MasterDatabase({
     ...(options.dbPath ? { path: resolve(options.dbPath) } : {}),
     ...(options.dbDirectory ? { dbDirectory: resolve(options.dbDirectory) } : {}),
+    playlistXml: false,
     readonly: true,
     unlock: true,
   });
@@ -540,11 +541,12 @@ export async function enrichRekordboxMetadata(
     };
   }
 
-  const releaseLock = await acquireRekordboxDatabaseLock(dbPath);
+  const releaseLock = await acquireRekordboxDatabaseLock(dbPath, { durability: "session" });
   try {
     const writer = new MasterDatabase({
       path: dbPath,
       dbDirectory,
+      playlistXml: false,
       readonly: false,
       unlock: true,
     });
@@ -609,17 +611,12 @@ export async function enrichRekordboxMetadata(
         });
       }
       writer.commit();
+      verifyChanges(writer, changes);
     } finally {
       writer.close();
     }
   } finally {
     await releaseLock();
-  }
-  const verifier = new MasterDatabase({ path: dbPath, dbDirectory, readonly: true, unlock: true });
-  try {
-    verifyChanges(verifier, changes);
-  } finally {
-    verifier.close();
   }
   options.onProgress?.({
     phase: "verify",

@@ -124,6 +124,8 @@ export type RunSetToRekordboxOptions = {
   /** Legacy file persistence for compatibility tests. Production callers use stateStore. */
   manifestPath?: string;
   stateStore?: PipelineStateStore;
+  /** Already-read state; null means the store was checked and had no row. */
+  initialState?: SetManifest | null;
   /** Stop after a durable stage; omitted runs through Rekordbox playlist import. */
   stopAfter?: "download" | "analysis";
   /** Canonical library root. Defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks. */
@@ -247,11 +249,14 @@ export async function runSetToRekordbox(
   if (!options.stateStore && !manifestPath) {
     throw new TypeError("Set workflow requires a Rekordbox pipeline state store");
   }
-  const persisted = options.stateStore
-    ? await options.stateStore.load()
-    : manifestPath && (await dependencies.exists(manifestPath))
-      ? await dependencies.readManifest(manifestPath)
-      : undefined;
+  const persisted =
+    options.initialState !== undefined
+      ? (options.initialState ?? undefined)
+      : options.stateStore
+        ? await options.stateStore.load()
+        : manifestPath && (await dependencies.exists(manifestPath))
+          ? await dependencies.readManifest(manifestPath)
+          : undefined;
   const existed = persisted !== undefined;
   const artifactDirectory = options.stateStore?.artifactDirectory ?? dirname(manifestPath!);
   const savePipelineState = (state: SetManifest): Promise<void> =>

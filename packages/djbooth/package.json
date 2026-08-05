@@ -74,7 +74,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "cli": "tsx --tsconfig tsconfig.cli.json src/cli.ts",
+    "cli": "tsx --tsconfig tsconfig.cli.json src/bin.ts",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint src test",

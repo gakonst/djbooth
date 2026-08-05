@@ -31,6 +31,10 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.js"
+    },
+    "./pipeline-state": {
+      "types": "./dist/pipeline-state.d.ts",
+      "import": "./dist/pipeline-state.js"
     }
   },
   "publishConfig": {

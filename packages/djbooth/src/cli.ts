@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
-import { loadEnvFile } from "node:process";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { usbCli } from "@gakonst/cdj-usb/cli";
@@ -17,13 +15,12 @@ import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
 import { serveCli } from "./serve.js";
-import { statusCli, stopCli } from "./status.js";
+import { statusCli } from "./status.js";
+import { stopCli } from "./stop.js";
+import { loadDjBoothEnvironment } from "./environment.js";
+import { createDjBoothRoot, DJBOOTH_VERSION } from "./root.js";
 
-export const DJBOOTH_VERSION = (
-  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-    version: string;
-  }
-).version;
+export { DJBOOTH_VERSION } from "./root.js";
 
 export const DJBOOTH_MCP_TOOL_FILTER = {
   include: [
@@ -73,17 +70,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
  * TypeScript commands provide the typed Incur wrapper and route execution to those helpers.
  */
 export function createDjBoothCli(): ReturnType<typeof Cli.create> {
-  const cli = Cli.create("djbooth", {
-    version: DJBOOTH_VERSION,
-    description:
-      "Agentically drive DJ-set discovery, acquisition, analysis, stems, library management, deck serving, and Rekordbox-compatible exports.",
-    hint: "Run djbooth <command> --help for examples and typed options. Workflow stages are direct commands; specialist providers remain grouped.",
-    mcp: {
-      instructions:
-        "Use the narrowest typed djbooth tool that completes the request. Tool descriptions, schemas, and errors are the workflow source of truth.",
-      tools: DJBOOTH_MCP_TOOL_FILTER,
-    },
-  });
+  const cli = createDjBoothRoot({ tools: DJBOOTH_MCP_TOOL_FILTER });
 
   cli.command(resolveCli);
   cli.command(enrichCli);
@@ -103,8 +90,11 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   return cli;
 }
 
-export async function runDjBoothCli(argv = process.argv.slice(2)): Promise<void> {
-  loadWorkspaceEnvironment();
+export async function runDjBoothCli(
+  argv = process.argv.slice(2),
+  options: { environmentLoaded?: boolean } = {},
+): Promise<void> {
+  if (!options.environmentLoaded) loadDjBoothEnvironment();
   const cli = createDjBoothCli();
   if (argv.length === 1 && argv[0] === "--codemode-mcp") {
     const { serveLocalDjBoothCodeMcp } = await import("./mcp.js");
@@ -112,32 +102,6 @@ export async function runDjBoothCli(argv = process.argv.slice(2)): Promise<void>
     return;
   }
   await cli.serve(argv);
-}
-
-function loadWorkspaceEnvironment(): void {
-  const candidates = [
-    process.env.DJBOOTH_ENV_FILE,
-    process.env.MUSIC_ENV_FILE,
-    ...ancestorEnvironmentFiles(process.cwd()),
-    resolve(homedir(), ".config/djbooth/.env"),
-    resolve(homedir(), ".config/music-ts/.env"),
-    resolve(import.meta.dirname, "../../../.env"),
-  ].filter(
-    (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
-  );
-  const path = candidates.find((candidate) => existsSync(candidate));
-  if (path) loadEnvFile(path);
-}
-
-function ancestorEnvironmentFiles(start: string): string[] {
-  const files: string[] = [];
-  let directory = resolve(start);
-  while (true) {
-    files.push(resolve(directory, ".env"));
-    const parent = dirname(directory);
-    if (parent === directory) return files;
-    directory = parent;
-  }
 }
 
 function isMainModule(): boolean {

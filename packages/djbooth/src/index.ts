@@ -12,3 +12,4 @@ export * from "./mcp.js";
 export * from "./serve.js";
 export * from "./runtime.js";
 export * from "./status.js";
+export * from "./stop.js";

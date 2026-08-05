@@ -187,7 +187,7 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
     ],
     plan: { folderName: "Sets", playlistName: "Example Set", items: [] },
     verification: {
-      quickCheck: "ok",
+      integrityCheck: "targeted",
       foreignKeyViolationCount: 0,
       playlistSidecarVerified: true,
       expectedMembershipCount: 1,
@@ -464,6 +464,42 @@ describe("runSetToRekordbox", () => {
       "resumed",
       "resumed",
     ]);
+  });
+
+  test("reuses state already loaded by the umbrella command", async () => {
+    const manifest = downloadedManifest(true);
+    const load = vi.fn(async () => manifest);
+    const save = vi.fn(async () => undefined);
+    const dependencies: RunSetToRekordboxDependencies = {
+      exists: async () => true,
+      readManifest: vi.fn(),
+      writeManifest: vi.fn(),
+      identify: vi.fn(),
+      createManifest,
+      enrichSpotify: async (current) => spotifyResult(current, 0),
+      cacheSourceSet: vi.fn(),
+      describeSourceSet: vi.fn(),
+      buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: "/tmp/staging" }),
+      acquire: async () => acquisitionResult(manifest, true),
+      analyze: async () => analysisResult(true),
+      importRekordbox: async (options) => importResult(options.manifest, false),
+    };
+
+    const result = await runSetToRekordbox({
+      source,
+      outputDirectory,
+      stateStore: {
+        artifactDirectory: "/tmp/music-ts-workflow/artifacts",
+        load,
+        save,
+      },
+      initialState: manifest,
+      acquirers: [],
+      dependencies,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(result.performance.warmResume).toBe(true);
   });
 
   test("retains the stable playlist target while a changed track invalidates its checkpoint", async () => {

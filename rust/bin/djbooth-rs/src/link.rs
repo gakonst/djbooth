@@ -39,7 +39,7 @@ enum Command {
     /// Validate a compatible database or projected djbooth library without opening DJ Link ports.
     Doctor(DoctorArgs),
     /// Serve a compatible database or projected djbooth library over DJ Link.
-    Serve(ServeArgs),
+    Serve(Box<ServeArgs>),
     /// Audit DJ Link packet shapes in a pcap/pcapng through tshark.
     AuditPcap(AuditPcapArgs),
 }
@@ -384,7 +384,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<()> {
     let cli = Cli::parse_from(std::iter::once("djbooth-rs link".to_string()).chain(args));
     match cli.command {
         Command::Doctor(args) => doctor(args).await,
-        Command::Serve(args) => serve(args).await,
+        Command::Serve(args) => serve(*args).await,
         Command::AuditPcap(args) => audit_pcap(args),
     }
 }

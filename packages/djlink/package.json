@@ -32,6 +32,10 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.js"
+    },
+    "./control": {
+      "types": "./dist/control.d.ts",
+      "import": "./dist/control.js"
     }
   },
   "scripts": {

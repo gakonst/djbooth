@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 
 import { createDjBoothCli } from "../src/cli.js";
+import { canDispatchDirectly } from "../src/dispatch.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,6 +27,14 @@ async function serve(argv: string[]): Promise<{
 }
 
 describe("djbooth CLI", () => {
+  test("uses package-local dispatch for normal commands and full discovery for global modes", () => {
+    expect(canDispatchDirectly(["status", "--format", "json"])).toBe(true);
+    expect(canDispatchDirectly(["import", "https://example.com/set"])).toBe(true);
+    expect(canDispatchDirectly(["--help"])).toBe(false);
+    expect(canDispatchDirectly(["--mcp"])).toBe(false);
+    expect(canDispatchDirectly([])).toBe(false);
+  });
+
   test("runs a flat command through the source-resolved workspace entrypoint", async () => {
     const { stdout } = await execFileAsync("pnpm", ["djbooth", "status", "--help"], {
       cwd: new URL("../../..", import.meta.url),

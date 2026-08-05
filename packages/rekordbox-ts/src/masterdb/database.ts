@@ -66,6 +66,8 @@ export type MasterDatabaseOptions = {
   dbDirectory?: string;
   key?: string;
   path?: string;
+  /** Parse masterPlaylists6.xml; disable for SQL-only short-lived readers. */
+  playlistXml?: boolean;
   readonly?: boolean;
   unlock?: boolean;
 };
@@ -126,6 +128,17 @@ export type PlaylistSummary = {
   sequence: number;
   trackCount: number | null;
   type: "folder" | "playlist" | "smart";
+};
+
+/** Compact active-library health counters shared by CLI and workstation surfaces. */
+export type LibraryHealth = {
+  tracks: number;
+  playlists: number;
+  folders: number;
+  analyzed: number;
+  missingAnalysis: number;
+  missingBpm: number;
+  missingKey: number;
 };
 
 /** Rekordbox 7 Hot Cue slot number (A through P). */
@@ -617,6 +630,7 @@ export class MasterDatabase {
 
   private options: Required<Pick<MasterDatabaseOptions, "readonly" | "unlock">> &
     MasterDatabaseOptions;
+  private tables = new Set<string>();
   private schemas = new Map<string, TableSchema>();
   private identity = new Map<string, models.DatabaseRow>();
   private tracked = new Set<models.DatabaseRow>();
@@ -646,8 +660,10 @@ export class MasterDatabase {
     this.options = { ...supplied, path, readonly: this.readonly, unlock: supplied.unlock ?? true };
     this.registry = new RekordboxAgentRegistry(this);
     this.open();
-    const playlistPath = join(this.dbDirectory, "masterPlaylists6.xml");
-    if (existsSync(playlistPath)) this.playlistXml = new MasterPlaylistXml(playlistPath);
+    if (supplied.playlistXml !== false) {
+      const playlistPath = join(this.dbDirectory, "masterPlaylists6.xml");
+      if (existsSync(playlistPath)) this.playlistXml = new MasterPlaylistXml(playlistPath);
+    }
   }
 
   /** Open the native database connection if closed. */
@@ -675,6 +691,7 @@ export class MasterDatabase {
     this.rollback();
     this.connection.close();
     this.connection = undefined;
+    this.tables.clear();
     this.schemas.clear();
     this.identity.clear();
     this.events.clear();
@@ -725,31 +742,13 @@ export class MasterDatabase {
     const tables = connection
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
       .all() as Array<{ name: string }>;
+    this.tables = new Set(tables.map(({ name }) => name));
     this.schemas.clear();
-    for (const { name } of tables) {
-      const columns = connection
-        .prepare(`PRAGMA table_info(${quoteIdentifier(name)})`)
-        .all() as Array<TableColumn>;
-      this.schemas.set(name, {
-        columns,
-        dates: new Set(
-          columns
-            .filter(
-              (column) =>
-                /DATE|TIME/iu.test(column.type) ||
-                ["releaseDate", "dateCreated", "dateAdded", "createdDate"].includes(column.name),
-            )
-            .map((column) => column.name),
-        ),
-        names: new Set(columns.map((column) => column.name)),
-        primaryKeys: columns.filter((column) => column.pk).map((column) => column.name),
-      });
-    }
   }
 
   /** Physical table names in this database. */
   get tableNames(): Array<string> {
-    return [...this.schemas.keys()].sort();
+    return [...this.tables].sort();
   }
 
   /**
@@ -768,7 +767,9 @@ export class MasterDatabase {
     const serialized = parameters.map((value) => this.serializeUnknown(value));
     if (statement.reader) return statement.all(...serialized) as Array<row>;
     this.requireWritable();
-    return statement.run(...serialized);
+    const result = statement.run(...serialized);
+    if (/^\s*(?:ALTER|CREATE|DROP)\s+TABLE\b/iu.test(sql)) this.loadSchema();
+    return result;
   }
 
   /** Execute an arbitrary reader statement and return all plain rows. */
@@ -783,12 +784,12 @@ export class MasterDatabase {
 
   /** Whether a physical table exists. */
   hasTable(table: string): boolean {
-    return this.schemas.has(table);
+    return this.tables.has(table);
   }
 
   /** Whether a physical column exists. */
   hasColumn(table: string, column: string): boolean {
-    return this.schemas.get(table)?.names.has(column) ?? false;
+    return this.hasTable(table) && this.schema(table).names.has(column);
   }
 
   /**
@@ -814,8 +815,27 @@ export class MasterDatabase {
   }
 
   private schema(table: string): TableSchema {
-    const schema = this.schemas.get(table);
-    if (!schema) throw new RangeError(`Table '${table}' does not exist`);
+    const cached = this.schemas.get(table);
+    if (cached) return cached;
+    if (!this.tables.has(table)) throw new RangeError(`Table '${table}' does not exist`);
+    const columns = this.requireConnection()
+      .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
+      .all() as Array<TableColumn>;
+    const schema = {
+      columns,
+      dates: new Set(
+        columns
+          .filter(
+            (column) =>
+              /DATE|TIME/iu.test(column.type) ||
+              ["releaseDate", "dateCreated", "dateAdded", "createdDate"].includes(column.name),
+          )
+          .map((column) => column.name),
+      ),
+      names: new Set(columns.map((column) => column.name)),
+      primaryKeys: columns.filter((column) => column.pk).map((column) => column.name),
+    } satisfies TableSchema;
+    this.schemas.set(table, schema);
     return schema;
   }
 
@@ -2267,6 +2287,54 @@ export class MasterDatabase {
     return this.hasColumn(table, "rb_local_deleted")
       ? `(${quoteIdentifier(alias)}."rb_local_deleted" IS NULL OR ${quoteIdentifier(alias)}."rb_local_deleted" = 0)`
       : "1 = 1";
+  }
+
+  /** Return active content/playlist health with two aggregate queries and no row hydration. */
+  getLibraryHealth(): LibraryHealth {
+    const contentActive = this.activeRowPredicate(models.DjmdContent.tableName, "c");
+    const playlistActive = this.activeRowPredicate(models.DjmdPlaylist.tableName, "p");
+    const content = this.selectRawRows<{
+      analyzed: number;
+      missingBpm: number;
+      missingKey: number;
+      tracks: number;
+    }>(
+      `SELECT COUNT(*) AS tracks,
+        COALESCE(SUM(CASE WHEN c."AnalysisDataPath" IS NOT NULL
+          AND c."AnalysisDataPath" != '' AND COALESCE(c."Analysed", 0) > 0
+          THEN 1 ELSE 0 END), 0) AS analyzed,
+        COALESCE(SUM(CASE WHEN COALESCE(c."BPM", 0) <= 0 THEN 1 ELSE 0 END), 0)
+          AS missingBpm,
+        COALESCE(SUM(CASE WHEN c."KeyID" IS NULL OR c."KeyID" = ''
+          THEN 1 ELSE 0 END), 0) AS missingKey
+       FROM "djmdContent" c WHERE ${contentActive}`,
+    )[0];
+    const playlists = this.selectRawRows<{ attribute: number; count: number }>(
+      `SELECT p."Attribute" AS attribute, COUNT(*) AS count FROM "djmdPlaylist" p
+       WHERE ${playlistActive} AND p."Attribute" IN (?, ?, ?)
+       GROUP BY p."Attribute"`,
+      [
+        models.PlaylistType.PLAYLIST,
+        models.PlaylistType.FOLDER,
+        models.PlaylistType.SMART_PLAYLIST,
+      ],
+    );
+    const countByAttribute = new Map(
+      playlists.map((row) => [Number(row.attribute), Number(row.count)]),
+    );
+    const tracks = Number(content?.tracks ?? 0);
+    const analyzed = Number(content?.analyzed ?? 0);
+    return {
+      tracks,
+      playlists:
+        (countByAttribute.get(models.PlaylistType.PLAYLIST) ?? 0) +
+        (countByAttribute.get(models.PlaylistType.SMART_PLAYLIST) ?? 0),
+      folders: countByAttribute.get(models.PlaylistType.FOLDER) ?? 0,
+      analyzed,
+      missingAnalysis: tracks - analyzed,
+      missingBpm: Number(content?.missingBpm ?? 0),
+      missingKey: Number(content?.missingKey ?? 0),
+    };
   }
 
   private resolveActivePlaylist(

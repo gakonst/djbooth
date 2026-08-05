@@ -58,7 +58,7 @@ pub(crate) fn connect_audio_meter(
         SampleFormat::F32 => {
             let error_name = name.clone();
             device.build_input_stream(
-                config.clone(),
+                config,
                 meter_callback::<f32>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
@@ -69,7 +69,7 @@ pub(crate) fn connect_audio_meter(
         SampleFormat::I16 => {
             let error_name = name.clone();
             device.build_input_stream(
-                config.clone(),
+                config,
                 meter_callback::<i16>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
@@ -80,7 +80,7 @@ pub(crate) fn connect_audio_meter(
         SampleFormat::U16 => {
             let error_name = name.clone();
             device.build_input_stream(
-                config.clone(),
+                config,
                 meter_callback::<u16>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");

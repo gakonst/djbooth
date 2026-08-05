@@ -1012,6 +1012,7 @@ async function runSetWorkflowCommand(
   stopAfter: "download" | "analysis" | "rekordbox",
 ): Promise<z.output<typeof setWorkflowOutput>> {
   let soulseek: SoulseekClient | undefined;
+  let stateStore: RekordboxPipelineStore | undefined;
   const controller = new AbortController();
   const cancel = () => controller.abort(new DOMException("Import interrupted", "AbortError"));
   process.once("SIGINT", cancel);
@@ -1042,15 +1043,16 @@ async function runSetWorkflowCommand(
     const outputDirectory =
       context.options.outputDirectory ??
       defaultTrackLibraryRoot({ ...process.env, ...context.env });
-    const stateStore = new RekordboxPipelineStore({
+    stateStore = new RekordboxPipelineStore({
       source: context.args.source,
       outputDirectory,
+      keepOpen: true,
       ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
       ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
     });
-    const persisted = await stateStore.load();
-    let sourceKind: ImportSourceKind = inferImportSourceKind(persisted);
-    if (!persisted) {
+    let initialState = (await stateStore.load()) ?? null;
+    let sourceKind: ImportSourceKind = inferImportSourceKind(initialState ?? undefined);
+    if (!initialState) {
       const hosted = await prepareHostedImportSource(context.args.source, {
         spotify,
         createSoundcloud: () =>
@@ -1070,11 +1072,13 @@ async function runSetWorkflowCommand(
         hosted.manifest.artifacts.downloadDirectory = outputDirectory;
         delete hosted.manifest.artifacts.manifest;
         await stateStore.save(hosted.manifest);
+        initialState = hosted.manifest;
       }
     }
     const result = await runSetToRekordbox({
       source: context.args.source,
       stateStore,
+      initialState,
       outputDirectory,
       ...(stopAfter === "rekordbox" ? {} : { stopAfter }),
       identify: {
@@ -1162,6 +1166,7 @@ async function runSetWorkflowCommand(
   } finally {
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
+    stateStore?.close();
     if (soulseek?.state !== "disconnected") await soulseek?.disconnect();
   }
 }

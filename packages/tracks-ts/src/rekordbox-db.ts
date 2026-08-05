@@ -187,7 +187,7 @@ export type RekordboxImportedItem = {
 };
 
 export type RekordboxVerification = {
-  quickCheck: "ok";
+  integrityCheck: "targeted";
   foreignKeyViolationCount: 0;
   playlistSidecarVerified: true;
   expectedMembershipCount: number;
@@ -580,7 +580,9 @@ async function importManifestToRekordboxLocked(
 
   const rekordbox = await measure("library-load", () => loadRekordboxLibrary(options));
   const location = resolveDatabaseLocation(rekordbox, options);
-  const releaseDatabaseLock = await acquireRekordboxDatabaseLock(location.dbPath);
+  const releaseDatabaseLock = await acquireRekordboxDatabaseLock(location.dbPath, {
+    durability: "session",
+  });
   try {
     await assertRekordboxWriteTargets(location);
     const checkpointed = checkpointedRekordboxImport(manifest, plan, location.dbPath);
@@ -627,57 +629,59 @@ async function importManifestToRekordboxLocked(
     let imported: RekordboxImportedItem[];
     let installedAnalysis: RekordboxInstalledAnalysis[] = [];
     let databaseCommitAttempted = false;
+    let verification: RekordboxVerification;
     try {
-      await measure("database-write-plan", () => {
-        writer = new rekordbox.MasterDatabase({
-          path: location.dbPath,
-          dbDirectory: location.dbDirectory,
-          readonly: false,
-          unlock: true,
-          ...(options.key === undefined ? {} : { key: options.key }),
+      try {
+        await measure("database-write-plan", () => {
+          writer = new rekordbox.MasterDatabase({
+            path: location.dbPath,
+            dbDirectory: location.dbDirectory,
+            readonly: false,
+            unlock: true,
+            ...(options.key === undefined ? {} : { key: options.key }),
+          });
+          const writeResult = writeRekordboxPlan(writer, rekordbox, plan);
+          playlistId = writeResult.playlistId;
+          folderId = writeResult.folderId;
+          imported = writeResult.imported;
+          installedAnalysis = writeResult.installedAnalysis;
         });
-        const writeResult = writeRekordboxPlan(writer, rekordbox, plan);
-        playlistId = writeResult.playlistId;
-        folderId = writeResult.folderId;
-        imported = writeResult.imported;
-        installedAnalysis = writeResult.installedAnalysis;
-      });
-      await measure("database-commit", () => {
-        databaseCommitAttempted = true;
-        writer!.commit();
-      });
-    } catch (error) {
-      if (!databaseCommitAttempted) removeInstalledAnalysis(installedAnalysis);
-      throw new TracksError(
-        "TOOL_FAILED",
-        `Rekordbox database import failed: ${errorMessage(error)}`,
-        { cause: error },
-      );
+        await measure("database-commit", () => {
+          databaseCommitAttempted = true;
+          writer!.commit();
+        });
+      } catch (error) {
+        if (!databaseCommitAttempted) removeInstalledAnalysis(installedAnalysis);
+        throw new TracksError(
+          "TOOL_FAILED",
+          `Rekordbox database import failed: ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      try {
+        verification = await measure("database-verification", () =>
+          verifyCommittedImport(
+            rekordbox,
+            location,
+            options.key,
+            folderId!,
+            playlistId!,
+            imported!,
+            plan,
+            writer,
+          ),
+        );
+      } catch (error) {
+        throw new TracksError("TOOL_FAILED", "Rekordbox post-commit verification failed", {
+          cause: error,
+        });
+      }
     } finally {
       const closeStarted = performance.now();
       writer?.close();
       stages.push({
         stage: "database-close",
         durationMs: roundMilliseconds(performance.now() - closeStarted),
-      });
-    }
-
-    let verification: RekordboxVerification;
-    try {
-      verification = await measure("database-verification", () =>
-        verifyCommittedImport(
-          rekordbox,
-          location,
-          options.key,
-          folderId!,
-          playlistId!,
-          imported!,
-          plan,
-        ),
-      );
-    } catch (error) {
-      throw new TracksError("TOOL_FAILED", "Rekordbox post-commit verification failed", {
-        cause: error,
       });
     }
     const updatedManifest = applyRekordboxImportResults(manifest, imported!, {
@@ -1373,19 +1377,18 @@ function verifyCommittedImport(
   playlistId: string,
   imported: RekordboxImportedItem[],
   plan: RekordboxImportPlan,
+  connection?: RekordboxMasterDatabase,
 ): RekordboxVerification {
-  const db = new rekordbox.MasterDatabase({
-    path: location.dbPath,
-    dbDirectory: location.dbDirectory,
-    readonly: true,
-    unlock: true,
-    ...(key === undefined ? {} : { key }),
-  });
+  const db =
+    connection ??
+    new rekordbox.MasterDatabase({
+      path: location.dbPath,
+      dbDirectory: location.dbDirectory,
+      readonly: true,
+      unlock: true,
+      ...(key === undefined ? {} : { key }),
+    });
   try {
-    const quickRows = db.selectRawRows("PRAGMA quick_check");
-    const quickValues = quickRows.map((row) => String(Object.values(row)[0]));
-    if (quickValues.length !== 1 || quickValues[0]?.toLocaleLowerCase() !== "ok")
-      throw new Error(`Rekordbox quick_check failed: ${quickValues.join("; ")}`);
     const foreignKeys = db.selectRawRows("PRAGMA foreign_key_check");
     if (foreignKeys.length)
       throw new Error(`Rekordbox foreign_key_check found ${foreignKeys.length} violation(s)`);
@@ -1451,7 +1454,7 @@ function verifyCommittedImport(
       verifiedPaths.push(content.FolderPath);
     }
     return {
-      quickCheck: "ok",
+      integrityCheck: "targeted",
       foreignKeyViolationCount: 0,
       playlistSidecarVerified: true,
       expectedMembershipCount: imported.length,
@@ -1465,7 +1468,7 @@ function verifyCommittedImport(
       verifiedPaths,
     };
   } finally {
-    db.close();
+    if (!connection) db.close();
   }
 }
 

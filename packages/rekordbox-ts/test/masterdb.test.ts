@@ -299,6 +299,28 @@ function fixture(): { dbPath: string; root: string; xmlPath: string } {
 }
 
 describe("MasterDatabase queries", () => {
+  it("aggregates library health without hydrating content or playlist rows", () => {
+    const { dbPath } = fixture();
+    const db = new MasterDatabase({
+      path: dbPath,
+      playlistXml: false,
+      readonly: true,
+      unlock: false,
+    });
+
+    expect(db.getLibraryHealth()).toEqual({
+      tracks: 2,
+      playlists: 1,
+      folders: 0,
+      analyzed: 0,
+      missingAnalysis: 2,
+      missingBpm: 1,
+      missingKey: 1,
+    });
+
+    db.close();
+  });
+
   it("maps rows, dates, relationships, search, and virtual mixer values", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });

@@ -73,6 +73,7 @@ describe("HostedPlaylistAcquisitionWorker", () => {
       },
       async acquire(options) {
         acquisitionOptions = options;
+        if (!options.manifestPath) throw new Error("Expected hosted manifest path");
         const persisted = JSON.parse(readFileSync(options.manifestPath, "utf8")) as SetManifest;
         expect(persisted.entries[0]?.spotify.status).toBe("unmatched");
         const plan = materializedPlan(options);

@@ -5,7 +5,6 @@ import { z } from "zod";
 
 import {
   browseRekordboxDjLink,
-  DjLinkError,
   doctorDjLink,
   doctorRekordboxDjLink,
   listDjLinkDevices,
@@ -17,9 +16,9 @@ import {
   runRekordboxDjLink,
   searchDjLink,
   startDjLink,
-  statusDjLink,
   stopDjLink,
 } from "./runtime.js";
+import { DjLinkError, statusDjLink } from "./control.js";
 
 export const DJLINK_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
