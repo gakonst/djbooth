@@ -697,44 +697,48 @@ body {
   z-index: 7;
   overflow: hidden;
   border-radius: 7%;
-  filter: brightness(0.48) saturate(0.55);
-  transition: filter 35ms linear;
+  opacity: 0;
+  mix-blend-mode: screen;
+  transition:
+    filter 35ms linear,
+    opacity 35ms linear;
 }
 
 .a9-image-button.lit {
-  filter: brightness(1.18) saturate(1.06) drop-shadow(0 0 3px rgb(225 246 255 / 82%));
+  opacity: 1;
+  filter: brightness(1.28) saturate(1.1);
 }
 
 .a9-image-button.tone-blue {
-  filter: brightness(0.42) saturate(0.72);
+  filter: none;
 }
 
 .a9-image-button.tone-blue.lit {
-  filter: brightness(1.32) saturate(1.2) drop-shadow(0 0 3px rgb(36 150 255 / 88%));
+  filter: brightness(1.42) saturate(1.25);
 }
 
 .a9-image-button.tone-red {
-  filter: brightness(0.38) saturate(0.5);
+  filter: none;
 }
 
 .a9-image-button.tone-red.lit {
-  filter: brightness(1.18) saturate(1.2) drop-shadow(0 0 3px rgb(255 63 48 / 82%));
+  filter: brightness(1.18) saturate(1.2);
 }
 
 .a9-image-button.tone-amber {
-  filter: brightness(0.4) saturate(0.52);
+  filter: none;
 }
 
 .a9-image-button.tone-amber.lit {
-  filter: brightness(1.15) saturate(1.1) drop-shadow(0 0 3px rgb(255 180 45 / 76%));
+  filter: brightness(1.15) saturate(1.1);
 }
 
 .a9-image-button.tone-green {
-  filter: brightness(0.34) saturate(0.42);
+  filter: none;
 }
 
 .a9-image-button.tone-green.lit {
-  filter: brightness(1.16) saturate(1.18) drop-shadow(0 0 4px rgb(39 255 91 / 82%));
+  filter: brightness(1.16) saturate(1.18);
 }
 
 .a9-image-button.is-round {

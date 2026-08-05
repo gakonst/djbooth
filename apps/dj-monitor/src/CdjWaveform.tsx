@@ -73,9 +73,11 @@ function drawWaveform(
     if (!amplitude) continue;
     const firstColor = colors?.[firstIndex] ?? [28, 117, 255];
     const secondColor = colors?.[secondIndex] ?? firstColor;
-    const red = Math.round(lerp(firstColor[0], secondColor[0], mix));
-    const green = Math.round(lerp(firstColor[1], secondColor[1], mix));
-    const blue = Math.round(lerp(firstColor[2], secondColor[2], mix));
+    const [red, green, blue] = brightenWaveformColor([
+      lerp(firstColor[0], secondColor[0], mix),
+      lerp(firstColor[1], secondColor[1], mix),
+      lerp(firstColor[2], secondColor[2], mix),
+    ]);
     const waveformHeight = Math.max(1, amplitude * (height / 2 - 2));
     context.fillStyle = `rgb(${String(red)} ${String(green)} ${String(blue)})`;
     context.fillRect(x, Math.round(midline - waveformHeight), 1, Math.ceil(waveformHeight * 2));
@@ -83,6 +85,20 @@ function drawWaveform(
 
   context.fillStyle = "rgb(255 255 255 / 16%)";
   context.fillRect(0, Math.floor(midline), width, 1);
+}
+
+function brightenWaveformColor(color: [number, number, number]): [number, number, number] {
+  const brightest = Math.max(...color);
+  if (brightest <= 0) return [28, 117, 255];
+  // PWV4 is authored for the CDJ's very bright LCD and looks artificially dim
+  // when copied numerically to a browser canvas. Preserve its hue while lifting
+  // every peak to the same luminous range as the physical display.
+  const gain = Math.max(1.35, 210 / brightest);
+  return color.map((channel) => Math.round(clamp(channel * gain, 0, 255))) as [
+    number,
+    number,
+    number,
+  ];
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
