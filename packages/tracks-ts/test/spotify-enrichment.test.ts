@@ -355,7 +355,7 @@ describe("Spotify manifest enrichment", () => {
     ]);
   });
 
-  test("safely handles catalog typos, inferred versions, and bogus short durations", () => {
+  test("safely handles catalog typos and duration-supported radio or extended versions", () => {
     const typoTarget = { artist: "Maré (Am)", title: "Baila Conmigao", durationMs: 327_000 };
     const typo = {
       id: "baila",
@@ -379,6 +379,13 @@ describe("Spotify manifest enrichment", () => {
       name: "Sexy M.F. - Extended Mix",
       durationMs: 343_000,
     };
+    const remix = {
+      ...radio,
+      id: "remix",
+      uri: "spotify:track:remix",
+      name: "Sexy M.F. - Club Remix",
+      durationMs: 333_000,
+    };
     const shortTarget = {
       artist: "Mita Gami & Rafael (IL)",
       title: "What Is Luv",
@@ -396,7 +403,8 @@ describe("Spotify manifest enrichment", () => {
     expect(isSafeSpotifyAutomaticMatch(typoTarget, typo)).toBe(true);
     expect(isSafeSpotifyAutomaticMatch(extendedTarget, radio)).toBe(false);
     expect(isSafeSpotifyAutomaticMatch(extendedTarget, extended)).toBe(true);
-    expect(isSafeSpotifyAutomaticMatch(shortTarget, fullRecording)).toBe(true);
+    expect(isSafeSpotifyAutomaticMatch(extendedTarget, remix)).toBe(false);
+    expect(isSafeSpotifyAutomaticMatch(shortTarget, fullRecording)).toBe(false);
   });
 
   test("records request failures without discarding other entries", async () => {

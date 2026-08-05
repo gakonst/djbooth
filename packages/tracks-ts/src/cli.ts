@@ -37,7 +37,7 @@ import {
 } from "./integrations/ytdlp-library.js";
 import { defaultTrackLibraryRoot } from "./library-paths.js";
 import { createManifest, parseManifest } from "./manifest.js";
-import { backfillRekordboxMetadata } from "./metadata-backfill.js";
+import { enrichRekordboxMetadata } from "./metadata-enrichment.js";
 import { runProcess } from "./process.js";
 import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
 import {
@@ -616,7 +616,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for metadata-only DJ-set resolution. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer with Auto rhythm mode as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. Use Dynamic for known live/rubato/materially changing tempo and Normal only when a static grid is intended. The proprietary reference oracle is opt-in only through --analysis-engine reference, requires explicit Normal or Dynamic mode, and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
+      "Use resolve for metadata-only DJ-set resolution. Use enrich as the idempotent whole-library metadata stage; it writes one backed-up, verified update by default and supports --dry-run or optional --folder scoping. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer with Auto rhythm mode as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. Use Dynamic for known live/rubato/materially changing tempo and Normal only when a static grid is intended. The proprietary reference oracle is opt-in only through --analysis-engine reference, requires explicit Normal or Dynamic mode, and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
   },
   sync: {
     cwd: import.meta.dirname,
@@ -626,16 +626,13 @@ export const tracksCli = Cli.create("tracks", {
       "find the 1001Tracklists entry for a YouTube URL",
       "search 1001Tracklists for a DJ set",
       "analyze only the downloaded recordings in a durable manifest",
+      "enrich metadata across the complete Rekordbox library",
       "import a fully acquired and analyzed manifest into Rekordbox",
       "resolve, download, analyze, and create the Rekordbox playlist for this approved DJ set in one invocation",
       "retry unavailable tracks from an approved local set source in the same import",
       "render a tracklist as YouTube chapters",
     ],
   },
-});
-
-const metadataCli = Cli.create("metadata", {
-  description: "Recover album, label, genre, ISRC, and release metadata without Spotify lock-in.",
 });
 
 const metadataCoverageOutput = z.object({
@@ -646,11 +643,11 @@ const metadataCoverageOutput = z.object({
   releaseDate: z.number().int().nonnegative(),
 });
 
-metadataCli.command("backfill", {
+tracksCli.command("enrich", {
   description:
-    "Repair identities and backfill one Rekordbox playlist folder from exact acquisition sources, local metadata, Apple, Spotify, Discogs, Deezer, and MusicBrainz.",
+    "Idempotently enrich every Rekordbox track from durable provenance, local metadata, Apple, Spotify, Discogs, Deezer, and MusicBrainz.",
   options: z.object({
-    folder: z.string().default("DJ Sets I Like").describe("Direct-child playlist folder"),
+    folder: z.string().optional().describe("Optional direct-child playlist-folder scope"),
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     manifestRoot: z
@@ -666,12 +663,15 @@ metadataCli.command("backfill", {
     cacheMode: cacheModeOption,
     probeConcurrency: z.number().int().min(1).max(32).default(8),
     backupRoot: z.string().optional().describe("Pre-write backup directory root"),
-    write: z.boolean().default(false).describe("Apply one backed-up, verified database commit"),
+    dryRun: z.boolean().default(false).describe("Plan enrichment without updating Rekordbox"),
     progress: z.enum(["auto", "always", "never"]).default("auto"),
   }),
   output: z.object({
     dbPath: z.string(),
-    folderName: z.string(),
+    scope: z.union([
+      z.object({ kind: z.literal("library") }),
+      z.object({ kind: z.literal("folder"), name: z.string() }),
+    ]),
     tracks: z.number().int().nonnegative(),
     changed: z.number().int().nonnegative(),
     written: z.boolean(),
@@ -799,10 +799,10 @@ metadataCli.command("backfill", {
       const showProgress =
         context.options.progress === "always" ||
         (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
-      const result = await backfillRekordboxMetadata({
-        approved: context.options.write,
-        write: context.options.write,
-        folderName: context.options.folder,
+      const result = await enrichRekordboxMetadata({
+        approved: !context.options.dryRun,
+        write: !context.options.dryRun,
+        ...(context.options.folder ? { folder: context.options.folder } : {}),
         catalogSearch: context.options.catalogSearch,
         catalogOptions: { cacheMode: context.options.cacheMode },
         appleOptions: { cacheMode: context.options.cacheMode },
@@ -826,7 +826,7 @@ metadataCli.command("backfill", {
                   progress.current === progress.total ||
                   progress.current % 10 === 0
                 ) {
-                  process.stderr.write(`[metadata:${progress.phase}] ${progress.message}\n`);
+                  process.stderr.write(`[enrich:${progress.phase}] ${progress.message}\n`);
                 }
               },
             }
@@ -834,7 +834,7 @@ metadataCli.command("backfill", {
       });
       return {
         dbPath: result.dbPath,
-        folderName: result.folderName,
+        scope: result.scope,
         tracks: result.tracks,
         changed: result.changed,
         written: result.written,
@@ -855,8 +855,6 @@ metadataCli.command("backfill", {
     }
   },
 });
-
-tracksCli.command(metadataCli);
 
 tracksCli.command("import-existing", {
   description:
@@ -1732,7 +1730,6 @@ async function workflowSpotifyClient(
 async function metadataSourceClients(cacheMode: CacheMode): Promise<ExactSourceMetadataClient[]> {
   const reference = new ReferenceClient();
   const clients: ExactSourceMetadataClient[] = [
-    new ReferenceSourceMetadataClient("youtube", reference, { cacheMode }),
     new ReferenceSourceMetadataClient("bandcamp", reference, { cacheMode }),
   ];
   try {

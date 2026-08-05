@@ -544,20 +544,14 @@ export function isSafeSpotifyAutomaticMatch(
   if (
     versionPenalty(expected, actual) > 0 &&
     !(
-      versionWords(expected).size === 0 &&
-      versionWords(actual).size > 0 &&
+      isDurationInferableVersion(expected, actual) &&
       durationRatio !== undefined &&
       durationRatio <= 0.05
     )
   )
     return false;
   if (target.durationMs !== undefined && candidate.durationMs !== undefined) {
-    if (
-      durationRatio !== undefined &&
-      durationRatio > 0.12 &&
-      !isObviouslyUnreliableTargetDuration(target, candidate)
-    )
-      return false;
+    if (durationRatio !== undefined && durationRatio > 0.12) return false;
   }
   return true;
 }
@@ -628,25 +622,6 @@ function durationDifferenceRatio(
   return Math.abs(expectedDurationMs - candidateDurationMs) / expectedDurationMs;
 }
 
-function isObviouslyUnreliableTargetDuration(
-  target: SpotifyScoringTarget,
-  candidate: SpotifyTrackCandidate,
-): boolean {
-  if (
-    target.durationMs === undefined ||
-    candidate.durationMs === undefined ||
-    target.durationMs >= 120_000 ||
-    candidate.durationMs < 180_000
-  )
-    return false;
-  return (
-    titleSimilarity(
-      normalizeMatchText(expectedTitle(target)),
-      normalizeMatchText(candidate.name),
-    ) >= 0.95 && artistRecall(target.artist, candidate.artists) >= 0.95
-  );
-}
-
 function versionPenalty(expected: string, candidate: string): number {
   const expectedVersions = versionWords(expected);
   const candidateVersions = versionWords(candidate);
@@ -657,6 +632,14 @@ function versionPenalty(expected: string, candidate: string): number {
 
 function versionWords(value: string): Set<string> {
   return new Set([...tokenSet(value)].filter((word) => VERSION_WORDS.has(word)));
+}
+
+function isDurationInferableVersion(expected: string, candidate: string): boolean {
+  const expectedVersions = versionWords(expected);
+  const candidateVersions = versionWords(candidate);
+  if (expectedVersions.size || !candidateVersions.size) return false;
+  if (!candidateVersions.has("extended") && !candidateVersions.has("radio")) return false;
+  return [...candidateVersions].every((word) => /^(?:edit|extended|mix|radio)$/u.test(word));
 }
 
 function withoutVersionWords(value: string): string {

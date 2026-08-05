@@ -32,6 +32,22 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-04 — whole-library enrichment stage checkpoint
+
+- Replaced the folder-first `metadata backfill` product surface with one idempotent `tracks enrich`
+  stage. It processes the complete Rekordbox library and writes a backed-up, verified commit by
+  default; `--folder` is an explicit scope and `--dry-run` is the non-mutating preview.
+- Reconnected acquisition evidence by Rekordbox content ID, canonical path, SHA-256, and Spotify ID.
+  Independent recording URLs survive set-clip fallback while containing-set URLs remain excluded.
+- Matching now uses cached measured media duration, allows catalog resolution without a database
+  duration, and infers only duration-compatible radio/extended versions—never remixes or live,
+  acoustic, or instrumental variants.
+- Exact and catalog providers run as a fast cascade; local probing is fingerprint-cached and
+  expensive YouTube inspection is omitted from routine enrichment. The tracks package passes 292
+  tests, typecheck, lint, formatting, and build.
+- Applied three newly reachable exact-source repairs below `DJ Sets I Like`; genre coverage moved
+  130→133 and the verified backup is `rekordbox-20260805T013436-950Z`.
+
 ### 2026-08-04 — typo-tolerant Spotify metadata checkpoint
 
 - Kept catalog matching conservative while adding a broad-search fallback for spelling drift,

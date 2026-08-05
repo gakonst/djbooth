@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -15,8 +15,9 @@ import {
 } from "@gakonst/rekordbox/masterdb";
 import { getRekordboxProcessState } from "@gakonst/rekordbox/utils";
 
-import { normalizeMatchText, probeAudio } from "./acquisition.js";
+import { normalizeMatchText, probeAudio, sha256File } from "./acquisition.js";
 import { AppleMetadataClient, type AppleMetadataClientOptions } from "./apple-metadata.js";
+import { JsonDiskCache } from "./cache.js";
 import {
   MusicBrainzMetadataClient,
   type CatalogMetadata,
@@ -47,7 +48,7 @@ import {
   type ExactTrackSource,
 } from "./source-metadata.js";
 
-export type RekordboxMetadataBackfillOptions = {
+export type RekordboxMetadataEnrichmentOptions = {
   approved?: boolean;
   backupRoot?: string;
   catalog?: MusicBrainzMetadataClient;
@@ -62,16 +63,16 @@ export type RekordboxMetadataBackfillOptions = {
   catalogSearch?: boolean;
   dbDirectory?: string;
   dbPath?: string;
-  /** Direct child playlists of this folder are included. */
-  folderName?: string;
+  /** Optional folder scope; all tracks are enriched when omitted. */
+  folder?: string;
   manifestRoots?: string[];
   probeConcurrency?: number;
   sourceClients?: ExactSourceMetadataClient[];
   write?: boolean;
-  onProgress?: (progress: RekordboxMetadataBackfillProgress) => void;
+  onProgress?: (progress: RekordboxMetadataEnrichmentProgress) => void;
 };
 
-export type RekordboxMetadataBackfillProgress = {
+export type RekordboxMetadataEnrichmentProgress = {
   phase: "inventory" | "embedded" | "identity" | "source" | "catalog" | "write" | "verify";
   current: number;
   total: number;
@@ -101,7 +102,7 @@ export type MetadataFieldSource =
 type RepairableMetadataField = "album" | "label" | "genre" | "isrc" | "releaseDate";
 type RepairableIdentityField = "updatedTitle" | "updatedArtist";
 
-export type RekordboxMetadataBackfillChange = {
+export type RekordboxMetadataEnrichmentChange = {
   contentId: string;
   title: string;
   artist?: string;
@@ -147,9 +148,9 @@ export type RekordboxMetadataGapSummary = {
   byReason: Record<RekordboxMetadataGap["reasons"][number], number>;
 };
 
-export type RekordboxMetadataBackfillResult = {
+export type RekordboxMetadataEnrichmentResult = {
   dbPath: string;
-  folderName: string;
+  scope: { kind: "library" } | { kind: "folder"; name: string };
   tracks: number;
   changed: number;
   written: boolean;
@@ -167,7 +168,7 @@ export type RekordboxMetadataBackfillResult = {
   };
   unresolvedSummary: RekordboxMetadataGapSummary;
   unresolved: RekordboxMetadataGap[];
-  changes: RekordboxMetadataBackfillChange[];
+  changes: RekordboxMetadataEnrichmentChange[];
 };
 
 type CacheSnapshot = ReturnType<MusicBrainzMetadataClient["cacheStats"]>;
@@ -203,13 +204,19 @@ type MetadataCandidate = {
   genre?: string | undefined;
   isrc?: string | undefined;
   releaseDate?: string | undefined;
+  durationSeconds?: number | undefined;
 };
 
-const DEFAULT_FOLDER_NAME = "DJ Sets I Like";
+export type ManifestMetadataRecord = {
+  metadata: MetadataCandidate;
+  sources: ExactTrackSource[];
+};
 
-type ManifestMetadataIndex = {
-  metadata: Map<string, MetadataCandidate>;
-  sources: Map<string, ExactTrackSource[]>;
+export type ManifestMetadataIndex = {
+  byContentId: Map<string, ManifestMetadataRecord>;
+  byPath: Map<string, ManifestMetadataRecord>;
+  bySha256: Map<string, ManifestMetadataRecord>;
+  bySpotifyId: Map<string, ManifestMetadataRecord>;
 };
 
 type MetadataCatalogClient = {
@@ -220,10 +227,10 @@ type MetadataCatalogClient = {
   cacheStats(): CacheSnapshot;
 };
 
-/** Backfill one Rekordbox playlist folder without overwriting trustworthy existing metadata. */
-export async function backfillRekordboxMetadata(
-  options: RekordboxMetadataBackfillOptions = {},
-): Promise<RekordboxMetadataBackfillResult> {
+/** Idempotently enrich a Rekordbox library without overwriting trustworthy existing metadata. */
+export async function enrichRekordboxMetadata(
+  options: RekordboxMetadataEnrichmentOptions = {},
+): Promise<RekordboxMetadataEnrichmentResult> {
   if (options.write) assertRekordboxImportApproved(options.approved);
   const reader = new MasterDatabase({
     ...(options.dbPath ? { path: resolve(options.dbPath) } : {}),
@@ -233,12 +240,15 @@ export async function backfillRekordboxMetadata(
   });
   const dbPath = reader.path;
   const dbDirectory = reader.dbDirectory;
-  const folderName = options.folderName ?? DEFAULT_FOLDER_NAME;
+  const folderName = options.folder?.trim() || undefined;
+  const scope: RekordboxMetadataEnrichmentResult["scope"] = folderName
+    ? { kind: "folder", name: folderName }
+    : { kind: "library" };
   let tracks: LibraryTrack[];
   let allTracks: LibraryTrack[];
   try {
-    tracks = folderTracks(reader, folderName);
     allTracks = databaseTracks(reader);
+    tracks = folderName ? folderTracks(reader, folderName) : allTracks;
   } finally {
     reader.close();
   }
@@ -246,19 +256,57 @@ export async function backfillRekordboxMetadata(
     phase: "inventory",
     current: tracks.length,
     total: tracks.length,
-    message: `${String(tracks.length)} unique tracks in ${folderName}`,
+    message: `${String(tracks.length)} unique tracks in ${folderName ?? "the Rekordbox library"}`,
   });
   const coverageBefore = metadataCoverage(tracks);
   const manifestRoots = options.manifestRoots ?? defaultManifestRoots();
-  const manifestMetadata = await metadataFromManifestRoots(manifestRoots);
+  const manifestMetadata = await indexManifestMetadata(manifestRoots);
   const embeddedMetadata = new Map<string, MetadataCandidate>();
-  const paths = tracks.flatMap((track) =>
-    track.path && existsSync(track.path) ? [track.path] : [],
-  );
+  const artifactHashes = new Map<string, string>();
+  const probeCache = new JsonDiskCache({
+    namespace: "local-audio-enrichment-v1",
+    defaultTtlMs: 365 * 24 * 60 * 60 * 1000,
+    ...(options.catalogOptions?.cacheMode ? { mode: options.catalogOptions.cacheMode } : {}),
+  });
+  const paths = [
+    ...new Set(
+      tracks.flatMap((track) =>
+        track.path && existsSync(track.path) && needsMeasuredMetadata(track)
+          ? [resolve(track.path)]
+          : [],
+      ),
+    ),
+  ];
+  const tracksByPath = new Map<string, LibraryTrack[]>();
+  for (const track of tracks) {
+    if (!track.path || !existsSync(track.path)) continue;
+    const path = resolve(track.path);
+    const values = tracksByPath.get(path) ?? [];
+    values.push(track);
+    tracksByPath.set(path, values);
+  }
   let probed = 0;
   await mapConcurrent(paths, options.probeConcurrency ?? 8, async (path) => {
     try {
-      const tags = (await probeAudio(path)).tags;
+      const relatedTracks = tracksByPath.get(resolve(path)) ?? [];
+      const needsHash =
+        manifestMetadata.bySha256.size > 0 &&
+        isManagedArtifactPath(path) &&
+        relatedTracks.some(
+          (track) =>
+            !manifestMetadata.byContentId.has(track.id) &&
+            !manifestMetadata.byPath.has(resolve(path)) &&
+            !manifestMetadata.bySpotifyId.has(spotifyIdFromPath(path) ?? ""),
+        );
+      const file = await stat(path);
+      const fingerprint = { path, size: file.size, mtimeMs: file.mtimeMs };
+      const [probe, sha256] = await Promise.all([
+        probeCache.getOrLoad({ operation: "ffprobe", ...fingerprint }, () => probeAudio(path)),
+        needsHash
+          ? probeCache.getOrLoad({ operation: "sha256", ...fingerprint }, () => sha256File(path))
+          : Promise.resolve(undefined),
+      ]);
+      const tags = probe.tags;
       embeddedMetadata.set(path, {
         title: clean(tags.title),
         artist: clean(tags.artist),
@@ -267,7 +315,9 @@ export async function backfillRekordboxMetadata(
         genre: clean(tags.genre),
         isrc: clean(tags.isrc),
         releaseDate: clean(tags.date),
+        durationSeconds: probe.durationSeconds,
       });
+      if (sha256) artifactHashes.set(resolve(path), sha256);
     } catch {
       // Missing or unreadable files stay visible in the bounded result; DB recovery continues.
     } finally {
@@ -288,6 +338,7 @@ export async function backfillRekordboxMetadata(
       track,
       manifestMetadata,
       embeddedMetadata,
+      artifactHashes,
       localMetadata,
       localArtistGenres,
       localReleaseMetadata,
@@ -321,10 +372,6 @@ export async function backfillRekordboxMetadata(
     ),
   ];
   const catalogs: MetadataCatalogClient[] = [
-    options.catalog ?? new MusicBrainzMetadataClient(options.catalogOptions),
-    apple,
-    deezer,
-    discogs,
     ...sourceClients.flatMap((client) =>
       client.lookupCatalog
         ? [
@@ -336,6 +383,10 @@ export async function backfillRekordboxMetadata(
           ]
         : [],
     ),
+    apple,
+    deezer,
+    discogs,
+    options.catalog ?? new MusicBrainzMetadataClient(options.catalogOptions),
   ];
   const providers: Record<string, MetadataProviderStats> = Object.fromEntries(
     [...sourceClients, ...catalogs].map((provider) => [
@@ -344,8 +395,7 @@ export async function backfillRekordboxMetadata(
     ]),
   );
   const sourceTargets = drafts.filter(
-    (draft) =>
-      needsMetadata(draft.value) && !isSetExtract(draft.value) && draft.exactSources.length,
+    (draft) => needsMetadata(draft.value) && draft.exactSources.length,
   );
   let completedSourceTargets = 0;
   await mapConcurrent(sourceTargets, 4, async (draft) => {
@@ -425,28 +475,24 @@ export async function backfillRekordboxMetadata(
       ...(draft.value.isrc ? { isrc: draft.value.isrc } : {}),
       ...(draft.value.durationSeconds ? { durationSeconds: draft.value.durationSeconds } : {}),
     };
-    const results = await Promise.all(
-      catalogs.map(async (catalog) => {
-        providers[catalog.provider]!.queries += 1;
-        catalogQueries += 1;
-        try {
-          return await catalog.lookup(query);
-        } catch (error) {
-          options.onProgress?.({
-            phase: "catalog",
-            current: index,
-            total: catalogTargets.length,
-            message: `${catalog.provider} miss: ${error instanceof Error ? error.message : String(error)}`,
-          });
-          return undefined;
-        }
-      }),
-    );
-    for (const metadata of results
-      .filter((value): value is CatalogMetadata => value !== undefined)
-      .toSorted(
-        (left, right) => catalogProviderRank(left.provider) - catalogProviderRank(right.provider),
-      )) {
+    for (const catalog of catalogs) {
+      if (!needsMetadata(draft.value)) break;
+      if (catalog.provider === "musicbrainz" && draft.value.album && draft.value.label) continue;
+      providers[catalog.provider]!.queries += 1;
+      catalogQueries += 1;
+      let metadata: CatalogMetadata | undefined;
+      try {
+        metadata = await catalog.lookup(query);
+      } catch (error) {
+        options.onProgress?.({
+          phase: "catalog",
+          current: index,
+          total: catalogTargets.length,
+          message: `${catalog.provider} miss: ${error instanceof Error ? error.message : String(error)}`,
+        });
+        continue;
+      }
+      if (!metadata) continue;
       const before = metadataFieldCount(draft.value);
       mergeMissing(draft, metadata, metadata.provider);
       const fields = metadataFieldCount(draft.value) - before;
@@ -491,7 +537,7 @@ export async function backfillRekordboxMetadata(
   if (!options.write || !changes.length) {
     return {
       dbPath,
-      folderName,
+      scope,
       tracks: tracks.length,
       changed: changes.length,
       written: false,
@@ -603,7 +649,7 @@ export async function backfillRekordboxMetadata(
   });
   return {
     dbPath,
-    folderName,
+    scope,
     tracks: tracks.length,
     changed: changes.length,
     written: true,
@@ -700,7 +746,7 @@ function libraryTrack(row: Record<string, unknown>): LibraryTrack {
 type Draft = {
   track: LibraryTrack;
   value: LibraryTrack;
-  sources: RekordboxMetadataBackfillChange["sources"];
+  sources: RekordboxMetadataEnrichmentChange["sources"];
   broadCatalogGenreRejected: boolean;
   catalogAttempted: boolean;
   catalogMatched: boolean;
@@ -713,6 +759,7 @@ function createDraft(
   track: LibraryTrack,
   manifests: ManifestMetadataIndex,
   embedded: Map<string, MetadataCandidate>,
+  artifactHashes: Map<string, string>,
   local: Map<string, MetadataCandidate>,
   localArtistGenres: Map<string, MetadataCandidate>,
   localReleaseMetadata: Map<string, MetadataCandidate>,
@@ -730,15 +777,27 @@ function createDraft(
     sourceMatched: false,
   };
   let trustedLocalIdentity = false;
-  if (track.path) {
-    const path = resolve(track.path);
-    mergeCandidate(draft, manifests.metadata.get(path), "manifest");
-    draft.exactSources = uniqueTrackSources([
-      ...draft.exactSources,
-      ...(manifests.sources.get(path) ?? []),
-    ]);
+  const path = track.path ? resolve(track.path) : undefined;
+  const records = uniqueManifestRecords([
+    manifests.byContentId.get(track.id),
+    ...(path
+      ? [
+          manifests.byPath.get(path),
+          manifests.bySpotifyId.get(spotifyIdFromPath(path) ?? ""),
+          manifests.bySha256.get(artifactHashes.get(path) ?? ""),
+        ]
+      : []),
+  ]);
+  for (const record of records) {
+    mergeCandidate(draft, record.metadata, "manifest");
+    draft.exactSources = uniqueTrackSources([...draft.exactSources, ...record.sources]);
   }
-  if (track.path) mergeCandidate(draft, embedded.get(resolve(track.path)), "embedded");
+  if (path) {
+    const measured = embedded.get(path);
+    mergeCandidate(draft, measured, "embedded");
+    if (measured?.durationSeconds)
+      draft.value.durationSeconds = Math.round(measured.durationSeconds);
+  }
   if (!draft.value.artist) {
     const repair = inferLocalIdentity(draft.value, allTracks);
     if (repair) {
@@ -809,7 +868,7 @@ function mergeMissing(
   }
 }
 
-function changedDraft(draft: Draft): RekordboxMetadataBackfillChange[] {
+function changedDraft(draft: Draft): RekordboxMetadataEnrichmentChange[] {
   const fields: RepairableMetadataField[] = ["album", "label", "genre", "isrc", "releaseDate"];
   const entries: Array<[RepairableMetadataField, string | null]> = [];
   for (const field of fields) {
@@ -1097,12 +1156,17 @@ function identityKeys(
   ];
 }
 
-async function metadataFromManifestRoots(roots: string[]): Promise<ManifestMetadataIndex> {
-  const metadata = new Map<string, MetadataCandidate>();
-  const sources = new Map<string, ExactTrackSource[]>();
+/** Index durable recording metadata and exact sources independently of current media location. */
+export async function indexManifestMetadata(roots: string[]): Promise<ManifestMetadataIndex> {
+  const index: ManifestMetadataIndex = {
+    byContentId: new Map(),
+    byPath: new Map(),
+    bySha256: new Map(),
+    bySpotifyId: new Map(),
+  };
   for (const root of roots) {
     if (!existsSync(root)) continue;
-    for (const path of await manifestFiles(root)) {
+    for (const path of (await manifestFiles(root)).toSorted()) {
       let manifest: Record<string, unknown>;
       try {
         manifest = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
@@ -1114,6 +1178,7 @@ async function metadataFromManifestRoots(roots: string[]): Promise<ManifestMetad
         const identity = record(entry.identity);
         const spotify = record(entry.spotify);
         const acquisition = record(entry.acquisition);
+        const rekordbox = record(entry.rekordbox);
         if (acquisition.status !== "downloaded") continue;
         const candidate: MetadataCandidate = {
           title: clean(identity.title) ?? clean(spotify.name),
@@ -1125,26 +1190,97 @@ async function metadataFromManifestRoots(roots: string[]): Promise<ManifestMetad
           isrc: clean(spotify.isrc) ?? clean(identity.isrc),
           releaseDate: clean(spotify.releaseDate) ?? clean(identity.releaseDate),
         };
-        for (const rawDownload of [acquisition.download, ...array(acquisition.alternatives)]) {
-          const download = record(rawDownload);
+        const downloads = [acquisition.download, ...array(acquisition.alternatives)].map(record);
+        const spotifyIds = [
+          ...new Set(
+            [clean(spotify.id), ...downloads.map((download) => clean(download.spotifyId))].filter(
+              (value): value is string => value !== undefined,
+            ),
+          ),
+        ];
+        const spotifyUrls = [
+          clean(spotify.url),
+          ...spotifyIds.map((id) => `https://open.spotify.com/track/${id}`),
+        ];
+        const identityUrls = [
+          clean(identity.songLink),
+          ...array(identity.mediaLinks)
+            .map(record)
+            .map((link) => clean(link.url)),
+        ];
+        const acquisitionUrls = downloads.flatMap((download) =>
+          record(download.clip).sourceSetUrl ? [] : [clean(download.source)],
+        );
+        const manifestRecord: ManifestMetadataRecord = {
+          metadata: candidate,
+          sources: exactSourcesFromUrls([...identityUrls, ...spotifyUrls, ...acquisitionUrls]),
+        };
+        const contentIds = [
+          ...new Set(
+            [clean(rekordbox.dbContentId), ...array(rekordbox.dbContentIds).map(clean)].filter(
+              (value): value is string => value !== undefined,
+            ),
+          ),
+        ];
+        for (const contentId of contentIds)
+          setManifestRecord(index.byContentId, contentId, manifestRecord);
+        for (const spotifyId of spotifyIds)
+          setManifestRecord(index.bySpotifyId, spotifyId, manifestRecord);
+        for (const download of downloads) {
           const mediaPath = clean(download.mediaPath);
-          if (!mediaPath) continue;
-          const resolvedPath = resolve(mediaPath);
-          metadata.set(resolvedPath, candidate);
-          if (!record(download.clip).sourceSetUrl) {
-            const spotifyUrl =
-              clean(spotify.url) ??
-              (clean(download.spotifyId)
-                ? `https://open.spotify.com/track/${clean(download.spotifyId)!}`
-                : undefined);
-            const exactSources = exactSourcesFromUrls([clean(download.source), spotifyUrl]);
-            if (exactSources.length) sources.set(resolvedPath, exactSources);
-          }
+          if (mediaPath) setManifestRecord(index.byPath, resolve(mediaPath), manifestRecord);
+          const sha256 = clean(download.sha256)?.toLocaleLowerCase("en-US");
+          if (sha256 && /^[\da-f]{64}$/u.test(sha256))
+            setManifestRecord(index.bySha256, sha256, manifestRecord);
         }
       }
     }
   }
-  return { metadata, sources };
+  return index;
+}
+
+function setManifestRecord(
+  values: Map<string, ManifestMetadataRecord>,
+  key: string,
+  record: ManifestMetadataRecord,
+): void {
+  const prior = values.get(key);
+  if (!prior) {
+    values.set(key, record);
+    return;
+  }
+  values.set(key, {
+    metadata: {
+      title: prior.metadata.title ?? record.metadata.title,
+      artist: prior.metadata.artist ?? record.metadata.artist,
+      album: prior.metadata.album ?? record.metadata.album,
+      label: prior.metadata.label ?? record.metadata.label,
+      genre: prior.metadata.genre ?? record.metadata.genre,
+      isrc: prior.metadata.isrc ?? record.metadata.isrc,
+      releaseDate: prior.metadata.releaseDate ?? record.metadata.releaseDate,
+      durationSeconds: prior.metadata.durationSeconds ?? record.metadata.durationSeconds,
+    },
+    sources: uniqueTrackSources([...prior.sources, ...record.sources]),
+  });
+}
+
+function uniqueManifestRecords(
+  records: Array<ManifestMetadataRecord | undefined>,
+): ManifestMetadataRecord[] {
+  return [
+    ...new Set(records.filter((record): record is ManifestMetadataRecord => Boolean(record))),
+  ];
+}
+
+function spotifyIdFromPath(path: string): string | undefined {
+  return /\[spotify-([\dA-Za-z]{22})\]/u.exec(path)?.[1];
+}
+
+function isManagedArtifactPath(path: string): boolean {
+  return (
+    /\[(?:identity-[\da-f]{12}|set-extract|spotify-[\dA-Za-z]{22})\]/u.test(path) ||
+    /\/(?:\.djtools\/tracks|Music\/tracks-ts|Music\/Codex Imports)\//u.test(path)
+  );
 }
 
 async function manifestFiles(root: string): Promise<string[]> {
@@ -1176,6 +1312,10 @@ function needsMetadata(track: LibraryTrack): boolean {
   return !track.album || !track.label || !track.genre;
 }
 
+function needsMeasuredMetadata(track: LibraryTrack): boolean {
+  return !track.album || !track.genre || !track.durationSeconds || track.durationSeconds < 120;
+}
+
 function isSetExtract(track: LibraryTrack): boolean {
   return /\[set extract(?:\s*@[^\]]+)?\]|\bid remix\b/iu.test(track.title);
 }
@@ -1184,7 +1324,6 @@ function isCatalogSearchSafe(track: LibraryTrack): boolean {
   const title = catalogLookupTitle(track);
   return (
     Boolean(track.artist) &&
-    Boolean(track.durationSeconds) &&
     !/^unknown artist$/iu.test(track.artist!) &&
     !/\b(?:edit|bootleg|unreleased|candidate|mashup)\b|https?:|www\./iu.test(title)
   );
@@ -1215,7 +1354,7 @@ function metadataCoverage(tracks: Array<MetadataCandidate>): MetadataCoverage {
 }
 
 function countSources(
-  changes: RekordboxMetadataBackfillChange[],
+  changes: RekordboxMetadataEnrichmentChange[],
 ): Record<MetadataFieldSource, number> {
   const counts: Record<MetadataFieldSource, number> = {
     apple: 0,
@@ -1243,18 +1382,6 @@ function countSources(
   return counts;
 }
 
-function catalogProviderRank(provider: CatalogMetadata["provider"]): number {
-  return provider === "musicbrainz"
-    ? 0
-    : provider === "spotify"
-      ? 1
-      : provider === "discogs"
-        ? 2
-        : provider === "apple"
-          ? 3
-          : 4;
-}
-
 function namedRows<row extends DatabaseRow & { Name?: string | null }>(
   db: MasterDatabase,
   model: ModelClass<row>,
@@ -1267,7 +1394,7 @@ function namedRows<row extends DatabaseRow & { Name?: string | null }>(
   );
 }
 
-function verifyChanges(db: MasterDatabase, changes: RekordboxMetadataBackfillChange[]): void {
+function verifyChanges(db: MasterDatabase, changes: RekordboxMetadataEnrichmentChange[]): void {
   const ids = new Set(changes.map((change) => change.contentId));
   const verified = databaseTracks(db).filter((track) => ids.has(track.id));
   for (const change of changes) {
@@ -1350,8 +1477,8 @@ function summarizeGaps(gaps: RekordboxMetadataGap[]): RekordboxMetadataGapSummar
   return { tracks: gaps.length, fields, byField, byReason };
 }
 
-function summarizeProvenance(drafts: Draft[]): RekordboxMetadataBackfillResult["provenance"] {
-  const byProvider: RekordboxMetadataBackfillResult["provenance"]["byProvider"] = {};
+function summarizeProvenance(drafts: Draft[]): RekordboxMetadataEnrichmentResult["provenance"] {
+  const byProvider: RekordboxMetadataEnrichmentResult["provenance"]["byProvider"] = {};
   let links = 0;
   let tracks = 0;
   for (const draft of drafts) {
@@ -1370,7 +1497,25 @@ function uniqueTrackSources(sources: ExactTrackSource[]): ExactTrackSource[] {
     ...new Map(
       sources.map((source) => [`${source.provider}:${source.url}`, source] as const),
     ).values(),
-  ];
+  ].toSorted(
+    (left, right) =>
+      exactSourceRank(left.provider) - exactSourceRank(right.provider) ||
+      left.url.localeCompare(right.url),
+  );
+}
+
+function exactSourceRank(provider: ExactTrackSource["provider"]): number {
+  return provider === "spotify"
+    ? 0
+    : provider === "apple"
+      ? 1
+      : provider === "deezer"
+        ? 2
+        : provider === "soundcloud"
+          ? 3
+          : provider === "bandcamp"
+            ? 4
+            : 5;
 }
 
 function isBroadCatalogGenre(value: string): boolean {

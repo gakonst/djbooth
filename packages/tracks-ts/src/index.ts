@@ -97,16 +97,16 @@ export {
 } from "./description.js";
 export { isAbortError, TracksError, type TracksErrorCode } from "./errors.js";
 export {
-  backfillRekordboxMetadata,
+  enrichRekordboxMetadata,
   type MetadataFieldSource,
   type MetadataProviderStats,
-  type RekordboxMetadataBackfillChange,
+  type RekordboxMetadataEnrichmentChange,
+  type RekordboxMetadataEnrichmentOptions,
+  type RekordboxMetadataEnrichmentProgress,
+  type RekordboxMetadataEnrichmentResult,
   type RekordboxMetadataGap,
   type RekordboxMetadataGapSummary,
-  type RekordboxMetadataBackfillOptions,
-  type RekordboxMetadataBackfillProgress,
-  type RekordboxMetadataBackfillResult,
-} from "./metadata-backfill.js";
+} from "./metadata-enrichment.js";
 export {
   AppleSourceMetadataClient,
   canonicalSourceUrl,

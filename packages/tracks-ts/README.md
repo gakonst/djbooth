@@ -448,21 +448,23 @@ ytdlp-ts download "$SELECTED_TRACK_URL" \
 
 Use acquisition backends only for media you are authorized to download.
 
-Repair metadata already in the compatible library with the same local-first workflow. The command
+Enrich metadata throughout the compatible library with the same local-first workflow. The command
 normalizes recoverable artist/title identities, rejects ad spam and low-value catalog genres, then
-fills album, label, genre, ISRC, and release date from duration-compatible local copies, manifests,
+fills album, label, genre, ISRC, and release date from measured local files, durable manifests,
 embedded tags, and exact acquisition provenance retained in Rekordbox comments. Exact SoundCloud,
-Spotify, YouTube, Bandcamp, Apple Music, and relocated yt-dlp sidecars run before strict Spotify,
-MusicBrainz, Apple, Deezer, and Discogs catalog search. SoundCloud description/purchase links and
+Spotify, Bandcamp, Apple Music, and relocated yt-dlp sidecars run before strict Spotify,
+MusicBrainz, Apple, Deezer, and Discogs catalog search. YouTube evidence uses embedded tags and
+sidecars without slow network inspection. SoundCloud description/purchase links and
 other public smart links may resolve to an exact downstream catalog record; title, artist, tracklist,
 and duration checks prevent radio/extended/remix metadata crossing versions. Unanimous local release
 families may share album, label, genre, and date, but never a version-specific ISRC.
-It is a dry run unless `--write` is supplied; output includes provenance coverage, provider/cache
-counters, unresolved reasons, coverage deltas, and every proposed mutation.
+`enrich` processes the complete library and writes one verified update by default. Use `--folder` for
+an explicit folder scope or `--dry-run` to inspect provenance coverage, provider/cache counters,
+unresolved reasons, coverage deltas, and every proposed mutation without writing.
 
 ```sh
-djbooth tracks metadata backfill --folder 'DJ Sets I Like' --format json
-djbooth tracks metadata backfill --folder 'DJ Sets I Like' --write --format json
+djbooth tracks enrich --format json
+djbooth tracks enrich --folder 'DJ Sets I Like' --dry-run --format json
 ```
 
 Writes require Rekordbox to be stopped, create a checksummed backup, commit once, and reopen the
@@ -597,7 +599,7 @@ console.log(
 );
 ```
 
-Pipeline APIs are exported as libraries: `enrichSpotifyManifest`, `acquireManifest`, `analyzeExistingManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpNativeAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition and analysis checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+Pipeline APIs are exported as libraries: `enrichRekordboxMetadata`, `enrichSpotifyManifest`, `acquireManifest`, `analyzeExistingManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpNativeAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition and analysis checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
 
 The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject module objects when running it elsewhere.
 

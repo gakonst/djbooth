@@ -147,9 +147,9 @@ Run the same workflows explicitly:
 # Resolve, acquire, analyze, and import one set.
 djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --write --format json
 
-# Audit exact acquisition links, sidecars, provider catalogs, and local metadata; then apply one backed-up repair.
-djbooth tracks metadata backfill --folder 'DJ Sets I Like' --format json
-djbooth tracks metadata backfill --folder 'DJ Sets I Like' --write --format json
+# Enrich the complete library idempotently; scope to a playlist folder only when needed.
+djbooth tracks enrich --format json
+djbooth tracks enrich --folder 'DJ Sets I Like' --dry-run --format json
 
 # Analyze and separate one track.
 djbooth rekordbox analyze track ./track.flac --output-directory ./analysis --format json
