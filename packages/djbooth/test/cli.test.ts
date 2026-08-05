@@ -46,11 +46,12 @@ describe("djbooth CLI", () => {
         "analyze",
         "download",
         "enrich",
-        "import-set",
+        "import",
         "link",
         "resolve",
         "serve",
         "status",
+        "stop",
         "stems",
         "usb",
         "slsk search",
@@ -86,8 +87,9 @@ describe("djbooth CLI", () => {
 
   test("routes native and Python workflows without redundant action names", async () => {
     const stems = await serve(["stems", "--help"]);
-    expect(stems.output).toContain("djbooth stems <audioPath> <outputDirectory>");
+    expect(stems.output).toContain("djbooth stems <track>");
     expect(stems.output).toContain("--python-project-directory");
+    expect(stems.output).toContain("--output-directory");
 
     const usb = await serve(["usb", "--help"]);
     expect(usb.output).toContain("djbooth usb <target>");
@@ -95,7 +97,11 @@ describe("djbooth CLI", () => {
 
     const server = await serve(["serve", "--help"]);
     expect(server.output).toContain("Pro DJ Link");
+    expect(server.output).toContain("managed background");
     expect(server.output).toContain("--assistant");
+
+    const stop = await serve(["stop", "--help"]);
+    expect(stop.output).toContain("Stop the managed djbooth");
   });
 
   test("preserves the full-library DJ Link one-shot guidance", async () => {

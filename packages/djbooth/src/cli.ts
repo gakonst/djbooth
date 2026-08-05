@@ -7,17 +7,17 @@ import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { usbCli } from "@gakonst/cdj-usb/cli";
-import { statusCli } from "@gakonst/djbooth-app/cli";
 import { linkCli } from "@gakonst/djlink/cli";
 import { stemsCli } from "@gakonst/rekordbox/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
-import { analyzeCli, downloadCli, enrichCli, importSetCli, resolveCli } from "@gakonst/tracks/cli";
+import { analyzeCli, downloadCli, enrichCli, importCli, resolveCli } from "@gakonst/tracks/cli";
 import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
 import { serveCli } from "./serve.js";
+import { statusCli, stopCli } from "./status.js";
 
 export const DJBOOTH_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -31,7 +31,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "enrich",
     "download",
     "analyze",
-    "import-set",
+    "import",
     "link",
     "status",
     "stems",
@@ -89,11 +89,12 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(enrichCli);
   cli.command(downloadCli);
   cli.command(analyzeCli);
-  cli.command(importSetCli);
+  cli.command(importCli);
   cli.command(stemsCli);
   cli.command(linkCli);
   cli.command(serveCli);
   cli.command(statusCli);
+  cli.command(stopCli);
   cli.command(usbCli);
   cli.command(slskCli);
   cli.command(soundcloudCli);

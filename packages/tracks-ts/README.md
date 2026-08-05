@@ -10,10 +10,10 @@ tracks resolve "$SET_URL" --format json
 tracks enrich --folder 'DJ Sets I Like' --format json
 tracks download "$SET_URL" --format json
 tracks analyze "$SET_URL" --format json
-tracks import-set "$SET_URL" --folder-name 'DJ Sets I Like' --format json
+tracks import "$SET_URL" --folder-name 'DJ Sets I Like' --format json
 ```
 
-`resolve`, `download`, and `analyze` stop after their named durable stage. `import-set` runs through
+`resolve`, `download`, and `analyze` stop after their named durable stage. `import` runs through
 the final ordered playlist import. Every command is idempotent and resumes by source URL.
 
 Rekordbox `master.db` is the only workflow state. Internal `djbooth_*` extension tables retain

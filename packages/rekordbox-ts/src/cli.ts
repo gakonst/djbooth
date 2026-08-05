@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -372,10 +373,98 @@ function createStemSeparationCli<const Name extends string>(name: Name) {
   });
 }
 
-/** Root workflow command: separate one recording without a redundant `separate` layer. */
-export const stemsCli = createStemSeparationCli("stems");
+/** Root workflow command: resolve one library recording and write stems to its managed cache. */
+export const stemsCli = Cli.create("stems", {
+  description:
+    "Create MLX stems for one Rekordbox library track selected by content ID, title, or artist/title search.",
+  hint: "Use the stable content ID returned by status/search when possible. Output defaults to the workstation's managed derived-audio directory.",
+  args: z.object({
+    track: z.string().describe("Rekordbox content ID or unique title/artist search"),
+  }),
+  options: stemsRuntimeOptions.extend({
+    force: z.boolean().default(false).describe("Replace existing named stem WAV files"),
+    layout: z
+      .enum(["rekordbox", "four-stem"])
+      .default("rekordbox")
+      .describe("Rekordbox three-source contract, or model-native four sources"),
+    outputDirectory: z.string().optional().describe("Stem destination override"),
+    path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
+    plain: z.boolean().default(false).describe("Open an unencrypted SQLite database"),
+    stem: z.array(stemName).optional().describe("Only write this source; repeat for several"),
+  }),
+  async run(c) {
+    const db = openDatabase(c.options);
+    let content: DjmdContent;
+    let artist: string | undefined;
+    try {
+      content = resolveStemContent(db, c.args.track);
+      artist = content.ArtistName;
+    } finally {
+      db.close();
+    }
+    if (!content.FolderPath) throw new TypeError(`Content '${content.ID}' has no audio path`);
+    if (!existsSync(content.FolderPath)) {
+      throw new TypeError(
+        `Content '${content.ID}' audio file '${content.FolderPath}' does not exist`,
+      );
+    }
+    const outputDirectory =
+      c.options.outputDirectory ?? managedStemOutputDirectory(content.ID, content.Title);
+    const result = await separateStems(content.FolderPath, outputDirectory, {
+      cacheDirectory: c.options.cacheDirectory,
+      force: c.options.force,
+      layout: c.options.layout,
+      onLog(message) {
+        process.stderr.write(message);
+      },
+      pythonProjectDirectory: c.options.pythonProjectDirectory,
+      stems: c.options.stem,
+      uvBinary: c.options.uvBinary,
+    });
+    return {
+      contentId: content.ID,
+      title: content.Title ?? "",
+      artist,
+      ...result,
+    };
+  },
+});
 
 stemsGroupCli.command(createStemSeparationCli("separate"));
+
+function resolveStemContent(database: MasterDatabase, selector: string): DjmdContent {
+  const value = selector.trim();
+  if (!value) throw new TypeError("A Rekordbox content ID or track search is required");
+  const byId = database.getContent({ ID: value });
+  if (byId instanceof DjmdContent) return byId;
+  const rows = database.searchContent(value);
+  const normalized = value.toLocaleLowerCase();
+  const exact = rows.filter((row) => {
+    const title = row.Title?.trim().toLocaleLowerCase();
+    const artistTitle = `${row.ArtistName ?? ""} - ${row.Title ?? ""}`.trim().toLocaleLowerCase();
+    return title === normalized || artistTitle === normalized;
+  });
+  const candidates = exact.length ? exact : rows;
+  if (candidates.length === 1) return candidates[0]!;
+  if (!candidates.length) throw new TypeError(`No Rekordbox track matches '${selector}'`);
+  const summary = candidates
+    .slice(0, 10)
+    .map((row) => `${row.ID}: ${row.ArtistName ? `${row.ArtistName} - ` : ""}${row.Title ?? ""}`)
+    .join("; ");
+  throw new TypeError(
+    `Track selector '${selector}' is ambiguous (${String(candidates.length)} matches): ${summary}`,
+  );
+}
+
+function managedStemOutputDirectory(contentId: string, title: string | null): string {
+  const safe = (title || "track")
+    .replace(/[^\p{L}\p{N}._ -]+/gu, "_")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 120);
+  const safeId = contentId.replace(/[^\p{L}\p{N}._-]+/gu, "_");
+  return join(homedir(), "Music", "Rekordbox Derived", `${safe || "track"} [${safeId}]`, "stems");
+}
 
 stemsGroupCli.command("playlist", {
   description: "Separate every local track in a Rekordbox playlist with one model load.",

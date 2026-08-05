@@ -5,26 +5,27 @@ Repository prefix: `pnpm djbooth`; release prefix: `djbooth`. Discovery: `<path>
 
 | Stage    | Owns                                                                                               | Command                                            |
 | -------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Import   | Hosted playlist/set → complete resumable library workflow                                          | `import <source>`                                  |
 | Resolve  | Set URL/file → ordered database pipeline rows; description → 1001Tracklists → recognition fallback | `resolve <source>`                                 |
 | Enrich   | Content rows → recording IDs, release metadata, provider provenance, acquisition candidates        | `enrich [--folder <folder>]`                       |
 | Download | Ready source rows → adopted/downloaded canonical tagged audio; Soulseek/typed downloader fallback  | `download <source>`                                |
 | Analyze  | Downloaded source rows → BPM, key, beatgrid, waveforms, seek tables, phrases, DAT/EXT/2EX          | `analyze <source>`                                 |
-| Stems    | Audio → MLX Mel-Band-RoFormer vocals, drums, bass, other/Rekordbox layout                          | `stems <audio> <output>`                           |
+| Stems    | Library track → managed MLX vocals, drums, bass, other/Rekordbox layout                            | `stems <track> [--stem <stem>]`                    |
 | Link     | Rekordbox database → RemoteDB/NFS source visible to CDJs; optional cue                             | `link [track]`                                     |
 | USB      | Rekordbox folder → copied audio + rewritten ANLZ + Device Library + OneLibrary; import histories   | `usb <mount> --playlist-folder <folder> [--fresh]` |
 | Serve    | Link + loopback workstation/API → one managed runtime                                              | `serve --open [--no-assistant]`                    |
-| Agent    | Full typed surface → MCP/Code Mode                                                                 | `--mcp` or `pnpm djbooth:mcp:code`                 |
+| Inspect  | Library/import readiness + managed runtime state                                                   | `status`; `stop`                                   |
 
-Pipeline:
+Agent golden path:
 
 ```text
-resolve → database rows
+import <source> → database rows
         → identify enough to select recording → download → analyze ┐
         → remaining metadata enrichment ───────────────────────────┤→ ready rows → stems? → link/usb
 ```
 
 - Rekordbox `master.db` = only durable workflow state and source of truth.
-- No manifests, sidecar workflow databases, checkpoint files, or final library-commit stage.
+- No user-facing manifests, sidecar workflow databases, checkpoint files, or final library-commit stage.
 - Resolve inserts ordered pipeline state into `master.db`; standard content and playlist rows follow verified media.
 - Enrich and download pipeline concurrently across tracks; download waits only for acquisition identity.
 - Analyze starts per track as soon as audio lands; one serialized/batched writer updates `master.db`.

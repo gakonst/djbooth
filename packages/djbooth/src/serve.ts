@@ -13,6 +13,8 @@ import {
 } from "@gakonst/djlink";
 import { Cli, z } from "incur";
 
+import { startManagedDjBoothServer } from "./runtime.js";
+
 export type DjBoothServerOptions = {
   allowMissingAnalysis?: boolean;
   assistant?: boolean;
@@ -113,9 +115,8 @@ const linkStatusOutput = z.object({
 });
 
 export const serveCli = Cli.create("serve", {
-  description:
-    "Serve master.db to CDJs over Pro DJ Link and run the loopback workstation/API until interrupted.",
-  hint: "One process owns the UI session. A newly started DJ Link daemon stops with it; an already-running matching daemon is reused and left running.",
+  description: "Start or resume a managed background workstation/API and Pro DJ Link runtime.",
+  hint: "Returns readiness JSON immediately. Rerun with the same options safely; use status and stop instead of babysitting a foreground process.",
   options: z.object({
     allowMissingAnalysis: z
       .boolean()
@@ -143,15 +144,15 @@ export const serveCli = Cli.create("serve", {
     port: z.number().int().min(0).max(65_535).default(4179),
   }),
   output: z.object({
-    action: z.literal("stopped"),
+    action: z.enum(["started", "resumed"]),
     assistantEnabled: z.boolean(),
     link: linkStatusOutput.nullable(),
-    linkStopped: z.boolean(),
-    signal: z.enum(["SIGINT", "SIGTERM"]),
+    logPath: z.string(),
+    pid: z.number().int().positive(),
     url: z.string(),
   }),
   async run(context) {
-    const server = await startDjBoothServer({
+    const server = await startManagedDjBoothServer({
       allowMissingAnalysis: context.options.allowMissingAnalysis,
       assistant: context.options.assistant,
       ...(context.options.binary ? { binary: context.options.binary } : {}),
@@ -164,23 +165,13 @@ export const serveCli = Cli.create("serve", {
       playerNumber: context.options.playerNumber,
       port: context.options.port,
     });
-    process.stderr.write(
-      `${JSON.stringify({
-        action: "started",
-        assistantEnabled: server.assistantEnabled,
-        link: compactLinkStatus(server.link),
-        url: server.url,
-      })}\n`,
-    );
     if (context.options.open) openBrowser(server.url);
-    const signal = await waitForShutdown();
-    const { linkStopped } = await server.close();
     return {
-      action: "stopped" as const,
+      action: server.resumed ? ("resumed" as const) : ("started" as const),
       assistantEnabled: server.assistantEnabled,
       link: compactLinkStatus(server.link),
-      linkStopped,
-      signal,
+      logPath: server.logPath,
+      pid: server.pid,
       url: server.url,
     };
   },
@@ -219,18 +210,4 @@ function openBrowser(url: string): void {
         : { executable: "xdg-open", args: [url] };
   const child = spawn(command.executable, command.args, { detached: true, stdio: "ignore" });
   child.unref();
-}
-
-async function waitForShutdown(): Promise<"SIGINT" | "SIGTERM"> {
-  return await new Promise((resolveSignal) => {
-    const finish = (signal: "SIGINT" | "SIGTERM") => {
-      process.off("SIGINT", onInterrupt);
-      process.off("SIGTERM", onTerminate);
-      resolveSignal(signal);
-    };
-    const onInterrupt = () => finish("SIGINT");
-    const onTerminate = () => finish("SIGTERM");
-    process.once("SIGINT", onInterrupt);
-    process.once("SIGTERM", onTerminate);
-  });
 }

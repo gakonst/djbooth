@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 
 import { Cli, z } from "incur";
 import { SoulseekClient } from "slsk-ts";
+import { createSoundCloudUserClient } from "@gakonst/soundcloud";
 import { FileSessionStore, SpotifyClient, SpotifyOAuth } from "@gakonst/spots";
 import { ReferenceClient } from "@gakonst/ytdlp-ts";
 
@@ -25,6 +26,7 @@ import {
 import { cacheDigest, type CacheMode } from "./cache.js";
 import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
+import { prepareHostedImportSource, type ImportSourceKind } from "./import-source.js";
 import { CachedSpotifyClient } from "./integrations/spotify-cache.js";
 import { RekordboxPipelineStore } from "./pipeline-state.js";
 import { SoulseekLibraryAcquirer } from "./integrations/slsk-library.js";
@@ -128,7 +130,7 @@ const parseEnv = z.object({
   TRACKS_1001_BROWSER_PROFILE: z.string().optional(),
 });
 
-const importSetEnv = providerEnv.extend({
+const importEnv = providerEnv.extend({
   SLSK_USERNAME: z.string().optional().describe("Soulseek username"),
   SLSK_PASSWORD: z.string().optional().describe("Soulseek password"),
   DJBOOTH_LIBRARY_ROOT: z
@@ -136,6 +138,8 @@ const importSetEnv = providerEnv.extend({
     .optional()
     .describe("Canonical artist/album recording root; default ~/.djtools/tracks"),
   MUSIC_LIBRARY_ROOT: z.string().optional().describe("Legacy alias for DJBOOTH_LIBRARY_ROOT"),
+  SOUNDCLOUD_ACCESS_TOKEN: z.string().optional().describe("SoundCloud user access token"),
+  SOUNDCLOUD_CLIENT_SECRET: z.string().optional().describe("SoundCloud OAuth refresh secret"),
 });
 
 const cacheModeOption = z
@@ -604,7 +608,7 @@ export const tracksCli = Cli.create("tracks", {
   version: VERSION,
   description:
     "Database-backed resolve → enrich → download → analyze → Rekordbox playlist workflows.",
-  hint: "Use resolve, enrich, download, and analyze independently; import-set runs the complete database-backed workflow.",
+  hint: "Use import for the complete resumable workflow; direct stages are available for diagnosis and explicit partial work.",
   config: {
     flag: "config",
     files: ["tracks.json", "~/.config/tracks/config.json"],
@@ -612,7 +616,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Rekordbox master.db is the only workflow state. resolve writes ordered source state; enrich repairs library metadata; download acquires and checkpoints verified recordings; analyze runs through analysis without playlist import; import-set resumes through the final ordered Rekordbox playlist. No manifest path is required.",
+      "Rekordbox master.db is the only workflow state. import accepts hosted playlists, DJ-set URLs, and local sets and resumes the complete workflow. resolve, enrich, download, and analyze expose explicit partial stages.",
   },
 });
 
@@ -830,7 +834,9 @@ export const enrichCli = Cli.create("enrich", {
 tracksCli.command(enrichCli);
 
 const setWorkflowArgs = z.object({
-  source: z.string().describe("YouTube/SoundCloud set URL or local set"),
+  source: z
+    .string()
+    .describe("Spotify/SoundCloud playlist, YouTube/SoundCloud DJ set, or local set"),
 });
 const setWorkflowOptions = z.object({
   outputDirectory: z
@@ -932,6 +938,7 @@ const setWorkflowOptions = z.object({
 const setWorkflowOutput = z.object({
   outputDirectory: z.string(),
   source: z.string(),
+  sourceKind: z.enum(["dj-set", "soundcloud-playlist", "spotify-playlist"]),
   entries: z.number().int().nonnegative(),
   downloaded: z.number().int().nonnegative(),
   resumed: z.number().int().nonnegative(),
@@ -952,17 +959,17 @@ const setWorkflowOutput = z.object({
 type SetWorkflowContext = Parameters<typeof fail>[0] & {
   agent: boolean;
   args: z.output<typeof setWorkflowArgs>;
-  env: z.output<typeof importSetEnv>;
+  env: z.output<typeof importEnv>;
   formatExplicit: boolean;
   options: z.output<typeof setWorkflowOptions>;
 };
 
-export const importSetCli = Cli.create("import-set", {
+export const importCli = Cli.create("import", {
   description:
-    "Resolve, enrich, download, analyze, and create or update one ordered Rekordbox playlist.",
-  hint: "Database-backed full workflow. Rerun the same source to resume; no manifest or checkpoint file is required.",
+    "Import a hosted playlist or DJ set end to end: resolve, enrich, download, analyze, and update one ordered Rekordbox playlist.",
+  hint: "This is the agent golden path. Rerun the same source to resume directly from master.db.",
   args: setWorkflowArgs,
-  env: importSetEnv,
+  env: importEnv,
   options: setWorkflowOptions,
   output: setWorkflowOutput,
   async run(context) {
@@ -975,7 +982,7 @@ export const downloadCli = Cli.create("download", {
     "Resolve and enrich a set, adopt or download every available recording, and checkpoint each result in Rekordbox master.db.",
   hint: "Analysis and playlist import do not run. Reruns verify and reuse completed files; refresh resolution to reconsider unavailable rows.",
   args: setWorkflowArgs,
-  env: importSetEnv,
+  env: importEnv,
   options: setWorkflowOptions,
   output: setWorkflowOutput,
   async run(context) {
@@ -988,7 +995,7 @@ export const analyzeCli = Cli.create("analyze", {
     "Resolve prerequisites, download missing recordings, then produce and checkpoint Rekordbox-compatible analysis without importing a playlist.",
   hint: "Download and analysis are idempotent; existing verified media and analyzer artifacts are reused.",
   args: setWorkflowArgs,
-  env: importSetEnv,
+  env: importEnv,
   options: setWorkflowOptions,
   output: setWorkflowOutput,
   async run(context) {
@@ -996,7 +1003,7 @@ export const analyzeCli = Cli.create("analyze", {
   },
 });
 
-tracksCli.command(importSetCli);
+tracksCli.command(importCli);
 tracksCli.command(downloadCli);
 tracksCli.command(analyzeCli);
 
@@ -1041,6 +1048,30 @@ async function runSetWorkflowCommand(
       ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
       ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
     });
+    const persisted = await stateStore.load();
+    let sourceKind: ImportSourceKind = inferImportSourceKind(persisted);
+    if (!persisted) {
+      const hosted = await prepareHostedImportSource(context.args.source, {
+        spotify,
+        createSoundcloud: () =>
+          createSoundCloudUserClient({
+            ...(context.env.SOUNDCLOUD_ACCESS_TOKEN
+              ? { accessToken: context.env.SOUNDCLOUD_ACCESS_TOKEN }
+              : {}),
+            ...(context.env.SOUNDCLOUD_CLIENT_SECRET
+              ? { clientSecret: context.env.SOUNDCLOUD_CLIENT_SECRET }
+              : {}),
+          }),
+        signal: controller.signal,
+      });
+      if (hosted) {
+        sourceKind = hosted.kind;
+        hosted.manifest.artifacts.root = stateStore.artifactDirectory;
+        hosted.manifest.artifacts.downloadDirectory = outputDirectory;
+        delete hosted.manifest.artifacts.manifest;
+        await stateStore.save(hosted.manifest);
+      }
+    }
     const result = await runSetToRekordbox({
       source: context.args.source,
       stateStore,
@@ -1054,6 +1085,7 @@ async function runSetWorkflowCommand(
       spotify,
       acquirers,
       localArtifactDirectories: context.options.localDirectory,
+      allowSourceSetClips: sourceKind === "dj-set",
       ...(context.options.sourceSetPath
         ? {
             sourceSet: {
@@ -1100,6 +1132,7 @@ async function runSetWorkflowCommand(
     return {
       outputDirectory: result.outputDirectory,
       source: result.manifest.source.input,
+      sourceKind,
       entries: result.manifest.entries.length,
       downloaded: result.acquisition.downloaded.length,
       resumed: result.acquisition.resumed.length,
@@ -1131,6 +1164,20 @@ async function runSetWorkflowCommand(
     process.removeListener("SIGTERM", cancel);
     if (soulseek?.state !== "disconnected") await soulseek?.disconnect();
   }
+}
+
+function inferImportSourceKind(
+  manifest: Awaited<ReturnType<RekordboxPipelineStore["load"]>>,
+): ImportSourceKind {
+  if (!manifest) return "dj-set";
+  if (manifest.source.id?.startsWith("soundcloud:playlists:")) return "soundcloud-playlist";
+  if (
+    manifest.source.input.startsWith("spotify:playlist:") ||
+    manifest.source.url?.includes("open.spotify.com/playlist/")
+  ) {
+    return "spotify-playlist";
+  }
+  return "dj-set";
 }
 
 export const resolveCli = Cli.create("resolve", {
@@ -1489,7 +1536,7 @@ async function workflowSpotifyClient(
   if (!session) {
     throw new TracksError(
       "AUTH_REQUIRED",
-      "No spots OAuth session found; run `spots auth login` before import-set",
+      "No spots OAuth session found; run `spots auth login` before import",
       { exitCode: 2 },
     );
   }
@@ -1646,7 +1693,7 @@ function tracksErrorCta(
   if (error.code === "TOOL_FAILED" || error.code === "INVALID_SOURCE") {
     return {
       description: "Review the database-backed workflow requirements, then retry the same source:",
-      commands: [tracksCtaCommand(displayName, "import-set --help")],
+      commands: [tracksCtaCommand(displayName, "import --help")],
     };
   }
   return undefined;

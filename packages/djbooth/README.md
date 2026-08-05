@@ -74,12 +74,13 @@ package and implementation CLIs are reserved for development and diagnosis.
 djbooth resolve "https://youtu.be/example" --format json
 djbooth download "https://youtu.be/example" --format json
 djbooth analyze "https://youtu.be/example" --analysis-threads 12 --format json
-djbooth import-set "https://youtu.be/example" --format json
+djbooth import "https://youtu.be/example" --format json
 djbooth enrich --folder "DJ Sets I Like" --format json
-djbooth stems ./track.flac ./stems --layout four-stem --format json
+djbooth stems "$CONTENT_ID" --layout four-stem --format json
 djbooth status --format json
 djbooth serve --open
 djbooth serve --open --no-assistant
+djbooth stop --format json
 djbooth link "Artist - Track" --player 3 --format json
 djbooth usb /mnt/cdj --playlist-folder "DJ Sets I Like" --format json
 
@@ -92,12 +93,13 @@ djbooth slsk search "artist track" --timeout 8 --format json
 
 Rekordbox `master.db` is the sole durable workflow state. `resolve` writes ordered rows; `download`
 and `enrich` can advance independently; `analyze` checkpoints compatible ANLZ artifacts; and
-`import-set` runs through an ordered playlist in one resumable command. Files are immutable
+`import` runs through an ordered playlist in one resumable command. Files are immutable
 artifacts referenced by the database, not a second workflow ledger.
 
-`serve` starts or resumes the matching read-only Pro DJ Link source and brings up the loopback
-workstation/API as one session. `link [track]` is the bounded deck path when only serving or cueing
-is needed. Loading cues the selected deck and intentionally leaves PLAY physical.
+`serve` starts or resumes the managed Pro DJ Link source and loopback workstation/API, then returns
+readiness JSON immediately. `status` reports library, import, UI, and Link state; `stop` shuts down
+the managed runtime. `link [track]` is the bounded deck path when only serving or cueing is needed.
+Loading cues the selected deck and intentionally leaves PLAY physical.
 
 `djbooth usb` is the separate front-panel content path. It first imports each unseen CDJ history
 into the normal Rekordbox `master.db` as a `DJ Set YYYY-MM-DD` playlist, preserving order and
@@ -168,7 +170,7 @@ const codeMode = await createDjBoothCodeMcpServer({
 
 ## Packages
 
-- [`@gakonst/tracks`](https://github.com/gakonst/djbooth/tree/main/packages/tracks-ts): DJ-set resolution, manifests, enrichment, and pipeline coordination.
+- [`@gakonst/tracks`](https://github.com/gakonst/djbooth/tree/main/packages/tracks-ts): playlist/DJ-set resolution, enrichment, acquisition, and pipeline coordination.
 - [`@gakonst/spots`](https://github.com/gakonst/djbooth/tree/main/packages/spots): Spotify OAuth and Web API.
 - [`@gakonst/soundcloud`](https://github.com/gakonst/djbooth/tree/main/packages/soundcloud): SoundCloud OAuth and Public API.
 - [`slsk-ts`](https://github.com/gakonst/djbooth/tree/main/packages/slsk-ts): Soulseek protocol, search, and transfers.

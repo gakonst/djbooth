@@ -21,6 +21,19 @@ export type RekordboxPipelineStoreOptions = {
   outputDirectory: string;
 };
 
+export type RekordboxImportStatus = {
+  source: string;
+  title?: string;
+  updatedAt: string;
+  tracks: number;
+  identified: number;
+  downloaded: number;
+  analyzed: number;
+  ready: number;
+  blocked: number;
+  pending: number;
+};
+
 /** Durable set-pipeline state stored inside the normal Rekordbox master.db. */
 export class RekordboxPipelineStore {
   readonly source: string;
@@ -111,4 +124,61 @@ export function resolveRekordboxPipelineLocation(
     dbPath,
     dbDirectory: resolve(options.dbDirectory ?? configured?.dbDir ?? join(dbPath, "..")),
   };
+}
+
+/** Read agent-facing import progress from the pipeline rows stored in master.db. */
+export function inspectRekordboxImports(
+  options: Pick<RekordboxPipelineStoreOptions, "dbPath" | "dbDirectory"> = {},
+): { dbPath: string; imports: RekordboxImportStatus[] } {
+  const location = resolveRekordboxPipelineLocation(options);
+  const database = new MasterDatabase({
+    path: location.dbPath,
+    dbDirectory: location.dbDirectory,
+    readonly: true,
+    unlock: true,
+  });
+  try {
+    if (!database.hasTable(PIPELINE_TABLE)) return { dbPath: location.dbPath, imports: [] };
+    const rows = database.selectRawRows<{ Source: string; StateJson: string; UpdatedAt: string }>(
+      `SELECT "Source", "StateJson", "UpdatedAt" FROM "${PIPELINE_TABLE}" ORDER BY "UpdatedAt" DESC`,
+    );
+    return {
+      dbPath: location.dbPath,
+      imports: rows.map((row) => {
+        const state = parseManifest(JSON.parse(row.StateJson) as unknown);
+        const analyzedPaths = new Set(
+          state.artifacts.analysis?.map((item) => item.mediaPath) ?? [],
+        );
+        const ready = state.entries.filter((entry) => entry.rekordbox.status === "imported").length;
+        const blocked = state.entries.filter(
+          (entry) =>
+            entry.identity.status === "unidentified" ||
+            entry.acquisition.status === "failed" ||
+            entry.acquisition.status === "unmatched" ||
+            entry.acquisition.status === "skipped" ||
+            entry.rekordbox.status === "failed",
+        ).length;
+        return {
+          source: row.Source,
+          ...(state.source.title ? { title: state.source.title } : {}),
+          updatedAt: row.UpdatedAt,
+          tracks: state.entries.length,
+          identified: state.entries.filter((entry) => entry.identity.status === "identified")
+            .length,
+          downloaded: state.entries.filter((entry) => entry.acquisition.status === "downloaded")
+            .length,
+          analyzed: state.entries.filter(
+            (entry) =>
+              entry.acquisition.status === "downloaded" &&
+              analyzedPaths.has(entry.acquisition.download.mediaPath),
+          ).length,
+          ready,
+          blocked,
+          pending: Math.max(0, state.entries.length - ready - blocked),
+        };
+      }),
+    };
+  } finally {
+    database.close();
+  }
 }

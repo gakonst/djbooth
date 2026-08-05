@@ -40,6 +40,12 @@ export {
   type BuildAcquisitionPlanOptions,
 } from "./generic-acquisition-plan.js";
 export {
+  prepareHostedImportSource,
+  type ImportSourceKind,
+  type PreparedImportSource,
+} from "./import-source.js";
+export { inspectRekordboxImports, type RekordboxImportStatus } from "./pipeline-state.js";
+export {
   DJBOOTH_LIBRARY_ROOT_ENV,
   MUSIC_LIBRARY_ROOT_ENV,
   canonicalTrackPath,

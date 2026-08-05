@@ -10,3 +10,5 @@ export * as slsk from "slsk-ts";
 
 export * from "./mcp.js";
 export * from "./serve.js";
+export * from "./runtime.js";
+export * from "./status.js";

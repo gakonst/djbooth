@@ -141,14 +141,14 @@ djbooth download "$SET_URL" --format json
 djbooth analyze "$SET_URL" --format json
 
 # Or run through ordered playlist import in one command.
-djbooth import-set "$SET_URL" --format json
+djbooth import "$SET_URL" --format json
 
 # Enrich the complete library idempotently; scope to a playlist folder only when needed.
 djbooth enrich --format json
 djbooth enrich --folder 'DJ Sets I Like' --dry-run --format json
 
-# Analyze and separate one track.
-djbooth stems ./track.flac ./stems --layout four-stem --format json
+# Separate one library track by stable content ID (or a unique title search).
+djbooth stems "$CONTENT_ID" --layout four-stem --format json
 
 # Import play history and batch one host playlist folder onto both USB library formats.
 djbooth usb /Volumes/CDJ --playlist-folder 'DJ Sets I Like' --format json
@@ -171,6 +171,8 @@ Keep Codex or Claude as the conversation surface and open the UI without its emb
 
 ```sh
 djbooth serve --open --no-assistant
+djbooth status --format json
+djbooth stop --format json
 ```
 
 The same workbench ships as the `djbooth.ai` Tauri desktop app. Agent and UI share one local library,

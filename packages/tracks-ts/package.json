@@ -52,6 +52,7 @@
   },
   "dependencies": {
     "@gakonst/rekordbox": "workspace:*",
+    "@gakonst/soundcloud": "workspace:*",
     "@gakonst/spots": "workspace:*",
     "@gakonst/ytdlp-ts": "workspace:*",
     "fast-xml-parser": "^5.10.0",

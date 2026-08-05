@@ -226,12 +226,13 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !stemsHelp.stdout.includes("djbooth stems <audioPath> <outputDirectory>") ||
-    !stemsHelp.stdout.includes("--layout")
+    !stemsHelp.stdout.includes("djbooth stems <track>") ||
+    !stemsHelp.stdout.includes("--layout") ||
+    !stemsHelp.stdout.includes("--output-directory")
   ) {
-    throw new Error("Packed djbooth CLI did not expose direct stem separation");
+    throw new Error("Packed djbooth CLI did not expose library-resolved stem separation");
   }
-  process.stdout.write("✓ djbooth stems direct command\n");
+  process.stdout.write("✓ djbooth stems library command\n");
 
   run(
     process.execPath,
@@ -365,7 +366,7 @@ try {
     "analyze",
     "download",
     "enrich",
-    "import-set",
+    "import",
     "link",
     "resolve",
     "soundcloud_playlist_create",

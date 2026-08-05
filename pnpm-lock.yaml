@@ -454,6 +454,9 @@ importers:
       '@gakonst/rekordbox':
         specifier: workspace:*
         version: link:../rekordbox-ts
+      '@gakonst/soundcloud':
+        specifier: workspace:*
+        version: link:../soundcloud
       '@gakonst/spots':
         specifier: workspace:*
         version: link:../spots
