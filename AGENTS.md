@@ -3,17 +3,17 @@
 Repository prefix: `pnpm djbooth`; release prefix: `djbooth`. Discovery: `<path> --help`,
 `--schema`, `--llms-full`. Machine output: `--format json|jsonl`.
 
-| Stage    | Owns                                                                                                                    | Command                                                              |
-| -------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Resolve  | Set URL/file → ordered database pipeline rows; description → 1001Tracklists → recognition fallback                      | `tracks resolve <source>`                                            |
-| Enrich   | Content rows → recording IDs, release metadata, provider provenance, acquisition candidates                             | `tracks enrich [--folder <folder>]`                                  |
-| Download | Ready source rows → adopted/downloaded canonical tagged audio; Soulseek/typed downloader fallback                       | `tracks download <source>`                                           |
-| Analyze  | Downloaded source rows → BPM, key, beatgrid, waveforms, seek tables, phrases, DAT/EXT/2EX                               | `tracks analyze <source>` or `rekordbox analyze track(s)`            |
-| Stems    | Audio/playlist → MLX Mel-Band-RoFormer vocals, drums, bass, other/Rekordbox layout                                      | `rekordbox stems setup`, `doctor`, `separate`, `playlist`            |
-| Link     | Rekordbox database → RemoteDB/NFS source visible to CDJs                                                                | `djlink rekordbox [track]`                                           |
-| USB      | Rekordbox folder → copied audio + rewritten ANLZ + Device Library + OneLibrary; import histories                        | `usb sync <mount> --playlist-folder <folder> [--fresh]`              |
-| UI       | Local library/workflows → browser workstation                                                                           | `library serve --open [--no-assistant]`                              |
-| Agent    | Full typed surface → MCP/Code Mode                                                                                      | `--mcp` or `pnpm djbooth:mcp:code`                                   |
+| Stage    | Owns                                                                                               | Command                                            |
+| -------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Resolve  | Set URL/file → ordered database pipeline rows; description → 1001Tracklists → recognition fallback | `resolve <source>`                                 |
+| Enrich   | Content rows → recording IDs, release metadata, provider provenance, acquisition candidates        | `enrich [--folder <folder>]`                       |
+| Download | Ready source rows → adopted/downloaded canonical tagged audio; Soulseek/typed downloader fallback  | `download <source>`                                |
+| Analyze  | Downloaded source rows → BPM, key, beatgrid, waveforms, seek tables, phrases, DAT/EXT/2EX          | `analyze <source>`                                 |
+| Stems    | Audio → MLX Mel-Band-RoFormer vocals, drums, bass, other/Rekordbox layout                          | `stems <audio> <output>`                           |
+| Link     | Rekordbox database → RemoteDB/NFS source visible to CDJs; optional cue                             | `link [track]`                                     |
+| USB      | Rekordbox folder → copied audio + rewritten ANLZ + Device Library + OneLibrary; import histories   | `usb <mount> --playlist-folder <folder> [--fresh]` |
+| Serve    | Link + loopback workstation/API → one managed runtime                                              | `serve --open [--no-assistant]`                    |
+| Agent    | Full typed surface → MCP/Code Mode                                                                 | `--mcp` or `pnpm djbooth:mcp:code`                 |
 
 Pipeline:
 
@@ -35,8 +35,8 @@ resolve → database rows
 - One intent → highest-level command → rerun same command to resume/reconcile.
 - No package CLI, direct `dist`, manual SQL/filesystem, Rust binary, or Python bypass.
 - Lower-level command only for explicit low-level work or diagnosis; missing workflow → add umbrella route.
-- `tracks enrich` is normal idempotent maintenance.
-- `usb sync` owns history, audio, ANLZ, Device Library, and OneLibrary; `--fresh` only for empty media.
+- `enrich` is normal idempotent maintenance.
+- `usb` owns history, audio, ANLZ, Device Library, and OneLibrary; `--fresh` only for empty media.
 - Incur help/schema/LLM/MCP = runtime truth; no `SKILL.md` or duplicated workflow docs.
 
 # Workspace conventions

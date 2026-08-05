@@ -43,7 +43,7 @@ export const libraryCli = Cli.create("library", {
   description: "Browse, prepare, and safely manage local DJ media in the djbooth.ai workstation.",
 });
 
-libraryCli.command("status", {
+export const statusCli = Cli.create("status", {
   description: "Show the discovered library and read-only health counts.",
   options: z.object({
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
@@ -71,6 +71,8 @@ libraryCli.command("status", {
     }
   },
 });
+
+libraryCli.command(statusCli);
 
 libraryCli.command("serve", {
   description: "Serve the loopback-only djbooth.ai workstation until interrupted.",

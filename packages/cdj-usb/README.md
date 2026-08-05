@@ -8,7 +8,7 @@ ordinary Rekordbox `master.db`:
 CDJ HISTORY 001 ───────> DJ Set YYYY-MM-DD + play counts
                              in master.db
                                   |
-                           djbooth usb sync
+                             djbooth usb
                                   |
 master.db + audio + ANLZ ─> changed USB files + both library indexes
 ```
@@ -73,7 +73,7 @@ USB host. Check the running kernel before buying more hardware:
 ls -1 /sys/class/udc
 ```
 
-At least one name must appear. `djbooth usb doctor` performs the same check.
+At least one name must appear. `cdj-usb doctor` performs the same check.
 
 Orange Pi model names matter:
 
@@ -143,13 +143,13 @@ board's actual OTG controller/device-tree configuration.
 For a new or previously djbooth.ai-owned mounted FAT/exFAT volume:
 
 ```sh
-djbooth usb sync /mnt/cdj --database /path/to/master.db --format json
+djbooth usb /mnt/cdj --database /path/to/master.db --format json
 ```
 
 To import pending play history and synchronize only one host folder in a single batched operation:
 
 ```sh
-djbooth usb sync /mnt/cdj --playlist-folder 'DJ Sets I Like' \
+djbooth usb /mnt/cdj --playlist-folder 'DJ Sets I Like' \
   --database /path/to/master.db --format json
 ```
 
@@ -160,14 +160,14 @@ For a freshly formatted stick, initialize both USB library formats with one norm
 exact ID:
 
 ```sh
-djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+cdj-usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
   --database /path/to/master.db --fresh --format json
 ```
 
 Run the same command without `--fresh` for an existing djbooth.ai dual-library stick:
 
 ```sh
-djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
+cdj-usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
   --database /path/to/master.db --format json
 ```
 
@@ -197,7 +197,7 @@ If the CDJ added a history, sync imports it first and creates a normal playlist 
 checksummed and verified, and an interrupted retry recognizes the deterministic playlist receipt
 instead of applying play counts again.
 
-`djbooth usb export` remains available for an outbound-only initial compile. It refuses to overwrite
+`cdj-usb export` remains available for an outbound-only initial compile. It refuses to overwrite
 unimported history and requires `--replace` for an existing exporter-owned volume. `sync` is the
 normal day-to-day command.
 
@@ -206,10 +206,10 @@ normal day-to-day command.
 The current configfs controller starts with a detached appliance and a complete backing image:
 
 ```sh
-djbooth usb doctor ./rekordbox-usb.img --format json
-sudo djbooth usb publish ./rekordbox-usb.img --format json
-sudo djbooth usb attach --format json
-djbooth usb status --format json
+cdj-usb doctor ./rekordbox-usb.img --format json
+sudo cdj-usb publish ./rekordbox-usb.img --format json
+sudo cdj-usb attach --format json
+cdj-usb status --format json
 ```
 
 `publish` validates a regular, non-empty, 512-byte-aligned file, hashes it, copies it into
@@ -221,7 +221,7 @@ The default USB identity is `djbooth.ai / CDJ USB`; the machine ID supplies a st
 specific device controller only when the board exposes more than one:
 
 ```sh
-sudo djbooth usb attach --udc 5020000.usb --product "music USB" --format json
+sudo cdj-usb attach --udc 5020000.usb --product "music USB" --format json
 ```
 
 Before changing generations:

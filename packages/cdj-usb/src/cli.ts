@@ -247,63 +247,71 @@ cdjUsbCli.command("export", {
   },
 });
 
-cdjUsbCli.command("sync", {
-  description: "Import unseen CDJ histories, then synchronize all or one filtered playlist folder.",
-  hint: "Use --playlist-folder to batch only that folder's direct playlists into Device Library and OneLibrary. Shared tracks copy once, both catalogs publish once, and pending CDJ history is imported in the same operation. Each unseen history becomes DJ Set YYYY-MM-DD, play counts advance exactly once, and unchanged audio is not recopied. Without the filter, sync reconciles the complete exporter-owned library.",
-  args: z.object({
-    target: z.string().min(1).describe("Mounted CDJ media root"),
-  }),
-  options: z.object({
-    database: z
-      .string()
-      .optional()
-      .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
-    databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
-    plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
-    playlistFolder: z
-      .string()
-      .min(1)
-      .optional()
-      .describe("Exact host-library folder; sync only its direct playlist children"),
-    fresh: z
-      .boolean()
-      .default(false)
-      .describe("Initialize empty dual-library media; requires --playlist-folder"),
-    copyConcurrency: z
-      .number()
-      .int()
-      .min(1)
-      .max(32)
-      .default(4)
-      .describe("Parallel changed-media copy workers"),
-  }),
-  output: z.union([syncOutput, playlistFolderSyncOutput]),
-  async run(c) {
-    try {
-      if (c.options.playlistFolder)
-        return await syncLegacyDevicePlaylistFolder({
+function createUsbSyncCli<const Name extends string>(name: Name) {
+  return Cli.create(name, {
+    description:
+      "Import unseen CDJ histories, then synchronize all or one filtered playlist folder.",
+    hint: "Use --playlist-folder to batch only that folder's direct playlists into Device Library and OneLibrary. Shared tracks copy once, both catalogs publish once, and pending CDJ history is imported in the same operation. Each unseen history becomes DJ Set YYYY-MM-DD, play counts advance exactly once, and unchanged audio is not recopied. Without the filter, sync reconciles the complete exporter-owned library.",
+    args: z.object({
+      target: z.string().min(1).describe("Mounted CDJ media root"),
+    }),
+    options: z.object({
+      database: z
+        .string()
+        .optional()
+        .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
+      databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
+      plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
+      playlistFolder: z
+        .string()
+        .min(1)
+        .optional()
+        .describe("Exact host-library folder; sync only its direct playlist children"),
+      fresh: z
+        .boolean()
+        .default(false)
+        .describe("Initialize empty dual-library media; requires --playlist-folder"),
+      copyConcurrency: z
+        .number()
+        .int()
+        .min(1)
+        .max(32)
+        .default(4)
+        .describe("Parallel changed-media copy workers"),
+    }),
+    output: z.union([syncOutput, playlistFolderSyncOutput]),
+    async run(c) {
+      try {
+        if (c.options.playlistFolder)
+          return await syncLegacyDevicePlaylistFolder({
+            targetDirectory: c.args.target,
+            folderName: c.options.playlistFolder,
+            databasePath: c.options.database,
+            databaseKey: c.options.databaseKey,
+            databaseUnlock: !c.options.plain,
+            copyConcurrency: c.options.copyConcurrency,
+            fresh: c.options.fresh,
+          });
+        if (c.options.fresh)
+          throw new TypeError("--fresh requires --playlist-folder for filtered dual-library sync");
+        return await syncLegacyDeviceLibrary({
           targetDirectory: c.args.target,
-          folderName: c.options.playlistFolder,
           databasePath: c.options.database,
           databaseKey: c.options.databaseKey,
           databaseUnlock: !c.options.plain,
           copyConcurrency: c.options.copyConcurrency,
-          fresh: c.options.fresh,
         });
-      if (c.options.fresh)
-        throw new TypeError("--fresh requires --playlist-folder for filtered dual-library sync");
-      return await syncLegacyDeviceLibrary({
-        targetDirectory: c.args.target,
-        databasePath: c.options.database,
-        databaseKey: c.options.databaseKey,
-        databaseUnlock: !c.options.plain,
-        copyConcurrency: c.options.copyConcurrency,
-      });
-    } catch (error) {
-      return failSync(c, error);
-    }
-  },
-});
+      } catch (error) {
+        return failSync(c, error);
+      }
+    },
+  });
+}
+
+/** Root workflow command: synchronize a mounted device without a redundant `sync` layer. */
+export const usbCli = createUsbSyncCli("usb");
+
+cdjUsbCli.command(createUsbSyncCli("sync"));
 
 cdjUsbCli.command("sync-playlist", {
   description: "Sync one analyzed Rekordbox playlist to traditional Device Library and OneLibrary.",

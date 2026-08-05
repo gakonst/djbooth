@@ -27,14 +27,14 @@ licenses and executable code remain. macOS signing/notarization credentials are 
 to the release environment.
 
 ```sh
-djbooth library status --format json
-djbooth library serve --open
-djbooth library serve --open --no-assistant # Codex/Claude hosts the conversation
+djbooth status --format json
+djbooth serve --open
+djbooth serve --open --no-assistant # Codex/Claude hosts the conversation
 ```
 
 Agent-hosted mode keeps the complete visual workbench and processing backend while omitting the
 Nanocodex rail, browser worker, Responses authorization endpoint, and WebSocket proxy. Launch it
-through the top-level `djbooth library serve --open --no-assistant` command.
+through the top-level `djbooth serve --open --no-assistant` command.
 
 For repository development, one command starts the SQLite/API server on an ephemeral loopback port
 and the Vite client with HMR on `http://127.0.0.1:4179/`:

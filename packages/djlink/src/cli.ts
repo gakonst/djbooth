@@ -145,14 +145,14 @@ export const djlinkCli = Cli.create("djlink", {
   version: DJLINK_VERSION,
   description:
     "Serve compatible master.db content or acquired djbooth recordings to CDJs over Pro DJ Link.",
-  hint: "Start the full browsable library: music djlink rekordbox. Add a track selector to validate, start, discover, and cue it in one shot. PLAY stays physical.",
+  hint: "Start the full browsable library: djlink link. Add a track selector to validate, start, discover, and cue it in one shot. PLAY stays physical.",
   mcp: {
     instructions:
-      "Use rekordbox with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use rekordbox <track> for a one-shot database-to-deck cue. Use run <manifest> <track> for newly acquired ad-hoc recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code. Loading does not start transport because CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.",
+      "Use link with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use link <track> for a one-shot database-to-deck cue. Use run <manifest> <track> only for developer diagnosis of recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code. Loading does not start transport because CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.",
   },
 });
 
-djlinkCli.command("rekordbox", {
+export const linkCli = Cli.create("link", {
   description:
     "Validate and serve the complete read-only master.db library; verify discovery and optionally cue one track.",
   hint: "No track argument performs validate → start/resume → discover and exposes folders, playlists, artists, albums, and tracks. A track adds resolve → cue. One command either returns visible decks or a network CTA.",
@@ -234,6 +234,8 @@ djlinkCli.command("rekordbox", {
     }
   },
 });
+
+djlinkCli.command(linkCli);
 
 djlinkCli.command("doctor-rekordbox", {
   description:
@@ -614,9 +616,7 @@ function fail(
         "inspect DJ Link; source checkouts build the helper with pnpm --filter @gakonst/djlink native:build",
     });
   } else if (error instanceof DjLinkError && error.code === "NOT_RUNNING") {
-    commands.push(
-      scopedCommand(context.displayName, manifest ? `start '${manifest}'` : "rekordbox"),
-    );
+    commands.push(scopedCommand(context.displayName, manifest ? `start '${manifest}'` : "link"));
   } else if (error instanceof DjLinkError && error.code === "ALREADY_RUNNING") {
     commands.push(
       {

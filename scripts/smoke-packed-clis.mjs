@@ -179,80 +179,59 @@ try {
   }
 
   const djbooth = join(consumer, "node_modules", ".bin", "djbooth");
-  const libraryHelp = run(djbooth, ["library", "--help"], {
+  const statusHelp = run(djbooth, ["status", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (
-    !libraryHelp.stdout.includes("djbooth library") ||
-    !libraryHelp.stdout.includes("status") ||
-    !libraryHelp.stdout.includes("serve")
-  ) {
-    throw new Error("Packed djbooth CLI did not compose the djbooth.ai library workbench");
+  if (!statusHelp.stdout.includes("djbooth status") || !statusHelp.stdout.includes("--path")) {
+    throw new Error("Packed djbooth CLI did not expose direct library status");
   }
-  process.stdout.write("✓ djbooth library composed CLI\n");
+  const serveHelp = run(djbooth, ["serve", "--help"], {
+    cwd: consumer,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (!serveHelp.stdout.includes("Pro DJ Link") || !serveHelp.stdout.includes("--assistant")) {
+    throw new Error("Packed djbooth CLI did not expose the combined workbench runtime");
+  }
+  process.stdout.write("✓ djbooth status/serve direct commands\n");
 
-  const djlinkHelp = run(djbooth, ["djlink", "--help"], {
+  const djlinkHelp = run(djbooth, ["link", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !djlinkHelp.stdout.includes("djbooth djlink") ||
-    !djlinkHelp.stdout.includes("devices") ||
-    !djlinkHelp.stdout.includes("load") ||
-    !djlinkHelp.stdout.includes("search")
+    !djlinkHelp.stdout.includes("djbooth link [track]") ||
+    !djlinkHelp.stdout.includes("start/resume") ||
+    !djlinkHelp.stdout.includes("--player")
   ) {
-    throw new Error("Packed djbooth CLI did not compose the DJ Link workflow");
+    throw new Error("Packed djbooth CLI did not expose direct DJ Link serving");
   }
-  process.stdout.write("✓ djbooth djlink composed CLI\n");
+  process.stdout.write("✓ djbooth link direct command\n");
 
   const usbHelp = run(djbooth, ["usb", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !usbHelp.stdout.includes("djbooth usb") ||
-    !usbHelp.stdout.includes("sync") ||
-    !usbHelp.stdout.includes("export") ||
-    !usbHelp.stdout.includes("doctor")
+    !usbHelp.stdout.includes("djbooth usb <target>") ||
+    !usbHelp.stdout.includes("--database") ||
+    !usbHelp.stdout.includes("--playlist-folder")
   ) {
-    throw new Error("Packed djbooth CLI did not compose the CDJ front-USB workflow");
+    throw new Error("Packed djbooth CLI did not expose direct CDJ USB synchronization");
   }
-  const usbSyncHelp = run(djbooth, ["usb", "sync", "--help"], {
-    cwd: consumer,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (
-    !usbSyncHelp.stdout.includes("--database") ||
-    !usbSyncHelp.stdout.includes("unseen CDJ histories") ||
-    !usbSyncHelp.stdout.includes("DJ Set YYYY-MM-DD")
-  ) {
-    throw new Error("Packed djbooth CLI did not expose differential CDJ USB synchronization");
-  }
-  const usbExportHelp = run(djbooth, ["usb", "export", "--help"], {
-    cwd: consumer,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (
-    !usbExportHelp.stdout.includes("--database") ||
-    !usbExportHelp.stdout.includes("--replace") ||
-    !usbExportHelp.stdout.includes("export.pdb")
-  ) {
-    throw new Error("Packed djbooth CLI did not expose the legacy Device Library exporter");
-  }
-  process.stdout.write("✓ djbooth usb sync/export composed CLI\n");
+  process.stdout.write("✓ djbooth usb direct command\n");
 
-  const analyzeHelp = run(djbooth, ["rekordbox", "analyze", "--help"], {
+  const stemsHelp = run(djbooth, ["stems", "--help"], {
     cwd: consumer,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (
-    !analyzeHelp.stdout.includes("beat-grid-diff") ||
-    !analyzeHelp.stdout.includes("waveform-diff")
+    !stemsHelp.stdout.includes("djbooth stems <audioPath> <outputDirectory>") ||
+    !stemsHelp.stdout.includes("--layout")
   ) {
-    throw new Error("Packed djbooth CLI did not expose semantic analysis comparisons");
+    throw new Error("Packed djbooth CLI did not expose direct stem separation");
   }
-  process.stdout.write("✓ djbooth rekordbox analyze composed CLI\n");
+  process.stdout.write("✓ djbooth stems direct command\n");
 
   run(
     process.execPath,
@@ -301,15 +280,15 @@ try {
     throw new Error("Packed Rekordbox CLI did not list the fixture playlist hierarchy as JSON");
   }
   const playlistListTable = run(
-    djbooth,
-    ["rekordbox", "db", "playlist", "list", "--path", playlistFixture, "--plain"],
+    rekordbox,
+    ["db", "playlist", "list", "--path", playlistFixture, "--plain"],
     { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
   );
   if (
     !playlistListTable.stdout.includes("| path") ||
     !playlistListTable.stdout.includes("Packed Sets › Packed Festival Set")
   ) {
-    throw new Error("Packed djbooth CLI did not render the fixture playlist hierarchy table");
+    throw new Error("Packed Rekordbox CLI did not render the fixture playlist hierarchy table");
   }
   const playlistJson = run(
     rekordbox,
@@ -334,24 +313,15 @@ try {
     throw new Error("Packed Rekordbox CLI did not return the fixture playlist as JSON");
   }
   const playlistTable = run(
-    djbooth,
-    [
-      "rekordbox",
-      "db",
-      "playlist",
-      "show",
-      "Packed Festival Set",
-      "--path",
-      playlistFixture,
-      "--plain",
-    ],
+    rekordbox,
+    ["db", "playlist", "show", "Packed Festival Set", "--path", playlistFixture, "--plain"],
     { cwd: consumer, stdio: ["ignore", "pipe", "pipe"] },
   );
   if (
     !playlistTable.stdout.includes("| position | artist") ||
     !playlistTable.stdout.includes("Packed Track")
   ) {
-    throw new Error("Packed djbooth CLI did not render the fixture playlist table");
+    throw new Error("Packed Rekordbox CLI did not render the fixture playlist table");
   }
   process.stdout.write("✓ packed Rekordbox playlist JSON and table\n");
 
@@ -375,24 +345,8 @@ try {
       id: 3,
       method: "tools/call",
       params: {
-        name: "rekordbox_db_playlist_show",
-        arguments: {
-          name: "Packed Festival Set",
-          path: playlistFixture,
-          plain: true,
-        },
-      },
-    },
-    {
-      jsonrpc: "2.0",
-      id: 4,
-      method: "tools/call",
-      params: {
-        name: "rekordbox_db_playlist_list",
-        arguments: {
-          path: playlistFixture,
-          plain: true,
-        },
+        name: "ytdlp-ts_engines",
+        arguments: {},
       },
     },
   ];
@@ -408,15 +362,12 @@ try {
   const initialize = responses.find((response) => response.id === 1);
   const tools = responses.find((response) => response.id === 2)?.result?.tools;
   const requiredTools = [
-    "djlink_devices",
-    "djlink_doctor",
-    "djlink_load",
-    "djlink_monitor",
-    "djlink_search",
-    "djlink_start",
-    "djlink_status",
-    "djlink_stop",
-    "library_status",
+    "analyze",
+    "download",
+    "enrich",
+    "import-set",
+    "link",
+    "resolve",
     "soundcloud_playlist_create",
     "soundcloud_playlist_delete",
     "soundcloud_playlist_get",
@@ -425,35 +376,28 @@ try {
     "spots_playlist_delete",
     "spots_playlist_get",
     "spots_playlist_update",
-    "rekordbox_db_playlist_list",
-    "rekordbox_db_playlist_show",
+    "status",
+    "stems",
+    "usb",
+    "ytdlp-ts_engines",
   ];
   const toolNames = new Set(tools?.map((tool) => tool.name));
-  const playlistListTool = tools?.find((tool) => tool.name === "rekordbox_db_playlist_list");
-  const playlistShowTool = tools?.find((tool) => tool.name === "rekordbox_db_playlist_show");
-  const playlistListCall = responses.find((response) => response.id === 4)?.result;
-  const playlistShowCall = responses.find((response) => response.id === 3)?.result;
+  const resolveTool = tools?.find((tool) => tool.name === "resolve");
+  const usbTool = tools?.find((tool) => tool.name === "usb");
+  const enginesCall = responses.find((response) => response.id === 3)?.result;
+  const enginesResult = JSON.parse(enginesCall?.content?.[0]?.text ?? "null");
   if (
     initialize?.result?.serverInfo?.name !== "djbooth" ||
     !tools ||
-    tools?.length < 50 ||
+    tools?.length < 30 ||
     !tools.some((tool) => tool.name === "slsk_download") ||
-    !tools.some((tool) => tool.name === "rekordbox_db_playlist_create") ||
     requiredTools.some((name) => !toolNames.has(name)) ||
-    playlistListTool?.inputSchema?.properties?.path?.type !== "string" ||
-    playlistListTool?.outputSchema?.properties?.summary?.type !== "object" ||
-    playlistListTool?.outputSchema?.properties?.entries?.type !== "array" ||
-    playlistShowTool?.inputSchema?.properties?.name?.type !== "string" ||
-    !playlistShowTool?.inputSchema?.required?.includes("name") ||
-    playlistShowTool?.outputSchema?.properties?.playlist?.type !== "object" ||
-    playlistShowTool?.outputSchema?.properties?.tracks?.type !== "array" ||
-    playlistShowCall?.isError ||
-    playlistShowCall?.structuredContent?.playlist?.id !== "playlist-1" ||
-    playlistShowCall?.structuredContent?.tracks?.[0]?.title !== "Packed Track" ||
-    playlistListCall?.isError ||
-    playlistListCall?.structuredContent?.summary?.total !== 2 ||
-    playlistListCall?.structuredContent?.entries?.[1]?.id !== "playlist-1" ||
-    playlistListCall?.structuredContent?.entries?.[1]?.trackCount !== 1
+    resolveTool?.inputSchema?.properties?.source?.type !== "string" ||
+    !resolveTool?.inputSchema?.required?.includes("source") ||
+    usbTool?.inputSchema?.properties?.target?.type !== "string" ||
+    !usbTool?.inputSchema?.required?.includes("target") ||
+    enginesCall?.isError ||
+    enginesResult?.native?.available !== true
   ) {
     throw new Error("Packed djbooth MCP did not initialize with the composable tool surface");
   }
@@ -470,7 +414,7 @@ try {
         params: {
           name: "code",
           arguments: {
-            code: "async () => codemode.rekordbox_status({})",
+            code: 'async () => codemode["ytdlp-ts_engines"]({})',
           },
         },
       },
@@ -489,7 +433,7 @@ try {
   if (
     codeTools?.length !== 1 ||
     codeTools[0]?.name !== "code" ||
-    typeof codeResult?.runtime !== "string"
+    codeResult?.native?.available !== true
   ) {
     throw new Error("Packed djbooth CodeMode MCP did not execute in the local sandbox");
   }

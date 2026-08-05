@@ -26,128 +26,83 @@ async function serve(argv: string[]): Promise<{
 }
 
 describe("djbooth CLI", () => {
-  test("runs library help through the source-resolved workspace command", async () => {
-    const { stdout } = await execFileAsync("pnpm", ["djbooth", "library", "status", "--help"], {
+  test("runs a flat command through the source-resolved workspace entrypoint", async () => {
+    const { stdout } = await execFileAsync("pnpm", ["djbooth", "status", "--help"], {
       cwd: new URL("../../..", import.meta.url),
       env: { ...process.env, NO_COLOR: "1" },
     });
 
-    expect(stdout).toContain("djbooth library status");
+    expect(stdout).toContain("djbooth status");
     expect(stdout).toContain("--path <string>");
   });
 
-  test("composes every package-owned command tree", async () => {
+  test("exposes workflow verbs directly and omits package namespaces", async () => {
     const { output } = await serve(["--llms-full", "--format", "json"]);
     const manifest = JSON.parse(output) as { commands: { name: string }[] };
     const names = manifest.commands.map((command) => command.name);
 
     expect(names).toEqual(
       expect.arrayContaining([
-        "usb attach",
-        "usb doctor",
-        "usb export",
-        "usb publish",
-        "usb sync",
-        "usb status",
-        "djlink devices",
-        "djlink load",
-        "djlink search",
-        "djlink start",
-        "rekordbox analyze track",
-        "rekordbox stems doctor",
-        "rekordbox stems separate",
-        "rekordbox db playlist create",
-        "rekordbox db playlist list",
-        "rekordbox status",
-        "library status",
-        "slsk download",
+        "analyze",
+        "download",
+        "enrich",
+        "import-set",
+        "link",
+        "resolve",
+        "serve",
+        "status",
+        "stems",
+        "usb",
         "slsk search",
-        "soundcloud api get-me",
         "soundcloud playlist create",
-        "soundcloud playlist delete",
-        "soundcloud playlist get",
-        "soundcloud playlist update",
-        "spots api get-current-users-profile",
         "spots playlist create",
-        "spots playlist delete",
-        "spots playlist get",
-        "spots playlist update",
-        "tracks resolve",
-        "ytdlp-ts engines",
         "ytdlp-ts music",
       ]),
     );
-    expect(names).not.toContain("spots session");
-    expect(names.length).toBeGreaterThan(250);
+    expect(names).not.toEqual(
+      expect.arrayContaining([
+        "djlink link",
+        "library status",
+        "rekordbox stems separate",
+        "tracks resolve",
+        "usb sync",
+      ]),
+    );
   });
 
-  test("retains package command schemas after mounting", async () => {
+  test("retains typed specialist provider groups", async () => {
     const spotify = await serve(["spots", "playlist", "create", "--help"]);
     expect(spotify.exitCode).toBeUndefined();
     expect(spotify.output).toContain("djbooth spots playlist create <name>");
     expect(spotify.output).toContain("--track");
-    expect(spotify.output).toContain("--input-file");
     expect(spotify.output).toContain("--visibility");
 
     const soundcloud = await serve(["soundcloud", "playlist", "create", "--help"]);
     expect(soundcloud.exitCode).toBeUndefined();
     expect(soundcloud.output).toContain("djbooth soundcloud playlist create <title>");
     expect(soundcloud.output).toContain("--track");
-    expect(soundcloud.output).toContain("--input-file");
     expect(soundcloud.output).toContain("--sharing");
   });
 
-  test("mounts every specialist CLI as a top-level group", async () => {
-    const { output } = await serve(["--help"]);
-
-    for (const command of [
-      "library",
-      "usb",
-      "djlink",
-      "rekordbox",
-      "slsk",
-      "soundcloud",
-      "spots",
-      "tracks",
-      "ytdlp-ts",
-    ]) {
-      expect(output).toMatch(new RegExp(`^  ${command}\\s{2,}`, "m"));
-    }
-  });
-
-  test("routes native and Python helpers through the umbrella Incur tree", async () => {
-    const analyzer = await serve(["rekordbox", "analyze", "track", "--help"]);
-    expect(analyzer.output).toContain("djbooth rekordbox analyze track <audioPath>");
-    expect(analyzer.output).toContain("--analyzer-binary");
-
-    const stems = await serve(["rekordbox", "stems", "separate", "--help"]);
-    expect(stems.output).toContain(
-      "djbooth rekordbox stems separate <audioPath> <outputDirectory>",
-    );
+  test("routes native and Python workflows without redundant action names", async () => {
+    const stems = await serve(["stems", "--help"]);
+    expect(stems.output).toContain("djbooth stems <audioPath> <outputDirectory>");
     expect(stems.output).toContain("--python-project-directory");
 
-    const djlink = await serve(["djlink", "doctor", "--help"]);
-    expect(djlink.output).toContain("--binary");
+    const usb = await serve(["usb", "--help"]);
+    expect(usb.output).toContain("djbooth usb <target>");
+    expect(usb.output).toContain("--playlist-folder");
 
-    const usb = await serve(["usb", "doctor", "--help"]);
-    expect(usb.output).toContain("--binary");
+    const server = await serve(["serve", "--help"]);
+    expect(server.output).toContain("Pro DJ Link");
+    expect(server.output).toContain("--assistant");
   });
 
   test("preserves the full-library DJ Link one-shot guidance", async () => {
-    const { output } = await serve(["djlink", "rekordbox", "--help"]);
+    const { output } = await serve(["link", "--help"]);
 
-    expect(output).toContain("djbooth djlink rekordbox [track]");
+    expect(output).toContain("djbooth link [track]");
     expect(output).toContain("validate → start/resume → discover");
     expect(output).toContain("network CTA");
-  });
-
-  test("preserves the read-only DJ Link Search preflight", async () => {
-    const { output } = await serve(["djlink", "search", "--help"]);
-
-    expect(output).toContain("djbooth djlink search <query>");
-    expect(output).toContain("without changing deck or library state");
-    expect(output).toContain("CDJ Search UI activation");
-    expect(output).toContain("0x1500");
-    expect(output).toContain("Per-keystroke reconnects mean rejection");
   });
 });

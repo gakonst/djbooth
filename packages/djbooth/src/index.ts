@@ -9,3 +9,4 @@ export * as ytdlp from "@gakonst/ytdlp-ts";
 export * as slsk from "slsk-ts";
 
 export * from "./mcp.js";
+export * from "./serve.js";

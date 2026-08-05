@@ -302,7 +302,7 @@ analyzeCli.command("phrase-features", {
 
 rekordboxCli.command(analyzeCli);
 
-const stemsCli = Cli.create("stems", {
+const stemsGroupCli = Cli.create("stems", {
   description: "Separate local audio with MLX-native Mel-Band-RoFormer on Apple Silicon.",
   hint: "The pinned Apache-2.0 four-source model downloads once (3.76 GB), converts to reusable safetensors, and runs inference on the Apple GPU. Rekordbox layout emits instrumental, vocals, and residual drums; four-stem emits drums, bass, other, and vocals.",
 });
@@ -314,7 +314,7 @@ const stemsRuntimeOptions = z.object({
 });
 const stemName = z.enum(["instrumental", "vocals", "drums", "bass", "other"]);
 
-stemsCli.command("doctor", {
+stemsGroupCli.command("doctor", {
   description: "Inspect Apple Silicon, MLX, and local model readiness.",
   options: stemsRuntimeOptions,
   async run(c) {
@@ -326,7 +326,7 @@ stemsCli.command("doctor", {
   },
 });
 
-stemsCli.command("setup", {
+stemsGroupCli.command("setup", {
   description: "Download, authenticate, and convert the pinned four-stem model.",
   options: stemsRuntimeOptions,
   async run(c) {
@@ -341,36 +341,43 @@ stemsCli.command("setup", {
   },
 });
 
-stemsCli.command("separate", {
-  description: "Create three Rekordbox-compatible stems or four native model stems.",
-  args: z.object({
-    audioPath: z.string().describe("Existing audio file"),
-    outputDirectory: z.string().describe("Stem WAV destination"),
-  }),
-  options: stemsRuntimeOptions.extend({
-    force: z.boolean().default(false).describe("Replace existing named stem WAV files"),
-    layout: z
-      .enum(["rekordbox", "four-stem"])
-      .default("rekordbox")
-      .describe("Rekordbox three-source contract, or model-native four sources"),
-    stem: z.array(stemName).optional().describe("Only write this source; repeat for several"),
-  }),
-  async run(c) {
-    return await separateStems(c.args.audioPath, c.args.outputDirectory, {
-      cacheDirectory: c.options.cacheDirectory,
-      force: c.options.force,
-      layout: c.options.layout,
-      onLog(message) {
-        process.stderr.write(message);
-      },
-      pythonProjectDirectory: c.options.pythonProjectDirectory,
-      stems: c.options.stem,
-      uvBinary: c.options.uvBinary,
-    });
-  },
-});
+function createStemSeparationCli<const Name extends string>(name: Name) {
+  return Cli.create(name, {
+    description: "Create three Rekordbox-compatible stems or four native model stems.",
+    args: z.object({
+      audioPath: z.string().describe("Existing audio file"),
+      outputDirectory: z.string().describe("Stem WAV destination"),
+    }),
+    options: stemsRuntimeOptions.extend({
+      force: z.boolean().default(false).describe("Replace existing named stem WAV files"),
+      layout: z
+        .enum(["rekordbox", "four-stem"])
+        .default("rekordbox")
+        .describe("Rekordbox three-source contract, or model-native four sources"),
+      stem: z.array(stemName).optional().describe("Only write this source; repeat for several"),
+    }),
+    async run(c) {
+      return await separateStems(c.args.audioPath, c.args.outputDirectory, {
+        cacheDirectory: c.options.cacheDirectory,
+        force: c.options.force,
+        layout: c.options.layout,
+        onLog(message) {
+          process.stderr.write(message);
+        },
+        pythonProjectDirectory: c.options.pythonProjectDirectory,
+        stems: c.options.stem,
+        uvBinary: c.options.uvBinary,
+      });
+    },
+  });
+}
 
-stemsCli.command("playlist", {
+/** Root workflow command: separate one recording without a redundant `separate` layer. */
+export const stemsCli = createStemSeparationCli("stems");
+
+stemsGroupCli.command(createStemSeparationCli("separate"));
+
+stemsGroupCli.command("playlist", {
   description: "Separate every local track in a Rekordbox playlist with one model load.",
   hint: "The database is opened read-only. Duplicate playlist memberships are separated once, and each content ID gets its own output directory.",
   args: z.object({
@@ -439,7 +446,7 @@ stemsCli.command("playlist", {
   },
 });
 
-rekordboxCli.command(stemsCli);
+rekordboxCli.command(stemsGroupCli);
 
 const configCli = Cli.create("config", {
   description: "Discover Rekordbox installations and library paths.",

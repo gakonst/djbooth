@@ -136,25 +136,24 @@ Run the same workflows explicitly:
 
 ```sh
 # Run stages independently; every stage resumes from Rekordbox master.db.
-djbooth tracks resolve "$SET_URL" --format json
-djbooth tracks download "$SET_URL" --format json
-djbooth tracks analyze "$SET_URL" --format json
+djbooth resolve "$SET_URL" --format json
+djbooth download "$SET_URL" --format json
+djbooth analyze "$SET_URL" --format json
 
 # Or run through ordered playlist import in one command.
-djbooth tracks import-set "$SET_URL" --format json
+djbooth import-set "$SET_URL" --format json
 
 # Enrich the complete library idempotently; scope to a playlist folder only when needed.
-djbooth tracks enrich --format json
-djbooth tracks enrich --folder 'DJ Sets I Like' --dry-run --format json
+djbooth enrich --format json
+djbooth enrich --folder 'DJ Sets I Like' --dry-run --format json
 
 # Analyze and separate one track.
-djbooth rekordbox analyze track ./track.flac --output-directory ./analysis --format json
-djbooth rekordbox stems separate ./track.flac ./stems --layout four-stem --format json
+djbooth stems ./track.flac ./stems --layout four-stem --format json
 
 # Import play history and batch one host playlist folder onto both USB library formats.
-djbooth usb sync /Volumes/CDJ --playlist-folder 'DJ Sets I Like' --format json
-djbooth djlink rekordbox --format json
-djbooth djlink rekordbox "Apathy" --player 3 --format json
+djbooth usb /Volumes/CDJ --playlist-folder 'DJ Sets I Like' --format json
+djbooth link --format json
+djbooth link "Apathy" --player 3 --format json
 ```
 
 Downloads, provider responses, model weights, analysis, stems, and playlist acquisition are cached.
@@ -165,13 +164,13 @@ Warm runs do not redownload or reanalyze unchanged tracks.
 Open the local workstation:
 
 ```sh
-djbooth library serve --open
+djbooth serve --open
 ```
 
 Keep Codex or Claude as the conversation surface and open the UI without its embedded assistant:
 
 ```sh
-djbooth library serve --open --no-assistant
+djbooth serve --open --no-assistant
 ```
 
 The same workbench ships as the `djbooth.ai` Tauri desktop app. Agent and UI share one local library,

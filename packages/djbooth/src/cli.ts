@@ -6,16 +6,18 @@ import { dirname, resolve } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
-import cdjUsbCli from "@gakonst/cdj-usb/cli";
-import djlinkCli from "@gakonst/djlink/cli";
-import rekordboxCli from "@gakonst/rekordbox/cli";
-import libraryCli from "@gakonst/djbooth-app/cli";
+import { usbCli } from "@gakonst/cdj-usb/cli";
+import { statusCli } from "@gakonst/djbooth-app/cli";
+import { linkCli } from "@gakonst/djlink/cli";
+import { stemsCli } from "@gakonst/rekordbox/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
-import tracksCli from "@gakonst/tracks/cli";
+import { analyzeCli, downloadCli, enrichCli, importSetCli, resolveCli } from "@gakonst/tracks/cli";
 import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
+
+import { serveCli } from "./serve.js";
 
 export const DJBOOTH_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -25,12 +27,15 @@ export const DJBOOTH_VERSION = (
 
 export const DJBOOTH_MCP_TOOL_FILTER = {
   include: [
-    "djlink_*",
-    "usb_doctor",
-    "usb_export",
-    "usb_sync",
-    "usb_status",
-    "tracks_*",
+    "resolve",
+    "enrich",
+    "download",
+    "analyze",
+    "import-set",
+    "link",
+    "status",
+    "stems",
+    "usb",
     "spots_auth_status",
     "spots_me",
     "spots_recent",
@@ -53,20 +58,11 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "slsk_info",
     "slsk_search",
     "slsk_download",
-    "ytdlp_engines",
-    "ytdlp_inspect",
-    "ytdlp_formats",
-    "ytdlp_music",
-    "ytdlp_download",
-    "rekordbox_status",
-    "rekordbox_analyze_*",
-    "rekordbox_stems_*",
-    "rekordbox_db_info",
-    "rekordbox_db_search",
-    "rekordbox_db_content_*",
-    "rekordbox_db_metadata_add",
-    "rekordbox_db_playlist_*",
-    "library_status",
+    "ytdlp-ts_engines",
+    "ytdlp-ts_inspect",
+    "ytdlp-ts_formats",
+    "ytdlp-ts_music",
+    "ytdlp-ts_download",
   ],
 };
 
@@ -81,7 +77,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
     version: DJBOOTH_VERSION,
     description:
       "Agentically drive DJ-set discovery, acquisition, analysis, stems, library management, deck serving, and Rekordbox-compatible exports.",
-    hint: "Run djbooth <surface> --help for commands, examples, and typed options.",
+    hint: "Run djbooth <command> --help for examples and typed options. Workflow stages are direct commands; specialist providers remain grouped.",
     mcp: {
       instructions:
         "Use the narrowest typed djbooth tool that completes the request. Tool descriptions, schemas, and errors are the workflow source of truth.",
@@ -89,14 +85,19 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
     },
   });
 
-  cli.command(cdjUsbCli);
-  cli.command(djlinkCli);
-  cli.command(rekordboxCli);
-  cli.command(libraryCli);
+  cli.command(resolveCli);
+  cli.command(enrichCli);
+  cli.command(downloadCli);
+  cli.command(analyzeCli);
+  cli.command(importSetCli);
+  cli.command(stemsCli);
+  cli.command(linkCli);
+  cli.command(serveCli);
+  cli.command(statusCli);
+  cli.command(usbCli);
   cli.command(slskCli);
   cli.command(soundcloudCli);
   cli.command(spotsCli);
-  cli.command(tracksCli);
   cli.command(ytdlpCli);
   return cli;
 }

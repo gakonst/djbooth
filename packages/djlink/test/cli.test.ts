@@ -26,7 +26,7 @@ describe("DJ Link CLI", () => {
     expect(manifest.commands.map(({ name }) => name)).toEqual(
       expect.arrayContaining([
         "run",
-        "rekordbox",
+        "link",
         "doctor-rekordbox",
         "doctor",
         "start",
@@ -74,10 +74,10 @@ describe("DJ Link CLI", () => {
   });
 
   it("advertises direct full-library serving as the default flow", async () => {
-    const { output, exitCode } = await serve(djlinkCli, ["rekordbox", "--help"]);
+    const { output, exitCode } = await serve(djlinkCli, ["link", "--help"]);
 
     expect(exitCode).toBeUndefined();
-    expect(output).toContain("djlink rekordbox [track]");
+    expect(output).toContain("djlink link [track]");
     expect(output).toContain("complete read-only master.db library");
     expect(output).toContain("validate → start/resume → discover");
     expect(output).toContain("folders, playlists, artists, albums, and tracks");

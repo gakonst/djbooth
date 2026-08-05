@@ -20,7 +20,7 @@ claude plugin install djbooth@djbooth-ai
 ## Workstation
 
 ```sh
-djbooth library serve --open --no-assistant
+djbooth serve --open --no-assistant
 ```
 
 ## Development

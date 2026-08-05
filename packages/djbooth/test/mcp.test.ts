@@ -14,7 +14,7 @@ import {
 function createTestDjBoothCli(): ReturnType<typeof Cli.create> {
   const cli = Cli.create("djbooth");
   cli.command(
-    Cli.create("rekordbox").command("status", {
+    Cli.create("status", {
       run: () => ({ rekordboxPid: 42 }),
     }),
   );
@@ -35,13 +35,13 @@ function createTestDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(Cli.create("spots").command(spotsAuth));
 
   cli.command(
-    Cli.create("tracks").command("resolve", {
+    Cli.create("resolve", {
       args: z.object({ source: z.string() }),
       run: ({ args }) => ({ source: args.source }),
     }),
   );
   cli.command(
-    Cli.create("ytdlp").command("engines", {
+    Cli.create("ytdlp-ts").command("engines", {
       run: () => ({ native: { available: true } }),
     }),
   );
@@ -51,12 +51,12 @@ function createTestDjBoothCli(): ReturnType<typeof Cli.create> {
 const localSandboxTest = process.platform === "win32" ? it.skip : it;
 
 const toolCalls = [
-  { name: "rekordbox_status", arguments: {} },
+  { name: "status", arguments: {} },
   { name: "slsk_info", arguments: {} },
   { name: "soundcloud_auth_status", arguments: {} },
   { name: "spots_auth_status", arguments: {} },
-  { name: "tracks_resolve", arguments: { source: "https://youtu.be/example" } },
-  { name: "ytdlp_engines", arguments: {} },
+  { name: "resolve", arguments: { source: "https://youtu.be/example" } },
+  { name: "ytdlp-ts_engines", arguments: {} },
 ] as const;
 
 async function connect(server: McpServer): Promise<Client> {
@@ -74,15 +74,15 @@ describe("djbooth MCP adapters", () => {
     try {
       const { tools } = await client.listTools();
       expect(tools.map(({ name }) => name).sort()).toEqual([
-        "rekordbox_status",
+        "resolve",
         "slsk_info",
         "soundcloud_auth_status",
         "spots_auth_status",
-        "tracks_resolve",
-        "ytdlp_engines",
+        "status",
+        "ytdlp-ts_engines",
       ]);
 
-      const result = await client.callTool({ name: "rekordbox_status", arguments: {} });
+      const result = await client.callTool({ name: "status", arguments: {} });
       const content = result.content as Array<{ type: string; text: string }>;
       expect(JSON.parse(content[0]!.text)).toEqual({
         rekordboxPid: 42,
@@ -98,8 +98,8 @@ describe("djbooth MCP adapters", () => {
     const executor: Executor = {
       async execute(_code, resolved) {
         providers = Array.isArray(resolved) ? resolved : undefined;
-        const status = providers?.[0]?.fns.rekordbox_status;
-        if (!status) return { result: undefined, error: "missing rekordbox_status" };
+        const status = providers?.[0]?.fns.status;
+        if (!status) return { result: undefined, error: "missing status" };
         return { result: await status({}) };
       },
     };
@@ -109,11 +109,11 @@ describe("djbooth MCP adapters", () => {
       const { tools } = await client.listTools();
       expect(tools).toHaveLength(1);
       expect(tools[0]?.name).toBe("code");
-      expect(tools[0]?.description).toContain("rekordbox_status");
+      expect(tools[0]?.description).toContain("status");
 
       const result = await client.callTool({
         name: "code",
-        arguments: { code: "async () => codemode.rekordbox_status({})" },
+        arguments: { code: "async () => codemode.status({})" },
       });
       const content = result.content as Array<{ type: string; text: string }>;
       expect(JSON.parse(content[0]!.text)).toEqual({ rekordboxPid: 42 });
@@ -135,7 +135,7 @@ describe("djbooth MCP adapters", () => {
       try {
         const result = await client.callTool({
           name: "code",
-          arguments: { code: "async () => codemode.rekordbox_status({})" },
+          arguments: { code: "async () => codemode.status({})" },
         });
         const content = result.content as Array<{ type: string; text: string }>;
         if (result.isError) throw new Error(content[0]!.text);
@@ -177,12 +177,12 @@ describe("djbooth MCP adapters", () => {
       const codeClient = await connect(codeServer);
       try {
         const calls = Array.from({ length: rounds }, () => [
-          "codemode.rekordbox_status({})",
+          "codemode.status({})",
           "codemode.slsk_info({})",
           "codemode.soundcloud_auth_status({})",
           "codemode.spots_auth_status({})",
-          'codemode.tracks_resolve({ source: "https://youtu.be/example" })',
-          "codemode.ytdlp_engines({})",
+          'codemode.resolve({ source: "https://youtu.be/example" })',
+          'codemode["ytdlp-ts_engines"]({})',
         ]).flat();
         const result = await codeClient.callTool({
           name: "code",

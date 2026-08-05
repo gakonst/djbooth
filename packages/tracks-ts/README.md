@@ -32,4 +32,5 @@ Analysis begins per verified track in the end-to-end route. Unavailable releases
 skipped rows; available tracks continue into the playlist.
 
 Use `tracks --help`, `tracks <command> --schema`, or `tracks --llms-full` as the complete runtime
-reference. The umbrella release surface is `djbooth tracks ...`.
+reference. The umbrella release surface exposes these stages directly as `djbooth resolve`,
+`djbooth enrich`, `djbooth download`, and `djbooth analyze`.

@@ -272,11 +272,11 @@ Cue writes acquire the canonical `<master.db>.tracks-ts.lock`, commit once, then
 `--clear-color`, or `--clear-color-table-index` for explicit clearing.
 
 ```sh
-djbooth rekordbox db content cues CONTENT_ID --format json
-djbooth rekordbox db content set-cue CONTENT_ID 32
-djbooth rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
+rekordbox db content cues CONTENT_ID --format json
+rekordbox db content set-cue CONTENT_ID 32
+rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
   --type loop --end-seconds 72 --active-loop --comment "Drop loop"
-djbooth rekordbox db content delete-cue CONTENT_ID CUE_ID
+rekordbox db content delete-cue CONTENT_ID CUE_ID
 ```
 
 For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.

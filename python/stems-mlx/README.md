@@ -14,6 +14,6 @@ uv run --project python/stems-mlx djbooth-stems-mlx separate track.flac ./track-
 The first setup downloads and converts the pinned Apache-2.0 model. Model files and the uv-managed
 Python environment stay under `~/Library/Caches/rekordbox-ts/stems` by default. The TypeScript
 `rekordbox stems` commands call this project through uv, and the umbrella exposes those commands as
-`djbooth rekordbox stems ...`. The direct `djbooth-stems-mlx` CLI remains useful for development.
+`djbooth stems <audio> <output>`. The direct `djbooth-stems-mlx` CLI remains useful for development.
 Installed deployments should set `DJBOOTH_STEMS_MLX_PROJECT` or pass
 `--python-project-directory`; `MUSIC_STEMS_MLX_PROJECT` remains a compatibility alias.

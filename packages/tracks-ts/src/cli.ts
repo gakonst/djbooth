@@ -624,7 +624,7 @@ const metadataCoverageOutput = z.object({
   releaseDate: z.number().int().nonnegative(),
 });
 
-tracksCli.command("enrich", {
+export const enrichCli = Cli.create("enrich", {
   description:
     "Idempotently enrich every Rekordbox track from durable provenance, local metadata, Apple, Spotify, Discogs, Deezer, and MusicBrainz.",
   options: z.object({
@@ -827,6 +827,8 @@ tracksCli.command("enrich", {
   },
 });
 
+tracksCli.command(enrichCli);
+
 const setWorkflowArgs = z.object({
   source: z.string().describe("YouTube/SoundCloud set URL or local set"),
 });
@@ -955,7 +957,7 @@ type SetWorkflowContext = Parameters<typeof fail>[0] & {
   options: z.output<typeof setWorkflowOptions>;
 };
 
-tracksCli.command("import-set", {
+export const importSetCli = Cli.create("import-set", {
   description:
     "Resolve, enrich, download, analyze, and create or update one ordered Rekordbox playlist.",
   hint: "Database-backed full workflow. Rerun the same source to resume; no manifest or checkpoint file is required.",
@@ -968,7 +970,7 @@ tracksCli.command("import-set", {
   },
 });
 
-tracksCli.command("download", {
+export const downloadCli = Cli.create("download", {
   description:
     "Resolve and enrich a set, adopt or download every available recording, and checkpoint each result in Rekordbox master.db.",
   hint: "Analysis and playlist import do not run. Reruns verify and reuse completed files; refresh resolution to reconsider unavailable rows.",
@@ -981,7 +983,7 @@ tracksCli.command("download", {
   },
 });
 
-tracksCli.command("analyze", {
+export const analyzeCli = Cli.create("analyze", {
   description:
     "Resolve prerequisites, download missing recordings, then produce and checkpoint Rekordbox-compatible analysis without importing a playlist.",
   hint: "Download and analysis are idempotent; existing verified media and analyzer artifacts are reused.",
@@ -993,6 +995,10 @@ tracksCli.command("analyze", {
     return runSetWorkflowCommand(context, "analysis");
   },
 });
+
+tracksCli.command(importSetCli);
+tracksCli.command(downloadCli);
+tracksCli.command(analyzeCli);
 
 async function runSetWorkflowCommand(
   context: SetWorkflowContext,
@@ -1127,7 +1133,7 @@ async function runSetWorkflowCommand(
   }
 }
 
-tracksCli.command("resolve", {
+export const resolveCli = Cli.create("resolve", {
   aliases: ["identify"],
   description:
     "Resolve a set by inspecting its URL, reading timestamped metadata, matching 1001Tracklists by URL then title/uploader, and only then using recognition—without downloading the remote set.",
@@ -1225,6 +1231,8 @@ tracksCli.command("resolve", {
     }
   },
 });
+
+tracksCli.command(resolveCli);
 
 const one001 = Cli.create("1001", {
   description:

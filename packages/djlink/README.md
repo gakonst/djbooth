@@ -22,28 +22,28 @@ loading, load-confirm experiments, auto-unlock, or private packet replay.
 Use the complete direct Rekordbox library by default:
 
 ```sh
-djbooth djlink rekordbox --format json
-djbooth djlink rekordbox "Artist - Track" --player 3 --format json
+djbooth link --format json
+djbooth link "Artist - Track" --player 3 --format json
 ```
 
-Without a selector, `rekordbox` validates direct read-only master.db ingestion, starts or resumes,
+Without a selector, `link` validates direct read-only master.db ingestion, starts or resumes,
 requires at least one discovered deck, and exposes the complete folders/playlists/artists/albums/
 tracks hierarchy. With a selector it also resolves and cues the track. Use `run` for a completed
 ad-hoc manifest before its recordings are imported. Both leave PLAY physical. Stage commands remain
 for partial workflows and diagnosis:
 
 ```sh
-djbooth djlink run ./set/manifest.json 4 --player 3 --format json
-djbooth djlink doctor ./set/manifest.json --format json
-djbooth djlink start ./set/manifest.json --format json
-djbooth djlink status --format json
-djbooth djlink devices --wait-ms 5000 --format json
-djbooth djlink probe 169.254.7.4 --format json
-djbooth djlink load 4 --player 3 --format json
-djbooth djlink prepare "Adam Ten - Track" --player 3 --bpm 128 --bars-before 1 --format json
-djbooth djlink search "Science Fiction" --mode track --format json
-djbooth djlink monitor --player 3 --format json
-djbooth djlink stop --format json
+djlink run ./set/manifest.json 4 --player 3 --format json
+djlink doctor ./set/manifest.json --format json
+djlink start ./set/manifest.json --format json
+djlink status --format json
+djlink devices --wait-ms 5000 --format json
+djlink probe 169.254.7.4 --format json
+djlink load 4 --player 3 --format json
+djlink prepare "Adam Ten - Track" --player 3 --bpm 128 --bars-before 1 --format json
+djlink search "Science Fiction" --mode track --format json
+djlink monitor --player 3 --format json
+djlink stop --format json
 ```
 
 `doctor` validates the native helper, local audio, and DAT/EXT/2EX paths without joining the DJ
