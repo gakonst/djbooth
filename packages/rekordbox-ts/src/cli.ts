@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { execFile } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { Cli, z } from "incur";
 
@@ -1205,9 +1207,12 @@ databaseRowCli.command("delete", {
   },
 });
 
-const databasePlaylistCli = Cli.create("playlist", {
-  description: "Query and mutate master-database playlists.",
+export const playlistCli = Cli.create("playlist", {
+  description: "Manage Rekordbox playlists and put local audio onto decks.",
+  hint: "Use a playlist ID, exact name, or hierarchy path anywhere <playlist> is accepted.",
 });
+
+const execFileAsync = promisify(execFile);
 
 const databaseContentCli = Cli.create("content", {
   description: "Create tracks and coordinate database, ANLZ, and cue data.",
@@ -1477,6 +1482,64 @@ function buildPlaylistTree(playlists: Array<PlaylistSummary>): {
   return { entries, warnings: [...warnings] };
 }
 
+type PlaylistEntryType = PlaylistTreeEntry["type"];
+
+function resolvePlaylistSelector(
+  db: MasterDatabase,
+  selector: string,
+  allowedTypes: ReadonlyArray<PlaylistEntryType> = ["folder", "playlist", "smart"],
+): { entry: PlaylistTreeEntry; row: DjmdPlaylist } {
+  const entries = buildPlaylistTree(db.listPlaylists()).entries.filter((entry) =>
+    allowedTypes.includes(entry.type),
+  );
+  const byId = entries.find((entry) => entry.id === selector);
+  const normalizedSelector = selector.replaceAll("/", " › ");
+  const matches = byId
+    ? [byId]
+    : entries.filter(
+        (entry) =>
+          entry.name === selector ||
+          entry.path === selector ||
+          entry.path === normalizedSelector ||
+          entry.pathSegments.join("/") === selector,
+      );
+  if (!matches.length)
+    throw new Error(
+      `No ${allowedTypes.join(" or ")} matches '${selector}'. Run 'djbooth playlist list' to inspect selectors.`,
+    );
+  if (matches.length > 1)
+    throw new Error(
+      `Playlist selector '${selector}' is ambiguous: ${matches
+        .map((entry) => `'${entry.path}' (${entry.id})`)
+        .join(", ")}. Use a hierarchy path or ID.`,
+    );
+  const entry = matches[0]!;
+  return {
+    entry,
+    row: db.query(DjmdPlaylist).where({ ID: entry.id }).one(),
+  };
+}
+
+async function probeAudioDuration(audioPath: string, signal: AbortSignal): Promise<number> {
+  const { stdout } = await execFileAsync(
+    process.env.FFPROBE_PATH ?? "ffprobe",
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      audioPath,
+    ],
+    { encoding: "utf8", maxBuffer: 1024 * 1024, signal },
+  );
+  const duration = Number(stdout.trim());
+  if (!Number.isFinite(duration) || duration <= 0)
+    throw new TypeError(`ffprobe returned an invalid duration for '${audioPath}'`);
+  return duration;
+}
+
 const playlistListOutput = z.object({
   summary: z.object({
     total: z.number().int().nonnegative(),
@@ -1511,7 +1574,7 @@ const playlistListOutput = z.object({
   warnings: z.array(z.string()).optional(),
 });
 
-databasePlaylistCli.command("list", {
+playlistCli.command("list", {
   description: "List the complete active Rekordbox playlist hierarchy as a table or JSON.",
   options: dbOpenOptions.extend({
     type: z
@@ -1734,9 +1797,9 @@ databaseContentCli.command("delete-cue", {
   },
 });
 
-databasePlaylistCli.command("contents", {
-  description: "List tracks selected by a regular or smart playlist.",
-  args: z.object({ id: z.string().describe("Playlist ID") }),
+playlistCli.command("contents", {
+  description: "Query the raw content rows selected by a regular or smart playlist.",
+  args: z.object({ playlist: z.string().describe("Playlist ID, exact name, or hierarchy path") }),
   options: dbOpenOptions.extend({
     limit: z.number().int().min(1).max(100_000).default(100),
     offset: z.number().int().min(0).default(0),
@@ -1744,7 +1807,8 @@ databasePlaylistCli.command("contents", {
   run(c) {
     const db = openDatabase(c.options);
     try {
-      const query = db.getPlaylistContents(c.args.id);
+      const { row } = resolvePlaylistSelector(db, c.args.playlist, ["playlist", "smart"]);
+      const query = db.getPlaylistContents(row);
       return {
         count: query.count(),
         rows: query.offset(c.options.offset).limit(c.options.limit).all(),
@@ -1788,12 +1852,12 @@ const playlistShowOutput = z.object({
   ),
 });
 
-databasePlaylistCli.command("show", {
-  description: "Show an exact-name playlist as an ordered metadata table or JSON.",
-  args: z.object({ name: z.string().min(1).describe("Exact playlist name") }),
+playlistCli.command("show", {
+  description: "Show an ordered playlist by ID, exact name, or hierarchy path.",
+  args: z.object({
+    playlist: z.string().min(1).describe("Playlist ID, exact name, or hierarchy path"),
+  }),
   options: dbOpenOptions.extend({
-    id: z.string().optional().describe("Playlist ID used to disambiguate duplicate names"),
-    parentId: z.string().optional().describe("Parent folder ID used to disambiguate the name"),
     limit: z
       .number()
       .int()
@@ -1808,37 +1872,13 @@ databasePlaylistCli.command("show", {
   examples: [
     {
       description: "Show an ordered playlist as a table",
-      args: { name: "'Adam Ten — Burning Man 2025 [music-ts E2E]'" },
+      args: { playlist: "'Adam Ten — Burning Man 2025 [music-ts E2E]'" },
     },
   ],
   run(c) {
     const db = openDatabase(c.options);
     try {
-      const matches = db
-        .query(DjmdPlaylist)
-        .where({
-          Name: c.args.name,
-          ...(c.options.parentId === undefined ? {} : { ParentID: c.options.parentId }),
-        })
-        .all()
-        .filter(
-          (playlist) =>
-            !playlist.isFolder && (c.options.id === undefined || playlist.ID === c.options.id),
-        );
-      if (!matches.length)
-        throw new Error(
-          `No playlist named '${c.args.name}'${c.options.parentId ? ` under parent '${c.options.parentId}'` : ""}${c.options.id ? ` with ID '${c.options.id}'` : ""}`,
-        );
-      if (matches.length > 1) {
-        const candidates = matches
-          .map((playlist) => `${playlist.ID} (parent ${playlist.ParentID})`)
-          .join(", ");
-        throw new Error(
-          `Multiple playlists named '${c.args.name}' match: ${candidates}. Pass --parent-id or --id.`,
-        );
-      }
-
-      const playlist = matches[0]!;
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist, ["playlist", "smart"]);
       const count = db.countPlaylistTracks(playlist);
       const tracks = db.getPlaylistTracks(playlist, {
         limit: c.options.limit,
@@ -1906,19 +1946,46 @@ function formatFileType(fileType: number | null, path: string | null): string | 
   return extension || null;
 }
 
-databasePlaylistCli.command("create", {
+playlistCli.command("create", {
   description: "Create a normal playlist, folder, or smart playlist.",
-  args: z.object({ name: z.string().describe("Playlist name") }),
+  args: z.object({ name: z.string().min(1).describe("Playlist name") }),
   options: dbWriteOptions.extend({
-    parent: z.string().optional().describe("Parent folder ID"),
+    ifNotExists: z.boolean().default(false).describe("Return an existing sibling of the same type"),
+    parent: z.string().optional().describe("Parent folder ID, exact name, or hierarchy path"),
     seq: z.number().int().positive().optional().describe("One-based sibling sequence"),
     smartXml: z.string().optional().describe("Smart-list NODE XML"),
-    type: z.enum(["playlist", "folder", "smart"]).default("playlist"),
+    type: z.enum(["playlist", "folder", "smart"]).default("playlist").describe("Entry type"),
   }),
+  examples: [
+    {
+      args: { name: "Deck A/B Test" },
+      options: { ifNotExists: true },
+      description: "Ensure a reusable top-level playlist exists",
+    },
+  ],
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      const options = { parent: c.options.parent, seq: c.options.seq };
+      const parent = c.options.parent
+        ? resolvePlaylistSelector(db, c.options.parent, ["folder"]).row
+        : undefined;
+      const parentId = parent?.ID ?? "root";
+      if (c.options.ifNotExists) {
+        const existing = db
+          .listPlaylists()
+          .filter(
+            (playlist) =>
+              playlist.parentId === parentId &&
+              playlist.name === c.args.name &&
+              playlist.type === c.options.type,
+          );
+        if (existing.length > 1)
+          throw new Error(
+            `Multiple ${c.options.type} entries named '${c.args.name}' already exist under '${parentId}'`,
+          );
+        if (existing[0]) return db.query(DjmdPlaylist).where({ ID: existing[0].id }).one();
+      }
+      const options = { parent, seq: c.options.seq };
       const row =
         c.options.type === "folder"
           ? db.createPlaylistFolder(c.args.name, options)
@@ -1937,10 +2004,10 @@ databasePlaylistCli.command("create", {
   },
 });
 
-databasePlaylistCli.command("add-track", {
-  description: "Add content to a normal playlist.",
+playlistCli.command("add-track", {
+  description: "Add an existing Rekordbox content row to a normal playlist.",
   args: z.object({
-    playlistId: z.string().describe("Playlist ID"),
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
     contentId: z.string().describe("Content ID"),
   }),
   options: dbWriteOptions.extend({
@@ -1949,7 +2016,8 @@ databasePlaylistCli.command("add-track", {
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      const row = db.addToPlaylist(c.args.playlistId, c.args.contentId, c.options.trackNumber);
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist, ["playlist"]);
+      const row = db.addToPlaylist(playlist, c.args.contentId, c.options.trackNumber);
       db.commit();
       return row;
     } finally {
@@ -1958,71 +2026,205 @@ databasePlaylistCli.command("add-track", {
   },
 });
 
-databasePlaylistCli.command("remove-track", {
+playlistCli.command("add", {
+  description: "Adopt, analyze, and add one local audio file to a playlist.",
+  hint: "Idempotent by canonical file path and playlist membership; safe to rerun.",
+  args: z.object({
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
+    audioPath: z.string().describe("Existing local audio file"),
+  }),
+  options: dbWriteOptions.extend({
+    analyzerBinary: z.string().optional().describe("Selected analyzer executable override"),
+    durationSeconds: z
+      .number()
+      .positive()
+      .optional()
+      .describe("Duration override; defaults to an ffprobe measurement"),
+    engine: z
+      .enum(["clean", "reference"])
+      .default("clean")
+      .describe("Clean-room DSP, or an explicit local proprietary parity oracle"),
+    outputDirectory: z.string().optional().describe("Artifact directory; defaults beside audio"),
+    rekordboxApp: z.string().optional().describe("Reference-engine Rekordbox.app override"),
+    rekordboxCache: z.string().optional().describe("Reference-engine cache directory"),
+    replaceAnalysis: z
+      .boolean()
+      .default(false)
+      .describe("Regenerate and replace installed analysis"),
+    rhythmMode: z.enum(["normal", "dynamic", "auto"]).default("normal").describe("Beat-grid mode"),
+    threads: z.number().int().min(1).max(64).optional().describe("Native analyzer CPU workers"),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .default(300_000)
+      .describe("Analyzer timeout in milliseconds"),
+    title: z.string().optional().describe("Library title; defaults to the file basename"),
+    trackNumber: z.number().int().positive().optional().describe("One-based insertion point"),
+  }),
+  examples: [
+    {
+      args: { playlist: "'Deck A/B Test'", audioPath: "./enhanced.wav" },
+      options: { title: "'B — Neural enhancement'" },
+      description: "Analyze a local file and make it immediately loadable from the playlist",
+    },
+  ],
+  async run(c) {
+    const audioPath = realpathSync(resolve(c.args.audioPath));
+    const controller = new AbortController();
+    const abort = () => controller.abort(new DOMException("Interrupted", "AbortError"));
+    process.once("SIGINT", abort);
+    process.once("SIGTERM", abort);
+    try {
+      const [analysis, measuredDuration] = await Promise.all([
+        analyzeTrackAsync(audioPath, {
+          analyzerBinary: c.options.analyzerBinary,
+          engine: c.options.engine,
+          force: c.options.replaceAnalysis,
+          outputDirectory: c.options.outputDirectory,
+          rekordboxApp: c.options.rekordboxApp,
+          rekordboxCache: c.options.rekordboxCache,
+          rhythmMode: c.options.rhythmMode,
+          signal: controller.signal,
+          threads: c.options.threads,
+          timeoutMs: c.options.timeoutMs,
+        }),
+        c.options.durationSeconds ?? probeAudioDuration(audioPath, controller.signal),
+      ]);
+      const db = openDatabase(c.options, true);
+      try {
+        const { entry: playlistEntry, row: playlist } = resolvePlaylistSelector(
+          db,
+          c.args.playlist,
+          ["playlist"],
+        );
+        let content = db.query(DjmdContent).where({ FolderPath: audioPath }).oneOrNone();
+        const contentCreated = content === undefined;
+        const title = c.options.title ?? basename(audioPath, extname(audioPath));
+        if (content === undefined) {
+          content = db.addContent(audioPath, {
+            Length: Math.round(measuredDuration),
+            Title: title,
+          });
+        } else {
+          if (c.options.title !== undefined) content.Title = c.options.title;
+          content.Length = Math.round(measuredDuration);
+        }
+
+        const analysisInstalled = !content.AnalysisDataPath || c.options.replaceAnalysis;
+        if (analysisInstalled)
+          db.installContentAnalysis(content, dirname(analysis.summaryPath), {
+            commit: false,
+            replace: c.options.replaceAnalysis,
+          });
+        else
+          db.syncContentAnalysisMetadata(content, dirname(analysis.summaryPath), { commit: false });
+
+        let membership = db
+          .query(DjmdSongPlaylist)
+          .where({ PlaylistID: playlist.ID, ContentID: content.ID })
+          .oneOrNone();
+        const membershipCreated = membership === undefined;
+        if (membership === undefined)
+          membership = db.addToPlaylist(playlist, content.ID, c.options.trackNumber);
+        db.commit();
+        return {
+          analysisDirectory: dirname(analysis.summaryPath),
+          analysisInstalled,
+          contentCreated,
+          contentId: content.ID,
+          membershipCreated,
+          membershipId: membership.ID,
+          path: audioPath,
+          playlist: playlistEntry.path,
+          playlistId: playlist.ID,
+          title: content.Title,
+        };
+      } finally {
+        db.close();
+      }
+    } finally {
+      process.removeListener("SIGINT", abort);
+      process.removeListener("SIGTERM", abort);
+    }
+  },
+});
+
+playlistCli.command("remove-track", {
   description: "Remove a playlist-membership row.",
   args: z.object({
-    playlistId: z.string().describe("Playlist ID"),
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
     songId: z.string().describe("djmdSongPlaylist ID"),
   }),
   options: dbWriteOptions,
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      db.removeFromPlaylist(c.args.playlistId, c.args.songId);
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist, ["playlist"]);
+      db.removeFromPlaylist(playlist, c.args.songId);
       db.commit();
-      return { playlistId: c.args.playlistId, removed: c.args.songId };
+      return { playlistId: playlist.ID, removed: c.args.songId };
     } finally {
       db.close();
     }
   },
 });
 
-databasePlaylistCli.command("move", {
+playlistCli.command("move", {
   description: "Move a playlist to another parent and/or sequence.",
-  args: z.object({ playlistId: z.string().describe("Playlist ID") }),
+  args: z.object({
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
+  }),
   options: dbWriteOptions.extend({
-    parent: z.string().optional().describe("New parent folder ID"),
+    parent: z.string().optional().describe("New parent folder ID, exact name, or hierarchy path"),
     seq: z.number().int().positive().optional().describe("New one-based sequence"),
   }),
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      db.movePlaylist(c.args.playlistId, { parent: c.options.parent, seq: c.options.seq });
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist);
+      const parent = c.options.parent
+        ? resolvePlaylistSelector(db, c.options.parent, ["folder"]).row
+        : undefined;
+      db.movePlaylist(playlist, { parent, seq: c.options.seq });
       db.commit();
-      return db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
+      return playlist;
     } finally {
       db.close();
     }
   },
 });
 
-databasePlaylistCli.command("rename", {
+playlistCli.command("rename", {
   description: "Rename a playlist or folder.",
   args: z.object({
-    playlistId: z.string().describe("Playlist ID"),
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
     name: z.string().describe("New name"),
   }),
   options: dbWriteOptions,
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      db.renamePlaylist(c.args.playlistId, c.args.name);
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist);
+      db.renamePlaylist(playlist, c.args.name);
       db.commit();
-      return db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
+      return playlist;
     } finally {
       db.close();
     }
   },
 });
 
-databasePlaylistCli.command("delete", {
+playlistCli.command("delete", {
   description: "Delete a playlist subtree and resequence its siblings.",
-  args: z.object({ playlistId: z.string().describe("Playlist or folder ID") }),
+  args: z.object({
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
+  }),
   options: dbWriteOptions,
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      const row = db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
+      const { row } = resolvePlaylistSelector(db, c.args.playlist);
       const deleted = row.toJSON();
       db.deletePlaylist(row);
       db.commit();
@@ -2033,10 +2235,10 @@ databasePlaylistCli.command("delete", {
   },
 });
 
-databasePlaylistCli.command("move-track", {
+playlistCli.command("move-track", {
   description: "Move a playlist-membership row to a new one-based track number.",
   args: z.object({
-    playlistId: z.string().describe("Playlist ID"),
+    playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
     songId: z.string().describe("djmdSongPlaylist ID"),
     trackNumber: z.number().int().positive().describe("New one-based track number"),
   }),
@@ -2044,7 +2246,8 @@ databasePlaylistCli.command("move-track", {
   run(c) {
     const db = openDatabase(c.options, true);
     try {
-      db.moveSongInPlaylist(c.args.playlistId, c.args.songId, c.args.trackNumber);
+      const { row: playlist } = resolvePlaylistSelector(db, c.args.playlist, ["playlist"]);
+      db.moveSongInPlaylist(playlist, c.args.songId, c.args.trackNumber);
       db.commit();
       return db.query(DjmdSongPlaylist).where({ ID: c.args.songId }).one();
     } finally {
@@ -2056,7 +2259,7 @@ databasePlaylistCli.command("move-track", {
 databaseCli.command(databaseRowCli);
 databaseCli.command(databaseContentCli);
 databaseCli.command(databaseMetadataCli);
-databaseCli.command(databasePlaylistCli);
+databaseCli.command(playlistCli);
 rekordboxCli.command(databaseCli);
 
 const deviceOpenOptions = z.object({

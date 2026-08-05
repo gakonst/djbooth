@@ -30,6 +30,7 @@ describe("djbooth CLI", () => {
   test("uses package-local dispatch for normal commands and full discovery for global modes", () => {
     expect(canDispatchDirectly(["status", "--format", "json"])).toBe(true);
     expect(canDispatchDirectly(["import", "https://example.com/set"])).toBe(true);
+    expect(canDispatchDirectly(["playlist", "list"])).toBe(true);
     expect(canDispatchDirectly(["--help"])).toBe(false);
     expect(canDispatchDirectly(["--mcp"])).toBe(false);
     expect(canDispatchDirectly([])).toBe(false);
@@ -57,6 +58,8 @@ describe("djbooth CLI", () => {
         "enrich",
         "import",
         "link",
+        "playlist create",
+        "playlist add",
         "resolve",
         "serve",
         "status",
@@ -78,6 +81,19 @@ describe("djbooth CLI", () => {
         "usb sync",
       ]),
     );
+  });
+
+  test("exposes local Rekordbox playlist CRUD at the product root", async () => {
+    const create = await serve(["playlist", "create", "--help"]);
+    expect(create.exitCode).toBeUndefined();
+    expect(create.output).toContain("djbooth playlist create <name>");
+    expect(create.output).toContain("--type");
+
+    const addFile = await serve(["playlist", "add", "--help"]);
+    expect(addFile.exitCode).toBeUndefined();
+    expect(addFile.output).toContain("djbooth playlist add <playlist> <audioPath>");
+    expect(addFile.output).toContain("--duration-seconds");
+    expect(addFile.output).toContain("--replace-analysis");
   });
 
   test("retains typed specialist provider groups", async () => {

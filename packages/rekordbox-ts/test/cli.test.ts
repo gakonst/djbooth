@@ -536,7 +536,7 @@ describe("CLI process boundary", () => {
     );
   }, 20_000);
 
-  it("fails safely on ambiguous playlist names and accepts a parent ID", () => {
+  it("fails safely on ambiguous playlist names and accepts a hierarchy path", () => {
     const path = playlistFixture();
     const database = new Database(path);
     database.exec(`
@@ -557,18 +557,20 @@ describe("CLI process boundary", () => {
     );
     expect(ambiguous.status).not.toBe(0);
     expect(`${ambiguous.stdout}\n${ambiguous.stderr}`).toContain(
-      "Multiple playlists named 'Festival Set' match",
+      "Playlist selector 'Festival Set' is ambiguous",
     );
-    expect(`${ambiguous.stdout}\n${ambiguous.stderr}`).toContain("playlist-1 (parent folder-1)");
-    expect(`${ambiguous.stdout}\n${ambiguous.stderr}`).toContain("playlist-2 (parent folder-2)");
+    expect(`${ambiguous.stdout}\n${ambiguous.stderr}`).toContain(
+      "'DJ Sets › Festival Set' (playlist-1)",
+    );
+    expect(`${ambiguous.stdout}\n${ambiguous.stderr}`).toContain(
+      "'Archive › Festival Set' (playlist-2)",
+    );
 
     const selected = runCli(
       "db",
       "playlist",
       "show",
-      "Festival Set",
-      "--parent-id",
-      "folder-1",
+      "DJ Sets/Festival Set",
       "--path",
       path,
       "--plain",
@@ -590,9 +592,7 @@ describe("CLI process boundary", () => {
       "db",
       "playlist",
       "show",
-      "Festival Set",
-      "--parent-id",
-      "folder-1",
+      "DJ Sets/Festival Set",
       "--path",
       path,
       "--plain",
@@ -600,15 +600,13 @@ describe("CLI process boundary", () => {
     );
     expect(stillAmbiguous.status).not.toBe(0);
     expect(`${stillAmbiguous.stdout}\n${stillAmbiguous.stderr}`).toContain(
-      "Pass --parent-id or --id",
+      "Playlist selector 'DJ Sets/Festival Set' is ambiguous",
     );
 
     const selected = runCli(
       "db",
       "playlist",
       "show",
-      "Festival Set",
-      "--id",
       "playlist-2",
       "--path",
       path,
