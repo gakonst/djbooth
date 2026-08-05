@@ -1,0 +1,62 @@
+diff --git a/dist/internal/command.js b/dist/internal/command.js
+index 9fcf5c291e09c8ebfd23e1a62135d49512566190..dbcca33b896a1172a139077f12103f37024ebb30 100644
+--- a/dist/internal/command.js
++++ b/dist/internal/command.js
+@@ -268,26 +268,6 @@ export const builtinCommands = [
+             }),
+         ],
+     },
+-    {
+-        name: 'skills',
+-        aliases: ['skill'],
+-        description: 'Sync skill files to agents',
+-        subcommands: [
+-            subcommand({
+-                name: 'add',
+-                description: 'Sync skill files to agents',
+-                options: z.object({
+-                    depth: z.number().optional().describe('Grouping depth for skill files (default: 1)'),
+-                    noGlobal: z.boolean().optional().describe('Install to project instead of globally'),
+-                }),
+-            }),
+-            subcommand({
+-                name: 'list',
+-                aliases: ['ls'],
+-                description: 'List skills',
+-            }),
+-        ],
+-    },
+ ];
+ /** @internal Finds a builtin command by its name or alias. */
+ export function findBuiltin(token) {
+diff --git a/src/internal/command.ts b/src/internal/command.ts
+index 7b298302da67ba0f63a04528a8325e433ac71da9..353ffb90aa9951dccb142558b60fc78238daf2c5 100644
+--- a/src/internal/command.ts
++++ b/src/internal/command.ts
+@@ -430,26 +430,6 @@ export const builtinCommands = [
+       }),
+     ],
+   },
+-  {
+-    name: 'skills',
+-    aliases: ['skill'],
+-    description: 'Sync skill files to agents',
+-    subcommands: [
+-      subcommand({
+-        name: 'add',
+-        description: 'Sync skill files to agents',
+-        options: z.object({
+-          depth: z.number().optional().describe('Grouping depth for skill files (default: 1)'),
+-          noGlobal: z.boolean().optional().describe('Install to project instead of globally'),
+-        }),
+-      }),
+-      subcommand({
+-        name: 'list',
+-        aliases: ['ls'],
+-        description: 'List skills',
+-      }),
+-    ],
+-  },
+ ] satisfies {
+   name: string
+   aliases?: string[] | undefined

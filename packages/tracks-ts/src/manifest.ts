@@ -270,7 +270,6 @@ export type ManifestArtifacts = {
     folderId: string;
     playlistName: string;
     playlistId: string;
-    backupDirectory: string;
   };
 };
 
@@ -1272,7 +1271,6 @@ function validateArtifacts(value: unknown, path: string): void {
       "folderId",
       "playlistName",
       "playlistId",
-      "backupDirectory",
     ]);
     literal(rekordbox.target, "rekordbox-db", `${path}.rekordbox.target`);
     const dbPath = nonemptyString(rekordbox.dbPath, `${path}.rekordbox.dbPath`);
@@ -1281,13 +1279,6 @@ function validateArtifacts(value: unknown, path: string): void {
     nonemptyString(rekordbox.folderId, `${path}.rekordbox.folderId`);
     nonemptyString(rekordbox.playlistName, `${path}.rekordbox.playlistName`);
     nonemptyString(rekordbox.playlistId, `${path}.rekordbox.playlistId`);
-    const backupDirectory = nonemptyString(
-      rekordbox.backupDirectory,
-      `${path}.rekordbox.backupDirectory`,
-    );
-    if (!isAbsolutePath(backupDirectory)) {
-      invalid(`${path}.rekordbox.backupDirectory`, "must be an absolute path");
-    }
   }
 }
 

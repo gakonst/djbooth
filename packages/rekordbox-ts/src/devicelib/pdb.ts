@@ -436,6 +436,16 @@ export class LegacyDevicePdbWriter {
     );
   }
 
+  /** Consume every CDJ history row while preserving all unrelated database bytes. */
+  clearHistories(): void {
+    this.requireMutable();
+    for (const table of [TABLE.HISTORY_PLAYLISTS, TABLE.HISTORY_ENTRIES])
+      this.clearTableRows(table);
+    this.historyIds.clear();
+    this.historyEntryCounts.clear();
+    this.nextHistoryId = 0;
+  }
+
   /** Finalize page generations and return a private copy of `export.pdb`. */
   build(): Buffer {
     if (!this.finalized) {
@@ -641,6 +651,33 @@ export class LegacyDevicePdbWriter {
     );
     this.putU16(pageOffset + 0x20, appended);
     this.putU16(pageOffset + 0x22, this.originalSlots.get(pageIndex) ?? 0);
+  }
+
+  private clearTableRows(table: number): void {
+    const tableOffset = this.tableEntryOffset(table);
+    let page = this.u32(tableOffset + 8);
+    const last = this.u32(tableOffset + 12);
+    const visited = new Set<number>();
+    while (true) {
+      if (visited.has(page))
+        throw new TypeError(`DeviceSQL table ${String(table)} contains a page cycle`);
+      visited.add(page);
+      const pageOffset = page * this.pageSize;
+      if (!(this.data[pageOffset + 0x1b]! & 0x40)) {
+        const slots = this.slotCount(pageOffset);
+        for (let group = 0; group < Math.ceil(slots / 16); group++) {
+          const groupBase = pageOffset + this.pageSize - group * 0x24;
+          this.putU16(groupBase - 4, 0);
+          this.putU16(groupBase - 2, 0);
+        }
+        this.putU16(pageOffset + 0x19, slots > 255 ? 1 : 0);
+        this.putU16(pageOffset + 0x20, 0);
+        this.putU16(pageOffset + 0x22, slots);
+        this.markTableTouched(table, page);
+      }
+      if (page === last) break;
+      page = this.u32(pageOffset + 0x0c);
+    }
   }
 
   private allocatePage(table: number): number {

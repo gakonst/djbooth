@@ -491,7 +491,6 @@ const manifestOutput = z.object({
         folderId: z.string(),
         playlistName: z.string(),
         playlistId: z.string(),
-        backupDirectory: z.string(),
       })
       .optional(),
   }),
@@ -607,8 +606,8 @@ const workflowPerformanceOutput = z.object({
 export const tracksCli = Cli.create("tracks", {
   version: VERSION,
   description:
-    "Resolve DJ sets or run one approved, resumable resolve→enrich→acquire→analyze→Rekordbox playlist import.",
-  hint: "One-shot: tracks import-set <set-url> --manifest <path> --write defaults to clean Auto rhythm; add --analysis-rhythm-mode dynamic for known live/rubato sets or --allow-set-clips --source-set-path <local-set> for same-run cue recovery.",
+    "Resolve DJ sets or run one resumable resolve→enrich→acquire→analyze→Rekordbox playlist import.",
+  hint: "One-shot: tracks import-set <set-url> --manifest <path> defaults to clean Auto rhythm and automatic cue-bounded set recovery; add --analysis-rhythm-mode dynamic for known live/rubato sets. Pass --source-set-path only to reuse an existing local set recording.",
   config: {
     flag: "config",
     files: ["tracks.json", "~/.config/tracks/config.json"],
@@ -616,22 +615,7 @@ export const tracksCli = Cli.create("tracks", {
   mcp: {
     command: "tracks --mcp",
     instructions:
-      "Use resolve for metadata-only DJ-set resolution. Use enrich as the idempotent whole-library metadata stage; it writes one backed-up, verified update by default and supports --dry-run or optional --folder scoping. For an explicitly approved local end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic safe Spotify acquisition primary while retaining all candidates, stores verified recordings under the canonical artist/album root, starts the releasable clean-room analyzer with Auto rhythm mode as recordings verify, and creates or updates the ordered playlist in one verified normal Rekordbox database commit with analyzer BPM/key. Use Dynamic for known live/rubato/materially changing tempo and Normal only when a static grid is intended. The proprietary reference oracle is opt-in only through --analysis-engine reference, requires explicit Normal or Dynamic mode, and is never a release dependency. import-set never downloads a remote source set. With both --allow-set-clips and an existing --source-set-path, failed individual acquisitions are checkpointed and recovered from exact cues in one bounded second pass during the same invocation. Return its automation counters and unresolved decisions; never claim completion after a failed import.",
-  },
-  sync: {
-    cwd: import.meta.dirname,
-    include: ["../skills/*"],
-    suggestions: [
-      "resolve a YouTube DJ set into a versioned track manifest",
-      "find the 1001Tracklists entry for a YouTube URL",
-      "search 1001Tracklists for a DJ set",
-      "analyze only the downloaded recordings in a durable manifest",
-      "enrich metadata across the complete Rekordbox library",
-      "import a fully acquired and analyzed manifest into Rekordbox",
-      "resolve, download, analyze, and create the Rekordbox playlist for this approved DJ set in one invocation",
-      "retry unavailable tracks from an approved local set source in the same import",
-      "render a tracklist as YouTube chapters",
-    ],
+      "Use resolve for metadata-only DJ-set resolution. Use enrich as the idempotent whole-library metadata stage; it writes one verified update by default and supports --dry-run or optional --folder scoping. For an end-to-end request, call import-set once instead of manually sequencing resolve, Spotify, download, analysis, and playlist commands. import-set resumes one durable manifest, auto-selects a deterministic Spotify acquisition primary while retaining all alternatives, stores verified recordings under the canonical artist/album root, starts the clean-room analyzer with Auto rhythm mode as recordings verify, and creates or updates the ordered playlist in one verified Rekordbox database commit with analyzer BPM/key. Failed individual acquisitions automatically use cue-bounded recovery from the cached source set. --source-set-path overrides that cache with an existing local recording.",
   },
 });
 
@@ -662,7 +646,6 @@ tracksCli.command("enrich", {
       ),
     cacheMode: cacheModeOption,
     probeConcurrency: z.number().int().min(1).max(32).default(8),
-    backupRoot: z.string().optional().describe("Pre-write backup directory root"),
     dryRun: z.boolean().default(false).describe("Plan enrichment without updating Rekordbox"),
     progress: z.enum(["auto", "always", "never"]).default("auto"),
   }),
@@ -675,7 +658,6 @@ tracksCli.command("enrich", {
     tracks: z.number().int().nonnegative(),
     changed: z.number().int().nonnegative(),
     written: z.boolean(),
-    backupDirectory: z.string().optional(),
     coverageBefore: metadataCoverageOutput,
     coverageAfter: metadataCoverageOutput,
     sources: z.object({
@@ -800,7 +782,6 @@ tracksCli.command("enrich", {
         context.options.progress === "always" ||
         (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
       const result = await enrichRekordboxMetadata({
-        approved: !context.options.dryRun,
         write: !context.options.dryRun,
         ...(context.options.folder ? { folder: context.options.folder } : {}),
         catalogSearch: context.options.catalogSearch,
@@ -812,7 +793,6 @@ tracksCli.command("enrich", {
         probeConcurrency: context.options.probeConcurrency,
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
-        ...(context.options.backupRoot ? { backupRoot: context.options.backupRoot } : {}),
         ...(context.options.manifestRoot.length
           ? { manifestRoots: context.options.manifestRoot }
           : {}),
@@ -838,7 +818,6 @@ tracksCli.command("enrich", {
         tracks: result.tracks,
         changed: result.changed,
         written: result.written,
-        ...(result.backup ? { backupDirectory: result.backup.directory } : {}),
         coverageBefore: result.coverageBefore,
         coverageAfter: result.coverageAfter,
         sources: result.sources,
@@ -865,11 +844,6 @@ tracksCli.command("import-existing", {
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     folderName: z.string().optional().describe("Destination Rekordbox folder"),
     playlistName: z.string().optional().describe("Destination Rekordbox playlist"),
-    backupRoot: z.string().optional().describe("Backup directory root"),
-    write: z
-      .boolean()
-      .default(false)
-      .describe("Required acknowledgement for normal Rekordbox database mutation"),
   }),
   output: z.object({
     manifestPath: z.string(),
@@ -879,7 +853,6 @@ tracksCli.command("import-existing", {
     imported: z.number().int().nonnegative(),
     expectedAnalysis: z.number().int().nonnegative(),
     verifiedAnalysis: z.number().int().nonnegative(),
-    backupDirectory: z.string(),
     changed: z.boolean(),
     startedAt: z.string(),
     finishedAt: z.string(),
@@ -887,13 +860,6 @@ tracksCli.command("import-existing", {
   }),
   async run(context) {
     try {
-      if (!context.options.write) {
-        throw new TracksError(
-          "INVALID_SOURCE",
-          "Manifest import requires the explicit --write acknowledgement",
-          { exitCode: 2 },
-        );
-      }
       const manifestPath = resolve(context.args.manifest);
       const manifest = await readManifest(manifestPath);
       const analysisDirectories = Object.fromEntries(
@@ -903,7 +869,6 @@ tracksCli.command("import-existing", {
         ]),
       );
       const result = await importManifestToRekordbox({
-        approved: true,
         manifest,
         manifestPath,
         analysisDirectories,
@@ -911,7 +876,6 @@ tracksCli.command("import-existing", {
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
         ...(context.options.folderName ? { folderName: context.options.folderName } : {}),
         ...(context.options.playlistName ? { playlistName: context.options.playlistName } : {}),
-        ...(context.options.backupRoot ? { backupRoot: context.options.backupRoot } : {}),
       });
       return {
         manifestPath,
@@ -921,7 +885,6 @@ tracksCli.command("import-existing", {
         imported: result.imported.length,
         expectedAnalysis: result.verification.expectedAnalysisCount,
         verifiedAnalysis: result.verification.verifiedAnalysisCount,
-        backupDirectory: result.backup.directory,
         changed: result.performance.changed,
         startedAt: result.performance.startedAt,
         finishedAt: result.performance.finishedAt,
@@ -1060,8 +1023,8 @@ tracksCli.command("analyze-existing", {
 
 tracksCli.command("import-set", {
   description:
-    "One-shot an approved set through resolution, deterministic Spotify primary selection, canonical acquisition, same-run cue fallback, clean-room analysis, and one verified ordered Rekordbox playlist commit.",
-  hint: "This is the full set workflow; clean Auto rhythm analysis is automatic. Use --analysis-rhythm-mode dynamic for known live/rubato sets. Pass --allow-set-clips with --source-set-path for failed-track recovery in pass 2/2.",
+    "One-shot a set through resolution, deterministic Spotify primary selection, canonical acquisition, automatic cue fallback, clean-room analysis, and one verified ordered Rekordbox playlist commit.",
+  hint: "This is the full set workflow; clean Auto rhythm analysis and failed-track recovery from bounded set cues are automatic. Use --analysis-rhythm-mode dynamic for known live/rubato sets; --source-set-path optionally reuses a local set.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud set URL or local set") }),
   env: importSetEnv,
   options: z.object({
@@ -1084,17 +1047,11 @@ tracksCli.command("import-set", {
       .describe(
         "Explicitly permit external yt-dlp after Soulseek and a typed native capability gap",
       ),
-    allowSetClips: z
-      .boolean()
-      .default(false)
-      .describe(
-        "Explicitly permit a bounded same-invocation second pass using cues from an existing local set",
-      ),
     sourceSetPath: z
       .string()
       .optional()
       .describe(
-        "Existing local set recording used only after individual failure; never downloaded by this command",
+        "Optional existing local set recording; overrides automatic caching of the exact public set",
       ),
     sourceSetUrl: z
       .string()
@@ -1170,11 +1127,6 @@ tracksCli.command("import-set", {
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     folderName: z.string().optional().describe("Destination Rekordbox folder"),
     playlistName: z.string().optional().describe("Destination Rekordbox playlist"),
-    backupRoot: z.string().optional().describe("Backup directory root"),
-    write: z
-      .boolean()
-      .default(false)
-      .describe("Required acknowledgement for normal Rekordbox database mutation"),
     progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
   }),
   output: z.object({
@@ -1195,7 +1147,6 @@ tracksCli.command("import-set", {
     dbPath: z.string(),
     folderId: z.string(),
     playlistId: z.string(),
-    backupDirectory: z.string(),
     performance: workflowPerformanceOutput,
   }),
   async run(context) {
@@ -1205,13 +1156,6 @@ tracksCli.command("import-set", {
     process.once("SIGINT", cancel);
     process.once("SIGTERM", cancel);
     try {
-      if (!context.options.write) {
-        throw new TracksError(
-          "INVALID_SOURCE",
-          "Set import requires the explicit --write acknowledgement",
-          { exitCode: 2 },
-        );
-      }
       const spotify = await workflowSpotifyClient(context.options.cacheMode);
       soulseek = new SoulseekClient();
       const acquirers = orderedImportSetAcquirers(context.options.referenceYtdlp, {
@@ -1240,7 +1184,6 @@ tracksCli.command("import-set", {
         outputDirectory:
           context.options.outputDirectory ??
           defaultTrackLibraryRoot({ ...process.env, ...context.env }),
-        approved: true,
         identify: {
           provider: context.options.provider,
           cacheMode: context.options.cacheMode,
@@ -1249,7 +1192,6 @@ tracksCli.command("import-set", {
         spotify,
         acquirers,
         localArtifactDirectories: context.options.localDirectory,
-        allowSourceSetClips: context.options.allowSetClips,
         ...(context.options.sourceSetPath
           ? {
               sourceSet: {
@@ -1282,7 +1224,6 @@ tracksCli.command("import-set", {
           ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
           ...(context.options.folderName ? { folderName: context.options.folderName } : {}),
           ...(context.options.playlistName ? { playlistName: context.options.playlistName } : {}),
-          ...(context.options.backupRoot ? { backupRoot: context.options.backupRoot } : {}),
         },
         ...(showProgress
           ? {
@@ -1312,7 +1253,6 @@ tracksCli.command("import-set", {
         dbPath: result.rekordbox.dbPath,
         folderId: result.rekordbox.folderId,
         playlistId: result.rekordbox.playlistId,
-        backupDirectory: result.rekordbox.backup.directory,
         performance: result.performance,
       };
     } catch (error) {
@@ -1865,10 +1805,7 @@ function tracksErrorCta(
       ],
     };
   }
-  if (
-    error.code === "TOOL_FAILED" ||
-    (error.code === "INVALID_SOURCE" && /(?:cue|source-set|--write)/iu.test(error.message))
-  ) {
+  if (error.code === "TOOL_FAILED" || error.code === "INVALID_SOURCE") {
     return {
       description:
         "Review the one-shot import requirements (clean Auto rhythm by default), then retry the same manifest:",

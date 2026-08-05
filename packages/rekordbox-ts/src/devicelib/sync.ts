@@ -1,18 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
-import { readFile, realpath, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import {
   acquireRekordboxWriteLock,
-  assertRekordboxWriteStopped,
-  createRekordboxWriteBackup,
   DjmdContent,
   DjmdPlaylist,
-  getRekordboxWriteProcessState,
   MasterDatabase,
   PlaylistType,
-  type RekordboxWriteBackup,
-  type RekordboxWriteProcessState,
 } from "../masterdb/index.js";
 import {
   checkpointLegacyDeviceHistoryReceipts,
@@ -45,8 +40,6 @@ type ImportedHistory = LegacyDeviceHistoryReceipt & {
 
 /** Options for one complete mounted-USB ↔ master.db reconciliation. */
 export type SyncLegacyDeviceLibraryOptions = {
-  /** Explicit acknowledgement for USB and master.db mutation. */
-  approved: boolean;
   /** Mounted FAT/exFAT CDJ media root. */
   targetDirectory: string;
   /** Rekordbox `master.db`; defaults to the configured Rekordbox 6/7 database. */
@@ -55,16 +48,50 @@ export type SyncLegacyDeviceLibraryOptions = {
   databaseKey?: string;
   /** Disable SQLCipher setup for an explicitly plain SQLite library. */
   databaseUnlock?: boolean;
-  /** Directory for durable checksummed pre-write database backups. */
-  backupRoot?: string;
   /** Parallel audio-copy workers. */
   copyConcurrency?: number;
   /** Cooperative cancellation. */
   signal?: AbortSignal;
   /** Deterministic clock override for tests. */
   now?: Date;
-  /** Testable process-state override. */
-  getProcessState?: () => RekordboxWriteProcessState;
+};
+
+type HistoryImportRuntimeOptions = Pick<
+  SyncLegacyDeviceLibraryOptions,
+  "databaseKey" | "databaseUnlock" | "signal"
+>;
+
+/** One stable DeviceSQL-to-master-library identity used for CDJ history import. */
+export type LegacyDeviceHistoryTrackMapping = {
+  pdbId: number;
+  contentId: string;
+};
+
+/** Options for importing mapped CDJ histories without reconciling the complete library. */
+export type ImportMappedLegacyDeviceHistoriesOptions = HistoryImportRuntimeOptions & {
+  databasePath: string;
+  mediaId: string;
+  generationId: string;
+  histories: readonly LegacyDevicePdbHistory[];
+  trackMap: readonly LegacyDeviceHistoryTrackMapping[];
+  importedHistories?: readonly LegacyDeviceHistoryReceipt[];
+  now?: Date;
+};
+
+/** Durable result of a mapped CDJ-history import. */
+export type ImportMappedLegacyDeviceHistoriesResult = {
+  historiesFound: number;
+  historiesImported: number;
+  historiesAlreadyImported: number;
+  playlistsCreated: Array<{
+    historyId: number;
+    historyName: string;
+    playlistId: string;
+    playlistName: string;
+    tracks: number;
+  }>;
+  playCountIncrements: number;
+  receipts: LegacyDeviceHistoryReceipt[];
 };
 
 /** Result of importing new histories and differentially reconciling mounted CDJ media. */
@@ -84,7 +111,6 @@ export type SyncLegacyDeviceLibraryResult = {
     tracks: number;
   }>;
   playCountIncrements: number;
-  backupDirectory: string | null;
   export: LegacyDeviceLibraryExportResult;
 };
 
@@ -97,12 +123,9 @@ export type SyncLegacyDeviceLibraryResult = {
 export async function syncLegacyDeviceLibrary(
   options: SyncLegacyDeviceLibraryOptions,
 ): Promise<SyncLegacyDeviceLibraryResult> {
-  if (!options.approved)
-    throw new TypeError("USB synchronization requires explicit write approval");
   throwIfAborted(options.signal);
   const now = options.now ?? new Date();
   if (!Number.isFinite(now.getTime())) throw new TypeError("Sync clock is invalid");
-  assertRekordboxWriteStopped((options.getProcessState ?? getRekordboxWriteProcessState)());
   const targetDirectory = await realpath(resolve(options.targetDirectory));
   const marker = await readLegacyDeviceExportMarker(targetDirectory);
   const inspection = await readCurrentInspection(targetDirectory);
@@ -121,7 +144,7 @@ export async function syncLegacyDeviceLibrary(
   const databasePath = await resolveDatabasePath(options);
   const imported = unseen.length
     ? await importHistoryPlans(databasePath, unseen, now, options)
-    : { backup: undefined, histories: [] };
+    : { histories: [] };
   const receipts = mergeReceipts(
     markerV2?.importedHistories ?? [],
     imported.histories.map(({ created: _, playCountIncrements: __, ...receipt }) => receipt),
@@ -171,8 +194,60 @@ export async function syncLegacyDeviceLibrary(
       (sum, history) => sum + history.playCountIncrements,
       0,
     ),
-    backupDirectory: imported.backup?.directory ?? null,
     export: exported,
+  };
+}
+
+/**
+ * Import mapped CDJ histories into `master.db` without exporting unrelated host playlists.
+ *
+ * Deterministic playlist UUIDs make a retry idempotent across the database-commit/USB-checkpoint
+ * boundary. The caller persists `receipts` before consuming the history rows on the device.
+ */
+export async function importMappedLegacyDeviceHistories(
+  options: ImportMappedLegacyDeviceHistoriesOptions,
+): Promise<ImportMappedLegacyDeviceHistoriesResult> {
+  throwIfAborted(options.signal);
+  if (!options.mediaId.length || !options.generationId.length)
+    throw new TypeError("CDJ history import requires stable media and generation identities");
+  const now = options.now ?? new Date();
+  if (!Number.isFinite(now.getTime())) throw new TypeError("History import clock is invalid");
+  const databasePath = await realpath(resolve(options.databasePath));
+  const plans = planMappedHistories(
+    options.mediaId,
+    options.generationId,
+    options.histories,
+    options.trackMap,
+  );
+  const prior = options.importedHistories ?? [];
+  const priorFingerprints = new Set(prior.map(({ fingerprint }) => fingerprint));
+  const unseen = plans.filter(({ fingerprint }) => !priorFingerprints.has(fingerprint));
+  const imported = unseen.length
+    ? await importHistoryPlans(databasePath, unseen, now, options)
+    : { histories: [] };
+  const receipts = mergeReceipts(
+    prior,
+    imported.histories.map(({ created: _, playCountIncrements: __, ...receipt }) => receipt),
+  );
+  return {
+    historiesFound: options.histories.length,
+    historiesImported: imported.histories.filter(({ created }) => created).length,
+    historiesAlreadyImported:
+      plans.length - unseen.length + imported.histories.filter(({ created }) => !created).length,
+    playlistsCreated: imported.histories
+      .filter(({ created }) => created)
+      .map(({ historyId, historyName, playlistId, playlistName, tracks }) => ({
+        historyId,
+        historyName,
+        playlistId,
+        playlistName,
+        tracks,
+      })),
+    playCountIncrements: imported.histories.reduce(
+      (sum, history) => sum + history.playCountIncrements,
+      0,
+    ),
+    receipts,
   };
 }
 
@@ -217,6 +292,29 @@ function planHistories(
       );
     contentByPdbId.set(mapping.pdbId, mapping.contentId);
   }
+  return planMappedHistories(
+    marker.mediaId,
+    marker.generationId,
+    histories,
+    [...contentByPdbId].map(([pdbId, contentId]) => ({ pdbId, contentId })),
+  );
+}
+
+function planMappedHistories(
+  mediaId: string,
+  generationId: string,
+  histories: readonly LegacyDevicePdbHistory[],
+  trackMap: readonly LegacyDeviceHistoryTrackMapping[],
+): HistoryPlan[] {
+  const contentByPdbId = new Map<number, string>();
+  for (const mapping of trackMap) {
+    if (!Number.isSafeInteger(mapping.pdbId) || mapping.pdbId < 1 || !mapping.contentId.length)
+      throw new TypeError("Invalid mapped CDJ history track identity");
+    const existing = contentByPdbId.get(mapping.pdbId);
+    if (existing && existing !== mapping.contentId)
+      throw new Error(`DeviceSQL track ${String(mapping.pdbId)} has conflicting master identities`);
+    contentByPdbId.set(mapping.pdbId, mapping.contentId);
+  }
   return histories
     .filter(({ trackIds }) => trackIds.length > 0)
     .map((history) => {
@@ -228,10 +326,10 @@ function planHistories(
           );
         return contentId;
       });
-      const fingerprint = historyFingerprint(marker, history);
+      const fingerprint = historyFingerprint(mediaId, generationId, history);
       return {
         fingerprint,
-        generationId: marker.generationId,
+        generationId,
         history,
         contentIds,
         playlistUuid: deterministicUuid(`music-ts:cdj-history:${fingerprint}`),
@@ -240,14 +338,15 @@ function planHistories(
 }
 
 function historyFingerprint(
-  marker: LegacyDeviceExportMarker,
+  mediaId: string,
+  generationId: string,
   history: LegacyDevicePdbHistory,
 ): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        mediaId: marker.mediaId,
-        generationId: marker.generationId,
+        mediaId,
+        generationId,
         historyId: history.id,
         historyName: history.name,
         trackIds: history.trackIds,
@@ -268,12 +367,10 @@ async function importHistoryPlans(
   databasePath: string,
   plans: readonly HistoryPlan[],
   now: Date,
-  options: SyncLegacyDeviceLibraryOptions,
-): Promise<{ backup: RekordboxWriteBackup | undefined; histories: ImportedHistory[] }> {
+  options: HistoryImportRuntimeOptions,
+): Promise<{ histories: ImportedHistory[] }> {
   const lock = await acquireRekordboxWriteLock(databasePath);
   try {
-    const processState = options.getProcessState ?? getRekordboxWriteProcessState;
-    assertRekordboxWriteStopped(processState());
     const preflight = inspectHistoryCommitState(
       databasePath,
       plans,
@@ -282,7 +379,6 @@ async function importHistoryPlans(
     );
     if (!preflight.pending.length)
       return {
-        backup: undefined,
         histories: preflight.committed.map((history) => ({
           ...history,
           created: false,
@@ -290,12 +386,6 @@ async function importHistoryPlans(
         })),
       };
 
-    const mutationId = randomUUID();
-    const backup = await createRekordboxWriteBackup(databasePath, {
-      mutationId,
-      backupRoot: options.backupRoot,
-    });
-    assertRekordboxWriteStopped(processState());
     const writer = openDatabase(
       databasePath,
       options.databaseKey,
@@ -347,13 +437,9 @@ async function importHistoryPlans(
           playCountIncrements: plan.contentIds.length,
         });
       }
-      assertRekordboxWriteStopped(processState());
-      writer.commit({ allowWhileRunning: false });
+      writer.commit();
     } catch (error) {
-      throw new Error(
-        `CDJ history import failed; pre-write backup is '${backup.directory}': ${asError(error).message}`,
-        { cause: error },
-      );
+      throw new Error(`CDJ history import failed: ${asError(error).message}`, { cause: error });
     } finally {
       writer.close();
     }
@@ -365,22 +451,7 @@ async function importHistoryPlans(
       options.databaseKey,
       options.databaseUnlock ?? true,
     );
-    await writeFile(
-      join(backup.directory, `cdj-history-import-${mutationId}.json`),
-      `${JSON.stringify(
-        {
-          schemaVersion: 1,
-          mutationId,
-          databasePath,
-          committedAt: now.toISOString(),
-          histories: committed,
-        },
-        null,
-        2,
-      )}\n`,
-      { flag: "wx", mode: 0o600 },
-    );
-    return { backup, histories: committed };
+    return { histories: committed };
   } finally {
     await lock.release();
   }
@@ -486,7 +557,6 @@ function openDatabase(
     key,
     readonly,
     unlock,
-    allowWhileRunning: false,
   });
 }
 

@@ -90,7 +90,6 @@ function mockApi(
         dbPath: "/tmp/master.db",
         dbDirectory: "/tmp",
         writeEnabled: true,
-        processes: { rekordboxPid: 0, rekordboxAgentPid: 0 },
         stats: {
           tracks: 1,
           playlists: 1,

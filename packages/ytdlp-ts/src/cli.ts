@@ -57,15 +57,6 @@ export const cli = Cli.create('ytdlp-ts', {
     instructions:
       'Use inspect before download when format or subtitle selection matters. Results report the native or reference engine used.',
   },
-  sync: {
-    cwd: import.meta.dirname,
-    suggestions: [
-      'inspect a media URL and summarize its formats',
-      'download the highest-quality source audio and metadata for a URL',
-      'download several YouTube and SoundCloud tracks at the highest source quality with metadata',
-      'list available subtitles for a media URL',
-    ],
-  },
 })
 
 cli.command('inspect', {

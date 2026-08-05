@@ -368,9 +368,7 @@ export async function acquireManifest(
         try {
           if (serialized !== expectedManifestContents) {
             checkpointWrites += 1;
-            await writeManifestAtomic(manifestPath, snapshot, {
-              expectedContents: expectedManifestContents,
-            });
+            await writeManifestAtomic(manifestPath, snapshot);
             expectedManifestContents = serialized;
           }
           checkpointedManifest = snapshot;

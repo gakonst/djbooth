@@ -20,7 +20,7 @@ played tracks work without manually copying access tokens.
   5xx retries for idempotent requests. Unsafe `POST` requests are not retried after rate-limit or
   transient server errors.
 - All 96 Spotify operations exposed through `incur`, with JSON Schema, structured output, MCP,
-  agent skill generation, shell completion, and LLM-readable discovery.
+  shell completion and LLM-readable discovery.
 
 All requests made through one `SpotifyClient` share a rate-limit recovery gate. After any `429`,
 later calls honor the longest [`Retry-After`](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)
@@ -182,7 +182,6 @@ spots --llms                 # compact command manifest
 spots --llms-full            # full command manifest
 spots --mcp                  # serve all commands over MCP stdio
 spots mcp add                # register the MCP server
-spots skills add             # install an agent skill for this CLI
 spots completions zsh        # generate shell completions
 spots recent --format json
 spots recent --filter-output 'items[0].track.name'

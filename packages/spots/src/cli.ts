@@ -30,15 +30,6 @@ function loadWorkspaceEnvironment(): void {
 export const spotsCli = Cli.create('spots', {
   version: packageJson.version,
   description: 'Typed Spotify Web API client for humans and agents.',
-  sync: {
-    suggestions: [
-      'show my recently played Spotify tracks',
-      'search Spotify for an artist',
-      'show my Spotify profile',
-      'list my saved Spotify albums',
-      'create a Spotify playlist from these tracks',
-    ],
-  },
 })
 const cli = spotsCli
 

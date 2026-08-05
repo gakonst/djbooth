@@ -60,14 +60,6 @@ async function connected<T>(env: Auth, run: (client: SoulseekClient) => Promise<
 export const cli = Cli.create('slsk', {
   version: (createRequire(import.meta.url)('../package.json') as { version: string }).version,
   description: 'A complete command-line client for the Soulseek network.',
-  sync: {
-    suggestions: [
-      'search Soulseek for music',
-      'browse a Soulseek user shares',
-      'download a file from Soulseek',
-      'send a Soulseek private message',
-    ],
-  },
 })
 
 cli.command('login', {

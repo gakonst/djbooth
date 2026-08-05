@@ -1052,29 +1052,29 @@ async function installReconciledExport(
   pendingRemovals: readonly string[],
 ): Promise<void> {
   const target = exportPaths(targetRoot);
-  const backupRoot = join(stagingRoot, ".rollback");
+  const rollbackRoot = join(stagingRoot, ".rollback");
   const stagedMarker = join(stagingRoot, EXPORT_MARKER);
-  await mkdir(backupRoot, { recursive: true });
+  await mkdir(rollbackRoot, { recursive: true });
   await writeFile(stagedMarker, `${JSON.stringify(marker, null, 2)}\n`, { flag: "wx" });
   const installs = [...pendingInstalls, { staged: stagedMarker, target: target.marker }];
   const removals = [...new Set(pendingRemovals.map((path) => resolve(path)))];
-  const movedOld: Array<{ target: string; backup: string }> = [];
+  const replaced: Array<{ target: string; rollbackPath: string }> = [];
   const installed: string[] = [];
   try {
-    let backupIndex = 0;
+    let rollbackIndex = 0;
     for (const path of removals) {
       assertOwnedTarget(targetRoot, path);
       if (!(await pathExists(path))) continue;
-      const backup = join(backupRoot, String(backupIndex++));
-      await rename(path, backup);
-      movedOld.push({ target: path, backup });
+      const rollbackPath = join(rollbackRoot, String(rollbackIndex++));
+      await rename(path, rollbackPath);
+      replaced.push({ target: path, rollbackPath });
     }
     for (const { staged, target: destination } of installs) {
       assertOwnedTarget(targetRoot, destination);
       if (await pathExists(destination)) {
-        const backup = join(backupRoot, String(backupIndex++));
-        await rename(destination, backup);
-        movedOld.push({ target: destination, backup });
+        const rollbackPath = join(rollbackRoot, String(rollbackIndex++));
+        await rename(destination, rollbackPath);
+        replaced.push({ target: destination, rollbackPath });
       }
       await mkdir(dirname(destination), { recursive: true });
       await rename(staged, destination);
@@ -1082,10 +1082,10 @@ async function installReconciledExport(
     }
   } catch (error) {
     for (const path of installed.reverse()) await rm(path, { force: true, recursive: true });
-    for (const { target: destination, backup } of movedOld.reverse()) {
-      if (await pathExists(backup)) {
+    for (const { target: destination, rollbackPath } of replaced.reverse()) {
+      if (await pathExists(rollbackPath)) {
         await mkdir(dirname(destination), { recursive: true });
-        await rename(backup, destination);
+        await rename(rollbackPath, destination);
       }
     }
     throw error;

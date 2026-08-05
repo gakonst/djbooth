@@ -19,7 +19,7 @@ import {
 } from "../anlz/index.js";
 import { readAnalysisResult } from "../analyzer/index.js";
 import { getConfig } from "../config/index.js";
-import { deobfuscate, getRekordboxProcessState, warnDeprecated } from "../utils.js";
+import { deobfuscate, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
 import {
@@ -63,18 +63,15 @@ export class SessionNotInitializedError extends Error {
 
 /** Options for opening a Rekordbox master database. */
 export type MasterDatabaseOptions = {
-  allowWhileRunning?: boolean;
   dbDirectory?: string;
   key?: string;
   path?: string;
   readonly?: boolean;
   unlock?: boolean;
-  warnIfRunning?: boolean;
 };
 
 /** Commit behavior controls. */
 export type CommitOptions = {
-  allowWhileRunning?: boolean;
   autoincrement?: boolean;
 };
 
@@ -1137,7 +1134,7 @@ export class MasterDatabase {
   /** Commit staged changes, assigning local USNs by default. */
   commit(options: CommitOptions | boolean = {}): void {
     const normalized = typeof options === "boolean" ? { autoincrement: options } : options;
-    this.assertCommitAllowed(normalized.allowWhileRunning);
+    this.assertCommitAllowed();
     this.emit("before_commit");
     if ((normalized.autoincrement ?? true) && this.changes.length)
       this.registry.autoincrementLocalUpdateCount(true);
@@ -1200,19 +1197,9 @@ export class MasterDatabase {
     this.changes = [];
   }
 
-  /** Validate the write/running-process guard without committing. */
-  assertCommitAllowed(allowWhileRunning?: boolean): void {
+  /** Validate that the database was opened for writes. */
+  assertCommitAllowed(): void {
     this.requireWritable();
-    if (allowWhileRunning ?? this.options.allowWhileRunning) return;
-    const { rekordboxAgentPid, rekordboxPid } = getRekordboxProcessState();
-    const running = [
-      rekordboxPid ? `rekordbox (PID ${rekordboxPid})` : undefined,
-      rekordboxAgentPid ? `rekordboxAgent (PID ${rekordboxAgentPid})` : undefined,
-    ].filter((value): value is string => value !== undefined);
-    if (running.length)
-      throw new Error(
-        `Close Rekordbox before committing database changes; running: ${running.join(", ")}`,
-      );
   }
 
   /** Roll back all staged and flushed-but-uncommitted changes. */
@@ -2937,9 +2924,9 @@ export class MasterDatabase {
   installContentAnalysis(
     content: models.DjmdContent | string | number,
     analysisDirectory: string,
-    options: { allowWhileRunning?: boolean; commit?: boolean; replace?: boolean } = {},
+    options: { commit?: boolean; replace?: boolean } = {},
   ): InstallContentAnalysisResult {
-    this.assertCommitAllowed(options.allowWhileRunning);
+    this.assertCommitAllowed();
     const row = this.resolve(models.DjmdContent, content);
     if (!row.FolderPath) throw new TypeError(`Content '${row.ID}' has no FolderPath`);
     if (!row.UUID) throw new TypeError(`Content '${row.ID}' has no UUID`);
@@ -2987,7 +2974,7 @@ export class MasterDatabase {
     if (this.hasColumn(row.tableName, "Analysed")) row.set("Analysed", 105);
     if (this.hasColumn(row.tableName, "AnalysisUpdated")) row.set("AnalysisUpdated", "2");
     if (this.hasColumn(row.tableName, "TrackInfoUpdated")) row.set("TrackInfoUpdated", "2");
-    if (options.commit ?? true) this.commit({ allowWhileRunning: options.allowWhileRunning });
+    if (options.commit ?? true) this.commit();
     return { analysisDataPath, contentId: row.ID, directory, paths, ...metadata };
   }
 
@@ -2995,15 +2982,15 @@ export class MasterDatabase {
   syncContentAnalysisMetadata(
     content: models.DjmdContent | string | number,
     analysisDirectory: string,
-    options: { allowWhileRunning?: boolean; commit?: boolean } = {},
+    options: { commit?: boolean } = {},
   ): SyncContentAnalysisMetadataResult {
-    this.assertCommitAllowed(options.allowWhileRunning);
+    this.assertCommitAllowed();
     const row = this.resolve(models.DjmdContent, content);
     const metadata = this.prepareContentAnalysisMetadata(row, analysisDirectory);
     this.applyContentAnalysisMetadata(row, metadata);
     if (this.hasColumn(row.tableName, "AnalysisUpdated")) row.set("AnalysisUpdated", "2");
     if (this.hasColumn(row.tableName, "TrackInfoUpdated")) row.set("TrackInfoUpdated", "2");
-    if (options.commit ?? true) this.commit({ allowWhileRunning: options.allowWhileRunning });
+    if (options.commit ?? true) this.commit();
     return { contentId: row.ID, ...metadata };
   }
 
@@ -3102,15 +3089,13 @@ export class MasterDatabase {
     content: models.DjmdContent | string | number,
     path: string,
     options: {
-      allowWhileRunning?: boolean;
       checkPath?: boolean;
       commit?: boolean;
       saveAnlz?: boolean;
     } = {},
   ): void {
     const row = this.resolve(models.DjmdContent, content);
-    if ((options.commit ?? true) || (options.saveAnlz ?? true))
-      this.assertCommitAllowed(options.allowWhileRunning);
+    if ((options.commit ?? true) || (options.saveAnlz ?? true)) this.assertCommitAllowed();
     if ((options.checkPath ?? true) && !existsSync(path))
       throw new TypeError(`Path '${path}' does not exist`);
     const normalized = path.replaceAll("\\", "/");
@@ -3130,7 +3115,6 @@ export class MasterDatabase {
     content: models.DjmdContent | string | number,
     name: string,
     options: {
-      allowWhileRunning?: boolean;
       checkPath?: boolean;
       commit?: boolean;
       saveAnlz?: boolean;

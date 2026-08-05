@@ -71,7 +71,6 @@ export type HostedRekordboxImportOptions = {
   dbPath?: string;
   dbDirectory?: string;
   key?: string;
-  backupRoot?: string;
   folderNames?: Partial<Record<HostedPlaylistProvider, string>>;
 };
 
@@ -496,7 +495,6 @@ export class HostedPlaylistAcquisitionWorker {
     if (this.#shouldImport(payload)) {
       this.#current!.phase = "import";
       const imported = await this.#dependencies.importRekordbox({
-        approved: true,
         manifest: analyzedManifest,
         manifestPath,
         folderName:
@@ -509,7 +507,6 @@ export class HostedPlaylistAcquisitionWorker {
         ...(this.#rekordbox.dbPath ? { dbPath: this.#rekordbox.dbPath } : {}),
         ...(this.#rekordbox.dbDirectory ? { dbDirectory: this.#rekordbox.dbDirectory } : {}),
         ...(this.#rekordbox.key ? { key: this.#rekordbox.key } : {}),
-        ...(this.#rekordbox.backupRoot ? { backupRoot: this.#rekordbox.backupRoot } : {}),
       });
       localPlaylistId = imported.playlistId;
       const entryOrders = new Map(analyzedManifest.entries.map((entry) => [entry.id, entry.order]));

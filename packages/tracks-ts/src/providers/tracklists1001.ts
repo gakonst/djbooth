@@ -16,6 +16,7 @@ import type {
   LatestTracklists,
   SearchTracklists,
   TrackMediaLink,
+  TracklistEntry,
   TracklistSummary,
 } from "../types.js";
 
@@ -363,7 +364,7 @@ function normalizeSearchText(value: string): string {
 }
 
 export function databaseTracklistToEntries(tracklist: DatabaseTracklist) {
-  return tracklist.tracks.map((track, index) => {
+  const entries: TracklistEntry[] = tracklist.tracks.map((track, index) => {
     const startSeconds = track.timestamp ? parseTimestamp(track.timestamp) : undefined;
     const songLink = firstTrackLink(track);
     const mediaLinks = preferredMediaOrder(track.media ?? [], track.durationSeconds);
@@ -379,6 +380,18 @@ export function databaseTracklistToEntries(tracklist: DatabaseTracklist) {
       ...(songLink ? { songLink } : {}),
       ...(mediaLinks.length ? { mediaLinks } : {}),
     };
+  });
+  return entries.map((entry, index) => {
+    const startSeconds = entry.startSeconds;
+    if (startSeconds === undefined || entry.endSeconds !== undefined) return entry;
+    const nextStart = entries
+      .slice(index + 1)
+      .map((candidate) => candidate.startSeconds)
+      .find(
+        (candidate): candidate is number => candidate !== undefined && candidate > startSeconds,
+      );
+    const endSeconds = nextStart ?? tracklist.durationSeconds;
+    return endSeconds !== undefined && endSeconds > startSeconds ? { ...entry, endSeconds } : entry;
   });
 }
 

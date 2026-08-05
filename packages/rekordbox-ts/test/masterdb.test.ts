@@ -653,7 +653,6 @@ describe("MasterDatabase mutations", () => {
   it("respects no-autoflush scopes when querying playlist tracks", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -678,7 +677,7 @@ describe("MasterDatabase mutations", () => {
     });
     const prepare = vi.spyOn(db.connection!, "prepare");
 
-    db.commit({ allowWhileRunning: true, autoincrement: false });
+    db.commit({ autoincrement: false });
 
     const contentUpdates = prepare.mock.calls.filter(
       ([sql]) => typeof sql === "string" && sql.startsWith('UPDATE "djmdContent" SET'),
@@ -718,14 +717,11 @@ describe("MasterDatabase mutations", () => {
     writeAnalysisSummary(analysisDirectory, audioPath);
 
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
     });
-    const result = db.installContentAnalysis("1", analysisDirectory, {
-      allowWhileRunning: true,
-    });
+    const result = db.installContentAnalysis("1", analysisDirectory, {});
     expect(result.analysisDataPath).toBe("/PIONEER/USBANLZ/con/tent-1/ANLZ0000.DAT");
     expect(result.bpmHundredths).toBe(12_801);
     expect(result.keyId).toBe("301");
@@ -733,9 +729,7 @@ describe("MasterDatabase mutations", () => {
     expect(result.tempoBpm).toBe(128.006_827);
     expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe(audioPath);
     const installedDat = readFileSync(result.paths.DAT);
-    const synced = db.syncContentAnalysisMetadata("1", analysisDirectory, {
-      allowWhileRunning: true,
-    });
+    const synced = db.syncContentAnalysisMetadata("1", analysisDirectory, {});
     expect(synced).toEqual({
       bpmHundredths: 12_801,
       contentId: "1",
@@ -745,9 +739,9 @@ describe("MasterDatabase mutations", () => {
     });
     expect(readFileSync(result.paths.DAT)).toEqual(installedDat);
     writeFileSync(audioPath, "changed after analysis");
-    expect(() =>
-      db.syncContentAnalysisMetadata("1", analysisDirectory, { allowWhileRunning: true }),
-    ).toThrow("source fingerprint does not match");
+    expect(() => db.syncContentAnalysisMetadata("1", analysisDirectory)).toThrow(
+      "source fingerprint does not match",
+    );
     db.close();
 
     const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
@@ -765,7 +759,6 @@ describe("MasterDatabase mutations", () => {
   it("allows the same album name for different album artists", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -792,7 +785,6 @@ describe("MasterDatabase mutations", () => {
   it("stages, rolls back, and commits row changes with local USNs", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -833,7 +825,6 @@ describe("MasterDatabase mutations", () => {
   it("creates playlists and maintains song ordering", () => {
     const { dbPath, xmlPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -871,7 +862,6 @@ describe("MasterDatabase mutations", () => {
   it("commits row deletions without assigning a local USN to the deleted model", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -888,7 +878,6 @@ describe("MasterDatabase mutations", () => {
   it("preserves a committed database and the original sidecar error when saving XML fails", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -917,7 +906,6 @@ describe("MasterDatabase mutations", () => {
   it("rejects fractional positions, cross-playlist songs, and hierarchy cycles", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -940,7 +928,6 @@ describe("MasterDatabase mutations", () => {
   it("preserves contiguous playlist ordering through a deterministic 300-operation state machine", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -1000,7 +987,6 @@ describe("MasterDatabase mutations", () => {
   it("handles default inserts and every new-row rollback/delete boundary", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -1034,7 +1020,6 @@ describe("MasterDatabase mutations", () => {
   it("rekeys the identity map when a primary key changes", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -1070,7 +1055,6 @@ describe("MasterDatabase mutations", () => {
   it("refuses to expire identities while changes are pending", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,
@@ -1100,7 +1084,6 @@ describe("MasterDatabase mutations", () => {
   it("persists relationship, proxy, and live collection mutations", () => {
     const { dbPath } = fixture();
     const db = new MasterDatabase({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,

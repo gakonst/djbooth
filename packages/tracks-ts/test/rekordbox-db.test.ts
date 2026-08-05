@@ -9,15 +9,10 @@ import type { SetManifest } from "../src/manifest.js";
 import {
   applyRekordboxImportResults,
   acquireRekordboxDatabaseLock,
-  assertRekordboxImportApproved,
-  assertRekordboxStopped,
-  backupRekordboxDatabase,
   DEFAULT_REKORDBOX_IO_CONCURRENCY,
   defaultRekordboxPlaylistName,
   planRekordboxImport,
   preflightRekordboxMedia,
-  readRekordboxBackup,
-  rekordboxBackupSources,
   resolveRekordboxAnalysisDirectory,
   validateMasterPlaylistSidecar,
   writeRekordboxPlan,
@@ -952,7 +947,7 @@ describe("Rekordbox direct database planning", () => {
       {
         contentId: result.imported[0]!.contentId,
         directory: "/analysis/track-1",
-        options: { allowWhileRunning: false, commit: false, replace: false },
+        options: { commit: false, replace: false },
       },
     ]);
     expect(commitCount).toBe(0);
@@ -1088,7 +1083,7 @@ describe("Rekordbox direct database planning", () => {
     expect(syncCalls).toEqual([
       {
         directory: "/analysis/track-1",
-        options: { allowWhileRunning: false, commit: false },
+        options: { commit: false },
       },
     ]);
   });
@@ -1198,7 +1193,6 @@ describe("Rekordbox direct database planning", () => {
         folderId: "folder-1",
         playlistName: "Festival Set [tracks-ts]",
         playlistId: "playlist-1",
-        backupDirectory: "/backups/import-1",
       },
     );
 
@@ -1224,76 +1218,11 @@ describe("Rekordbox direct database planning", () => {
       folderId: "folder-1",
       playlistName: "Festival Set [tracks-ts]",
       playlistId: "playlist-1",
-      backupDirectory: "/backups/import-1",
     });
   });
 
-  test("enforces explicit approval and stopped application plus agent", () => {
-    expect(() => assertRekordboxImportApproved(false)).toThrow("requires approved: true");
-    expect(() => assertRekordboxStopped({ rekordboxPid: 10, rekordboxAgentPid: 20 })).toThrow(
-      "rekordbox (PID 10), rekordboxAgent (PID 20)",
-    );
-    expect(() => assertRekordboxStopped({ rekordboxPid: 0, rekordboxAgentPid: 0 })).not.toThrow();
-  });
-
-  test("derives deterministic naming and backup companion paths", () => {
+  test("derives the default playlist name", () => {
     expect(defaultRekordboxPlaylistName(completedManifest())).toBe("Festival Set [tracks-ts]");
-    const directory = resolve("/rekordbox");
-    expect(rekordboxBackupSources(directory)).toEqual([
-      { name: "master.db", sourcePath: join(directory, "master.db"), required: true },
-      { name: "master.db-wal", sourcePath: join(directory, "master.db-wal"), required: false },
-      { name: "master.db-shm", sourcePath: join(directory, "master.db-shm"), required: false },
-      {
-        name: "master.db-journal",
-        sourcePath: join(directory, "master.db-journal"),
-        required: false,
-      },
-      {
-        name: "masterPlaylists6.xml",
-        sourcePath: join(directory, "masterPlaylists6.xml"),
-        required: true,
-      },
-    ]);
-  });
-
-  test("backs up the selected custom database and its companions", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tracks-ts-rekordbox-backup-"));
-    const dbDirectory = join(root, "rekordbox");
-    const backupRoot = join(root, "backups");
-    const dbPath = join(dbDirectory, "selected-library.db");
-    try {
-      await mkdir(dbDirectory);
-      await Promise.all([
-        writeFile(join(dbDirectory, "master.db"), "wrong database"),
-        writeFile(dbPath, "selected database"),
-        writeFile(`${dbPath}-wal`, "selected wal"),
-        writeFile(join(dbDirectory, "masterPlaylists6.xml"), "<MASTER_PLAYLIST/>"),
-      ]);
-
-      const backup = await backupRekordboxDatabase(dbDirectory, {
-        backupRoot,
-        dbPath,
-        now: new Date("2026-07-12T12:34:56.789Z"),
-      });
-
-      expect(backup.files.map((file) => file.name)).toEqual([
-        "selected-library.db",
-        "selected-library.db-wal",
-        "masterPlaylists6.xml",
-      ]);
-      expect(await readFile(join(backup.directory, "selected-library.db"), "utf8")).toBe(
-        "selected database",
-      );
-      expect(backup.files.some((file) => file.sourcePath.endsWith("/master.db"))).toBe(false);
-      await expect(readRekordboxBackup(backup.directory)).resolves.toEqual(backup);
-
-      await writeFile(backup.files[0]!.backupPath, "corrupted recovery file");
-      await expect(readRekordboxBackup(backup.directory)).rejects.toThrow(
-        "Rekordbox backup file changed",
-      );
-    } finally {
-      await rm(root, { force: true, recursive: true });
-    }
   });
 
   test("canonicalizes symlink spellings to one Rekordbox database lock", async () => {

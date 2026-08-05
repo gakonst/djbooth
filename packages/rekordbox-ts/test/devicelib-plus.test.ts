@@ -297,7 +297,6 @@ describe("DeviceLibraryPlus mutations", () => {
   it("creates autoincrement rows, content, playlists, tags, and properties", () => {
     const { audioPath, dbPath } = fixture();
     const db = new DeviceLibraryPlus({
-      allowWhileRunning: true,
       path: dbPath,
       readonly: false,
       unlock: false,

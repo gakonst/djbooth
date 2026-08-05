@@ -77,9 +77,9 @@ describe("CLI version", () => {
     const result = JSON.parse(output) as {
       cta?: { commands?: Array<{ command?: string }> };
     };
-    expect(
-      result.cta?.commands?.some(({ command }) => command === "music tracks import-set --help"),
-    ).toBe(true);
+    expect(result.cta?.commands?.some(({ command }) => command === "music tracks doctor")).toBe(
+      true,
+    );
   });
 
   it("always registers native acquisition and constructs reference acquisition only on opt-in", () => {

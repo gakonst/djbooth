@@ -18,7 +18,7 @@ The package implements the complete known Soulseek wire surface: server, peer-in
 - Distributed parent/child search topology and embedded server searches
 - Incremental bounded frame decoding, backpressure-aware writes, and compressed-message limits
 - All known server, peer, peer-init, and distributed message codes
-- Incur CLI with TOON/JSON/YAML/Markdown/JSONL output, schemas, completions, MCP, and agent skills
+- Incur CLI with TOON/JSON/YAML/Markdown/JSONL output, schemas, completions, and MCP
 - Client library at 100% statement, branch, function, and line coverage
 
 ## Install
@@ -149,7 +149,6 @@ Incur supplies structured output and agent integrations:
 slsk --llms
 slsk search --schema
 slsk completions zsh
-slsk skills add
 slsk mcp add
 ```
 

@@ -20,14 +20,12 @@ import {
   PlaylistType,
   normalizeRekordboxKeyName,
 } from "@gakonst/rekordbox/masterdb";
-import { getRekordboxProcessState } from "@gakonst/rekordbox/utils";
-import { acquireRekordboxDatabaseLock, assertRekordboxStopped } from "@gakonst/tracks";
+import { acquireRekordboxDatabaseLock } from "@gakonst/tracks";
 import { parseFile, selectCover } from "music-metadata";
 
 import type {
   LibraryBootstrap,
   LibraryMutation,
-  LibraryProcesses,
   MutationReceipt,
   PlaylistItem,
   TrackDetail,
@@ -54,10 +52,7 @@ export type TrackQuery = {
 };
 
 export type LibraryOptions = {
-  /** @deprecated Interactive mutations no longer create per-edit backups. */
-  backupRoot?: string;
   dbPath?: string;
-  getProcessState?: () => LibraryProcesses;
   key?: string;
   unlock?: boolean;
   writeEnabled?: boolean;
@@ -75,8 +70,6 @@ type PlaylistExpectation = {
   parentId: string;
   attribute: number;
 };
-
-const processStateCacheMs = 1_000;
 
 type MutationResult = { changedId: string; membershipIds?: string[] };
 
@@ -109,37 +102,6 @@ export class LibraryMutationConflictError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "LibraryMutationConflictError";
-  }
-}
-
-/**
- * Legacy bulk-mutation recovery error retained for API compatibility.
- *
- * Interactive workbench mutations no longer create a backup and journal per edit, so new code
- * receives the underlying transaction error directly. Bulk workflows may still use this shape.
- */
-export class LibraryMutationError extends Error {
-  readonly backupDirectory: string;
-  readonly journalPath: string;
-  readonly databaseCommitted: boolean | undefined;
-  readonly sidecarCommitted: boolean | undefined;
-
-  constructor(
-    message: string,
-    options: {
-      backupDirectory: string;
-      cause?: unknown;
-      databaseCommitted: boolean | undefined;
-      journalPath: string;
-      sidecarCommitted: boolean | undefined;
-    },
-  ) {
-    super(message, { cause: options.cause });
-    this.name = "LibraryMutationError";
-    this.backupDirectory = options.backupDirectory;
-    this.journalPath = options.journalPath;
-    this.databaseCommitted = options.databaseCommitted;
-    this.sidecarCommitted = options.sidecarCommitted;
   }
 }
 
@@ -410,12 +372,10 @@ export class RekordboxLibraryService {
   readonly unlock: boolean;
   readonly writeEnabled: boolean;
 
-  private readonly getProcessState: () => LibraryProcesses;
   private readonly mutationTails = new Map<string, Promise<void>>();
   private readonly audioPathCache = new Map<string, string>();
   private readonly waveformCache = new Map<string, WaveformCacheEntry>();
   private readonly fileExistenceCache = new Map<string, { checkedAt: number; exists: boolean }>();
-  private processStateCache: { checkedAt: number; value: LibraryProcesses } | undefined;
   private bootstrapProjection: BootstrapProjection | undefined;
   private playlistProjection: PlaylistItem[] | undefined;
   private database: MasterDatabase | undefined;
@@ -425,8 +385,7 @@ export class RekordboxLibraryService {
     this.dbPath = options.dbPath;
     this.key = options.key;
     this.unlock = options.unlock ?? true;
-    this.writeEnabled = options.writeEnabled ?? false;
-    this.getProcessState = options.getProcessState ?? (() => getRekordboxProcessState());
+    this.writeEnabled = options.writeEnabled ?? true;
   }
 
   private open(readonly = !this.writeEnabled): MasterDatabase {
@@ -595,7 +554,7 @@ export class RekordboxLibraryService {
     return query.first();
   }
 
-  /** Return library identity, process state, safety mode, and health counts. */
+  /** Return library identity, mode, and health counts. */
   getBootstrap(csrfToken: string): LibraryBootstrap {
     let projection = this.bootstrapProjection;
     if (!projection) {
@@ -649,13 +608,7 @@ export class RekordboxLibraryService {
       });
       this.bootstrapProjection = projection;
     }
-    return {
-      csrfToken,
-      library: {
-        ...projection,
-        processes: this.getCachedProcessState(),
-      },
-    };
+    return { csrfToken, library: projection };
   }
 
   /** Return the active playlist hierarchy and direct membership counts. */
@@ -1104,8 +1057,7 @@ export class RekordboxLibraryService {
 
   /** Apply one serialized local mutation using SQLite's transaction boundary. */
   async mutate(mutation: LibraryMutation): Promise<MutationReceipt> {
-    if (!this.writeEnabled)
-      throw new Error("Library write mode is disabled; restart with the explicit --write flag");
+    if (!this.writeEnabled) throw new Error("Library is running in read-only mode");
 
     const dbPath = realpathSync(this.getDatabase().path);
     return this.serializeMutation(dbPath, () => this.mutateSerialized(dbPath, mutation));
@@ -1121,17 +1073,10 @@ export class RekordboxLibraryService {
       try {
         this.assertMutationPrecondition(writer, mutation);
         const cueMutation = mutation.type === "upsert-cue" || mutation.type === "delete-cue";
-        // Cue mirrors intentionally query their own staged rows, so they require autoflush. Guard
-        // those writes both before staging and at the final commit boundary. Every other helper can
-        // remain purely staged until the single final process check below.
-        if (cueMutation) this.assertStopped();
         const expectation = cueMutation
           ? this.applyMutation(writer, mutation)
           : writer.noAutoflush(() => this.applyMutation(writer, mutation));
-        // Staging is synchronous and does not write SQLite. Take one fresh process snapshot at the
-        // last possible point, immediately before the transaction is flushed and committed.
-        this.assertStopped();
-        writer.commit({ allowWhileRunning: true });
+        writer.commit();
         this.databaseFilesVersion = this.captureDatabaseFilesVersion(writer);
         const revisionContentId =
           mutation.type === "update-track" ||
@@ -1166,21 +1111,6 @@ export class RekordboxLibraryService {
     } finally {
       await releaseLock();
     }
-  }
-
-  private assertStopped(): void {
-    const processes = this.getProcessState();
-    this.processStateCache = { checkedAt: Date.now(), value: processes };
-    assertRekordboxStopped(processes);
-  }
-
-  private getCachedProcessState(): LibraryProcesses {
-    const now = Date.now();
-    if (this.processStateCache && now - this.processStateCache.checkedAt < processStateCacheMs)
-      return this.processStateCache.value;
-    const value = this.getProcessState();
-    this.processStateCache = { checkedAt: now, value };
-    return value;
   }
 
   private assertMutationPrecondition(db: MasterDatabase, mutation: LibraryMutation): void {

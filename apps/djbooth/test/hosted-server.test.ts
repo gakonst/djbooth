@@ -47,7 +47,6 @@ function localApi(): LibraryApi {
         dbPath: "/tmp/master.db",
         dbDirectory: "/tmp",
         writeEnabled: true,
-        processes: { rekordboxPid: 0, rekordboxAgentPid: 0 },
         stats: {
           tracks: 0,
           playlists: 0,

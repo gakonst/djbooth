@@ -16,7 +16,7 @@ commands are generated from SoundCloud's official OpenAPI schema.
 - Automatic one-time 401 refresh plus coordinated, bounded 429 and transient-read retries.
 - Safe linked pagination through opaque `next_href` URLs.
 - User-authorized playlist creation from ordered track IDs, URNs, and URLs.
-- Incur structured output, OpenAPI commands, MCP, skills, shell completion, and LLM discovery.
+- Incur structured output, OpenAPI commands, MCP, shell completion, and LLM discovery.
 - Convenience methods and commands for `/me`, likes, and recently played tracks.
 
 ## Configure the SoundCloud application
@@ -91,7 +91,6 @@ pnpm soundcloud --llms
 pnpm soundcloud --llms-full
 pnpm soundcloud --mcp
 pnpm soundcloud mcp add
-pnpm soundcloud skills add
 pnpm soundcloud completions zsh
 ```
 

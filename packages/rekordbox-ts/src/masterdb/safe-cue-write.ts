@@ -1,20 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
-import { constants, createReadStream } from "node:fs";
-import {
-  copyFile,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  unlink,
-} from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { lstat, open, readFile, realpath, stat, unlink } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { getRekordboxAgentPid, getRekordboxPid } from "../utils.js";
 import { MasterDatabase } from "./database.js";
 import type {
   ContentCueInput,
@@ -25,61 +13,6 @@ import type {
 } from "./database.js";
 
 const staleLockAgeMs = 24 * 60 * 60 * 1_000;
-
-/** Rekordbox processes that must be stopped before a direct master.db write. */
-export type RekordboxWriteProcessState = {
-  rekordboxPid: number;
-  rekordboxAgentPid: number;
-};
-
-type ProcessState = RekordboxWriteProcessState;
-
-/** One checksummed file in a guarded master.db backup. */
-export type RekordboxWriteBackupFile = {
-  name: string;
-  sourcePath: string;
-  backupPath: string;
-  bytes: number;
-  sha256: string;
-};
-
-/** Durable pre-write backup shared by direct Rekordbox database mutations. */
-export type RekordboxWriteBackup = {
-  directory: string;
-  reportPath: string;
-  files: Array<RekordboxWriteBackupFile>;
-};
-
-type CueWriteBackup = RekordboxWriteBackup;
-
-type JournalStage = {
-  status: "pending" | "in-progress" | "succeeded" | "failed";
-  finishedAt?: string;
-  message?: string;
-};
-
-type CueWriteJournal = {
-  schemaVersion: 1;
-  mutationId: string;
-  dbPath: string;
-  backupDirectory: string;
-  backupReportPath: string;
-  startedAt: string;
-  updatedAt: string;
-  intent: GuardedCueMutation;
-  changedId?: string;
-  stages: {
-    database: JournalStage;
-    verification: JournalStage;
-    receipt: JournalStage;
-  };
-  outcome?: {
-    status: "succeeded" | "failed";
-    committed: boolean;
-    error?: { name: string; message: string };
-  };
-  receipt?: GuardedCueMutationReceipt;
-};
 
 type CueExpectation =
   | { state: "present"; cue: ContentCuePoint; cueUpdated?: string }
@@ -107,20 +40,14 @@ export type GuardedCueMutation =
 /** Testable options for one guarded cue mutation. */
 export type GuardedCueWriteOptions = {
   dbPath: string;
-  backupRoot?: string;
   key?: string;
   unlock?: boolean;
-  getProcessState?: () => ProcessState;
 };
 
 type ReceiptBase = {
   operation: GuardedCueMutation["type"];
   contentId: string;
   changedId: string;
-  backupDirectory: string;
-  backupReportPath: string;
-  backupFiles: Array<{ name: string; bytes: number; sha256: string }>;
-  journalPath: string;
   quickCheck: "ok";
   foreignKeyViolationCount: 0;
   semanticVerification: "exact";
@@ -140,16 +67,6 @@ function errorCode(error: unknown): string | undefined {
   return error instanceof Error && "code" in error ? String(error.code) : undefined;
 }
 
-function stage(status: JournalStage["status"], error?: unknown): JournalStage {
-  return {
-    status,
-    ...(status === "pending" || status === "in-progress"
-      ? {}
-      : { finishedAt: new Date().toISOString() }),
-    ...(error === undefined ? {} : { message: asError(error).message }),
-  };
-}
-
 async function syncDirectory(path: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -160,143 +77,6 @@ async function syncDirectory(path: string): Promise<void> {
   } finally {
     await handle?.close();
   }
-}
-
-async function syncFile(path: string): Promise<void> {
-  const handle = await open(path, "r");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function sha256File(path: string): Promise<string> {
-  const hash = createHash("sha256");
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return hash.digest("hex");
-}
-
-async function writeJson(path: string, value: unknown, exclusive = false): Promise<void> {
-  const contents = `${JSON.stringify(value, null, 2)}\n`;
-  if (exclusive) {
-    const handle = await open(path, "wx", 0o600);
-    try {
-      await handle.writeFile(contents, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    await syncDirectory(dirname(path));
-    return;
-  }
-
-  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", 0o600);
-  try {
-    await handle.writeFile(contents, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
-    await rename(temporary, path);
-    await syncDirectory(dirname(path));
-  } catch (error) {
-    await unlink(temporary).catch(() => undefined);
-    throw error;
-  }
-}
-
-function backupSources(dbPath: string): Array<{ name: string; path: string; required: boolean }> {
-  const directory = dirname(dbPath);
-  const name = basename(dbPath);
-  return [
-    { name, path: dbPath, required: true },
-    { name: `${name}-wal`, path: `${dbPath}-wal`, required: false },
-    { name: `${name}-shm`, path: `${dbPath}-shm`, required: false },
-    { name: `${name}-journal`, path: `${dbPath}-journal`, required: false },
-    {
-      name: "masterPlaylists6.xml",
-      path: join(directory, "masterPlaylists6.xml"),
-      required: false,
-    },
-  ];
-}
-
-async function createBackup(
-  dbPath: string,
-  mutationId: string,
-  backupRoot?: string,
-): Promise<CueWriteBackup> {
-  const root = resolve(backupRoot ?? join(dirname(dbPath), "tracks-ts-backups"));
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const timestamp = new Date().toISOString().replaceAll(/[-:.]/g, "");
-  const directory = join(root, `rekordbox-${timestamp}-${mutationId}`);
-  await mkdir(directory, { mode: 0o700 });
-  await syncDirectory(root);
-
-  const files: Array<RekordboxWriteBackupFile> = [];
-  for (const source of backupSources(dbPath)) {
-    let before;
-    try {
-      before = await stat(source.path);
-    } catch (error) {
-      if (!source.required && errorCode(error) === "ENOENT") continue;
-      throw error;
-    }
-    if (!before.isFile()) throw new TypeError(`Backup source '${source.path}' is not a file`);
-    const sourceSha256Before = await sha256File(source.path);
-    const backupPath = join(directory, source.name);
-    await copyFile(source.path, backupPath, constants.COPYFILE_EXCL);
-    await syncFile(backupPath);
-    const [after, copied, sourceSha256After, copiedSha256] = await Promise.all([
-      stat(source.path),
-      stat(backupPath),
-      sha256File(source.path),
-      sha256File(backupPath),
-    ]);
-    if (
-      before.size !== after.size ||
-      before.size !== copied.size ||
-      sourceSha256Before !== sourceSha256After ||
-      sourceSha256Before !== copiedSha256
-    )
-      throw new Error(`Backup source changed while copying: ${source.path}`);
-    files.push({
-      name: source.name,
-      sourcePath: source.path,
-      backupPath,
-      bytes: copied.size,
-      sha256: copiedSha256,
-    });
-  }
-
-  const reportPath = join(directory, "backup.json");
-  await writeJson(
-    reportPath,
-    {
-      schemaVersion: 1,
-      createdAt: new Date().toISOString(),
-      dbPath,
-      files,
-    },
-    true,
-  );
-  await syncDirectory(directory);
-  return { directory, reportPath, files };
-}
-
-/** Create a durable checksummed backup before a guarded direct master.db mutation. */
-export async function createRekordboxWriteBackup(
-  dbPath: string,
-  options: { backupRoot?: string; mutationId?: string } = {},
-): Promise<RekordboxWriteBackup> {
-  return createBackup(
-    await realpath(resolve(dbPath)),
-    options.mutationId ?? randomUUID(),
-    options.backupRoot,
-  );
 }
 
 async function readLockOwner(path: string): Promise<{ pid?: number; [key: string]: unknown }> {
@@ -465,34 +245,6 @@ async function pathReferencesOwnedFile(
   } catch {
     return false;
   }
-}
-
-function defaultProcessState(): ProcessState {
-  return {
-    rekordboxPid: getRekordboxPid(),
-    rekordboxAgentPid: getRekordboxAgentPid(),
-  };
-}
-
-function assertStopped(state: ProcessState): void {
-  const running = [
-    state.rekordboxPid ? `rekordbox (PID ${state.rekordboxPid})` : undefined,
-    state.rekordboxAgentPid ? `rekordboxAgent (PID ${state.rekordboxAgentPid})` : undefined,
-  ].filter((value): value is string => value !== undefined);
-  if (running.length)
-    throw new Error(
-      `Close Rekordbox and rekordboxAgent before writing; running: ${running.join(", ")}`,
-    );
-}
-
-/** Read the live Rekordbox process state used by guarded writers. */
-export function getRekordboxWriteProcessState(): RekordboxWriteProcessState {
-  return defaultProcessState();
-}
-
-/** Refuse a direct database write while Rekordbox or rekordboxAgent is running. */
-export function assertRekordboxWriteStopped(state: RekordboxWriteProcessState): void {
-  assertStopped(state);
 }
 
 function openDatabase(
@@ -688,48 +440,19 @@ function verify(
   }
 }
 
-/**
- * Apply exactly one cue mutation behind the shared lock, stopped-process checks, durable backup,
- * one database commit, outcome journal, and read-only integrity/semantic verification.
- */
+/** Apply one cue mutation behind the shared lock, then verify the committed database. */
 export async function performGuardedCueMutation(
   options: GuardedCueWriteOptions,
   mutation: GuardedCueMutation,
 ): Promise<GuardedCueMutationReceipt> {
   const dbPath = await realpath(resolve(options.dbPath));
-  const getProcessState = options.getProcessState ?? defaultProcessState;
   const lock = await acquireCueWriteLock(dbPath);
-  let backup: CueWriteBackup | undefined;
-  let journal: CueWriteJournal | undefined;
-  let journalPath: string | undefined;
   let committed = false;
   try {
-    assertStopped(getProcessState());
-    const mutationId = randomUUID();
-    backup = await createBackup(dbPath, mutationId, options.backupRoot);
-    const startedAt = new Date().toISOString();
-    journalPath = join(backup.directory, `cue-mutation-${mutationId}.json`);
-    journal = {
-      schemaVersion: 1,
-      mutationId,
-      dbPath,
-      backupDirectory: backup.directory,
-      backupReportPath: backup.reportPath,
-      startedAt,
-      updatedAt: startedAt,
-      intent: mutation,
-      stages: {
-        database: stage("pending"),
-        verification: stage("pending"),
-        receipt: stage("pending"),
-      },
-    };
-    await writeJson(journalPath, journal, true);
-
-    assertStopped(getProcessState());
     const writer = openDatabase(dbPath, options, false);
     let expectation: CueExpectation;
     let deleted: ContentCuePoint | undefined;
+    let changedId: string;
     try {
       const cueUpdated = nextCueUpdated(writer, mutation.contentId);
       if (mutation.type === "set-cue") {
@@ -738,7 +461,7 @@ export async function performGuardedCueMutation(
           desiredCueInput(writer, mutation.contentId, mutation.cue),
         );
         expectation = { state: "present", cue, cueUpdated };
-        journal.changedId = cue.id;
+        changedId = cue.id;
       } else {
         deleted = writer.getContentCues(mutation.contentId).find(({ id }) => id === mutation.cueId);
         if (!deleted)
@@ -752,82 +475,36 @@ export async function performGuardedCueMutation(
           cueId: mutation.cueId,
           cueUpdated,
         };
-        journal.changedId = mutation.cueId;
+        changedId = mutation.cueId;
       }
-      journal.stages.database = stage("in-progress");
-      journal.updatedAt = new Date().toISOString();
-      await writeJson(journalPath, journal);
-      assertStopped(getProcessState());
-      writer.commit({ allowWhileRunning: false });
+      writer.commit();
       committed = true;
     } finally {
       writer.close();
     }
 
-    journal.stages.database = stage("succeeded");
-    journal.stages.verification = stage("in-progress");
-    journal.updatedAt = new Date().toISOString();
-    await writeJson(journalPath, journal);
     verify(dbPath, options, expectation);
-    journal.stages.verification = stage("succeeded");
 
     const base: ReceiptBase = {
       operation: mutation.type,
       contentId: mutation.contentId,
-      changedId: journal.changedId!,
-      backupDirectory: backup.directory,
-      backupReportPath: backup.reportPath,
-      backupFiles: backup.files.map(({ name, bytes, sha256 }) => ({ name, bytes, sha256 })),
-      journalPath,
+      changedId,
       quickCheck: "ok",
       foreignKeyViolationCount: 0,
       semanticVerification: "exact",
       finishedAt: new Date().toISOString(),
     };
-    const receipt: GuardedCueMutationReceipt =
-      mutation.type === "set-cue"
-        ? {
-            ...base,
-            operation: "set-cue",
-            cue: expectation.state === "present" ? expectation.cue : never(),
-          }
-        : { ...base, operation: "delete-cue", deleted: deleted! };
-    journal.receipt = receipt;
-    journal.outcome = { status: "succeeded", committed: true };
-    journal.stages.receipt = stage("succeeded");
-    journal.updatedAt = new Date().toISOString();
-    await writeJson(journalPath, journal);
-    return receipt;
+    return mutation.type === "set-cue"
+      ? {
+          ...base,
+          operation: "set-cue",
+          cue: expectation.state === "present" ? expectation.cue : never(),
+        }
+      : { ...base, operation: "delete-cue", deleted: deleted! };
   } catch (error) {
-    let failure: unknown = error;
-    if (journal && journalPath) {
-      journal.stages.database = committed ? stage("succeeded") : stage("failed", error);
-      if (journal.stages.verification.status === "in-progress")
-        journal.stages.verification = stage("failed", error);
-      else if (!committed) journal.stages.verification = stage("failed", error);
-      journal.stages.receipt = stage("failed", error);
-      const normalized = asError(error);
-      journal.outcome = {
-        status: "failed",
-        committed,
-        error: { name: normalized.name, message: normalized.message },
-      };
-      journal.updatedAt = new Date().toISOString();
-      try {
-        await writeJson(journalPath, journal);
-      } catch (journalError) {
-        failure = new AggregateError(
-          [normalized, asError(journalError)],
-          "Cue mutation failed and its outcome journal could not be updated",
-        );
-      }
-    }
-    const recovery = backup
-      ? `; recovery backup: ${backup.directory}; outcome journal: ${journalPath}`
-      : "";
     throw new Error(
-      `Guarded cue mutation '${mutation.type}' failed${committed ? " after commit" : " before commit"}: ${asError(failure).message}${recovery}`,
-      { cause: failure },
+      `Cue mutation '${mutation.type}' failed${committed ? " after commit" : ""}: ${asError(error).message}`,
+      { cause: error },
     );
   } finally {
     await lock.release();

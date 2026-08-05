@@ -7,6 +7,7 @@ import {
   exportLegacyDeviceLibrary,
   syncLegacyDeviceLibrary,
   syncLegacyDevicePlaylist,
+  syncLegacyDevicePlaylistFolder,
 } from "@gakonst/rekordbox/devicelib";
 
 import {
@@ -117,7 +118,6 @@ const syncOutput = z.object({
     }),
   ),
   playCountIncrements: z.number().int().nonnegative(),
-  backupDirectory: z.string().nullable(),
   export: exportOutput,
 });
 
@@ -138,8 +138,34 @@ const playlistSyncOutput = z.object({
   audioFiles: z.number().int().nonnegative(),
   analysisFiles: z.number().int().nonnegative(),
   bytesCopied: z.number().int().nonnegative(),
-  backupPath: z.string().nullable(),
-  oneLibraryBackupPath: z.string().nullable(),
+  changed: z.boolean(),
+});
+
+const playlistFolderSyncOutput = z.object({
+  schemaVersion: z.literal(3),
+  format: z.literal("dual-device-playlist-folder-sync"),
+  databasePath: z.string(),
+  targetDirectory: z.string(),
+  folderName: z.string(),
+  playlists: z.array(
+    z.object({
+      playlistId: z.string(),
+      playlistName: z.string(),
+      tracks: z.number().int().positive(),
+      changed: z.boolean(),
+    }),
+  ),
+  playlistsChanged: z.number().int().nonnegative(),
+  tracks: z.number().int().nonnegative(),
+  uniqueTracksAdded: z.number().int().nonnegative(),
+  audioFiles: z.number().int().nonnegative(),
+  analysisFiles: z.number().int().nonnegative(),
+  bytesCopied: z.number().int().nonnegative(),
+  historiesFound: z.number().int().nonnegative(),
+  historiesImported: z.number().int().nonnegative(),
+  historiesAlreadyImported: z.number().int().nonnegative(),
+  historyPlaylistsCreated: z.number().int().nonnegative(),
+  playCountIncrements: z.number().int().nonnegative(),
   changed: z.boolean(),
 });
 
@@ -175,16 +201,6 @@ export const cdjUsbCli = Cli.create("usb", {
   mcp: {
     instructions:
       "Use sync-playlist --fresh for a newly formatted stick: it writes both traditional Device Library and OneLibrary with shared audio/ANLZ. Omit --fresh for verified existing dual-library media. Complete-library sync retains the legacy CDJ-history round trip. Never sync media while a deck or USB gadget owns it.",
-  },
-  sync: {
-    suggestions: [
-      "sync my CDJ USB and import last night's set",
-      "make my mounted CDJ USB match my Rekordbox library",
-      "check whether this Linux board can act as a USB drive",
-      "show the active CDJ USB image and deck connection",
-      "attach the active image to the deck",
-      "detach the USB image after I eject it on the deck",
-    ],
   },
 });
 
@@ -232,9 +248,8 @@ cdjUsbCli.command("export", {
 });
 
 cdjUsbCli.command("sync", {
-  description:
-    "Import unseen CDJ histories, then differentially make mounted USB media match master.db.",
-  hint: "This is the normal plug-in-and-go workflow. Each unseen history becomes DJ Set YYYY-MM-DD (with a suffix when needed), ordered duplicates are preserved, play counts advance exactly once, removed library tracks are removed from exporter-owned media, and unchanged audio is not recopied. Rekordbox must be closed.",
+  description: "Import unseen CDJ histories, then synchronize all or one filtered playlist folder.",
+  hint: "Use --playlist-folder to batch only that folder's direct playlists into Device Library and OneLibrary. Shared tracks copy once, both catalogs publish once, and pending CDJ history is imported in the same operation. Each unseen history becomes DJ Set YYYY-MM-DD, play counts advance exactly once, and unchanged audio is not recopied. Without the filter, sync reconciles the complete exporter-owned library.",
   args: z.object({
     target: z.string().min(1).describe("Mounted CDJ media root"),
   }),
@@ -245,7 +260,15 @@ cdjUsbCli.command("sync", {
       .describe("Rekordbox master.db; defaults to the configured Rekordbox library"),
     databaseKey: z.string().optional().describe("Optional SQLCipher key override"),
     plain: z.boolean().default(false).describe("Open an explicitly plain SQLite database"),
-    backupRoot: z.string().optional().describe("Checksummed pre-write backup directory"),
+    playlistFolder: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Exact host-library folder; sync only its direct playlist children"),
+    fresh: z
+      .boolean()
+      .default(false)
+      .describe("Initialize empty dual-library media; requires --playlist-folder"),
     copyConcurrency: z
       .number()
       .int()
@@ -253,21 +276,27 @@ cdjUsbCli.command("sync", {
       .max(32)
       .default(4)
       .describe("Parallel changed-media copy workers"),
-    write: z
-      .boolean()
-      .default(false)
-      .describe("Required acknowledgement for USB and master.db mutation"),
   }),
-  output: syncOutput,
+  output: z.union([syncOutput, playlistFolderSyncOutput]),
   async run(c) {
     try {
+      if (c.options.playlistFolder)
+        return await syncLegacyDevicePlaylistFolder({
+          targetDirectory: c.args.target,
+          folderName: c.options.playlistFolder,
+          databasePath: c.options.database,
+          databaseKey: c.options.databaseKey,
+          databaseUnlock: !c.options.plain,
+          copyConcurrency: c.options.copyConcurrency,
+          fresh: c.options.fresh,
+        });
+      if (c.options.fresh)
+        throw new TypeError("--fresh requires --playlist-folder for filtered dual-library sync");
       return await syncLegacyDeviceLibrary({
-        approved: c.options.write,
         targetDirectory: c.args.target,
         databasePath: c.options.database,
         databaseKey: c.options.databaseKey,
         databaseUnlock: !c.options.plain,
-        backupRoot: c.options.backupRoot,
         copyConcurrency: c.options.copyConcurrency,
       });
     } catch (error) {
@@ -278,7 +307,7 @@ cdjUsbCli.command("sync", {
 
 cdjUsbCli.command("sync-playlist", {
   description: "Sync one analyzed Rekordbox playlist to traditional Device Library and OneLibrary.",
-  hint: "Use --fresh once on an empty stick. Audio and rewritten ANLZ are copied once and shared by both indexes. Later runs verify the receipt and copy nothing when unchanged; existing dual-library media is backed up before append.",
+  hint: "Use --fresh once on an empty stick. Audio and rewritten ANLZ are copied once and shared by both indexes. Later runs verify the receipt and copy nothing when unchanged.",
   args: z.object({
     target: z.string().min(1).describe("Mounted CDJ media root"),
     playlist: z.string().min(1).describe("Exact normal Rekordbox playlist ID"),
@@ -294,13 +323,11 @@ cdjUsbCli.command("sync-playlist", {
       .boolean()
       .default(false)
       .describe("Initialize an empty target with both USB library formats"),
-    write: z.boolean().default(false).describe("Required acknowledgement for USB mutation"),
   }),
   output: playlistSyncOutput,
   async run(c) {
     try {
       return await syncLegacyDevicePlaylist({
-        approved: c.options.write,
         targetDirectory: c.args.target,
         playlistId: c.args.playlist,
         databasePath: c.options.database,
@@ -565,8 +592,7 @@ function failSync(
     exitCode: 1,
     retryable: false,
     cta: {
-      description:
-        "Close Rekordbox, ensure the deck has ejected the mounted media, and inspect the sync contract:",
+      description: "Ensure the deck has ejected the mounted media, then inspect the sync contract:",
       commands: [scopedCommand(context.displayName, "sync --help")],
     },
   });

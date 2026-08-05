@@ -20,7 +20,6 @@ export const DEVICE_LIBRARY_PLUS_KEY_BLOB =
   "PN_1dH8$oLJY)16j_RvM6qphWw`476>;C1cWmI#se(PG`j}~xAjlufj?`#0i{;=glh(SkW)y0>n?YEiD`l%t(";
 
 export type DeviceLibraryPlusOptions = {
-  allowWhileRunning?: boolean;
   key?: string;
   path: string;
   readonly?: boolean;
@@ -351,7 +350,6 @@ export class DeviceLibraryPlus {
     if (supplied.key && !supplied.key.startsWith("r8gd"))
       throw new TypeError("The provided Device Library Plus key does not look valid");
     this.engine = new DeviceDatabaseEngine({
-      allowWhileRunning: supplied.allowWhileRunning,
       key: unlock ? (supplied.key ?? deobfuscate(DEVICE_LIBRARY_PLUS_KEY_BLOB)) : undefined,
       path: supplied.path,
       readonly: supplied.readonly ?? true,

@@ -3,7 +3,6 @@
 export { libraryCli, runLibraryCli } from "./cli.js";
 export {
   LibraryMutationConflictError,
-  LibraryMutationError,
   RekordboxLibraryService as DjBoothLibraryService,
   RekordboxLibraryService,
   type LibraryOptions,

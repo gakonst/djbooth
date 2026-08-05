@@ -21,7 +21,6 @@ describe("umbrella exports", () => {
     expect(rekordbox.MasterDatabase).toBeTypeOf("function");
     expect(library.RekordboxLibraryService).toBeTypeOf("function");
     expect(library.LibraryMutationConflictError).toBeTypeOf("function");
-    expect(library.LibraryMutationError).toBeTypeOf("function");
     expect(usb.statusCdjUsb).toBeTypeOf("function");
   });
 
@@ -35,7 +34,6 @@ describe("umbrella exports", () => {
     expect(rekordboxSubpath.MasterDatabase).toBe(rekordbox.MasterDatabase);
     expect(librarySubpath.RekordboxLibraryService).toBe(library.RekordboxLibraryService);
     expect(librarySubpath.LibraryMutationConflictError).toBe(library.LibraryMutationConflictError);
-    expect(librarySubpath.LibraryMutationError).toBe(library.LibraryMutationError);
     expect(usbSubpath.statusCdjUsb).toBe(usb.statusCdjUsb);
   });
 });

@@ -16,6 +16,7 @@ import {
   readLegacyDeviceExportMarker,
   syncLegacyDeviceLibrary,
   syncLegacyDevicePlaylist,
+  syncLegacyDevicePlaylistFolder,
 } from "../src/devicelib/index.js";
 import { MasterDatabase } from "../src/masterdb/index.js";
 
@@ -300,6 +301,28 @@ describe("legacy Device Library PDB", () => {
     ]);
     expect(inspection.histories).toEqual([{ id: 6, name: "HISTORY 001", trackIds: [9, 42, 9] }]);
   });
+
+  it("consumes histories without changing tracks or playlists", () => {
+    const initial = new LegacyDevicePdbWriter();
+    const track = initial.addTrack({
+      id: 42,
+      title: "Played",
+      filePath: "/Contents/0000002A/played.mp3",
+    });
+    const playlist = initial.createPlaylist("Keep");
+    initial.addToPlaylist(playlist, track);
+    const history = initial.createHistory("HISTORY 001");
+    initial.addToHistory(history, track);
+    const before = inspectLegacyDevicePdb(initial.build());
+
+    const consumed = new LegacyDevicePdbWriter(initial.build());
+    consumed.clearHistories();
+    const after = inspectLegacyDevicePdb(consumed.build());
+
+    expect(after.histories).toEqual([]);
+    expect(after.tracks).toEqual(before.tracks);
+    expect(after.playlists).toEqual(before.playlists);
+  });
 });
 
 describe("master.db to legacy Device Library export", () => {
@@ -335,13 +358,11 @@ describe("master.db to legacy Device Library export", () => {
     });
 
     const first = await syncLegacyDevicePlaylist({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       playlistId: "playlist",
       now: new Date("2026-08-02T12:00:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(first).toMatchObject({
       changed: true,
@@ -351,8 +372,6 @@ describe("master.db to legacy Device Library export", () => {
       audioFiles: 2,
       analysisFiles: 6,
     });
-    expect(first.backupPath && existsSync(first.backupPath)).toBe(true);
-    expect(first.oneLibraryBackupPath && existsSync(first.oneLibraryBackupPath)).toBe(true);
     const inspection = inspectLegacyDevicePdb(readFileSync(join(rekordboxDirectory, "export.pdb")));
     expect(inspection.tracks).toEqual(
       expect.arrayContaining([
@@ -376,26 +395,22 @@ describe("master.db to legacy Device Library export", () => {
     oneLibrary.close();
 
     const second = await syncLegacyDevicePlaylist({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       playlistId: "playlist",
       now: new Date("2026-08-02T12:05:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(second).toMatchObject({ changed: false, tracks: 2, bytesCopied: 0 });
-  });
+  }, 15_000);
 
   it("initializes a fresh dual-library stick and verifies a zero-copy rerun", async () => {
     const fixture = exportFixture();
     mkdirSync(fixture.output);
     const first = await syncLegacyDevicePlaylist({
-      approved: true,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       fresh: true,
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
       now: new Date("2026-08-02T12:00:00Z"),
       playlistId: "playlist",
       targetDirectory: fixture.output,
@@ -403,10 +418,8 @@ describe("master.db to legacy Device Library export", () => {
     expect(first).toMatchObject({
       analysisFiles: 6,
       audioFiles: 2,
-      backupPath: null,
       changed: true,
       format: "dual-device-playlist-sync",
-      oneLibraryBackupPath: null,
       playlistName: "Tonight",
       tracks: 2,
     });
@@ -441,14 +454,97 @@ describe("master.db to legacy Device Library export", () => {
     oneLibrary.close();
 
     const second = await syncLegacyDevicePlaylist({
-      approved: true,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
       playlistId: "playlist",
       targetDirectory: fixture.output,
     });
     expect(second).toMatchObject({ changed: false, bytesCopied: 0, tracks: 2 });
+  });
+
+  it("syncs one host folder in one deduplicated pass and imports its CDJ history", async () => {
+    const fixture = exportFixture();
+    let connection = new Database(fixture.databasePath);
+    connection.exec(`
+      INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, SmartList, rb_local_deleted)
+      VALUES ('playlist-2', 2, 'Tomorrow', 0, 'folder', NULL, 0);
+      INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+      VALUES ('membership-3', 'playlist-2', '1', 1, 0);
+      INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+      VALUES ('membership-4', 'playlist-2', '2', 2, 0);
+    `);
+    connection.close();
+    mkdirSync(fixture.output);
+
+    const first = await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      fresh: true,
+      now: new Date("2026-08-04T12:00:00Z"),
+      targetDirectory: fixture.output,
+    });
+    expect(first).toMatchObject({
+      changed: true,
+      playlistsChanged: 2,
+      tracks: 4,
+      uniqueTracksAdded: 2,
+      audioFiles: 2,
+      analysisFiles: 6,
+      historiesFound: 0,
+    });
+    expect(first.playlists.map(({ playlistName }) => playlistName)).toEqual([
+      "Tonight",
+      "Tomorrow",
+    ]);
+    const pdbPath = join(fixture.output, "PIONEER", "rekordbox", "export.pdb");
+    let inspection = inspectLegacyDevicePdb(readFileSync(pdbPath));
+    expect(inspection.tracks).toHaveLength(2);
+    expect(inspection.playlists.map(({ name }) => name)).toEqual(["Gigs", "Tonight", "Tomorrow"]);
+    const marker = JSON.parse(
+      readFileSync(join(fixture.output, ".music-cdj-playlist-sync.json"), "utf8"),
+    ) as {
+      schemaVersion: number;
+      records: Array<{
+        playlistName: string;
+        trackIds: number[];
+        contentIds: string[];
+        oneLibraryContentIds: number[];
+      }>;
+    };
+    expect(marker.schemaVersion).toBe(3);
+    expect(marker.records.every(({ contentIds }) => contentIds.length === 2)).toBe(true);
+
+    const played = new LegacyDevicePdbWriter(readFileSync(pdbPath));
+    const history = played.createHistory("HISTORY 001");
+    played.addToHistory(history, marker.records[0]!.trackIds[0]!);
+    played.addToHistory(history, marker.records[0]!.trackIds[1]!);
+    writeFileSync(pdbPath, played.build());
+    const second = await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      now: new Date("2026-08-04T12:05:00Z"),
+      targetDirectory: fixture.output,
+    });
+    expect(second).toMatchObject({
+      audioFiles: 0,
+      analysisFiles: 0,
+      historiesFound: 1,
+      historiesImported: 1,
+      historyPlaylistsCreated: 1,
+      playCountIncrements: 2,
+      playlistsChanged: 0,
+      uniqueTracksAdded: 0,
+    });
+    expect(second.bytesCopied).toBe(0);
+    inspection = inspectLegacyDevicePdb(readFileSync(pdbPath));
+    expect(inspection.histories).toEqual([]);
+    connection = new Database(fixture.databasePath);
+    expect(
+      connection.prepare("SELECT Name FROM djmdPlaylist WHERE Name LIKE 'DJ Set %'").pluck().all(),
+    ).toEqual(["DJ Set 2026-08-04"]);
+    connection.close();
   });
 
   it("keeps SQLite authoritative and emits audio, rewritten ANLZ, playlists, and export.pdb", async () => {
@@ -545,12 +641,10 @@ describe("master.db to legacy Device Library export", () => {
     const fixture = exportFixture();
     mkdirSync(fixture.output);
     const first = await syncLegacyDeviceLibrary({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       now: new Date("2026-07-29T10:00:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(first.export).toMatchObject({
       changed: true,
@@ -561,12 +655,10 @@ describe("master.db to legacy Device Library export", () => {
     expect(firstMarker?.schemaVersion).toBe(2);
 
     const second = await syncLegacyDeviceLibrary({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       now: new Date("2026-07-29T10:05:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(second.export).toMatchObject({
       changed: false,
@@ -579,12 +671,10 @@ describe("master.db to legacy Device Library export", () => {
     connection.prepare("UPDATE djmdContent SET Title = 'Metadata only' WHERE ID = '1'").run();
     connection.close();
     const metadataOnly = await syncLegacyDeviceLibrary({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       now: new Date("2026-07-29T10:10:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(metadataOnly.export).toMatchObject({
       changed: true,
@@ -606,12 +696,10 @@ describe("master.db to legacy Device Library export", () => {
     connection.prepare("DELETE FROM djmdContent WHERE ID = '2'").run();
     connection.close();
     const removed = await syncLegacyDeviceLibrary({
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       now: new Date("2026-07-29T10:15:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     });
     expect(removed.export).toMatchObject({
       tracks: 1,
@@ -626,13 +714,10 @@ describe("master.db to legacy Device Library export", () => {
     const fixture = exportFixture();
     mkdirSync(fixture.output);
     const syncOptions = {
-      approved: true,
       targetDirectory: fixture.output,
       databasePath: fixture.databasePath,
       databaseUnlock: false,
-      backupRoot: join(fixture.root, "backups"),
       now: new Date("2026-07-29T12:00:00Z"),
-      getProcessState: () => ({ rekordboxAgentPid: 0, rekordboxPid: 0 }),
     } as const;
     await syncLegacyDeviceLibrary(syncOptions);
     await writePlayedHistory(fixture.output, ["2", "1", "2"]);

@@ -31,15 +31,6 @@ import { createSoundCloudUserClient } from './user-client.js'
 export const soundcloudCli = Cli.create('soundcloud', {
   version: packageJson.version,
   description: 'Typed SoundCloud API client for humans and agents.',
-  sync: {
-    suggestions: [
-      'show my liked SoundCloud tracks',
-      'list the SoundCloud URLs for all my likes',
-      'search SoundCloud for a track',
-      'show my SoundCloud profile',
-      'resolve a SoundCloud permalink',
-    ],
-  },
 })
 
 const auth = Cli.create('auth', {

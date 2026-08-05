@@ -105,15 +105,13 @@ function batch(results: RekordboxAnalysisResult[]): AnalyzeTracksResult {
 function dependencies(value: SetManifest, analyze: AnalyzeExistingManifestDependencies["analyze"]) {
   const release = vi.fn(async () => undefined);
   const writeManifest = vi.fn(async () => undefined);
-  const contents = `${JSON.stringify(value, null, 2)}\n`;
   return {
-    contents,
     release,
     writeManifest,
     value: {
       acquireLock: vi.fn(async () => release),
       analyze,
-      readManifestSnapshot: vi.fn(async () => ({ contents, manifest: value })),
+      readManifest: vi.fn(async () => value),
       writeManifest,
     } satisfies AnalyzeExistingManifestDependencies,
   };
@@ -161,9 +159,7 @@ describe("analysis-only manifest workflow", () => {
       Object.fromEntries(mediaPaths.map((path) => [path, `${path}.rekordbox`])),
     );
     expect(result.manifest.entries.map((entry) => entry.acquisition)).toEqual(acquisition);
-    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object), {
-      expectedContents: mocks.contents,
-    });
+    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object));
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
@@ -225,9 +221,7 @@ describe("analysis-only manifest workflow", () => {
         status: "cancelled",
       }),
     ]);
-    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object), {
-      expectedContents: mocks.contents,
-    });
+    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object));
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
@@ -265,32 +259,7 @@ describe("analysis-only manifest workflow", () => {
         status: "failed",
       }),
     ]);
-    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object), {
-      expectedContents: mocks.contents,
-    });
-  });
-
-  test("refuses to overwrite a non-cooperating manifest edit made during analysis", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-analyze-existing-cas-"));
-    const path = join(directory, "manifest.json");
-    const starting = manifest();
-    await writeFile(path, `${JSON.stringify(starting, null, 2)}\n`);
-    const edited = structuredClone(starting);
-    edited.warnings.push("manual edit during analysis");
-
-    await expect(
-      analyzeExistingManifest({
-        manifestPath: path,
-        dependencies: {
-          analyze: vi.fn(async () => {
-            await writeFile(path, `${JSON.stringify(edited, null, 2)}\n`);
-            return batch(mediaPaths.map(analysis));
-          }),
-        },
-      }),
-    ).rejects.toThrow("Manifest changed");
-
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(edited);
+    expect(mocks.writeManifest).toHaveBeenCalledWith(manifestPath, expect.any(Object));
   });
 
   test("keeps lexical manifest keys across symlink warm runs and the Rekordbox import map", async () => {

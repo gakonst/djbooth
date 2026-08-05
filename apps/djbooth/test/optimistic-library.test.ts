@@ -513,7 +513,6 @@ function bootstrap(): LibraryBootstrap {
       dbPath: "/library/master.db",
       dbDirectory: "/library",
       writeEnabled: true,
-      processes: { rekordboxPid: 0, rekordboxAgentPid: 0 },
       stats: {
         tracks: 3,
         playlists: 1,

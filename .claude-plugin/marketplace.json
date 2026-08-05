@@ -12,7 +12,7 @@
     {
       "name": "djbooth",
       "source": "./plugins/djbooth",
-      "description": "Agentically prepare music and produce Rekordbox-compatible DJ artifacts.",
+      "description": "Operate djbooth.ai through its typed MCP surface.",
       "version": "0.2.0",
       "author": {
         "name": "gakonst"

@@ -108,7 +108,7 @@ export async function createDefaultHostedPlaylistRuntime(
     trackCacheMs: options.trackCacheMs,
     acquisition: {
       rekordbox: {
-        enabled: options.writeEnabled === true,
+        enabled: options.writeEnabled !== false,
         ...(options.dbPath ? { dbPath: options.dbPath } : {}),
         ...(options.key ? { key: options.key } : {}),
       },

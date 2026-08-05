@@ -1,4 +1,0 @@
-interface:
-  display_name: "djbooth.ai"
-  short_description: "One-shot DJ sets, libraries, and connected CDJs"
-  default_prompt: "Use $djbooth to resolve and prepare this music workflow, then serve and load verified local tracks on my connected CDJs when requested."

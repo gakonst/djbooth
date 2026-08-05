@@ -62,43 +62,21 @@ export type VerifyAudioOptions = {
   expectedMetadata?: AudioMetadata;
 };
 
-export type WriteManifestOptions = {
-  /** Reject the replacement when the durable manifest changed since it was read. */
-  expectedContents?: string;
-};
-
-export type ManifestSnapshot = {
-  contents: string;
-  manifest: SetManifest;
-};
-
-/** Read one exact durable snapshot so later compare-and-swap writes protect that same version. */
-export async function readManifestSnapshot(path: string): Promise<ManifestSnapshot> {
+/** Read and validate a pipeline manifest. */
+export async function readManifest(path: string): Promise<SetManifest> {
   try {
     const contents = await readFile(path, "utf8");
-    return {
-      contents,
-      manifest: parseManifest(JSON.parse(contents) as unknown),
-    };
+    return parseManifest(JSON.parse(contents) as unknown);
   } catch (error) {
     throw new TracksError("INVALID_SOURCE", `Could not read manifest ${path}`, { cause: error });
   }
-}
-
-/** Read and validate a pipeline manifest without weakening its strict schema. */
-export async function readManifest(path: string): Promise<SetManifest> {
-  return (await readManifestSnapshot(path)).manifest;
 }
 
 /**
  * Validate, fsync, and atomically replace a manifest. The temporary file lives beside the
  * destination so rename never crosses filesystems.
  */
-export async function writeManifestAtomic(
-  path: string,
-  manifest: SetManifest,
-  options: WriteManifestOptions = {},
-): Promise<void> {
+export async function writeManifestAtomic(path: string, manifest: SetManifest): Promise<void> {
   parseManifest(manifest);
   const directory = dirname(path);
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
@@ -115,15 +93,6 @@ export async function writeManifestAtomic(
       await file.sync();
     } finally {
       await file.close();
-    }
-    if (options.expectedContents !== undefined) {
-      const current = await readFile(path, "utf8");
-      if (current !== options.expectedContents) {
-        throw new TracksError(
-          "TOOL_FAILED",
-          `Manifest changed while this stage was running; refusing to overwrite ${path}`,
-        );
-      }
     }
     await rename(temporary, path);
     await chmod(path, 0o600);

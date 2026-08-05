@@ -234,7 +234,7 @@ describe("buildAcquisitionPlan", () => {
     expect(plan.recordings[0]!.variants[0]!.metadata).not.toHaveProperty("isrc");
   });
 
-  test("uses ASCII-safe paths and resumes a failed individual as an approved cue clip", async () => {
+  test("uses ASCII-safe paths and resumes a failed individual as a cue clip", async () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-fallback-"));
     const outputDirectory = join(directory, "output");
     const sourcePath = join(directory, "set.m4a");

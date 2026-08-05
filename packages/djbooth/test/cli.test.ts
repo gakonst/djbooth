@@ -150,15 +150,4 @@ describe("djbooth CLI", () => {
     expect(output).toContain("0x1500");
     expect(output).toContain("Per-keystroke reconnects mean rejection");
   });
-
-  test("lists the workflow skill alongside typed command-group skills", async () => {
-    const { output } = await serve(["skills", "list"]);
-    expect(output).toContain("djbooth ");
-    expect(output).toContain("djbooth-djlink");
-    expect(output).toContain("djbooth-library");
-    expect(output).toContain("djbooth-rekordbox");
-    expect(output).toContain("djbooth-usb");
-    expect(output).toContain("djbooth-ytdlp-ts");
-    expect(output).toContain("10 skills");
-  });
 });

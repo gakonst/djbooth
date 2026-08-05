@@ -30,7 +30,6 @@ describe('spots CLI', () => {
 
     expect(stdout).toContain('--llms')
     expect(stdout).toContain('mcp')
-    expect(stdout).toContain('skills')
   })
 
   it('exposes first-class playlist CRUD', async () => {

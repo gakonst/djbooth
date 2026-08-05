@@ -272,7 +272,7 @@ export async function enrichSpotifyManifest(
  *
  * The complete candidate list remains attached to the matched checkpoint. This is intentionally
  * separate from enrichment: metadata-only resolution keeps close results ambiguous, while the
- * approved end-to-end import can proceed without downloading every catalog re-release.
+ * end-to-end import can proceed without downloading every catalog re-release.
  */
 export function canonicalizeSpotifyAmbiguities(
   manifest: SetManifest,

@@ -13,9 +13,9 @@ Tracks manifest
   -> connected CDJ load/cue
 ```
 
-The detached daemon has one protected Unix control socket and serves one manifest at a time. It
-does not enable beat clock, automatic database loading, load-confirm experiments, auto-unlock, or
-private packet replay.
+The detached daemon has one protected Unix control socket and serves one manifest at a time. Its
+beat source stays off until an explicit `prepare` request; it does not enable automatic database
+loading, load-confirm experiments, auto-unlock, or private packet replay.
 
 ## CLI
 
@@ -40,6 +40,7 @@ djbooth djlink status --format json
 djbooth djlink devices --wait-ms 5000 --format json
 djbooth djlink probe 169.254.7.4 --format json
 djbooth djlink load 4 --player 3 --format json
+djbooth djlink prepare "Adam Ten - Track" --player 3 --bpm 128 --bars-before 1 --format json
 djbooth djlink search "Science Fiction" --mode track --format json
 djbooth djlink monitor --player 3 --format json
 djbooth djlink stop --format json
@@ -50,9 +51,12 @@ Link network. `start` auto-selects a link-local interface when available. `devic
 for announcements. If discovery is empty, `probe` sends one bounded ARP request to a known deck IP
 on the selected interface; it does not send a DJ Link control command. `load` accepts manifest
 order, native ID, Spotify ID, title, or artist-title; it cues the local recording and returns
-`playing: false`. `search` exercises the same prewarmed matcher and RemoteDB row builder used by
-the CDJ, without changing deck or library state, so index failures can be separated from deck UI
-activation failures. Press PLAY on the physical deck.
+`playing: false`. `prepare` additionally reads Rekordbox phrase analysis, overlays a session-only
+memory cue before the first chorus, selects Memory Auto Cue, loads the track, advertises the target
+BPM as tempo master, and enables Sync on the selected deck. Its result reports whether deck status
+confirmed the requested effective BPM. `search` exercises the same prewarmed matcher and RemoteDB
+row builder used by the CDJ, without changing deck or library state, so index failures can be
+separated from deck UI activation failures. Press PLAY on the physical deck.
 
 `DJBOOTH_DJLINK_STATE_DIR` changes the daemon state directory. `DJBOOTH_DJLINK_BINARY` selects an
 explicit native helper. `--bind-ip` and `--broadcast-ip` are diagnostic overrides.
@@ -148,3 +152,48 @@ Playlist and folder `MENU_ITEM` argument 10 carries the row's master `Seq`; emit
 CDJ restore the correct child cursor but highlight the first parent row after Back.
 Golden payloads, capture hashes, and the wire contract live in
 `native/crates/djtools-link/tests/fixtures/` and `native/crates/djtools-link/PROTOCOL.md`.
+
+### Booth state API
+
+Every `link serve` process also binds a read-only booth-state API on `127.0.0.1:4182` by default.
+It combines physical CDJ telemetry from the DJ Link actor with timestamped DJM-A9 MIDI changes.
+Both inputs are event-driven: there is no application-level device polling. The API keeps one
+atomically reduced snapshot and one ordered stream; concurrent control movements are serialized by
+`sequence` without dropping either change.
+
+```text
+GET /                 API discovery
+GET /health           source/device health and latest sequence
+GET /v1/state         complete schemaVersion=1 snapshot
+WS  /v1/events        initial snapshot, then DJ Link and MIDI events
+```
+
+```sh
+curl http://127.0.0.1:4182/v1/state | jq
+```
+
+Use `--api-bind 0.0.0.0:4182` only on a trusted network; this first API slice is read-only but does
+not yet authenticate clients. A lagging WebSocket client receives a fresh snapshot and resumes
+from its sequence. `observedAtUs` is monotonic time since daemon startup; MIDI events additionally
+retain the device callback timestamp. The separate `@gakonst/dj-monitor` app is one client of this
+API, not part of the server contract.
+
+### DJM-A9 MIDI reader
+
+The native runtime also exposes the connected DJM-A9's complete documented MIDI surface. Values
+are timestamped, decoded to stable semantic names, and retain raw bytes. Continuous controls report
+physical travel from 0–100%; this is not a claim about the mixer's nonlinear audio gain or EQ
+response. MIDI timing clock is reduced to one BPM reading per quarter note by default.
+
+```sh
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- mixer devices
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- \
+  mixer monitor --device DJM-A9 --format human
+cargo run --manifest-path rust/Cargo.toml -p djbooth-rs -- \
+  mixer monitor --device DJM-A9 --format jsonl
+```
+
+The mixer emits changes, not a queryable startup snapshot. A recording session must therefore save
+a known initial control state or perform one calibration sweep before relying on the event log for
+full state reconstruction. The Beat FX ON/OFF button and X-PAD touch deliberately share one MIDI
+message and cannot be distinguished from MIDI alone.

@@ -30,12 +30,11 @@ to the release environment.
 djbooth library status --format json
 djbooth library serve --open
 djbooth library serve --open --no-assistant # Codex/Claude hosts the conversation
-djbooth library serve --write
 ```
 
 Agent-hosted mode keeps the complete visual workbench and processing backend while omitting the
-Nanocodex rail, browser worker, Responses authorization endpoint, and WebSocket proxy. Use the
-marketplace djbooth skill to let Codex or Claude Code launch this mode beside its own chat surface.
+Nanocodex rail, browser worker, Responses authorization endpoint, and WebSocket proxy. Launch it
+through the top-level `djbooth library serve --open --no-assistant` command.
 
 For repository development, one command starts the SQLite/API server on an ephemeral loopback port
 and the Vite client with HMR on `http://127.0.0.1:4179/`:
@@ -48,10 +47,8 @@ pnpm app:dev -- --read-only # optional
 Development writes are enabled by default. `--path`, `--port`, `--api-port`, and `--open` are also
 available; the browser always reaches the API through Vite's same-origin `/api` proxy.
 
-The server binds to `127.0.0.1`. Browsing is read-only. `--write` enables serialized local SQLite
-mutations behind the cross-process lock and stopped Rekordbox/rekordboxAgent check. Writes update
-the optimistic UI immediately and commit once; they do not create per-edit backups, journals, or
-post-write verification passes.
+The server binds to `127.0.0.1`. Mutations use the shared cross-process lock and one SQLite commit.
+Writes update the optimistic UI immediately.
 
 The workstation provides:
 
@@ -116,11 +113,11 @@ Connections determine order; loose candidates remain outside the playlist, while
 nodes remain members until explicitly removed. Destructive canvas replacement and folder deletion
 carry the exact source snapshot and fail with a conflict if the library changed after confirmation.
 Undo and redo execute inverse mutations through the same serialized server queue; they are disabled
-while a write is pending or Rekordbox is running. Refreshes, external database changes, page reloads,
+while a write is pending. Refreshes, external database changes, page reloads,
 successful hosted-playlist writes, and populated playlist/folder deletion clear the in-memory
 history.
-Database changes still require `--write`; every playlist and cue write uses the same stopped-process,
-lock, and SQLite transaction boundary. Audio, artwork, prompts, and metadata remain local. The HTTP
+Every playlist and cue write uses the same lock and SQLite transaction boundary. Audio, artwork,
+prompts, and metadata remain local. The HTTP
 server rejects non-loopback binds, cross-origin writes, unsupported media types, and symlink-backed
 media.
 

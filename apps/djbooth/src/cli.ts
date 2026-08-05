@@ -41,13 +41,6 @@ async function waitForShutdown(): Promise<"SIGINT" | "SIGTERM"> {
 export const libraryCli = Cli.create("library", {
   version,
   description: "Browse, prepare, and safely manage local DJ media in the djbooth.ai workstation.",
-  sync: {
-    suggestions: [
-      "open my djbooth.ai workstation",
-      "browse my compatible playlists",
-      "find tracks missing analysis",
-    ],
-  },
 });
 
 libraryCli.command("status", {
@@ -59,7 +52,6 @@ libraryCli.command("status", {
     dbPath: z.string(),
     dbDirectory: z.string(),
     writeEnabled: z.boolean(),
-    processes: z.object({ rekordboxPid: z.number(), rekordboxAgentPid: z.number() }),
     stats: z.object({
       tracks: z.number(),
       playlists: z.number(),
@@ -91,7 +83,6 @@ libraryCli.command("serve", {
     open: z.boolean().default(false).describe("Open the workbench in the default browser"),
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
     port: z.number().int().min(0).max(65_535).default(4179),
-    write: z.boolean().default(false).describe("Enable direct local playlist mutations"),
   }),
   output: z.object({
     action: z.literal("stopped"),
@@ -106,7 +97,7 @@ libraryCli.command("serve", {
       dbPath: c.options.path,
       host: c.options.host,
       port: c.options.port,
-      writeEnabled: c.options.write,
+      writeEnabled: true,
     });
     const url = workbenchUrl(server.url, c.options.assistant);
     process.stderr.write(
@@ -114,7 +105,7 @@ libraryCli.command("serve", {
         action: "started",
         assistantEnabled: c.options.assistant,
         url,
-        writeEnabled: c.options.write,
+        writeEnabled: true,
       })}\n`,
     );
     if (c.options.open) openBrowser(url);
@@ -125,7 +116,7 @@ libraryCli.command("serve", {
       assistantEnabled: c.options.assistant,
       signal,
       url,
-      writeEnabled: c.options.write,
+      writeEnabled: true,
     };
   },
 });

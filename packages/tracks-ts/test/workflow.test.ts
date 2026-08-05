@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import type { AcquireManifestResult, AcquisitionPerformance } from "../src/acquire-manifest.js";
+import type { BuildAcquisitionPlanOptions } from "../src/generic-acquisition-plan.js";
 import { createManifest, type SetManifest } from "../src/manifest.js";
 import { planRekordboxImport, type ImportManifestToRekordboxResult } from "../src/rekordbox-db.js";
 import type { SpotifyEnrichmentResult } from "../src/spotify-enrichment.js";
@@ -185,12 +186,6 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
       },
     ],
     plan: { folderName: "Sets", playlistName: "Example Set", items: [] },
-    backup: {
-      directory: "/tmp/backup",
-      createdAt: new Date(0).toISOString(),
-      files: [],
-      reportPath: "/tmp/backup/backup.json",
-    },
     verification: {
       quickCheck: "ok",
       foreignKeyViolationCount: 0,
@@ -220,7 +215,7 @@ describe("runSetToRekordbox", () => {
     expect(MAX_NATIVE_ANALYSIS_CONCURRENCY).toBe(64);
   });
 
-  test("composes the entire approved flow as libraries and installs clean-room analysis", async () => {
+  test("composes the entire flow as libraries and installs clean-room analysis", async () => {
     const writes: SetManifest[] = [];
     const calls: string[] = [];
     let plannedOptions: unknown;
@@ -242,6 +237,7 @@ describe("runSetToRekordbox", () => {
         manifest.entries[0]!.spotify = enrichedManifest().entries[0]!.spotify;
         return spotifyResult(manifest, 1);
       },
+      cacheSourceSet: vi.fn(),
       describeSourceSet: vi.fn(),
       buildPlan: async (_manifest, options) => {
         calls.push("plan");
@@ -287,7 +283,6 @@ describe("runSetToRekordbox", () => {
       },
       importRekordbox: async (options) => {
         calls.push("rekordbox");
-        expect(options.approved).toBe(true);
         importedAnalysis = options.analysisDirectories;
         return importResult(options.manifest, true);
       },
@@ -297,7 +292,6 @@ describe("runSetToRekordbox", () => {
       source,
       manifestPath,
       outputDirectory,
-      approved: true,
       spotify: { raw: vi.fn() },
       acquirers: [],
       analysis: {
@@ -377,6 +371,7 @@ describe("runSetToRekordbox", () => {
         identify: vi.fn(),
         createManifest,
         enrichSpotify: async (current) => spotifyResult(current, 0),
+        cacheSourceSet: vi.fn(),
         describeSourceSet: vi.fn(),
         buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: directory }),
         acquire: async (options) => {
@@ -415,7 +410,6 @@ describe("runSetToRekordbox", () => {
         source,
         manifestPath: resolve(directory, "manifest.json"),
         outputDirectory: directory,
-        approved: true,
         acquirers: [],
         dependencies,
       });
@@ -442,6 +436,7 @@ describe("runSetToRekordbox", () => {
       identify: vi.fn(),
       createManifest,
       enrichSpotify: async (current) => spotifyResult(current, 0),
+      cacheSourceSet: vi.fn(),
       describeSourceSet: vi.fn(),
       buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: "/tmp/staging" }),
       acquire: async () => acquisitionResult(manifest, true),
@@ -453,7 +448,6 @@ describe("runSetToRekordbox", () => {
       source,
       manifestPath,
       outputDirectory,
-      approved: true,
       spotify: { raw: vi.fn() },
       acquirers: [],
       dependencies,
@@ -490,7 +484,6 @@ describe("runSetToRekordbox", () => {
       folderId: "folder",
       playlistName: "Example Set",
       playlistId: "stable-playlist",
-      backupDirectory: "/tmp/backup",
     };
     const refreshed = downloadedManifest(true);
     const importRekordbox = vi.fn<RunSetToRekordboxDependencies["importRekordbox"]>(
@@ -506,6 +499,7 @@ describe("runSetToRekordbox", () => {
       identify: vi.fn(),
       createManifest,
       enrichSpotify: async (current) => spotifyResult(current, 0),
+      cacheSourceSet: vi.fn(),
       describeSourceSet: vi.fn(),
       buildPlan: async () => ({
         clips: [],
@@ -521,7 +515,6 @@ describe("runSetToRekordbox", () => {
       source,
       manifestPath,
       outputDirectory,
-      approved: true,
       acquirers: [],
       dependencies,
     });
@@ -539,6 +532,7 @@ describe("runSetToRekordbox", () => {
       identify: vi.fn(),
       createManifest,
       enrichSpotify: async (current) => spotifyResult(current, 0),
+      cacheSourceSet: vi.fn(),
       describeSourceSet: vi.fn(),
       buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: "/tmp/staging" }),
       acquire: async () => acquisitionResult(manifest, true),
@@ -553,7 +547,6 @@ describe("runSetToRekordbox", () => {
       source,
       manifestPath,
       outputDirectory,
-      approved: true,
       spotify: { raw: vi.fn() },
       acquirers: [],
       dependencies,
@@ -566,7 +559,7 @@ describe("runSetToRekordbox", () => {
     );
   });
 
-  test("recovers failed individual recordings from approved cues in the same invocation", async () => {
+  test("caches the remote set only after individual acquisition fails and recovers in the same invocation", async () => {
     const sourceSetPath = resolve("/tmp/music-ts-workflow/source-set.m4a");
     const sourceSet = {
       url: source,
@@ -577,7 +570,6 @@ describe("runSetToRekordbox", () => {
       bitrate: 256_000,
     };
     const failed = enrichedManifest();
-    failed.artifacts.sourceSet = sourceSet;
     failed.entries[0]!.acquisition = {
       status: "failed",
       query: "Artist Track",
@@ -638,6 +630,7 @@ describe("runSetToRekordbox", () => {
         }
         expect(options.continueOnError).toBe(false);
         await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
+        recovered.artifacts = structuredClone(failed.artifacts);
         recovered.entries[0]!.warnings = [...failed.entries[0]!.warnings];
         return {
           manifest: recovered,
@@ -649,11 +642,20 @@ describe("runSetToRekordbox", () => {
         };
       },
     );
-    const buildPlan = vi.fn(async () => ({
-      clips: [],
-      recordings: [],
-      stagingDirectory: "/tmp/staging",
-    }));
+    const buildPlan = vi.fn(
+      async (_manifest: SetManifest, planOptions: BuildAcquisitionPlanOptions) => {
+        if (buildPlan.mock.calls.length === 1) {
+          expect(planOptions.allowSourceSetClips).toBeUndefined();
+        } else {
+          expect(planOptions).toMatchObject({
+            allowSourceSetClips: true,
+            sourceSetPath,
+          });
+        }
+        return { clips: [], recordings: [], stagingDirectory: "/tmp/staging" };
+      },
+    );
+    const cacheSourceSet = vi.fn(async () => ({ path: sourceSetPath, url: source }));
     const dependencies: RunSetToRekordboxDependencies = {
       exists: async () => false,
       readManifest: vi.fn(),
@@ -661,6 +663,7 @@ describe("runSetToRekordbox", () => {
       identify: async () => tracklist(),
       createManifest: () => enrichedManifest(),
       enrichSpotify: vi.fn(),
+      cacheSourceSet,
       describeSourceSet: async () => sourceSet,
       buildPlan,
       acquire,
@@ -672,15 +675,19 @@ describe("runSetToRekordbox", () => {
       source,
       manifestPath,
       outputDirectory,
-      approved: true,
       allowSourceSetClips: true,
-      sourceSet: { path: sourceSetPath },
       acquirers: [],
       dependencies,
     });
 
     expect(acquire).toHaveBeenCalledTimes(2);
     expect(buildPlan).toHaveBeenCalledTimes(2);
+    expect(cacheSourceSet).toHaveBeenCalledOnce();
+    expect(cacheSourceSet).toHaveBeenCalledWith(
+      source,
+      resolve("/tmp/music-ts-workflow/source"),
+      undefined,
+    );
     expect(result.acquisition.downloaded).toEqual([mediaPath]);
     expect(result.acquisition.failures).toEqual([]);
     expect(result.performance.automation).toEqual({
@@ -691,18 +698,5 @@ describe("runSetToRekordbox", () => {
     expect(result.manifest.entries[0]!.warnings).toContain(
       "Automatic source-set fallback after individual acquisition failure: No individual recording candidate passed validation",
     );
-  });
-
-  test("rejects a local set source unless cue clipping was explicitly allowed", async () => {
-    await expect(
-      runSetToRekordbox({
-        source,
-        manifestPath,
-        outputDirectory,
-        approved: true,
-        sourceSet: { path: "/tmp/full-set.m4a" },
-        acquirers: [],
-      }),
-    ).rejects.toThrow("without explicit allowSourceSetClips: true");
   });
 });

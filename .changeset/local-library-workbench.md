@@ -9,10 +9,8 @@ Add a loopback-only React workbench over the native TypeScript Rekordbox APIs, w
 playlist hierarchy, sortable track search, a persistent range-streamed RGB waveform player, artwork,
 cue editing, keyboard/context actions, an infinite set canvas, and explicitly enabled guarded
 playlist mutations. Keep interactive edits instant with optimistic updates and short lock-coordinated
-SQLite transactions instead of per-edit backups; retain backups for imports and explicitly approved
-offline bulk workflows.
+SQLite transactions.
 
-Package one generated Music skill for both Claude Code and Codex marketplaces, expose the workbench
-through the aggregate Incur CLI, share its database-writer lock, reject commits while either
+Expose the workbench through the aggregate Incur CLI, share its database-writer lock, reject commits while either
 Rekordbox process is active, and stop redistributing the proprietary analyzer helper/runtime in the
 public npm package.

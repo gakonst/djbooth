@@ -39,12 +39,11 @@ describe('soundcloud CLI', () => {
     )
   })
 
-  it('exposes Incur discovery, MCP, and skills integration', async () => {
+  it('exposes Incur discovery and MCP integration', async () => {
     const { stdout } = await runCli('--help')
 
     expect(stdout).toContain('--llms')
     expect(stdout).toContain('mcp')
-    expect(stdout).toContain('skills')
   })
 
   it('documents account likes and ytdlp permalink output', async () => {

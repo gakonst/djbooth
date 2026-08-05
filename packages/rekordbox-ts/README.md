@@ -97,8 +97,8 @@ The composed `music` CLI exposes mounted-media synchronization separately from t
 `device` OneLibrary commands:
 
 ```sh
-music usb sync /mnt/cdj --database /path/to/master.db --write --format json
-music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --fresh --write --format json
+music usb sync /mnt/cdj --database /path/to/master.db --format json
+music usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --fresh --format json
 ```
 
 The destination is a mounted FAT/exFAT root or a staging directory. Sync imports every unseen CDJ
@@ -110,7 +110,7 @@ of the final USB audio path; CDJs do not trust the PDB analysis-path field alone
 stable device IDs and copy only changed files. The source SQLite database remains authoritative.
 `music usb export` is retained for an outbound-only initial compile.
 
-Database mutation commands require `--write`; databases otherwise open read-only. Commits refuse to run while Rekordbox is open unless `--allow-while-running` is also supplied. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
+Mutation subcommands open databases for writes directly. Generic `row create`, `row update`, and `row delete` commands expose mapped physical tables, while content, playlist, and tag commands cover common coordinated workflows.
 
 Use `--plain` for an unencrypted SQLite fixture or unlocked copy. The built-in upstream keys handle standard databases; override them with `REKORDBOX_DB_KEY` or `REKORDBOX_DEVICE_DB_KEY` when necessary.
 
@@ -266,20 +266,17 @@ database helpers deliberately do not rewrite PCOB/PCO2 tags in installed ANLZ fi
 port parses and preserves those binary cue lists but does not safely synthesize them.
 
 The Incur CLI exposes the same model through `db content cues`, `set-cue`, and `delete-cue`.
-Cue writes require `--write`, never accept `--allow-while-running`, and refuse to proceed while
-either Rekordbox or rekordboxAgent is running. Each command acquires the canonical
-`<master.db>.tracks-ts.lock`, creates a checksummed backup of the database and existing companions,
-writes a durable intent/outcome journal, commits once, then reopens read-only for `quick_check`,
-`foreign_key_check`, and exact cue verification. The receipt contains the backup and journal paths.
+Cue writes acquire the canonical `<master.db>.tracks-ts.lock`, commit once, then reopen read-only for
+`quick_check`, `foreign_key_check`, and exact cue verification.
 `set-cue --id` has patch semantics: omitted cue fields remain unchanged; use `--clear-comment`,
 `--clear-color`, or `--clear-color-table-index` for explicit clearing.
 
 ```sh
 djbooth rekordbox db content cues CONTENT_ID --format json
-djbooth rekordbox db content set-cue CONTENT_ID 32 --write
+djbooth rekordbox db content set-cue CONTENT_ID 32
 djbooth rekordbox db content set-cue CONTENT_ID 64 --kind hot --slot A \
-  --type loop --end-seconds 72 --active-loop --comment "Drop loop" --write
-djbooth rekordbox db content delete-cue CONTENT_ID CUE_ID --write
+  --type loop --end-seconds 72 --active-loop --comment "Drop loop"
+djbooth rekordbox db content delete-cue CONTENT_ID CUE_ID
 ```
 
 For SQLAlchemy-style escape-hatch work, `executeSql()` supports parameterized joins, projections, aggregates, CTEs, and mutations, while the public native `connection` supports custom SQLite functions, savepoints, and streaming statements. Model rows expose complete generated physical-column types, relationship metadata, writable to-one relationships and association proxies, and live relationship collections.
@@ -419,11 +416,10 @@ at most four clean analyzers with three native threads each. Explicit values rem
 analysis must leave capacity for live DJ software. Structured output reports `threadBudget` and
 `workerThreadBudgets`.
 
-After closing Rekordbox and backing up the library, install the verified artifacts for an existing
-content row:
+Install verified artifacts for an existing content row:
 
 ```sh
-rekordbox db content install-analysis 123456 /Music/track.rekordbox --write --format json
+rekordbox db content install-analysis 123456 /Music/track.rekordbox --format json
 ```
 
 Installation also reads `analysis.json`, validates its complete schema, and proves that both analyzer
@@ -440,7 +436,7 @@ missing database projection without copying the analysis files again:
 
 ```sh
 rekordbox db content sync-analysis-metadata \
-  123456 /Music/track.rekordbox --write --format json
+  123456 /Music/track.rekordbox --format json
 ```
 
 Programmatically, use `analyzeTrack()` or the nonblocking `analyzeTrackAsync()`. `analyzeTracks()`

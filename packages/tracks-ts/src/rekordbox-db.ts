@@ -6,18 +6,7 @@ import {
   readFileSync,
   rmSync,
 } from "node:fs";
-import {
-  access,
-  copyFile,
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  unlink,
-} from "node:fs/promises";
+import { access, lstat, open, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { availableParallelism } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -110,12 +99,12 @@ export type RekordboxMasterDatabase = {
   installContentAnalysis(
     content: DjmdContent | string | number,
     analysisDirectory: string,
-    options?: { allowWhileRunning?: boolean; commit?: boolean; replace?: boolean },
+    options?: { commit?: boolean; replace?: boolean },
   ): RekordboxInstalledAnalysis;
   syncContentAnalysisMetadata(
     content: DjmdContent | string | number,
     analysisDirectory: string,
-    options?: { allowWhileRunning?: boolean; commit?: boolean },
+    options?: { commit?: boolean },
   ): RekordboxAnalysisMetadata;
   getContentAnlzPaths(
     content: DjmdContent | string | number,
@@ -125,7 +114,7 @@ export type RekordboxMasterDatabase = {
   ): Map<string, { get(key: string): unknown }>;
   hasColumn(table: string, column: string): boolean;
   selectRawRows(sql: string, parameters?: unknown[]): Array<Record<string, unknown>>;
-  commit(options?: { allowWhileRunning?: boolean }): void;
+  commit(): void;
   close(): void;
 };
 
@@ -135,7 +124,6 @@ export type RekordboxLibrary = {
     dbDirectory: string;
     readonly: boolean;
     unlock: boolean;
-    allowWhileRunning?: boolean;
     key?: string;
   }) => RekordboxMasterDatabase;
   DjmdArtist: RekordboxModel<DjmdArtist>;
@@ -152,8 +140,6 @@ export type RekordboxLibrary = {
   };
   normalizeRekordboxKeyName(value: string): string;
   getConfig(section: "rekordbox6" | "rekordbox7"): { dbPath: string; dbDir: string } | undefined;
-  getRekordboxPid(): number;
-  getRekordboxAgentPid(): number;
 };
 
 export type RekordboxTrackMetadata = {
@@ -188,25 +174,6 @@ export type RekordboxImportPlan = {
   /** Stable existing playlist target. Name matching is used only when this is absent. */
   playlistId?: string;
   items: RekordboxImportItem[];
-};
-
-export type RekordboxBackupFile = {
-  name: string;
-  sourcePath: string;
-  backupPath: string;
-  bytes: number;
-  sha256: string;
-  sourceBytesBefore: number;
-  sourceBytesAfter: number;
-  sourceSha256Before: string;
-  sourceSha256After: string;
-};
-
-export type RekordboxBackup = {
-  directory: string;
-  createdAt: string;
-  files: RekordboxBackupFile[];
-  reportPath: string;
 };
 
 export type RekordboxImportedItem = {
@@ -304,8 +271,6 @@ export function validateMasterPlaylistSidecar(
 }
 
 export type ImportManifestToRekordboxOptions = {
-  /** Required acknowledgement because this mutates the encrypted Rekordbox database. */
-  approved: true;
   manifest: SetManifest;
   manifestPath: string;
   dbPath?: string;
@@ -315,10 +280,8 @@ export type ImportManifestToRekordboxOptions = {
   playlistName?: string;
   /** Reuse this exact Rekordbox playlist across provider renames and duplicate display names. */
   playlistId?: string;
-  backupRoot?: string;
   /** Analyzer output directories keyed by absolute media path. */
   analysisDirectories?: Readonly<Record<string, string>>;
-  now?: Date;
   /** Inject the library directly for tests or a custom runtime. */
   rekordboxModule?: RekordboxLibrary;
   /** Optional package name or file URL used when no module object is injected. */
@@ -332,7 +295,6 @@ export type ImportManifestToRekordboxResult = {
   folderId: string;
   plan: RekordboxImportPlan;
   imported: RekordboxImportedItem[];
-  backup: RekordboxBackup;
   verification: RekordboxVerification;
   performance: RekordboxPerformance;
 };
@@ -357,8 +319,6 @@ export type RekordboxMediaReceipt = {
 
 export type RekordboxMediaProbe = (path: string) => Promise<{ durationSeconds: number }>;
 
-type ProcessState = { rekordboxPid: number; rekordboxAgentPid: number };
-
 type ResolvedDatabaseLocation = { dbPath: string; dbDirectory: string };
 
 type SpotifyMetadata = {
@@ -370,30 +330,6 @@ type SpotifyMetadata = {
   releaseDate?: string;
   isrc?: string;
 };
-
-/** Pure safety guard used by the direct database entrypoint. */
-export function assertRekordboxImportApproved(approved: unknown): asserts approved is true {
-  if (approved !== true)
-    throw new TracksError(
-      "INVALID_SOURCE",
-      "Direct Rekordbox database import requires approved: true",
-      { exitCode: 2 },
-    );
-}
-
-/** Pure process-state validation; PID collection stays at the live entrypoint boundary. */
-export function assertRekordboxStopped(state: ProcessState): void {
-  const running = [
-    state.rekordboxPid ? `rekordbox (PID ${state.rekordboxPid})` : undefined,
-    state.rekordboxAgentPid ? `rekordboxAgent (PID ${state.rekordboxAgentPid})` : undefined,
-  ].filter((value): value is string => value !== undefined);
-  if (running.length)
-    throw new TracksError(
-      "TOOL_FAILED",
-      `Close Rekordbox before direct database import; running: ${running.join(", ")}`,
-      { details: state },
-    );
-}
 
 export function defaultRekordboxPlaylistName(manifest: SetManifest): string {
   const name = manifest.source.title?.trim() || manifest.source.id?.trim() || "DJ Set";
@@ -582,116 +518,15 @@ export function applyRekordboxImportResults(
   return parseManifest(manifest);
 }
 
-/** Files captured before any database connection is opened for writing. */
-export function rekordboxBackupSources(
-  dbDirectory: string,
-  dbPath = join(resolve(dbDirectory), "master.db"),
-): Array<{
-  name: string;
-  sourcePath: string;
-  required: boolean;
-}> {
-  const directory = resolve(dbDirectory);
-  const databasePath = resolve(dbPath);
-  const databaseName = basename(databasePath);
-  return [
-    { name: databaseName, sourcePath: databasePath, required: true },
-    { name: `${databaseName}-wal`, sourcePath: `${databasePath}-wal`, required: false },
-    { name: `${databaseName}-shm`, sourcePath: `${databasePath}-shm`, required: false },
-    {
-      name: `${databaseName}-journal`,
-      sourcePath: `${databasePath}-journal`,
-      required: false,
-    },
-    {
-      name: "masterPlaylists6.xml",
-      sourcePath: join(directory, "masterPlaylists6.xml"),
-      required: true,
-    },
-  ];
-}
-
-/** Create an exclusive, durable, checksummed pre-write backup. */
-export async function backupRekordboxDatabase(
-  dbDirectory: string,
-  options: { backupRoot?: string; dbPath?: string; now?: Date } = {},
-): Promise<RekordboxBackup> {
-  const createdAt = (options.now ?? new Date()).toISOString();
-  const backupRoot = resolve(options.backupRoot ?? join(dbDirectory, "tracks-ts-backups"));
-  await mkdir(backupRoot, { recursive: true, mode: 0o700 });
-  const directory = join(backupRoot, `rekordbox-${backupTimestamp(createdAt)}`);
-  await mkdir(directory, { recursive: false, mode: 0o700 });
-
-  let files: RekordboxBackupFile[] = [];
-  try {
-    const copied = await mapConcurrent(
-      rekordboxBackupSources(dbDirectory, options.dbPath),
-      DEFAULT_REKORDBOX_IO_CONCURRENCY,
-      async (source): Promise<RekordboxBackupFile | undefined> => {
-        let sourceStat;
-        try {
-          sourceStat = await stat(source.sourcePath);
-        } catch (error) {
-          if (isMissingPathError(error) && !source.required) return undefined;
-          throw error;
-        }
-        if (!sourceStat.isFile())
-          throw new TypeError(`Rekordbox backup source '${source.sourcePath}' is not a file`);
-        const sourceSha256Before = await sha256File(source.sourcePath);
-        const backupPath = join(directory, source.name);
-        await copyFile(source.sourcePath, backupPath, fsConstants.COPYFILE_EXCL);
-        await syncFile(backupPath);
-        const copiedStat = await stat(backupPath);
-        const sourceStatAfter = await stat(source.sourcePath);
-        const [copiedSha256, sourceSha256After] = await Promise.all([
-          sha256File(backupPath),
-          sha256File(source.sourcePath),
-        ]);
-        if (
-          sourceStat.size !== sourceStatAfter.size ||
-          sourceStat.size !== copiedStat.size ||
-          sourceSha256Before !== sourceSha256After ||
-          sourceSha256Before !== copiedSha256
-        )
-          throw new Error(`Rekordbox backup source changed while copying: ${source.sourcePath}`);
-        return {
-          name: source.name,
-          sourcePath: source.sourcePath,
-          backupPath,
-          bytes: copiedStat.size,
-          sha256: copiedSha256,
-          sourceBytesBefore: sourceStat.size,
-          sourceBytesAfter: sourceStatAfter.size,
-          sourceSha256Before,
-          sourceSha256After,
-        };
-      },
-    );
-    files = copied.filter((file): file is RekordboxBackupFile => file !== undefined);
-    const reportPath = join(directory, "backup.json");
-    await writeExclusiveJson(reportPath, { createdAt, files });
-    await syncDirectory(directory);
-    return { directory, createdAt, files, reportPath };
-  } catch (error) {
-    throw new TracksError("TOOL_FAILED", `Could not create Rekordbox backup '${directory}'`, {
-      cause: error,
-      details: { directory },
-    });
-  }
-}
-
 /**
  * Import a completed manifest into the normal encrypted Rekordbox 6/7 master.db.
- * The function refuses to run without explicit approval or while either Rekordbox
- * process is alive, backs up all companion files, commits once, then verifies by
- * reopening read-only before atomically updating the manifest.
+ * The function commits once, verifies by reopening read-only, then updates the manifest.
  */
 export async function importManifestToRekordbox(
   options: ImportManifestToRekordboxOptions,
 ): Promise<ImportManifestToRekordboxResult> {
   const startedAt = new Date();
   const started = performance.now();
-  assertRekordboxImportApproved(options.approved);
   const manifestPath = resolve(options.manifestPath);
   const lockStarted = performance.now();
   const release = await acquirePipelineManifestLock(manifestPath);
@@ -723,15 +558,6 @@ async function importManifestToRekordboxLocked(
     }
   };
   const manifest = parseManifest(structuredClone(options.manifest));
-  const manifestBytes = await readFile(manifestPath);
-  const diskManifest = parseManifest(JSON.parse(manifestBytes.toString("utf8")) as unknown);
-  if (!isDeepStrictEqual(diskManifest, manifest))
-    throw new TracksError(
-      "INVALID_SOURCE",
-      `Manifest '${manifestPath}' changed or does not match the supplied manifest`,
-      { exitCode: 2 },
-    );
-  const manifestSha256 = sha256Bytes(manifestBytes);
   const plan = planRekordboxImport(manifest, {
     mediaBaseDirectory: dirname(manifestPath),
     ...(options.folderName === undefined ? {} : { folderName: options.folderName }),
@@ -741,19 +567,14 @@ async function importManifestToRekordboxLocked(
       ? {}
       : { analysisDirectories: options.analysisDirectories }),
   });
-  const mediaReceipts = await measure("media-preflight", async () => {
-    const [receipts] = await Promise.all([
-      preflightRekordboxMedia(plan),
-      assertAnalysisDirectoriesExist(plan),
-    ]);
-    return receipts;
+  await measure("media-preflight", async () => {
+    await Promise.all([preflightRekordboxMedia(plan), assertAnalysisDirectoriesExist(plan)]);
   });
 
   const rekordbox = await measure("library-load", () => loadRekordboxLibrary(options));
   const location = resolveDatabaseLocation(rekordbox, options);
   const releaseDatabaseLock = await acquireRekordboxDatabaseLock(location.dbPath);
   try {
-    assertRekordboxStopped(readProcessState(rekordbox));
     await assertRekordboxWriteTargets(location);
     const checkpointed = checkpointedRekordboxImport(manifest, plan, location.dbPath);
     if (checkpointed) {
@@ -768,8 +589,6 @@ async function importManifestToRekordboxLocked(
           checkpointed.imported,
           plan,
         );
-        await preflightRekordboxMedia(plan, mediaReceipts);
-        const backup = await readRekordboxBackup(checkpointed.backupDirectory);
         return {
           manifest,
           dbPath: location.dbPath,
@@ -777,7 +596,6 @@ async function importManifestToRekordboxLocked(
           folderId: checkpointed.folderId,
           plan,
           imported: checkpointed.imported,
-          backup,
           verification,
           performance: {
             startedAt: new Date(Date.now() - (performance.now() - started)).toISOString(),
@@ -787,20 +605,8 @@ async function importManifestToRekordboxLocked(
             stages,
           },
         };
-      } catch (error) {
-        if (!isRepairableRekordboxCheckpointDrift(error)) {
-          throw new TracksError(
-            "TOOL_FAILED",
-            "Existing Rekordbox checkpoint could not be safely verified; refusing database mutation",
-            {
-              cause: error,
-              details: {
-                dbPath: location.dbPath,
-                backupDirectory: checkpointed.backupDirectory,
-              },
-            },
-          );
-        }
+      } catch {
+        // Stale or incomplete checkpoint: reconcile it through the normal write path.
       } finally {
         stages.push({
           stage: "existing-import-verification",
@@ -808,15 +614,6 @@ async function importManifestToRekordboxLocked(
         });
       }
     }
-    const backup = await measure("database-backup", () =>
-      backupRekordboxDatabase(location.dbDirectory, {
-        dbPath: location.dbPath,
-        ...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),
-        ...(options.now === undefined ? {} : { now: options.now }),
-      }),
-    );
-    assertRekordboxStopped(readProcessState(rekordbox));
-
     let writer: RekordboxMasterDatabase | undefined;
     let playlistId: string;
     let folderId: string;
@@ -830,7 +627,6 @@ async function importManifestToRekordboxLocked(
           dbDirectory: location.dbDirectory,
           readonly: false,
           unlock: true,
-          allowWhileRunning: false,
           ...(options.key === undefined ? {} : { key: options.key }),
         });
         const writeResult = writeRekordboxPlan(writer, rekordbox, plan);
@@ -839,20 +635,16 @@ async function importManifestToRekordboxLocked(
         imported = writeResult.imported;
         installedAnalysis = writeResult.installedAnalysis;
       });
-      await measure("media-recheck-before-commit", () =>
-        preflightRekordboxMedia(plan, mediaReceipts),
-      );
       await measure("database-commit", () => {
-        assertRekordboxStopped(readProcessState(rekordbox));
         databaseCommitAttempted = true;
-        writer!.commit({ allowWhileRunning: false });
+        writer!.commit();
       });
     } catch (error) {
       if (!databaseCommitAttempted) removeInstalledAnalysis(installedAnalysis);
       throw new TracksError(
         "TOOL_FAILED",
-        `Rekordbox database import failed: ${errorMessage(error)}; pre-write backup: ${backup.directory}`,
-        { cause: error, details: { backup } },
+        `Rekordbox database import failed: ${errorMessage(error)}`,
+        { cause: error },
       );
     } finally {
       const closeStarted = performance.now();
@@ -865,9 +657,8 @@ async function importManifestToRekordboxLocked(
 
     let verification: RekordboxVerification;
     try {
-      verification = await measure("database-verification", () => {
-        assertRekordboxStopped(readProcessState(rekordbox));
-        return verifyCommittedImport(
+      verification = await measure("database-verification", () =>
+        verifyCommittedImport(
           rekordbox,
           location,
           options.key,
@@ -875,17 +666,12 @@ async function importManifestToRekordboxLocked(
           playlistId!,
           imported!,
           plan,
-        );
-      });
-      await measure("media-recheck-after-commit", () =>
-        preflightRekordboxMedia(plan, mediaReceipts),
+        ),
       );
     } catch (error) {
-      throw new TracksError(
-        "TOOL_FAILED",
-        `Rekordbox post-commit verification failed; restore or inspect backup: ${backup.directory}`,
-        { cause: error, details: { backup } },
-      );
+      throw new TracksError("TOOL_FAILED", "Rekordbox post-commit verification failed", {
+        cause: error,
+      });
     }
     const updatedManifest = applyRekordboxImportResults(manifest, imported!, {
       target: "rekordbox-db",
@@ -894,10 +680,9 @@ async function importManifestToRekordboxLocked(
       folderId: folderId!,
       playlistName: plan.playlistName,
       playlistId: playlistId!,
-      backupDirectory: backup.directory,
     });
     await measure("manifest-checkpoint", () =>
-      writeManifestAtomically(manifestPath, updatedManifest, manifestSha256),
+      writeManifestAtomically(manifestPath, updatedManifest),
     );
     return {
       manifest: updatedManifest,
@@ -906,7 +691,6 @@ async function importManifestToRekordboxLocked(
       folderId: folderId!,
       plan,
       imported: imported!,
-      backup,
       verification,
       performance: {
         startedAt: new Date(Date.now() - (performance.now() - started)).toISOString(),
@@ -1179,7 +963,6 @@ function checkpointedRekordboxImport(
   | {
       folderId: string;
       playlistId: string;
-      backupDirectory: string;
       imported: RekordboxImportedItem[];
     }
   | undefined {
@@ -1217,84 +1000,8 @@ function checkpointedRekordboxImport(
   return {
     folderId: artifact.folderId,
     playlistId: artifact.playlistId,
-    backupDirectory: artifact.backupDirectory,
     imported,
   };
-}
-
-/** Read and fully reverify a checkpointed backup before relying on it for recovery. */
-export async function readRekordboxBackup(directory: string): Promise<RekordboxBackup> {
-  const resolvedDirectory = resolve(directory);
-  const reportPath = join(resolvedDirectory, "backup.json");
-  const value = JSON.parse(await readFile(reportPath, "utf8")) as {
-    createdAt?: unknown;
-    files?: unknown;
-  };
-  if (
-    typeof value.createdAt !== "string" ||
-    !Number.isFinite(Date.parse(value.createdAt)) ||
-    !Array.isArray(value.files)
-  ) {
-    throw new Error(`Invalid Rekordbox backup report: ${reportPath}`);
-  }
-  const files = value.files.filter(isRekordboxBackupFile);
-  if (files.length !== value.files.length || !files.length) {
-    throw new Error(`Invalid Rekordbox backup file inventory: ${reportPath}`);
-  }
-  await mapConcurrent(files, DEFAULT_REKORDBOX_IO_CONCURRENCY, async (file) => {
-    if (
-      basename(file.name) !== file.name ||
-      resolve(file.backupPath) !== join(resolvedDirectory, file.name)
-    ) {
-      throw new Error(`Invalid Rekordbox backup path: ${file.backupPath}`);
-    }
-    const backupStat = await lstat(file.backupPath);
-    if (!backupStat.isFile() || backupStat.isSymbolicLink() || backupStat.size !== file.bytes) {
-      throw new Error(`Rekordbox backup file changed: ${file.backupPath}`);
-    }
-    if ((await sha256File(file.backupPath)) !== file.sha256) {
-      throw new Error(`Rekordbox backup checksum changed: ${file.backupPath}`);
-    }
-  });
-  return { directory: resolvedDirectory, createdAt: value.createdAt, files, reportPath };
-}
-
-function isRekordboxBackupFile(value: unknown): value is RekordboxBackupFile {
-  if (!value || typeof value !== "object") return false;
-  const file = value as Record<string, unknown>;
-  return (
-    typeof file.name === "string" &&
-    typeof file.sourcePath === "string" &&
-    typeof file.backupPath === "string" &&
-    Number.isSafeInteger(file.bytes) &&
-    (file.bytes as number) >= 0 &&
-    typeof file.sha256 === "string" &&
-    /^[\da-f]{64}$/u.test(file.sha256) &&
-    Number.isSafeInteger(file.sourceBytesBefore) &&
-    (file.sourceBytesBefore as number) >= 0 &&
-    Number.isSafeInteger(file.sourceBytesAfter) &&
-    (file.sourceBytesAfter as number) >= 0 &&
-    typeof file.sourceSha256Before === "string" &&
-    /^[\da-f]{64}$/u.test(file.sourceSha256Before) &&
-    typeof file.sourceSha256After === "string" &&
-    /^[\da-f]{64}$/u.test(file.sourceSha256After)
-  );
-}
-
-function isRepairableRekordboxCheckpointDrift(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return [
-    /^Rekordbox playlist folder verification failed/u,
-    /^Rekordbox playlist row verification failed/u,
-    /^Rekordbox playlist sidecar /u,
-    /^Rekordbox playlist has \d+ memberships/u,
-    /^Rekordbox import plan\/result mismatch/u,
-    /^Rekordbox membership verification failed/u,
-    /^Rekordbox AnalysisDataPath is invalid/u,
-    /^Rekordbox (?:Artist|AlbumArtist|Album|Label)ID is missing/u,
-    /^Rekordbox KeyID (?:is missing|'[^']+' is invalid)/u,
-    /^Rekordbox \w+ mismatch/u,
-  ].some((pattern) => pattern.test(message));
 }
 
 async function assertRekordboxWriteTargets(location: ResolvedDatabaseLocation): Promise<void> {
@@ -1354,8 +1061,6 @@ function isRekordboxLibrary(value: unknown): value is RekordboxLibrary {
   return (
     typeof module.MasterDatabase === "function" &&
     typeof module.getConfig === "function" &&
-    typeof module.getRekordboxPid === "function" &&
-    typeof module.getRekordboxAgentPid === "function" &&
     typeof module.readAnalysisMetadata === "function" &&
     typeof module.normalizeRekordboxKeyName === "function" &&
     typeof module.DjmdContent === "function" &&
@@ -1366,13 +1071,6 @@ function isRekordboxLibrary(value: unknown): value is RekordboxLibrary {
     typeof module.DjmdLabel === "function" &&
     !!module.PlaylistType
   );
-}
-
-function readProcessState(rekordbox: RekordboxLibrary): ProcessState {
-  return {
-    rekordboxPid: rekordbox.getRekordboxPid(),
-    rekordboxAgentPid: rekordbox.getRekordboxAgentPid(),
-  };
 }
 
 /** Apply a validated import plan to an already-open write transaction. */
@@ -1537,7 +1235,6 @@ export function writeRekordboxPlan(
         currentAnalysisPath !== ""
       ) {
         const synchronized = db.syncContentAnalysisMetadata(content, item.analysisDirectory, {
-          allowWhileRunning: false,
           commit: false,
         });
         if (synchronized.contentId !== content.ID)
@@ -1547,7 +1244,6 @@ export function writeRekordboxPlan(
         continue;
       }
       const installed = db.installContentAnalysis(content, item.analysisDirectory, {
-        allowWhileRunning: false,
         commit: false,
         replace: false,
       });
@@ -1956,11 +1652,7 @@ function requireMeasuredDuration(item: RekordboxImportItem): number {
   return value;
 }
 
-async function writeManifestAtomically(
-  path: string,
-  manifest: SetManifest,
-  expectedSha256: string,
-): Promise<void> {
+async function writeManifestAtomically(path: string, manifest: SetManifest): Promise<void> {
   const directory = dirname(path);
   const pathStat = await stat(path);
   const temporary = join(directory, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
@@ -1972,12 +1664,6 @@ async function writeManifestAtomically(
     await handle.close();
   }
   try {
-    const currentSha256 = sha256Bytes(await readFile(path));
-    if (currentSha256 !== expectedSha256)
-      throw new TracksError(
-        "TOOL_FAILED",
-        `Manifest '${path}' changed during Rekordbox import; database is committed but manifest was not overwritten`,
-      );
     await rename(temporary, path);
     await syncDirectory(directory);
   } catch (error) {
@@ -2283,29 +1969,6 @@ function rekordboxHexId(id: string): string {
   }
 }
 
-function backupTimestamp(iso: string): string {
-  return iso.replace(/[-:]/gu, "").replace(".", "-");
-}
-
-async function writeExclusiveJson(path: string, value: unknown): Promise<void> {
-  const handle = await open(path, "wx", 0o600);
-  try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function syncFile(path: string): Promise<void> {
-  const handle = await open(path, "r+");
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 async function syncDirectory(path: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -2322,10 +1985,6 @@ async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
-}
-
-function sha256Bytes(value: Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {

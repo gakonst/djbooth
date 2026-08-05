@@ -136,7 +136,6 @@ describe("HostedPlaylistAcquisitionWorker", () => {
     expect(planningManifest?.entries[0]?.spotify.status).toBe("unmatched");
     expect(acquisitionOptions?.signal?.aborted).toBe(false);
     expect(importOptions).toMatchObject({
-      approved: true,
       folderName: "SoundCloud - GAK",
       playlistName: "Exact playlist",
       playlistId: "local-playlist-77",

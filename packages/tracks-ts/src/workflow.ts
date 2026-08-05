@@ -1,5 +1,5 @@
 import { realpath, stat } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -9,6 +9,12 @@ import {
   type AnalyzeTracksOptions,
   type AnalyzeTracksResult,
 } from "@gakonst/rekordbox/analyzer";
+import {
+  downloadMedia,
+  ExtractorRegistry,
+  MUSIC_FORMAT_SPEC,
+  type MediaInfo,
+} from "@gakonst/ytdlp-ts";
 
 import {
   acquireManifest,
@@ -31,6 +37,7 @@ import {
 import { identify } from "./identify.js";
 import { defaultTrackLibraryRoot } from "./library-paths.js";
 import { createManifest, type RekordboxAnalysisArtifact, type SetManifest } from "./manifest.js";
+import { isSupportedDownloadUrl } from "./media.js";
 import {
   importManifestToRekordbox,
   type ImportManifestToRekordboxOptions,
@@ -45,7 +52,7 @@ import {
 import type { IdentifyOptions, Tracklist } from "./types.js";
 
 export type SetSourceClip = {
-  /** Existing local set recording. The workflow never downloads it. */
+  /** Existing cached set recording. */
   path: string;
   /** Canonical URL used to annotate extracted clips. Defaults to the resolved set URL. */
   url?: string;
@@ -102,7 +109,7 @@ export type WorkflowPerformance = {
 
 export type WorkflowImportOptions = Omit<
   ImportManifestToRekordboxOptions,
-  "approved" | "analysisDirectories" | "manifest" | "manifestPath"
+  "analysisDirectories" | "manifest" | "manifestPath"
 >;
 
 export type RunSetToRekordboxOptions = {
@@ -110,16 +117,14 @@ export type RunSetToRekordboxOptions = {
   manifestPath: string;
   /** Canonical library root. Defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks. */
   outputDirectory?: string;
-  /** Required acknowledgement: the final stage mutates the normal encrypted master.db. */
-  approved: true;
   identify?: IdentifyOptions;
   spotify?: SpotifyLibraryClient;
   spotifyOptions?: SpotifyEnrichmentOptions;
   acquirers: TrackAcquirer[];
   localArtifactDirectories?: readonly string[];
-  /** Source-set clipping is disabled unless this is explicitly true. */
+  /** Disable automatic cue-bounded recovery from the source set. */
   allowSourceSetClips?: boolean;
-  /** An existing local set recording; the workflow never downloads a whole set. */
+  /** Optional existing local set recording; otherwise cue recovery caches the set URL. */
   sourceSet?: SetSourceClip;
   stagingDirectory?: string;
   cacheMode?: CacheMode;
@@ -161,6 +166,7 @@ export type RunSetToRekordboxDependencies = {
     spotify: SpotifyLibraryClient,
     options?: SpotifyEnrichmentOptions,
   ): Promise<SpotifyEnrichmentResult>;
+  cacheSourceSet(source: string, directory: string, signal?: AbortSignal): Promise<SetSourceClip>;
   describeSourceSet(source: SetSourceClip, manifest: SetManifest): Promise<SourceSetArtifact>;
   buildPlan(manifest: SetManifest, options: BuildAcquisitionPlanOptions): Promise<AcquisitionPlan>;
   acquire(options: Parameters<typeof acquireManifest>[0]): Promise<AcquireManifestResult>;
@@ -182,6 +188,7 @@ const defaultDependencies: RunSetToRekordboxDependencies = {
   identify,
   createManifest,
   enrichSpotify: enrichSpotifyManifest,
+  cacheSourceSet,
   describeSourceSet,
   buildPlan: buildAcquisitionPlan,
   acquire: acquireManifest,
@@ -199,20 +206,7 @@ const defaultDependencies: RunSetToRekordboxDependencies = {
 export async function runSetToRekordbox(
   options: RunSetToRekordboxOptions,
 ): Promise<RunSetToRekordboxResult> {
-  if (options.approved !== true) {
-    throw new TracksError(
-      "INVALID_SOURCE",
-      "Set import requires approved: true because it writes the normal Rekordbox database",
-      { exitCode: 2 },
-    );
-  }
-  if (options.sourceSet && !options.allowSourceSetClips) {
-    throw new TracksError(
-      "INVALID_SOURCE",
-      "A source set was supplied without explicit allowSourceSetClips: true",
-      { exitCode: 2 },
-    );
-  }
+  const allowSourceSetClips = options.allowSourceSetClips !== false;
   const dependencies = { ...defaultDependencies, ...options.dependencies };
   const startedAt = new Date();
   const started = performance.now();
@@ -271,34 +265,70 @@ export async function runSetToRekordbox(
     };
   });
   const checkpointedPlaylistId = manifest.artifacts.rekordbox?.playlistId;
-
-  if (options.allowSourceSetClips) {
-    manifest = await runStage("source-set", async () => {
-      const prior = manifest.artifacts.sourceSet;
-      const sourceSet = options.sourceSet
-        ? prior && resolve(prior.path) === resolve(options.sourceSet.path)
-          ? prior
-          : await dependencies.describeSourceSet(options.sourceSet, manifest)
-        : prior;
-      if (!sourceSet) {
-        throw new TracksError(
-          "INVALID_SOURCE",
-          "allowSourceSetClips requires an explicit local sourceSet or a verified manifest source-set artifact",
-          { exitCode: 2 },
-        );
-      }
-      const resumed = sourceSet === prior;
-      if (!resumed) {
-        manifest.artifacts.sourceSet = sourceSet;
-        await dependencies.writeManifest(manifestPath, manifest);
-      }
-      return {
-        value: manifest,
-        details: { status: resumed ? "resumed" : "completed", operations: 1 },
-      };
+  const sourceSetStage: WorkflowStage = {
+    stage: "source-set",
+    status: "skipped",
+    durationMs: 0,
+  };
+  stages.push(sourceSetStage);
+  let sourceSet = allowSourceSetClips ? manifest.artifacts.sourceSet : undefined;
+  let sourceSetPrepared = false;
+  const ensureSourceSet = async (): Promise<SourceSetArtifact> => {
+    if (sourceSetPrepared && sourceSet) return sourceSet;
+    options.signal?.throwIfAborted();
+    options.onProgress?.({
+      stage: "source-set",
+      status: "started",
+      message: "source-set started",
     });
-  } else {
-    stages.push({ stage: "source-set", status: "skipped", durationMs: 0 });
+    const stageStarted = performance.now();
+    const prior = manifest.artifacts.sourceSet;
+    let downloaded = false;
+    if (options.sourceSet) {
+      const priorExists =
+        prior !== undefined &&
+        resolve(prior.path) === resolve(options.sourceSet.path) &&
+        (await dependencies.exists(prior.path));
+      sourceSet = priorExists
+        ? prior
+        : await dependencies.describeSourceSet(options.sourceSet, manifest);
+    } else if (prior && (await dependencies.exists(prior.path))) {
+      sourceSet = prior;
+    } else {
+      const remoteSource = automaticSourceSetUrl(manifest, options.source);
+      const cached = await dependencies.cacheSourceSet(
+        remoteSource,
+        join(dirname(manifestPath), "source"),
+        options.signal,
+      );
+      sourceSet = await dependencies.describeSourceSet(cached, manifest);
+      downloaded = true;
+    }
+    sourceSetPrepared = true;
+    const changed = !isDeepStrictEqual(sourceSet, prior);
+    if (changed) {
+      manifest.artifacts.sourceSet = sourceSet;
+      await dependencies.writeManifest(manifestPath, manifest);
+    }
+    sourceSetStage.status = downloaded || changed ? "completed" : "resumed";
+    sourceSetStage.durationMs = roundMilliseconds(performance.now() - stageStarted);
+    sourceSetStage.operations = 1;
+    if (downloaded) sourceSetStage.networkRequests = 1;
+    options.onProgress?.({
+      stage: "source-set",
+      status: sourceSetStage.status,
+      message: `source-set ${sourceSetStage.status} in ${sourceSetStage.durationMs.toFixed(2)}ms`,
+      durationMs: sourceSetStage.durationMs,
+    });
+    return sourceSet;
+  };
+  if (
+    allowSourceSetClips &&
+    (options.sourceSet !== undefined ||
+      manifest.artifacts.sourceSet !== undefined ||
+      requiresImmediateSourceSet(manifest))
+  ) {
+    await ensureSourceSet();
   }
 
   let spotifyResult: SpotifyEnrichmentResult | undefined;
@@ -353,7 +383,6 @@ export async function runSetToRekordbox(
     );
   }
 
-  const sourceSet = options.allowSourceSetClips ? manifest.artifacts.sourceSet : undefined;
   const analysisConcurrency = options.analysisConcurrency ?? DEFAULT_NATIVE_ANALYSIS_CONCURRENCY;
   validateAnalysisConcurrency(analysisConcurrency);
   const analysisThreadBudget = validateAnalysisThreadBudget(
@@ -462,24 +491,26 @@ export async function runSetToRekordbox(
             options.onProgress?.({
               stage: "acquisition",
               status: "started",
-              message: `${sourceSet ? `pass ${String(currentPass)}/2 ` : ""}${progress.phase}: ${progress.message}`,
+              message: `${allowSourceSetClips ? `pass ${String(currentPass)}/2 ` : ""}${progress.phase}: ${progress.message}`,
             });
           },
           onArtifactVerified: analyzeVerifiedArtifact,
         });
       const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [
-        await acquirePass(sourceSet !== undefined),
+        await acquirePass(allowSourceSetClips),
       ];
       acquisitionPasses = 1;
-      const recoverableOrders = sourceSet
+      const recoverableOrders = allowSourceSetClips
         ? sourceSetFallbackOrders(passes[0]!.manifest, passes[0]!.failures)
         : [];
       if (
-        sourceSet &&
+        allowSourceSetClips &&
         passes[0]!.failures.length > 0 &&
         recoverableOrders.length ===
           new Set(passes[0]!.failures.map((failure) => failure.entryOrder)).size
       ) {
+        manifest = passes[0]!.manifest;
+        await ensureSourceSet();
         const warningChanged = recordSourceSetFallbackWarnings(
           passes[0]!.manifest,
           passes[0]!.failures,
@@ -489,7 +520,7 @@ export async function runSetToRekordbox(
         options.onProgress?.({
           stage: "acquisition",
           status: "started",
-          message: `pass 2/2: recovering ${String(recoverableOrders.length)} failed individual recording${recoverableOrders.length === 1 ? "" : "s"} from approved set cues`,
+          message: `pass 2/2: recovering ${String(recoverableOrders.length)} failed individual recording${recoverableOrders.length === 1 ? "" : "s"} from set cues`,
         });
         passes.push(await acquirePass(false));
         acquisitionPasses = 2;
@@ -595,7 +626,6 @@ export async function runSetToRekordbox(
 
   const rekordbox = await runStage("rekordbox", async () => {
     const result = await dependencies.importRekordbox({
-      approved: true,
       manifest,
       manifestPath,
       analysisDirectories,
@@ -668,6 +698,59 @@ function toAnalysisArtifact(
     sourceMtimeMs: result.source.mtimeMs,
     sourceSize: result.source.size,
   };
+}
+
+async function cacheSourceSet(
+  source: string,
+  directory: string,
+  signal?: AbortSignal,
+): Promise<SetSourceClip> {
+  if (!isSupportedDownloadUrl(source)) {
+    throw new TracksError(
+      "INVALID_SOURCE",
+      `Automatic source-set caching requires a public YouTube or SoundCloud URL; got '${source}'`,
+      { exitCode: 2 },
+    );
+  }
+  const context = signal ? { signal } : {};
+  const info = await new ExtractorRegistry().extract(source, context);
+  assertSingleSourceSet(info, source);
+  const result = await downloadMedia(info, {
+    format: MUSIC_FORMAT_SPEC,
+    paths: directory,
+    output: "source-set [%(id)s].%(ext)s",
+    noOverwrites: true,
+    continueDownload: true,
+    retries: 5,
+    writeInfoJson: false,
+    writeThumbnail: false,
+    ...(signal ? { signal } : {}),
+  });
+  const path = result.files[0];
+  if (!path) {
+    throw new TracksError("TOOL_FAILED", `Source-set download produced no media for '${source}'`);
+  }
+  return {
+    path: resolve(path),
+    url: stableSourceSetUrl(info, source),
+  };
+}
+
+function assertSingleSourceSet(info: MediaInfo, source: string): void {
+  if (!info.entries?.length) return;
+  throw new TracksError(
+    "INVALID_SOURCE",
+    `Source-set caching requires one exact media item, not a playlist: '${source}'`,
+    { exitCode: 2 },
+  );
+}
+
+function stableSourceSetUrl(info: MediaInfo, fallback: string): string {
+  for (const value of [info.webpage_url, info.original_url, fallback]) {
+    if (typeof value !== "string" || !isSupportedDownloadUrl(value)) continue;
+    return value;
+  }
+  return fallback;
 }
 
 async function describeSourceSet(
@@ -756,6 +839,36 @@ function sourceSetFallbackOrders(
       }),
     ),
   ].toSorted((left, right) => left - right);
+}
+
+function requiresImmediateSourceSet(manifest: SetManifest): boolean {
+  return manifest.entries.some((entry) => {
+    const completeCue =
+      entry.cue.startSeconds !== undefined &&
+      entry.cue.endSeconds !== undefined &&
+      entry.cue.endSeconds > entry.cue.startSeconds;
+    if (!completeCue) return false;
+    return (
+      entry.identity.status === "unidentified" ||
+      entry.errors.some((error) => error.stage === "acquisition") ||
+      entry.warnings.some((warning) =>
+        warning.includes("Automatic source-set fallback after individual acquisition failure"),
+      )
+    );
+  });
+}
+
+function automaticSourceSetUrl(manifest: SetManifest, requestedSource: string): string {
+  const source = [manifest.source.url, manifest.source.input, requestedSource].find(
+    (candidate): candidate is string =>
+      candidate !== undefined && isSupportedDownloadUrl(candidate),
+  );
+  if (source) return source;
+  throw new TracksError(
+    "INVALID_SOURCE",
+    "Approved cue recovery could not find a public YouTube or SoundCloud source-set URL; supply --source-set-path",
+    { exitCode: 2 },
+  );
 }
 
 function recordSourceSetFallbackWarnings(

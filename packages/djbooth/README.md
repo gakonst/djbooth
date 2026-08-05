@@ -68,15 +68,15 @@ import { exportLegacyDeviceLibrary } from "@gakonst/djbooth/usb";
 ## CLI
 
 The umbrella mounts the package-owned Incur CLI definitions directly. Every specialist command
-and schema remains defined once, in its owning package; `djbooth` adds only the common root and agent
-Skill. Focused package CLIs and native/Python implementation CLIs remain available for development
-and diagnosis. Normal user and agent flows enter through `djbooth`; the owning Incur command validates
-arguments, invokes its Rust or Python helper, and returns bounded structured output.
+and schema remains defined once, in its owning package; `djbooth` adds only the common root. Focused
+package CLIs and native/Python implementation CLIs remain available for development and diagnosis.
+Normal user and agent flows enter through `djbooth`; the owning Incur command validates arguments,
+invokes its Rust or Python helper, and returns bounded structured output.
 
 ```sh
 djbooth tracks resolve "https://youtu.be/example" --format json
 djbooth tracks import-set "https://youtu.be/example" --manifest ./set/manifest.json \
-  --analysis-threads 12 --write --format json
+  --analysis-threads 12 --format json
 djbooth spots auth status --format json
 djbooth spots playlist create "Set IDs" --track "spotify:track:4iV5W9uYEdYUVa79Axb7Rh" --format json
 djbooth spots playlist get spotify:playlist:PLAYLIST_ID --format json
@@ -100,9 +100,9 @@ djbooth djlink search "Science Fiction" --mode track --format json
 djbooth djlink run ./set/manifest.json 1 --player 3 --format json
 djbooth djlink probe 169.254.7.4 --format json
 djbooth djlink stop --format json
-djbooth usb sync /mnt/cdj --database /path/to/master.db --write --format json
-djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --database /path/to/master.db --fresh --write --format json
-djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --database /path/to/master.db --write --format json
+djbooth usb sync /mnt/cdj --database /path/to/master.db --format json
+djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --database /path/to/master.db --fresh --format json
+djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" --database /path/to/master.db --format json
 djbooth usb doctor ./rekordbox-usb.img --format json
 ```
 
@@ -124,7 +124,7 @@ The umbrella mounts the complete package-specific `tracks`, `spots`, `soundcloud
 `rekordbox`, `library`, `djlink`, and `usb` Incur CLIs. Its MCP surface filters those commands to the
 composable calls used for set resolution, metadata lookup, individual acquisition, analysis,
 normal Rekordbox database maintenance, and safe CDJ loading. Agents should prefer the mounted
-`tracks import-set` pipeline command for an approved resolve-download-analyze-playlist request,
+`tracks import-set` pipeline command for a resolve-download-analyze-playlist request,
 then continue without another prompt with one `djlink rekordbox <track>` when a connected-deck
 handoff was requested. Use `djlink run` only for a completed manifest not yet imported. Stage
 commands remain available for diagnosis.
@@ -170,11 +170,12 @@ Both provider groups expose `playlist create|get|update|delete`. SoundCloud dele
 Spotify's delete command reflects Spotify's platform model and removes the playlist from the user's
 library because Spotify provides no permanent delete endpoint.
 
-Install the curated workflow skill plus Incur's typed command-group skills, or register the same
-command map as MCP:
+Discover the complete typed command map through Incur or register it as MCP:
 
 ```sh
-djbooth skills add
+djbooth --help
+djbooth --llms
+djbooth --llms-full
 djbooth mcp add
 ```
 

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -233,7 +232,7 @@ describe("CLI process boundary", () => {
     database.exec("CREATE TABLE sample (ID TEXT PRIMARY KEY)");
     database.close();
 
-    const denied = runCli(
+    const result = runCli(
       "db",
       "sql",
       "INSERT INTO sample VALUES ('1')",
@@ -242,20 +241,8 @@ describe("CLI process boundary", () => {
       "--plain",
       "--json",
     );
-    expect(denied.status).not.toBe(0);
-
-    const allowed = runCli(
-      "db",
-      "sql",
-      "INSERT INTO sample VALUES ('1')",
-      "--path",
-      path,
-      "--plain",
-      "--write",
-      "--json",
-    );
-    expect(allowed.status, allowed.stderr).toBe(0);
-    expect(JSON.parse(allowed.stdout)).toMatchObject({ changes: 1 });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ changes: 1 });
   }, 20_000);
 
   it("lists the complete playlist hierarchy as JSON and a compact table", () => {
@@ -635,44 +622,15 @@ describe("CLI process boundary", () => {
     });
   }, 20_000);
 
-  it("refuses database mutations without explicit write acknowledgement", () => {
-    const result = runCli("db", "row", "create", "djmdArtist", "{}", "--plain", "--json");
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toContain("explicit --write flag");
+  it("runs database mutations without acknowledgement flags", () => {
+    const result = runCli("db", "row", "create", "--help");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("--write");
+    expect(result.stdout).not.toContain("allow-while-running");
   }, 20_000);
 
   it("lists, sets, updates, and deletes normalized content cues", () => {
     const path = cueFixture();
-    const denied = runCli(
-      "db",
-      "content",
-      "set-cue",
-      "track-1",
-      "12.3454",
-      "--path",
-      path,
-      "--plain",
-      "--json",
-    );
-    expect(denied.status).not.toBe(0);
-    expect(`${denied.stdout}\n${denied.stderr}`).toContain("explicit --write flag");
-
-    const bypass = runCli(
-      "db",
-      "content",
-      "set-cue",
-      "track-1",
-      "12",
-      "--path",
-      path,
-      "--plain",
-      "--write",
-      "--allow-while-running",
-      "--json",
-    );
-    expect(bypass.status).not.toBe(0);
-    expect(`${bypass.stdout}\n${bypass.stderr}`).toContain("allow-while-running");
-
     const memory = runCli(
       "db",
       "content",
@@ -684,17 +642,10 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(memory.status, memory.stderr).toBe(0);
-    const memoryReceipt = JSON.parse(memory.stdout) as {
-      backupDirectory: string;
-      backupFiles: Array<{ name: string; sha256: string }>;
-      backupReportPath: string;
-      journalPath: string;
-      cue: { id: string };
-    };
+    const memoryReceipt = JSON.parse(memory.stdout) as { cue: { id: string } };
     expect(memoryReceipt).toMatchObject({
       operation: "set-cue",
       quickCheck: "ok",
@@ -712,33 +663,6 @@ describe("CLI process boundary", () => {
         type: "cue",
       },
     });
-    expect(memoryReceipt.backupFiles.map(({ name }) => name)).toEqual([
-      "plain.db",
-      "masterPlaylists6.xml",
-    ]);
-    expect(existsSync(memoryReceipt.backupReportPath)).toBe(true);
-    const backedUpDatabase = join(memoryReceipt.backupDirectory, "plain.db");
-    const backupHash = createHash("sha256").update(readFileSync(backedUpDatabase)).digest("hex");
-    expect(memoryReceipt.backupFiles[0]?.sha256).toBe(backupHash);
-    const backup = new Database(backedUpDatabase, { readonly: true });
-    expect(
-      (backup.prepare("SELECT COUNT(*) AS count FROM djmdCue").get() as { count: number }).count,
-    ).toBe(0);
-    backup.close();
-    const journal = JSON.parse(readFileSync(memoryReceipt.journalPath, "utf8")) as {
-      outcome: { committed: boolean; status: string };
-      receipt: { changedId: string };
-      stages: Record<string, { status: string }>;
-    };
-    expect(journal).toMatchObject({
-      outcome: { committed: true, status: "succeeded" },
-      stages: {
-        database: { status: "succeeded" },
-        verification: { status: "succeeded" },
-        receipt: { status: "succeeded" },
-      },
-    });
-    expect(journal.receipt.changedId).toBe(memoryReceipt.cue.id);
     const committed = new Database(path, { readonly: true });
     expect(
       (
@@ -786,7 +710,6 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(hot.status, hot.stderr).toBe(0);
@@ -817,7 +740,6 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(updated.status, updated.stderr).toBe(0);
@@ -852,7 +774,6 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(cleared.status, cleared.stderr).toBe(0);
@@ -904,7 +825,6 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(deleted.status, deleted.stderr).toBe(0);
@@ -927,37 +847,11 @@ describe("CLI process boundary", () => {
       "--path",
       path,
       "--plain",
-      "--write",
       "--json",
     );
     expect(invalid.status).not.toBe(0);
     expect(`${invalid.stdout}\n${invalid.stderr}`).toContain("require --slot A through P");
   }, 40_000);
-
-  it("requires both Rekordbox processes stopped before backup or mutation", async () => {
-    const path = cueFixture();
-    await expect(
-      performGuardedCueMutation(
-        {
-          dbPath: path,
-          unlock: false,
-          getProcessState: () => ({ rekordboxPid: 123, rekordboxAgentPid: 456 }),
-        },
-        {
-          type: "set-cue",
-          contentId: "track-1",
-          cue: { kind: "memory", startSeconds: 10, type: "cue" },
-        },
-      ),
-    ).rejects.toThrow("rekordbox (PID 123), rekordboxAgent (PID 456)");
-    expect(existsSync(`${path}.tracks-ts.lock`)).toBe(false);
-    expect(existsSync(join(path, "..", "tracks-ts-backups"))).toBe(false);
-    const database = new Database(path, { readonly: true });
-    expect(
-      (database.prepare("SELECT COUNT(*) AS count FROM djmdCue").get() as { count: number }).count,
-    ).toBe(0);
-    database.close();
-  });
 
   it("coordinates cue writes through the exact shared tracks-ts lock", async () => {
     const path = cueFixture();
@@ -972,7 +866,6 @@ describe("CLI process boundary", () => {
           {
             dbPath: path,
             unlock: false,
-            getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
           },
           {
             type: "set-cue",
@@ -1030,7 +923,6 @@ describe("CLI process boundary", () => {
       {
         dbPath: path,
         unlock: false,
-        getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
       },
       {
         type: "set-cue",

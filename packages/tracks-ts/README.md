@@ -165,7 +165,9 @@ tracks 1001 charts --type trending
 ```
 
 The resolver preserves ordered rows, accepted and unresolved identities, mashup parts, suggestions,
-row durations, and every media candidate returned by 1001Tracklists. A duration-nearest Spotify
+row durations, and every media candidate returned by 1001Tracklists. Each cue start is bounded by
+the next later cue (or the set duration for the final row), so unavailable tracks can be extracted
+without guessing a range. A duration-nearest Spotify
 candidate becomes the exact Spotify handoff; all alternate Spotify, SoundCloud, YouTube, Apple
 Music, Beatport, Traxsource, and Bandcamp links remain in the manifest.
 
@@ -263,7 +265,6 @@ tracks resolve "$SET_URL" --format json
 tracks resolve --schema
 tracks --llms
 tracks mcp add
-tracks skills add
 tracks completions zsh
 ```
 
@@ -281,13 +282,13 @@ tracks import-set "$SET_URL" \
   --local-directory "$HOME/Music/2026/Adam Ten - MAXA x BiPolar Express Link up - Burning Man 2025" \
   --folder-name 'DJ Sets I Like' \
   --analysis-threads 12 \
-  --write \
   --format json
 ```
 
-`--write` is required. The command never downloads a remote source set. Cue recovery additionally
-requires `--allow-set-clips` and an existing `--source-set-path`; external reference yt-dlp requires
-`--reference-ytdlp`. Individual-track acquisition always registers the TypeScript-native YouTube
+Identified tracks try individual acquisition first; after a recoverable failure the workflow caches the exact
+public YouTube/SoundCloud set once. Unidentified ID rows with complete cues cache it before their
+only acquisition pass. Pass `--source-set-path` to reuse an existing local recording instead.
+External reference yt-dlp requires `--reference-ytdlp`. Individual-track acquisition always registers the TypeScript-native YouTube
 search/extractor/downloader after Soulseek; the external executable is neither constructed nor
 invoked by the default path. Final recordings default to
 `~/.djtools/tracks/<artist>/<album>/<title> [identity].ext`; set `DJBOOTH_LIBRARY_ROOT` or pass
@@ -306,7 +307,7 @@ analysis slots, not a per-process value. The workflow divides it deterministical
 host parallelism and the number of uncached tracks. Apple Silicon keeps two Rayon slots per core;
 small batches are capped at eight threads per track.
 
-With cue recovery approved, one invocation performs at most two acquisition passes. Pass 1 tries
+One invocation performs at most two acquisition passes. Pass 1 tries
 individual releases and checkpoints every exact failure. Pass 2 extracts only failed identified
 tracks with complete cues from the verified local set, then the same invocation continues through
 analysis and Rekordbox commit. Structured output reports `acquisitionPasses`,
@@ -315,8 +316,8 @@ analysis and Rekordbox commit. Structured output reports `acquisitionPasses`,
 Resume clean-room analysis independently when media is already checkpointed. This command loads no
 Spotify, Soulseek, or downloader credentials and never acquires, retags, or imports media. It writes
 successful analyzer artifacts back to the same locked manifest, including cache hits and partial
-successes when another item fails or the run is interrupted. Its compare-and-swap checkpoint
-refuses to overwrite a non-cooperating edit made after the exact manifest snapshot was read.
+successes when another item fails or the run is interrupted. The pipeline lock serializes manifest
+updates while the atomic rename prevents partial files.
 `artifacts.analysisRuns` retains start/finish timestamps, duration, status, and analyzed/cache/
 failed/cancelled counts for later performance study:
 
@@ -337,15 +338,13 @@ Use `--rhythm-mode dynamic` for known live or rubato material and `normal` for a
 grid. Requested and selected modes are persisted with each artifact and participate in cache reuse.
 
 Once acquisition and analysis are complete, import that checkpoint without rerunning network
-stages. `--write` remains mandatory; the importer coordinates the database lock with the open
-library workbench, creates one recovery backup only when a mutation is needed, commits once, and
+stages. The importer coordinates the database lock with the open library workbench, commits once, and
 reopens read-only for integrity/metadata/analysis verification:
 
 ```sh
 tracks import-existing ./adam-ten/manifest.json \
   --folder-name 'DJ Sets I Like' \
   --playlist-name 'Adam Ten — Burning Man 2025 [music-ts]' \
-  --write \
   --format json
 ```
 
@@ -379,7 +378,7 @@ Spotify playlists ── spots ─────────┤
 | [`@gakonst/spots`](https://github.com/gakonst/djbooth/tree/main/packages/spots)            | Pull the user's Spotify playlists; enrich or verify track metadata                  |
 | `@gakonst/tracks`                                                                          | Resolve one set, coordinate enrichment/acquisition, and retain the durable manifest |
 | [`slsk-ts`](https://github.com/gakonst/djbooth/tree/main/packages/slsk-ts)                 | Preferred search and resumable download of each individual track                    |
-| [`@gakonst/ytdlp-ts`](https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and approved bounded set-cache source |
+| [`@gakonst/ytdlp-ts`](https://github.com/gakonst/djbooth/tree/main/packages/ytdlp-ts)      | Metadata inspection, selected-track fallback, and bounded set-cache source          |
 | [`@gakonst/rekordbox`](https://github.com/gakonst/djbooth/tree/main/packages/rekordbox-ts) | Approved, backed-up direct import into the normal encrypted Rekordbox database      |
 | [`@gakonst/djlink`](https://github.com/gakonst/djbooth/tree/main/packages/djlink)          | Serve completed local media/ANLZ and load or cue it on a connected CDJ              |
 
@@ -408,10 +407,11 @@ The boundary is deliberate:
   output-lock, write, identity, and content-validation failures stop instead of starting a second
   engine.
 - Compatible Soulseek FLAC, MP3, and M4A files retain their container; PCM sources become FLAC losslessly, while an unavoidable lossy compatibility transcode is annotated.
-- If no individual release exists, a cue-bounded extract may come from one explicitly supplied
-  local set recording. It is marked lossy and transition-bearing; `import-set` never downloads the
-  remote set.
-- Identified tracks still try individual acquisition first. With explicit set-clip approval, a
+- If no individual release exists, a cue-bounded extract may come from one verified local set
+  recording. `import-set` caches the exact public source set once
+  after individual acquisition fails; `--source-set-path` overrides it with an existing file. The
+  extract is marked lossy and transition-bearing.
+- Identified tracks still try individual acquisition first. A
   checkpointed failure becomes a cue-bounded source extract in a bounded second pass during the same
   invocation and stays on that recovery path on later warm runs.
 - Acquisition uses three network workers; verification and Spotify enrichment/refresh use eight;
@@ -420,13 +420,10 @@ The boundary is deliberate:
   deterministic. Explicit reference search stays deferred until native reports a safe capability
   gap. Clean-room analysis begins per artifact while remaining downloads continue.
 - Direct Rekordbox import begins only after all planned files are present, checksummed, and analyzed.
-  Its file preflight, hashing, analysis installation, and backup copies use up to eight workers,
-  bounded further by Node's available parallelism. Encrypted database access stays serialized in
-  one transaction. It requires explicit approval,
-  stopped Rekordbox processes, an exclusive backup of the database and companion files, and
-  post-commit integrity, metadata, analysis, BPM/key, and membership verification. Warm resumes
-  treat missing or stale analyzer BPM/key as repairable checkpoint drift and use the same backed-up
-  transaction to synchronize it.
+  File preflight, hashing, and analysis installation use up to eight workers, bounded further by
+  Node's available parallelism. Encrypted database access stays serialized in one transaction,
+  followed by integrity, metadata, analysis, BPM/key, and membership verification. Warm resumes
+  treat missing or stale analyzer BPM/key as repairable checkpoint drift and reconcile it.
 - Rekordbox `Length` is the rounded duration probed from each verified media artifact. Spotify and
   cue durations remain identity/provenance data and never substitute for the recording measurement.
   The stat-keyed preflight receipt carries both checksum and duration through warm verification and
@@ -467,7 +464,7 @@ djbooth tracks enrich --format json
 djbooth tracks enrich --folder 'DJ Sets I Like' --dry-run --format json
 ```
 
-Writes require Rekordbox to be stopped, create a checksummed backup, commit once, and reopen the
+Writes require Rekordbox to be stopped, commit once, and reopen the
 database to verify every changed field.
 
 After `import-set` commits the verified files and playlist, serve the complete master.db and cue an
@@ -524,7 +521,7 @@ unchanged repeat hash/probe work. Library callers can inject the same `JsonDiskC
 `verificationCache`. A fully verified resume takes the fast path without loading an acquisition
 backend.
 The normal Rekordbox importer similarly verifies an already-imported playlist and returns
-`performance.changed: false` without another backup or write.
+`performance.changed: false` without another write.
 
 ```sh
 pnpm exec tsx src/run-brunello-acquisition.ts --concurrency 3
@@ -599,7 +596,7 @@ console.log(
 );
 ```
 
-Pipeline APIs are exported as libraries: `enrichRekordboxMetadata`, `enrichSpotifyManifest`, `acquireManifest`, `analyzeExistingManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpNativeAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Acquisition and analysis checkpoints reject concurrent manifest edits. The Rekordbox import requires `approved: true`, accepts an injected `@gakonst/rekordbox` module, and performs the stopped-process, exact-path backup, one-commit, verification, and atomic-manifest sequence described above. A successful import persists its database, folder, playlist, and backup identity under `artifacts.rekordbox`.
+Pipeline APIs are exported as libraries: `enrichRekordboxMetadata`, `enrichSpotifyManifest`, `acquireManifest`, `analyzeExistingManifest`, `refreshKnownSpotifyTracks`, `CachedSpotifyClient`, `JsonDiskCache`, `SoulseekLibraryAcquirer`, `YtdlpNativeAcquirer`, `YtdlpReferenceAcquirer`, `verifyAcquisitionPlan`, and `importManifestToRekordbox`. `enrichSpotifyManifest` accepts one long-lived `@gakonst/spots` client, searches pending identified entries with bounded concurrency, and preserves weak or close matches as candidate arrays. Pipeline stages share one manifest lock. Rekordbox import accepts an injected `@gakonst/rekordbox` module, commits once, verifies, and atomically checkpoints the manifest. A successful import persists its database, folder, and playlist identity under `artifacts.rekordbox`.
 
 The checked-in Brunello recovery preset defaults to `~/Music/tracks-ts/brunello-lightning-in-a-bottle-2026`; set `TRACKS_BRUNELLO_ROOT` or inject module objects when running it elsewhere.
 

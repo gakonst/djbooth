@@ -224,7 +224,6 @@ try {
   });
   if (
     !usbSyncHelp.stdout.includes("--database") ||
-    !usbSyncHelp.stdout.includes("--write") ||
     !usbSyncHelp.stdout.includes("unseen CDJ histories") ||
     !usbSyncHelp.stdout.includes("DJ Set YYYY-MM-DD")
   ) {
@@ -254,74 +253,6 @@ try {
     throw new Error("Packed djbooth CLI did not expose semantic analysis comparisons");
   }
   process.stdout.write("✓ djbooth rekordbox analyze composed CLI\n");
-
-  const skills = run(djbooth, ["skills", "list"], {
-    cwd: consumer,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (
-    !skills.stdout.includes("10 skills") ||
-    !skills.stdout.includes("djbooth-djlink") ||
-    !skills.stdout.includes("djbooth-library") ||
-    !skills.stdout.includes("djbooth-rekordbox") ||
-    !skills.stdout.includes("djbooth-usb")
-  ) {
-    throw new Error("Packed djbooth CLI did not expose its workflow and typed command-group skills");
-  }
-  process.stdout.write("✓ djbooth skills list\n");
-
-  run(djbooth, ["skills", "add", "--no-global"], {
-    cwd: consumer,
-    stdio: "ignore",
-  });
-  const installedSkill = join(consumer, ".agents", "skills", "djbooth", "SKILL.md");
-  const installedSkillSource = readFileSync(installedSkill, "utf8");
-  const workflowContracts = [
-    "## ytdlp engine contract",
-    "## Local library workbench",
-    "--engine native",
-    "shared cross-process database lock",
-    "offline bulk workflows",
-    "reference helper nor Rekordbox/JUCE/runtime bytes may enter a release artifact",
-    "djbooth rekordbox analyze beat-grid-diff",
-    "djbooth rekordbox analyze waveform-diff",
-    "## 8. Serve and load connected CDJs",
-    "djbooth usb sync",
-    "Spotify streaming tracks cannot be LINK EXPORTed",
-    "djbooth djlink search <query>",
-  ];
-  if (workflowContracts.some((contract) => !installedSkillSource.includes(contract))) {
-    throw new Error("Installed djbooth.ai workflow skill is missing a safety contract");
-  }
-  const generatedSkills = [
-    ["djbooth-djlink", ["# djbooth djlink doctor", "# djbooth djlink load", "# djbooth djlink search"]],
-    ["djbooth-library", ["# djbooth library serve"]],
-    ["djbooth-tracks", ["# djbooth tracks resolve"]],
-    ["djbooth-spots", ["# djbooth spots api search"]],
-    ["djbooth-soundcloud", ["# djbooth soundcloud resolve"]],
-    ["djbooth-slsk", ["# djbooth slsk download"]],
-    ["djbooth-usb", ["# djbooth usb doctor", "# djbooth usb export", "# djbooth usb sync"]],
-    ["djbooth-ytdlp-ts", ["# djbooth ytdlp-ts download"]],
-    [
-      "djbooth-rekordbox",
-      [
-        "# djbooth rekordbox analyze beat-grid-diff",
-        "# djbooth rekordbox analyze waveform-diff",
-        "# djbooth rekordbox db playlist create",
-        "# djbooth rekordbox db playlist list",
-        "# djbooth rekordbox db playlist show",
-      ],
-    ],
-  ];
-  for (const [skill, commands] of generatedSkills) {
-    const source = readFileSync(join(consumer, ".agents", "skills", skill, "SKILL.md"), "utf8");
-    if (
-      !source.includes("requires_bin: djbooth") ||
-      commands.some((command) => !source.includes(command))
-    )
-      throw new Error(`Installed ${skill} skill is missing generated Incur command metadata`);
-  }
-  process.stdout.write("✓ djbooth skills add --no-global\n");
 
   run(
     process.execPath,

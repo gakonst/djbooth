@@ -14,11 +14,12 @@ master.db + audio + ANLZ ─> changed USB files + both library indexes
 ```
 
 Complete-library `sync` retains the legacy Device Library round trip used by CDJ-3000 media.
-Scoped `sync-playlist` creates and updates both traditional Device Library and OneLibrary so one
-stick works across legacy and current players. Neither workflow requires a disk-image file.
-`sync --write` mutates the normal master library only when the
-USB contains an unseen play history, behind the shared lock, stopped-Rekordbox check, checksummed
-backup, one transaction, and post-commit verification.
+`sync --playlist-folder <name>` performs the same history round trip while batching only that
+folder's direct playlists into traditional Device Library and OneLibrary. Shared tracks get one
+audio/ANLZ copy and one content identity regardless of playlist membership count. `sync-playlist`
+remains the lower-level exact-ID operation. None of these workflows requires a disk-image file.
+`sync` mutates the normal master library only when the USB contains unseen play history, behind the
+shared lock and one transaction.
 
 The package also contains a lower-level Linux configfs controller for presenting an immutable
 backing image through a board's USB device/OTG port. In that mode the deck remains the USB host, the
@@ -44,6 +45,8 @@ The mounted-media synchronizer:
 - refuses to replace unowned media or erase a history it cannot map exactly;
 - can initialize an empty stick with one analyzed playlist in both traditional Device Library and
   OneLibrary, or append to an existing dual-format export without rebuilding unrelated rows.
+- can select one host folder, deduplicate its union of tracks, copy with bounded concurrency, and
+  publish both catalogs once behind one rollback snapshot pair.
 
 The current low-level gadget controller:
 
@@ -140,28 +143,37 @@ board's actual OTG controller/device-tree configuration.
 For a new or previously djbooth.ai-owned mounted FAT/exFAT volume:
 
 ```sh
-djbooth usb sync /mnt/cdj --database /path/to/master.db --write --format json
+djbooth usb sync /mnt/cdj --database /path/to/master.db --format json
 ```
+
+To import pending play history and synchronize only one host folder in a single batched operation:
+
+```sh
+djbooth usb sync /mnt/cdj --playlist-folder 'DJ Sets I Like' \
+  --database /path/to/master.db --format json
+```
+
+Use `--fresh` with `--playlist-folder` for an empty stick. Playlist memberships share one physical
+audio/ANLZ artifact per unique master-library track.
 
 For a freshly formatted stick, initialize both USB library formats with one normal playlist by
 exact ID:
 
 ```sh
 djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
-  --database /path/to/master.db --fresh --write --format json
+  --database /path/to/master.db --fresh --format json
 ```
 
 Run the same command without `--fresh` for an existing djbooth.ai dual-library stick:
 
 ```sh
 djbooth usb sync-playlist /mnt/cdj "$PLAYLIST_ID" \
-  --database /path/to/master.db --write --format json
+  --database /path/to/master.db --format json
 ```
 
 Scoped sync writes one shared audio/ANLZ tree plus traditional `export.pdb` and encrypted OneLibrary
 `exportLibrary.db`. It verifies both playlist hierarchies and orders, SQLite integrity, ANLZ paths,
-and installed audio before writing its receipt. Existing dual-library media gets timestamped
-backups; an unchanged rerun is a zero-copy no-op.
+and installed audio before writing its receipt. An unchanged rerun is a zero-copy no-op.
 
 The result contains:
 
@@ -266,13 +278,11 @@ import {
 } from "@gakonst/cdj-usb";
 
 await syncLegacyDeviceLibrary({
-  approved: true,
   databasePath: "/path/to/master.db",
   targetDirectory: "/mnt/cdj",
 });
 
 await syncLegacyDevicePlaylist({
-  approved: true,
   databasePath: "/path/to/master.db",
   playlistId: "86387235",
   targetDirectory: "/mnt/cdj",

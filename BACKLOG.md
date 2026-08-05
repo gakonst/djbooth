@@ -153,9 +153,6 @@ Rekordbox analysis/import, and the No Static case-study workflow.
   - Cue inference/fingerprint alignment against a local full set only after approval.
   - No source-set clipping without complete cue bounds and explicit approval.
   - Never silently substitute another version.
-- [x] Version the music skill contract in the repository.
-  - Restore a canonical skill source and generated-install regression test.
-  - `music skills add` must preserve native-default, fail-closed, cue, and Rekordbox safety rules.
 - [ ] Clean repository and release state.
   - Reconcile the root checkout with current `main`.
   - Preserve active work; prune merged stale worktrees using `wt`.

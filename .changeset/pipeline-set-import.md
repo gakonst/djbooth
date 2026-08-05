@@ -6,7 +6,7 @@
 ---
 
 Add a resumable set-to-Rekordbox library workflow and Incur command that resolves a set, enriches
-Spotify metadata, acquires every individual or explicitly approved cue-bounded recording, pipelines
+Spotify metadata, acquires every individual or cue-bounded recording, pipelines
 bounded four-worker native analysis with acquisition, and installs verified analysis in one normal
 Rekordbox database transaction. Add offline `analyze-existing` and `import-existing` stage commands
 with manifest checkpoints, run timestamps, partial-result recovery, and idempotent warm verification.

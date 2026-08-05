@@ -8,11 +8,7 @@ import {
   type RekordboxAnalysisResult,
 } from "@gakonst/rekordbox/analyzer";
 
-import {
-  acquirePipelineManifestLock,
-  readManifestSnapshot,
-  writeManifestAtomic,
-} from "./acquisition.js";
+import { acquirePipelineManifestLock, readManifest, writeManifestAtomic } from "./acquisition.js";
 import { TracksError } from "./errors.js";
 import type {
   RekordboxAnalysisArtifact,
@@ -44,14 +40,14 @@ export type AnalyzeExistingManifestResult = {
 export type AnalyzeExistingManifestDependencies = {
   acquireLock: typeof acquirePipelineManifestLock;
   analyze: typeof analyzeTracks;
-  readManifestSnapshot: typeof readManifestSnapshot;
+  readManifest: typeof readManifest;
   writeManifest: typeof writeManifestAtomic;
 };
 
 const defaultDependencies: AnalyzeExistingManifestDependencies = {
   acquireLock: acquirePipelineManifestLock,
   analyze: analyzeTracks,
-  readManifestSnapshot,
+  readManifest,
   writeManifest: writeManifestAtomic,
 };
 
@@ -65,8 +61,7 @@ export async function analyzeExistingManifest(
   const dependencies = { ...defaultDependencies, ...options.dependencies };
   const release = await dependencies.acquireLock(manifestPath);
   try {
-    const snapshot = await dependencies.readManifestSnapshot(manifestPath);
-    const manifest = snapshot.manifest;
+    const manifest = await dependencies.readManifest(manifestPath);
     const mediaPaths = acquiredMediaPaths(manifest);
     if (!mediaPaths.length) {
       throw new TracksError("INVALID_SOURCE", "Manifest has no downloaded media to analyze", {
@@ -112,11 +107,10 @@ export async function analyzeExistingManifest(
           mediaPaths,
           partial.results,
           run,
-          snapshot.contents,
           dependencies,
         );
       } else {
-        await persistAnalysisRun(manifestPath, manifest, run, snapshot.contents, dependencies);
+        await persistAnalysisRun(manifestPath, manifest, run, dependencies);
       }
       throw error;
     }
@@ -133,7 +127,6 @@ export async function analyzeExistingManifest(
         "completed",
         performance.now() - started,
       ),
-      snapshot.contents,
       dependencies,
     );
     const finishedAt = new Date().toISOString();
@@ -155,12 +148,11 @@ async function persistAnalysisRun(
   manifestPath: string,
   manifest: SetManifest,
   run: RekordboxAnalysisRunArtifact,
-  expectedContents: string,
   dependencies: AnalyzeExistingManifestDependencies,
 ): Promise<void> {
   const nextManifest = structuredClone(manifest);
   nextManifest.artifacts.analysisRuns = [...(manifest.artifacts.analysisRuns ?? []), run];
-  await dependencies.writeManifest(manifestPath, nextManifest, { expectedContents });
+  await dependencies.writeManifest(manifestPath, nextManifest);
   manifest.artifacts.analysisRuns = nextManifest.artifacts.analysisRuns;
 }
 
@@ -184,7 +176,6 @@ async function persistAnalysisArtifacts(
   mediaPaths: readonly string[],
   results: readonly (RekordboxAnalysisResult | undefined)[],
   run: RekordboxAnalysisRunArtifact,
-  expectedContents: string,
   dependencies: AnalyzeExistingManifestDependencies,
 ): Promise<void> {
   const selectedIdentities = new Set(
@@ -204,7 +195,7 @@ async function persistAnalysisArtifacts(
   const nextManifest = structuredClone(manifest);
   nextManifest.artifacts.analysis = artifacts;
   nextManifest.artifacts.analysisRuns = [...(manifest.artifacts.analysisRuns ?? []), run];
-  await dependencies.writeManifest(manifestPath, nextManifest, { expectedContents });
+  await dependencies.writeManifest(manifestPath, nextManifest);
   manifest.artifacts.analysis = artifacts;
   manifest.artifacts.analysisRuns = nextManifest.artifacts.analysisRuns;
 }

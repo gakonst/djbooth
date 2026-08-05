@@ -61,18 +61,6 @@ import { type ContentCuePatch, performGuardedCueMutation } from "./masterdb/safe
 export const rekordboxCli = Cli.create("rekordbox", {
   version,
   description: "Query and modify Rekordbox databases, libraries, and export formats.",
-  sync: {
-    suggestions: [
-      "search my Rekordbox database",
-      "list playlists in my Rekordbox library",
-      "show tracks in a Rekordbox playlist by name",
-      "list memory cues and Hot Cues for a Rekordbox track",
-      "set a memory cue or Hot Cue in my Rekordbox library",
-      "inspect my Rekordbox configuration",
-      "inspect an ANLZ file",
-      "summarize a Rekordbox XML export",
-    ],
-  },
 });
 
 rekordboxCli.command("status", {
@@ -795,14 +783,8 @@ const dbOpenOptions = z.object({
   path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
   plain: z.boolean().default(false).describe("Open an unencrypted SQLite database"),
 });
-const dbWriteOptions = dbOpenOptions.extend({
-  allowWhileRunning: z.boolean().default(false).describe("Allow commit while Rekordbox is running"),
-  write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
-});
-const guardedCueWriteOptions = dbOpenOptions.extend({
-  backupRoot: z.string().optional().describe("Directory for checksummed pre-write backups"),
-  write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
-});
+const dbWriteOptions = dbOpenOptions;
+const guardedCueWriteOptions = dbOpenOptions;
 
 function openDatabase(options: { path?: string; plain: boolean }, write = false): MasterDatabase {
   return new MasterDatabase({
@@ -811,10 +793,6 @@ function openDatabase(options: { path?: string; plain: boolean }, write = false)
     readonly: !write,
     unlock: !options.plain,
   });
-}
-
-function requireDatabaseWrite(options: { write: boolean }): void {
-  if (!options.write) throw new TypeError("Database mutations require the explicit --write flag");
 }
 
 function resolveDatabasePath(options: { path?: string; plain: boolean }): string {
@@ -912,7 +890,7 @@ databaseCli.command("sql", {
     offset: z.number().int().min(0).default(0),
   }),
   run(c) {
-    const db = openDatabase(c.options, c.options.write);
+    const db = openDatabase(c.options, true);
     try {
       const result = db.executeSql(c.args.sql, parseJsonArray(c.options.parameters, "parameters"));
       if (Array.isArray(result))
@@ -954,7 +932,6 @@ databaseRowCli.command("create", {
   }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const model = modelByTable[c.args.table];
@@ -963,7 +940,7 @@ databaseRowCli.command("create", {
         model,
         parseJsonObject(c.args.values, "values") as Record<string, DatabaseValue>,
       );
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { row, table: c.args.table };
     } finally {
       db.close();
@@ -982,7 +959,6 @@ databaseRowCli.command("update", {
     keyColumn: z.string().default("ID").describe("Primary-key column"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const model = modelByTable[c.args.table];
@@ -993,7 +969,7 @@ databaseRowCli.command("update", {
         .one();
       for (const [key, value] of Object.entries(parseJsonObject(c.args.values, "values")))
         row.set(key, value as DatabaseValue);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { row, table: c.args.table };
     } finally {
       db.close();
@@ -1011,7 +987,6 @@ databaseRowCli.command("delete", {
     keyColumn: z.string().default("ID").describe("Primary-key column"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const model = modelByTable[c.args.table];
@@ -1022,7 +997,7 @@ databaseRowCli.command("delete", {
         .one();
       const deleted = row.toJSON();
       db.delete(row);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { deleted, table: c.args.table };
     } finally {
       db.close();
@@ -1080,7 +1055,6 @@ databaseMetadataCli.command("add", {
     searchString: z.string().optional().describe("Optional search string"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const row =
@@ -1096,7 +1070,7 @@ databaseMetadataCli.command("add", {
                   imagePath: c.options.imagePath,
                   searchString: c.options.searchString,
                 });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -1114,7 +1088,6 @@ databaseContentCli.command("add", {
     title: z.string().optional(),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const row = db.addContent(c.args.audioPath, {
@@ -1123,7 +1096,7 @@ databaseContentCli.command("add", {
         GenreID: c.options.genreId ?? null,
         Title: c.options.title ?? null,
       });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -1142,16 +1115,14 @@ databaseContentCli.command("set-path", {
     saveAnlz: z.boolean().default(true).describe("Write updated analysis files"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.updateContentPath(c.args.contentId, c.args.audioPath, {
-        allowWhileRunning: c.options.allowWhileRunning,
         checkPath: c.options.checkPath,
         commit: false,
         saveAnlz: c.options.saveAnlz,
       });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return db.query(DjmdContent).where({ ID: c.args.contentId }).one();
     } finally {
       db.close();
@@ -1170,16 +1141,14 @@ databaseContentCli.command("set-filename", {
     saveAnlz: z.boolean().default(true).describe("Write updated analysis files"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.updateContentFilename(c.args.contentId, c.args.filename, {
-        allowWhileRunning: c.options.allowWhileRunning,
         checkPath: c.options.checkPath,
         commit: false,
         saveAnlz: c.options.saveAnlz,
       });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return db.query(DjmdContent).where({ ID: c.args.contentId }).one();
     } finally {
       db.close();
@@ -1199,11 +1168,9 @@ databaseContentCli.command("install-analysis", {
     replace: z.boolean().default(false).describe("Replace existing analysis files"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       return db.installContentAnalysis(c.args.contentId, c.args.analysisDirectory, {
-        allowWhileRunning: c.options.allowWhileRunning,
         commit: true,
         replace: c.options.replace,
       });
@@ -1221,11 +1188,9 @@ databaseContentCli.command("sync-analysis-metadata", {
   }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       return db.syncContentAnalysisMetadata(c.args.contentId, c.args.analysisDirectory, {
-        allowWhileRunning: c.options.allowWhileRunning,
         commit: true,
       });
     } finally {
@@ -1500,13 +1465,11 @@ databaseContentCli.command("set-cue", {
         kind: "hot",
         slot: "A",
         type: "loop",
-        write: true,
       },
       description: "Set Hot Cue A to an active loop",
     },
   ],
   async run(c) {
-    requireDatabaseWrite(c.options);
     if (c.options.clearColor && c.options.color !== undefined)
       throw new TypeError("Pass either --color or --clear-color, not both");
     if (c.options.clearColorTableIndex && c.options.colorTableIndex !== undefined)
@@ -1542,7 +1505,6 @@ databaseContentCli.command("set-cue", {
     return performGuardedCueMutation(
       {
         dbPath,
-        backupRoot: c.options.backupRoot,
         key: process.env.REKORDBOX_DB_KEY,
         unlock: !c.options.plain,
       },
@@ -1558,20 +1520,12 @@ databaseContentCli.command("delete-cue", {
     cueId: z.string().describe("Cue ID"),
   }),
   options: guardedCueWriteOptions,
-  examples: [
-    {
-      args: { contentId: "123456789", cueId: "987654321" },
-      options: { write: true },
-      description: "Delete one cue after explicit write acknowledgement",
-    },
-  ],
+  examples: [{ args: { contentId: "123456789", cueId: "987654321" } }],
   async run(c) {
-    requireDatabaseWrite(c.options);
     const dbPath = resolveDatabasePath(c.options);
     return performGuardedCueMutation(
       {
         dbPath,
-        backupRoot: c.options.backupRoot,
         key: process.env.REKORDBOX_DB_KEY,
         unlock: !c.options.plain,
       },
@@ -1762,7 +1716,6 @@ databasePlaylistCli.command("create", {
     type: z.enum(["playlist", "folder", "smart"]).default("playlist"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const options = { parent: c.options.parent, seq: c.options.seq };
@@ -1776,7 +1729,7 @@ databasePlaylistCli.command("create", {
                 options,
               )
             : db.createPlaylist(c.args.name, options);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -1794,11 +1747,10 @@ databasePlaylistCli.command("add-track", {
     trackNumber: z.number().int().positive().optional().describe("One-based insertion point"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const row = db.addToPlaylist(c.args.playlistId, c.args.contentId, c.options.trackNumber);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -1814,11 +1766,10 @@ databasePlaylistCli.command("remove-track", {
   }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.removeFromPlaylist(c.args.playlistId, c.args.songId);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { playlistId: c.args.playlistId, removed: c.args.songId };
     } finally {
       db.close();
@@ -1834,11 +1785,10 @@ databasePlaylistCli.command("move", {
     seq: z.number().int().positive().optional().describe("New one-based sequence"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.movePlaylist(c.args.playlistId, { parent: c.options.parent, seq: c.options.seq });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
     } finally {
       db.close();
@@ -1854,11 +1804,10 @@ databasePlaylistCli.command("rename", {
   }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.renamePlaylist(c.args.playlistId, c.args.name);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
     } finally {
       db.close();
@@ -1871,13 +1820,12 @@ databasePlaylistCli.command("delete", {
   args: z.object({ playlistId: z.string().describe("Playlist or folder ID") }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       const row = db.query(DjmdPlaylist).where({ ID: c.args.playlistId }).one();
       const deleted = row.toJSON();
       db.deletePlaylist(row);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { deleted };
     } finally {
       db.close();
@@ -1894,11 +1842,10 @@ databasePlaylistCli.command("move-track", {
   }),
   options: dbWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDatabase(c.options, true);
     try {
       db.moveSongInPlaylist(c.args.playlistId, c.args.songId, c.args.trackNumber);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return db.query(DjmdSongPlaylist).where({ ID: c.args.songId }).one();
     } finally {
       db.close();
@@ -1916,17 +1863,13 @@ const deviceOpenOptions = z.object({
   path: z.string().describe("exportLibrary.db path"),
   plain: z.boolean().default(false).describe("Open an unencrypted SQLite database"),
 });
-const deviceWriteOptions = deviceOpenOptions.extend({
-  allowWhileRunning: z.boolean().default(false).describe("Allow commit while Rekordbox is running"),
-  write: z.boolean().default(false).describe("Required acknowledgement for database mutation"),
-});
+const deviceWriteOptions = deviceOpenOptions;
 
 function openDeviceLibrary(
-  options: { allowWhileRunning?: boolean; path: string; plain: boolean },
+  options: { path: string; plain: boolean },
   write = false,
 ): DeviceLibraryPlus {
   return new DeviceLibraryPlus({
-    allowWhileRunning: options.allowWhileRunning,
     key: process.env.REKORDBOX_DEVICE_DB_KEY,
     path: options.path,
     readonly: !write,
@@ -2019,7 +1962,7 @@ deviceCli.command("sql", {
     offset: z.number().int().min(0).default(0),
   }),
   run(c) {
-    const db = openDeviceLibrary(c.options, c.options.write);
+    const db = openDeviceLibrary(c.options, true);
     try {
       const result = db.executeSql(c.args.sql, parseJsonArray(c.options.parameters, "parameters"));
       if (Array.isArray(result))
@@ -2063,13 +2006,12 @@ deviceRowCli.command("create", {
   }),
   options: deviceWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const model = deviceModelByTable[c.args.table];
       if (!model) throw new TypeError(`No mapped Device Library Plus table '${c.args.table}'`);
       const row = db.create(model, parseJsonObject(c.args.values, "values"));
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { row, table: c.args.table };
     } finally {
       db.close();
@@ -2086,7 +2028,6 @@ deviceRowCli.command("update", {
   }),
   options: deviceWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const model = deviceModelByTable[c.args.table];
@@ -2094,7 +2035,7 @@ deviceRowCli.command("update", {
       const row = db.query(model).where(parseJsonObject(c.args.filters, "filters")).one();
       for (const [key, value] of Object.entries(parseJsonObject(c.args.values, "values")))
         row.set(key, value as DatabaseValue);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { row, table: c.args.table };
     } finally {
       db.close();
@@ -2110,7 +2051,6 @@ deviceRowCli.command("delete", {
   }),
   options: deviceWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const model = deviceModelByTable[c.args.table];
@@ -2118,7 +2058,7 @@ deviceRowCli.command("delete", {
       const row = db.query(model).where(parseJsonObject(c.args.filters, "filters")).one();
       const deleted = row.toJSON();
       db.delete(row);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return { deleted, table: c.args.table };
     } finally {
       db.close();
@@ -2147,7 +2087,6 @@ deviceMetadataCli.command("add", {
     searchString: z.string().optional().describe("Artist or album search string"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const row =
@@ -2169,7 +2108,7 @@ deviceMetadataCli.command("add", {
                         isCompilation: c.options.compilation,
                         searchString: c.options.searchString,
                       });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -2191,7 +2130,6 @@ deviceContentCli.command("add", {
     values: z.string().default("{}").describe("Additional physical-column JSON"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const row = db.addContent(c.args.audioPath, c.args.fileType, {
@@ -2202,7 +2140,7 @@ deviceContentCli.command("add", {
         values: parseJsonObject(c.options.values, "values"),
       });
       if (db.hasTable("property") && db.getProperty().count()) db.updateContentCount();
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -2250,7 +2188,6 @@ devicePlaylistCli.command("create", {
     type: z.enum(["playlist", "folder"]).default("playlist"),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const options = {
@@ -2261,7 +2198,7 @@ devicePlaylistCli.command("create", {
         c.options.type === "folder"
           ? db.addPlaylistFolder(c.args.name, options)
           : db.addPlaylist(c.args.name, { ...options, imageId: c.options.imageId });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -2279,11 +2216,10 @@ devicePlaylistCli.command("add-track", {
     sequenceNo: z.number().int().positive().optional(),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const row = db.addPlaylistContent(c.args.playlistId, c.args.contentId, c.options.sequenceNo);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -2304,7 +2240,6 @@ deviceTagCli.command("create", {
     sequenceNo: z.number().int().positive().optional(),
   }),
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const row = db.addMyTag(c.args.name, {
@@ -2312,7 +2247,7 @@ deviceTagCli.command("create", {
         parentId: c.options.parentId,
         sequenceNo: c.options.sequenceNo,
       });
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();
@@ -2328,11 +2263,10 @@ deviceTagCli.command("add-track", {
   }),
   options: deviceWriteOptions,
   run(c) {
-    requireDatabaseWrite(c.options);
     const db = openDeviceLibrary(c.options, true);
     try {
       const row = db.addMyTagContent(c.args.tagId, c.args.contentId);
-      db.commit({ allowWhileRunning: c.options.allowWhileRunning });
+      db.commit();
       return row;
     } finally {
       db.close();

@@ -153,7 +153,7 @@ describe("MasterDatabase content cues", () => {
       type: "cue",
     });
     expect(sameHot.id).toBe(hot.id);
-    db.commit({ allowWhileRunning: true });
+    db.commit();
 
     expect(
       db.executeSql(
@@ -190,7 +190,7 @@ describe("MasterDatabase content cues", () => {
 
     db.deleteContentCue("track-1", memory.id);
     expect(() => db.deleteContentCue("track-2", sameHot.id)).toThrow(/does not belong/u);
-    db.commit({ allowWhileRunning: true });
+    db.commit();
     expect(db.getContentCues("track-1").map((cue) => cue.id)).toEqual([sameHot.id]);
     const updatedMirror = db.query(ContentCueRow).where({ ContentID: "track-1" }).one();
     expect(JSON.parse(String(updatedMirror.Cues))).toEqual([
@@ -403,7 +403,7 @@ describe("MasterDatabase content cues", () => {
       [expect.any(String), 1, 25],
       ["keep-hot", 2, 35],
     ]);
-    db.commit({ allowWhileRunning: true });
+    db.commit();
     expect(db.getContentCues("track-1")).toEqual(cues);
     expect(db.query(DjmdCue).where({ ID: "remove-memory" }).count()).toBe(0);
     db.close();

@@ -1,6 +1,5 @@
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity,
   AudioLines,
   ChevronRight,
   CircleAlert,
@@ -424,12 +423,8 @@ export function App({ assistantEnabled = true }: AppProps) {
     enabled: Boolean(metadataTarget),
   });
 
-  const processes = bootstrapQuery.data?.library.processes;
-  const rekordboxRunning = Boolean(
-    (processes?.rekordboxPid ?? 0) > 0 || (processes?.rekordboxAgentPid ?? 0) > 0,
-  );
   const writeEnabled = bootstrapQuery.data?.library.writeEnabled === true;
-  const writeReady = writeEnabled && !rekordboxRunning;
+  const writeReady = writeEnabled;
   const canWrite = writeReady;
   const editingPlaylistCanWrite = Boolean(
     editingPlaylist?.hosted
@@ -701,13 +696,9 @@ export function App({ assistantEnabled = true }: AppProps) {
 
   const assertWritable = useCallback(() => {
     if (!writeReady) {
-      throw new Error(
-        rekordboxRunning
-          ? "Quit Rekordbox and rekordboxAgent before changing the library."
-          : "Library writes are disabled; restart this workbench with --write.",
-      );
+      throw new Error("Library writes are disabled.");
     }
-  }, [rekordboxRunning, writeReady]);
+  }, [writeReady]);
 
   const applyMutationAsync = useCallback(
     async (
@@ -2465,11 +2456,6 @@ export function App({ assistantEnabled = true }: AppProps) {
             <button className="secondary-button compact-button" type="button" onClick={refreshAll}>
               Retry
             </button>
-          </div>
-        ) : rekordboxRunning ? (
-          <div className="connection-banner is-warning">
-            <Activity size={15} />
-            <span>Browsing is available. Quit Rekordbox and rekordboxAgent to enable writes.</span>
           </div>
         ) : null}
 

@@ -174,7 +174,6 @@ function copiedFixture(): Fixture {
 function service(fixture: Fixture): RekordboxLibraryService {
   const library = new RekordboxLibraryService({
     dbPath: fixture.dbPath,
-    getProcessState: () => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }),
     unlock: false,
     writeEnabled: true,
   });
@@ -254,13 +253,11 @@ describe("RekordboxLibraryService", () => {
     expect(listPlaylists).toHaveBeenCalledTimes(2);
   });
 
-  it("caches bootstrap aggregates and display process state without weakening commit checks", async () => {
+  it("caches bootstrap aggregates", async () => {
     const fixture = copiedFixture();
-    const getProcessState = vi.fn(() => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }));
     const selectRawRows = vi.spyOn(MasterDatabase.prototype, "selectRawRows");
     const library = new RekordboxLibraryService({
       dbPath: fixture.dbPath,
-      getProcessState,
       unlock: false,
       writeEnabled: true,
     });
@@ -270,13 +267,11 @@ describe("RekordboxLibraryService", () => {
     const aggregateReadCount = selectRawRows.mock.calls.length;
     const second = library.getBootstrap("second-token");
     expect(selectRawRows).toHaveBeenCalledTimes(aggregateReadCount);
-    expect(getProcessState).toHaveBeenCalledOnce();
     expect(second.csrfToken).toBe("second-token");
     expect(second.library.stats).toBe(first.library.stats);
     expect(Object.isFrozen(first.library.stats)).toBe(true);
 
     await library.mutate({ type: "create-playlist", name: "Fresh stats" });
-    expect(getProcessState).toHaveBeenCalledTimes(2);
     const refreshed = library.getBootstrap("third-token");
     expect(refreshed.library.stats).not.toBe(first.library.stats);
     expect(refreshed.library.stats.playlists).toBe(first.library.stats.playlists + 1);
@@ -943,36 +938,10 @@ describe("RekordboxLibraryService", () => {
     );
   });
 
-  it("checks the Rekordbox process state once immediately before commit", async () => {
+  it("updates related metadata in one mutation", async () => {
     const fixture = copiedFixture();
-    const getProcessState = vi.fn(() => ({ rekordboxPid: 0, rekordboxAgentPid: 0 }));
     const library = new RekordboxLibraryService({
       dbPath: fixture.dbPath,
-      getProcessState,
-      unlock: false,
-      writeEnabled: true,
-    });
-    services.push(library);
-
-    await library.mutate({ type: "create-playlist", name: "Guarded" });
-
-    expect(getProcessState).toHaveBeenCalledTimes(1);
-    expect(library.getPlaylists()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "Guarded" })]),
-    );
-  });
-
-  it("does not autoflush new metadata relations before the process guard", async () => {
-    const fixture = copiedFixture();
-    let transactionOpenAtGuard: boolean | undefined;
-    let library!: RekordboxLibraryService;
-    library = new RekordboxLibraryService({
-      dbPath: fixture.dbPath,
-      getProcessState: () => {
-        transactionOpenAtGuard = (library as unknown as { database?: MasterDatabase }).database
-          ?.connection?.inTransaction;
-        return { rekordboxPid: 0, rekordboxAgentPid: 0 };
-      },
       unlock: false,
       writeEnabled: true,
     });
@@ -998,7 +967,6 @@ describe("RekordboxLibraryService", () => {
       },
     });
 
-    expect(transactionOpenAtGuard).toBe(false);
     expect(library.getTrack("1")).toMatchObject({
       album: "New Album",
       artist: "New Artist",
@@ -1007,17 +975,10 @@ describe("RekordboxLibraryService", () => {
     });
   });
 
-  it("does not autoflush playlist deletion before the process guard", async () => {
+  it("deletes a playlist in one mutation", async () => {
     const fixture = copiedFixture();
-    let transactionOpenAtGuard: boolean | undefined;
-    let library!: RekordboxLibraryService;
-    library = new RekordboxLibraryService({
+    const library = new RekordboxLibraryService({
       dbPath: fixture.dbPath,
-      getProcessState: () => {
-        transactionOpenAtGuard = (library as unknown as { database?: MasterDatabase }).database
-          ?.connection?.inTransaction;
-        return { rekordboxPid: 0, rekordboxAgentPid: 0 };
-      },
       unlock: false,
       writeEnabled: true,
     });
@@ -1029,28 +990,8 @@ describe("RekordboxLibraryService", () => {
       expectedPlaylistIds: ["500"],
     });
 
-    expect(transactionOpenAtGuard).toBe(false);
     expect(library.getPlaylists()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "500" })]),
-    );
-  });
-
-  it("rolls back staged changes when Rekordbox starts before commit", async () => {
-    const fixture = copiedFixture();
-    const library = new RekordboxLibraryService({
-      dbPath: fixture.dbPath,
-      getProcessState: () => ({ rekordboxPid: 123, rekordboxAgentPid: 0 }),
-      unlock: false,
-      writeEnabled: true,
-    });
-    services.push(library);
-
-    await expect(
-      library.mutate({ type: "create-playlist", name: "Never committed" }),
-    ).rejects.toThrow("Close Rekordbox");
-
-    expect(library.getPlaylists()).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ name: "Never committed" })]),
     );
   });
 
@@ -1132,7 +1073,7 @@ describe("RekordboxLibraryService", () => {
 
     await delay(75);
     const waitedForExternalWriter = !firstSettled;
-    externalWriter.commit({ allowWhileRunning: true });
+    externalWriter.commit();
     externalWriter.close();
     await releaseExternalWriter();
     expect(waitedForExternalWriter).toBe(true);

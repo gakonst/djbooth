@@ -8,18 +8,12 @@ export type LibraryStats = {
   missingKey: number;
 };
 
-export type LibraryProcesses = {
-  rekordboxPid: number;
-  rekordboxAgentPid: number;
-};
-
 export type LibraryBootstrap = {
   csrfToken: string;
   library: {
     dbPath: string;
     dbDirectory: string;
     writeEnabled: boolean;
-    processes: LibraryProcesses;
     stats: LibraryStats;
   };
 };
@@ -257,12 +251,6 @@ export type MutationReceipt = {
   membershipIds?: string[];
   /** Authoritative track revision returned by a content metadata, color, or cue transaction. */
   revision?: string;
-  /** @deprecated Interactive mutations no longer create per-edit backups. */
-  backupDirectory?: string;
-  /** @deprecated Integrity checks are reserved for bulk workflows, not each interactive edit. */
-  quickCheck?: "ok";
-  /** @deprecated Integrity checks are reserved for bulk workflows, not each interactive edit. */
-  foreignKeyViolationCount?: 0;
   finishedAt: string;
 };
 

@@ -19,7 +19,7 @@
 - Added the `incur` CLI with all 96 generated API commands plus `auth`, `me`, `recent`, and raw
   `request` workflows.
 - Confirmed the generated CLI provides incur manifests, JSON Schema, MCP serving/registration,
-  agent skill sync, shell completion, filtering, and multiple structured output formats.
+  MCP registration, shell completion, filtering, and multiple structured output formats.
 - Added 10 tests covering PKCE, refresh rotation, secure credential storage, bearer injection,
   retries, errors, paging, endpoint coverage, and incur integration.
 - Passed formatting, lint, typecheck, tests, and the production build.

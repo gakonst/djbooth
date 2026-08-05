@@ -266,7 +266,6 @@ describe("pipeline manifests", () => {
       folderId: "folder-1",
       playlistName: "Set [tracks-ts]",
       playlistId: "playlist-1",
-      backupDirectory: "/backups/one",
     };
 
     expectInvalid(manifest, "$.entries[0].rekordbox.status");

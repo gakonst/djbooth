@@ -38,21 +38,21 @@ Rekordbox compatibility at the Pioneer DJ/AlphaTheta hardware boundary.
 
 Every layer is also a focused command:
 
-| CLI                         | What it does                                                            |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `djbooth`                   | Agent Skill, MCP, Code Mode, and umbrella workflow router               |
-| `tracks`                    | Resolve sets, acquire recordings, enrich metadata, analyze, and import  |
-| `spots`                     | Spotify authentication, catalog lookup, and playlist management         |
-| `soundcloud`                | SoundCloud authentication, search, likes, playlists, and exact sources  |
-| `slsk`                      | Soulseek search, ranking, and lossless acquisition                       |
-| `ytdlp-ts`                  | Inspect, search, and acquire web-hosted audio                            |
-| `rekordbox`                 | Read/write compatible databases, ANLZ, settings, XML, analysis, stems   |
-| `cdj-usb`                   | Sync playlists, media, analysis, and history to mounted player media    |
-| `djlink`                    | Discover players and serve/search/control libraries over Pro DJ Link    |
-| `djbooth-rs analyzer`       | Native BPM, key, grid, phrase, and waveform analysis                     |
-| `djbooth-rs usb`            | Native USB export runtime                                                |
-| `djbooth-rs link`           | Native Pro DJ Link runtime                                               |
-| `djbooth-stems-mlx`         | Apple Silicon Mel-Band-RoFormer vocals/drums/bass/other separation       |
+| CLI                   | What it does                                                           |
+| --------------------- | ---------------------------------------------------------------------- |
+| `djbooth`             | Typed CLI, MCP, Code Mode, and umbrella workflow router                |
+| `tracks`              | Resolve sets, acquire recordings, enrich metadata, analyze, and import |
+| `spots`               | Spotify authentication, catalog lookup, and playlist management        |
+| `soundcloud`          | SoundCloud authentication, search, likes, playlists, and exact sources |
+| `slsk`                | Soulseek search, ranking, and lossless acquisition                     |
+| `ytdlp-ts`            | Inspect, search, and acquire web-hosted audio                          |
+| `rekordbox`           | Read/write compatible databases, ANLZ, settings, XML, analysis, stems  |
+| `cdj-usb`             | Sync playlists, media, analysis, and history to mounted player media   |
+| `djlink`              | Discover players and serve/search/control libraries over Pro DJ Link   |
+| `djbooth-rs analyzer` | Native BPM, key, grid, phrase, and waveform analysis                   |
+| `djbooth-rs usb`      | Native USB export runtime                                              |
+| `djbooth-rs link`     | Native Pro DJ Link runtime                                             |
+| `djbooth-stems-mlx`   | Apple Silicon Mel-Band-RoFormer vocals/drums/bass/other separation     |
 
 ```text
 "Import this playlist, acquire anything I do not own, analyze it, build a compatible playlist,
@@ -107,22 +107,13 @@ sessions, cookies, databases, and model caches remain local and outside Git.
 
 ## Getting Started
 
-Add djbooth.ai to your agent:
+Use the top-level CLI directly. Incur provides command help, machine-readable schemas, an LLM
+manifest, and MCP from the same command definitions:
 
 ```sh
-# Codex
-codex plugin marketplace add gakonst/djbooth
-codex plugin add djbooth@djbooth-ai
-
-# Claude Code
-claude plugin marketplace add gakonst/djbooth
-claude plugin install djbooth@djbooth-ai
-```
-
-Or install the Skill and MCP command map directly:
-
-```sh
-djbooth skills add
+djbooth --help
+djbooth --llms
+djbooth --llms-full
 djbooth mcp add
 ```
 
@@ -145,7 +136,7 @@ Run the same workflows explicitly:
 
 ```sh
 # Resolve, acquire, analyze, and import one set.
-djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --write --format json
+djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --format json
 
 # Enrich the complete library idempotently; scope to a playlist folder only when needed.
 djbooth tracks enrich --format json
@@ -155,8 +146,8 @@ djbooth tracks enrich --folder 'DJ Sets I Like' --dry-run --format json
 djbooth rekordbox analyze track ./track.flac --output-directory ./analysis --format json
 djbooth rekordbox stems separate ./track.flac ./stems --layout four-stem --format json
 
-# Sync one compatible USB and serve connected players.
-djbooth usb sync /Volumes/CDJ --database /path/to/master.db --write --format json
+# Import play history and batch one host playlist folder onto both USB library formats.
+djbooth usb sync /Volumes/CDJ --playlist-folder 'DJ Sets I Like' --format json
 djbooth djlink rekordbox --format json
 djbooth djlink rekordbox "Apathy" --player 3 --format json
 ```
@@ -187,7 +178,7 @@ the active database read-only unless write access is requested.
 ```text
 Codex / Claude / Nanocodex                djbooth.ai workbench
               │                                    │
-              └────────── Skill · MCP · CLI ───────┘
+              └─────────── MCP · CLI ──────────────┘
                                     │
                        TypeScript orchestration
                       ┌─────────────┼──────────────┐
@@ -201,7 +192,7 @@ Codex / Claude / Nanocodex                djbooth.ai workbench
 
 | Path                                          | Responsibility                                      |
 | --------------------------------------------- | --------------------------------------------------- |
-| [`packages/djbooth/`](packages/djbooth)       | Unified API, CLI, MCP map, and agent Skill          |
+| [`packages/djbooth/`](packages/djbooth)       | Unified API, CLI, MCP map, and Code Mode surface    |
 | [`apps/djbooth/`](apps/djbooth)               | Browser workstation and Tauri desktop application   |
 | [`packages/`](packages)                       | Typed workflow libraries and focused Incur commands |
 | [`rust/bin/djbooth-rs/`](rust/bin/djbooth-rs) | Unified native CLI                                  |

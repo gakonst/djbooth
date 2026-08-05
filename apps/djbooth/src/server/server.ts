@@ -745,7 +745,7 @@ export async function startLibraryServer(
               await import("./hosted-runtime.js")
             ).createDefaultHostedPlaylistRuntime({
               statePath: options.hostedStatePath,
-              writeEnabled: options.writeEnabled === true,
+              writeEnabled: options.writeEnabled ?? true,
               dbPath: options.dbPath,
               key: options.key,
             })

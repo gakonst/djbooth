@@ -6,6 +6,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { JsonDiskCache } from "../src/cache.js";
 import {
+  databaseTracklistToEntries,
   isDatabaseMediaUrl,
   normalizeMediaUrl,
   parse1001TracklistHtml,
@@ -13,6 +14,25 @@ import {
 } from "../src/providers/tracklists1001.js";
 
 describe("1001Tracklists client", () => {
+  test("infers cue ends from the next 1001 cue and the set duration", () => {
+    expect(
+      databaseTracklistToEntries({
+        url: "https://www.1001tracklists.com/tracklist/test.html",
+        durationSeconds: 1_500,
+        event: { name: "DJ Set", lineup: ["DJ"] },
+        tracks: [
+          { order: 1, timestamp: "00:17:00", artist: "A", title: "Released" },
+          { order: 2, timestamp: "00:18:00", artist: "B", title: "Unreleased" },
+          { order: 3, timestamp: "00:21:30", artist: "C", title: "Closing" },
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({ order: 1, startSeconds: 1_020, endSeconds: 1_080 }),
+      expect.objectContaining({ order: 2, startSeconds: 1_080, endSeconds: 1_290 }),
+      expect.objectContaining({ order: 3, startSeconds: 1_290, endSeconds: 1_500 }),
+    ]);
+  });
+
   test("normalizes common YouTube links", () => {
     expect(normalizeMediaUrl("https://youtu.be/abc123?t=9")).toBe(
       "https://www.youtube.com/watch?v=abc123",

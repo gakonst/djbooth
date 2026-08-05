@@ -501,7 +501,6 @@ describe("acquireManifest", () => {
         folderId: "folder-1",
         playlistName: "Legacy Set",
         playlistId: "playlist-1",
-        backupDirectory: "/backups/legacy",
       };
       await writeManifestAtomic(manifestPath, value);
 
@@ -989,7 +988,6 @@ describe("acquireManifest", () => {
         folderId: "folder-1",
         playlistName: "Set [tracks-ts]",
         playlistId: "playlist-1",
-        backupDirectory: "/backups/one",
       };
       await writeManifestAtomic(manifestPath, first.manifest);
       downloads = 0;
@@ -1775,25 +1773,7 @@ describe("acquireManifest", () => {
   );
 });
 
-describe("manifest locking and compare-and-swap writes", () => {
-  test("rejects a stale expected snapshot without losing the newer edit", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-cas-"));
-    const path = join(directory, "manifest.json");
-    const first = oneTrackManifest();
-    await writeManifestAtomic(path, first);
-    const expectedContents = await readFile(path, "utf8");
-    const newer = structuredClone(first);
-    newer.warnings.push("manual edit");
-    await writeManifestAtomic(path, newer);
-
-    const stale = structuredClone(first);
-    stale.warnings.push("stale stage edit");
-    await expect(writeManifestAtomic(path, stale, { expectedContents })).rejects.toThrow(
-      "Manifest changed",
-    );
-    expect(parseManifest(JSON.parse(await readFile(path, "utf8")) as unknown)).toEqual(newer);
-  });
-
+describe("manifest locking", () => {
   test("recovers a lock owned by a dead process", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-stale-lock-"));
     const path = join(directory, "manifest.json");

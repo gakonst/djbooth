@@ -13,8 +13,6 @@ import {
   type DatabaseRow,
   type ModelClass,
 } from "@gakonst/rekordbox/masterdb";
-import { getRekordboxProcessState } from "@gakonst/rekordbox/utils";
-
 import { normalizeMatchText, probeAudio, sha256File } from "./acquisition.js";
 import { AppleMetadataClient, type AppleMetadataClientOptions } from "./apple-metadata.js";
 import { JsonDiskCache } from "./cache.js";
@@ -27,13 +25,7 @@ import { DeezerMetadataClient, type DeezerMetadataClientOptions } from "./deezer
 import { DiscogsMetadataClient, type DiscogsMetadataClientOptions } from "./discogs-metadata.js";
 import { TracksError } from "./errors.js";
 import { mapConcurrent } from "./process.js";
-import {
-  acquireRekordboxDatabaseLock,
-  assertRekordboxImportApproved,
-  assertRekordboxStopped,
-  backupRekordboxDatabase,
-  type RekordboxBackup,
-} from "./rekordbox-db.js";
+import { acquireRekordboxDatabaseLock } from "./rekordbox-db.js";
 import {
   exactSourcesFromRekordboxComment,
   exactSourcesFromUrls,
@@ -49,8 +41,6 @@ import {
 } from "./source-metadata.js";
 
 export type RekordboxMetadataEnrichmentOptions = {
-  approved?: boolean;
-  backupRoot?: string;
   catalog?: MusicBrainzMetadataClient;
   catalogOptions?: MusicBrainzMetadataClientOptions;
   apple?: AppleMetadataClient;
@@ -154,7 +144,6 @@ export type RekordboxMetadataEnrichmentResult = {
   tracks: number;
   changed: number;
   written: boolean;
-  backup?: RekordboxBackup;
   coverageBefore: MetadataCoverage;
   coverageAfter: MetadataCoverage;
   sources: Record<MetadataFieldSource, number>;
@@ -231,7 +220,6 @@ type MetadataCatalogClient = {
 export async function enrichRekordboxMetadata(
   options: RekordboxMetadataEnrichmentOptions = {},
 ): Promise<RekordboxMetadataEnrichmentResult> {
-  if (options.write) assertRekordboxImportApproved(options.approved);
   const reader = new MasterDatabase({
     ...(options.dbPath ? { path: resolve(options.dbPath) } : {}),
     ...(options.dbDirectory ? { dbDirectory: resolve(options.dbDirectory) } : {}),
@@ -554,14 +542,8 @@ export async function enrichRekordboxMetadata(
     };
   }
 
-  assertRekordboxStopped(getRekordboxProcessState());
   const releaseLock = await acquireRekordboxDatabaseLock(dbPath);
-  let backup: RekordboxBackup | undefined;
   try {
-    backup = await backupRekordboxDatabase(dbDirectory, {
-      dbPath,
-      ...(options.backupRoot ? { backupRoot: options.backupRoot } : {}),
-    });
     const writer = new MasterDatabase({
       path: dbPath,
       dbDirectory,
@@ -653,7 +635,6 @@ export async function enrichRekordboxMetadata(
     tracks: tracks.length,
     changed: changes.length,
     written: true,
-    backup,
     coverageBefore,
     coverageAfter,
     sources,

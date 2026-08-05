@@ -32,6 +32,17 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-04 — single agent surface
+
+- Removed authored and generated DJBooth skills, skill install smoke tests, and every package-level
+  Incur `sync` configuration. Claude/Codex marketplace plugins now launch the typed MCP server
+  directly and contain no duplicated workflow instructions.
+- Runtime discovery now comes only from the top-level `djbooth` command: normal help, schemas,
+  `--llms`, `--llms-full`, MCP, and Code Mode all derive from the same typed command definitions.
+  The repository root `AGENTS.md` is the only agent instruction file.
+- `tracks enrich` now writes directly under the shared database lock and verifies the committed
+  metadata after reopening; it no longer creates or reports a durable pre-write backup.
+
 ### 2026-08-04 — whole-library enrichment stage checkpoint
 
 - Replaced the folder-first `metadata backfill` product surface with one idempotent `tracks enrich`
@@ -137,6 +148,22 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 - OneLibrary exports now retain `MasterDBID` and source analysis/information revision counters,
   defaulting analyzed rows to Rekordbox's observed revision 2. Regression tests require both USB
   indexes and the filesystem to resolve the same hardware-computed analysis paths.
+
+### 2026-08-04 — filtered folder round-trip checkpoint
+
+- Added one `usb sync --playlist-folder <name> --write` boundary that imports pending CDJ history
+  before synchronizing only the folder's direct host playlists. Complete-library sync remains the
+  unfiltered default.
+- Folder sync plans the union of master content IDs once. Duplicate playlist memberships reuse one
+  DeviceSQL track, OneLibrary content row, audio file, and DAT/EXT/2EX set; bounded workers copy only
+  unique new media.
+- Both catalogs stage and publish once behind one legacy/OneLibrary rollback snapshot pair. Scoped
+  marker schema 3 stores master content mappings plus stable media/generation identities, allowing
+  deterministic history receipts and exact play-count idempotency without exporting unrelated
+  host playlists.
+- Added lossless DeviceSQL history consumption by tombstoning only history-table rows. Tests retain
+  all track and playlist semantics, verify a two-playlist shared-track batch, then import history on
+  a zero-audio-copy rerun.
 
 ### 2026-08-02 — fresh dual-library USB checkpoint
 
@@ -2231,3 +2258,19 @@ The pinned pyrekordbox port and incur CLI are complete. Future work should track
   codegen unit regressed. A representative-corpus PGO build was byte-identical
   but did not produce a stable win. Samply still shows no allocator hotspot,
   so portable release codegen and the system allocator remain the defaults.
+
+## Writer and agent surface simplification (2026-08-04)
+
+- Removed repository skills, generated skill synchronization, and the duplicated MCP workflow
+  prompt. Claude/Codex marketplace plugins are thin MCP launchers. Runtime discovery comes from the
+  top-level `djbooth` Incur help, schema, LLM, and MCP surfaces; the root `AGENTS.md` is the only
+  agent instruction file.
+- Removed durable pre-write backups, mutation journals, approval flags,
+  `--write`, and Rekordbox process-stop gates from enrich, set import, direct
+  database/cue writes, workbench mutations, USB history import, and USB sync.
+- Retained cross-process locks, one SQLite transaction, atomic file publication,
+  and post-commit semantic verification. USB publication rollback remains
+  transient staging state and is removed with its staging directory.
+- Simplified manifest writes: one pipeline lock serializes each mutating stage,
+  and one fsynced atomic rename checkpoints it. Removed redundant snapshot/hash
+  compare-and-swap checks inside already locked stages.

@@ -78,7 +78,9 @@ describe("CDJ USB CLI", () => {
     expect(output).toContain("DJ Set YYYY-MM-DD");
     expect(output).toContain("play counts advance exactly once");
     expect(output).toContain("unchanged audio is not recopied");
-    expect(output).toContain("--write");
+    expect(output).toContain("--playlist-folder");
+    expect(output).toContain("Shared tracks copy once");
+    expect(output).not.toContain("--write");
   });
 
   it("exposes fresh and incremental dual-library playlist sync", async () => {
@@ -89,6 +91,6 @@ describe("CDJ USB CLI", () => {
     expect(output).toContain("traditional Device Library and OneLibrary");
     expect(output).toContain("--fresh");
     expect(output).toContain("both USB library formats");
-    expect(output).toContain("--write");
+    expect(output).not.toContain("--write");
   });
 });

@@ -34,8 +34,8 @@ The recurring problem is orchestration and state, not insufficient raw paralleli
    late.
 6. Provider/session churn. Soulseek searches and transfers repeatedly authenticated, serialized
    8–11 second searches, and waited 60 seconds on dead peers. Provider-wide cooldowns were absent.
-7. Rekordbox writer friction. UI mutations performed heavyweight backups, agents stopped the UI
-   unnecessarily, and concurrent CLI/UI writes lacked one explicit short-transaction contract.
+7. Legacy Rekordbox writer friction. UI mutations performed heavyweight backups and process gates;
+   current writers use one shared lock and a short transaction.
 8. Analyzer path incompatibility. Unicode-heavy paths repeatedly returned exact native error
    `Rekordbox startAnalyze failed with status -1`; byte-identical numeric ASCII staging succeeded.
 
@@ -51,7 +51,6 @@ The recurring problem is orchestration and state, not insufficient raw paralleli
 | Local recognition           |                        3 |                 8 |
 | Native Rekordbox analysis   |                        4 |                64 |
 | Rekordbox filesystem I/O    | min(8, host parallelism) | measured override |
-| Rekordbox backup copies     | min(4, host parallelism) | measured override |
 
 These are independent resource pools. A setting of `N` must not accidentally start `N` clips plus
 `N` downloads plus `N` provider searches.
