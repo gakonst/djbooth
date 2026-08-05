@@ -135,8 +135,13 @@ Serve my library to the CDJs and cue "Apathy" on player 3 without starting playb
 Run the same workflows explicitly:
 
 ```sh
-# Resolve, acquire, analyze, and import one set.
-djbooth tracks import-set "$SET_URL" --manifest "$MANIFEST" --format json
+# Run stages independently; every stage resumes from Rekordbox master.db.
+djbooth tracks resolve "$SET_URL" --format json
+djbooth tracks download "$SET_URL" --format json
+djbooth tracks analyze "$SET_URL" --format json
+
+# Or run through ordered playlist import in one command.
+djbooth tracks import-set "$SET_URL" --format json
 
 # Enrich the complete library idempotently; scope to a playlist folder only when needed.
 djbooth tracks enrich --format json

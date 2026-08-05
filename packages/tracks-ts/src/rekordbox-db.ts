@@ -272,7 +272,10 @@ export function validateMasterPlaylistSidecar(
 
 export type ImportManifestToRekordboxOptions = {
   manifest: SetManifest;
-  manifestPath: string;
+  /** Legacy JSON checkpoint location. Database-backed callers omit this. */
+  manifestPath?: string;
+  /** Base for any relative media paths when no legacy checkpoint exists. */
+  mediaBaseDirectory?: string;
   dbPath?: string;
   dbDirectory?: string;
   key?: string;
@@ -374,6 +377,9 @@ export function planRekordboxImport(
   const items: RekordboxImportItem[] = [];
 
   for (const entry of manifest.entries) {
+    if (entry.acquisition.status === "skipped" && entry.rekordbox.status === "skipped") {
+      continue;
+    }
     const acquisitionErrors = entry.errors.filter((error) => error.stage === "acquisition");
     if (acquisitionErrors.length)
       throw new TracksError(
@@ -381,13 +387,6 @@ export function planRekordboxImport(
         `Manifest entry ${entry.id} has unresolved acquisition errors`,
         { exitCode: 2, details: { errors: acquisitionErrors } },
       );
-    if (
-      entry.identity.status === "unidentified" &&
-      entry.acquisition.status === "skipped" &&
-      entry.rekordbox.status === "skipped"
-    ) {
-      continue;
-    }
     if (entry.acquisition.status !== "downloaded")
       throw new TracksError(
         "INVALID_SOURCE",
@@ -527,7 +526,14 @@ export async function importManifestToRekordbox(
 ): Promise<ImportManifestToRekordboxResult> {
   const startedAt = new Date();
   const started = performance.now();
-  const manifestPath = resolve(options.manifestPath);
+  const manifestPath = options.manifestPath ? resolve(options.manifestPath) : undefined;
+  if (!manifestPath) {
+    const result = await importManifestToRekordboxLocked(options);
+    result.performance.totalMs = roundMilliseconds(performance.now() - started);
+    result.performance.startedAt = startedAt.toISOString();
+    result.performance.finishedAt = new Date().toISOString();
+    return result;
+  }
   const lockStarted = performance.now();
   const release = await acquirePipelineManifestLock(manifestPath);
   const lockMs = roundMilliseconds(performance.now() - lockStarted);
@@ -545,7 +551,7 @@ export async function importManifestToRekordbox(
 
 async function importManifestToRekordboxLocked(
   options: ImportManifestToRekordboxOptions,
-  manifestPath: string,
+  manifestPath?: string,
 ): Promise<ImportManifestToRekordboxResult> {
   const started = performance.now();
   const stages: RekordboxPerformance["stages"] = [];
@@ -559,7 +565,8 @@ async function importManifestToRekordboxLocked(
   };
   const manifest = parseManifest(structuredClone(options.manifest));
   const plan = planRekordboxImport(manifest, {
-    mediaBaseDirectory: dirname(manifestPath),
+    mediaBaseDirectory:
+      options.mediaBaseDirectory ?? (manifestPath ? dirname(manifestPath) : process.cwd()),
     ...(options.folderName === undefined ? {} : { folderName: options.folderName }),
     ...(options.playlistName === undefined ? {} : { playlistName: options.playlistName }),
     ...(options.playlistId === undefined ? {} : { playlistId: options.playlistId }),
@@ -681,9 +688,11 @@ async function importManifestToRekordboxLocked(
       playlistName: plan.playlistName,
       playlistId: playlistId!,
     });
-    await measure("manifest-checkpoint", () =>
-      writeManifestAtomically(manifestPath, updatedManifest),
-    );
+    if (manifestPath) {
+      await measure("state-checkpoint", () =>
+        writeManifestAtomically(manifestPath, updatedManifest),
+      );
+    }
     return {
       manifest: updatedManifest,
       dbPath: location.dbPath,
@@ -712,9 +721,10 @@ function metadataForDownload(
   variantIndex: number,
 ): RekordboxTrackMetadata {
   const spotify = spotifyMetadata(entry, download, variantIndex);
+  const downloadedIdentity = recordingIdentityForDownload(entry, download);
   const isSetExtract = download.kind === "source-set-clip" || download.clip !== undefined;
   const isUnidentified = entry.identity.status === "unidentified" || entry.identity.isId === true;
-  const identityTitle = entry.identity.title?.trim();
+  const identityTitle = downloadedIdentity?.title.trim() ?? entry.identity.title?.trim();
   const mix = entry.identity.mix?.trim();
   const baseTitle = isUnidentified
     ? `ID [Set Extract @ ${entry.cue.timestamp ?? formatTimestamp(entry.cue.startSeconds ?? 0)}]`
@@ -728,7 +738,8 @@ function metadataForDownload(
     isSetExtract && !isUnidentified && !/\[Set Extract\]/iu.test(baseTitle)
       ? `${baseTitle} [Set Extract]`
       : baseTitle;
-  const identityArtist = entry.identity.artist?.trim();
+  const identityArtist =
+    downloadedIdentity?.artists.filter(Boolean).join(", ").trim() ?? entry.identity.artist?.trim();
   const artist =
     (isUnidentified ? undefined : spotify?.artists?.filter(Boolean).join(", ").trim()) ||
     (isUnidentified ? undefined : identityArtist) ||
@@ -758,6 +769,27 @@ function metadataForDownload(
     ...(isrc ? { isrc } : {}),
     comment: downloadComment(manifest, entry, download),
   };
+}
+
+function recordingIdentityForDownload(
+  entry: ResolvedTrack,
+  download: AcquisitionDownload,
+): { title: string; artists: string[] } | undefined {
+  if (!download.variantKey) return undefined;
+  for (const overlap of entry.identity.overlaps ?? []) {
+    const artists = [overlap.artist];
+    if (recordingVariantKey(artists, overlap.title) === download.variantKey) {
+      return { title: overlap.title, artists };
+    }
+  }
+  return undefined;
+}
+
+function recordingVariantKey(artists: readonly string[], title: string, isrc = ""): string {
+  return createHash("sha256")
+    .update(`${artists.join("\u0000")}\u0000${title}\u0000${isrc}`)
+    .digest("hex")
+    .slice(0, 20);
 }
 
 function spotifyMetadata(

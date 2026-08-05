@@ -112,9 +112,20 @@ export type WorkflowImportOptions = Omit<
   "analysisDirectories" | "manifest" | "manifestPath"
 >;
 
+/** Pipeline persistence implemented by Rekordbox master.db in production. */
+export type PipelineStateStore = {
+  artifactDirectory: string;
+  load(): Promise<SetManifest | undefined>;
+  save(state: SetManifest): Promise<void>;
+};
+
 export type RunSetToRekordboxOptions = {
   source: string;
-  manifestPath: string;
+  /** Legacy file persistence for compatibility tests. Production callers use stateStore. */
+  manifestPath?: string;
+  stateStore?: PipelineStateStore;
+  /** Stop after a durable stage; omitted runs through Rekordbox playlist import. */
+  stopAfter?: "download" | "analysis";
   /** Canonical library root. Defaults to DJBOOTH_LIBRARY_ROOT or ~/.djtools/tracks. */
   outputDirectory?: string;
   identify?: IdentifyOptions;
@@ -141,13 +152,25 @@ export type RunSetToRekordboxOptions = {
 
 export type RunSetToRekordboxResult = {
   manifest: SetManifest;
-  manifestPath: string;
+  manifestPath?: string;
   outputDirectory: string;
   acquisition: AcquireManifestResult;
   spotify?: SpotifyEnrichmentResult;
   analysis: AnalyzeTracksResult;
   analysisDirectories: Record<string, string>;
   rekordbox: ImportManifestToRekordboxResult;
+  performance: WorkflowPerformance;
+};
+
+export type RunSetToStageResult = {
+  manifest: SetManifest;
+  manifestPath?: string;
+  outputDirectory: string;
+  acquisition: AcquireManifestResult;
+  spotify?: SpotifyEnrichmentResult;
+  analysis?: AnalyzeTracksResult;
+  analysisDirectories?: Record<string, string>;
+  rekordbox?: ImportManifestToRekordboxResult;
   performance: WorkflowPerformance;
 };
 
@@ -199,21 +222,42 @@ const defaultDependencies: RunSetToRekordboxDependencies = {
 /**
  * Resolve, enrich, acquire, analyze, and import one set through library calls only.
  *
- * Durable manifests, metadata caches, completed audio, analyzer outputs, and the verified
- * Rekordbox checkpoint are reused on later runs. Independent work inside each stage uses its
- * configured bounded limit; the encrypted database still commits exactly once.
+ * Rekordbox database state, metadata caches, completed audio, and analyzer outputs are reused on
+ * later runs. Independent work inside each stage uses its configured bounded limit.
  */
+export function runSetToRekordbox(
+  options: RunSetToRekordboxOptions & { stopAfter: "download" | "analysis" },
+): Promise<RunSetToStageResult>;
+export function runSetToRekordbox(
+  options: RunSetToRekordboxOptions & { stopAfter?: undefined },
+): Promise<RunSetToRekordboxResult>;
+export function runSetToRekordbox(
+  options: RunSetToRekordboxOptions,
+): Promise<RunSetToRekordboxResult | RunSetToStageResult>;
 export async function runSetToRekordbox(
   options: RunSetToRekordboxOptions,
-): Promise<RunSetToRekordboxResult> {
+): Promise<RunSetToRekordboxResult | RunSetToStageResult> {
   const allowSourceSetClips = options.allowSourceSetClips !== false;
   const dependencies = { ...defaultDependencies, ...options.dependencies };
   const startedAt = new Date();
   const started = performance.now();
   const stages: WorkflowStage[] = [];
-  const manifestPath = resolve(options.manifestPath);
   const outputDirectory = resolve(options.outputDirectory ?? defaultTrackLibraryRoot());
-  const existed = await dependencies.exists(manifestPath);
+  const manifestPath = options.manifestPath ? resolve(options.manifestPath) : undefined;
+  if (!options.stateStore && !manifestPath) {
+    throw new TypeError("Set workflow requires a Rekordbox pipeline state store");
+  }
+  const persisted = options.stateStore
+    ? await options.stateStore.load()
+    : manifestPath && (await dependencies.exists(manifestPath))
+      ? await dependencies.readManifest(manifestPath)
+      : undefined;
+  const existed = persisted !== undefined;
+  const artifactDirectory = options.stateStore?.artifactDirectory ?? dirname(manifestPath!);
+  const savePipelineState = (state: SetManifest): Promise<void> =>
+    options.stateStore
+      ? options.stateStore.save(state)
+      : dependencies.writeManifest(manifestPath!, state);
 
   const runStage = async <T>(
     stage: WorkflowStageName,
@@ -236,11 +280,11 @@ export async function runSetToRekordbox(
 
   let manifest = await runStage("resolve", async () => {
     if (existed) {
-      const resumed = await dependencies.readManifest(manifestPath);
+      const resumed = persisted!;
       if (resumed.source.input !== options.source) {
         throw new TracksError(
           "INVALID_SOURCE",
-          `Manifest source '${resumed.source.input}' does not match '${options.source}'`,
+          `Pipeline source '${resumed.source.input}' does not match '${options.source}'`,
           { exitCode: 2 },
         );
       }
@@ -255,10 +299,11 @@ export async function runSetToRekordbox(
           : {}),
       }),
     );
-    resolved.artifacts.root = dirname(manifestPath);
-    resolved.artifacts.manifest = manifestPath;
+    resolved.artifacts.root = artifactDirectory;
+    if (manifestPath) resolved.artifacts.manifest = manifestPath;
+    else delete resolved.artifacts.manifest;
     resolved.artifacts.downloadDirectory = outputDirectory;
-    await dependencies.writeManifest(manifestPath, resolved);
+    await savePipelineState(resolved);
     return {
       value: resolved,
       details: { status: "completed", operations: resolved.entries.length },
@@ -298,7 +343,7 @@ export async function runSetToRekordbox(
       const remoteSource = automaticSourceSetUrl(manifest, options.source);
       const cached = await dependencies.cacheSourceSet(
         remoteSource,
-        join(dirname(manifestPath), "source"),
+        join(artifactDirectory, "source"),
         options.signal,
       );
       sourceSet = await dependencies.describeSourceSet(cached, manifest);
@@ -308,7 +353,7 @@ export async function runSetToRekordbox(
     const changed = !isDeepStrictEqual(sourceSet, prior);
     if (changed) {
       manifest.artifacts.sourceSet = sourceSet;
-      await dependencies.writeManifest(manifestPath, manifest);
+      await savePipelineState(manifest);
     }
     sourceSetStage.status = downloaded || changed ? "completed" : "resumed";
     sourceSetStage.durationMs = roundMilliseconds(performance.now() - stageStarted);
@@ -343,8 +388,7 @@ export async function runSetToRekordbox(
           DEFAULT_SPOTIFY_REFRESH_CONCURRENCY,
       });
       manifest = result.manifest;
-      if (result.attempted || result.skipped)
-        await dependencies.writeManifest(manifestPath, manifest);
+      if (result.attempted || result.skipped) await savePipelineState(manifest);
       return {
         value: result,
         details: {
@@ -364,7 +408,7 @@ export async function runSetToRekordbox(
   const spotifyCanonicalSelections = spotifyCanonicalization.selected;
   if (spotifyCanonicalSelections) {
     manifest = spotifyCanonicalization.manifest;
-    await dependencies.writeManifest(manifestPath, manifest);
+    await savePipelineState(manifest);
     options.onProgress?.({
       stage: "spotify",
       status: "completed",
@@ -459,7 +503,9 @@ export async function runSetToRekordbox(
       let currentPass = 1;
       const acquirePass = (continueOnError: boolean) =>
         dependencies.acquire({
-          manifestPath,
+          ...(options.stateStore
+            ? { state: manifest, saveState: savePipelineState }
+            : { manifestPath: manifestPath! }),
           plan: (current) =>
             dependencies.buildPlan(current, {
               outputDirectory,
@@ -494,7 +540,9 @@ export async function runSetToRekordbox(
               message: `${allowSourceSetClips ? `pass ${String(currentPass)}/2 ` : ""}${progress.phase}: ${progress.message}`,
             });
           },
-          onArtifactVerified: analyzeVerifiedArtifact,
+          ...(options.stopAfter === "download"
+            ? {}
+            : { onArtifactVerified: analyzeVerifiedArtifact }),
         });
       const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [
         await acquirePass(allowSourceSetClips),
@@ -515,7 +563,7 @@ export async function runSetToRekordbox(
           passes[0]!.manifest,
           passes[0]!.failures,
         );
-        if (warningChanged) await dependencies.writeManifest(manifestPath, passes[0]!.manifest);
+        if (warningChanged) await savePipelineState(passes[0]!.manifest);
         currentPass = 2;
         options.onProgress?.({
           stage: "acquisition",
@@ -547,7 +595,33 @@ export async function runSetToRekordbox(
     throw error;
   }
   manifest = acquisition.manifest;
-  assertAcquisitionComplete(manifest, acquisition);
+  const unavailable = settleUnavailableAcquisitions(manifest);
+  if (unavailable) await savePipelineState(manifest);
+  assertAcquisitionReady(manifest);
+
+  if (options.stopAfter === "download") {
+    const caches: Record<string, CacheStats> = {
+      ...(spotifyResult?.cache ? { spotify: spotifyResult.cache } : {}),
+      ...acquisition.performance.caches,
+    };
+    return {
+      manifest,
+      ...(manifestPath ? { manifestPath } : {}),
+      outputDirectory,
+      acquisition,
+      ...(spotifyResult ? { spotify: spotifyResult } : {}),
+      performance: finishWorkflowPerformance({
+        startedAt,
+        started,
+        existed,
+        stages,
+        spotifyCanonicalSelections,
+        acquisitionPasses,
+        sourceSetFallbacks,
+        caches,
+      }),
+    };
+  }
 
   const mediaPaths = acquiredMediaPaths(manifest);
   const analysisRequests = await Promise.all(
@@ -600,7 +674,7 @@ export async function runSetToRekordbox(
   );
   if (analysisMetadataChanged) {
     manifest.artifacts.analysis = analysisArtifacts;
-    await dependencies.writeManifest(manifestPath, manifest);
+    await savePipelineState(manifest);
   }
   const analysisStatus = analysis.analyzed || analysisMetadataChanged ? "completed" : "resumed";
   stages.push({
@@ -624,10 +698,36 @@ export async function runSetToRekordbox(
     ]),
   );
 
+  if (options.stopAfter === "analysis") {
+    const caches: Record<string, CacheStats> = {
+      ...(spotifyResult?.cache ? { spotify: spotifyResult.cache } : {}),
+      ...acquisition.performance.caches,
+    };
+    return {
+      manifest,
+      ...(manifestPath ? { manifestPath } : {}),
+      outputDirectory,
+      acquisition,
+      ...(spotifyResult ? { spotify: spotifyResult } : {}),
+      analysis,
+      analysisDirectories,
+      performance: finishWorkflowPerformance({
+        startedAt,
+        started,
+        existed,
+        stages,
+        spotifyCanonicalSelections,
+        acquisitionPasses,
+        sourceSetFallbacks,
+        caches,
+      }),
+    };
+  }
+
   const rekordbox = await runStage("rekordbox", async () => {
     const result = await dependencies.importRekordbox({
       manifest,
-      manifestPath,
+      ...(manifestPath ? { manifestPath } : { mediaBaseDirectory: artifactDirectory }),
       analysisDirectories,
       ...(checkpointedPlaylistId === undefined ? {} : { playlistId: checkpointedPlaylistId }),
       ...options.rekordbox,
@@ -642,6 +742,7 @@ export async function runSetToRekordbox(
     };
   });
   manifest = rekordbox.manifest;
+  if (options.stateStore) await savePipelineState(manifest);
 
   const caches: Record<string, CacheStats> = {
     ...(spotifyResult?.cache ? { spotify: spotifyResult.cache } : {}),
@@ -656,7 +757,7 @@ export async function runSetToRekordbox(
   );
   return {
     manifest,
-    manifestPath,
+    ...(manifestPath ? { manifestPath } : {}),
     outputDirectory,
     acquisition,
     ...(spotifyResult ? { spotify: spotifyResult } : {}),
@@ -679,6 +780,34 @@ export async function runSetToRekordbox(
       stages,
       caches,
     },
+  };
+}
+
+function finishWorkflowPerformance(options: {
+  startedAt: Date;
+  started: number;
+  existed: boolean;
+  stages: WorkflowStage[];
+  spotifyCanonicalSelections: number;
+  acquisitionPasses: number;
+  sourceSetFallbacks: number;
+  caches: Record<string, CacheStats>;
+}): WorkflowPerformance {
+  return {
+    startedAt: options.startedAt.toISOString(),
+    finishedAt: new Date().toISOString(),
+    totalMs: roundMilliseconds(performance.now() - options.started),
+    warmResume:
+      options.existed &&
+      options.stages.every((stage) => stage.status === "resumed" || stage.status === "skipped"),
+    peakConcurrency: Math.max(1, ...options.stages.map((stage) => stage.concurrency ?? 0)),
+    automation: {
+      spotifyCanonicalSelections: options.spotifyCanonicalSelections,
+      acquisitionPasses: options.acquisitionPasses,
+      sourceSetFallbacks: options.sourceSetFallbacks,
+    },
+    stages: options.stages,
+    caches: options.caches,
   };
 }
 
@@ -787,23 +916,21 @@ function acquiredMediaPaths(manifest: SetManifest): string[] {
   return [...paths];
 }
 
-function assertAcquisitionComplete(
-  manifest: SetManifest,
-  acquisition: AcquireManifestResult,
-): void {
+function assertAcquisitionReady(manifest: SetManifest): void {
   const incomplete = manifest.entries.filter(
     (entry) =>
       entry.acquisition.status !== "downloaded" &&
-      !(
-        entry.identity.status === "unidentified" &&
-        entry.acquisition.status === "skipped" &&
-        entry.rekordbox.status === "skipped"
-      ),
+      !(entry.acquisition.status === "skipped" && entry.rekordbox.status === "skipped"),
   );
-  if (!acquisition.failures.length && !incomplete.length) return;
+  const downloaded = manifest.entries.filter(
+    (entry) => entry.acquisition.status === "downloaded",
+  ).length;
+  if (!incomplete.length && downloaded) return;
   throw new TracksError(
     "TOOL_FAILED",
-    `Acquisition incomplete: ${String(incomplete.length)} manifest entries and ${String(acquisition.failures.length)} failures; refusing Rekordbox import`,
+    downloaded
+      ? `Acquisition has ${String(incomplete.length)} unresolved entries; refusing Rekordbox import`
+      : "Acquisition produced no downloadable tracks",
     {
       details: {
         incomplete: incomplete.map((entry) => ({
@@ -811,10 +938,32 @@ function assertAcquisitionComplete(
           order: entry.order,
           status: entry.acquisition.status,
         })),
-        failures: acquisition.failures,
       },
     },
   );
+}
+
+function settleUnavailableAcquisitions(manifest: SetManifest): number {
+  let skipped = 0;
+  for (const entry of manifest.entries) {
+    const acquisitionErrors = entry.errors.filter((error) => error.stage === "acquisition");
+    if (entry.acquisition.status === "downloaded" && acquisitionErrors.length) {
+      for (const error of acquisitionErrors) {
+        const warning = `Additional recording unavailable: ${error.message}`;
+        if (!entry.warnings.includes(warning)) entry.warnings.push(warning);
+      }
+      entry.errors = entry.errors.filter((error) => error.stage !== "acquisition");
+      continue;
+    }
+    if (entry.acquisition.status !== "failed") continue;
+    const reason = `Recording unavailable: ${entry.acquisition.error.message}`;
+    entry.acquisition = { status: "skipped", reason };
+    entry.rekordbox = { status: "skipped", reason };
+    entry.errors = entry.errors.filter((error) => error.stage !== "acquisition");
+    if (!entry.warnings.includes(reason)) entry.warnings.push(reason);
+    skipped += 1;
+  }
+  return skipped;
 }
 
 function sourceSetFallbackOrders(

@@ -221,7 +221,12 @@ export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 8;
 export const MAX_SPOTIFY_REFRESH_CONCURRENCY = 32;
 
 export type AcquireManifestOptions = {
-  manifestPath: string;
+  /** Legacy JSON checkpoint adapter. New callers persist state in Rekordbox master.db. */
+  manifestPath?: string;
+  /** Current database-backed pipeline state. */
+  state?: SetManifest;
+  /** Persist database-backed pipeline state after each completed artifact. */
+  saveState?: (state: SetManifest) => Promise<void>;
   plan: AcquisitionPlan | ((manifest: SetManifest) => AcquisitionPlan | Promise<AcquisitionPlan>);
   prepare?: (manifest: SetManifest) => SetManifest | Promise<SetManifest>;
   spotify?: SpotifyLibraryClient;
@@ -339,11 +344,18 @@ export async function acquireManifest(
         }
       : {}),
   });
-  const manifestPath = resolve(options.manifestPath);
-  const release = await measure("manifest-lock", () => acquirePipelineManifestLock(manifestPath));
+  const manifestPath = options.manifestPath ? resolve(options.manifestPath) : undefined;
+  if (!manifestPath && (!options.state || !options.saveState)) {
+    throw new TypeError("Acquisition requires database state and saveState");
+  }
+  const release = manifestPath
+    ? await measure("state-lock", () => acquirePipelineManifestLock(manifestPath))
+    : () => Promise.resolve();
   try {
-    let expectedManifestContents = await readFile(manifestPath, "utf8");
-    let manifest = parseManifest(JSON.parse(expectedManifestContents) as unknown);
+    let manifest = options.state
+      ? parseManifest(structuredClone(options.state))
+      : parseManifest(JSON.parse(await readFile(manifestPath!, "utf8")) as unknown);
+    let expectedManifestContents = serializeManifest(manifest);
     let checkpointedManifest = structuredClone(manifest);
     type CheckpointWaiter = { resolve: () => void; reject: (error: unknown) => void };
     let pendingCheckpoints: CheckpointWaiter[] = [];
@@ -368,7 +380,8 @@ export async function acquireManifest(
         try {
           if (serialized !== expectedManifestContents) {
             checkpointWrites += 1;
-            await writeManifestAtomic(manifestPath, snapshot);
+            if (options.saveState) await options.saveState(snapshot);
+            else await writeManifestAtomic(manifestPath!, snapshot);
             expectedManifestContents = serialized;
           }
           checkpointedManifest = snapshot;

@@ -154,8 +154,14 @@ async function inspectMediaMetadataUncached(
 
 export async function getYtdlpTsCommand(env: Environment = process.env): Promise<CliCommand> {
   if (env.YTDLP_TS_PATH) return commandForPath(env.YTDLP_TS_PATH);
-  const entrypoint = fileURLToPath(import.meta.resolve("@gakonst/ytdlp-ts"));
-  return commandForPath(join(dirname(entrypoint), "cli.js"));
+  const entrypoint = fileURLToPath(import.meta.resolve("@gakonst/ytdlp-ts/cli"));
+  if (entrypoint.endsWith(".ts")) {
+    return {
+      executable: join(dirname(entrypoint), "..", "node_modules", ".bin", "tsx"),
+      prefix: [entrypoint],
+    };
+  }
+  return commandForPath(entrypoint);
 }
 
 function commandForPath(path: string): { executable: string; prefix: string[] } {

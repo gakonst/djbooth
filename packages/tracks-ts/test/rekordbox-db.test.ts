@@ -449,6 +449,37 @@ describe("Rekordbox direct database planning", () => {
     );
   });
 
+  test("uses an acquired overlap identity when the primary recording was unavailable", () => {
+    const manifest = completedManifest();
+    const entry = manifest.entries[0]!;
+    entry.identity = {
+      status: "identified",
+      artist: "Sub Focus",
+      title: "Siren (Phrva Flip)",
+      searchQuery: "Sub Focus - Siren (Phrva Flip)",
+      overlaps: [{ artist: "A$AP Ferg", title: "WORK" }],
+    };
+    entry.spotify = { status: "unmatched", query: "Sub Focus - Siren (Phrva Flip)" };
+    entry.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "ytdlp",
+        mediaPath: "/music/A$AP Ferg/WORK.m4a",
+        files: ["/music/A$AP Ferg/WORK.m4a"],
+        variantKey: createHash("sha256")
+          .update("A$AP Ferg\u0000WORK\u0000")
+          .digest("hex")
+          .slice(0, 20),
+      },
+    };
+    manifest.entries = [entry];
+
+    expect(planRekordboxImport(manifest).items[0]!.metadata).toMatchObject({
+      artist: "A$AP Ferg",
+      title: "WORK",
+    });
+  });
+
   test("reuses an exact playlist ID across provider renames and duplicate display names", () => {
     const plan = planRekordboxImport(completedManifest(), {
       folderName: "Spotify",

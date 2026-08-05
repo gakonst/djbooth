@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
@@ -55,7 +54,6 @@ export type RekordboxMetadataEnrichmentOptions = {
   dbPath?: string;
   /** Optional folder scope; all tracks are enriched when omitted. */
   folder?: string;
-  manifestRoots?: string[];
   probeConcurrency?: number;
   sourceClients?: ExactSourceMetadataClient[];
   write?: boolean;
@@ -247,7 +245,7 @@ export async function enrichRekordboxMetadata(
     message: `${String(tracks.length)} unique tracks in ${folderName ?? "the Rekordbox library"}`,
   });
   const coverageBefore = metadataCoverage(tracks);
-  const manifestRoots = options.manifestRoots ?? defaultManifestRoots();
+  const manifestRoots: string[] = [];
   const manifestMetadata = await indexManifestMetadata(manifestRoots);
   const embeddedMetadata = new Map<string, MetadataCandidate>();
   const artifactHashes = new Map<string, string>();
@@ -1283,10 +1281,6 @@ async function manifestFiles(root: string): Promise<string[]> {
     }
   }
   return files;
-}
-
-function defaultManifestRoots(): string[] {
-  return [join(homedir(), ".djtools"), join(homedir(), "Music")];
 }
 
 function needsMetadata(track: LibraryTrack): boolean {

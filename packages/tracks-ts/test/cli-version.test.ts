@@ -46,42 +46,6 @@ describe("CLI version", () => {
     expect(JSON.parse(output)).toMatchObject({ description: { configured: true } });
   });
 
-  it("keeps error CTAs scoped to tracks when mounted under music", async () => {
-    let output = "";
-    let exitCode: number | undefined;
-    const parent = Cli.create("music");
-    parent.command(tracksCli);
-
-    await parent.serve(
-      [
-        "tracks",
-        "import-set",
-        "https://youtu.be/example",
-        "--manifest",
-        "/tmp/music-ts-cta-never-created.json",
-        "--format",
-        "json",
-      ],
-      {
-        env: {},
-        stdout(value) {
-          output += value;
-        },
-        exit(code) {
-          exitCode = code;
-        },
-      },
-    );
-
-    expect(exitCode).toBe(2);
-    const result = JSON.parse(output) as {
-      cta?: { commands?: Array<{ command?: string }> };
-    };
-    expect(result.cta?.commands?.some(({ command }) => command === "music tracks doctor")).toBe(
-      true,
-    );
-  });
-
   it("always registers native acquisition and constructs reference acquisition only on opt-in", () => {
     let referenceFactories = 0;
     const soulseek = fakeAcquirer("slsk");
@@ -102,14 +66,14 @@ describe("CLI version", () => {
     expect(referenceFactories).toBe(1);
   });
 
-  it("configures the explicit import-set reference client as a deferred capability fallback", () => {
+  it("configures the explicitly enabled reference client as a normal fallback", () => {
     const client: YtdlpReferenceClient = {
       inspect: () => Promise.reject(new Error("not used")),
       download: () => Promise.reject(new Error("not used")),
     };
 
     expect(createImportSetReferenceAcquirer(client, "off").requiresPriorCapabilityFailure).toBe(
-      true,
+      false,
     );
   });
 });

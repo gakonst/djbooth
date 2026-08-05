@@ -33,12 +33,42 @@ export function parseDescriptionTracklist(text: string): DescriptionParseResult 
   return { tracks, timestampedLines, identifiedLines };
 }
 
+/** Parse an explicitly labelled, ordered track list whose publisher omitted cue timestamps. */
+export function parseUntimestampedDescriptionTracklist(text: string): DescriptionParseResult {
+  const lines = text.split(/\r?\n/);
+  const marker = lines.findIndex((line) => /^\s*track\s*list\s*:?\s*$/iu.test(line));
+  if (marker < 0) return { tracks: [], timestampedLines: 0, identifiedLines: 0 };
+
+  const tracks: TracklistEntry[] = [];
+  let identifiedLines = 0;
+  for (const line of lines.slice(marker + 1)) {
+    const text = cleanTrackText(line);
+    if (!text) continue;
+    if (/^(?:https?:\/\/|#)/iu.test(text)) break;
+    const { primary, overlaps } = parseTrackText(text);
+    if (!primary.artist || !primary.title) continue;
+    if (!primary.isId) identifiedLines += 1;
+    tracks.push({
+      order: tracks.length + 1,
+      artist: primary.artist,
+      title: primary.title,
+      ...(primary.isId === undefined ? {} : { isId: primary.isId }),
+      ...(overlaps.length ? { overlaps } : {}),
+    });
+  }
+  return { tracks, timestampedLines: 0, identifiedLines };
+}
+
 export function tracklistFromDescription(
   source: string,
   metadata: MediaMetadata,
 ): Tracklist | undefined {
   if (!metadata.description) return undefined;
-  const parsed = parseDescriptionTracklist(metadata.description);
+  const timestamped = parseDescriptionTracklist(metadata.description);
+  const parsed =
+    timestamped.tracks.length >= 2
+      ? timestamped
+      : parseUntimestampedDescriptionTracklist(metadata.description);
   if (parsed.tracks.length < 2 || parsed.identifiedLines < 1) return undefined;
   const tracks = parsed.tracks.map((track, index) => {
     const nextStart = parsed.tracks[index + 1]?.startSeconds ?? metadata.durationSeconds;
@@ -67,9 +97,20 @@ export function tracklistFromDescription(
       ? {
           warnings: [
             `${unresolvedCount} description entr${unresolvedCount === 1 ? "y is" : "ies are"} not directly searchable.`,
+            ...(parsed.timestampedLines
+              ? []
+              : [
+                  "The published tracklist has no cue timestamps; source-set clip recovery is unavailable.",
+                ]),
           ],
         }
-      : {}),
+      : parsed.timestampedLines
+        ? {}
+        : {
+            warnings: [
+              "The published tracklist has no cue timestamps; source-set clip recovery is unavailable.",
+            ],
+          }),
   };
 }
 

@@ -435,7 +435,7 @@ export function parseManifest(value: unknown): SetManifest {
   const rekordboxArtifact = artifacts.rekordbox;
   if (rekordboxArtifact) {
     (entries as ResolvedTrack[]).forEach((entry, index) => {
-      if (isSkippedUnidentifiedEntry(entry)) return;
+      if (isSkippedEntry(entry)) return;
       if (entry.rekordbox.status !== "imported" || entry.rekordbox.target !== "rekordbox-db") {
         invalid(
           `$.entries[${index}].rekordbox.status`,
@@ -454,12 +454,8 @@ export function parseManifest(value: unknown): SetManifest {
   return value as SetManifest;
 }
 
-function isSkippedUnidentifiedEntry(entry: ResolvedTrack): boolean {
-  return (
-    entry.identity.status === "unidentified" &&
-    entry.acquisition.status === "skipped" &&
-    entry.rekordbox.status === "skipped"
-  );
+function isSkippedEntry(entry: ResolvedTrack): boolean {
+  return entry.acquisition.status === "skipped" && entry.rekordbox.status === "skipped";
 }
 
 export function trackSearchQuery(track: TracklistEntry): string | undefined {

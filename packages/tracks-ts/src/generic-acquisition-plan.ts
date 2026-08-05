@@ -112,6 +112,7 @@ export async function buildAcquisitionPlan(
 }
 
 function recordingIdentities(entry: ResolvedTrack): RecordingIdentity[] {
+  if (entry.acquisition.status === "skipped") return [];
   const primary =
     entry.spotify.status === "matched"
       ? [spotifyIdentity(entry.spotify, entry)]

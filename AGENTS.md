@@ -3,17 +3,17 @@
 Repository prefix: `pnpm djbooth`; release prefix: `djbooth`. Discovery: `<path> --help`,
 `--schema`, `--llms-full`. Machine output: `--format json|jsonl`.
 
-| Stage | Owns | Command |
-| --- | --- | --- |
-| Resolve | Set URL/file → ordered playlist + provisional Rekordbox content rows; description → 1001Tracklists → recognition fallback | `tracks resolve <source>` |
-| Enrich | Content rows → recording IDs, release metadata, provider provenance, acquisition candidates | `tracks enrich [--folder <folder>]` |
-| Download | Ready content rows → adopted/downloaded canonical tagged audio; Soulseek/typed downloader fallback | `tracks download [--folder <folder>]` |
-| Analyze | Downloaded rows → BPM, key, beatgrid, waveforms, seek tables, phrases, DAT/EXT/2EX; update rows as each track completes | `tracks analyze [--folder <folder>]` or `rekordbox analyze track(s)` |
-| Stems | Audio/playlist → MLX Mel-Band-RoFormer vocals, drums, bass, other/Rekordbox layout | `rekordbox stems setup|doctor|separate|playlist` |
-| Link | Rekordbox database → RemoteDB/NFS source visible to CDJs | `djlink rekordbox [track]` |
-| USB | Rekordbox folder → copied audio + rewritten ANLZ + Device Library + OneLibrary; import histories | `usb sync <mount> --playlist-folder <folder> [--fresh]` |
-| UI | Local library/workflows → browser workstation | `library serve --open [--no-assistant]` |
-| Agent | Full typed surface → MCP/Code Mode | `--mcp` or `pnpm djbooth:mcp:code` |
+| Stage    | Owns                                                                                                                    | Command                                                              |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Resolve  | Set URL/file → ordered database pipeline rows; description → 1001Tracklists → recognition fallback                      | `tracks resolve <source>`                                            |
+| Enrich   | Content rows → recording IDs, release metadata, provider provenance, acquisition candidates                             | `tracks enrich [--folder <folder>]`                                  |
+| Download | Ready source rows → adopted/downloaded canonical tagged audio; Soulseek/typed downloader fallback                       | `tracks download <source>`                                           |
+| Analyze  | Downloaded source rows → BPM, key, beatgrid, waveforms, seek tables, phrases, DAT/EXT/2EX                               | `tracks analyze <source>` or `rekordbox analyze track(s)`            |
+| Stems    | Audio/playlist → MLX Mel-Band-RoFormer vocals, drums, bass, other/Rekordbox layout                                      | `rekordbox stems setup`, `doctor`, `separate`, `playlist`            |
+| Link     | Rekordbox database → RemoteDB/NFS source visible to CDJs                                                                | `djlink rekordbox [track]`                                           |
+| USB      | Rekordbox folder → copied audio + rewritten ANLZ + Device Library + OneLibrary; import histories                        | `usb sync <mount> --playlist-folder <folder> [--fresh]`              |
+| UI       | Local library/workflows → browser workstation                                                                           | `library serve --open [--no-assistant]`                              |
+| Agent    | Full typed surface → MCP/Code Mode                                                                                      | `--mcp` or `pnpm djbooth:mcp:code`                                   |
 
 Pipeline:
 
@@ -25,7 +25,7 @@ resolve → database rows
 
 - Rekordbox `master.db` = only durable workflow state and source of truth.
 - No manifests, sidecar workflow databases, checkpoint files, or final library-commit stage.
-- Resolve inserts playlist membership and provisional content rows immediately.
+- Resolve inserts ordered pipeline state into `master.db`; standard content and playlist rows follow verified media.
 - Enrich and download pipeline concurrently across tracks; download waits only for acquisition identity.
 - Analyze starts per track as soon as audio lands; one serialized/batched writer updates `master.db`.
 - Files are immutable artifacts referenced by database rows, never a competing state ledger.
