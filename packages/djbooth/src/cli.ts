@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { usbCli } from "@gakonst/cdj-usb/cli";
 import { linkCli } from "@gakonst/djlink/cli";
-import { stemsCli } from "@gakonst/rekordbox/cli";
+import { playlistCli, stemsCli } from "@gakonst/rekordbox/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
 import { analyzeCli, downloadCli, enrichCli, importCli, resolveCli } from "@gakonst/tracks/cli";
@@ -30,6 +30,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "analyze",
     "import",
     "link",
+    "playlist_*",
     "status",
     "stems",
     "usb",
@@ -77,6 +78,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(downloadCli);
   cli.command(analyzeCli);
   cli.command(importCli);
+  cli.command(playlistCli);
   cli.command(stemsCli);
   cli.command(linkCli);
   cli.command(serveCli);
