@@ -1,4 +1,4 @@
-import { writeFile, unlink } from "node:fs/promises";
+import { unlink, writeFile } from "node:fs/promises";
 
 import { startDjBoothServer, type DjBoothServerOptions } from "./serve.js";
 import {
@@ -14,7 +14,7 @@ const options = JSON.parse(
 ) as DjBoothServerOptions;
 const paths = djBoothRuntimePaths();
 const server = await startDjBoothServer(options);
-const state: DjBoothRuntimeState = {
+let state: DjBoothRuntimeState = {
   version: DJBOOTH_RUNTIME_VERSION,
   pid: process.pid,
   startedAt: new Date().toISOString(),
@@ -27,11 +27,14 @@ const state: DjBoothRuntimeState = {
 await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
 let closing = false;
+let lastReconcileError: string | undefined;
+const reconcileLoop = monitorLink();
 const close = async () => {
   if (closing) return;
   closing = true;
   try {
     await server.close();
+    await reconcileLoop;
   } finally {
     await unlink(paths.state).catch(() => undefined);
   }
@@ -50,3 +53,37 @@ process.once("unhandledRejection", (error) => {
 });
 
 await new Promise(() => undefined);
+
+async function monitorLink(): Promise<void> {
+  while (!closing) {
+    await delay(2_000);
+    if (closing) break;
+    try {
+      const previousPid = state.link?.pid;
+      const previousBindIp = state.link?.bindIp;
+      const link = await server.reconcileLink();
+      if (closing) break;
+      if (link?.pid !== previousPid || link?.bindIp !== previousBindIp) {
+        state = { ...state, link };
+        await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
+        process.stderr.write(
+          `DJ Link reconciled on ${link?.bindIp ?? "no interface"} (PID ${String(link?.pid ?? 0)})\n`,
+        );
+      }
+      if (lastReconcileError) {
+        process.stderr.write("DJ Link connectivity recovered\n");
+        lastReconcileError = undefined;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== lastReconcileError) {
+        process.stderr.write(`DJ Link reconnect pending: ${message}\n`);
+        lastReconcileError = message;
+      }
+    }
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}

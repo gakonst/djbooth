@@ -2,9 +2,30 @@ import { describe, expect, it, vi } from "vitest";
 
 import { startDjBoothServer, type DjBoothServerDependencies } from "../src/serve.js";
 
+function linkStatus(pid: number, resumed: boolean) {
+  return {
+    bindIp: "169.254.1.1",
+    broadcastIp: "169.254.255.255",
+    logPath: "/tmp/djbooth.log",
+    pid,
+    playerNumber: 17,
+    playlists: 4,
+    remoteDeckPreparationSupported: true as const,
+    remoteTransportSupported: false as const,
+    resumed,
+    running: true as const,
+    socketPath: "/tmp/djbooth.sock",
+    sourceKind: "rekordbox" as const,
+    sourcePath: "/Library/master.db",
+    tracks: 100,
+    uptimeMs: 10,
+  };
+}
+
 function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
   const closeWeb = vi.fn(async () => undefined);
   const stopLink = vi.fn(async () => ({ stopped: true, wasRunning: true, pid: 42 }));
+  const startLink = vi.fn(async () => linkStatus(42, options.resumed ?? false));
   const value: DjBoothServerDependencies = {
     async startLibraryServer() {
       if (options.webError) throw options.webError;
@@ -16,28 +37,10 @@ function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
         url: "http://127.0.0.1:4179/",
       };
     },
-    async startRekordboxDjLink() {
-      return {
-        bindIp: "169.254.1.1",
-        broadcastIp: "169.254.255.255",
-        logPath: "/tmp/djbooth.log",
-        pid: 42,
-        playerNumber: 17,
-        playlists: 4,
-        remoteDeckPreparationSupported: true,
-        remoteTransportSupported: false,
-        resumed: options.resumed ?? false,
-        running: true,
-        socketPath: "/tmp/djbooth.sock",
-        sourceKind: "rekordbox",
-        sourcePath: "/Library/master.db",
-        tracks: 100,
-        uptimeMs: 10,
-      };
-    },
+    startRekordboxDjLink: startLink,
     stopDjLink: stopLink,
   };
-  return { closeWeb, stopLink, value };
+  return { closeWeb, startLink, stopLink, value };
 }
 
 describe("combined djbooth server", () => {
@@ -58,6 +61,31 @@ describe("combined djbooth server", () => {
 
     await expect(server.close()).resolves.toEqual({ linkStopped: false });
     expect(fake.closeWeb).toHaveBeenCalledTimes(1);
+    expect(fake.stopLink).not.toHaveBeenCalled();
+  });
+
+  it("takes ownership when reconciliation replaces a resumed DJ Link daemon", async () => {
+    const fake = dependencies({ resumed: true });
+    fake.startLink
+      .mockResolvedValueOnce(linkStatus(42, true))
+      .mockResolvedValueOnce(linkStatus(84, false));
+    const server = await startDjBoothServer({}, fake.value);
+
+    await expect(server.reconcileLink()).resolves.toMatchObject({ pid: 84, resumed: false });
+    expect(server.link).toMatchObject({ pid: 84 });
+    await expect(server.close()).resolves.toEqual({ linkStopped: true });
+    expect(fake.stopLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not claim an externally replaced resumed DJ Link daemon", async () => {
+    const fake = dependencies();
+    fake.startLink
+      .mockResolvedValueOnce(linkStatus(42, false))
+      .mockResolvedValueOnce(linkStatus(84, true));
+    const server = await startDjBoothServer({}, fake.value);
+
+    await server.reconcileLink();
+    await expect(server.close()).resolves.toEqual({ linkStopped: false });
     expect(fake.stopLink).not.toHaveBeenCalled();
   });
 

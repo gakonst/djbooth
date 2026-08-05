@@ -33,6 +33,7 @@ export type RunningDjBoothServer = {
   assistantEnabled: boolean;
   close(): Promise<{ linkStopped: boolean }>;
   link: (DjLinkServerStatus & { resumed: boolean }) | null;
+  reconcileLink(): Promise<(DjLinkServerStatus & { resumed: boolean }) | null>;
   url: string;
   web: RunningLibraryServer;
 };
@@ -57,19 +58,22 @@ export async function startDjBoothServer(
   dependencies: DjBoothServerDependencies = defaultDependencies,
 ): Promise<RunningDjBoothServer> {
   const assistantEnabled = options.assistant ?? true;
+  const linkOptions: StartRekordboxDjLinkOptions = {
+    allowMissingAnalysis: options.allowMissingAnalysis ?? true,
+    ...(options.binary ? { binaryPath: options.binary } : {}),
+    ...(options.bindIp ? { bindIp: options.bindIp } : {}),
+    ...(options.broadcastIp ? { broadcastIp: options.broadcastIp } : {}),
+    ...(options.databasePath ? { databasePath: options.databasePath } : {}),
+    name: options.name ?? "djbooth",
+    playerNumber: options.playerNumber ?? 17,
+  };
   let link: (DjLinkServerStatus & { resumed: boolean }) | null = null;
+  let ownedLinkPid: number | undefined;
   let web: RunningLibraryServer | undefined;
   try {
     if (options.link !== false) {
-      link = await dependencies.startRekordboxDjLink({
-        allowMissingAnalysis: options.allowMissingAnalysis ?? true,
-        ...(options.binary ? { binaryPath: options.binary } : {}),
-        ...(options.bindIp ? { bindIp: options.bindIp } : {}),
-        ...(options.broadcastIp ? { broadcastIp: options.broadcastIp } : {}),
-        ...(options.databasePath ? { databasePath: options.databasePath } : {}),
-        name: options.name ?? "djbooth",
-        playerNumber: options.playerNumber ?? 17,
-      });
+      link = await dependencies.startRekordboxDjLink(linkOptions);
+      if (!link.resumed) ownedLinkPid = link.pid;
     }
     web = await dependencies.startLibraryServer({
       assistantEnabled,
@@ -85,15 +89,32 @@ export async function startDjBoothServer(
 
   const url = workbenchUrl(web.url, assistantEnabled);
   let closePromise: Promise<{ linkStopped: boolean }> | undefined;
+  let reconcilePromise: Promise<(DjLinkServerStatus & { resumed: boolean }) | null> | undefined;
   return {
     assistantEnabled,
-    link,
+    get link() {
+      return link;
+    },
+    reconcileLink() {
+      if (options.link === false || closePromise) return Promise.resolve(link);
+      reconcilePromise ??= (async () => {
+        const next = await dependencies.startRekordboxDjLink(linkOptions);
+        if (!next.resumed) ownedLinkPid = next.pid;
+        else if (ownedLinkPid !== next.pid) ownedLinkPid = undefined;
+        link = next;
+        return link;
+      })().finally(() => {
+        reconcilePromise = undefined;
+      });
+      return reconcilePromise;
+    },
     url,
     web,
     close() {
       closePromise ??= (async () => {
+        await reconcilePromise?.catch(() => undefined);
         await web.close();
-        if (!link || link.resumed) return { linkStopped: false };
+        if (!link || ownedLinkPid !== link.pid) return { linkStopped: false };
         const stopped = await dependencies.stopDjLink();
         return { linkStopped: stopped.stopped };
       })();
