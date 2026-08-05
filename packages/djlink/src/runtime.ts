@@ -233,6 +233,7 @@ async function startDjLinkSource(
     String(options.playerNumber ?? 17),
     "--log-path",
     paths.log,
+    "--stagehand-monitor",
     ...(options.bindIp ? ["--bind-ip", options.bindIp] : []),
     ...(options.broadcastIp ? ["--broadcast-ip", options.broadcastIp] : []),
     ...(requireAnalysis ? ["--require-analysis"] : []),

@@ -19,9 +19,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::a9_usb::configure_meter_routes;
-use crate::audio_meter::connect_audio_meter;
-use crate::mixer::{Decoder, connect_midi};
+use crate::audio_meter::{MeterEvent, audio_input_present, connect_audio_meter};
+use crate::mixer::{Decoder, connect_midi, midi_input_present};
 use crate::state_api::{StateApiConfig, StateApiServer};
+
+const DEVICE_RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Parser)]
 #[command(
@@ -964,6 +966,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     };
     let mut server = DjLinkServer::new(config, library).await?;
     let mut telemetry_events = server.subscribe_telemetry();
+    let mut mixer_telemetry_events = server.subscribe_mixer_telemetry();
     server.start().await?;
     let listener = UnixListener::bind(&args.socket)
         .with_context(|| format!("failed to bind control socket '{}'", args.socket.display()))?;
@@ -978,7 +981,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         tracks: server.library_track_count(),
         playlists: server.library_playlist_count(),
     });
-    let (midi_connection, mut midi_events, device_name, mixer_connected) =
+    let (mut midi_connection, mut midi_events, mut device_name, mixer_connected) =
         match connect_midi(&args.midi_device) {
             Ok((connection, receiver, device_name)) => {
                 (Some(connection), Some(receiver), device_name, true)
@@ -988,13 +991,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 (None, None, args.midi_device.clone(), false)
             }
         };
-    let state_api = StateApiServer::start(StateApiConfig {
-        bind: args.api_bind,
-        mixer_device: device_name,
-        mixer_connected,
-        djlink: server.clone(),
-    })
-    .await?;
     let audio_meter_routing = if args.audio_device.to_ascii_lowercase().contains("djm-a9") {
         match configure_meter_routes() {
             Ok(routing) => {
@@ -1013,7 +1009,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     } else {
         None
     };
-    let (audio_meter_connection, mut audio_meter_events, audio_meter_device) =
+    let (mut audio_meter_connection, mut audio_meter_events, mut audio_meter_device) =
         match connect_audio_meter(&args.audio_device) {
             Ok((connection, receiver, name)) => (Some(connection), Some(receiver), Some(name)),
             Err(error) => {
@@ -1021,6 +1017,15 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 (None, None, None)
             }
         };
+    let state_api = StateApiServer::start(StateApiConfig {
+        bind: args.api_bind,
+        mixer_device: device_name.clone(),
+        mixer_connected,
+        audio_meter_device: audio_meter_device.clone(),
+        audio_meter_connected: audio_meter_connection.is_some(),
+        djlink: server.clone(),
+    })
+    .await?;
     state_api.publisher().refresh_decks(&server).await?;
     println!(
         "{}",
@@ -1036,7 +1041,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "wirePcap": args.wire_pcap,
             "stateApi": format!("http://{}", state_api.address),
             "audioMeterDevice": audio_meter_device,
-            "audioMeterRouting": audio_meter_routing.map(|routing| json!({
+            "audioMeterRouting": audio_meter_routing.as_ref().map(|routing| json!({
                 "master": routing.master_pair,
                 "channels": routing.channel_pairs,
             })),
@@ -1051,6 +1056,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
     let mut control_tasks = JoinSet::new();
     let mut decoder = Decoder::default();
+    let mut reconnect = tokio::time::interval(DEVICE_RECONNECT_INTERVAL);
+    reconnect.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconnect.tick().await;
     loop {
         tokio::select! {
             biased;
@@ -1089,24 +1097,105 @@ async fn serve(args: ServeArgs) -> Result<()> {
                     tracing::warn!("state_api_midi_disconnected");
                     state_api.publisher().set_mixer_connected(false).await?;
                     midi_events = None;
+                    midi_connection = None;
+                    decoder = Decoder::default();
                     continue;
                 };
                 for event in decoder.decode_packet(&raw, false) {
                     state_api.publisher().publish_mixer_event(&event).await?;
                 }
             }
-            frame = async {
+            meter_event = async {
                 match audio_meter_events.as_mut() {
                     Some(events) => events.recv().await,
                     None => std::future::pending().await,
                 }
             }, if audio_meter_events.is_some() => {
-                let Some(frame) = frame else {
+                let Some(meter_event) = meter_event else {
                     tracing::warn!("state_api_audio_meter_disconnected");
                     audio_meter_events = None;
+                    audio_meter_connection = None;
+                    state_api.publisher().set_audio_meter_connection(audio_meter_device.clone(), false).await?;
                     continue;
                 };
-                state_api.publisher().publish_meter_frame(&frame).await?;
+                match meter_event {
+                    MeterEvent::Frame(frame) => {
+                        state_api.publisher().publish_meter_frame(&frame).await?;
+                    }
+                    MeterEvent::Disconnected { device, error } => {
+                        tracing::warn!(%device, %error, "state_api_audio_meter_disconnected");
+                        audio_meter_events = None;
+                        audio_meter_connection = None;
+                        state_api.publisher().set_audio_meter_connection(Some(device), false).await?;
+                    }
+                }
+            }
+            _ = reconnect.tick() => {
+                if midi_connection.is_some() {
+                    match midi_input_present(&device_name) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            tracing::warn!(device = %device_name, "state_api_midi_device_removed");
+                            midi_events = None;
+                            midi_connection = None;
+                            decoder = Decoder::default();
+                            state_api.publisher().set_mixer_connected(false).await?;
+                        }
+                        Err(error) => tracing::debug!(%error, "state_api_midi_probe_failed"),
+                    }
+                }
+                if midi_connection.is_none() {
+                    match connect_midi(&args.midi_device) {
+                        Ok((connection, receiver, name)) => {
+                            tracing::info!(device = %name, "state_api_midi_reconnected");
+                            device_name = name.clone();
+                            midi_connection = Some(connection);
+                            midi_events = Some(receiver);
+                            decoder = Decoder::default();
+                            state_api.publisher().set_mixer_connection(Some(name), true).await?;
+                        }
+                        Err(error) => tracing::debug!(%error, "state_api_midi_reconnect_pending"),
+                    }
+                }
+
+                if audio_meter_connection.is_some() {
+                    let present = match audio_meter_device.as_deref() {
+                        Some(device) => audio_input_present(device),
+                        None => Ok(false),
+                    };
+                    match present {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            tracing::warn!(device = ?audio_meter_device, "state_api_audio_meter_device_removed");
+                            audio_meter_events = None;
+                            audio_meter_connection = None;
+                            state_api.publisher().set_audio_meter_connection(audio_meter_device.clone(), false).await?;
+                        }
+                        Err(error) => tracing::debug!(%error, "state_api_audio_meter_probe_failed"),
+                    }
+                }
+                if audio_meter_connection.is_none() {
+                    if args.audio_device.to_ascii_lowercase().contains("djm-a9") {
+                        match configure_meter_routes() {
+                            Ok(routing) => tracing::debug!(
+                                master_pair = routing.master_pair,
+                                channel_pairs = ?routing.channel_pairs,
+                                "a9_meter_routes_reconfigured"
+                            ),
+                            Err(error) => tracing::debug!(%error, "a9_meter_routes_reconnect_pending"),
+                        }
+                    }
+                    match connect_audio_meter(&args.audio_device) {
+                        Ok((connection, receiver, name)) => {
+                            tracing::info!(device = %name, "state_api_audio_meter_reconnected");
+                            audio_meter_device = Some(name.clone());
+                            audio_meter_connection = Some(connection);
+                            audio_meter_events = Some(receiver);
+                            state_api.publisher().set_audio_meter_connection(Some(name), true).await?;
+                        }
+                        Err(error) => tracing::debug!(%error, "state_api_audio_meter_reconnect_pending"),
+                    }
+                }
             }
             telemetry = telemetry_events.recv() => {
                 match telemetry {
@@ -1117,6 +1206,17 @@ async fn serve(args: ServeArgs) -> Result<()> {
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         bail!("DJ Link telemetry stream closed");
+                    }
+                }
+            }
+            telemetry = mixer_telemetry_events.recv() => {
+                match telemetry {
+                    Ok(event) => state_api.publisher().publish_djlink_mixer_event(event).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "state_api_djlink_mixer_events_lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        bail!("DJ Link mixer telemetry stream closed");
                     }
                 }
             }
@@ -1132,7 +1232,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     drop(stop_tx);
     drop(stop_rx);
     drop(runtime);
-    state_api.stop();
+    state_api.stop().await;
     drop(midi_connection);
     drop(audio_meter_connection);
     let Ok(mut server) = Arc::try_unwrap(server) else {

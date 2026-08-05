@@ -11,7 +11,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use djtools_link::{
-    DjLinkDeckState, DjLinkServer, DjLinkTelemetryEvent, DjLinkTelemetryKind, DjLinkTrackMetadata,
+    DjLinkDeckState, DjLinkMixerTelemetryEvent, DjLinkServer, DjLinkTelemetryEvent,
+    DjLinkTelemetryKind, DjLinkTrackMetadata,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -27,6 +28,8 @@ pub(crate) struct StateApiConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) mixer_device: String,
     pub(crate) mixer_connected: bool,
+    pub(crate) audio_meter_device: Option<String>,
+    pub(crate) audio_meter_connected: bool,
     pub(crate) djlink: Arc<DjLinkServer>,
 }
 
@@ -64,6 +67,8 @@ struct BoothState {
 struct MixerState {
     device: String,
     connected: bool,
+    audio_meter_device: Option<String>,
+    audio_meter_connected: bool,
     bpm: Option<f64>,
     controls: BTreeMap<String, ControlState>,
     meters: BTreeMap<String, MeterState>,
@@ -171,6 +176,8 @@ impl StateApiServer {
                 mixer: MixerState {
                     device: config.mixer_device,
                     connected: config.mixer_connected,
+                    audio_meter_device: config.audio_meter_device,
+                    audio_meter_connected: config.audio_meter_connected,
                     bpm: None,
                     controls: BTreeMap::new(),
                     meters: BTreeMap::new(),
@@ -208,12 +215,71 @@ impl StateApiServer {
         self.publisher.clone()
     }
 
-    pub(crate) fn stop(self) {
+    pub(crate) async fn stop(self) {
         self.task.abort();
+        let _ = self.task.await;
     }
 }
 
 impl StatePublisher {
+    pub(crate) async fn publish_djlink_mixer_event(
+        &self,
+        event: DjLinkMixerTelemetryEvent,
+    ) -> Result<()> {
+        let observed_at_us = elapsed_us(self.state.started);
+        {
+            let mut booth = self.state.booth.write().await;
+            booth.sequence += 1;
+            booth.observed_at_us = observed_at_us;
+            booth.mixer.connected = true;
+            for channel in event.mixer.channels {
+                let prefix = format!("channel.{}", channel.channel);
+                set_link_control(
+                    &mut booth.mixer.controls,
+                    format!("{prefix}.input"),
+                    format!("Channel {} input source", channel.channel),
+                    channel.input_source,
+                    None,
+                    observed_at_us,
+                );
+                for (suffix, label, value) in [
+                    ("trim", "trim", channel.trim),
+                    ("eq.high", "EQ high", channel.eq_high),
+                    ("eq.mid", "EQ mid", channel.eq_mid),
+                    ("eq.low", "EQ low", channel.eq_low),
+                    ("color", "Sound Color FX knob", channel.color),
+                    ("fader", "fader", channel.fader),
+                ] {
+                    set_link_control(
+                        &mut booth.mixer.controls,
+                        format!("{prefix}.{suffix}"),
+                        format!("Channel {} {label}", channel.channel),
+                        value,
+                        None,
+                        observed_at_us,
+                    );
+                }
+                set_link_control(
+                    &mut booth.mixer.controls,
+                    format!("{prefix}.crossfaderAssign"),
+                    format!("Channel {} crossfader assign", channel.channel),
+                    channel.crossfader_assign,
+                    crossfader_assign_state(channel.crossfader_assign),
+                    observed_at_us,
+                );
+            }
+            set_link_control(
+                &mut booth.mixer.controls,
+                "crossfader.position".to_string(),
+                "Crossfader".to_string(),
+                event.mixer.crossfader,
+                None,
+                observed_at_us,
+            );
+        }
+        self.broadcast_snapshot().await
+    }
+
     pub(crate) async fn publish_meter_frame(&self, frame: &MeterFrame) -> Result<()> {
         let (sequence, observed_at_us, meters) = {
             let mut booth = self.state.booth.write().await;
@@ -284,12 +350,64 @@ impl StatePublisher {
     }
 
     pub(crate) async fn set_mixer_connected(&self, connected: bool) -> Result<()> {
+        self.set_mixer_connection(None, connected).await
+    }
+
+    pub(crate) async fn set_mixer_connection(
+        &self,
+        device: Option<String>,
+        connected: bool,
+    ) -> Result<()> {
         let changed = {
             let mut booth = self.state.booth.write().await;
-            if booth.mixer.connected == connected {
+            let device_changed = device
+                .as_ref()
+                .is_some_and(|device| booth.mixer.device != *device);
+            if booth.mixer.connected == connected && !device_changed {
                 false
             } else {
+                if let Some(device) = device {
+                    booth.mixer.device = device;
+                }
                 booth.mixer.connected = connected;
+                if !connected {
+                    booth.mixer.bpm = None;
+                }
+                booth.sequence += 1;
+                booth.observed_at_us = elapsed_us(self.state.started);
+                true
+            }
+        };
+        if changed {
+            self.broadcast_snapshot().await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn set_audio_meter_connection(
+        &self,
+        device: Option<String>,
+        connected: bool,
+    ) -> Result<()> {
+        let changed = {
+            let mut booth = self.state.booth.write().await;
+            let device_changed = device
+                .as_ref()
+                .is_some_and(|device| booth.mixer.audio_meter_device.as_ref() != Some(device));
+            let had_meters = !booth.mixer.meters.is_empty();
+            if booth.mixer.audio_meter_connected == connected
+                && !device_changed
+                && (connected || !had_meters)
+            {
+                false
+            } else {
+                if let Some(device) = device {
+                    booth.mixer.audio_meter_device = Some(device);
+                }
+                booth.mixer.audio_meter_connected = connected;
+                if !connected {
+                    booth.mixer.meters.clear();
+                }
                 booth.sequence += 1;
                 booth.observed_at_us = elapsed_us(self.state.started);
                 true
@@ -607,9 +725,41 @@ fn elapsed_us(started: Instant) -> u64 {
     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+fn set_link_control(
+    controls: &mut BTreeMap<String, ControlState>,
+    path: String,
+    label: String,
+    value: u8,
+    state: Option<&str>,
+    changed_at_us: u64,
+) {
+    controls.insert(
+        path,
+        ControlState {
+            label,
+            value: Some(u16::from(value)),
+            percent: Some(f64::from(value) * 100.0 / 255.0),
+            state: state.map(str::to_string),
+            raw: format!("{value:02X}"),
+            changed_at_us,
+        },
+    );
+}
+
+fn crossfader_assign_state(value: u8) -> Option<&'static str> {
+    match value {
+        0 => Some("thru"),
+        1 => Some("a"),
+        2 => Some("b"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use djtools_link::{DjLinkMixerChannelState, DjLinkMixerState};
+    use std::net::Ipv4Addr;
 
     fn test_publisher() -> StatePublisher {
         let (messages, _) = broadcast::channel(32);
@@ -622,6 +772,8 @@ mod tests {
                     mixer: MixerState {
                         device: "DJM-A9".to_string(),
                         connected: true,
+                        audio_meter_device: Some("DJM-A9".to_string()),
+                        audio_meter_connected: true,
                         bpm: None,
                         controls: BTreeMap::new(),
                         meters: BTreeMap::new(),
@@ -706,5 +858,86 @@ mod tests {
         assert_eq!(booth.sequence, 2);
         assert_eq!(booth.mixer.controls["channel.1.eq.low"].value, Some(24));
         assert_eq!(booth.mixer.controls["channel.2.eq.low"].value, Some(96));
+    }
+
+    #[tokio::test]
+    async fn disconnected_usb_sources_clear_transient_state() {
+        let publisher = test_publisher();
+        {
+            let mut booth = publisher.state.booth.write().await;
+            booth.mixer.bpm = Some(128.0);
+            booth.mixer.meters.insert(
+                "usb.1_2".to_string(),
+                MeterState {
+                    pair: 1,
+                    channels: [1, 2],
+                    peak_dbfs: -1.0,
+                    rms_dbfs: -6.0,
+                    left_peak_dbfs: -1.0,
+                    right_peak_dbfs: -2.0,
+                    left_rms_dbfs: -6.0,
+                    right_rms_dbfs: -7.0,
+                    changed_at_us: 1,
+                },
+            );
+        }
+
+        publisher.set_mixer_connected(false).await.unwrap();
+        publisher
+            .set_audio_meter_connection(Some("DJM-A9".to_string()), false)
+            .await
+            .unwrap();
+
+        let booth = publisher.state.booth.read().await;
+        assert!(!booth.mixer.connected);
+        assert!(!booth.mixer.audio_meter_connected);
+        assert_eq!(booth.mixer.bpm, None);
+        assert!(booth.mixer.meters.is_empty());
+    }
+
+    #[tokio::test]
+    async fn ethernet_a9_state_populates_mixer_controls_without_usb() {
+        let publisher = test_publisher();
+        publisher.set_mixer_connected(false).await.unwrap();
+        let channel = |number, value, assign| DjLinkMixerChannelState {
+            channel: number,
+            input_source: number,
+            trim: value,
+            eq_high: value,
+            eq_mid: value,
+            eq_low: value,
+            color: value,
+            fader: value,
+            crossfader_assign: assign,
+        };
+        publisher
+            .publish_djlink_mixer_event(DjLinkMixerTelemetryEvent {
+                source_ip: Ipv4Addr::new(169, 254, 1, 33),
+                mixer: DjLinkMixerState {
+                    channels: [
+                        channel(1, 0, 0),
+                        channel(2, 64, 1),
+                        channel(3, 128, 2),
+                        channel(4, 255, 0),
+                    ],
+                    crossfader: 120,
+                },
+            })
+            .await
+            .unwrap();
+
+        let booth = publisher.state.booth.read().await;
+        assert!(booth.mixer.connected);
+        assert_eq!(booth.mixer.controls["channel.3.eq.low"].value, Some(128));
+        assert_eq!(
+            booth.mixer.controls["channel.3.crossfaderAssign"]
+                .state
+                .as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            booth.mixer.controls["crossfader.position"].percent,
+            Some(120.0 * 100.0 / 255.0)
+        );
     }
 }

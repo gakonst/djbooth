@@ -425,6 +425,31 @@ pub struct DjLinkTelemetryEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DjLinkMixerChannelState {
+    pub channel: u8,
+    pub input_source: u8,
+    pub trim: u8,
+    pub eq_high: u8,
+    pub eq_mid: u8,
+    pub eq_low: u8,
+    pub color: u8,
+    pub fader: u8,
+    pub crossfader_assign: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkMixerState {
+    pub channels: [DjLinkMixerChannelState; 4],
+    pub crossfader: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkMixerTelemetryEvent {
+    pub source_ip: Ipv4Addr,
+    pub mixer: DjLinkMixerState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkSearchMode {
     Track,
     Artist,
@@ -487,6 +512,7 @@ impl DjLinkServer {
         let search_index = SearchIndex::new(&library);
         let (actor_tx, actor_rx) = ServerActor::channel();
         let (telemetry_tx, _) = broadcast::channel(1_024);
+        let (mixer_telemetry_tx, _) = broadcast::channel(1_024);
         let initial_bpm = if config.emit_beat_clock { 13_005 } else { 0 };
         let state = Arc::new(ServerState {
             config,
@@ -499,6 +525,7 @@ impl DjLinkServer {
             search_index,
             actor_tx,
             telemetry_tx,
+            mixer_telemetry_tx,
             log_path,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(initial_bpm),
@@ -901,6 +928,10 @@ impl DjLinkServer {
 
     pub fn subscribe_telemetry(&self) -> broadcast::Receiver<DjLinkTelemetryEvent> {
         self.state.telemetry_tx.subscribe()
+    }
+
+    pub fn subscribe_mixer_telemetry(&self) -> broadcast::Receiver<DjLinkMixerTelemetryEvent> {
+        self.state.mixer_telemetry_tx.subscribe()
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -2383,6 +2414,7 @@ struct ServerState {
     search_index: SearchIndex,
     actor_tx: ServerActorSender,
     telemetry_tx: broadcast::Sender<DjLinkTelemetryEvent>,
+    mixer_telemetry_tx: broadcast::Sender<DjLinkMixerTelemetryEvent>,
     log_path: Option<PathBuf>,
     cue_overrides_ms: RwLock<HashMap<u32, u32>>,
     master_bpm_hundreds: AtomicU16,
@@ -4875,7 +4907,7 @@ async fn send_stagehand_packet(
     context: &str,
 ) -> std::io::Result<usize> {
     let sent = send_udp_packet(state, sock, packet, broadcast_target, context).await?;
-    if let (Some(target_ip), Some(target_mac)) = (
+    let configured_target = if let (Some(target_ip), Some(target_mac)) = (
         state.config.stagehand_target_ip,
         state.config.stagehand_target_mac.as_deref(),
     ) {
@@ -4885,6 +4917,23 @@ async fn send_stagehand_packet(
             target_ip,
             KEEPALIVE_PORT,
             target_mac,
+            packet,
+            context,
+        )
+        .await?;
+        Some(target_ip)
+    } else {
+        None
+    };
+    for device in state.devices_sorted().await.into_iter().filter(|device| {
+        device.model.eq_ignore_ascii_case("DJM-A9") && configured_target != Some(device.ip_addr)
+    }) {
+        send_raw_udp_packet_to_mac(
+            state,
+            sock.local_addr()?.port(),
+            device.ip_addr,
+            KEEPALIVE_PORT,
+            &device.mac_addr,
             packet,
             context,
         )
@@ -5748,7 +5797,11 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
                 continue;
             }
             let packet = &buf[..len];
-            if stagehand::is_a9_mixer_state(packet) {
+            if let Some(mixer) = parse_a9_mixer_state(packet) {
+                let _ = state.mixer_telemetry_tx.send(DjLinkMixerTelemetryEvent {
+                    source_ip: ip,
+                    mixer,
+                });
                 tracing::trace!(
                     target: "djtools_link::stagehand",
                     %addr,
@@ -5905,6 +5958,30 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
             }
             log_unknown_dj_packet(&state, "status", addr, packet).await;
         }
+    })
+}
+
+fn parse_a9_mixer_state(packet: &[u8]) -> Option<DjLinkMixerState> {
+    if !stagehand::is_a9_mixer_state(packet) {
+        return None;
+    }
+    let channels = std::array::from_fn(|index| {
+        let offset = 36 + index * 24;
+        DjLinkMixerChannelState {
+            channel: index as u8 + 1,
+            input_source: packet[offset],
+            trim: packet[offset + 1],
+            eq_high: packet[offset + 3],
+            eq_mid: packet[offset + 4],
+            eq_low: packet[offset + 6],
+            color: packet[offset + 7],
+            fader: packet[offset + 11],
+            crossfader_assign: packet[offset + 12],
+        }
+    });
+    Some(DjLinkMixerState {
+        channels,
+        crossfader: packet[0xb4],
     })
 }
 
@@ -13266,9 +13343,39 @@ notes: []
         entry
     }
 
+    #[test]
+    fn parses_a9_stagehand_mixer_state() {
+        let mut packet = vec![0u8; 266];
+        packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
+        packet[0x0a] = 0x39;
+        packet[0x1e] = 0x3a;
+        for index in 0..4 {
+            let offset = 36 + index * 24;
+            packet[offset] = index as u8;
+            packet[offset + 1] = 0x81 + index as u8;
+            packet[offset + 3] = 0x82 + index as u8;
+            packet[offset + 4] = 0x83 + index as u8;
+            packet[offset + 6] = 0x84 + index as u8;
+            packet[offset + 7] = 0x85 + index as u8;
+            packet[offset + 11] = 0x86 + index as u8;
+            packet[offset + 12] = index.min(2) as u8;
+        }
+        packet[0xb4] = 0x78;
+
+        let mixer = parse_a9_mixer_state(&packet).expect("valid A9 mixer state");
+        assert_eq!(mixer.channels[0].channel, 1);
+        assert_eq!(mixer.channels[0].trim, 0x81);
+        assert_eq!(mixer.channels[1].eq_low, 0x85);
+        assert_eq!(mixer.channels[2].color, 0x87);
+        assert_eq!(mixer.channels[3].fader, 0x89);
+        assert_eq!(mixer.channels[3].crossfader_assign, 2);
+        assert_eq!(mixer.crossfader, 0x78);
+    }
+
     fn test_state() -> ServerState {
         let (actor_tx, actor_rx) = ServerActor::channel();
         let (telemetry_tx, _) = broadcast::channel(32);
+        let (mixer_telemetry_tx, _) = broadcast::channel(32);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(ServerActor::default().run(actor_rx));
         }
@@ -13290,6 +13397,7 @@ notes: []
             search_index,
             actor_tx,
             telemetry_tx,
+            mixer_telemetry_tx,
             log_path: None,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(0),

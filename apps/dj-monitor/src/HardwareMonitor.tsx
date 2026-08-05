@@ -116,6 +116,7 @@ function Cdj3000({ deck }: { deck: DeckState }) {
       ? clamp((inferredPlayheadMs / (trackLengthSec * 1_000)) * 100, 0, 100)
       : 0;
   const bpm = deck.effectiveBpm ?? deck.bpm;
+  const jogAngle = (((inferredPlayheadMs ?? 0) % 1_800) / 1_800) * 360;
 
   return (
     <article
@@ -174,15 +175,11 @@ function Cdj3000({ deck }: { deck: DeckState }) {
         )}
       </section>
 
-      <span
-        className={`cdj-platter-photo ${deck.playing ? "spinning" : ""}`}
-        style={cdjSpriteStyle(50.2, 67.4, 50.2, 67.4, 54.0, 54.0 * CDJ_IMAGE.faceRatio)}
-      />
       <div
-        className={`cdj-jog-live ${deck.playing ? "spinning" : ""}`}
+        className="cdj-jog-live"
         style={cdjSpriteStyle(50.2, 67.4, 50.2, 67.4, 12.8, 12.8 * CDJ_IMAGE.faceRatio)}
       >
-        <i />
+        <i style={{ transform: `rotate(${jogAngle}deg)` }} />
         <span>{deck.playing ? "PLAY" : (deck.playState ?? "IDLE").toUpperCase()}</span>
         <strong>{formatTime(inferredPlayheadMs)}</strong>
         <small>{deck.beatInBar ?? "–"}/4</small>

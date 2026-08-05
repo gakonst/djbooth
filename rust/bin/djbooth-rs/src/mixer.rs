@@ -229,6 +229,21 @@ pub(crate) fn connect_midi(
     Ok((connection, receiver, device_name))
 }
 
+pub(crate) fn midi_input_present(device_name: &str) -> Result<bool> {
+    let midi = MidiInput::new("music-ts DJ mixer probe")
+        .context("failed to initialize MIDI input probe")?;
+    for port in midi.ports() {
+        if midi
+            .port_name(&port)
+            .context("failed to read MIDI input name")?
+            == device_name
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn display_devices(devices: &[String]) -> String {
     if devices.is_empty() {
         "none".to_string()

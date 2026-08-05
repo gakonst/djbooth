@@ -22,6 +22,7 @@ const BROWSE_CONTEXT_HISTORY_MAX: usize = 16;
 const RECENT_BROWSE_CONTEXT_FOR: Duration = Duration::from_secs(300);
 const RECENT_OLD_AUDIO_READ_FOR_SWITCH: Duration = Duration::from_millis(450);
 pub(crate) const DEVICE_MAX_AGE: Duration = Duration::from_secs(10);
+const DEVICE_RELINK_GAP: Duration = Duration::from_secs(5);
 
 pub(crate) type ServerActorSender = mpsc::Sender<ServerMsg>;
 
@@ -589,9 +590,56 @@ impl ServerActor {
 
     fn record_device(&mut self, device: LinkDevice) -> bool {
         self.expire_devices(Instant::now());
-        let is_new = !self.devices.contains_key(&device.ip_addr);
+
+        let conflicting_ips = self
+            .devices
+            .iter()
+            .filter(|(ip, existing)| {
+                **ip != device.ip_addr
+                    && (existing.player_number == device.player_number
+                        || existing.mac_addr == device.mac_addr)
+            })
+            .map(|(ip, _)| *ip)
+            .collect::<Vec<_>>();
+        let mut requires_link_init = false;
+        for ip in conflicting_ips {
+            if let Some(replaced) = self.remove_device(ip) {
+                tracing::info!(
+                    player = replaced.player_number,
+                    old_ip = %replaced.ip_addr,
+                    new_ip = %device.ip_addr,
+                    "device_address_changed"
+                );
+                requires_link_init = true;
+            }
+        }
+
+        if let Some(existing) = self.devices.get(&device.ip_addr).cloned() {
+            let identity_changed = existing.player_number != device.player_number
+                || existing.mac_addr != device.mac_addr
+                || existing.model != device.model;
+            let announcement_gap = device
+                .last_seen
+                .saturating_duration_since(existing.last_seen);
+            if identity_changed || announcement_gap >= DEVICE_RELINK_GAP {
+                self.remove_device(device.ip_addr);
+                tracing::info!(
+                    player = device.player_number,
+                    %device.ip_addr,
+                    gap_ms = announcement_gap.as_millis(),
+                    identity_changed,
+                    "device_restarted"
+                );
+                requires_link_init = true;
+            } else if device.last_seen < existing.last_seen {
+                return false;
+            }
+        } else {
+            requires_link_init = true;
+        }
+
         self.devices.insert(device.ip_addr, device);
-        is_new
+        requires_link_init
     }
 
     fn device_for_ip(&mut self, ip: Ipv4Addr) -> Option<LinkDevice> {
@@ -621,24 +669,11 @@ impl ServerActor {
         let expired = self
             .devices
             .iter()
-            .filter(|(_, device)| now.saturating_duration_since(device.last_seen) > DEVICE_MAX_AGE)
+            .filter(|(_, device)| now.saturating_duration_since(device.last_seen) >= DEVICE_MAX_AGE)
             .map(|(ip, device)| (*ip, device.player_number, device.last_seen))
             .collect::<Vec<_>>();
         for &(ip, player, last_seen) in &expired {
-            self.devices.remove(&ip);
-            self.linked_devices.remove(&ip);
-            self.db_auto_load_last_sent.remove(&ip);
-            self.load_ack_by_ip.remove(&ip);
-            self.db_query_counts.remove(&ip);
-            self.load_confirm_by_player.remove(&player);
-            self.browse_context_by_player.remove(&player);
-            self.last_status_by_player.remove(&player);
-            self.last_status_seen_by_player.remove(&player);
-            self.last_beat_by_player.remove(&player);
-            self.last_beat_seen_by_player.remove(&player);
-            self.last_position_by_player.remove(&player);
-            self.load_progress_by_player
-                .retain(|(target_player, _), _| *target_player != player);
+            self.remove_device(ip);
             tracing::info!(
                 player,
                 %ip,
@@ -648,6 +683,45 @@ impl ServerActor {
             self.emit_telemetry(DjLinkTelemetryKind::Device, player);
         }
         expired.into_iter().map(|(_, player, _)| player).collect()
+    }
+
+    fn remove_device(&mut self, ip: Ipv4Addr) -> Option<LinkDevice> {
+        let device = self.devices.remove(&ip)?;
+        let player = device.player_number;
+        self.linked_devices.remove(&ip);
+        self.db_auto_load_last_sent.remove(&ip);
+        self.load_ack_by_ip.remove(&ip);
+        self.db_query_counts.remove(&ip);
+        self.load_confirm_by_player.remove(&player);
+        self.browse_context_by_player.remove(&player);
+        self.last_status_by_player.remove(&player);
+        self.last_status_seen_by_player.remove(&player);
+        self.last_beat_by_player.remove(&player);
+        self.last_beat_seen_by_player.remove(&player);
+        self.last_position_by_player.remove(&player);
+        self.load_progress_by_player
+            .retain(|(target_player, _), _| *target_player != player);
+
+        let mut remaining_load_ack_waiters = Vec::with_capacity(self.load_ack_waiters.len());
+        for waiter in self.load_ack_waiters.drain(..) {
+            if waiter.ip == ip {
+                let _ = waiter.reply.send(false);
+            } else {
+                remaining_load_ack_waiters.push(waiter);
+            }
+        }
+        self.load_ack_waiters = remaining_load_ack_waiters;
+
+        let mut remaining_status_waiters = Vec::with_capacity(self.status_waiters.len());
+        for waiter in self.status_waiters.drain(..) {
+            if waiter.target_player == player {
+                let _ = waiter.reply.send(false);
+            } else {
+                remaining_status_waiters.push(waiter);
+            }
+        }
+        self.status_waiters = remaining_status_waiters;
+        Some(device)
     }
 
     fn should_send_link_init(&mut self, ip: Ipv4Addr) -> bool {
@@ -1169,6 +1243,36 @@ mod tests {
 
         assert!(actor.record_device(test_device(3, ip)));
         assert_eq!(actor.devices_sorted().len(), 1);
+    }
+
+    #[test]
+    fn actor_relinks_a_deck_after_a_short_restart_gap() {
+        let mut actor = ServerActor::default();
+        let ip = Ipv4Addr::new(169, 254, 7, 4);
+        let mut before_restart = test_device(3, ip);
+        before_restart.last_seen = Instant::now() - DEVICE_RELINK_GAP - Duration::from_millis(1);
+        actor.devices.insert(ip, before_restart);
+        actor.linked_devices.insert(ip);
+
+        assert!(actor.record_device(test_device(3, ip)));
+        assert!(!actor.linked_devices.contains(&ip));
+        assert_eq!(actor.devices_sorted().len(), 1);
+    }
+
+    #[test]
+    fn actor_replaces_a_deck_that_reappears_at_a_new_ip() {
+        let mut actor = ServerActor::default();
+        let old_ip = Ipv4Addr::new(169, 254, 7, 4);
+        let new_ip = Ipv4Addr::new(169, 254, 9, 8);
+        assert!(actor.record_device(test_device(3, old_ip)));
+        actor.linked_devices.insert(old_ip);
+
+        assert!(actor.record_device(test_device(3, new_ip)));
+        assert!(!actor.linked_devices.contains(&old_ip));
+        assert!(!actor.linked_devices.contains(&new_ip));
+        let devices = actor.devices_sorted();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].ip_addr, new_ip);
     }
 
     #[test]

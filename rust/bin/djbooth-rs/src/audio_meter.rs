@@ -14,6 +14,12 @@ pub(crate) struct MeterFrame {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) enum MeterEvent {
+    Frame(MeterFrame),
+    Disconnected { device: String, error: String },
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct StereoMeter {
     pub(crate) pair: u8,
     pub(crate) left_channel: u8,
@@ -28,7 +34,7 @@ pub(crate) struct StereoMeter {
 
 pub(crate) fn connect_audio_meter(
     selector: &str,
-) -> Result<(Stream, mpsc::UnboundedReceiver<MeterFrame>, String)> {
+) -> Result<(Stream, mpsc::UnboundedReceiver<MeterEvent>, String)> {
     let host = cpal::default_host();
     let selector_lower = selector.to_ascii_lowercase();
     let mut selected = None;
@@ -57,33 +63,48 @@ pub(crate) fn connect_audio_meter(
     let stream = match supported.sample_format() {
         SampleFormat::F32 => {
             let error_name = name.clone();
+            let error_tx = tx.clone();
             device.build_input_stream(
                 config,
                 meter_callback::<f32>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
+                    let _ = error_tx.send(MeterEvent::Disconnected {
+                        device: error_name.clone(),
+                        error: error.to_string(),
+                    });
                 },
                 None,
             )
         }
         SampleFormat::I16 => {
             let error_name = name.clone();
+            let error_tx = tx.clone();
             device.build_input_stream(
                 config,
                 meter_callback::<i16>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
+                    let _ = error_tx.send(MeterEvent::Disconnected {
+                        device: error_name.clone(),
+                        error: error.to_string(),
+                    });
                 },
                 None,
             )
         }
         SampleFormat::U16 => {
             let error_name = name.clone();
+            let error_tx = tx.clone();
             device.build_input_stream(
                 config,
                 meter_callback::<u16>(channels, tx),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
+                    let _ = error_tx.send(MeterEvent::Disconnected {
+                        device: error_name.clone(),
+                        error: error.to_string(),
+                    });
                 },
                 None,
             )
@@ -105,7 +126,7 @@ pub(crate) fn connect_audio_meter(
 
 fn meter_callback<T>(
     channels: usize,
-    tx: mpsc::UnboundedSender<MeterFrame>,
+    tx: mpsc::UnboundedSender<MeterEvent>,
 ) -> impl FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static
 where
     T: cpal::Sample + Send + 'static,
@@ -152,8 +173,21 @@ where
         square_sums.fill(0.0);
         samples_per_channel = 0;
         last_publish = Instant::now();
-        let _ = tx.send(MeterFrame { pairs });
+        let _ = tx.send(MeterEvent::Frame(MeterFrame { pairs }));
     }
+}
+
+pub(crate) fn audio_input_present(device_name: &str) -> Result<bool> {
+    let host = cpal::default_host();
+    for device in host.input_devices().context("list audio input devices")? {
+        let description = device
+            .description()
+            .context("read audio device description")?;
+        if description.name() == device_name {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn amplitude_dbfs(amplitude: f64) -> f64 {
