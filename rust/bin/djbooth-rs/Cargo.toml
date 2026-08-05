@@ -8,10 +8,14 @@ description = "Native analyzer, USB, and DJ Link runtime for djbooth.ai"
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
+cpal.workspace = true
+nusb.workspace = true
 djbooth-analyzer.workspace = true
 djtools-link.workspace = true
 fs2 = "0.4"
+midir.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

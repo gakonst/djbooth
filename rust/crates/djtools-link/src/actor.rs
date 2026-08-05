@@ -5,10 +5,11 @@ use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::djlink::{
-    CdjBeatSnapshot, CdjPositionSnapshot, CdjStatusSnapshot, DjLinkMonitorSnapshot, LinkDevice,
+    CdjBeatSnapshot, CdjPositionSnapshot, CdjStatusSnapshot, DjLinkMonitorSnapshot,
+    DjLinkTelemetryEvent, DjLinkTelemetryKind, LinkDevice,
 };
 use crate::load::{
     BrowseContextSnapshot, LoadConfirmContext, LoadConfirmSession, LoadProgressSnapshot,
@@ -252,6 +253,7 @@ pub(crate) struct ServerActor {
     waveform_preview_cache: HashMap<u32, Vec<u8>>,
     seen_unknown_packets: HashSet<String>,
     nfs: NfsState,
+    telemetry: Option<broadcast::Sender<DjLinkTelemetryEvent>>,
 }
 
 struct LoadAckWaiter {
@@ -276,19 +278,40 @@ impl ServerActor {
         mpsc::channel(SERVER_ACTOR_QUEUE_CAPACITY)
     }
 
+    pub(crate) fn with_telemetry(telemetry: broadcast::Sender<DjLinkTelemetryEvent>) -> Self {
+        Self {
+            telemetry: Some(telemetry),
+            ..Self::default()
+        }
+    }
+
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<ServerMsg>) {
-        while let Some(msg) = rx.recv().await {
-            if matches!(msg, ServerMsg::Shutdown) {
-                break;
+        loop {
+            let expiry = self.next_device_expiry();
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    if matches!(msg, ServerMsg::Shutdown) {
+                        break;
+                    }
+                    self.handle(msg);
+                }
+                _ = wait_until(expiry) => {
+                    self.expire_devices(Instant::now());
+                }
             }
-            self.handle(msg);
         }
     }
 
     fn handle(&mut self, msg: ServerMsg) {
         match msg {
             ServerMsg::RecordDevice { device, reply } => {
-                let _ = reply.send(self.record_device(device));
+                let player = device.player_number;
+                let changed = self.record_device(device);
+                if changed {
+                    self.emit_telemetry(DjLinkTelemetryKind::Device, player);
+                }
+                let _ = reply.send(changed);
             }
             ServerMsg::DeviceCount { reply } => {
                 let _ = reply.send(self.device_count());
@@ -358,6 +381,7 @@ impl ServerActor {
                 let seen_at = Instant::now();
                 let should_log = self.record_status(status.clone(), seen_at);
                 self.notify_status_waiters(&status, seen_at);
+                self.emit_telemetry(DjLinkTelemetryKind::Status, status.player());
                 let _ = reply.send(should_log);
             }
             ServerMsg::RecordBeat {
@@ -365,7 +389,10 @@ impl ServerActor {
                 seen_at,
                 reply,
             } => {
-                let _ = reply.send(self.record_beat(beat, seen_at));
+                let player = beat.player();
+                let changed = self.record_beat(beat, seen_at);
+                self.emit_telemetry(DjLinkTelemetryKind::Beat, player);
+                let _ = reply.send(changed);
             }
             ServerMsg::RecentBeatSeen {
                 target_player,
@@ -374,7 +401,10 @@ impl ServerActor {
                 let _ = reply.send(self.last_beat_seen_by_player.get(&target_player).copied());
             }
             ServerMsg::RecordPosition { position, reply } => {
-                let _ = reply.send(self.record_position(position));
+                let player = position.player();
+                let changed = self.record_position(position);
+                self.emit_telemetry(DjLinkTelemetryKind::Position, player);
+                let _ = reply.send(changed);
             }
             ServerMsg::MonitorSnapshot { player, reply } => {
                 let _ = reply.send(self.monitor_snapshot(player));
@@ -580,14 +610,21 @@ impl ServerActor {
         (targets, self.devices.is_empty())
     }
 
-    fn expire_devices(&mut self, now: Instant) {
+    fn next_device_expiry(&self) -> Option<Instant> {
+        self.devices
+            .values()
+            .filter_map(|device| device.last_seen.checked_add(DEVICE_MAX_AGE))
+            .min()
+    }
+
+    fn expire_devices(&mut self, now: Instant) -> Vec<u8> {
         let expired = self
             .devices
             .iter()
             .filter(|(_, device)| now.saturating_duration_since(device.last_seen) > DEVICE_MAX_AGE)
             .map(|(ip, device)| (*ip, device.player_number, device.last_seen))
             .collect::<Vec<_>>();
-        for (ip, player, last_seen) in expired {
+        for &(ip, player, last_seen) in &expired {
             self.devices.remove(&ip);
             self.linked_devices.remove(&ip);
             self.db_auto_load_last_sent.remove(&ip);
@@ -608,7 +645,9 @@ impl ServerActor {
                 age_ms = now.saturating_duration_since(last_seen).as_millis(),
                 "device_expired"
             );
+            self.emit_telemetry(DjLinkTelemetryKind::Device, player);
         }
+        expired.into_iter().map(|(_, player, _)| player).collect()
     }
 
     fn should_send_link_init(&mut self, ip: Ipv4Addr) -> bool {
@@ -690,10 +729,17 @@ impl ServerActor {
     }
 
     fn record_status(&mut self, status: CdjStatusSnapshot, seen_at: Instant) -> bool {
-        self.last_status_seen_by_player
-            .insert(status.player(), seen_at);
+        let player = status.player();
+        let track_changed = self
+            .last_status_by_player
+            .get(&player)
+            .is_some_and(|previous| previous.track_id() != status.track_id());
+        if track_changed {
+            self.last_position_by_player.remove(&player);
+        }
+        self.last_status_seen_by_player.insert(player, seen_at);
         self.last_status_by_player
-            .insert(status.player(), status.clone())
+            .insert(player, status.clone())
             .map(|previous| status.log_worthy_change_from(&previous))
             .unwrap_or(true)
     }
@@ -751,20 +797,26 @@ impl ServerActor {
     }
 
     fn monitor_snapshot(&self, player: u8) -> DjLinkMonitorSnapshot {
+        let status = self.last_status_by_player.get(&player);
+        let beat = self.last_beat_by_player.get(&player);
+        let position = self.last_position_by_player.get(&player);
         DjLinkMonitorSnapshot {
-            status: self
-                .last_status_by_player
-                .get(&player)
-                .map(CdjStatusSnapshot::summary),
-            beat: self
-                .last_beat_by_player
-                .get(&player)
-                .map(CdjBeatSnapshot::summary),
-            position: self
-                .last_position_by_player
-                .get(&player)
-                .map(CdjPositionSnapshot::summary),
+            status: status.map(CdjStatusSnapshot::summary),
+            beat: beat.map(CdjBeatSnapshot::summary),
+            position: position.map(CdjPositionSnapshot::summary),
+            deck: status.map(|status| status.deck_state(position, beat)),
         }
+    }
+
+    fn emit_telemetry(&self, kind: DjLinkTelemetryKind, player: u8) {
+        let Some(telemetry) = &self.telemetry else {
+            return;
+        };
+        let _ = telemetry.send(DjLinkTelemetryEvent {
+            kind,
+            player,
+            deck: self.monitor_snapshot(player).deck,
+        });
     }
 
     fn remember_browse_context(
@@ -1035,6 +1087,13 @@ impl ServerActor {
             .map(|(_, progress)| progress)
             .max_by_key(|progress| progress.seen_at)
             .cloned()
+    }
+}
+
+async fn wait_until(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
+        None => std::future::pending().await,
     }
 }
 

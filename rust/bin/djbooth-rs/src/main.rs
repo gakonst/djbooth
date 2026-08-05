@@ -1,5 +1,9 @@
+mod a9_usb;
 mod analyzer;
+mod audio_meter;
 mod link;
+mod mixer;
+mod state_api;
 mod usb;
 mod usb_cli;
 
@@ -17,6 +21,7 @@ async fn run() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("analyzer") => analyzer::run(args),
+        Some("mixer") => mixer::run(args).await,
         Some("usb") => usb_cli::run(args),
         Some("link") => link::run(args).await,
         Some("-V" | "--version") => {
@@ -28,6 +33,7 @@ async fn run() -> Result<()> {
                 "Native runtime for djbooth.ai\n\n\
                  Usage:\n  djbooth-rs <COMMAND> [OPTIONS]\n\n\
                  Commands:\n  analyzer  Analyze audio and produce Rekordbox-compatible artifacts\n  \
+                 mixer    Read DJ mixer controls over MIDI\n  \
                  usb       Publish CDJ-compatible USB gadget images\n  \
                  link      Serve libraries over DJ Link"
             );

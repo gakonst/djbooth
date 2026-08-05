@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,6 +17,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+
+use crate::a9_usb::configure_meter_routes;
+use crate::audio_meter::connect_audio_meter;
+use crate::mixer::{Decoder, connect_midi};
+use crate::state_api::{StateApiConfig, StateApiServer};
 
 #[derive(Parser)]
 #[command(
@@ -74,6 +79,24 @@ struct ServeArgs {
     log_level: String,
     #[arg(long)]
     require_analysis: bool,
+    /// Bind the read-only, versioned booth-state HTTP/WebSocket API.
+    #[arg(long, default_value = "127.0.0.1:4182")]
+    api_bind: SocketAddr,
+    /// Case-insensitive MIDI input selector exposed through the state API.
+    #[arg(long, default_value = "DJM-A9")]
+    midi_device: String,
+    /// Case-insensitive CoreAudio input selector used for live level meters.
+    #[arg(long, default_value = "DJM-A9")]
+    audio_device: String,
+    /// Join as a Stagehand peer so compatible mixers stream controls and VU levels.
+    #[arg(long)]
+    stagehand_monitor: bool,
+    /// Optional mixer IP for a direct Stagehand handshake in addition to broadcast discovery.
+    #[arg(long, requires = "stagehand_target_mac")]
+    stagehand_target_ip: Option<Ipv4Addr>,
+    /// Link-layer mixer MAC paired with --stagehand-target-ip.
+    #[arg(long, requires = "stagehand_target_ip")]
+    stagehand_target_mac: Option<String>,
 }
 
 #[derive(Args)]
@@ -929,6 +952,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         wire_capture_path: args.wire_pcap.clone(),
         serve_extended_anlz_tags: true,
         emit_beat_clock: false,
+        stagehand_monitor: args.stagehand_monitor,
+        stagehand_target_ip: args.stagehand_target_ip,
+        stagehand_target_mac: args.stagehand_target_mac,
         tcp_track_file_side_channel: false,
         db_auto_load: false,
         auto_load_confirm: false,
@@ -937,6 +963,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         load_payload_byte_overrides: Vec::new(),
     };
     let mut server = DjLinkServer::new(config, library).await?;
+    let mut telemetry_events = server.subscribe_telemetry();
     server.start().await?;
     let listener = UnixListener::bind(&args.socket)
         .with_context(|| format!("failed to bind control socket '{}'", args.socket.display()))?;
@@ -951,6 +978,50 @@ async fn serve(args: ServeArgs) -> Result<()> {
         tracks: server.library_track_count(),
         playlists: server.library_playlist_count(),
     });
+    let (midi_connection, mut midi_events, device_name, mixer_connected) =
+        match connect_midi(&args.midi_device) {
+            Ok((connection, receiver, device_name)) => {
+                (Some(connection), Some(receiver), device_name, true)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "state_api_midi_unavailable");
+                (None, None, args.midi_device.clone(), false)
+            }
+        };
+    let state_api = StateApiServer::start(StateApiConfig {
+        bind: args.api_bind,
+        mixer_device: device_name,
+        mixer_connected,
+        djlink: server.clone(),
+    })
+    .await?;
+    let audio_meter_routing = if args.audio_device.to_ascii_lowercase().contains("djm-a9") {
+        match configure_meter_routes() {
+            Ok(routing) => {
+                tracing::info!(
+                    master_pair = routing.master_pair,
+                    channel_pairs = ?routing.channel_pairs,
+                    "a9_meter_routes_configured"
+                );
+                Some(routing)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "a9_meter_routes_unavailable");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let (audio_meter_connection, mut audio_meter_events, audio_meter_device) =
+        match connect_audio_meter(&args.audio_device) {
+            Ok((connection, receiver, name)) => (Some(connection), Some(receiver), Some(name)),
+            Err(error) => {
+                tracing::warn!(%error, "state_api_audio_meter_unavailable");
+                (None, None, None)
+            }
+        };
+    state_api.publisher().refresh_decks(&server).await?;
     println!(
         "{}",
         serde_json::to_string(&json!({
@@ -963,6 +1034,12 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "wirePcap": args.wire_pcap,
+            "stateApi": format!("http://{}", state_api.address),
+            "audioMeterDevice": audio_meter_device,
+            "audioMeterRouting": audio_meter_routing.map(|routing| json!({
+                "master": routing.master_pair,
+                "channels": routing.channel_pairs,
+            })),
             "source": {
                 "snapshot": args.library.snapshot,
                 "rekordboxDatabase": args.library.rekordbox_db,
@@ -973,6 +1050,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
     let mut control_tasks = JoinSet::new();
+    let mut decoder = Decoder::default();
     loop {
         tokio::select! {
             biased;
@@ -1001,6 +1079,47 @@ async fn serve(args: ServeArgs) -> Result<()> {
                     tracing::warn!(%error, "control_task_failed");
                 }
             }
+            raw = async {
+                match midi_events.as_mut() {
+                    Some(events) => events.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if midi_events.is_some() => {
+                let Some(raw) = raw else {
+                    tracing::warn!("state_api_midi_disconnected");
+                    state_api.publisher().set_mixer_connected(false).await?;
+                    midi_events = None;
+                    continue;
+                };
+                for event in decoder.decode_packet(&raw, false) {
+                    state_api.publisher().publish_mixer_event(&event).await?;
+                }
+            }
+            frame = async {
+                match audio_meter_events.as_mut() {
+                    Some(events) => events.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if audio_meter_events.is_some() => {
+                let Some(frame) = frame else {
+                    tracing::warn!("state_api_audio_meter_disconnected");
+                    audio_meter_events = None;
+                    continue;
+                };
+                state_api.publisher().publish_meter_frame(&frame).await?;
+            }
+            telemetry = telemetry_events.recv() => {
+                match telemetry {
+                    Ok(event) => state_api.publisher().publish_djlink_event(&server, event).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "state_api_djlink_events_lagged");
+                        state_api.publisher().refresh_decks(&server).await?;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        bail!("DJ Link telemetry stream closed");
+                    }
+                }
+            }
             signal = tokio::signal::ctrl_c() => {
                 signal.context("failed to listen for Ctrl-C")?;
                 break;
@@ -1013,6 +1132,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
     drop(stop_tx);
     drop(stop_rx);
     drop(runtime);
+    state_api.stop();
+    drop(midi_connection);
+    drop(audio_meter_connection);
     let Ok(mut server) = Arc::try_unwrap(server) else {
         bail!("DJ Link control tasks retained the server during shutdown");
     };

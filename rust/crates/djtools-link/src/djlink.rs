@@ -14,7 +14,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinHandle as TokioJoinHandle, JoinSet};
 use tracing::{debug, trace, warn};
 
@@ -52,6 +52,7 @@ use crate::nfs::{NFS_ROOT_FH, NfsState, RPC_MOUNT_PROG, RPC_NFS_PROG};
 #[cfg(test)]
 use crate::protocol::decode_nfs_name;
 use crate::protocol::keepalive::{self, KeepaliveBody, KeepaliveKind};
+use crate::protocol::stagehand;
 use crate::protocol::status;
 use crate::protocol::{be_u24, be_u32, decode_hex, rpc_parse_call, rpc_reply_header};
 use crate::search::{
@@ -157,6 +158,9 @@ pub struct DjLinkConfig {
     pub wire_capture_path: Option<PathBuf>,
     pub serve_extended_anlz_tags: bool,
     pub emit_beat_clock: bool,
+    pub stagehand_monitor: bool,
+    pub stagehand_target_ip: Option<Ipv4Addr>,
+    pub stagehand_target_mac: Option<String>,
     pub tcp_track_file_side_channel: bool,
     pub db_auto_load: bool,
     pub auto_load_confirm: bool,
@@ -215,6 +219,9 @@ impl Default for DjLinkConfig {
             wire_capture_path: None,
             serve_extended_anlz_tags: true,
             emit_beat_clock: false,
+            stagehand_monitor: false,
+            stagehand_target_ip: None,
+            stagehand_target_mac: None,
             tcp_track_file_side_channel: false,
             db_auto_load: false,
             auto_load_confirm: false,
@@ -232,6 +239,30 @@ pub struct DjLinkServer {
     load_tx: Option<mpsc::Sender<LoadCommand>>,
     status_tx: Option<Arc<UdpSocket>>,
     beat_tx: Option<Arc<UdpSocket>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DjLinkWaveformBeat {
+    pub beat: u8,
+    pub time_seconds: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DjLinkWaveform {
+    pub duration_seconds: u32,
+    pub peaks: Vec<f32>,
+    pub colors: Vec<[u8; 3]>,
+    pub beat_grid: Vec<DjLinkWaveformBeat>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkTrackMetadata {
+    pub track_id: u32,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_sec: u32,
+    pub artwork_url: Option<String>,
 }
 
 struct LoadCommand {
@@ -352,6 +383,45 @@ pub struct DjLinkMonitorSnapshot {
     pub status: Option<String>,
     pub beat: Option<String>,
     pub position: Option<String>,
+    pub deck: Option<DjLinkDeckState>,
+}
+
+/// Stable, structured telemetry for applications monitoring one physical deck.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkDeckState {
+    pub player: u8,
+    pub active: bool,
+    pub source_player: u8,
+    pub source_slot: u8,
+    pub track_type: u8,
+    pub track_id: Option<u32>,
+    pub playing: bool,
+    pub play_state: &'static str,
+    pub synced: bool,
+    pub tempo_master: bool,
+    pub bpm_hundreds: Option<u16>,
+    pub effective_bpm_hundreds: Option<u32>,
+    pub pitch_centi_percent: i32,
+    pub beat_in_bar: u8,
+    pub beat_number: Option<u32>,
+    pub track_progress_milli: Option<u16>,
+    pub track_length_sec: Option<u32>,
+    pub playhead_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DjLinkTelemetryKind {
+    Device,
+    Status,
+    Beat,
+    Position,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkTelemetryEvent {
+    pub kind: DjLinkTelemetryKind,
+    pub player: u8,
+    pub deck: Option<DjLinkDeckState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,6 +486,7 @@ impl DjLinkServer {
             .context("failed to initialize raw wire capture")?;
         let search_index = SearchIndex::new(&library);
         let (actor_tx, actor_rx) = ServerActor::channel();
+        let (telemetry_tx, _) = broadcast::channel(1_024);
         let initial_bpm = if config.emit_beat_clock { 13_005 } else { 0 };
         let state = Arc::new(ServerState {
             config,
@@ -427,6 +498,7 @@ impl DjLinkServer {
             library: Arc::new(library),
             search_index,
             actor_tx,
+            telemetry_tx,
             log_path,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(initial_bpm),
@@ -472,6 +544,41 @@ impl DjLinkServer {
             .map(|index| index + 1)
             .unwrap_or(1);
         Ok((order, track))
+    }
+
+    pub fn library_track_metadata(&self, track_id: u32) -> Option<DjLinkTrackMetadata> {
+        let track = self.state.library.tracks_by_id.get(&track_id)?;
+        Some(DjLinkTrackMetadata {
+            track_id,
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: track.album.clone(),
+            duration_sec: track.duration_sec,
+            artwork_url: track.artwork_url.clone(),
+        })
+    }
+
+    pub async fn library_waveform(&self, track_id: u32) -> Option<DjLinkWaveform> {
+        let track = self.state.library.tracks_by_id.get(&track_id)?;
+        let (peaks, colors) = if let Some(tag) = read_anlz_tag(track, "PWV4", None).await {
+            waveform_from_pwv4_tag(&tag).unwrap_or_default()
+        } else if let Some(tag) = read_anlz_tag(track, "PWAV", None).await {
+            waveform_from_pwav_tag(&tag).unwrap_or_default()
+        } else if let Some(tag) = read_anlz_tag(track, "PWV5", None).await {
+            waveform_from_pwv5_tag(&tag).unwrap_or_default()
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let beat_grid = match read_anlz_tag(track, "PQTZ", None).await {
+            Some(tag) => waveform_beats_from_pqtz_tag(&tag).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Some(DjLinkWaveform {
+            duration_seconds: track.duration_sec,
+            peaks,
+            colors,
+            beat_grid,
+        })
     }
 
     pub async fn phrase_cue_before_chorus(
@@ -792,6 +899,10 @@ impl DjLinkServer {
         self.state.monitor_snapshot(player).await
     }
 
+    pub fn subscribe_telemetry(&self) -> broadcast::Receiver<DjLinkTelemetryEvent> {
+        self.state.telemetry_tx.subscribe()
+    }
+
     pub async fn start(&mut self) -> Result<()> {
         if !self.tasks.is_empty() {
             return Ok(());
@@ -911,8 +1022,9 @@ impl DjLinkServer {
         self.beat_tx = Some(beat_tx_sock.clone());
 
         let actor_rx = self.actor_rx.take().ok_or(LinkError::RuntimeStopped)?;
-        self.tasks
-            .push(tokio::spawn(ServerActor::default().run(actor_rx)));
+        self.tasks.push(tokio::spawn(
+            ServerActor::with_telemetry(self.state.telemetry_tx.clone()).run(actor_rx),
+        ));
         let (load_tx, load_rx) = mpsc::channel(LOAD_COMMAND_QUEUE_CAPACITY);
         self.load_tx = Some(load_tx);
         self.tasks.push(tokio::spawn(run_load_command_actor(
@@ -928,6 +1040,12 @@ impl DjLinkServer {
         ));
         self.tasks
             .push(spawn_announce(self.state.clone(), keepalive_sock.clone()));
+        if self.state.config.stagehand_monitor {
+            self.tasks.push(spawn_stagehand_announce(
+                self.state.clone(),
+                keepalive_sock.clone(),
+            ));
+        }
         self.tasks
             .push(spawn_link_init(self.state.clone(), status_sock.clone()));
         self.tasks
@@ -2264,6 +2382,7 @@ struct ServerState {
     library: Arc<LibrarySnapshot>,
     search_index: SearchIndex,
     actor_tx: ServerActorSender,
+    telemetry_tx: broadcast::Sender<DjLinkTelemetryEvent>,
     log_path: Option<PathBuf>,
     cue_overrides_ms: RwLock<HashMap<u32, u32>>,
     master_bpm_hundreds: AtomicU16,
@@ -2584,6 +2703,7 @@ pub(crate) struct CdjStatusSnapshot {
     pitch_1: u32,
     pitch_2: u32,
     bpm_hundreds: u16,
+    beat_number: Option<u32>,
     beat_in_bar: u8,
     master_meaningful: u8,
     master_handoff: u8,
@@ -2662,6 +2782,10 @@ impl CdjStatusSnapshot {
         self.player
     }
 
+    pub(crate) fn track_id(&self) -> u32 {
+        self.track_id
+    }
+
     pub(crate) fn matches_track_from_source(
         &self,
         source_player: u8,
@@ -2674,12 +2798,65 @@ impl CdjStatusSnapshot {
     }
 
     pub(crate) fn is_playing(&self) -> bool {
-        self.flags & CDJ_STATUS_PLAYING_FLAG != 0
-            || matches!(self.play_state_1, 0x03 | 0x04 | 0x07 | 0x10)
+        if self.flags & CDJ_STATUS_PLAYING_FLAG != 0 {
+            return true;
+        }
+        match self.play_state_2 {
+            0x7a | 0xfa => true,
+            0x7e | 0xfe => false,
+            _ => matches!(self.play_state_1, 0x03 | 0x04 | 0x07 | 0x10),
+        }
+    }
+
+    fn play_state_label(&self) -> &'static str {
+        if !self.is_playing() && self.flags == 0x84 {
+            "cued"
+        } else {
+            cdj_play_state_1_label(self.play_state_1)
+        }
     }
 
     fn is_synced(&self) -> bool {
         self.flags & 0x10 != 0
+    }
+
+    pub(crate) fn deck_state(
+        &self,
+        position: Option<&CdjPositionSnapshot>,
+        beat: Option<&CdjBeatSnapshot>,
+    ) -> DjLinkDeckState {
+        let bpm_hundreds = beat
+            .map(|beat| beat.bpm_hundreds)
+            .unwrap_or(self.bpm_hundreds);
+        let pitch = beat.map(|beat| beat.pitch).unwrap_or(self.pitch_1);
+        DjLinkDeckState {
+            player: self.player,
+            active: self.active != 0,
+            source_player: self.source_player,
+            source_slot: self.source_slot,
+            track_type: self.track_type,
+            track_id: (self.track_id != 0).then_some(self.track_id),
+            playing: self.is_playing(),
+            play_state: self.play_state_label(),
+            synced: self.is_synced(),
+            tempo_master: self.master_meaningful != 0,
+            bpm_hundreds: (bpm_hundreds != u16::MAX).then_some(bpm_hundreds),
+            effective_bpm_hundreds: effective_bpm_hundreds(bpm_hundreds, pitch),
+            pitch_centi_percent: (pitch_percent(pitch) * 100.0).round() as i32,
+            beat_in_bar: beat
+                .map(|beat| beat.beat_in_bar)
+                .unwrap_or(self.beat_in_bar),
+            beat_number: self.beat_number,
+            track_progress_milli: position.and_then(|position| {
+                let duration_ms = u64::from(position.track_length_sec) * 1_000;
+                (duration_ms > 0).then(|| {
+                    ((u64::from(position.playhead_ms).min(duration_ms) * 1_000) / duration_ms)
+                        as u16
+                })
+            }),
+            track_length_sec: position.map(|position| position.track_length_sec),
+            playhead_ms: position.map(|position| position.playhead_ms),
+        }
     }
 
     pub(crate) fn log_worthy_change_from(&self, previous: &Self) -> bool {
@@ -2719,7 +2896,7 @@ impl CdjStatusSnapshot {
             .map(|bpm| format!("{:.2}", bpm as f64 / 100.0))
             .unwrap_or_else(|| "none".to_string());
         format!(
-            "cdj status player={} active={} src_player={} slot={} type={} track_id={} track_pos={} sort=0x{:02x} source_menu=0x{:02x}({}) cat1={} cat2={} menu_count={} flags=0x{:02x}({}) play1=0x{:02x}({}) play2=0x{:02x}({}) play3=0x{:02x}({}) pitch={pitch:.3}% bpm={} effective_bpm={effective_bpm} beat_in_bar={} master={} handoff=0x{:02x} master_tempo={} key={} key_shift_cents={} p4={} bar={} buf={}/{} loop={}",
+            "cdj status player={} active={} src_player={} slot={} type={} track_id={} track_pos={} sort=0x{:02x} source_menu=0x{:02x}({}) cat1={} cat2={} menu_count={} flags=0x{:02x}({}) play1=0x{:02x}({}) play2=0x{:02x}({}) play3=0x{:02x}({}) pitch={pitch:.3}% bpm={} effective_bpm={effective_bpm} beat_number={} beat_in_bar={} master={} handoff=0x{:02x} master_tempo={} key={} key_shift_cents={} p4={} bar={} buf={}/{} loop={}",
             self.player,
             self.active,
             self.source_player,
@@ -2743,6 +2920,9 @@ impl CdjStatusSnapshot {
             cdj_play_state_3_label(self.play_state_3),
             base_bpm
                 .map(|bpm| format!("{bpm:.2}"))
+                .unwrap_or_else(|| "none".to_string()),
+            self.beat_number
+                .map(|beat| beat.to_string())
                 .unwrap_or_else(|| "none".to_string()),
             self.beat_in_bar,
             self.master_meaningful,
@@ -3973,6 +4153,10 @@ fn parse_cdj_status(packet: &[u8]) -> Option<CdjStatusSnapshot> {
         pitch_1: be_u32(packet.get(0x8c..0x90)?),
         pitch_2: be_u32(packet.get(0x98..0x9c)?),
         bpm_hundreds: u16::from_be_bytes(packet.get(0x92..0x94)?.try_into().ok()?),
+        beat_number: match be_u32(packet.get(0xa0..0xa4)?) {
+            u32::MAX => None,
+            beat => Some(beat),
+        },
         beat_in_bar: packet[0xa6],
         master_meaningful: packet[0x9e],
         master_handoff: packet[0x9f],
@@ -4628,6 +4812,85 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
             }
         }
     })
+}
+
+fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
+    tokio::spawn(async move {
+        const MODEL: &str = "Stagehand";
+        let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
+        let mac = match parse_mac(&state.mac_addr) {
+            Ok(mac) => mac,
+            Err(err) => {
+                warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
+                return;
+            }
+        };
+        let runtime_number = 0x80
+            | (state.bind_ip.octets()[3] ^ (std::process::id() as u8)).wrapping_add(0x3a) & 0x7f;
+
+        for _ in 0..3 {
+            let packet = stagehand::build_announcement(MODEL);
+            if let Err(err) =
+                send_stagehand_packet(&state, &sock, &packet, target, "stagehand announcement")
+                    .await
+            {
+                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_announcement_failed");
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        for iteration in 1..=3 {
+            let packet = stagehand::build_claim(MODEL, state.bind_ip, mac, iteration);
+            if let Err(err) =
+                send_stagehand_packet(&state, &sock, &packet, target, "stagehand claim").await
+            {
+                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_claim_failed");
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+
+        tracing::info!(
+            target: "djtools_link::stagehand",
+            runtime_number,
+            ip = %state.bind_ip,
+            "stagehand_joined"
+        );
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            interval.tick().await;
+            let packet = stagehand::build_keepalive(MODEL, runtime_number, state.bind_ip, mac, 1);
+            if let Err(err) =
+                send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
+            {
+                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
+            }
+        }
+    })
+}
+
+async fn send_stagehand_packet(
+    state: &ServerState,
+    sock: &UdpSocket,
+    packet: &[u8],
+    broadcast_target: SocketAddrV4,
+    context: &str,
+) -> std::io::Result<usize> {
+    let sent = send_udp_packet(state, sock, packet, broadcast_target, context).await?;
+    if let (Some(target_ip), Some(target_mac)) = (
+        state.config.stagehand_target_ip,
+        state.config.stagehand_target_mac.as_deref(),
+    ) {
+        send_raw_udp_packet_to_mac(
+            state,
+            sock.local_addr()?.port(),
+            target_ip,
+            KEEPALIVE_PORT,
+            target_mac,
+            packet,
+            context,
+        )
+        .await?;
+    }
+    Ok(sent)
 }
 
 fn spawn_link_init(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
@@ -5361,6 +5624,25 @@ fn spawn_beat_rx(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHand
                 continue;
             }
             let packet = &buf[..len];
+            if stagehand::is_a9_vu(packet) {
+                tracing::trace!(
+                    target: "djtools_link::stagehand",
+                    %addr,
+                    len,
+                    "a9_vu"
+                );
+                continue;
+            }
+            if stagehand::is_peer_packet(packet) {
+                trace!(
+                    target: "djtools_link::stagehand",
+                    %addr,
+                    len,
+                    packet_type = packet.get(0x0a).copied().unwrap_or_default(),
+                    "stagehand_beat_packet"
+                );
+                continue;
+            }
             if let Some(beat) = parse_cdj_beat(packet) {
                 let changed = state.record_beat(beat.clone(), Instant::now()).await;
                 if changed {
@@ -5466,6 +5748,25 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
                 continue;
             }
             let packet = &buf[..len];
+            if stagehand::is_a9_mixer_state(packet) {
+                tracing::trace!(
+                    target: "djtools_link::stagehand",
+                    %addr,
+                    len,
+                    "a9_mixer_state"
+                );
+                continue;
+            }
+            if stagehand::is_peer_packet(packet) {
+                trace!(
+                    target: "djtools_link::stagehand",
+                    %addr,
+                    len,
+                    packet_type = packet.get(0x0a).copied().unwrap_or_default(),
+                    "stagehand_status_packet"
+                );
+                continue;
+            }
             let status_header = status::decode_header(packet).ok();
             if let Some((remote_player, slot, _unknown)) = parse_status_link_query_detail(packet) {
                 let reply = build_status_link_reply(
@@ -8459,6 +8760,90 @@ fn waveform_preview_from_pwav_tag(tag: &[u8], pwv2_tag: Option<&[u8]>) -> Option
     Some(out)
 }
 
+fn waveform_from_pwv5_tag(tag: &[u8]) -> Option<(Vec<f32>, Vec<[u8; 3]>)> {
+    if tag.len() < 24 || tag.get(0..4)? != b"PWV5" {
+        return None;
+    }
+    let tag_len = (be_u32(tag.get(8..12)?) as usize).min(tag.len());
+    let count = be_u32(tag.get(16..20)?) as usize;
+    let entries_len = count.checked_mul(2)?;
+    if tag_len < 24 || tag_len - 24 < entries_len {
+        return None;
+    }
+    let mut peaks = Vec::with_capacity(count);
+    let mut colors = Vec::with_capacity(count);
+    for index in 0..count {
+        let offset = 24 + index * 2;
+        let value = u16::from_be_bytes(tag.get(offset..offset + 2)?.try_into().ok()?);
+        peaks.push(f32::from((value & 0x007c) >> 2) / 31.0);
+        colors.push([
+            scale_three_bit_color((value & 0xe000) >> 13),
+            scale_three_bit_color((value & 0x1c00) >> 10),
+            scale_three_bit_color((value & 0x0380) >> 7),
+        ]);
+    }
+    Some((peaks, colors))
+}
+
+fn waveform_from_pwv4_tag(tag: &[u8]) -> Option<(Vec<f32>, Vec<[u8; 3]>)> {
+    if tag.len() < 24 || tag.get(0..4)? != b"PWV4" {
+        return None;
+    }
+    let tag_len = (be_u32(tag.get(8..12)?) as usize).min(tag.len());
+    let count = be_u32(tag.get(16..20)?) as usize;
+    let entries_len = count.checked_mul(6)?;
+    if tag_len < 24 || tag_len - 24 < entries_len {
+        return None;
+    }
+    let mut peaks = Vec::with_capacity(count);
+    let mut colors = Vec::with_capacity(count);
+    for entry in tag[24..24 + entries_len].chunks_exact(6) {
+        let boost = u16::from(entry[1]);
+        let inverse_blue = entry[2] & 0x7f;
+        let red = entry[3] & 0x7f;
+        let green = entry[4] & 0x7f;
+        let blue = entry[5] & 0x7f;
+        peaks.push(f32::from(blue.max(inverse_blue).max(red).max(green)) / 127.0);
+        colors.push([
+            ((u16::from(red) * boost) / 127).min(255) as u8,
+            ((u16::from(green) * boost) / 127).min(255) as u8,
+            ((u16::from(blue) * boost) / 127).min(255) as u8,
+        ]);
+    }
+    Some((peaks, colors))
+}
+
+fn waveform_from_pwav_tag(tag: &[u8]) -> Option<(Vec<f32>, Vec<[u8; 3]>)> {
+    if tag.get(0..4)? != b"PWAV" {
+        return None;
+    }
+    let body = anlz_tag_body(tag)?;
+    let peaks = body
+        .iter()
+        .map(|value| f32::from(value & 0x1f) / 31.0)
+        .collect::<Vec<_>>();
+    Some((peaks, Vec::new()))
+}
+
+fn waveform_beats_from_pqtz_tag(tag: &[u8]) -> Option<Vec<DjLinkWaveformBeat>> {
+    let stats = pqtz_grid_stats(tag)?;
+    let mut beats = Vec::with_capacity(stats.count);
+    for index in 0..stats.count {
+        let offset = 24 + index * 8;
+        let beat = u16::from_be_bytes(tag.get(offset..offset + 2)?.try_into().ok()?);
+        let time_ms = be_u32(tag.get(offset + 4..offset + 8)?);
+        beats.push(DjLinkWaveformBeat {
+            beat: u8::try_from(beat).ok()?,
+            time_seconds: time_ms as f32 / 1_000.0,
+        });
+    }
+    Some(beats)
+}
+
+fn scale_three_bit_color(value: u16) -> u8 {
+    ((value * 255 + 3) / 7).min(255) as u8
+}
+
 fn waveform_detail_from_pwv3_tag(tag: &[u8]) -> Option<Vec<u8>> {
     if tag.len() < 24 || tag.get(0..4)? != b"PWV3" {
         return None;
@@ -10123,6 +10508,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         packet[0x9d] = 0x09;
         packet[0x9e] = 1;
         packet[0x9f] = 0xff;
+        packet[0xa0..0xa4].copy_from_slice(&321u32.to_be_bytes());
         packet[0xa6] = 4;
         packet[0x158] = 1;
         packet[0x15c..0x15f].copy_from_slice(&[9, 0, 0]);
@@ -10145,6 +10531,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(status.source_category_1, 123);
         assert_eq!(status.source_category_2, 456);
         assert_eq!(status.menu_track_count, 68);
+        assert_eq!(status.beat_number, Some(321));
         assert_eq!(status.p4, Some(0x80));
         assert_eq!(status.bar_steps, Some(512));
         assert_eq!(status.bar_position, Some(128));
@@ -10303,6 +10690,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             pitch_1: 0x0010_8000,
             pitch_2: 0x0010_8000,
             bpm_hundreds: 12_200,
+            beat_number: Some(321),
             beat_in_bar: 1,
             master_meaningful: 1,
             master_handoff: 0xff,
@@ -10371,6 +10759,14 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         alt_moving.play_state_2 = 0xfa;
         alt_moving.play_state_3 = 0x00;
         assert!(status_is_playing(&alt_moving));
+
+        let mut ambiguous_cued = alt_moving.clone();
+        ambiguous_cued.flags = 0x84;
+        ambiguous_cued.play_state_1 = 0x03;
+        ambiguous_cued.play_state_2 = 0xfe;
+        ambiguous_cued.play_state_3 = 0x01;
+        assert!(!status_is_playing(&ambiguous_cued));
+        assert_eq!(ambiguous_cued.play_state_label(), "cued");
 
         let mut flag_playing = paused;
         flag_playing.flags |= CDJ_STATUS_PLAYING_FLAG;
@@ -12694,6 +13090,7 @@ notes: []
             pitch_1: 0x0010_0000,
             pitch_2: 0x0010_0000,
             bpm_hundreds: 12_200,
+            beat_number: Some(1),
             beat_in_bar: 1,
             master_meaningful: 1,
             master_handoff: 0xff,
@@ -12871,6 +13268,7 @@ notes: []
 
     fn test_state() -> ServerState {
         let (actor_tx, actor_rx) = ServerActor::channel();
+        let (telemetry_tx, _) = broadcast::channel(32);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(ServerActor::default().run(actor_rx));
         }
@@ -12891,6 +13289,7 @@ notes: []
             library,
             search_index,
             actor_tx,
+            telemetry_tx,
             log_path: None,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(0),

@@ -1,6 +1,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) mod keepalive;
+pub(crate) mod stagehand;
 pub(crate) mod status;
 
 pub const DJLINK_MAGIC: &[u8; 10] = b"Qspt1WmJOL";
