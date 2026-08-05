@@ -32,6 +32,19 @@ The Python source at the pinned revision is the behavioral specification. Tests 
 
 ## Decisions
 
+### 2026-08-04 — typo-tolerant Spotify metadata checkpoint
+
+- Kept catalog matching conservative while adding a broad-search fallback for spelling drift,
+  two-letter artist territory aliases, punctuation-only title differences, and duration-supported
+  radio/extended selection. Obviously truncated sub-two-minute local durations stop vetoing an
+  otherwise near-exact title and complete artist credit.
+- Recomputed same-release local consensus after catalog enrichment so duplicate library rows gain
+  trusted release metadata in the same run. Regression coverage includes `Baila Conmigao`,
+  `Sexy MF`, and `What Is Luv`; the complete tracks package remains at 291 passing tests.
+- Applied and verified four live-library repairs. Album/label/genre coverage moved 150→154,
+  139→143, and 126→130; the guarded backup is
+  `tracks-ts-backups/rekordbox-20260805T004317-064Z`.
+
 ### 2026-08-03 — provider-independent release metadata checkpoint
 
 - Added album artist, label, and genre to the durable acquisition identity and audio-tag contract.
