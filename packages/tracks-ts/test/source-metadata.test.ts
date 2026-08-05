@@ -160,6 +160,55 @@ describe("exact source metadata", () => {
     });
   });
 
+  test("retries Spotify catalog lookup broadly for a safe spelling correction", async () => {
+    const queries: string[] = [];
+    const track = {
+      id: "baila",
+      name: "Baila Conmigo",
+      duration_ms: 327_000,
+      external_ids: { isrc: "US83Z2552735" },
+      artists: [{ id: "artist-1", name: "MARé (AM)" }],
+      album: { id: "album-1", name: "Baila Conmigo", release_date: "2025" },
+    };
+    const client = new SpotifySourceMetadataClient({
+      async raw<T>(_method: string, path: string, options?: { query?: Record<string, unknown> }) {
+        if (path === "search") {
+          const query = String(options?.query?.q ?? "");
+          queries.push(query);
+          return {
+            tracks: { items: query.startsWith('track:"') ? [] : [track] },
+          } as T;
+        }
+        if (path === "tracks/baila") return track as T;
+        if (path === "albums/album-1")
+          return {
+            name: "Baila Conmigo",
+            label: "Maccabi House",
+            release_date: "2025-11-28",
+          } as T;
+        return { genres: ["organic house"] } as T;
+      },
+    });
+
+    await expect(
+      client.lookupCatalog({
+        title: "Baila Conmigao",
+        artists: ["Maré (Am)"],
+        durationSeconds: 327,
+      }),
+    ).resolves.toMatchObject({
+      title: "Baila Conmigo",
+      album: "Baila Conmigo",
+      label: "Maccabi House",
+      genre: "organic house",
+      recordingId: "baila",
+    });
+    expect(queries).toEqual([
+      'track:"Baila Conmigao" artist:"Maré (Am)"',
+      "Baila Conmigao Maré (Am)",
+    ]);
+  });
+
   test("finds relocated sidecars by canonical source URL", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-sidecars-"));
     const nested = join(root, "relocated");

@@ -467,6 +467,18 @@ export async function backfillRekordboxMetadata(
     const cache = catalog.cacheStats();
     if (cache) providers[catalog.provider]!.cache = cache;
   }
+  const enrichedDrafts = new Map(drafts.map((draft) => [draft.track.id, draft.value]));
+  const enrichedReleaseMetadata = localReleaseConsensus(
+    allTracks.map((track) => enrichedDrafts.get(track.id) ?? track),
+  );
+  for (const draft of drafts) {
+    if (draft.value.artist)
+      mergeMissing(
+        draft,
+        enrichedReleaseMetadata.get(releaseFamilyKey(draft.value)),
+        "local-release",
+      );
+  }
   const changes = drafts.flatMap((draft) => changedDraft(draft));
   const projected = tracks.map(
     (track) => drafts.find((draft) => draft.track.id === track.id)!.value,

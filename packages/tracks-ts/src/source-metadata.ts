@@ -9,7 +9,13 @@ import { AppleMetadataClient } from "./apple-metadata.js";
 import type { CatalogMetadata, CatalogMetadataQuery } from "./catalog-metadata.js";
 import { DeezerMetadataClient } from "./deezer-metadata.js";
 import type { SpotifyRawClient } from "./integrations/spotify-cache.js";
-import { parseSpotifySearchTracks, scoreSpotifyCandidates } from "./spotify-enrichment.js";
+import {
+  isSafeSpotifyAutomaticMatch,
+  parseSpotifySearchTracks,
+  scoreSpotifyCandidates,
+  type SpotifyScoringTarget,
+  type SpotifyTrackCandidate,
+} from "./spotify-enrichment.js";
 
 export type ExactSourceProvider =
   | "apple"
@@ -184,26 +190,37 @@ export class SpotifySourceMetadataClient implements ExactSourceMetadataClient {
   }
 
   async lookupCatalog(query: CatalogMetadataQuery): Promise<CatalogMetadata | undefined> {
-    const response = await this.#client.raw("GET", "search", {
-      query: {
-        q: query.isrc
-          ? `isrc:${query.isrc}`
-          : `track:"${spotifySearchTerm(query.title)}" artist:"${spotifySearchTerm(query.artists.join(" "))}"`,
-        type: "track",
-        limit: 10,
-      },
-    });
-    const matches = scoreSpotifyCandidates(
-      {
-        title: query.title,
-        artist: query.artists.join(", "),
-        ...(query.isrc ? { isrc: query.isrc } : {}),
-        ...(query.durationSeconds ? { durationMs: query.durationSeconds * 1_000 } : {}),
-      },
-      parseSpotifySearchTracks(response),
-    );
-    const best = matches[0];
-    if (!best || best.score < 0.9 || best.score - (matches[1]?.score ?? 0) < 0.05) return undefined;
+    const title = spotifySearchTerm(query.title);
+    const artists = spotifySearchTerm(query.artists.join(" "));
+    const searches = query.isrc
+      ? [`isrc:${query.isrc}`]
+      : [`track:"${title}" artist:"${artists}"`, `${title} ${artists}`];
+    const target: SpotifyScoringTarget = {
+      title: query.title,
+      artist: query.artists.join(", "),
+      ...(query.isrc ? { isrc: query.isrc } : {}),
+      ...(query.durationSeconds ? { durationMs: query.durationSeconds * 1_000 } : {}),
+    };
+    const candidates = new Map<string, SpotifyTrackCandidate>();
+    let best: ReturnType<typeof scoreSpotifyCandidates>[number] | undefined;
+    for (const search of searches) {
+      const response = await this.#client.raw("GET", "search", {
+        query: { q: search, type: "track", limit: 10 },
+      });
+      for (const candidate of parseSpotifySearchTracks(response))
+        candidates.set(candidate.id, candidate);
+      const safe = scoreSpotifyCandidates(target, [...candidates.values()]).filter(
+        (candidate) =>
+          candidate.score >= (query.isrc ? 1 : 0.82) &&
+          isSafeSpotifyAutomaticMatch(target, candidate),
+      );
+      const selected = safe[0];
+      if (selected && selected.score - (safe[1]?.score ?? 0) >= 0.05) {
+        best = selected;
+        break;
+      }
+    }
+    if (!best) return undefined;
     const metadata = await this.lookup(`https://open.spotify.com/track/${best.id}`);
     if (!metadata) return undefined;
     return {

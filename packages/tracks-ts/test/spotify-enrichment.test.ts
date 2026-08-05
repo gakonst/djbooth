@@ -4,6 +4,7 @@ import { createManifest, parseManifest, type SetManifest } from "../src/manifest
 import {
   canonicalizeSpotifyAmbiguities,
   enrichSpotifyManifest,
+  isSafeSpotifyAutomaticMatch,
   scoreSpotifyCandidates,
   type SpotifySearchClient,
 } from "../src/spotify-enrichment.js";
@@ -352,6 +353,50 @@ describe("Spotify manifest enrichment", () => {
       expect.objectContaining({ id: "long", score: 1 }),
       expect.objectContaining({ id: "short", score: 0.9 }),
     ]);
+  });
+
+  test("safely handles catalog typos, inferred versions, and bogus short durations", () => {
+    const typoTarget = { artist: "Maré (Am)", title: "Baila Conmigao", durationMs: 327_000 };
+    const typo = {
+      id: "baila",
+      uri: "spotify:track:baila",
+      name: "Baila Conmigo",
+      artists: ["MARé (AM)"],
+      durationMs: 327_000,
+    };
+    const extendedTarget = { artist: "Jackie & AVIV SAB", title: "Sexy MF", durationMs: 333_000 };
+    const radio = {
+      id: "radio",
+      uri: "spotify:track:radio",
+      name: "Sexy M.F.",
+      artists: ["Jackie (IT)", "AVIV SAB"],
+      durationMs: 217_000,
+    };
+    const extended = {
+      ...radio,
+      id: "extended",
+      uri: "spotify:track:extended",
+      name: "Sexy M.F. - Extended Mix",
+      durationMs: 343_000,
+    };
+    const shortTarget = {
+      artist: "Mita Gami & Rafael (IL)",
+      title: "What Is Luv",
+      durationMs: 100_000,
+    };
+    const fullRecording = {
+      id: "what-is-luv",
+      uri: "spotify:track:what-is-luv",
+      name: "What Is Luv",
+      artists: ["Mita Gami", "Rafael"],
+      durationMs: 234_000,
+    };
+
+    expect(scoreSpotifyCandidates(typoTarget, [typo])[0]!.score).toBeGreaterThanOrEqual(0.82);
+    expect(isSafeSpotifyAutomaticMatch(typoTarget, typo)).toBe(true);
+    expect(isSafeSpotifyAutomaticMatch(extendedTarget, radio)).toBe(false);
+    expect(isSafeSpotifyAutomaticMatch(extendedTarget, extended)).toBe(true);
+    expect(isSafeSpotifyAutomaticMatch(shortTarget, fullRecording)).toBe(true);
   });
 
   test("records request failures without discarding other entries", async () => {

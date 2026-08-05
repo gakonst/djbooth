@@ -199,7 +199,7 @@ export async function enrichSpotifyManifest(
           runnerUp !== undefined && best.score - runnerUp.score < resolved.ambiguityMargin;
         if (
           best.score >= resolved.minimumMatchScore &&
-          isSafeAutomaticMatch(target, best) &&
+          isSafeSpotifyAutomaticMatch(target, best) &&
           !close
         ) {
           entry.spotify = {
@@ -287,7 +287,7 @@ export function canonicalizeSpotifyAmbiguities(
       ...(entry.identity.isrc ? { isrc: entry.identity.isrc } : {}),
     };
     const safe = entry.spotify.candidates.filter(
-      (candidate) => candidate.score >= 0.84 && isSafeAutomaticMatch(target, candidate),
+      (candidate) => candidate.score >= 0.84 && isSafeSpotifyAutomaticMatch(target, candidate),
     );
     if (!safe.length) continue;
     const selected = safe.toSorted((left, right) =>
@@ -494,11 +494,21 @@ function titleSimilarity(expected: string, candidate: string): number {
   const expectedTokens = tokenSet(expected);
   const candidateTokens = tokenSet(candidate);
   const overlap = intersectionSize(expectedTokens, candidateTokens);
-  if (!overlap) return 0;
-  const recall = overlap / expectedTokens.size;
-  const precision = overlap / candidateTokens.size;
-  const f1 = (2 * precision * recall) / (precision + recall);
-  return f1 * 0.55 + recall * 0.45;
+  const tokenScore = overlap
+    ? (() => {
+        const recall = overlap / expectedTokens.size;
+        const precision = overlap / candidateTokens.size;
+        const f1 = (2 * precision * recall) / (precision + recall);
+        return f1 * 0.55 + recall * 0.45;
+      })()
+    : 0;
+  const expectedBase = withoutVersionWords(expected);
+  const candidateBase = withoutVersionWords(candidate);
+  return Math.max(
+    tokenScore,
+    editSimilarity(expectedBase, candidateBase),
+    editSimilarity(expectedBase.replaceAll(" ", ""), candidateBase.replaceAll(" ", "")),
+  );
 }
 
 function artistSimilarity(expected: string, candidateArtists: readonly string[]): number {
@@ -520,7 +530,7 @@ function artistRecall(expected: string, candidateArtists: readonly string[]): nu
   );
 }
 
-function isSafeAutomaticMatch(
+export function isSafeSpotifyAutomaticMatch(
   target: SpotifyScoringTarget,
   candidate: SpotifyTrackCandidate,
 ): boolean {
@@ -530,10 +540,24 @@ function isSafeAutomaticMatch(
   const actual = normalizeMatchText(candidate.name);
   if (titleSimilarity(expected, actual) < 0.82) return false;
   if (artistRecall(target.artist, candidate.artists) < 0.75) return false;
-  if (versionPenalty(expected, actual) > 0) return false;
+  const durationRatio = durationDifferenceRatio(target.durationMs, candidate.durationMs);
+  if (
+    versionPenalty(expected, actual) > 0 &&
+    !(
+      versionWords(expected).size === 0 &&
+      versionWords(actual).size > 0 &&
+      durationRatio !== undefined &&
+      durationRatio <= 0.05
+    )
+  )
+    return false;
   if (target.durationMs !== undefined && candidate.durationMs !== undefined) {
-    const ratio = Math.abs(target.durationMs - candidate.durationMs) / target.durationMs;
-    if (ratio > 0.12) return false;
+    if (
+      durationRatio !== undefined &&
+      durationRatio > 0.12 &&
+      !isObviouslyUnreliableTargetDuration(target, candidate)
+    )
+      return false;
   }
   return true;
 }
@@ -590,6 +614,39 @@ function durationSimilarity(
   return 0;
 }
 
+function durationDifferenceRatio(
+  expectedDurationMs: number | undefined,
+  candidateDurationMs: number | undefined,
+): number | undefined {
+  if (
+    expectedDurationMs === undefined ||
+    candidateDurationMs === undefined ||
+    expectedDurationMs <= 0 ||
+    candidateDurationMs <= 0
+  )
+    return undefined;
+  return Math.abs(expectedDurationMs - candidateDurationMs) / expectedDurationMs;
+}
+
+function isObviouslyUnreliableTargetDuration(
+  target: SpotifyScoringTarget,
+  candidate: SpotifyTrackCandidate,
+): boolean {
+  if (
+    target.durationMs === undefined ||
+    candidate.durationMs === undefined ||
+    target.durationMs >= 120_000 ||
+    candidate.durationMs < 180_000
+  )
+    return false;
+  return (
+    titleSimilarity(
+      normalizeMatchText(expectedTitle(target)),
+      normalizeMatchText(candidate.name),
+    ) >= 0.95 && artistRecall(target.artist, candidate.artists) >= 0.95
+  );
+}
+
 function versionPenalty(expected: string, candidate: string): number {
   const expectedVersions = versionWords(expected);
   const candidateVersions = versionWords(candidate);
@@ -602,12 +659,36 @@ function versionWords(value: string): Set<string> {
   return new Set([...tokenSet(value)].filter((word) => VERSION_WORDS.has(word)));
 }
 
+function withoutVersionWords(value: string): string {
+  return [...tokenSet(value)].filter((word) => !VERSION_WORDS.has(word)).join(" ");
+}
+
+function editSimilarity(left: string, right: string): number {
+  if (!left || !right) return 0;
+  if (left === right) return 1;
+  const prior = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    let diagonal = prior[0]!;
+    prior[0] = leftIndex;
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const above = prior[rightIndex]!;
+      prior[rightIndex] = Math.min(
+        prior[rightIndex]! + 1,
+        prior[rightIndex - 1]! + 1,
+        diagonal + Number(left[leftIndex - 1] !== right[rightIndex - 1]),
+      );
+      diagonal = above;
+    }
+  }
+  return 1 - prior[right.length]! / Math.max(left.length, right.length);
+}
+
 function tokenSet(value: string): Set<string> {
   return new Set(normalizeMatchText(value).split(" ").filter(Boolean));
 }
 
 function artistTokens(value: string): Set<string> {
-  const tokens = tokenSet(value);
+  const tokens = tokenSet(value.replace(/\(\s*[a-z]{2,3}\s*\)/giu, " "));
   for (const connector of ["and", "versus", "vs", "x"]) tokens.delete(connector);
   return tokens;
 }
