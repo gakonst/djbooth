@@ -233,7 +233,6 @@ pub(crate) enum LoadProgressRecordResult {
 pub(crate) struct ServerActor {
     devices: HashMap<Ipv4Addr, LinkDevice>,
     linked_devices: HashSet<Ipv4Addr>,
-    link_init_sent_devices: HashSet<Ipv4Addr>,
     last_link_init_broadcast: Option<Instant>,
     db_auto_load_last_sent: HashMap<Ipv4Addr, (u32, u16, Instant)>,
     load_ack_by_ip: HashMap<Ipv4Addr, Instant>,
@@ -591,7 +590,6 @@ impl ServerActor {
         for (ip, player, last_seen) in expired {
             self.devices.remove(&ip);
             self.linked_devices.remove(&ip);
-            self.link_init_sent_devices.remove(&ip);
             self.db_auto_load_last_sent.remove(&ip);
             self.load_ack_by_ip.remove(&ip);
             self.db_query_counts.remove(&ip);
@@ -614,7 +612,7 @@ impl ServerActor {
     }
 
     fn should_send_link_init(&mut self, ip: Ipv4Addr) -> bool {
-        !self.linked_devices.contains(&ip) && self.link_init_sent_devices.insert(ip)
+        !self.linked_devices.contains(&ip)
     }
 
     fn should_retry_link_init_broadcast(&mut self, min_interval: Duration) -> bool {
@@ -1103,17 +1101,27 @@ mod tests {
         stale.last_seen = Instant::now() - DEVICE_MAX_AGE - Duration::from_secs(1);
         actor.devices.insert(ip, stale);
         actor.linked_devices.insert(ip);
-        actor.link_init_sent_devices.insert(ip);
         actor.db_query_counts.insert(ip, 4);
 
         assert!(actor.devices_sorted().is_empty());
         assert_eq!(actor.device_count(), 1);
         assert!(!actor.linked_devices.contains(&ip));
-        assert!(!actor.link_init_sent_devices.contains(&ip));
         assert!(!actor.db_query_counts.contains_key(&ip));
 
         assert!(actor.record_device(test_device(3, ip)));
         assert_eq!(actor.devices_sorted().len(), 1);
+    }
+
+    #[test]
+    fn actor_retries_link_init_until_deck_acknowledges() {
+        let mut actor = ServerActor::default();
+        let ip = Ipv4Addr::new(169, 254, 7, 4);
+
+        assert!(actor.should_send_link_init(ip));
+        assert!(actor.should_send_link_init(ip));
+
+        actor.linked_devices.insert(ip);
+        assert!(!actor.should_send_link_init(ip));
     }
 
     #[tokio::test]

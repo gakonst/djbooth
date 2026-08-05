@@ -12,6 +12,10 @@ pub enum LinkError {
     TrackSelectorNotFound { selector: String },
     #[error("route probe produced IPv6 address")]
     RouteProbeIpv6,
+    #[error(
+        "no active non-tunnel IPv4 interface available for DJ Link; connect Ethernet or pass --bind-ip"
+    )]
+    NoDjLinkInterface,
     #[error("raw UDP payload must not be empty")]
     RawUdpPayloadEmpty,
     #[error("DJ Link runtime is stopped")]

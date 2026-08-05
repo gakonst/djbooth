@@ -11,6 +11,7 @@ import {
   listDjLinkDevices,
   loadDjLinkTrack,
   monitorDjLink,
+  prepareDjLinkTrack,
   probeDjLinkDevice,
   runDjLink,
   runRekordboxDjLink,
@@ -77,6 +78,7 @@ const runningOutput = z.object({
   playlists: z.number().int().nonnegative(),
   uptimeMs: z.number().nonnegative(),
   remoteTransportSupported: z.literal(false),
+  remoteDeckPreparationSupported: z.boolean(),
 });
 
 const statusOutput = z.union([
@@ -102,6 +104,19 @@ const loadOutput = z.object({
   loaded: z.literal(true),
   playing: z.literal(false),
   transportNote: z.string(),
+});
+
+const prepareOutput = loadOutput.extend({
+  cue: z.object({
+    kind: z.literal("before-chorus"),
+    phraseBeat: z.number().int().positive(),
+    cueBeat: z.number().int().positive(),
+    cueMs: z.number().int().nonnegative(),
+    barsBefore: z.number().int().nonnegative(),
+  }),
+  tempoBpm: z.number().min(40).max(300),
+  tempoSyncRequested: z.literal(true),
+  tempoConfirmed: z.boolean(),
 });
 
 const searchOutput = z.object({
@@ -477,6 +492,45 @@ djlinkCli.command("load", {
       return await loadDjLinkTrack({
         selector: c.args.track,
         player: c.options.player,
+        repeat: c.options.repeat,
+        intervalMs: c.options.intervalMs,
+      });
+    } catch (error) {
+      return fail(c, error);
+    }
+  },
+});
+
+djlinkCli.command("prepare", {
+  description:
+    "Load a track, cue before its first Rekordbox-analyzed chorus, and set deck tempo with DJ Link Sync; PLAY remains physical.",
+  args: z.object({
+    track: z
+      .string()
+      .min(1)
+      .describe("Content/track ID, manifest order, Spotify ID, title, or artist-title"),
+  }),
+  options: z.object({
+    barsBefore: z
+      .number()
+      .int()
+      .min(0)
+      .max(32)
+      .default(1)
+      .describe("Beat-grid bars before the first chorus"),
+    bpm: z.number().min(40).max(300).describe("Target deck BPM"),
+    intervalMs: z.number().int().min(10).max(5_000).default(250),
+    player: z.number().int().min(1).max(6).default(3).describe("Target CDJ player number"),
+    repeat: z.number().int().min(1).max(5).default(3),
+  }),
+  output: prepareOutput,
+  async run(c) {
+    try {
+      return await prepareDjLinkTrack({
+        selector: c.args.track,
+        player: c.options.player,
+        bpm: c.options.bpm,
+        barsBefore: c.options.barsBefore,
         repeat: c.options.repeat,
         intervalMs: c.options.intervalMs,
       });

@@ -133,6 +133,19 @@ is the safe physical-presence check when an active link yields no announcements.
 Normal workflow may discover, browse, serve, and load/cue a verified local
 recording. Physical PLAY remains the default.
 
+Explicit phrase-aware preparation may also:
+
+- decode the track's `PSSI` phrase analysis and `PQTZ` beat grid;
+- expose a session-only RemoteDB memory cue at a selected grid beat;
+- send `0x34` with Auto Cue Level `0x88` (Memory), Auto Cue `0x81` (on),
+  and Tempo Range `0x83` (Wide);
+- advertise a requested BPM in master mixer-status (`0x29`) and beat (`0x28`)
+  packets, then unicast Sync On (`0x2a`, command `0x10`) to the target deck.
+
+The command confirms load from CDJ status and separately reports whether the
+deck's effective BPM converged. It does not emit PLAY, pause, seek, or Stagehand
+transport packets.
+
 Unsafe or unproven packets (`0x17` empty hot-cue bank, zero-valued `0x1b` CDJ
 renew, Stagehand candidates, arbitrary raw UDP) stay behind explicit unsafe
 commands and are never emitted by discovery, browsing, or loading.

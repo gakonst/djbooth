@@ -34,11 +34,23 @@ describe("DJ Link CLI", () => {
         "devices",
         "probe",
         "load",
+        "prepare",
         "search",
         "monitor",
         "stop",
       ]),
     );
+  });
+
+  it("documents phrase-aware deck preparation", async () => {
+    const { output, exitCode } = await serve(djlinkCli, ["prepare", "--help"]);
+
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("djlink prepare <track>");
+    expect(output).toContain("first Rekordbox-analyzed chorus");
+    expect(output).toContain("--bpm <number>");
+    expect(output).toContain("--bars-before <number>");
+    expect(output).toContain("PLAY remains physical");
   });
 
   it("retains scoped help when mounted under music", async () => {

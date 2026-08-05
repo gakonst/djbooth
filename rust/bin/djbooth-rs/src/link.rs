@@ -189,6 +189,20 @@ struct LoadParams {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrepareParams {
+    player: u8,
+    track_id: u32,
+    bpm_hundreds: u16,
+    #[serde(default = "default_bars_before")]
+    bars_before: u16,
+    #[serde(default = "default_load_repeat")]
+    repeat: usize,
+    #[serde(default = "default_load_interval_ms")]
+    interval_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
 struct PlayerParams {
     player: u8,
 }
@@ -1063,6 +1077,7 @@ async fn dispatch_control(
             "playlists": runtime.playlists,
             "uptimeMs": runtime.started.elapsed().as_millis(),
             "remoteTransportSupported": false,
+            "remoteDeckPreparationSupported": true,
         })),
         "devices" => {
             let devices = server
@@ -1175,6 +1190,43 @@ async fn dispatch_control(
                 "loaded": true,
                 "playing": false,
                 "transportNote": "CDJ-3000 remote play/pause is not a confirmed DJ Link command; press PLAY on the deck.",
+            }))
+        }
+        "prepare" => {
+            let params = serde_json::from_value::<PrepareParams>(request.params.clone())
+                .context("invalid prepare params")?;
+            let cue = server
+                .phrase_cue_before_chorus(params.track_id, params.bars_before)
+                .await?;
+            server.set_memory_cue_override(params.track_id, cue.cue_ms)?;
+            let sent = server
+                .send_prepared_track(
+                    params.player,
+                    params.track_id,
+                    params.repeat.max(1),
+                    Duration::from_millis(params.interval_ms.max(10)),
+                )
+                .await?;
+            let tempo_confirmed = server
+                .set_player_bpm(params.player, params.bpm_hundreds)
+                .await?;
+            Ok(json!({
+                "player": params.player,
+                "trackId": params.track_id,
+                "packetsSent": sent,
+                "loaded": true,
+                "playing": false,
+                "cue": {
+                    "kind": "before-chorus",
+                    "phraseBeat": cue.phrase_beat,
+                    "cueBeat": cue.cue_beat,
+                    "cueMs": cue.cue_ms,
+                    "barsBefore": cue.bars_before,
+                },
+                "tempoBpm": f64::from(params.bpm_hundreds) / 100.0,
+                "tempoSyncRequested": true,
+                "tempoConfirmed": tempo_confirmed,
+                "transportNote": "Track loaded at a generated memory cue with deck Sync enabled; PLAY remains physical.",
             }))
         }
         "stop" => Ok(json!({ "stopping": true })),
@@ -1311,6 +1363,10 @@ fn default_load_repeat() -> usize {
 
 fn default_load_interval_ms() -> u64 {
     250
+}
+
+fn default_bars_before() -> u16 {
+    1
 }
 
 fn default_arp_probe_timeout_ms() -> u64 {

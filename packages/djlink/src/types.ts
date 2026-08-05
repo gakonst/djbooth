@@ -116,6 +116,7 @@ export type DjLinkServerStatus = {
   playlists: number;
   uptimeMs: number;
   remoteTransportSupported: false;
+  remoteDeckPreparationSupported: boolean;
 };
 
 /** No active runtime was found. */
@@ -181,6 +182,20 @@ export type DjLinkLoadResult = {
   loaded: true;
   playing: false;
   transportNote: string;
+};
+
+/** Result of a phrase-aware remote deck preparation request. */
+export type DjLinkPrepareResult = DjLinkLoadResult & {
+  cue: {
+    kind: "before-chorus";
+    phraseBeat: number;
+    cueBeat: number;
+    cueMs: number;
+    barsBefore: number;
+  };
+  tempoBpm: number;
+  tempoSyncRequested: true;
+  tempoConfirmed: boolean;
 };
 
 /** Complete Rekordbox library is serving and visible to at least one CDJ. */

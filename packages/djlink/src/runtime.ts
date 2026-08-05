@@ -17,6 +17,7 @@ import type {
   DjLinkDoctorResult,
   DjLinkLoadResult,
   DjLinkMonitorResult,
+  DjLinkPrepareResult,
   DjLinkRunResult,
   DjLinkSearchMode,
   DjLinkSearchResult,
@@ -88,6 +89,11 @@ export type LoadDjLinkOptions = {
   repeat?: number;
   intervalMs?: number;
   env?: NodeJS.ProcessEnv;
+};
+
+export type PrepareDjLinkOptions = LoadDjLinkOptions & {
+  bpm: number;
+  barsBefore?: number;
 };
 
 export type ListDjLinkDevicesOptions = {
@@ -451,6 +457,48 @@ export async function loadDjLinkTrack(options: LoadDjLinkOptions): Promise<DjLin
   };
 }
 
+/** Load at a phrase-aware cue and set the target player tempo through DJ Link Sync. */
+export async function prepareDjLinkTrack(
+  options: PrepareDjLinkOptions,
+): Promise<DjLinkPrepareResult> {
+  const env = options.env ?? process.env;
+  const state = await requireRunningState(env);
+  let track: NativeResolvedTrack;
+  if (state.sourceKind === "manifest") {
+    if (!state.snapshotPath) {
+      throw new DjLinkError("INVALID_STATE", "Manifest-backed DJ Link state has no snapshot path");
+    }
+    track = resolveDjLinkTrack(await readSnapshot(state.snapshotPath), options.selector);
+  } else {
+    track = await requestControl<NativeResolvedTrack>(state.socketPath, "resolveTrack", {
+      selector: options.selector,
+    });
+  }
+  const bpmHundreds = Math.round(options.bpm * 100);
+  if (!Number.isSafeInteger(bpmHundreds) || bpmHundreds < 4_000 || bpmHundreds > 30_000) {
+    throw new DjLinkError("CONTROL_FAILED", "BPM must be between 40.00 and 300.00");
+  }
+  const result = await requestControl<NativePrepareResult>(
+    state.socketPath,
+    "prepare",
+    {
+      player: options.player,
+      trackId: track.trackId,
+      bpmHundreds,
+      barsBefore: options.barsBefore ?? 1,
+      repeat: options.repeat ?? 3,
+      intervalMs: options.intervalMs ?? 250,
+    },
+    15_000,
+  );
+  return {
+    ...result,
+    order: track.order,
+    title: track.title,
+    artist: track.artist,
+  };
+}
+
 /** Validate, start/resume, discover, and cue one manifest track without remote PLAY. */
 export async function runDjLink(options: RunDjLinkOptions): Promise<DjLinkRunResult> {
   const doctor = await doctorDjLink(options);
@@ -585,6 +633,7 @@ type NativeStatus = {
   playlists: number;
   uptimeMs: number;
   remoteTransportSupported: false;
+  remoteDeckPreparationSupported?: boolean;
 };
 
 type NativeLoadResult = {
@@ -595,6 +644,8 @@ type NativeLoadResult = {
   playing: false;
   transportNote: string;
 };
+
+type NativePrepareResult = Omit<DjLinkPrepareResult, "order" | "title" | "artist">;
 
 type NativeResolvedTrack = {
   order: number;
@@ -853,6 +904,7 @@ function toServerStatus(state: DjLinkDaemonState, native: NativeStatus): DjLinkS
     playlists: native.playlists,
     uptimeMs: native.uptimeMs,
     remoteTransportSupported: false,
+    remoteDeckPreparationSupported: native.remoteDeckPreparationSupported === true,
   };
 }
 

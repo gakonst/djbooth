@@ -5,10 +5,11 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -115,6 +116,13 @@ const TRACK_FILE_TCP_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const TRACK_FILE_TCP_CHUNK_SIZE: usize = 1024 * 1024;
 const FAST_ANNOUNCE_INTERVAL: Duration = Duration::from_millis(500);
 const FAST_LINK_INIT_INTERVAL: Duration = Duration::from_millis(300);
+const DJLINK_INTERFACE_WAIT: Duration = Duration::from_secs(5);
+const DJLINK_INTERFACE_POLL: Duration = Duration::from_millis(100);
+const PREPARE_LOAD_SETTINGS_OVERRIDES: &[(usize, u8)] = &[(0x2f, 0x88), (0x46, 0x81), (0x48, 0x83)];
+const PSSI_XOR_MASK: [u8; 19] = [
+    0xcb, 0xe1, 0xee, 0xfa, 0xe5, 0xee, 0xad, 0xee, 0xe9, 0xd2, 0xe9, 0xeb, 0xe1, 0xe9, 0xf3, 0xe8,
+    0xe9, 0xf4, 0xe1,
+];
 
 const LOAD_TRACK_PAYLOAD_TEMPLATE: [u8; 57] = [
     0x01, 0x00, 0x0d, 0x00, 0x34, 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -241,6 +249,7 @@ struct LoadCommandSpec {
     source_track_type: u8,
     attempts: usize,
     retry_interval: Duration,
+    load_settings_overrides: Vec<(usize, u8)>,
 }
 
 struct ActiveLoadCommand {
@@ -266,6 +275,14 @@ pub struct DjLinkLoadProfile {
     pub nfs_bytes: u64,
     pub nfs_chunks: usize,
     pub nfs_ms: u128,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DjLinkPhraseCue {
+    pub phrase_beat: u16,
+    pub cue_beat: u16,
+    pub cue_ms: u32,
+    pub bars_before: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -399,6 +416,7 @@ impl DjLinkServer {
             .context("failed to initialize raw wire capture")?;
         let search_index = SearchIndex::new(&library);
         let (actor_tx, actor_rx) = ServerActor::channel();
+        let initial_bpm = if config.emit_beat_clock { 13_005 } else { 0 };
         let state = Arc::new(ServerState {
             config,
             bind_ip,
@@ -410,6 +428,8 @@ impl DjLinkServer {
             search_index,
             actor_tx,
             log_path,
+            cue_overrides_ms: RwLock::new(HashMap::new()),
+            master_bpm_hundreds: AtomicU16::new(initial_bpm),
         });
         Ok(Self {
             state,
@@ -452,6 +472,84 @@ impl DjLinkServer {
             .map(|index| index + 1)
             .unwrap_or(1);
         Ok((order, track))
+    }
+
+    pub async fn phrase_cue_before_chorus(
+        &self,
+        track_id: u32,
+        bars_before: u16,
+    ) -> Result<DjLinkPhraseCue> {
+        let track = self
+            .state
+            .library
+            .tracks_by_id
+            .get(&track_id)
+            .with_context(|| format!("track {track_id} is not in the served library"))?;
+        let pssi = read_anlz_tag(track, "PSSI", None)
+            .await
+            .context("track has no Rekordbox phrase analysis (PSSI)")?;
+        let phrase = first_chorus_beat_from_pssi(&pssi)
+            .context("Rekordbox phrase analysis contains no chorus")?;
+        let cue_beat = phrase.saturating_sub(bars_before.saturating_mul(4)).max(1);
+        let pqtz = read_anlz_tag(track, "PQTZ", None)
+            .await
+            .context("track has no Rekordbox beat grid (PQTZ)")?;
+        let cue_ms = pqtz_beat_time_ms(&pqtz, cue_beat)
+            .with_context(|| format!("beat grid has no beat {cue_beat}"))?;
+        Ok(DjLinkPhraseCue {
+            phrase_beat: phrase,
+            cue_beat,
+            cue_ms,
+            bars_before,
+        })
+    }
+
+    pub fn set_memory_cue_override(&self, track_id: u32, cue_ms: u32) -> Result<()> {
+        if !self.state.library.tracks_by_id.contains_key(&track_id) {
+            bail!("track {track_id} is not in the served library");
+        }
+        self.state
+            .cue_overrides_ms
+            .write()
+            .expect("cue override lock poisoned")
+            .insert(track_id, cue_ms);
+        Ok(())
+    }
+
+    pub async fn set_player_bpm(&self, target_player: u8, bpm_hundreds: u16) -> Result<bool> {
+        if !(4_000..=30_000).contains(&bpm_hundreds) {
+            bail!("BPM must be between 40.00 and 300.00");
+        }
+        self.state
+            .master_bpm_hundreds
+            .store(bpm_hundreds, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        if let Err(error) = self
+            .send_sync_control_command(target_player, None, SyncControlCommand::SyncOn)
+            .await
+        {
+            self.state.master_bpm_hundreds.store(0, Ordering::Relaxed);
+            return Err(error);
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if self
+                .state
+                .status_snapshot(target_player)
+                .await
+                .is_some_and(|status| {
+                    status.is_synced()
+                        && effective_bpm_hundreds(status.bpm_hundreds, status.pitch_1).is_some_and(
+                            |effective| effective.abs_diff(u32::from(bpm_hundreds)) <= 2,
+                        )
+                })
+            {
+                return Ok(true);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(false)
     }
 
     pub fn first_track_id(&self) -> Option<u32> {
@@ -836,10 +934,8 @@ impl DjLinkServer {
             .push(spawn_status(self.state.clone(), status_sock.clone()));
         self.tasks
             .push(spawn_mixer_status(self.state.clone(), status_sock.clone()));
-        if self.state.config.emit_beat_clock {
-            self.tasks
-                .push(spawn_beat_status(self.state.clone(), beat_tx_sock.clone()));
-        }
+        self.tasks
+            .push(spawn_beat_status(self.state.clone(), beat_tx_sock.clone()));
         if let Some(beat_rx_sock) = beat_rx_sock {
             self.tasks
                 .push(spawn_beat_rx(self.state.clone(), beat_rx_sock));
@@ -888,6 +984,7 @@ impl DjLinkServer {
             source_track_type,
             attempts: repeat.max(1),
             retry_interval: interval,
+            load_settings_overrides: Vec::new(),
         })
         .await
     }
@@ -914,6 +1011,34 @@ impl DjLinkServer {
             source_track_type,
             attempts: repeat.max(1),
             retry_interval: interval,
+            load_settings_overrides: Vec::new(),
+        })
+        .await
+    }
+
+    pub async fn send_prepared_track(
+        &self,
+        target_player: u8,
+        track_id: u32,
+        repeat: usize,
+        interval: Duration,
+    ) -> Result<usize> {
+        let target = self
+            .list_devices()
+            .await
+            .into_iter()
+            .find(|device| device.player_number == target_player)
+            .ok_or(LinkError::TargetPlayerNotFound { target_player })?;
+        self.enqueue_load_track(LoadCommandSpec {
+            target_player,
+            target_ip: target.ip_addr,
+            track_id,
+            source_player: self.state.config.player_number,
+            source_slot: SLOT_REKORDBOX,
+            source_track_type: TRACK_TYPE_REKORDBOX,
+            attempts: repeat.max(1),
+            retry_interval: interval,
+            load_settings_overrides: PREPARE_LOAD_SETTINGS_OVERRIDES.to_vec(),
         })
         .await
     }
@@ -1937,14 +2062,21 @@ async fn execute_load_command(
         );
     }
 
-    let _ = send_load_settings_packet(
+    let settings_sent = send_load_settings_packet(
         &state,
         &sock,
         spec.target_player,
         spec.target_ip,
+        &spec.load_settings_overrides,
         "load-settings before load-track command",
     )
     .await;
+    if !spec.load_settings_overrides.is_empty() && !settings_sent {
+        bail!(
+            "failed to apply prepared load settings to player {}",
+            spec.target_player
+        );
+    }
 
     let attempts = spec.attempts.max(1);
     let retry_contexts =
@@ -2133,6 +2265,8 @@ struct ServerState {
     search_index: SearchIndex,
     actor_tx: ServerActorSender,
     log_path: Option<PathBuf>,
+    cue_overrides_ms: RwLock<HashMap<u32, u32>>,
+    master_bpm_hundreds: AtomicU16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2542,6 +2676,10 @@ impl CdjStatusSnapshot {
     pub(crate) fn is_playing(&self) -> bool {
         self.flags & CDJ_STATUS_PLAYING_FLAG != 0
             || matches!(self.play_state_1, 0x03 | 0x04 | 0x07 | 0x10)
+    }
+
+    fn is_synced(&self) -> bool {
+        self.flags & 0x10 != 0
     }
 
     pub(crate) fn log_worthy_change_from(&self, previous: &Self) -> bool {
@@ -3280,17 +3418,49 @@ fn internet_checksum(data: &[u8]) -> u16 {
 }
 
 fn default_ip() -> LinkResult<Ipv4Addr> {
-    for entry in ifconfig_ipv4_entries() {
-        if entry.active && entry.ip.is_link_local() {
-            return Ok(entry.ip);
+    let deadline = Instant::now() + DJLINK_INTERFACE_WAIT;
+    loop {
+        let entries = ifconfig_ipv4_entries();
+        if let Some(ip) = preferred_link_local_ip(&entries) {
+            return Ok(ip);
         }
+        if Instant::now() >= deadline {
+            return preferred_routed_ip(&entries).ok_or(LinkError::NoDjLinkInterface);
+        }
+        std::thread::sleep(DJLINK_INTERFACE_POLL);
     }
-    let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
-    sock.connect((Ipv4Addr::new(8, 8, 8, 8), 80))?;
-    match sock.local_addr()? {
-        SocketAddr::V4(addr) => Ok(*addr.ip()),
-        SocketAddr::V6(_) => Err(LinkError::RouteProbeIpv6),
-    }
+}
+
+fn preferred_link_local_ip(entries: &[IfconfigIpv4]) -> Option<Ipv4Addr> {
+    preferred_interface(entries, true).map(|entry| entry.ip)
+}
+
+fn preferred_routed_ip(entries: &[IfconfigIpv4]) -> Option<Ipv4Addr> {
+    preferred_interface(entries, false).map(|entry| entry.ip)
+}
+
+fn preferred_interface(entries: &[IfconfigIpv4], link_local: bool) -> Option<&IfconfigIpv4> {
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.active
+                && entry.ip.is_link_local() == link_local
+                && entry.broadcast.is_some()
+                && !is_tunnel_interface(&entry.name)
+        })
+        .min_by_key(|entry| (!is_physical_interface(&entry.name), entry.name.as_str()))
+}
+
+fn is_physical_interface(name: &str) -> bool {
+    name.starts_with("en") || name.starts_with("eth")
+}
+
+fn is_tunnel_interface(name: &str) -> bool {
+    [
+        "utun", "tun", "tap", "wg", "ipsec", "ppp", "gif", "stf", "awdl", "llw",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
 }
 
 fn default_broadcast_ip(ip: Ipv4Addr) -> Ipv4Addr {
@@ -3324,7 +3494,7 @@ fn default_interface_name(ip: Ipv4Addr) -> Option<String> {
         .map(|entry| entry.name)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct IfconfigIpv4 {
     name: String,
     ip: Ipv4Addr,
@@ -3338,29 +3508,47 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
         return Vec::new();
     };
     let text = String::from_utf8_lossy(&output.stdout);
+    parse_ifconfig_ipv4_entries(&text)
+}
+
+fn parse_ifconfig_ipv4_entries(text: &str) -> Vec<IfconfigIpv4> {
     let mut entries = Vec::new();
-    let mut name = String::new();
-    let mut active = true;
-    let mut mac = None::<String>;
+    let mut block = Vec::new();
     for line in text.lines() {
         if !line.starts_with('\t') && line.contains(": flags=") {
-            name = line
-                .split_once(':')
-                .map(|(name, _)| name.to_string())
-                .unwrap_or_default();
-            active = !line.contains("status: inactive");
-            mac = None;
-            continue;
+            append_ifconfig_block(&mut entries, &block);
+            block.clear();
         }
+        block.push(line);
+    }
+    append_ifconfig_block(&mut entries, &block);
+    entries
+}
+
+fn append_ifconfig_block(entries: &mut Vec<IfconfigIpv4>, lines: &[&str]) {
+    let Some(header) = lines.first() else {
+        return;
+    };
+    let Some((name, _)) = header.split_once(": flags=") else {
+        return;
+    };
+    let flags = header
+        .split_once('<')
+        .and_then(|(_, rest)| rest.split_once('>'))
+        .map(|(flags, _)| flags.split(',').collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let mut active = flags.contains("UP") && flags.contains("RUNNING");
+    let mut mac = None;
+    for line in lines.iter().skip(1) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("ether ") {
+            mac = rest.split_whitespace().next().map(str::to_string);
+        } else if let Some(status) = line.strip_prefix("status: ") {
+            active = status == "active";
+        }
+    }
+    for line in lines.iter().skip(1) {
         let s = line.trim();
-        if let Some(rest) = s.strip_prefix("ether ") {
-            mac = rest.split_whitespace().next().map(|v| v.to_string());
-            continue;
-        }
-        if let Some(rest) = s.strip_prefix("status: ") {
-            active = rest == "active";
-            continue;
-        }
         if let Some(rest) = s.strip_prefix("inet ") {
             let parts = rest.split_whitespace().collect::<Vec<_>>();
             let Some(ip) = parts.first().and_then(|v| v.parse().ok()) else {
@@ -3376,7 +3564,7 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
                 }
             }
             entries.push(IfconfigIpv4 {
-                name: name.clone(),
+                name: name.to_string(),
                 ip,
                 broadcast,
                 mac: mac.clone(),
@@ -3384,7 +3572,6 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
             });
         }
     }
-    entries
 }
 
 fn cstr_padded_ascii(value: &str, size: usize) -> Vec<u8> {
@@ -3537,10 +3724,42 @@ fn build_status_mixer_status(model: &str, player_number: u8) -> Vec<u8> {
     status::build_mixer_status(model, player_number)
 }
 
+fn build_tempo_mixer_status(model: &str, player_number: u8, bpm_hundreds: u16) -> Vec<u8> {
+    let mut packet = build_status_mixer_status(model, player_number);
+    packet[0x27] = 0xf0; // Playing, synced, and tempo master.
+    packet[0x2e..0x30].copy_from_slice(&bpm_hundreds.to_be_bytes());
+    packet
+}
+
+#[cfg(test)]
 fn build_status_beat_status(model: &str, player_number: u8) -> Vec<u8> {
+    build_tempo_beat_status(model, player_number, 13_005, 4)
+}
+
+fn build_tempo_beat_status(
+    model: &str,
+    player_number: u8,
+    bpm_hundreds: u16,
+    beat_in_bar: u8,
+) -> Vec<u8> {
     let mut packet = decode_hex(BEAT_STATUS_TEMPLATE_HEX);
     packet[11..31].copy_from_slice(&cstr_padded_ascii(model, 20));
     packet[33] = player_number;
+    let beat_in_bar = beat_in_bar.clamp(1, 4);
+    let next_bar_beats = u32::from(5 - beat_in_bar);
+    for (offset, beats) in [
+        (0x24, 1),
+        (0x28, 2),
+        (0x2c, next_bar_beats),
+        (0x30, 4),
+        (0x34, next_bar_beats + 4),
+        (0x38, 8),
+    ] {
+        let elapsed_ms = 6_000_000u32 * beats / u32::from(bpm_hundreds);
+        packet[offset..offset + 4].copy_from_slice(&elapsed_ms.to_be_bytes());
+    }
+    packet[0x5a..0x5c].copy_from_slice(&bpm_hundreds.to_be_bytes());
+    packet[0x5c] = beat_in_bar;
     if let Some(last) = packet.last_mut() {
         *last = player_number;
     }
@@ -4380,6 +4599,7 @@ fn spawn_keepalive_rx(
                     &status_sock,
                     dev.player_number,
                     dev.ip_addr,
+                    &[],
                     "load-settings on device discovery",
                 )
                 .await;
@@ -4428,11 +4648,19 @@ fn spawn_link_init(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHa
 
 fn spawn_mixer_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
-        let packet =
-            build_status_mixer_status(&state.config.model_name, state.config.player_number);
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
             interval.tick().await;
+            let bpm_hundreds = state.master_bpm_hundreds.load(Ordering::Relaxed);
+            let packet = if bpm_hundreds == 0 {
+                build_status_mixer_status(&state.config.model_name, state.config.player_number)
+            } else {
+                build_tempo_mixer_status(
+                    &state.config.model_name,
+                    state.config.player_number,
+                    bpm_hundreds,
+                )
+            };
             let target = SocketAddrV4::new(state.broadcast_ip, STATUS_PORT);
             if let Err(err) = send_udp_packet(&state, &sock, &packet, target, "mixer status").await
             {
@@ -5095,14 +5323,26 @@ async fn wait_for_track_confirmation(
 
 fn spawn_beat_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
-        let packet = build_status_beat_status(&state.config.model_name, state.config.player_number);
-        let mut interval = tokio::time::interval(Duration::from_millis(500));
+        let mut beat_in_bar = 1u8;
         loop {
-            interval.tick().await;
+            let bpm_hundreds = state.master_bpm_hundreds.load(Ordering::Relaxed);
+            if bpm_hundreds == 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            let packet = build_tempo_beat_status(
+                &state.config.model_name,
+                state.config.player_number,
+                bpm_hundreds,
+                beat_in_bar,
+            );
             let target = SocketAddrV4::new(state.broadcast_ip, BEAT_PORT);
             if let Err(err) = send_udp_packet(&state, &sock, &packet, target, "beat status").await {
                 debug!(target: "djtools_link::udp", %target, %err, "beat_status_send_failed");
             }
+            beat_in_bar = beat_in_bar % 4 + 1;
+            let beat_ns = 6_000_000_000_000u64 / u64::from(bpm_hundreds);
+            tokio::time::sleep(Duration::from_nanos(beat_ns)).await;
         }
     })
 }
@@ -6251,9 +6491,16 @@ async fn handle_db_client(
                 ));
             }
             DB_REQ_CUE_POINTS => {
-                let cues = load_cue_points(&state.library, &msg.args)
-                    .await
+                let cues = cue_override_for_request(&state, &msg.args)
+                    .map(cue_points_for_memory_override)
                     .unwrap_or_default();
+                let cues = if cues.memory_count > 0 {
+                    cues
+                } else {
+                    load_cue_points(&state.library, &msg.args)
+                        .await
+                        .unwrap_or_default()
+                };
                 send_response!(cue_points_response(
                     tx,
                     msg.msg_type,
@@ -6264,9 +6511,12 @@ async fn handle_db_client(
                 ));
             }
             DB_REQ_CUE_POINTS_EXT => {
-                let cues = load_cue_points_ext(&state.library, &msg.args)
-                    .await
-                    .unwrap_or_else(default_extended_cue_points);
+                let cues = match cue_override_for_request(&state, &msg.args) {
+                    Some(cue_ms) => cue_points_ext_for_memory_override(cue_ms),
+                    None => load_cue_points_ext(&state.library, &msg.args)
+                        .await
+                        .unwrap_or_else(default_extended_cue_points),
+                };
                 send_response!(cue_points_ext_response(
                     tx,
                     msg.msg_type,
@@ -7636,6 +7886,41 @@ struct CuePointsExt {
     entry_count: u32,
 }
 
+fn cue_override_for_request(state: &ServerState, args: &[DbValue]) -> Option<u32> {
+    let track_id = track_id_from_request_at(&state.library, args, 0)?;
+    state
+        .cue_overrides_ms
+        .read()
+        .expect("cue override lock poisoned")
+        .get(&track_id)
+        .copied()
+}
+
+fn cue_points_for_memory_override(cue_ms: u32) -> CuePoints {
+    let mut entry = [0u8; 36];
+    entry[1] = 1;
+    entry[12..16].copy_from_slice(&time_ms_to_half_frames(cue_ms).to_le_bytes());
+    CuePoints {
+        first: entry.to_vec(),
+        second: Vec::new(),
+        hot_count: 0,
+        memory_count: 1,
+    }
+}
+
+fn cue_points_ext_for_memory_override(cue_ms: u32) -> CuePointsExt {
+    let mut entry = vec![0u8; 56];
+    entry[0..4].copy_from_slice(&56u32.to_le_bytes());
+    entry[6] = 1;
+    entry[8..12].copy_from_slice(&[0x00, 0x00, 0xe8, 0x03]);
+    entry[12..16].copy_from_slice(&cue_ms.to_le_bytes());
+    entry[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+    CuePointsExt {
+        entries: entry,
+        entry_count: 1,
+    }
+}
+
 async fn load_cue_points(library: &LibrarySnapshot, args: &[DbValue]) -> Option<CuePoints> {
     let track = track_from_request(library, args)?;
     let dat_path = track.analysis_dat_path.as_ref()?;
@@ -7899,6 +8184,52 @@ fn pqtz_grid_stats(tag: &[u8]) -> Option<PqtzGridStats> {
         count: beat_count,
         last_beat_ms,
     })
+}
+
+fn first_chorus_beat_from_pssi(tag: &[u8]) -> Option<u16> {
+    if tag.len() < 32 || tag.get(0..4)? != b"PSSI" {
+        return None;
+    }
+    let tag_len = (be_u32(tag.get(8..12)?) as usize).min(tag.len());
+    let count = u16::from_be_bytes(tag.get(16..18)?.try_into().ok()?) as usize;
+    if tag_len < 32 + count.checked_mul(24)? {
+        return None;
+    }
+    let mut decoded = tag[..tag_len].to_vec();
+    let mut mood = u16::from_be_bytes(decoded.get(18..20)?.try_into().ok()?);
+    if !matches!(mood, 1..=3) {
+        for index in 18..decoded.len() {
+            decoded[index] ^=
+                PSSI_XOR_MASK[(index - 18) % PSSI_XOR_MASK.len()].wrapping_add(count as u8);
+        }
+        mood = u16::from_be_bytes(decoded.get(18..20)?.try_into().ok()?);
+    }
+    let chorus_kind = match mood {
+        1 => 5,
+        2 | 3 => 9,
+        _ => return None,
+    };
+    (0..count)
+        .filter_map(|index| {
+            let offset = 32 + index * 24;
+            let kind = u16::from_be_bytes(decoded.get(offset + 4..offset + 6)?.try_into().ok()?);
+            (kind == chorus_kind).then(|| {
+                u16::from_be_bytes(
+                    decoded
+                        .get(offset + 2..offset + 4)
+                        .expect("validated PSSI entry")
+                        .try_into()
+                        .expect("two-byte PSSI beat"),
+                )
+            })
+        })
+        .min()
+}
+
+fn pqtz_beat_time_ms(tag: &[u8], beat_number: u16) -> Option<u32> {
+    let stats = pqtz_grid_stats(tag)?;
+    let index = usize::from(beat_number.checked_sub(1)?);
+    (index < stats.count).then(|| be_u32(&tag[24 + index * 8 + 4..24 + index * 8 + 8]))
 }
 
 fn beat_grid_from_pqtz_tag(tag: &[u8]) -> Option<Vec<u8>> {
@@ -8350,16 +8681,19 @@ async fn send_load_settings_packet(
     sock: &UdpSocket,
     target_player: u8,
     target_ip: Ipv4Addr,
+    payload_overrides: &[(usize, u8)],
     context: &'static str,
 ) -> bool {
-    if !state.config.auto_unlock_load_lock || !(1..=6).contains(&target_player) {
+    if (!state.config.auto_unlock_load_lock && payload_overrides.is_empty())
+        || !(1..=6).contains(&target_player)
+    {
         return false;
     }
     let packet = build_status_load_settings_command(
         &state.config.model_name,
         state.config.player_number,
         target_player,
-        &[],
+        payload_overrides,
     );
     let target = SocketAddrV4::new(target_ip, STATUS_PORT);
     match send_udp_packet(state, sock, &packet, target, context).await {
@@ -8429,6 +8763,18 @@ async fn send_link_init_broadcast(state: &ServerState, sock: &UdpSocket, context
 mod tests {
     use super::*;
 
+    const IFCONFIG_WITH_VPN_AND_DJLINK: &str = r#"utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1420
+	inet 10.2.0.2 --> 10.2.0.2 netmask 0xffffffff
+en9: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:dd:ee:01
+	inet 169.254.1.2 netmask 0xffff0000 broadcast 169.254.255.255
+	status: inactive
+en11: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:dd:ee:11
+	inet 169.254.99.239 netmask 0xffff0000 broadcast 169.254.255.255
+	status: active
+"#;
+
     #[derive(Debug, thiserror::Error)]
     enum TestDbParseError {
         #[error(transparent)]
@@ -8448,6 +8794,39 @@ mod tests {
         assert!(!config.tcp_track_file_side_channel);
         assert!(config.serve_extended_anlz_tags);
         assert_eq!(config.announce_interval, FAST_ANNOUNCE_INTERVAL);
+    }
+
+    #[test]
+    fn interface_detection_prefers_active_djlink_ethernet_over_vpn() {
+        let entries = parse_ifconfig_ipv4_entries(IFCONFIG_WITH_VPN_AND_DJLINK);
+
+        assert_eq!(entries.len(), 3);
+        assert!(
+            !entries[1].active,
+            "status after inet must apply to the address"
+        );
+        assert_eq!(
+            preferred_link_local_ip(&entries),
+            Some(Ipv4Addr::new(169, 254, 99, 239))
+        );
+    }
+
+    #[test]
+    fn routed_interface_fallback_rejects_vpn_tunnel() {
+        let entries = parse_ifconfig_ipv4_entries(
+            r#"utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1420
+	inet 10.2.0.2 --> 10.2.0.2 netmask 0xffffffff
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+	ether aa:bb:cc:dd:ee:00
+	inet 10.0.0.195 netmask 0xffffff00 broadcast 10.0.0.255
+	status: active
+"#,
+        );
+
+        assert_eq!(
+            preferred_routed_ip(&entries),
+            Some(Ipv4Addr::new(10, 0, 0, 195))
+        );
     }
 
     #[test]
@@ -8752,6 +9131,12 @@ mod tests {
         assert_eq!(packet[0x47], 0x81); // Master Tempo on.
         assert_eq!(packet[0x48], 0x81); // Neighboring tempo range unchanged.
         assert_eq!(packet.len(), 0x74);
+
+        let prepared =
+            build_status_load_settings_command("rekordbox", 17, 3, PREPARE_LOAD_SETTINGS_OVERRIDES);
+        assert_eq!(prepared[0x2f], 0x88); // Memory Auto Cue level.
+        assert_eq!(prepared[0x46], 0x81); // Auto Cue on.
+        assert_eq!(prepared[0x48], 0x83); // Wide tempo range.
     }
 
     #[test]
@@ -10037,6 +10422,7 @@ mod tests {
                         source_track_type: TRACK_TYPE_REKORDBOX,
                         attempts: 1,
                         retry_interval: Duration::from_millis(10),
+                        load_settings_overrides: Vec::new(),
                     },
                     reply,
                 },
@@ -10172,6 +10558,69 @@ mod tests {
         assert_eq!(pitch_percent(beat.pitch), 0.0);
         assert_eq!(beat.bpm_hundreds, 0x32cd);
         assert_eq!(beat.beat_in_bar, 4);
+    }
+
+    #[test]
+    fn tempo_packets_encode_exact_bpm_and_bar_timing() {
+        let packet = build_tempo_beat_status("rekordbox", 17, 12_800, 2);
+        let beat = parse_cdj_beat(&packet).expect("beat");
+        assert_eq!(beat.bpm_hundreds, 12_800);
+        assert_eq!(beat.beat_in_bar, 2);
+        assert_eq!(beat.next_beat_ms, 468);
+        assert_eq!(beat.next_bar_ms, 1_406);
+        assert_eq!(beat.second_bar_ms, 3_281);
+
+        let mixer = build_tempo_mixer_status("rekordbox", 17, 12_800);
+        assert_eq!(mixer[0x27], 0xf0);
+        assert_eq!(&mixer[0x2e..0x30], &12_800u16.to_be_bytes());
+    }
+
+    #[test]
+    fn phrase_analysis_finds_chorus_and_maps_preceding_bar_to_grid() {
+        let mut pssi = vec![0u8; 32 + 3 * 24];
+        pssi[0..4].copy_from_slice(b"PSSI");
+        pssi[4..8].copy_from_slice(&32u32.to_be_bytes());
+        let pssi_len = pssi.len() as u32;
+        pssi[8..12].copy_from_slice(&pssi_len.to_be_bytes());
+        pssi[16..18].copy_from_slice(&3u16.to_be_bytes());
+        pssi[18..20].copy_from_slice(&1u16.to_be_bytes());
+        for (index, (beat, kind)) in [(1u16, 1u16), (17, 5), (33, 5)].into_iter().enumerate() {
+            let offset = 32 + index * 24;
+            pssi[offset..offset + 2].copy_from_slice(&(index as u16).to_be_bytes());
+            pssi[offset + 2..offset + 4].copy_from_slice(&beat.to_be_bytes());
+            pssi[offset + 4..offset + 6].copy_from_slice(&kind.to_be_bytes());
+        }
+        assert_eq!(first_chorus_beat_from_pssi(&pssi), Some(17));
+        let mut obfuscated = pssi.clone();
+        for index in 18..obfuscated.len() {
+            obfuscated[index] ^= PSSI_XOR_MASK[(index - 18) % PSSI_XOR_MASK.len()].wrapping_add(3);
+        }
+        assert_eq!(first_chorus_beat_from_pssi(&obfuscated), Some(17));
+
+        let entries = (1..=20)
+            .map(|beat| (((beat - 1) % 4 + 1) as u16, 12_800, (beat - 1) * 469))
+            .collect::<Vec<_>>();
+        let grid = test_pqtz_tag(&entries);
+        assert_eq!(pqtz_beat_time_ms(&grid, 13), Some(5_628));
+    }
+
+    #[test]
+    fn generated_memory_cue_matches_both_remote_db_wire_formats() {
+        let cues = cue_points_for_memory_override(12_345);
+        assert_eq!(cues.memory_count, 1);
+        assert_eq!(cues.first.len(), 36);
+        assert_eq!(
+            u32::from_le_bytes(cues.first[12..16].try_into().expect("half frames")),
+            time_ms_to_half_frames(12_345)
+        );
+
+        let extended = cue_points_ext_for_memory_override(12_345);
+        assert_eq!(extended.entry_count, 1);
+        assert_eq!(extended.entries[6], 1);
+        assert_eq!(
+            u32::from_le_bytes(extended.entries[12..16].try_into().expect("milliseconds")),
+            12_345
+        );
     }
 
     #[test]
@@ -12443,6 +12892,8 @@ notes: []
             search_index,
             actor_tx,
             log_path: None,
+            cue_overrides_ms: RwLock::new(HashMap::new()),
+            master_bpm_hundreds: AtomicU16::new(0),
         }
     }
 }
