@@ -101,7 +101,21 @@ describe("combined djbooth server", () => {
     const second = fake.startLink.mock.calls[1]?.[0];
     expect(first?.stagehandSessionNonce).toMatch(/^\d+$/);
     expect(second?.stagehandSessionNonce).toBe(first?.stagehandSessionNonce);
+    expect(first?.stagehandProtocolNonce).toMatch(/^\d+$/);
+    expect(second?.stagehandProtocolNonce).toBe(first?.stagehandProtocolNonce);
+    expect(first?.stagehandProtocolNonce).not.toBe(first?.stagehandSessionNonce);
     await server.close();
+  });
+
+  it("pins an explicitly configured Stagehand session IP", async () => {
+    const fake = dependencies();
+    vi.stubEnv("DJBOOTH_STAGEHAND_SESSION_IP", "169.254.51.174");
+    try {
+      await startDjBoothServer({}, fake.value);
+      expect(fake.startLink.mock.calls[0]?.[0].stagehandSessionIp).toBe("169.254.51.174");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does not claim an externally replaced resumed DJ Link daemon", async () => {

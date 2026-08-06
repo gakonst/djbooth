@@ -63,7 +63,11 @@ export async function startDjBoothServer(
   dependencies: DjBoothServerDependencies = defaultDependencies,
 ): Promise<RunningDjBoothServer> {
   const assistantEnabled = options.assistant ?? true;
-  const stagehandSessionNonce = randomBytes(8).readBigUInt64BE().toString();
+  const stagehandSessionNonce =
+    process.env.DJBOOTH_STAGEHAND_SESSION_NONCE ?? randomBytes(8).readBigUInt64BE().toString();
+  const stagehandProtocolNonce =
+    process.env.DJBOOTH_STAGEHAND_PROTOCOL_NONCE ?? randomBytes(8).readBigUInt64BE().toString();
+  const stagehandSessionIp = process.env.DJBOOTH_STAGEHAND_SESSION_IP;
   const linkOptions: StartRekordboxDjLinkOptions = {
     allowMissingAnalysis: options.allowMissingAnalysis ?? true,
     ...(options.binary ? { binaryPath: options.binary } : {}),
@@ -72,7 +76,9 @@ export async function startDjBoothServer(
     ...(options.databasePath ? { databasePath: options.databasePath } : {}),
     name: options.name ?? "djbooth",
     playerNumber: options.playerNumber ?? 17,
+    ...(stagehandSessionIp ? { stagehandSessionIp } : {}),
     stagehandSessionNonce,
+    stagehandProtocolNonce,
   };
   let link: (DjLinkServerStatus & { resumed: boolean }) | null = null;
   let ownedLinkPid: number | undefined;

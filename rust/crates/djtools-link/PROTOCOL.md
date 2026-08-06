@@ -79,10 +79,14 @@ second virtual CDJ:
 - answer ARP for the isolated identity and receive its unicast traffic through
   promiscuous BPF on macOS.
 
-Those values are one app-launch identity. `djbooth serve` creates them once in
-its long-lived supervisor and passes the same nonce to every replacement native
-worker. A worker crash therefore does not strand A9/CDJ unicast streams on a
-dead identity. The nonce is lifecycle state in parent memory, not library or
+Those values are one app-launch identity. `djbooth serve` creates independent
+network and protocol randoms once in its long-lived supervisor and passes both
+to every replacement native worker. The complete link-local alias is stable
+even if macOS assigns the Ethernet interface another address after a hardware
+restart. A worker crash therefore does not strand A9/CDJ unicast streams on a
+dead identity. After mixer traffic goes silent, keepalives pause for ten seconds
+before the full claim sequence is replayed, matching the fresh-launch behavior
+the A9 accepts. This is lifecycle state in parent memory, not library or
 workflow state.
 
 A live DJM-A9 capture verified 266-byte `0x39` control frames and the decoded

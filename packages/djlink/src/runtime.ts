@@ -58,7 +58,9 @@ export type StartDjLinkOptions = {
   broadcastIp?: string;
   name?: string;
   playerNumber?: number;
+  stagehandSessionIp?: string;
   stagehandSessionNonce?: string;
+  stagehandProtocolNonce?: string;
   allowMissingAnalysis?: boolean;
   env?: NodeJS.ProcessEnv;
 };
@@ -222,7 +224,8 @@ async function startDjLinkSource(
     );
   }
   const stagehandTarget = await discoverStagehandTarget(env);
-  assertStagehandSessionNonce(options.stagehandSessionNonce);
+  assertStagehandNonce("session", options.stagehandSessionNonce);
+  assertStagehandNonce("protocol", options.stagehandProtocolNonce);
 
   const args = [
     "link",
@@ -237,8 +240,12 @@ async function startDjLinkSource(
     "--log-path",
     paths.log,
     "--stagehand-monitor",
+    ...(options.stagehandSessionIp ? ["--stagehand-session-ip", options.stagehandSessionIp] : []),
     ...(options.stagehandSessionNonce
       ? ["--stagehand-session-nonce", options.stagehandSessionNonce]
+      : []),
+    ...(options.stagehandProtocolNonce
+      ? ["--stagehand-protocol-nonce", options.stagehandProtocolNonce]
       : []),
     ...(stagehandTarget
       ? ["--stagehand-target-ip", stagehandTarget.ip, "--stagehand-target-mac", stagehandTarget.mac]
@@ -304,8 +311,12 @@ async function resumeOrRestartDjLink(
     (options.playerNumber === undefined || options.playerNumber === current.playerNumber);
   const native = await requestControl<NativeStatus>(current.socketPath, "status");
   const stagehandSessionMatches =
-    options.stagehandSessionNonce === undefined ||
-    native.stagehandSessionNonce === options.stagehandSessionNonce;
+    (options.stagehandSessionIp === undefined ||
+      native.stagehandSessionIp === options.stagehandSessionIp) &&
+    (options.stagehandSessionNonce === undefined ||
+      native.stagehandSessionNonce === options.stagehandSessionNonce) &&
+    (options.stagehandProtocolNonce === undefined ||
+      native.stagehandProtocolNonce === options.stagehandProtocolNonce);
   if (
     explicitConfigurationMatches &&
     stagehandSessionMatches &&
@@ -323,10 +334,10 @@ async function resumeOrRestartDjLink(
   return undefined;
 }
 
-function assertStagehandSessionNonce(value: string | undefined): void {
+function assertStagehandNonce(kind: "session" | "protocol", value: string | undefined): void {
   if (value === undefined) return;
   if (!/^\d+$/.test(value) || BigInt(value) > 0xffff_ffff_ffff_ffffn) {
-    throw new TypeError(`Invalid Stagehand session nonce: ${value}`);
+    throw new TypeError(`Invalid Stagehand ${kind} nonce: ${value}`);
   }
 }
 

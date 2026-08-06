@@ -164,7 +164,9 @@ pub struct DjLinkConfig {
     pub stagehand_monitor: bool,
     pub stagehand_target_ip: Option<Ipv4Addr>,
     pub stagehand_target_mac: Option<String>,
+    pub stagehand_session_ip: Option<Ipv4Addr>,
     pub stagehand_session_nonce: Option<u64>,
+    pub stagehand_protocol_nonce: Option<u64>,
     pub tcp_track_file_side_channel: bool,
     pub db_auto_load: bool,
     pub auto_load_confirm: bool,
@@ -226,7 +228,9 @@ impl Default for DjLinkConfig {
             stagehand_monitor: false,
             stagehand_target_ip: None,
             stagehand_target_mac: None,
+            stagehand_session_ip: None,
             stagehand_session_nonce: None,
+            stagehand_protocol_nonce: None,
             tcp_track_file_side_channel: false,
             db_auto_load: false,
             auto_load_confirm: false,
@@ -529,9 +533,19 @@ impl DjLinkServer {
                 .stagehand_session_nonce
                 .unwrap_or_else(stagehand_launch_nonce)
         });
+        let stagehand_protocol_nonce = config.stagehand_monitor.then(|| {
+            config
+                .stagehand_protocol_nonce
+                .unwrap_or_else(stagehand_launch_nonce)
+        });
         config.stagehand_session_nonce = stagehand_session_nonce;
-        let stagehand_ip =
-            stagehand_session_nonce.map(|nonce| isolated_stagehand_ip(bind_ip, nonce));
+        config.stagehand_protocol_nonce = stagehand_protocol_nonce;
+        let stagehand_ip = config.stagehand_monitor.then(|| {
+            config
+                .stagehand_session_ip
+                .unwrap_or_else(|| isolated_stagehand_ip(bind_ip, stagehand_session_nonce.unwrap()))
+        });
+        config.stagehand_session_ip = stagehand_ip;
         let stagehand_link_mac = stagehand_session_nonce.map(|nonce| {
             stagehand_link_mac(
                 parse_mac(&mac_addr).expect("detected interface MAC is valid"),
@@ -589,6 +603,14 @@ impl DjLinkServer {
 
     pub fn stagehand_session_nonce(&self) -> Option<u64> {
         self.state.config.stagehand_session_nonce
+    }
+
+    pub fn stagehand_session_ip(&self) -> Option<Ipv4Addr> {
+        self.state.config.stagehand_session_ip
+    }
+
+    pub fn stagehand_protocol_nonce(&self) -> Option<u64> {
+        self.state.config.stagehand_protocol_nonce
     }
 
     pub fn library_track_count(&self) -> usize {
@@ -3821,7 +3843,15 @@ fn isolated_stagehand_ip(bind_ip: Ipv4Addr, launch_nonce: u64) -> Ipv4Addr {
     if host == d {
         host = if host == 253 { 2 } else { host + 1 };
     }
-    Ipv4Addr::new(a, b, c, host)
+    if a == 169 && b == 254 {
+        // A macOS link-local address can change whenever the Ethernet peer is
+        // restarted. Derive the complete /16 alias from the launch identity so
+        // Stagehand remains the same network host across those changes.
+        let subnet = 1 + (launch_nonce.rotate_right(8) % 253) as u8;
+        Ipv4Addr::new(a, b, subnet, host)
+    } else {
+        Ipv4Addr::new(a, b, c, host)
+    }
 }
 
 fn stagehand_link_mac(interface_mac: [u8; 6], launch_nonce: u64) -> [u8; 6] {
@@ -5034,6 +5064,8 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
 fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
         const MODEL: &str = "Stagehand";
+        const REJOIN_AFTER_MS: u64 = 10_000;
+        const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
         let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
         let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
         let link_mac = match parse_mac(&state.mac_addr) {
@@ -5048,7 +5080,7 @@ fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> To
         // keep using the parent-owned launch identity across worker lifetimes.
         let launch_nonce = state
             .config
-            .stagehand_session_nonce
+            .stagehand_protocol_nonce
             .unwrap_or_else(stagehand_launch_nonce);
         let mac = stagehand::protocol_mac(link_mac, launch_nonce);
         let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
@@ -5065,23 +5097,78 @@ fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> To
         );
         let mut interval = tokio::time::interval(Duration::from_secs(2));
         let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+        let mut last_join_ms = epoch_millis();
+        let mut quiet_since_ms = None;
         loop {
             interval.tick().await;
+            let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+            let now_ms = epoch_millis();
+            let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
+            if let Some(reason) = stagehand_rejoin_reason(
+                now_ms,
+                last_a9_ms,
+                last_join_ms,
+                requested_rejoin_ms,
+                handled_rejoin_ms,
+                REJOIN_AFTER_MS,
+            ) {
+                if reason == "peer-request" {
+                    tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
+                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                    last_join_ms = epoch_millis();
+                    handled_rejoin_ms = requested_rejoin_ms;
+                    quiet_since_ms = None;
+                    continue;
+                }
+                if quiet_since_ms.is_none() {
+                    tracing::info!(
+                        target: "djtools_link::stagehand",
+                        quiet_ms = QUIET_BEFORE_REJOIN_MS,
+                        "stagehand_rejoin_quiet"
+                    );
+                    quiet_since_ms = Some(now_ms);
+                }
+            }
+            if let Some(quiet_started_ms) = quiet_since_ms {
+                if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
+                    tracing::info!(
+                        target: "djtools_link::stagehand",
+                        reason = "peer-silent",
+                        "stagehand_rejoining"
+                    );
+                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                    last_join_ms = epoch_millis();
+                    quiet_since_ms = None;
+                }
+                continue;
+            }
             let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
             if let Err(err) =
                 send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
             {
                 debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
             }
-            let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
-            if requested_rejoin_ms > handled_rejoin_ms
-                && epoch_millis().saturating_sub(requested_rejoin_ms) >= 4_000
-            {
-                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-                handled_rejoin_ms = requested_rejoin_ms;
-            }
         }
     })
+}
+
+fn stagehand_rejoin_reason(
+    now_ms: u64,
+    last_a9_ms: u64,
+    last_join_ms: u64,
+    requested_rejoin_ms: u64,
+    handled_rejoin_ms: u64,
+    rejoin_after_ms: u64,
+) -> Option<&'static str> {
+    if requested_rejoin_ms > handled_rejoin_ms
+        && now_ms.saturating_sub(requested_rejoin_ms) >= 4_000
+    {
+        return Some("peer-request");
+    }
+    let last_contact_ms = last_a9_ms.max(last_join_ms);
+    (now_ms.saturating_sub(last_contact_ms) >= rejoin_after_ms
+        && now_ms.saturating_sub(last_join_ms) >= rejoin_after_ms)
+        .then_some("peer-silent")
 }
 
 fn stagehand_launch_nonce() -> u64 {
@@ -9620,10 +9707,15 @@ en11: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
-    fn stagehand_uses_a_neighboring_network_identity() {
+    fn stagehand_uses_a_stable_network_identity() {
         assert_eq!(
             isolated_stagehand_ip(Ipv4Addr::new(169, 254, 51, 208), 0),
-            Ipv4Addr::new(169, 254, 51, 2)
+            Ipv4Addr::new(169, 254, 1, 2)
+        );
+        assert_eq!(
+            isolated_stagehand_ip(Ipv4Addr::new(169, 254, 163, 196), 0),
+            Ipv4Addr::new(169, 254, 1, 2),
+            "link-local identity must not follow a reassigned host address"
         );
         assert_eq!(
             isolated_stagehand_ip(Ipv4Addr::new(192, 168, 1, 2), 0),
@@ -9631,8 +9723,30 @@ en11: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         );
 
         let link_mac = stagehand_link_mac([0xc8, 0x3d, 0xfc, 0x15, 0x71, 0xed], 42);
+        let protocol_mac = stagehand::protocol_mac([0xc8, 0x3d, 0xfc, 0x15, 0x71, 0xed], 43);
         assert_eq!(link_mac[0] & 0x03, 0x02, "must be local and unicast");
         assert_ne!(&link_mac[..3], &[0xc8, 0x3d, 0xfc]);
+        assert_ne!(
+            &link_mac[1..],
+            &protocol_mac[1..],
+            "link and protocol MACs are independent identities"
+        );
+    }
+
+    #[test]
+    fn stagehand_rejoins_after_a_peer_restart_without_changing_identity() {
+        assert_eq!(
+            stagehand_rejoin_reason(20_000, 0, 10_000, 0, 0, 10_000),
+            Some("peer-silent")
+        );
+        assert_eq!(
+            stagehand_rejoin_reason(20_000, 19_000, 10_000, 0, 0, 10_000),
+            None
+        );
+        assert_eq!(
+            stagehand_rejoin_reason(20_000, 19_000, 10_000, 15_000, 0, 10_000),
+            Some("peer-request")
+        );
     }
 
     #[test]

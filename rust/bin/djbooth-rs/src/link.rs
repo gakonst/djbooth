@@ -101,7 +101,13 @@ struct ServeArgs {
     stagehand_target_mac: Option<String>,
     /// Parent-owned Stagehand launch identity reused across supervised worker restarts.
     #[arg(long, hide = true, requires = "stagehand_monitor")]
+    stagehand_session_ip: Option<Ipv4Addr>,
+    /// Parent-owned Stagehand launch identity reused across supervised worker restarts.
+    #[arg(long, hide = true, requires = "stagehand_monitor")]
     stagehand_session_nonce: Option<u64>,
+    /// Independent protocol identity reused across supervised worker restarts.
+    #[arg(long, hide = true, requires = "stagehand_monitor")]
+    stagehand_protocol_nonce: Option<u64>,
 }
 
 #[derive(Args)]
@@ -263,7 +269,9 @@ struct RuntimeInfo {
     bind_ip: Ipv4Addr,
     broadcast_ip: Ipv4Addr,
     player_number: u8,
+    stagehand_session_ip: Option<Ipv4Addr>,
     stagehand_session_nonce: Option<u64>,
+    stagehand_protocol_nonce: Option<u64>,
     tracks: usize,
     playlists: usize,
 }
@@ -961,7 +969,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         stagehand_monitor: args.stagehand_monitor,
         stagehand_target_ip: args.stagehand_target_ip,
         stagehand_target_mac: args.stagehand_target_mac,
+        stagehand_session_ip: args.stagehand_session_ip,
         stagehand_session_nonce: args.stagehand_session_nonce,
+        stagehand_protocol_nonce: args.stagehand_protocol_nonce,
         tcp_track_file_side_channel: false,
         db_auto_load: false,
         auto_load_confirm: false,
@@ -984,7 +994,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         bind_ip: server.bind_ip(),
         broadcast_ip: server.broadcast_ip(),
         player_number: server.player_number(),
+        stagehand_session_ip: server.stagehand_session_ip(),
         stagehand_session_nonce: server.stagehand_session_nonce(),
+        stagehand_protocol_nonce: server.stagehand_protocol_nonce(),
         tracks: server.library_track_count(),
         playlists: server.library_playlist_count(),
     });
@@ -1044,6 +1056,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "broadcastIp": runtime.broadcast_ip,
             "playerNumber": runtime.player_number,
             "stagehandSessionNonce": runtime.stagehand_session_nonce.map(|nonce| nonce.to_string()),
+            "stagehandSessionIp": runtime.stagehand_session_ip.map(|ip| ip.to_string()),
+            "stagehandProtocolNonce": runtime.stagehand_protocol_nonce.map(|nonce| nonce.to_string()),
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "wirePcap": args.wire_pcap,
@@ -1315,6 +1329,8 @@ async fn dispatch_control(
             "broadcastIp": runtime.broadcast_ip,
             "playerNumber": runtime.player_number,
             "stagehandSessionNonce": runtime.stagehand_session_nonce.map(|nonce| nonce.to_string()),
+            "stagehandSessionIp": runtime.stagehand_session_ip.map(|ip| ip.to_string()),
+            "stagehandProtocolNonce": runtime.stagehand_protocol_nonce.map(|nonce| nonce.to_string()),
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "uptimeMs": runtime.started.elapsed().as_millis(),
