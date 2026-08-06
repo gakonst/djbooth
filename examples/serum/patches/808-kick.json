@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Kick",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 82,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 100,
+    "semitones": -3,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 4,
+    "decayMs": 620,
+    "sustainPercent": 0,
+    "releaseMs": 45
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 18,
+      "mixPercent": 42
+    }
+  },
+  "lfos": {
+    "pitchDrop": {
+      "mode": "envelope",
+      "rateHz": 23,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 8, "valuePercent": 63 },
+        { "positionPercent": 24, "valuePercent": 22 },
+        { "positionPercent": 55, "valuePercent": 4 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pitchDrop",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 24 }
+    }
+  ],
+  "designNotes": [
+    "A phase-locked sine supplies the body; a short two-octave pitch drop supplies the attack.",
+    "The long exponential amplitude decay is left mostly clean, with light tube saturation for audibility on small speakers."
+  ]
+}

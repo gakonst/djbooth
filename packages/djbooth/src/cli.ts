@@ -17,6 +17,8 @@ import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
+import { produceCli } from "./produce.js";
+
 export const DJBOOTH_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
     version: string;
@@ -67,6 +69,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "rekordbox_db_metadata_add",
     "rekordbox_db_playlist_*",
     "library_status",
+    "produce_*",
   ],
 };
 
@@ -120,6 +123,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(djlinkCli);
   cli.command(rekordboxCli);
   cli.command(libraryCli);
+  cli.command(produceCli);
   cli.command(slskCli);
   cli.command(soundcloudCli);
   cli.command(spotsCli);

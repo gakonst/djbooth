@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Cowbell",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 70,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 72,
+    "octave": 1,
+    "semitones": 5,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 58,
+    "octave": 2,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 2,
+    "decayMs": 150,
+    "sustainPercent": 0,
+    "releaseMs": 14
+  },
+  "filter": {
+    "filterType": "Band 12",
+    "cutoffHz": 720,
+    "resonancePercent": 30,
+    "drivePercent": 10,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {},
+  "designNotes": [
+    "Two square waves near 554 Hz and 831 Hz feed a resonant band-pass filter."
+  ]
+}

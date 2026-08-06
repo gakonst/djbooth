@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "name": "Reference-conditioned metallic pluck",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 66,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 82,
+    "octave": 0,
+    "unison": 2,
+    "detunePercent": 9,
+    "blendPercent": 74,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 27,
+    "octave": 1,
+    "unison": 1,
+    "wavetablePositionPercent": 34,
+    "phaseDegrees": 90,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 1,
+    "holdMs": 0,
+    "decayMs": 330,
+    "sustainPercent": 0,
+    "releaseMs": 180
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 420,
+    "resonancePercent": 18,
+    "drivePercent": 38,
+    "fatPercent": 22,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 44,
+      "mixPercent": 61,
+      "preFilter": true
+    },
+    "compressor": {
+      "thresholdDb": -24,
+      "ratio": "4:1",
+      "attackMs": 12,
+      "releaseMs": 105,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 720,
+      "lowQPercent": 62,
+      "lowGainDb": -2,
+      "highType": "Shelf",
+      "highFrequencyHz": 5200,
+      "highQPercent": 48,
+      "highGainDb": 3
+    },
+    "reverb": {
+      "sizePercent": 43,
+      "preDelayMs": 11,
+      "lowCutPercent": 51,
+      "highCutPercent": 70,
+      "dampPercent": 42,
+      "widthPercent": 100,
+      "mixPercent": 19
+    }
+  },
+  "lfos": {
+    "pluckContour": {
+      "mode": "envelope",
+      "rateHz": 4.6,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 9, "valuePercent": 82 },
+        { "positionPercent": 28, "valuePercent": 31 },
+        { "positionPercent": 62, "valuePercent": 7 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pluckContour",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 420, "maximum": 4400 }
+    }
+  ],
+  "designNotes": [
+    "Designed from the reference profile: sparse, transient-led midrange with width and tail separated from the centered kick/bass core."
+  ]
+}

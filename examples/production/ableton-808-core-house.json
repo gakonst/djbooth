@@ -1,0 +1,742 @@
+{
+  "schemaVersion": 1,
+  "title": "808 Core Kit — 808 Core Kit House 130 bpm",
+  "bpm": 130.0,
+  "bars": 4,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0.0,
+    "tailSeconds": 1.0
+  },
+  "tracks": [
+    {
+      "id": "36-bass-drum",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/Multisamples/Drum Machines/808/Kick 808 Tone1 k.wav",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 0.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 1.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 2.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 3.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 4.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 5.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 6.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 7.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 8.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 9.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 10.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 11.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 12.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 13.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 14.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 15.0,
+          "durationBeats": 0.125,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "id": "37-rim-shot",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Rim/Rim 808.aif",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 7.5,
+          "durationBeats": 0.0625,
+          "velocity": 1
+        },
+        {
+          "beat": 7.75,
+          "durationBeats": 0.0625,
+          "velocity": 1
+        },
+        {
+          "beat": 15.5,
+          "durationBeats": 0.0625,
+          "velocity": 1
+        },
+        {
+          "beat": 15.75,
+          "durationBeats": 0.0625,
+          "velocity": 1
+        }
+      ]
+    },
+    {
+      "id": "38-snare-drum",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/Multisamples/Drum Machines/808/Snare 808 Tone1 k.wav",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 2.75,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 6.75,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 10.75,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 14.75,
+          "durationBeats": 0.25,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "id": "39-hand-clap",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Clap/Clap 808.aif",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 1.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 3.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 5.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 7.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 9.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 11.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 13.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        },
+        {
+          "beat": 15.0,
+          "durationBeats": 0.25,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "id": "42-closed-hi-hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Closed 808.aif",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "chokeGroup": 1,
+      "triggers": [
+        {
+          "beat": 0.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 0.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 0.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 0.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 1.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 1.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 1.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 1.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 2.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 2.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 2.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 2.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 3.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 3.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 3.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 3.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 4.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 4.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 4.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 4.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 5.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 5.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 5.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 5.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 6.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 6.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 6.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 6.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 7.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 7.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 7.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 7.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 8.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 8.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 8.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 8.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 9.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 9.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 9.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 9.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 10.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 10.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 10.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 10.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 11.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 11.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 11.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 11.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 12.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 12.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 12.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 12.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 13.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 13.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 13.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 14.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 14.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 14.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 14.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 15.0,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 15.25,
+          "durationBeats": 0.125,
+          "velocity": 78
+        },
+        {
+          "beat": 15.5,
+          "durationBeats": 0.125,
+          "velocity": 87
+        },
+        {
+          "beat": 15.75,
+          "durationBeats": 0.125,
+          "velocity": 78
+        }
+      ]
+    },
+    {
+      "id": "44-maracas",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Shaker/Maracas 808.wav",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 0.25,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 3.75,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 4.25,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 7.25,
+          "durationBeats": 0.125,
+          "velocity": 49
+        },
+        {
+          "beat": 7.75,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 8.25,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 11.75,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 12.25,
+          "durationBeats": 0.125,
+          "velocity": 100
+        },
+        {
+          "beat": 15.25,
+          "durationBeats": 0.125,
+          "velocity": 49
+        },
+        {
+          "beat": 15.75,
+          "durationBeats": 0.125,
+          "velocity": 100
+        }
+      ]
+    },
+    {
+      "id": "48-hi-tom",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Tom/Tom 808 Hi.aif",
+      "oneShot": true,
+      "velocityAmount": 0.5,
+      "fadeOutSeconds": 0.005,
+      "gainDb": -10.0,
+      "triggers": [
+        {
+          "beat": 0.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 1.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 2.0,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 2.25,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 2.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 3.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 4.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 5.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 6.0,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 6.25,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 6.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 7.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 8.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 9.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 10.0,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 10.25,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 10.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 11.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 12.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 13.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 14.0,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 14.25,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 14.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        },
+        {
+          "beat": 15.75,
+          "durationBeats": 0.0625,
+          "velocity": 15
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "title": "Ableton graph smoke test",
+  "bpm": 125,
+  "bars": 1,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 1,
+  "master": {
+    "effects": [
+      {
+        "kind": "object",
+        "object": "abl.device.limiter~ @maximize 1 @threshold -8 @output -1 @link 1 @autorelease 1 @lookahead 2"
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "id": "kick",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 909 Prommer.wav",
+      "gainDb": -8,
+      "velocityAmount": 0.25,
+      "triggers": [
+        { "beat": 0, "velocity": 124 },
+        { "beat": 1, "velocity": 112 },
+        { "beat": 2, "velocity": 117 },
+        { "beat": 3, "velocity": 112 }
+      ]
+    },
+    {
+      "id": "bass",
+      "kind": "native",
+      "device": "Analog",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Analog/Bass/Muted Wow Bass.adv",
+      "gainDb": 22,
+      "notes": [
+        { "beat": 0.5, "durationBeats": 0.28, "note": 41, "velocity": 116 },
+        { "beat": 1.5, "durationBeats": 0.24, "note": 41, "velocity": 106 },
+        { "beat": 2.5, "durationBeats": 0.3, "note": 41, "velocity": 112 },
+        { "beat": 3.5, "durationBeats": 0.22, "note": 41, "velocity": 102 }
+      ]
+    }
+  ]
+}

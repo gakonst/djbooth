@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "name": "Basic Wavez Snare Backbeat — Serum 1.00 adaptation",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav", "Analog/BrightWhite.wav"],
+  "tutorial": {
+    "title": "Basic Wavez Ultimate Guide to Creating EDM Drums in Serum",
+    "url": "https://basicwavez.com/basic-wavez-ultimate-guide-to-creating-edm-drums-in-serum/",
+    "section": "Snares"
+  },
+  "masterVolumePercent": 65,
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 88,
+    "octave": 0,
+    "unison": 1,
+    "wavetablePositionPercent": 33,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 78,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 15
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 200,
+    "resonancePercent": 54,
+    "drivePercent": 46,
+    "fatPercent": 12,
+    "mixPercent": 100,
+    "route": ["oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 34,
+      "mixPercent": 64
+    },
+    "compressor": {
+      "thresholdDb": -24,
+      "ratio": "4:1",
+      "attackMs": 18,
+      "releaseMs": 80,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 2000,
+      "lowQPercent": 58,
+      "lowGainDb": 4,
+      "highType": "Shelf",
+      "highFrequencyHz": 9000,
+      "highQPercent": 45,
+      "highGainDb": 1
+    }
+  },
+  "lfos": {
+    "pitchEnvelope": {
+      "mode": "envelope",
+      "rateHz": 11.5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 7, "valuePercent": 55 },
+        { "positionPercent": 18, "valuePercent": 0 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "bodyEnvelope": {
+      "mode": "envelope",
+      "rateHz": 8.9,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 18, "valuePercent": 100 },
+        { "positionPercent": 30, "valuePercent": 46 },
+        { "positionPercent": 65, "valuePercent": 8 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "noiseTail": {
+      "mode": "envelope",
+      "rateHz": 6.2,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 0 },
+        { "positionPercent": 7, "valuePercent": 12 },
+        { "positionPercent": 14, "valuePercent": 100 },
+        { "positionPercent": 60, "valuePercent": 22 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pitchEnvelope",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 18 }
+    },
+    {
+      "source": "bodyEnvelope",
+      "destination": "oscillatorB.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 88 }
+    },
+    {
+      "source": "bodyEnvelope",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 200, "maximum": 4200 }
+    },
+    {
+      "source": "noiseTail",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 78 }
+    }
+  ],
+  "designNotes": [
+    "Triangle body around 200 Hz, fast pitch drop, driven low-pass movement, and a delayed white-noise tail follow the guide's screenshots.",
+    "This replaces the former synthetic clap because the selected guide provides a complete snare reference patch and audio path."
+  ]
+}

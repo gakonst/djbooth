@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "title": "Classic 808 — all-Serum rack",
+  "bpm": 122,
+  "bars": 4,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 3,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "kick-36",
+      "kind": "serum",
+      "patch": "../serum/patches/808-kick.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -1,
+      "notes": [
+        { "beat": 0, "durationBeats": 0.9, "note": 36, "velocity": 124 },
+        { "beat": 1, "durationBeats": 0.9, "note": 36, "velocity": 118 },
+        { "beat": 2, "durationBeats": 0.9, "note": 36, "velocity": 124 },
+        { "beat": 3, "durationBeats": 0.9, "note": 36, "velocity": 118 }
+      ]
+    },
+    {
+      "id": "snare-38",
+      "kind": "serum",
+      "patch": "../serum/patches/808-snare.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -2.5,
+      "notes": [
+        { "beat": 1, "durationBeats": 0.48, "note": 38, "velocity": 122 },
+        { "beat": 3, "durationBeats": 0.48, "note": 38, "velocity": 126 }
+      ]
+    },
+    {
+      "id": "clap-39",
+      "kind": "serum",
+      "patch": "../serum/patches/808-clap.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -3.5,
+      "pan": 0.04,
+      "notes": [
+        { "beat": 1, "durationBeats": 0.48, "note": 39, "velocity": 112 },
+        { "beat": 3, "durationBeats": 0.48, "note": 39, "velocity": 118 }
+      ]
+    },
+    {
+      "id": "closed-hat-42",
+      "kind": "serum",
+      "patch": "../serum/patches/808-closed-hat.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -3.5,
+      "pan": -0.07,
+      "notes": [
+        { "beat": 0.25, "durationBeats": 0.12, "note": 42, "velocity": 78 },
+        { "beat": 0.75, "durationBeats": 0.12, "note": 42, "velocity": 96 },
+        { "beat": 1.25, "durationBeats": 0.12, "note": 42, "velocity": 82 },
+        { "beat": 1.75, "durationBeats": 0.12, "note": 42, "velocity": 102 },
+        { "beat": 2.25, "durationBeats": 0.12, "note": 42, "velocity": 80 },
+        { "beat": 2.75, "durationBeats": 0.12, "note": 42, "velocity": 98 },
+        { "beat": 3.25, "durationBeats": 0.12, "note": 42, "velocity": 84 },
+        { "beat": 3.75, "durationBeats": 0.12, "note": 42, "velocity": 106 }
+      ]
+    },
+    {
+      "id": "open-hat-46",
+      "kind": "serum",
+      "patch": "../serum/patches/808-open-hat.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -1.5,
+      "pan": 0.07,
+      "notes": [
+        { "beat": 0.5, "durationBeats": 0.5, "note": 46, "velocity": 104 },
+        { "beat": 2.5, "durationBeats": 0.5, "note": 46, "velocity": 110 }
+      ]
+    },
+    {
+      "id": "rimshot-37",
+      "kind": "serum",
+      "patch": "../serum/patches/808-rimshot.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -3.5,
+      "pan": -0.12,
+      "notes": [
+        { "beat": 1.75, "durationBeats": 0.14, "note": 37, "velocity": 92 },
+        { "beat": 3.75, "durationBeats": 0.14, "note": 37, "velocity": 98 }
+      ]
+    },
+    {
+      "id": "low-tom-41",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -7.5,
+      "pan": -0.08,
+      "notes": [
+        { "beat": 3.25, "durationBeats": 0.55, "note": 41, "velocity": 105 }
+      ]
+    },
+    {
+      "id": "mid-tom-45",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -8,
+      "notes": [
+        { "beat": 3.5, "durationBeats": 0.48, "note": 45, "velocity": 101 }
+      ]
+    },
+    {
+      "id": "high-tom-48",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -8.5,
+      "pan": 0.08,
+      "notes": [
+        { "beat": 3.75, "durationBeats": 0.23, "note": 48, "velocity": 98 }
+      ]
+    },
+    {
+      "id": "cowbell-56",
+      "kind": "serum",
+      "patch": "../serum/patches/808-cowbell.json",
+      "pattern": { "lengthBeats": 4, "repeats": 4 },
+      "gainDb": -2,
+      "pan": 0.1,
+      "notes": [
+        { "beat": 0.75, "durationBeats": 0.25, "note": 56, "velocity": 92 },
+        { "beat": 2.75, "durationBeats": 0.25, "note": 56, "velocity": 98 }
+      ]
+    }
+  ]
+}

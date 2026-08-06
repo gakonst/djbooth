@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "name": "Basic Wavez Open Hat — Serum 1.00 adaptation",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/BrightWhite.wav"],
+  "tutorial": {
+    "title": "Basic Wavez Ultimate Guide to Creating EDM Drums in Serum",
+    "url": "https://basicwavez.com/basic-wavez-ultimate-guide-to-creating-edm-drums-in-serum/",
+    "section": "hi-Hats — open"
+  },
+  "masterVolumePercent": 62,
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 100,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 25
+  },
+  "filter": {
+    "filterType": "High 12",
+    "cutoffHz": 4300,
+    "resonancePercent": 9,
+    "drivePercent": 8,
+    "mixPercent": 100,
+    "route": ["noise"]
+  },
+  "effects": {
+    "reverb": {
+      "sizePercent": 23,
+      "preDelayMs": 2,
+      "lowCutPercent": 42,
+      "highCutPercent": 72,
+      "dampPercent": 34,
+      "widthPercent": 92,
+      "mixPercent": 12
+    }
+  },
+  "lfos": {
+    "hatEnvelope": {
+      "mode": "envelope",
+      "rateHz": 3,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 20, "valuePercent": 58 },
+        { "positionPercent": 45, "valuePercent": 24 },
+        { "positionPercent": 78, "valuePercent": 5 },
+        { "positionPercent": 94, "valuePercent": 2 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "hatEnvelope",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 100 }
+    }
+  ],
+  "designNotes": [
+    "The guide's 3 Hz open-hat contour is paired with its high-pass and short room treatment."
+  ]
+}

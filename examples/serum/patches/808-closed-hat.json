@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Closed Hat",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav", "Analog/BrightWhite.wav"],
+  "masterVolumePercent": 70,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 42,
+    "octave": 4,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 0,
+    "randomPhasePercent": 100
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 34,
+    "octave": 4,
+    "semitones": 7,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 0,
+    "randomPhasePercent": 100
+  },
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 24,
+    "pitchPercent": 58,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 1,
+    "decayMs": 46,
+    "sustainPercent": 0,
+    "releaseMs": 8
+  },
+  "filter": {
+    "filterType": "High 12",
+    "cutoffHz": 4800,
+    "resonancePercent": 8,
+    "drivePercent": 15,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB", "noise"]
+  },
+  "effects": {},
+  "designNotes": [
+    "Two inharmonic square-wave partials provide a metallic center; white noise fills the spectrum."
+  ]
+}

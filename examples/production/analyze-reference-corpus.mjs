@@ -1,0 +1,313 @@
+import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
+import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repository = path.resolve(here, "../..");
+const manifestPath = path.resolve(process.argv[2] ?? path.join(here, "maz-reference-corpus.json"));
+const outputRoot = path.resolve(
+  process.argv[3] ?? path.join(os.homedir(), "Library/Caches/djbooth/reference-corpora/maz-modern"),
+);
+const temporaryRoot = path.join(os.tmpdir(), "djbooth-reference-corpus-stems");
+const runnerLog = path.join(outputRoot, "runner.log");
+const windowsPerStem = Number(option("--windows") ?? 2);
+const limit = Number(option("--limit") ?? Number.POSITIVE_INFINITY);
+const requestedTrack = option("--track");
+
+const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const tracks = manifest.tracks
+  .filter((track) => !requestedTrack || track.id === requestedTrack)
+  .slice(0, limit);
+
+await mkdir(outputRoot, { recursive: true });
+await mkdir(temporaryRoot, { recursive: true });
+
+const states = [];
+for (const [index, track] of tracks.entries()) {
+  const started = new Date().toISOString();
+  const trackRoot = path.join(outputRoot, track.id);
+  const stemsRoot = path.join(temporaryRoot, track.id, "stems");
+  const profilePath = path.join(trackRoot, "reference-profile.json");
+  const transcriptionRoot = path.join(trackRoot, "transcription");
+  await mkdir(trackRoot, { recursive: true });
+  await mkdir(transcriptionRoot, { recursive: true });
+  const state = { ...track, started, status: "running" };
+  states.push(state);
+  await writeState(states);
+  console.error(`[corpus] ${index + 1}/${tracks.length} ${track.id}: inspect`);
+
+  try {
+    await access(track.audio);
+    let profile = await readJsonIfPresent(profilePath);
+    let windows = profile ? selectWindows(profile, windowsPerStem) : null;
+    if (profile && (await transcriptionsComplete(transcriptionRoot, windows))) {
+      state.status = "complete";
+      state.completed = new Date().toISOString();
+      state.resumed = true;
+      await writeState(states);
+      continue;
+    }
+
+    await mkdir(stemsRoot, { recursive: true });
+    console.error(`[corpus] ${track.id}: separate four stems`);
+    await djbooth([
+      "rekordbox",
+      "stems",
+      "separate",
+      track.audio,
+      stemsRoot,
+      "--layout",
+      "four-stem",
+      "--format",
+      "json",
+    ]);
+
+    if (!profile) {
+      console.error(`[corpus] ${track.id}: reference profile`);
+      await djbooth([
+        "produce",
+        "reference-profile",
+        track.audio,
+        "--stem",
+        `drums=${path.join(stemsRoot, "drums.wav")}`,
+        "--stem",
+        `bass=${path.join(stemsRoot, "bass.wav")}`,
+        "--stem",
+        `other=${path.join(stemsRoot, "other.wav")}`,
+        "--stem",
+        `vocals=${path.join(stemsRoot, "vocals.wav")}`,
+        "--output",
+        profilePath,
+        "--format",
+        "json",
+      ]);
+      profile = JSON.parse(await readFile(profilePath, "utf8"));
+      windows = selectWindows(profile, windowsPerStem);
+    }
+
+    await writeFile(
+      path.join(trackRoot, "selected-windows.json"),
+      `${JSON.stringify(windows, null, 2)}\n`,
+    );
+    for (const [stem, selected] of Object.entries(windows)) {
+      for (const window of selected) {
+        const name = `${stem}-${window.startSeconds.toFixed(3)}`;
+        const midi = path.join(transcriptionRoot, `${name}.mid`);
+        const events = path.join(transcriptionRoot, `${name}.events.json`);
+        if (await exists(events)) continue;
+        console.error(`[corpus] ${track.id}: transcribe ${name}`);
+        const constraints = {
+          drums: ["drums"],
+          bass: ["acoustic_bass", "electric_bass"],
+          other: [],
+          vocals: ["voice"],
+        }[stem];
+        await djbooth([
+          "produce",
+          "transcribe",
+          path.join(stemsRoot, `${stem}.wav`),
+          midi,
+          "--events",
+          events,
+          "--start",
+          String(window.startSeconds),
+          "--duration",
+          String(window.durationSeconds),
+          "--tempo",
+          String(profile.bpm),
+          "--max-tokens",
+          "750",
+          ...constraints.flatMap((instrument) => ["--instrument", instrument]),
+          "--format",
+          "json",
+        ]);
+      }
+    }
+
+    state.status = "complete";
+    state.completed = new Date().toISOString();
+    state.profile = profilePath;
+    state.transcription = transcriptionRoot;
+  } catch (error) {
+    state.status = "failed";
+    state.error = error instanceof Error ? error.message : String(error);
+    console.error(`[corpus] ${track.id}: ${state.error}`);
+  } finally {
+    // This directory contains only stems generated by this script. Source audio,
+    // profiles, MIDI and event evidence are outside it and remain untouched.
+    await rm(path.join(temporaryRoot, track.id), { recursive: true, force: true });
+    await writeState(states);
+    await buildSummary();
+  }
+}
+
+async function djbooth(args) {
+  await execute("pnpm", ["djbooth", ...args], repository);
+}
+
+async function execute(command, args, cwd) {
+  const log = openSync(runnerLog, "a");
+  try {
+    const child = spawn(command, args, { cwd, stdio: ["ignore", log, log] });
+    const code = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", resolve);
+    });
+    if (code !== 0) throw new Error(`${command} exited with ${code}; see ${runnerLog}`);
+  } finally {
+    closeSync(log);
+  }
+}
+
+function selectWindows(profile, count) {
+  return Object.fromEntries(
+    ["drums", "bass", "other", "vocals"].map((stem) => {
+      const ranked = profile.sections
+        .map((section) => ({
+          startSeconds: section.startSeconds,
+          durationSeconds: Math.min(10, Math.max(5, (section.durationBars * 4 * 60) / profile.bpm)),
+          durationBars: section.durationBars,
+          rmsDb: section.stemRmsDb[stem] ?? -120,
+          sectionIndex: section.index,
+        }))
+        .sort((left, right) => right.rmsDb - left.rmsDb);
+      const selected = [];
+      for (const candidate of ranked) {
+        if (
+          selected.every((window) => Math.abs(window.startSeconds - candidate.startSeconds) >= 15)
+        ) {
+          selected.push(candidate);
+        }
+        if (selected.length >= count) break;
+      }
+      return [stem, selected.sort((left, right) => left.startSeconds - right.startSeconds)];
+    }),
+  );
+}
+
+async function transcriptionsComplete(root, windows) {
+  for (const [stem, selected] of Object.entries(windows)) {
+    for (const window of selected) {
+      if (
+        !(await exists(path.join(root, `${stem}-${window.startSeconds.toFixed(3)}.events.json`)))
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+async function buildSummary() {
+  const completed = states.filter((state) => state.status === "complete");
+  const profiles = [];
+  const eventFiles = [];
+  for (const state of completed) {
+    const trackRoot = path.join(outputRoot, state.id);
+    const profile = await readJsonIfPresent(path.join(trackRoot, "reference-profile.json"));
+    if (profile) profiles.push({ id: state.id, profile });
+    const transcription = path.join(trackRoot, "transcription");
+    if (!(await exists(transcription))) continue;
+    for (const filename of await readdir(transcription)) {
+      if (filename.endsWith(".events.json")) {
+        eventFiles.push({
+          id: state.id,
+          events: JSON.parse(await readFile(path.join(transcription, filename), "utf8")),
+        });
+      }
+    }
+  }
+  const notes = eventFiles.flatMap(({ id, events }) =>
+    events.notes.filter((note) => note.trusted !== false).map((note) => ({ ...note, trackId: id })),
+  );
+  const summary = {
+    schemaVersion: 1,
+    corpus: manifest.name,
+    generatedAt: new Date().toISOString(),
+    requestedTracks: tracks.length,
+    completedTracks: completed.length,
+    failedTracks: states.filter((state) => state.status === "failed").length,
+    profileMeans: meanProfileMetrics(profiles.map(({ profile }) => profile)),
+    transcription: {
+      windows: eventFiles.length,
+      notes: notes.length,
+      instrumentCounts: countBy(notes, (note) => note.instrument),
+      pitchClassCounts: countBy(
+        notes.filter((note) => !note.isDrum),
+        (note) => String(note.pitch % 12),
+      ),
+      drumPitchCounts: countBy(
+        notes.filter((note) => note.isDrum),
+        (note) => String(note.pitch),
+      ),
+      onsetSixteenthCounts: countBy(notes, (note) =>
+        String(Math.round((((note.onsetBeats % 1) + 1) % 1) * 4) % 4),
+      ),
+    },
+    tracks: completed.map((state) => ({ id: state.id, title: state.title, year: state.year })),
+  };
+  await writeFile(
+    path.join(outputRoot, "corpus-summary.json"),
+    `${JSON.stringify(summary, null, 2)}\n`,
+  );
+}
+
+function meanProfileMetrics(profiles) {
+  const fields = [
+    ["bpm", (profile) => profile.bpm],
+    ["durationSeconds", (profile) => profile.durationSeconds],
+    ["mixCrestFactorDb", (profile) => profile.mix.crestFactorDb],
+    ["mixTransientDensityPerSecond", (profile) => profile.mix.transientDensityPerSecond],
+    ["mixStereoWidthDb", (profile) => profile.mix.stereoWidthDb],
+    ["mixLowBandRatio", (profile) => profile.mix.lowBandRatio],
+    ["mixMidBandRatio", (profile) => profile.mix.midBandRatio],
+    ["mixHighBandRatio", (profile) => profile.mix.highBandRatio],
+    ["sectionContrastDb", (profile) => profile.relationships.sectionContrastDb],
+  ];
+  return Object.fromEntries(
+    fields.map(([name, extract]) => {
+      const values = profiles.map(extract).filter(Number.isFinite);
+      return [
+        name,
+        values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+      ];
+    }),
+  );
+}
+
+function countBy(values, keyFor) {
+  const counts = {};
+  for (const value of values) {
+    const key = keyFor(value);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(counts).sort((left, right) => right[1] - left[1]));
+}
+
+async function writeState(states) {
+  await writeFile(
+    path.join(outputRoot, "state.json"),
+    `${JSON.stringify({ manifest: manifestPath, updatedAt: new Date().toISOString(), tracks: states }, null, 2)}\n`,
+  );
+}
+
+async function readJsonIfPresent(filename) {
+  return (await exists(filename)) ? JSON.parse(await readFile(filename, "utf8")) : null;
+}
+
+async function exists(filename) {
+  try {
+    await access(filename);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function option(name) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+}

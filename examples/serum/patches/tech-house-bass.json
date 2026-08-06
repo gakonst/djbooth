@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "name": "Mystic Alankar 10-step Tech-House Bass",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "tutorial": {
+    "title": "How To Create A Tech House Bass Sound In Xfer Serum",
+    "url": "https://mysticalankar.com/blogs/blog/how-to-create-a-tech-house-bass-sound-in-xfer-serum",
+    "section": "Steps 1–10"
+  },
+  "masterVolumePercent": 62,
+  "portamentoMs": 70,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 78,
+    "octave": -2,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 38,
+    "octave": -1,
+    "unison": 1,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 210,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0.5,
+    "holdMs": 0,
+    "decayMs": 260,
+    "sustainPercent": 78,
+    "releaseMs": 38
+  },
+  "envelope2": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 200,
+    "sustainPercent": 0,
+    "releaseMs": 15
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 140,
+    "resonancePercent": 0,
+    "drivePercent": 40,
+    "fatPercent": 40,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 60,
+      "mixPercent": 76,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 400,
+      "lowQPercent": 58,
+      "lowGainDb": 4,
+      "highType": "Shelf",
+      "highFrequencyHz": 2600,
+      "highQPercent": 48,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -25,
+      "ratio": "4:1",
+      "attackMs": 18,
+      "releaseMs": 95,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "filterEnvelope": {
+      "mode": "envelope",
+      "rateHz": 5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 35, "valuePercent": 45 },
+        { "positionPercent": 75, "valuePercent": 8 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "filterEnvelope",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 140, "maximum": 245 }
+    },
+    {
+      "source": "filterEnvelope",
+      "destination": "filter.resonance",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 10 }
+    }
+  ],
+  "designNotes": [
+    "Square oscillator A at -2 octaves, saw oscillator B at -1, deterministic phases, MG Low 24 at 140 Hz, 70 ms portamento, 400 Hz EQ weight and compression follow the written recipe.",
+    "Serum 1.00 predates the tutorial's Tape Saturation mode, so Tube is the closest exposed harmonic-saturation mode.",
+    "The headless MIDI remains non-overlapping because Serum 1.00 does not expose mono and legato switches as VST parameters."
+  ]
+}

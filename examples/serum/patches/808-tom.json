@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Tom",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 78,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 100,
+    "semitones": 4,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 2,
+    "decayMs": 390,
+    "sustainPercent": 0,
+    "releaseMs": 30
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 8,
+      "mixPercent": 22
+    }
+  },
+  "lfos": {
+    "pitchDrop": {
+      "mode": "envelope",
+      "rateHz": 17,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 18, "valuePercent": 38 },
+        { "positionPercent": 52, "valuePercent": 6 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pitchDrop",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 7 }
+    }
+  ],
+  "designNotes": [
+    "One sine patch serves low, mid and high tom MIDI notes; a restrained pitch drop supplies the drum attack."
+  ]
+}

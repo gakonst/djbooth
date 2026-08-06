@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "name": "Maz (BR) modern Afro-house reference corpus",
+  "artist": "Maz (BR)",
+  "intent": "Learn recurring production grammar across tracks without reusing reference audio in generated variants.",
+  "tracks": [
+    {
+      "id": "ninguem",
+      "title": "Ninguém",
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/mazda/KVSH, Maz, Fran, Chico Chico - Ninguém.mp3"
+    },
+    {
+      "id": "banho-de-folhas",
+      "title": "Banho de Folhas (Maz Remix)",
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/madarae-hd/Luedji Luna - Banho de Folhas (Maz (BR) Remix).wav"
+    },
+    {
+      "id": "sky-father",
+      "title": "Sky Father",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Antdot, Maz, Beacon Bloom - Sky Father.mp3"
+    },
+    {
+      "id": "corpo-e-cancao",
+      "title": "Corpo e Canção (Club Mix)",
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/mazda/Antdot, Maz, Letícia Fialho - Corpo e Canção - Club Mix.mp3"
+    },
+    {
+      "id": "learning-to-love",
+      "title": "Learning To Love",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Antdot, Maz, Noah Henderson - Learning To Love.mp3"
+    },
+    {
+      "id": "bad-love",
+      "title": "Bad Love (Antdot & Maz Remix)",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Fahlberg - Bad Love - Antdot & Maz Remix.mp3"
+    },
+    {
+      "id": "take-care",
+      "title": "Take Care (Maz Remix)",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Helsloot - Take Care - Maz Remix.mp3"
+    },
+    {
+      "id": "dear-mom-susan",
+      "title": "Dear Mom Susan (Maz Remix)",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Mai Lawson - Dear Mom Susan - Maz (BR) Remix.mp3"
+    },
+    {
+      "id": "nothing-on-me",
+      "title": "Nothing On Me",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Maz, APACHE (FR), MAXI MERAKI, Tabia - Nothing On Me.mp3"
+    },
+    {
+      "id": "run",
+      "title": "Run",
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/mazda/Maz, Antdot - Run.mp3"
+    },
+    {
+      "id": "brisa",
+      "title": "Brisa",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Maz, Antdot, Jéssica Gaspar - Brisa.mp3"
+    },
+    {
+      "id": "amana",
+      "title": "Amana",
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/mazda/Maz, VXSION - Amana.mp3"
+    },
+    {
+      "id": "baiao-destemperado",
+      "title": "Baião Destemperado",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/Riascode, Maz, Antdot, Dawn Patrol, Barbatuques - Baião Destemperado.mp3"
+    },
+    {
+      "id": "body-language",
+      "title": "Body Language",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/mazda/SOMMA, Maz, Coach Harrison - Body Language.mp3"
+    },
+    {
+      "id": "move",
+      "title": "Move (Maz Remix)",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Music/Media.localized/Music/Unknown Artist/Unknown Album/Move (Maz Remix).wav"
+    },
+    {
+      "id": "teka",
+      "title": "Teka (Maz Remix)",
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Music/Media.localized/Music/Malumz on Decks/Teka (Maz Remix)/01 Teka - Maz Remix.mp3"
+    },
+    {
+      "id": "todo-homem",
+      "title": "Todo Homem (Antdot & Maz Remix)",
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Freddy-New/freddy-to-load/Zeca Veloso - Todo Homem - Antdot & Maz (BR) Remix.mp3"
+    }
+  ]
+}

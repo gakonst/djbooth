@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Open Hat",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav", "Analog/BrightWhite.wav"],
+  "masterVolumePercent": 68,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 38,
+    "octave": 4,
+    "semitones": -4,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 0,
+    "randomPhasePercent": 100
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 31,
+    "octave": 4,
+    "semitones": 3,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 0,
+    "randomPhasePercent": 100
+  },
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 28,
+    "pitchPercent": 58,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 2,
+    "decayMs": 290,
+    "sustainPercent": 0,
+    "releaseMs": 24
+  },
+  "filter": {
+    "filterType": "High 12",
+    "cutoffHz": 4400,
+    "resonancePercent": 7,
+    "drivePercent": 12,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB", "noise"]
+  },
+  "effects": {},
+  "designNotes": [
+    "The metallic source matches the closed hat while the amplitude envelope is substantially longer."
+  ]
+}

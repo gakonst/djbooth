@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "name": "Basic Wavez 4.1 Hz Kick — Serum 1.00 adaptation",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav", "Analog/BrightWhite.wav"],
+  "tutorial": {
+    "title": "Basic Wavez Ultimate Guide to Creating EDM Drums in Serum",
+    "url": "https://basicwavez.com/basic-wavez-ultimate-guide-to-creating-edm-drums-in-serum/",
+    "section": "Kicks"
+  },
+  "masterVolumePercent": 70,
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 100,
+    "octave": 0,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 60,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 15
+  },
+  "effects": {
+    "compressor": {
+      "thresholdDb": -22,
+      "ratio": "4:1",
+      "attackMs": 42,
+      "releaseMs": 90,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "pitchEnvelope": {
+      "mode": "envelope",
+      "rateHz": 26.4,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 5, "valuePercent": 62 },
+        { "positionPercent": 14, "valuePercent": 24 },
+        { "positionPercent": 52, "valuePercent": 10 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "bodyEnvelope": {
+      "mode": "envelope",
+      "rateHz": 2.7,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 16, "valuePercent": 91 },
+        { "positionPercent": 28, "valuePercent": 74 },
+        { "positionPercent": 42, "valuePercent": 58 },
+        { "positionPercent": 55, "valuePercent": 45 },
+        { "positionPercent": 68, "valuePercent": 35 },
+        { "positionPercent": 82, "valuePercent": 14 },
+        { "positionPercent": 95, "valuePercent": 0 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "clickEnvelope": {
+      "mode": "envelope",
+      "rateHz": 26.4,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 8, "valuePercent": 52 },
+        { "positionPercent": 18, "valuePercent": 0 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pitchEnvelope",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 24 }
+    },
+    {
+      "source": "bodyEnvelope",
+      "destination": "oscillatorB.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 100 }
+    },
+    {
+      "source": "clickEnvelope",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 60 }
+    }
+  ],
+  "designNotes": [
+    "The tutorial's final 26.4 Hz pitch contour and revised 2.7 Hz body contour were transcribed from its screenshots.",
+    "Serum 1.00 cannot load the supplied modern FXP, so the host applies the same one-shot LFOs to Serum controls and 24-semitone pitch bend."
+  ]
+}

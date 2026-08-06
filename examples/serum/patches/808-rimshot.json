@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Rimshot",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 72,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 65,
+    "octave": 3,
+    "unison": 1,
+    "wavetablePositionPercent": 33,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 46,
+    "octave": 4,
+    "semitones": 7,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 1,
+    "decayMs": 64,
+    "sustainPercent": 0,
+    "releaseMs": 7
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 10,
+      "mixPercent": 28
+    }
+  },
+  "designNotes": [
+    "Two short phase-locked resonances create the woody click without a noise layer."
+  ]
+}

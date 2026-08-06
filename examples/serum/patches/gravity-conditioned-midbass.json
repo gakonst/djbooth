@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "name": "Reference-conditioned stereo mid-bass",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 54,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 72,
+    "octave": 0,
+    "unison": 3,
+    "detunePercent": 7,
+    "blendPercent": 72,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 24,
+    "octave": 1,
+    "unison": 2,
+    "detunePercent": 5,
+    "blendPercent": 78,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 210,
+    "randomPhasePercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 0.5,
+    "holdMs": 0,
+    "decayMs": 230,
+    "sustainPercent": 62,
+    "releaseMs": 42
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 720,
+    "resonancePercent": 8,
+    "drivePercent": 46,
+    "fatPercent": 34,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 52,
+      "mixPercent": 68,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 230,
+      "lowQPercent": 60,
+      "lowGainDb": -3,
+      "highType": "Shelf",
+      "highFrequencyHz": 1800,
+      "highQPercent": 46,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -24,
+      "ratio": "4:1",
+      "attackMs": 14,
+      "releaseMs": 90,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "filterEnvelope": {
+      "mode": "envelope",
+      "rateHz": 5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 30, "valuePercent": 48 },
+        { "positionPercent": 72, "valuePercent": 10 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "filterEnvelope",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 720, "maximum": 1650 }
+    }
+  ],
+  "designNotes": [
+    "A separate high-passed unison layer supplies stereo harmonics while the original sub-bass remains mono and phase-stable."
+  ]
+}

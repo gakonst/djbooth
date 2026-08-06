@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "name": "Basic Wavez Closed Hat — Serum 1.00 adaptation",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/BrightWhite.wav"],
+  "tutorial": {
+    "title": "Basic Wavez Ultimate Guide to Creating EDM Drums in Serum",
+    "url": "https://basicwavez.com/basic-wavez-ultimate-guide-to-creating-edm-drums-in-serum/",
+    "section": "hi-Hats — closed"
+  },
+  "masterVolumePercent": 66,
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 100,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 10
+  },
+  "effects": {
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 12000,
+      "lowQPercent": 64,
+      "lowGainDb": 6,
+      "highType": "Shelf",
+      "highFrequencyHz": 16000,
+      "highQPercent": 45,
+      "highGainDb": 1
+    }
+  },
+  "lfos": {
+    "hatEnvelope": {
+      "mode": "envelope",
+      "rateHz": 4,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 5, "valuePercent": 72 },
+        { "positionPercent": 15, "valuePercent": 26 },
+        { "positionPercent": 35, "valuePercent": 5 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "hatEnvelope",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 100 }
+    }
+  ],
+  "designNotes": [
+    "BrightWhite noise, the guide's 4 Hz one-shot contour, and its narrow high-frequency EQ emphasis are applied directly."
+  ]
+}

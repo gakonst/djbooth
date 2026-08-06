@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "title": "Ableton compiled DSP chain smoke test",
+  "bpm": 125,
+  "bars": 1,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 2,
+  "master": {
+    "inputGainDb": -3,
+    "outputGainDb": -2,
+    "effects": [
+      {
+        "kind": "object",
+        "object": "abl.device.delay~ @delay 0.18 @feedback 0.38 @mix 0.22 @pingpong 1"
+      },
+      {
+        "kind": "object",
+        "object": "abl.device.limiter~ @maximize 1"
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "id": "kick",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 909 Prommer.wav",
+      "gainDb": -8,
+      "velocityAmount": 0.25,
+      "triggers": [
+        { "beat": 0, "velocity": 124 },
+        { "beat": 1, "velocity": 112 },
+        { "beat": 2, "velocity": 117 },
+        { "beat": 3, "velocity": 112 }
+      ]
+    }
+  ]
+}

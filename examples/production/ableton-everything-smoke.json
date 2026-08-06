@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "title": "Ableton-only compiled engine proof",
+  "bpm": 126,
+  "bars": 2,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 2,
+  "master": {
+    "inputGainDb": -5,
+    "outputGainDb": -2,
+    "effects": [
+      {
+        "kind": "object",
+        "object": "abl.device.limiter~ @maximize 1"
+      }
+    ]
+  },
+  "tracks": [
+    {
+      "id": "kick",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 808 Hard.wav",
+      "gainDb": -5,
+      "velocityAmount": 0.2,
+      "effects": [
+        {
+          "kind": "object",
+          "object": "abl.device.compressor~ @threshold -12 @ratio 3 @attack 0.01 @release 0.08"
+        }
+      ],
+      "triggers": [
+        { "beat": 0, "velocity": 127 },
+        { "beat": 1, "velocity": 112 },
+        { "beat": 2, "velocity": 120 },
+        { "beat": 3, "velocity": 112 },
+        { "beat": 4, "velocity": 126 },
+        { "beat": 5, "velocity": 110 },
+        { "beat": 6, "velocity": 120 },
+        { "beat": 7, "velocity": 114 }
+      ]
+    },
+    {
+      "id": "hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Closed Future MPC.wav",
+      "gainDb": -13,
+      "pan": 0.12,
+      "velocityAmount": 0.35,
+      "triggers": [
+        { "beat": 0.5, "velocity": 108 },
+        { "beat": 1.5, "velocity": 96 },
+        { "beat": 2.5, "velocity": 112 },
+        { "beat": 3.5, "velocity": 98 },
+        { "beat": 4.5, "velocity": 108 },
+        { "beat": 5.5, "velocity": 96 },
+        { "beat": 6.5, "velocity": 114 },
+        { "beat": 7.5, "velocity": 101 }
+      ]
+    },
+    {
+      "id": "drift-bass",
+      "kind": "maxObject",
+      "object": "abl.device.drift~ @osc1shape 0.4 @osc2detune 0.07 @stereospread 0.2",
+      "gainDb": -12,
+      "effects": [
+        {
+          "kind": "object",
+          "object": "abl.device.roar~ @blend 0.15"
+        },
+        {
+          "kind": "object",
+          "object": "abl.device.delay~ @delay 0.1875 @feedback 0.28 @mix 0.12"
+        }
+      ],
+      "notes": [
+        { "beat": 0, "durationBeats": 0.72, "note": 36, "velocity": 116 },
+        { "beat": 1.5, "durationBeats": 0.34, "note": 36, "velocity": 102 },
+        { "beat": 2.0, "durationBeats": 0.72, "note": 39, "velocity": 110 },
+        { "beat": 3.25, "durationBeats": 0.48, "note": 34, "velocity": 104 },
+        { "beat": 4, "durationBeats": 0.72, "note": 36, "velocity": 118 },
+        { "beat": 5.5, "durationBeats": 0.34, "note": 43, "velocity": 102 },
+        { "beat": 6.0, "durationBeats": 0.72, "note": 39, "velocity": 112 },
+        { "beat": 7.25, "durationBeats": 0.48, "note": 34, "velocity": 106 }
+      ]
+    }
+  ]
+}

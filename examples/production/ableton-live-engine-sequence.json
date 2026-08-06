@@ -1,0 +1,13 @@
+{
+  "bpm": 126,
+  "bars": 1,
+  "beatsPerBar": 4,
+  "notes": [
+    { "beat": 0, "durationBeats": 0.4, "note": 36, "velocity": 118 },
+    { "beat": 0.75, "durationBeats": 0.2, "note": 36, "velocity": 96 },
+    { "beat": 1.5, "durationBeats": 0.4, "note": 43, "velocity": 112 },
+    { "beat": 2, "durationBeats": 0.4, "note": 36, "velocity": 120 },
+    { "beat": 2.75, "durationBeats": 0.2, "note": 39, "velocity": 102 },
+    { "beat": 3.5, "durationBeats": 0.35, "note": 34, "velocity": 116 }
+  ]
+}

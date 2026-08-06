@@ -60,6 +60,22 @@ describe("djbooth CLI", () => {
         "rekordbox db playlist list",
         "rekordbox status",
         "library status",
+        "produce ableton import-drum-clip",
+        "produce ableton import-midi-clip",
+        "produce ableton audit-device-graphs",
+        "produce ableton audit-presets",
+        "produce ableton inspect-asset",
+        "produce ableton inspect-clip",
+        "produce ableton inspect-groove",
+        "produce ableton inspect-instrument",
+        "produce ableton inspect-device-graph",
+        "produce ableton inspect-rack",
+        "produce ableton library",
+        "produce ableton probe-engine",
+        "produce profile-compare",
+        "produce reference-profile",
+        "produce render",
+        "produce transcribe",
         "slsk download",
         "slsk search",
         "soundcloud api get-me",
@@ -79,6 +95,46 @@ describe("djbooth CLI", () => {
     );
     expect(names).not.toContain("spots session");
     expect(names.length).toBeGreaterThan(250);
+  });
+
+  test("exposes native Ableton MIDI render controls", async () => {
+    const { output, exitCode } = await serve(["produce", "ableton", "probe-engine", "--help"]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("--note <number>");
+    expect(output).toContain("--sequence <string>");
+    expect(output).toContain("--sample <string>");
+    expect(output).toContain("--preset <string>");
+    expect(output).toContain("--preset-device-offset <number>");
+    expect(output).toContain("--velocity <number>");
+    expect(output).toContain("--gate-seconds <number>");
+    expect(output).toContain("--render-frames <number>");
+  });
+
+  test("exposes exhaustive Ableton device graph inspection", async () => {
+    const { output, exitCode } = await serve([
+      "produce",
+      "ableton",
+      "inspect-device-graph",
+      "--help",
+    ]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("djbooth produce ableton inspect-device-graph <asset>");
+    expect(output).toContain("nested racks");
+    expect(output).toContain("chain zones");
+  });
+
+  test("exposes crash-isolated Ableton engine rendering audit", async () => {
+    const { output, exitCode } = await serve(["produce", "ableton", "audit-engine", "--help"]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("--render");
+    expect(output).toContain("audio input/output topology");
+  });
+
+  test("exposes exhaustive installed Ableton preset auditing", async () => {
+    const { output, exitCode } = await serve(["produce", "ableton", "audit-presets", "--help"]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("--all");
+    expect(output).toContain("every eligible installed ADV preset");
   });
 
   test("retains package command schemas after mounting", async () => {
@@ -102,6 +158,7 @@ describe("djbooth CLI", () => {
 
     for (const command of [
       "library",
+      "produce",
       "usb",
       "djlink",
       "rekordbox",
@@ -125,6 +182,11 @@ describe("djbooth CLI", () => {
       "djbooth rekordbox stems separate <audioPath> <outputDirectory>",
     );
     expect(stems.output).toContain("--python-project-directory");
+
+    const transcription = await serve(["produce", "transcribe", "--help"]);
+    expect(transcription.output).toContain("djbooth produce transcribe <audio> <output>");
+    expect(transcription.output).toContain("--python-project-directory");
+    expect(transcription.output).toContain("--instrument");
 
     const djlink = await serve(["djlink", "doctor", "--help"]);
     expect(djlink.output).toContain("--binary");
@@ -156,9 +218,10 @@ describe("djbooth CLI", () => {
     expect(output).toContain("djbooth ");
     expect(output).toContain("djbooth-djlink");
     expect(output).toContain("djbooth-library");
+    expect(output).toContain("djbooth-produce");
     expect(output).toContain("djbooth-rekordbox");
     expect(output).toContain("djbooth-usb");
     expect(output).toContain("djbooth-ytdlp-ts");
-    expect(output).toContain("10 skills");
+    expect(output).toContain("11 skills");
   });
 });

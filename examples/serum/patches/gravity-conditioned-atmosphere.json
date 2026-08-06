@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "name": "Reference-conditioned breakdown atmosphere",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 58,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 72,
+    "octave": 0,
+    "unison": 5,
+    "detunePercent": 19,
+    "blendPercent": 68,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 100
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 24,
+    "octave": -1,
+    "unison": 2,
+    "detunePercent": 8,
+    "blendPercent": 72,
+    "wavetablePositionPercent": 33,
+    "phaseDegrees": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 380,
+    "holdMs": 0,
+    "decayMs": 1900,
+    "sustainPercent": 42,
+    "releaseMs": 2600
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 980,
+    "resonancePercent": 21,
+    "drivePercent": 18,
+    "fatPercent": 12,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 21,
+      "mixPercent": 34
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 260,
+      "lowQPercent": 54,
+      "lowGainDb": -6,
+      "highType": "Shelf",
+      "highFrequencyHz": 6200,
+      "highQPercent": 44,
+      "highGainDb": 2
+    },
+    "reverb": {
+      "sizePercent": 76,
+      "preDelayMs": 24,
+      "lowCutPercent": 58,
+      "highCutPercent": 67,
+      "dampPercent": 38,
+      "widthPercent": 100,
+      "mixPercent": 44
+    }
+  },
+  "lfos": {},
+  "modulations": [],
+  "designNotes": [
+    "The reference keeps the rhythmic core narrow and reserves stereo width for sparse atmospheric material, especially during the long breakdown."
+  ]
+}

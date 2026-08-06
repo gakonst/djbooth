@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "title": "Westend method — all-Serum tutorial study",
+  "bpm": 126,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": -1,
+    "softClipDrive": 1.12,
+    "ceilingDb": -1,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "kick",
+      "kind": "serum",
+      "patch": "../serum/patches/tech-house-kick.json",
+      "pattern": { "lengthBeats": 4, "repeats": 8 },
+      "gainDb": -5.5,
+      "notes": [
+        { "beat": 0, "durationBeats": 0.75, "note": 31, "velocity": 127 },
+        { "beat": 1, "durationBeats": 0.75, "note": 31, "velocity": 125 },
+        { "beat": 2, "durationBeats": 0.75, "note": 31, "velocity": 127 },
+        { "beat": 3, "durationBeats": 0.75, "note": 31, "velocity": 125 }
+      ]
+    },
+    {
+      "id": "clap",
+      "kind": "serum",
+      "patch": "../serum/patches/tech-house-clap.json",
+      "pattern": { "lengthBeats": 4, "repeats": 8 },
+      "gainDb": -8,
+      "highPassHz": 180,
+      "notes": [
+        { "beat": 1, "durationBeats": 0.34, "note": 55, "velocity": 127 },
+        { "beat": 3, "durationBeats": 0.34, "note": 55, "velocity": 125 }
+      ]
+    },
+    {
+      "id": "closed-hat",
+      "kind": "serum",
+      "patch": "../serum/patches/tech-house-closed-hat.json",
+      "pattern": { "lengthBeats": 4, "repeats": 8 },
+      "gainDb": -10,
+      "pan": -0.08,
+      "notes": [
+        { "beat": 0.25, "durationBeats": 0.2, "note": 60, "velocity": 72 },
+        { "beat": 0.75, "durationBeats": 0.2, "note": 60, "velocity": 91 },
+        { "beat": 1.25, "durationBeats": 0.2, "note": 60, "velocity": 76 },
+        { "beat": 1.75, "durationBeats": 0.2, "note": 60, "velocity": 96 },
+        { "beat": 2.25, "durationBeats": 0.2, "note": 60, "velocity": 73 },
+        { "beat": 2.75, "durationBeats": 0.2, "note": 60, "velocity": 92 },
+        { "beat": 3.25, "durationBeats": 0.2, "note": 60, "velocity": 79 },
+        { "beat": 3.75, "durationBeats": 0.2, "note": 60, "velocity": 100 }
+      ]
+    },
+    {
+      "id": "open-hat",
+      "kind": "serum",
+      "patch": "../serum/patches/tech-house-open-hat.json",
+      "pattern": { "lengthBeats": 4, "repeats": 8 },
+      "gainDb": -8,
+      "pan": 0.08,
+      "notes": [
+        { "beat": 0.5, "durationBeats": 0.48, "note": 60, "velocity": 108 },
+        { "beat": 1.5, "durationBeats": 0.48, "note": 60, "velocity": 116 },
+        { "beat": 2.5, "durationBeats": 0.48, "note": 60, "velocity": 106 },
+        { "beat": 3.5, "durationBeats": 0.48, "note": 60, "velocity": 120 }
+      ]
+    },
+    {
+      "id": "bass",
+      "kind": "serum",
+      "patch": "../serum/patches/tech-house-bass.json",
+      "pattern": { "lengthBeats": 4, "repeats": 8 },
+      "gainDb": -7,
+      "highPassHz": 25,
+      "sidechain": {
+        "everyBeats": 1,
+        "holdBeats": 0.035,
+        "releaseBeats": 0.44,
+        "depthDb": -20,
+        "curve": 0.7
+      },
+      "notes": [
+        { "beat": 0, "durationBeats": 0.09, "note": 49, "velocity": 101 },
+        { "beat": 0.63, "durationBeats": 0.1, "note": 54, "velocity": 105 },
+        { "beat": 0.88, "durationBeats": 0.32, "note": 53, "velocity": 112 },
+        { "beat": 1.25, "durationBeats": 0.1, "note": 56, "velocity": 98 },
+        { "beat": 1.75, "durationBeats": 0.22, "note": 56, "velocity": 108 },
+        { "beat": 2.38, "durationBeats": 0.12, "note": 59, "velocity": 94 },
+        { "beat": 2.63, "durationBeats": 0.24, "note": 61, "velocity": 111 },
+        { "beat": 2.88, "durationBeats": 0.14, "note": 59, "velocity": 96 },
+        { "beat": 3.25, "durationBeats": 0.12, "note": 56, "velocity": 102 },
+        { "beat": 3.5, "durationBeats": 0.32, "note": 56, "velocity": 114 },
+        { "beat": 3.75, "durationBeats": 0.24, "note": 49, "velocity": 108 }
+      ]
+    }
+  ]
+}

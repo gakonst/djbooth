@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Snare",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav", "Analog/BrightWhite.wav"],
+  "masterVolumePercent": 76,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 44,
+    "octave": 1,
+    "semitones": 4,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 30,
+    "octave": 2,
+    "semitones": -2,
+    "unison": 1,
+    "wavetablePositionPercent": 33,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 76,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 12
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 12,
+      "mixPercent": 32
+    }
+  },
+  "lfos": {
+    "bodyDecay": {
+      "mode": "envelope",
+      "rateHz": 5.6,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 15, "valuePercent": 84 },
+        { "positionPercent": 55, "valuePercent": 20 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "noiseDecay": {
+      "mode": "envelope",
+      "rateHz": 3.8,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 12, "valuePercent": 90 },
+        { "positionPercent": 48, "valuePercent": 32 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "bodyDecay",
+      "destination": "oscillatorA.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 44 }
+    },
+    {
+      "source": "bodyDecay",
+      "destination": "oscillatorB.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 30 }
+    },
+    {
+      "source": "noiseDecay",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 76 }
+    }
+  ],
+  "designNotes": [
+    "Two deterministic pitched bodies near 185 Hz and 330 Hz are layered with a longer white-noise decay."
+  ]
+}

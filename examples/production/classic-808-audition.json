@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "title": "Classic 808 — sequential Serum voice audition",
+  "bpm": 120,
+  "bars": 3,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 3,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "01-kick-36",
+      "kind": "serum",
+      "patch": "../serum/patches/808-kick.json",
+      "gainDb": -1,
+      "notes": [{ "beat": 0, "durationBeats": 1, "note": 36, "velocity": 124 }]
+    },
+    {
+      "id": "02-snare-38",
+      "kind": "serum",
+      "patch": "../serum/patches/808-snare.json",
+      "gainDb": -2.5,
+      "notes": [{ "beat": 1, "durationBeats": 0.48, "note": 38, "velocity": 124 }]
+    },
+    {
+      "id": "03-clap-39",
+      "kind": "serum",
+      "patch": "../serum/patches/808-clap.json",
+      "gainDb": -3.5,
+      "notes": [{ "beat": 2, "durationBeats": 0.48, "note": 39, "velocity": 118 }]
+    },
+    {
+      "id": "04-closed-hat-42",
+      "kind": "serum",
+      "patch": "../serum/patches/808-closed-hat.json",
+      "gainDb": -3.5,
+      "notes": [{ "beat": 3, "durationBeats": 0.12, "note": 42, "velocity": 106 }]
+    },
+    {
+      "id": "05-open-hat-46",
+      "kind": "serum",
+      "patch": "../serum/patches/808-open-hat.json",
+      "gainDb": -1.5,
+      "notes": [{ "beat": 4, "durationBeats": 0.5, "note": 46, "velocity": 110 }]
+    },
+    {
+      "id": "06-rimshot-37",
+      "kind": "serum",
+      "patch": "../serum/patches/808-rimshot.json",
+      "gainDb": -3.5,
+      "notes": [{ "beat": 5, "durationBeats": 0.14, "note": 37, "velocity": 108 }]
+    },
+    {
+      "id": "07-low-tom-41",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "gainDb": -7.5,
+      "notes": [{ "beat": 6, "durationBeats": 0.62, "note": 41, "velocity": 110 }]
+    },
+    {
+      "id": "08-mid-tom-45",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "gainDb": -8,
+      "notes": [{ "beat": 7, "durationBeats": 0.55, "note": 45, "velocity": 108 }]
+    },
+    {
+      "id": "09-high-tom-48",
+      "kind": "serum",
+      "patch": "../serum/patches/808-tom.json",
+      "gainDb": -8.5,
+      "notes": [{ "beat": 8, "durationBeats": 0.48, "note": 48, "velocity": 106 }]
+    },
+    {
+      "id": "10-cowbell-56",
+      "kind": "serum",
+      "patch": "../serum/patches/808-cowbell.json",
+      "gainDb": -2,
+      "notes": [{ "beat": 9, "durationBeats": 0.3, "note": 56, "velocity": 106 }]
+    }
+  ]
+}

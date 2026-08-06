@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "name": "Classic 808 Handclap",
+  "templatePreset": "Bass (Hard)/BA RBLz [7S].fxp",
+  "expectedResources": ["Analog/BrightWhite.wav"],
+  "masterVolumePercent": 78,
+  "noise": {
+    "sample": "Analog/BrightWhite.wav",
+    "levelPercent": 92,
+    "pitchPercent": 50,
+    "phasePercent": 0,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 0,
+    "holdMs": 0,
+    "decayMs": 1000,
+    "sustainPercent": 100,
+    "releaseMs": 10
+  },
+  "filter": {
+    "filterType": "High 12",
+    "cutoffHz": 850,
+    "resonancePercent": 18,
+    "drivePercent": 12,
+    "mixPercent": 100,
+    "route": ["noise"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 16,
+      "mixPercent": 38
+    }
+  },
+  "lfos": {
+    "burstEnvelope": {
+      "mode": "envelope",
+      "rateHz": 3.7,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 2, "valuePercent": 5 },
+        { "positionPercent": 4, "valuePercent": 96 },
+        { "positionPercent": 6, "valuePercent": 5 },
+        { "positionPercent": 8, "valuePercent": 88 },
+        { "positionPercent": 11, "valuePercent": 8 },
+        { "positionPercent": 14, "valuePercent": 72 },
+        { "positionPercent": 25, "valuePercent": 50 },
+        { "positionPercent": 55, "valuePercent": 18 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "burstEnvelope",
+      "destination": "noise.level",
+      "range": { "unit": "percent", "minimum": 0, "maximum": 92 }
+    }
+  ],
+  "designNotes": [
+    "Four rapid high-passed noise bursts feed a quieter decaying noise tail."
+  ]
+}
