@@ -115,7 +115,7 @@ export type DjLinkServerStatus = {
   tracks: number;
   playlists: number;
   uptimeMs: number;
-  remoteTransportSupported: false;
+  remoteTransportSupported: boolean;
   remoteDeckPreparationSupported: boolean;
 };
 
@@ -171,7 +171,7 @@ export type DjLinkSearchResult = {
   truncated: boolean;
 };
 
-/** Result of a safe remote track-load request. */
+/** Result of a remote track-load and playback request. */
 export type DjLinkLoadResult = {
   player: number;
   trackId: number;
@@ -180,7 +180,7 @@ export type DjLinkLoadResult = {
   artist: string;
   packetsSent: number;
   loaded: true;
-  playing: false;
+  playing: boolean;
   transportNote: string;
 };
 
@@ -205,7 +205,7 @@ export type DjLinkBrowseResult = {
   devices: DjLinkDevice[];
 };
 
-/** Completed manifest-to-deck handoff; transport remains physical. */
+/** Completed manifest-to-deck handoff. */
 export type DjLinkRunResult = DjLinkBrowseResult & {
   load: DjLinkLoadResult;
 };

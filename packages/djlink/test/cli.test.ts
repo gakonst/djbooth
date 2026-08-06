@@ -50,7 +50,7 @@ describe("DJ Link CLI", () => {
     expect(output).toContain("first Rekordbox-analyzed chorus");
     expect(output).toContain("--bpm <number>");
     expect(output).toContain("--bars-before <number>");
-    expect(output).toContain("PLAY remains physical");
+    expect(output).toContain("start playback");
   });
 
   it("retains scoped help when mounted under music", async () => {
@@ -60,7 +60,7 @@ describe("DJ Link CLI", () => {
 
     expect(exitCode).toBeUndefined();
     expect(output).toContain("music djlink load <track>");
-    expect(output).toContain("deck PLAY remains physical");
+    expect(output).toContain("load, and play");
     expect(output).toContain("--player <number>");
   });
 
@@ -70,7 +70,7 @@ describe("DJ Link CLI", () => {
     expect(exitCode).toBeUndefined();
     expect(output).toContain("djlink run <manifest> <track>");
     expect(output).toContain("one-shot manifest-to-deck handoff");
-    expect(output).toContain("never presses PLAY");
+    expect(output).toContain("confirms playback from CDJ status");
   });
 
   it("advertises direct full-library serving as the default flow", async () => {

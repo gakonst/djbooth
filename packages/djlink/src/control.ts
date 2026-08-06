@@ -29,10 +29,11 @@ export type NativeStatus = {
   bindIp: string;
   broadcastIp: string;
   playerNumber: number;
+  stagehandSessionNonce?: string;
   tracks: number;
   playlists: number;
   uptimeMs: number;
-  remoteTransportSupported: false;
+  remoteTransportSupported: boolean;
   remoteDeckPreparationSupported?: boolean;
 };
 
@@ -208,7 +209,7 @@ export function toServerStatus(state: DjLinkDaemonState, native: NativeStatus): 
     tracks: native.tracks,
     playlists: native.playlists,
     uptimeMs: native.uptimeMs,
-    remoteTransportSupported: false,
+    remoteTransportSupported: native.remoteTransportSupported === true,
     remoteDeckPreparationSupported: native.remoteDeckPreparationSupported === true,
   };
 }

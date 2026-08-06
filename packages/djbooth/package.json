@@ -15,6 +15,7 @@
   },
   "files": [
     "dist",
+    "monitor",
     "README.md",
     "LICENSE"
   ],
@@ -78,7 +79,8 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint src test",
-    "prepack": "pnpm build",
+    "monitor:build": "pnpm --filter @gakonst/dj-monitor build && node scripts/copy-monitor.mjs",
+    "prepack": "pnpm build && pnpm monitor:build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

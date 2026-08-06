@@ -23,6 +23,7 @@ let state: DjBoothRuntimeState = {
   options,
   link: server.link,
   logPath: paths.log,
+  monitorUrl: server.monitor.url,
 };
 await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 

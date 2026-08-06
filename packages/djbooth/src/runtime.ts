@@ -9,7 +9,7 @@ import type { DjLinkServerStatus } from "@gakonst/djlink";
 
 import type { DjBoothServerOptions } from "./serve.js";
 
-export const DJBOOTH_RUNTIME_VERSION = 1 as const;
+export const DJBOOTH_RUNTIME_VERSION = 2 as const;
 
 export type DjBoothRuntimeState = {
   version: typeof DJBOOTH_RUNTIME_VERSION;
@@ -20,6 +20,7 @@ export type DjBoothRuntimeState = {
   options: DjBoothServerOptions;
   link: (DjLinkServerStatus & { resumed: boolean }) | null;
   logPath: string;
+  monitorUrl: string;
 };
 
 export type DjBoothRuntimeStatus =
@@ -127,7 +128,8 @@ function parseRuntimeState(value: unknown): DjBoothRuntimeState | undefined {
     typeof state.assistantEnabled !== "boolean" ||
     typeof state.options !== "object" ||
     state.options === null ||
-    typeof state.logPath !== "string"
+    typeof state.logPath !== "string" ||
+    typeof state.monitorUrl !== "string"
   ) {
     return undefined;
   }

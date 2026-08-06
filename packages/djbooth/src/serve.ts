@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 import {
   startLibraryServer,
@@ -14,6 +15,7 @@ import {
 import { Cli, z } from "incur";
 
 import { startManagedDjBoothServer } from "./runtime.js";
+import { startMonitorServer, type RunningMonitorServer } from "./monitor.js";
 
 export type DjBoothServerOptions = {
   allowMissingAnalysis?: boolean;
@@ -33,6 +35,7 @@ export type RunningDjBoothServer = {
   assistantEnabled: boolean;
   close(): Promise<{ linkStopped: boolean }>;
   link: (DjLinkServerStatus & { resumed: boolean }) | null;
+  monitor: RunningMonitorServer;
   reconcileLink(): Promise<(DjLinkServerStatus & { resumed: boolean }) | null>;
   url: string;
   web: RunningLibraryServer;
@@ -40,6 +43,7 @@ export type RunningDjBoothServer = {
 
 export type DjBoothServerDependencies = {
   startLibraryServer(options: LibraryServerOptions): Promise<RunningLibraryServer>;
+  startMonitorServer(): Promise<RunningMonitorServer>;
   startRekordboxDjLink(
     options: StartRekordboxDjLinkOptions,
   ): Promise<DjLinkServerStatus & { resumed: boolean }>;
@@ -48,6 +52,7 @@ export type DjBoothServerDependencies = {
 
 const defaultDependencies: DjBoothServerDependencies = {
   startLibraryServer,
+  startMonitorServer,
   startRekordboxDjLink,
   stopDjLink,
 };
@@ -58,6 +63,7 @@ export async function startDjBoothServer(
   dependencies: DjBoothServerDependencies = defaultDependencies,
 ): Promise<RunningDjBoothServer> {
   const assistantEnabled = options.assistant ?? true;
+  const stagehandSessionNonce = randomBytes(8).readBigUInt64BE().toString();
   const linkOptions: StartRekordboxDjLinkOptions = {
     allowMissingAnalysis: options.allowMissingAnalysis ?? true,
     ...(options.binary ? { binaryPath: options.binary } : {}),
@@ -66,10 +72,12 @@ export async function startDjBoothServer(
     ...(options.databasePath ? { databasePath: options.databasePath } : {}),
     name: options.name ?? "djbooth",
     playerNumber: options.playerNumber ?? 17,
+    stagehandSessionNonce,
   };
   let link: (DjLinkServerStatus & { resumed: boolean }) | null = null;
   let ownedLinkPid: number | undefined;
   let web: RunningLibraryServer | undefined;
+  let monitor: RunningMonitorServer | undefined;
   try {
     if (options.link !== false) {
       link = await dependencies.startRekordboxDjLink(linkOptions);
@@ -82,7 +90,10 @@ export async function startDjBoothServer(
       port: options.port ?? 4179,
       writeEnabled: true,
     });
+    monitor = await dependencies.startMonitorServer();
   } catch (error) {
+    await monitor?.close().catch(() => undefined);
+    await web?.close().catch(() => undefined);
     if (link && !link.resumed) await dependencies.stopDjLink().catch(() => undefined);
     throw error;
   }
@@ -110,9 +121,11 @@ export async function startDjBoothServer(
     },
     url,
     web,
+    monitor,
     close() {
       closePromise ??= (async () => {
         await reconcilePromise?.catch(() => undefined);
+        await monitor.close();
         await web.close();
         if (!link || ownedLinkPid !== link.pid) return { linkStopped: false };
         const stopped = await dependencies.stopDjLink();
@@ -169,6 +182,7 @@ export const serveCli = Cli.create("serve", {
     assistantEnabled: z.boolean(),
     link: linkStatusOutput.nullable(),
     logPath: z.string(),
+    monitorUrl: z.string(),
     pid: z.number().int().positive(),
     url: z.string(),
   }),
@@ -192,6 +206,7 @@ export const serveCli = Cli.create("serve", {
       assistantEnabled: server.assistantEnabled,
       link: compactLinkStatus(server.link),
       logPath: server.logPath,
+      monitorUrl: server.monitorUrl,
       pid: server.pid,
       url: server.url,
     };

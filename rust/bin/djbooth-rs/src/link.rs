@@ -99,6 +99,9 @@ struct ServeArgs {
     /// Link-layer mixer MAC paired with --stagehand-target-ip.
     #[arg(long, requires = "stagehand_target_ip")]
     stagehand_target_mac: Option<String>,
+    /// Parent-owned Stagehand launch identity reused across supervised worker restarts.
+    #[arg(long, hide = true, requires = "stagehand_monitor")]
+    stagehand_session_nonce: Option<u64>,
 }
 
 #[derive(Args)]
@@ -260,6 +263,7 @@ struct RuntimeInfo {
     bind_ip: Ipv4Addr,
     broadcast_ip: Ipv4Addr,
     player_number: u8,
+    stagehand_session_nonce: Option<u64>,
     tracks: usize,
     playlists: usize,
 }
@@ -957,6 +961,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         stagehand_monitor: args.stagehand_monitor,
         stagehand_target_ip: args.stagehand_target_ip,
         stagehand_target_mac: args.stagehand_target_mac,
+        stagehand_session_nonce: args.stagehand_session_nonce,
         tcp_track_file_side_channel: false,
         db_auto_load: false,
         auto_load_confirm: false,
@@ -967,6 +972,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let mut server = DjLinkServer::new(config, library).await?;
     let mut telemetry_events = server.subscribe_telemetry();
     let mut mixer_telemetry_events = server.subscribe_mixer_telemetry();
+    let mut vu_telemetry_events = server.subscribe_vu_telemetry();
     server.start().await?;
     let listener = UnixListener::bind(&args.socket)
         .with_context(|| format!("failed to bind control socket '{}'", args.socket.display()))?;
@@ -978,6 +984,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         bind_ip: server.bind_ip(),
         broadcast_ip: server.broadcast_ip(),
         player_number: server.player_number(),
+        stagehand_session_nonce: server.stagehand_session_nonce(),
         tracks: server.library_track_count(),
         playlists: server.library_playlist_count(),
     });
@@ -1036,6 +1043,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             "bindIp": runtime.bind_ip,
             "broadcastIp": runtime.broadcast_ip,
             "playerNumber": runtime.player_number,
+            "stagehandSessionNonce": runtime.stagehand_session_nonce.map(|nonce| nonce.to_string()),
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "wirePcap": args.wire_pcap,
@@ -1220,6 +1228,17 @@ async fn serve(args: ServeArgs) -> Result<()> {
                     }
                 }
             }
+            telemetry = vu_telemetry_events.recv() => {
+                match telemetry {
+                    Ok(event) => state_api.publisher().publish_djlink_vu_event(event).await?,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(skipped, "state_api_djlink_vu_events_lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        bail!("DJ Link VU telemetry stream closed");
+                    }
+                }
+            }
             signal = tokio::signal::ctrl_c() => {
                 signal.context("failed to listen for Ctrl-C")?;
                 break;
@@ -1295,10 +1314,11 @@ async fn dispatch_control(
             "bindIp": runtime.bind_ip,
             "broadcastIp": runtime.broadcast_ip,
             "playerNumber": runtime.player_number,
+            "stagehandSessionNonce": runtime.stagehand_session_nonce.map(|nonce| nonce.to_string()),
             "tracks": runtime.tracks,
             "playlists": runtime.playlists,
             "uptimeMs": runtime.started.elapsed().as_millis(),
-            "remoteTransportSupported": false,
+            "remoteTransportSupported": true,
             "remoteDeckPreparationSupported": true,
         })),
         "devices" => {
@@ -1405,13 +1425,18 @@ async fn dispatch_control(
                     Duration::from_millis(params.interval_ms.max(10)),
                 )
                 .await?;
+            let playing = server.start_player(params.player, params.track_id).await?;
             Ok(json!({
                 "player": params.player,
                 "trackId": params.track_id,
                 "packetsSent": sent,
                 "loaded": true,
-                "playing": false,
-                "transportNote": "CDJ-3000 remote play/pause is not a confirmed DJ Link command; press PLAY on the deck.",
+                "playing": playing,
+                "transportNote": if playing {
+                    "Track loaded and remote playback confirmed from CDJ status."
+                } else {
+                    "Track loaded; Pro DJ Link and Stagehand transport commands were sent but the CDJ did not enter playback."
+                },
             }))
         }
         "prepare" => {
@@ -1432,12 +1457,13 @@ async fn dispatch_control(
             let tempo_confirmed = server
                 .set_player_bpm(params.player, params.bpm_hundreds)
                 .await?;
+            let playing = server.start_player(params.player, params.track_id).await?;
             Ok(json!({
                 "player": params.player,
                 "trackId": params.track_id,
                 "packetsSent": sent,
                 "loaded": true,
-                "playing": false,
+                "playing": playing,
                 "cue": {
                     "kind": "before-chorus",
                     "phraseBeat": cue.phrase_beat,
@@ -1448,7 +1474,11 @@ async fn dispatch_control(
                 "tempoBpm": f64::from(params.bpm_hundreds) / 100.0,
                 "tempoSyncRequested": true,
                 "tempoConfirmed": tempo_confirmed,
-                "transportNote": "Track loaded at a generated memory cue with deck Sync enabled; PLAY remains physical.",
+                "transportNote": if playing {
+                    "Track loaded at a generated memory cue and remote playback confirmed."
+                } else {
+                    "Track loaded at a generated memory cue; Pro DJ Link and Stagehand transport commands were sent but the CDJ did not enter playback."
+                },
             }))
         }
         "stop" => Ok(json!({ "stopping": true })),

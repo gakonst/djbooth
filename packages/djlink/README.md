@@ -28,8 +28,8 @@ djbooth link "Artist - Track" --player 3 --format json
 
 Without a selector, `link` validates direct read-only master.db ingestion, starts or resumes,
 requires at least one discovered deck, and exposes the complete folders/playlists/artists/albums/
-tracks hierarchy. With a selector it also resolves and cues the track. Use `run` for a completed
-ad-hoc manifest before its recordings are imported. Both leave PLAY physical. Stage commands remain
+tracks hierarchy. With a selector it also resolves, loads, and plays the track. Use `run` for a completed
+ad-hoc manifest before its recordings are imported. Both confirm playback from CDJ status. Stage commands remain
 for partial workflows and diagnosis:
 
 ```sh
@@ -50,13 +50,13 @@ djlink stop --format json
 Link network. `start` auto-selects a link-local interface when available. `devices` waits briefly
 for announcements. If discovery is empty, `probe` sends one bounded ARP request to a known deck IP
 on the selected interface; it does not send a DJ Link control command. `load` accepts manifest
-order, native ID, Spotify ID, title, or artist-title; it cues the local recording and returns
-`playing: false`. `prepare` additionally reads Rekordbox phrase analysis, overlays a session-only
+order, native ID, Spotify ID, title, or artist-title; it loads and starts the local recording and
+returns the confirmed `playing` state. `prepare` additionally reads Rekordbox phrase analysis, overlays a session-only
 memory cue before the first chorus, selects Memory Auto Cue, loads the track, advertises the target
 BPM as tempo master, and enables Sync on the selected deck. Its result reports whether deck status
 confirmed the requested effective BPM. `search` exercises the same prewarmed matcher and RemoteDB
 row builder used by the CDJ, without changing deck or library state, so index failures can be
-separated from deck UI activation failures. Press PLAY on the physical deck.
+separated from deck UI activation failures.
 
 `DJBOOTH_DJLINK_STATE_DIR` changes the daemon state directory. `DJBOOTH_DJLINK_BINARY` selects an
 explicit native helper. `--bind-ip` and `--broadcast-ip` are diagnostic overrides.

@@ -16,7 +16,9 @@ Pinned upstream revisions:
 - Deep Symmetry Beat Link:
   `a6d3945d42f081313fb7a38c8757e1892fa52c13`
 - Deep Symmetry Dysentery:
-  `45ad4c09667abf3d502c258113465e5fcacaa3fd`
+  `f62a24ba947f9db4c1553bb2dc3ba76de1fecbb4`
+- alphatheta-connect:
+  `ba142bfd762bd5249c158121a8cb92b242e76172`
 - prolink-connect:
   `4eda63b94454635a88469de297d7a514520b965a`
 
@@ -62,6 +64,32 @@ retained and mismatches must be logged; it must not silently redirect replies.
 
 Devices expire after ten seconds without a keepalive. A virtual source must not
 reuse player numbers already observed.
+
+## Stagehand peer
+
+The Stagehand path follows Deep Symmetry's 2026 capture rather than posing as a
+second virtual CDJ:
+
+- broadcast `0x0a` three times, then `0x02` three times, then `0x06` every two
+  seconds;
+- claim marker `0x3a`, protocol marker `3`, device type `5`, model code `0x20`,
+  and a runtime number in the observed 141–211 range;
+- use a distinct link-local IP, a locally administered link-layer MAC for
+  Ethernet/ARP, and a separate AlphaTheta-OUI protocol MAC inside `0x02`/`0x06`;
+- answer ARP for the isolated identity and receive its unicast traffic through
+  promiscuous BPF on macOS.
+
+Those values are one app-launch identity. `djbooth serve` creates them once in
+its long-lived supervisor and passes the same nonce to every replacement native
+worker. A worker crash therefore does not strand A9/CDJ unicast streams on a
+dead identity. The nonce is lifecycle state in parent memory, not library or
+workflow state.
+
+A live DJM-A9 capture verified 266-byte `0x39` control frames and the decoded
+trim, EQ, Color FX, fader, assignment, and crossfader fields. Deep Symmetry
+describes 584-byte `0x58` frames as the likely VU stream, but the local A9 did
+not emit them during active CH1 playback. Their body remains experimental and
+must not be treated as a confirmed Ethernet meter source.
 
 ## UDP/50002 update/status
 
@@ -130,8 +158,9 @@ is the safe physical-presence check when an active link yields no announcements.
 
 ## Safe command boundary
 
-Normal workflow may discover, browse, serve, and load/cue a verified local
-recording. Physical PLAY remains the default.
+Normal workflow may discover, browse, serve, load, and start a verified local
+recording. Playback uses the byte-tested fader-start command and must be confirmed
+from the target CDJ status before it is reported as playing.
 
 Explicit phrase-aware preparation may also:
 
@@ -142,10 +171,11 @@ Explicit phrase-aware preparation may also:
 - advertise a requested BPM in master mixer-status (`0x29`) and beat (`0x28`)
   packets, then unicast Sync On (`0x2a`, command `0x10`) to the target deck.
 
-The command confirms load from CDJ status and separately reports whether the
-deck's effective BPM converged. It does not emit PLAY, pause, seek, or Stagehand
-transport packets.
+The command confirms load and playback from CDJ status and separately reports
+whether the deck's effective BPM converged. Playback uses the observed
+fader-start command; Stagehand transport candidates are supplementary and are
+never reported successful without matching CDJ status.
 
 Unsafe or unproven packets (`0x17` empty hot-cue bank, zero-valued `0x1b` CDJ
-renew, Stagehand candidates, arbitrary raw UDP) stay behind explicit unsafe
-commands and are never emitted by discovery, browsing, or loading.
+renew, arbitrary raw UDP) stay behind explicit unsafe commands and are never
+emitted by discovery or browsing.

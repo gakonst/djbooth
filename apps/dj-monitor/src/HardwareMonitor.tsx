@@ -360,7 +360,9 @@ function DjmA9({
             <div className="a9-channel-live" key={channel}>
               <PhotoLevelMeter
                 x={x - 4.84}
-                meter={meters[`usb.${index * 2 + 3}_${index * 2 + 4}`]}
+                meter={
+                  meters[`ethernet.${channel}`] ?? meters[`usb.${index * 2 + 3}_${index * 2 + 4}`]
+                }
                 label={`Channel ${channel}`}
               />
               <PhotoStateKnob

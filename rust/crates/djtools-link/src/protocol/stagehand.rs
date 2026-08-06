@@ -7,6 +7,28 @@ const STARTUP_HEADER_LEN: usize = 36;
 const PROTOCOL_MARKER: u8 = 3;
 const DEVICE_TYPE: u8 = 5;
 const MODEL_CODE: u8 = 0x20;
+const ALPHATHETA_OUI: [u8; 3] = [0xc8, 0x3d, 0xfc];
+
+pub(crate) fn protocol_mac(link_mac: [u8; 6], launch_nonce: u64) -> [u8; 6] {
+    let mut hash = 0x811c_9dc5_u32;
+    for byte in b"djbooth-stagehand"
+        .iter()
+        .chain(link_mac.iter())
+        .chain(launch_nonce.to_be_bytes().iter())
+    {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let suffix = hash.to_be_bytes();
+    [
+        ALPHATHETA_OUI[0],
+        ALPHATHETA_OUI[1],
+        ALPHATHETA_OUI[2],
+        suffix[1],
+        suffix[2],
+        suffix[3],
+    ]
+}
 
 pub(crate) fn build_announcement(model: &str) -> Vec<u8> {
     let mut packet = build_header(model, 0x0a, 37);
@@ -25,8 +47,8 @@ pub(crate) fn build_claim(
     packet.extend_from_slice(&mac_addr);
     packet.push(0x3a);
     packet.push(iteration);
-    packet.push(1);
     packet.push(DEVICE_TYPE);
+    packet.push(1);
     packet
 }
 
@@ -51,18 +73,25 @@ pub(crate) fn is_a9_vu(packet: &[u8]) -> bool {
     packet.len() == 584
         && packet.starts_with(DJLINK_MAGIC)
         && packet.get(0x0a) == Some(&0x58)
-        && packet.get(0x1e) == Some(&0x3a)
+        && peer_marker(packet).is_some()
 }
 
 pub(crate) fn is_a9_mixer_state(packet: &[u8]) -> bool {
     packet.len() == 266
         && packet.starts_with(DJLINK_MAGIC)
         && packet.get(0x0a) == Some(&0x39)
-        && packet.get(0x1e) == Some(&0x3a)
+        && peer_marker(packet).is_some()
 }
 
 pub(crate) fn is_peer_packet(packet: &[u8]) -> bool {
-    packet.starts_with(DJLINK_MAGIC) && packet.get(0x1e) == Some(&0x3a)
+    packet.starts_with(DJLINK_MAGIC) && peer_marker(packet).is_some()
+}
+
+pub(crate) fn peer_marker(packet: &[u8]) -> Option<u8> {
+    packet
+        .get(0x1e)
+        .copied()
+        .filter(|marker| (0x3a..=0x3f).contains(marker))
 }
 
 fn build_header(model: &str, kind: u8, packet_len: usize) -> Vec<u8> {
@@ -106,11 +135,36 @@ mod tests {
         assert_eq!(claim.len(), 50);
         assert_eq!(&claim[0x24..0x28], &IP.octets());
         assert_eq!(&claim[0x28..0x2e], &MAC);
-        assert_eq!(&claim[0x2e..], &[0x3a, 2, 1, 5]);
+        assert_eq!(&claim[0x2e..], &[0x3a, 2, 5, 1]);
 
         let keepalive = build_keepalive("Stagehand", 0xc7, IP, MAC, 4);
         assert_eq!(keepalive.len(), 54);
         assert_eq!(keepalive[0x24], 0xc7);
         assert_eq!(&keepalive[0x34..], &[5, 0x20]);
+    }
+
+    #[test]
+    fn protocol_mac_uses_alphatheta_oui_and_changes_per_launch() {
+        let first = protocol_mac(MAC, 42);
+        let second = protocol_mac(MAC, 42);
+        let another_launch = protocol_mac(MAC, 43);
+        let another_adapter = protocol_mac([0xc8, 0x3d, 0xfc, 0x15, 0x71, 0xee], 42);
+
+        assert_eq!(&first[..3], &ALPHATHETA_OUI);
+        assert_ne!(first, MAC);
+        assert_eq!(first, second);
+        assert_ne!(first, another_launch);
+        assert_ne!(first, another_adapter);
+    }
+
+    #[test]
+    fn accepts_collision_shifted_peer_markers() {
+        let mut packet = vec![0; 40];
+        packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
+        packet[0x1e] = 0x3b;
+        assert_eq!(peer_marker(&packet), Some(0x3b));
+        assert!(is_peer_packet(&packet));
+        packet[0x1e] = 0x39;
+        assert_eq!(peer_marker(&packet), None);
     }
 }

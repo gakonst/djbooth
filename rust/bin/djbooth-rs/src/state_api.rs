@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use djtools_link::{
     DjLinkDeckState, DjLinkMixerTelemetryEvent, DjLinkServer, DjLinkTelemetryEvent,
-    DjLinkTelemetryKind, DjLinkTrackMetadata,
+    DjLinkTelemetryKind, DjLinkTrackMetadata, DjLinkVuTelemetryEvent,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -309,6 +309,70 @@ impl StatePublisher {
             sequence,
             observed_at_us,
             source: "usbAudio",
+            meters: &meters,
+        })?;
+        let _ = self.state.messages.send(text);
+        Ok(())
+    }
+
+    pub(crate) async fn publish_djlink_vu_event(
+        &self,
+        event: DjLinkVuTelemetryEvent,
+    ) -> Result<()> {
+        let (sequence, observed_at_us, meters) = {
+            let mut booth = self.state.booth.write().await;
+            booth.sequence += 1;
+            booth.observed_at_us = elapsed_us(self.state.started);
+            booth.mixer.connected = true;
+            let observed_at_us = booth.observed_at_us;
+            for (channel, frames) in event.channels {
+                let samples = frames.len().max(1) as f64;
+                let left_peak = frames
+                    .iter()
+                    .map(|frame| frame[0])
+                    .max()
+                    .unwrap_or_default();
+                let right_peak = frames
+                    .iter()
+                    .map(|frame| frame[1])
+                    .max()
+                    .unwrap_or_default();
+                let left_rms = (frames
+                    .iter()
+                    .map(|frame| f64::from(frame[0]).powi(2))
+                    .sum::<f64>()
+                    / samples)
+                    .sqrt();
+                let right_rms = (frames
+                    .iter()
+                    .map(|frame| f64::from(frame[1]).powi(2))
+                    .sum::<f64>()
+                    / samples)
+                    .sqrt();
+                let peak = left_peak.max(right_peak);
+                let rms = ((left_rms.powi(2) + right_rms.powi(2)) / 2.0).sqrt();
+                booth.mixer.meters.insert(
+                    format!("ethernet.{channel}"),
+                    MeterState {
+                        pair: channel,
+                        channels: [channel.saturating_mul(2).saturating_sub(1), channel * 2],
+                        peak_dbfs: raw_level_dbfs(f64::from(peak)),
+                        rms_dbfs: raw_level_dbfs(rms),
+                        left_peak_dbfs: raw_level_dbfs(f64::from(left_peak)),
+                        right_peak_dbfs: raw_level_dbfs(f64::from(right_peak)),
+                        left_rms_dbfs: raw_level_dbfs(left_rms),
+                        right_rms_dbfs: raw_level_dbfs(right_rms),
+                        changed_at_us: observed_at_us,
+                    },
+                );
+            }
+            (booth.sequence, observed_at_us, booth.mixer.meters.clone())
+        };
+        let text = serde_json::to_string(&StreamMessage::Meters {
+            schema_version: SCHEMA_VERSION,
+            sequence,
+            observed_at_us,
+            source: "djLinkEthernet",
             meters: &meters,
         })?;
         let _ = self.state.messages.send(text);
@@ -725,6 +789,14 @@ fn elapsed_us(started: Instant) -> u64 {
     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
+fn raw_level_dbfs(level: f64) -> f64 {
+    if level <= 0.0 {
+        -120.0
+    } else {
+        (20.0 * (level / f64::from(u16::MAX)).log10()).max(-120.0)
+    }
+}
+
 fn set_link_control(
     controls: &mut BTreeMap<String, ControlState>,
     path: String,
@@ -939,5 +1011,27 @@ mod tests {
             booth.mixer.controls["crossfader.position"].percent,
             Some(120.0 * 100.0 / 255.0)
         );
+    }
+
+    #[tokio::test]
+    async fn ethernet_a9_vu_populates_stereo_channel_meter() {
+        let publisher = test_publisher();
+        publisher
+            .publish_djlink_vu_event(DjLinkVuTelemetryEvent {
+                source_ip: Ipv4Addr::new(169, 254, 69, 43),
+                channels: BTreeMap::from([
+                    (1, vec![[u16::MAX, u16::MAX / 2]; 15]),
+                    (2, vec![[0, 0]; 15]),
+                ]),
+            })
+            .await
+            .unwrap();
+
+        let booth = publisher.state.booth.read().await;
+        let channel = &booth.mixer.meters["ethernet.1"];
+        assert_eq!(channel.channels, [1, 2]);
+        assert_eq!(channel.left_peak_dbfs, 0.0);
+        assert!((-6.1..-6.0).contains(&channel.right_peak_dbfs));
+        assert_eq!(booth.mixer.meters["ethernet.2"].peak_dbfs, -120.0);
     }
 }

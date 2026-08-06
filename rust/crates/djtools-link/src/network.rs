@@ -36,6 +36,65 @@ pub(crate) struct RawUdpDatagram {
     pub(crate) payload: Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RawUdpReceived {
+    pub(crate) src_ip: Ipv4Addr,
+    pub(crate) src_port: u16,
+    pub(crate) dst_port: u16,
+    pub(crate) payload: Vec<u8>,
+}
+
+pub(crate) fn spawn_raw_udp_receiver(
+    interface_name: Option<&str>,
+    local_mac: [u8; 6],
+    local_ip: Ipv4Addr,
+) -> io::Result<mpsc::Receiver<RawUdpReceived>> {
+    #[cfg(target_os = "macos")]
+    {
+        let interface_name = interface_name
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown bind interface"))?;
+        let mut receiver = RawUdpSender::open(interface_name)?;
+        let (tx, rx) = mpsc::channel(RAW_UDP_QUEUE_CAPACITY);
+        thread::spawn(move || {
+            loop {
+                match receiver.read_frames() {
+                    Ok(frames) => {
+                        for frame in frames {
+                            if let Some(reply) = build_arp_reply_for(&frame, local_mac, local_ip) {
+                                if let Err(error) = receiver.file.write_all(&reply) {
+                                    tracing::warn!(%error, "stagehand_arp_reply_failed");
+                                }
+                                continue;
+                            }
+                            let Some(datagram) = parse_udp_for(&frame, local_mac, local_ip) else {
+                                continue;
+                            };
+                            if tx.blocking_send(datagram).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "stagehand_raw_receive_failed");
+                        return;
+                    }
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+        });
+        return Ok(rx);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (interface_name, local_mac, local_ip);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "raw Stagehand peer receiving is only implemented on macOS",
+        ))
+    }
+}
+
 enum RawNetworkRequest {
     Udp {
         datagram: RawUdpDatagram,
@@ -465,6 +524,9 @@ fn bind_bpf_interface(file: &File, interface_name: &str) -> io::Result<()> {
         if libc::ioctl(fd, libc::BIOCSETIF, &request) < 0 {
             return Err(io::Error::last_os_error());
         }
+        if libc::ioctl(fd, libc::BIOCPROMISC.into(), 0) < 0 {
+            return Err(io::Error::last_os_error());
+        }
         let mut one: libc::c_uint = 1;
         if libc::ioctl(fd, libc::BIOCIMMEDIATE, &mut one) < 0 {
             return Err(io::Error::last_os_error());
@@ -654,6 +716,62 @@ fn build_ethernet_arp_request_frame(
     frame
 }
 
+#[cfg(target_os = "macos")]
+fn build_arp_reply_for(frame: &[u8], local_mac: [u8; 6], local_ip: Ipv4Addr) -> Option<Vec<u8>> {
+    if frame.len() < 42
+        || frame.get(12..14)? != 0x0806u16.to_be_bytes()
+        || frame.get(20..22)? != 1u16.to_be_bytes()
+        || frame.get(38..42)? != local_ip.octets()
+    {
+        return None;
+    }
+    let sender_mac: [u8; 6] = frame.get(22..28)?.try_into().ok()?;
+    let sender_ip: [u8; 4] = frame.get(28..32)?.try_into().ok()?;
+    let mut reply = Vec::with_capacity(60);
+    reply.extend_from_slice(&sender_mac);
+    reply.extend_from_slice(&local_mac);
+    reply.extend_from_slice(&0x0806u16.to_be_bytes());
+    reply.extend_from_slice(&1u16.to_be_bytes());
+    reply.extend_from_slice(&0x0800u16.to_be_bytes());
+    reply.extend_from_slice(&[6, 4]);
+    reply.extend_from_slice(&2u16.to_be_bytes());
+    reply.extend_from_slice(&local_mac);
+    reply.extend_from_slice(&local_ip.octets());
+    reply.extend_from_slice(&sender_mac);
+    reply.extend_from_slice(&sender_ip);
+    reply.resize(60, 0);
+    Some(reply)
+}
+
+#[cfg(target_os = "macos")]
+fn parse_udp_for(frame: &[u8], local_mac: [u8; 6], local_ip: Ipv4Addr) -> Option<RawUdpReceived> {
+    if frame.len() < 42
+        || frame.get(0..6)? != local_mac
+        || frame.get(12..14)? != 0x0800u16.to_be_bytes()
+        || frame.get(23).copied()? != 17
+        || frame.get(30..34)? != local_ip.octets()
+    {
+        return None;
+    }
+    let ip_header_len = usize::from(frame[14] & 0x0f) * 4;
+    let udp = 14 + ip_header_len;
+    if ip_header_len < 20 || frame.len() < udp + 8 {
+        return None;
+    }
+    let udp_len = usize::from(u16::from_be_bytes(
+        frame.get(udp + 4..udp + 6)?.try_into().ok()?,
+    ));
+    if udp_len < 8 || frame.len() < udp + udp_len {
+        return None;
+    }
+    Some(RawUdpReceived {
+        src_ip: Ipv4Addr::from(<[u8; 4]>::try_from(frame.get(26..30)?).ok()?),
+        src_port: u16::from_be_bytes(frame.get(udp..udp + 2)?.try_into().ok()?),
+        dst_port: u16::from_be_bytes(frame.get(udp + 2..udp + 4)?.try_into().ok()?),
+        payload: frame[udp + 8..udp + udp_len].to_vec(),
+    })
+}
+
 fn parse_arp_reply(
     frame: &[u8],
     local_mac: [u8; 6],
@@ -822,6 +940,39 @@ mod tests {
         );
         reply[38] ^= 1;
         assert_eq!(parse_arp_reply(&reply, local_mac, local_ip, deck_ip), None);
+    }
+
+    #[test]
+    fn isolated_peer_answers_arp_and_receives_udp() {
+        let local_mac = [0xc8, 0x3d, 0xfc, 0x15, 0x71, 0xed];
+        let deck_mac = [0x24, 0x97, 0xed, 0x24, 0x4a, 0x66];
+        let local_ip = Ipv4Addr::new(169, 254, 179, 138);
+        let deck_ip = Ipv4Addr::new(169, 254, 7, 4);
+        let request = build_ethernet_arp_request_frame(deck_mac, deck_ip, local_ip);
+        let reply = build_arp_reply_for(&request, local_mac, local_ip).expect("ARP reply");
+        assert_eq!(&reply[..6], &deck_mac);
+        assert_eq!(&reply[6..12], &local_mac);
+        assert_eq!(&reply[20..22], &2u16.to_be_bytes());
+        assert_eq!(&reply[28..32], &local_ip.octets());
+
+        let frame = build_ethernet_ipv4_udp_frames(
+            deck_mac,
+            local_mac,
+            deck_ip,
+            50001,
+            local_ip,
+            50001,
+            b"stagehand",
+            7,
+            RAW_IPV4_MTU,
+        )
+        .unwrap()
+        .remove(0);
+        let received = parse_udp_for(&frame, local_mac, local_ip).expect("UDP datagram");
+        assert_eq!(received.src_ip, deck_ip);
+        assert_eq!(received.src_port, 50001);
+        assert_eq!(received.dst_port, 50001);
+        assert_eq!(received.payload, b"stagehand");
     }
 
     #[test]

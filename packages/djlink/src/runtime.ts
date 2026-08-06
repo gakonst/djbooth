@@ -58,6 +58,7 @@ export type StartDjLinkOptions = {
   broadcastIp?: string;
   name?: string;
   playerNumber?: number;
+  stagehandSessionNonce?: string;
   allowMissingAnalysis?: boolean;
   env?: NodeJS.ProcessEnv;
 };
@@ -220,6 +221,8 @@ async function startDjLinkSource(
       `DJ Link validation failed: missing audio=${doctor.missingAudio.length}, missing analysis=${doctor.missingAnalysis.length}`,
     );
   }
+  const stagehandTarget = await discoverStagehandTarget(env);
+  assertStagehandSessionNonce(options.stagehandSessionNonce);
 
   const args = [
     "link",
@@ -233,6 +236,13 @@ async function startDjLinkSource(
     String(options.playerNumber ?? 17),
     "--log-path",
     paths.log,
+    "--stagehand-monitor",
+    ...(options.stagehandSessionNonce
+      ? ["--stagehand-session-nonce", options.stagehandSessionNonce]
+      : []),
+    ...(stagehandTarget
+      ? ["--stagehand-target-ip", stagehandTarget.ip, "--stagehand-target-mac", stagehandTarget.mac]
+      : []),
     ...(options.bindIp ? ["--bind-ip", options.bindIp] : []),
     ...(options.broadcastIp ? ["--broadcast-ip", options.broadcastIp] : []),
     ...(requireAnalysis ? ["--require-analysis"] : []),
@@ -292,7 +302,15 @@ async function resumeOrRestartDjLink(
     (options.bindIp === undefined || options.bindIp === current.bindIp) &&
     (options.broadcastIp === undefined || options.broadcastIp === current.broadcastIp) &&
     (options.playerNumber === undefined || options.playerNumber === current.playerNumber);
-  if (explicitConfigurationMatches && localIpv4Addresses().has(current.bindIp)) {
+  const native = await requestControl<NativeStatus>(current.socketPath, "status");
+  const stagehandSessionMatches =
+    options.stagehandSessionNonce === undefined ||
+    native.stagehandSessionNonce === options.stagehandSessionNonce;
+  if (
+    explicitConfigurationMatches &&
+    stagehandSessionMatches &&
+    shouldResumeDjLinkBind(current.bindIp, options.bindIp, localIpv4Addresses())
+  ) {
     return { ...current, resumed: true };
   }
   const stopped = await stopDjLink({ env });
@@ -303,6 +321,13 @@ async function resumeOrRestartDjLink(
     );
   }
   return undefined;
+}
+
+function assertStagehandSessionNonce(value: string | undefined): void {
+  if (value === undefined) return;
+  if (!/^\d+$/.test(value) || BigInt(value) > 0xffff_ffff_ffff_ffffn) {
+    throw new TypeError(`Invalid Stagehand session nonce: ${value}`);
+  }
 }
 
 function toDoctorResult(
@@ -454,7 +479,7 @@ export async function prepareDjLinkTrack(
   };
 }
 
-/** Validate, start/resume, discover, and cue one manifest track without remote PLAY. */
+/** Validate, start/resume, discover, load, and start one manifest track. */
 export async function runDjLink(options: RunDjLinkOptions): Promise<DjLinkRunResult> {
   const doctor = await doctorDjLink(options);
   const server = await startDjLink(options);
@@ -584,7 +609,7 @@ type NativeLoadResult = {
   trackId: number;
   packetsSent: number;
   loaded: true;
-  playing: false;
+  playing: boolean;
   transportNote: string;
 };
 
@@ -721,6 +746,45 @@ function localIpv4Addresses(): Set<string> {
       .filter((address) => address.family === "IPv4")
       .map((address) => address.address),
   );
+}
+
+export function shouldResumeDjLinkBind(
+  currentBindIp: string,
+  requestedBindIp: string | undefined,
+  localAddresses: ReadonlySet<string>,
+): boolean {
+  if (!localAddresses.has(currentBindIp)) return false;
+  if (requestedBindIp !== undefined) return requestedBindIp === currentBindIp;
+  const djLinkInterfaceAvailable = [...localAddresses].some(isLinkLocalIpv4);
+  return !djLinkInterfaceAvailable || isLinkLocalIpv4(currentBindIp);
+}
+
+function isLinkLocalIpv4(address: string): boolean {
+  return address.startsWith("169.254.");
+}
+
+async function discoverStagehandTarget(
+  env: NodeJS.ProcessEnv,
+): Promise<{ ip: string; mac: string } | undefined> {
+  try {
+    const result = await runProcess("/usr/sbin/arp", ["-an"], env);
+    if (result.code !== 0) return undefined;
+    return parseStagehandTargetFromArp(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseStagehandTargetFromArp(
+  output: string,
+): { ip: string; mac: string } | undefined {
+  for (const line of output.split("\n")) {
+    const match = line.match(
+      /\((169\.254\.\d{1,3}\.\d{1,3})\) at (c8:3d:fc:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2})\b/i,
+    );
+    if (match?.[1] && match[2]) return { ip: match[1], mac: match[2].toLowerCase() };
+  }
+  return undefined;
 }
 
 async function runProcess(

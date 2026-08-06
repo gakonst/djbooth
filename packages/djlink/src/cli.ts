@@ -76,7 +76,7 @@ const runningOutput = z.object({
   tracks: z.number().int().nonnegative(),
   playlists: z.number().int().nonnegative(),
   uptimeMs: z.number().nonnegative(),
-  remoteTransportSupported: z.literal(false),
+  remoteTransportSupported: z.boolean(),
   remoteDeckPreparationSupported: z.boolean(),
 });
 
@@ -101,7 +101,7 @@ const loadOutput = z.object({
   artist: z.string(),
   packetsSent: z.number().int().positive(),
   loaded: z.literal(true),
-  playing: z.literal(false),
+  playing: z.boolean(),
   transportNote: z.string(),
 });
 
@@ -144,10 +144,10 @@ export const djlinkCli = Cli.create("djlink", {
   version: DJLINK_VERSION,
   description:
     "Serve compatible master.db content or acquired djbooth recordings to CDJs over Pro DJ Link.",
-  hint: "Start the full browsable library: djlink link. Add a track selector to validate, start, discover, and cue it in one shot. PLAY stays physical.",
+  hint: "Start the full browsable library: djlink link. Add a track selector to validate, start, discover, load, and play it in one shot.",
   mcp: {
     instructions:
-      "Use link with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use link <track> for a one-shot database-to-deck cue. Use run <manifest> <track> only for developer diagnosis of recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code. Loading does not start transport because CDJ-3000 remote play/pause is not a confirmed safe DJ Link command.",
+      "Use link with no positional track to expose the complete auto-discovered master.db hierarchy directly and read-only. Use link <track> for a one-shot database-to-deck load and play. Use run <manifest> <track> only for developer diagnosis of recordings not yet imported. Use search <query> to verify the exact prewarmed RemoteDB matcher and row builder independently from CDJ Search UI activation. After a passing preflight, inspect TCP/1051: CDJ-3000 keyboard edits emit incremental 0x1500; legacy players may emit 0x1300. A reconnect after every keystroke means the server rejected Search; no request means the deck never activated it. The native daemon prewarms metadata and playlist membership, serves local audio plus ANLZ, and never streams Spotify audio. If an active interface yields no announcements, probe a known deck IP before changing protocol code.",
   },
 });
 
@@ -260,8 +260,8 @@ djlinkCli.command("doctor-rekordbox", {
 
 djlinkCli.command("run", {
   description:
-    "Validate a completed manifest, start or resume its source, discover one CDJ, then load and cue a track.",
-  hint: "This is the one-shot manifest-to-deck handoff. It never streams Spotify audio and never presses PLAY.",
+    "Validate a completed manifest, start or resume its source, discover one CDJ, then load and play a track.",
+  hint: "This is the one-shot manifest-to-deck handoff. It never streams Spotify audio and confirms playback from CDJ status.",
   args: z.object({
     manifest: z.string().min(1).describe("Completed music tracks manifest"),
     track: z
@@ -454,8 +454,7 @@ djlinkCli.command("probe", {
 });
 
 djlinkCli.command("load", {
-  description:
-    "Resolve, load, and cue one track from the running Rekordbox or manifest source; deck PLAY remains physical.",
+  description: "Resolve, load, and play one track from the running Rekordbox or manifest source.",
   args: z.object({
     track: z
       .string()
@@ -490,7 +489,7 @@ djlinkCli.command("load", {
 
 djlinkCli.command("prepare", {
   description:
-    "Load a track, cue before its first Rekordbox-analyzed chorus, and set deck tempo with DJ Link Sync; PLAY remains physical.",
+    "Load a track, cue before its first Rekordbox-analyzed chorus, set deck tempo with DJ Link Sync, and start playback.",
   args: z.object({
     track: z
       .string()

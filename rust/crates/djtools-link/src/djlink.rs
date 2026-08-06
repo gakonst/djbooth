@@ -5,9 +5,9 @@ use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use image::codecs::jpeg::JpegEncoder;
@@ -41,7 +41,10 @@ use crate::load::{
     LOAD_CONTEXT_ARTIST_MENU, LOAD_CONTEXT_CATEGORY_1_OFFSET, LOAD_CONTEXT_CATEGORY_2_OFFSET,
     LOAD_CONTEXT_MENU_COUNT_OFFSET, LOAD_CONTEXT_OFFSET, LoadConfirmContext, LoadProgressSnapshot,
 };
-use crate::network::{RawUdpDatagram, RawUdpTx, bind_udp, connect_tcp, parse_mac};
+use crate::network::{
+    RawUdpDatagram, RawUdpReceived, RawUdpTx, bind_udp, connect_tcp, parse_mac,
+    spawn_raw_udp_receiver,
+};
 pub use crate::nfs::NFS_PORT;
 use crate::nfs::{
     NFS_READ_CHUNK_MAX, NfsContext, PORTMAP_GETPORT, RPC_PORTMAP_PROG, handle_mount_packet,
@@ -161,6 +164,7 @@ pub struct DjLinkConfig {
     pub stagehand_monitor: bool,
     pub stagehand_target_ip: Option<Ipv4Addr>,
     pub stagehand_target_mac: Option<String>,
+    pub stagehand_session_nonce: Option<u64>,
     pub tcp_track_file_side_channel: bool,
     pub db_auto_load: bool,
     pub auto_load_confirm: bool,
@@ -222,6 +226,7 @@ impl Default for DjLinkConfig {
             stagehand_monitor: false,
             stagehand_target_ip: None,
             stagehand_target_mac: None,
+            stagehand_session_nonce: None,
             tcp_track_file_side_channel: false,
             db_auto_load: false,
             auto_load_confirm: false,
@@ -449,6 +454,12 @@ pub struct DjLinkMixerTelemetryEvent {
     pub mixer: DjLinkMixerState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DjLinkVuTelemetryEvent {
+    pub source_ip: Ipv4Addr,
+    pub channels: BTreeMap<u8, Vec<[u16; 2]>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkSearchMode {
     Track,
@@ -496,7 +507,7 @@ fn search_profile_item(entry: &MenuEntry) -> DjLinkSearchProfileItem {
 }
 
 impl DjLinkServer {
-    pub async fn new(config: DjLinkConfig, library: LibrarySnapshot) -> Result<Self> {
+    pub async fn new(mut config: DjLinkConfig, library: LibrarySnapshot) -> Result<Self> {
         init_djlink_tracing(config.log_path.clone(), config.log_level).await?;
         let bind_ip = match config.bind_ip {
             Some(ip) => ip,
@@ -509,16 +520,37 @@ impl DjLinkServer {
         let log_path = config.log_path.clone();
         let raw_udp = RawUdpTx::spawn(interface_name.clone(), config.wire_capture_path.clone())
             .context("failed to initialize raw wire capture")?;
+        let mac_addr = default_mac(bind_ip);
+        // The real Stagehand app is a separate network host. Keep that identity
+        // distinct from the Rekordbox source so peers never see two protocol
+        // personas claiming the same IP address.
+        let stagehand_session_nonce = config.stagehand_monitor.then(|| {
+            config
+                .stagehand_session_nonce
+                .unwrap_or_else(stagehand_launch_nonce)
+        });
+        config.stagehand_session_nonce = stagehand_session_nonce;
+        let stagehand_ip =
+            stagehand_session_nonce.map(|nonce| isolated_stagehand_ip(bind_ip, nonce));
+        let stagehand_link_mac = stagehand_session_nonce.map(|nonce| {
+            stagehand_link_mac(
+                parse_mac(&mac_addr).expect("detected interface MAC is valid"),
+                nonce,
+            )
+        });
         let search_index = SearchIndex::new(&library);
         let (actor_tx, actor_rx) = ServerActor::channel();
         let (telemetry_tx, _) = broadcast::channel(1_024);
         let (mixer_telemetry_tx, _) = broadcast::channel(1_024);
+        let (vu_telemetry_tx, _) = broadcast::channel(1_024);
         let initial_bpm = if config.emit_beat_clock { 13_005 } else { 0 };
         let state = Arc::new(ServerState {
             config,
             bind_ip,
             broadcast_ip,
-            mac_addr: default_mac(bind_ip),
+            mac_addr,
+            stagehand_ip,
+            stagehand_link_mac,
             raw_udp,
             interface_name,
             library: Arc::new(library),
@@ -526,6 +558,9 @@ impl DjLinkServer {
             actor_tx,
             telemetry_tx,
             mixer_telemetry_tx,
+            vu_telemetry_tx,
+            stagehand_last_a9_ms: AtomicU64::new(0),
+            stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(initial_bpm),
@@ -550,6 +585,10 @@ impl DjLinkServer {
 
     pub fn player_number(&self) -> u8 {
         self.state.config.player_number
+    }
+
+    pub fn stagehand_session_nonce(&self) -> Option<u64> {
+        self.state.config.stagehand_session_nonce
     }
 
     pub fn library_track_count(&self) -> usize {
@@ -934,6 +973,10 @@ impl DjLinkServer {
         self.state.mixer_telemetry_tx.subscribe()
     }
 
+    pub fn subscribe_vu_telemetry(&self) -> broadcast::Receiver<DjLinkVuTelemetryEvent> {
+        self.state.vu_telemetry_tx.subscribe()
+    }
+
     pub async fn start(&mut self) -> Result<()> {
         if !self.tasks.is_empty() {
             return Ok(());
@@ -1072,6 +1115,22 @@ impl DjLinkServer {
         self.tasks
             .push(spawn_announce(self.state.clone(), keepalive_sock.clone()));
         if self.state.config.stagehand_monitor {
+            if let Some(stagehand_ip) = self
+                .state
+                .stagehand_ip
+                .filter(|stagehand_ip| *stagehand_ip != self.state.bind_ip)
+            {
+                let raw_rx = spawn_raw_udp_receiver(
+                    self.state.interface_name.as_deref(),
+                    self.state
+                        .stagehand_link_mac
+                        .unwrap_or(parse_mac(&self.state.mac_addr)?),
+                    stagehand_ip,
+                )
+                .context("failed to start isolated Stagehand receiver")?;
+                self.tasks
+                    .push(spawn_stagehand_raw_rx(self.state.clone(), raw_rx));
+            }
             self.tasks.push(spawn_stagehand_announce(
                 self.state.clone(),
                 keepalive_sock.clone(),
@@ -1102,8 +1161,10 @@ impl DjLinkServer {
         self.tasks.push(spawn_nfs(self.state.clone(), nfs_sock));
 
         send_startup_link_init(&self.state, &status_sock).await;
-        self.tasks
-            .push(spawn_startup_hello(self.state.clone(), keepalive_sock));
+        if !self.state.config.stagehand_monitor {
+            self.tasks
+                .push(spawn_startup_hello(self.state.clone(), keepalive_sock));
+        }
         Ok(())
     }
 
@@ -1335,6 +1396,45 @@ impl DjLinkServer {
             ),
         );
         Ok(())
+    }
+
+    pub async fn start_player(&self, target_player: u8, track_id: u32) -> Result<bool> {
+        for attempt in 0..3 {
+            self.send_fader_start_command(target_player, None, true, 0x02)
+                .await?;
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+        }
+
+        let target_ip = self
+            .list_devices()
+            .await
+            .into_iter()
+            .find(|device| device.player_number == target_player)
+            .ok_or(LinkError::TargetPlayerNotFound { target_player })?
+            .ip_addr;
+        let sock = self.beat_tx.as_ref().ok_or(LinkError::ServerNotRunning)?;
+        let correlation =
+            stagehand_correlation_byte(self.state.stagehand_ip.unwrap_or(self.state.bind_ip));
+        for attempt in 0..3 {
+            for action in [0x0f, 0x14] {
+                let packet = build_stagehand_transport_command(correlation, 0x3a, action, true);
+                send_stagehand_transport_packet(&self.state, sock, &packet, target_ip).await?;
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if track_is_playing_on_player(&self.state, target_player, track_id).await {
+                return Ok(true);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(false)
     }
 
     pub async fn send_fader_start_control_datagram(
@@ -2072,6 +2172,29 @@ impl DjLinkServer {
     }
 }
 
+fn build_stagehand_transport_command(
+    correlation: u8,
+    marker: u8,
+    action: u8,
+    pressed: bool,
+) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(56);
+    packet.extend_from_slice(DJLINK_MAGIC);
+    packet.push(0x07);
+    packet.extend_from_slice(&cstr_padded_ascii("Stagehand", 20));
+    packet.extend_from_slice(&[0x01, 0x03, correlation, 0x00, 0x30]);
+    packet.extend_from_slice(&[0; 20]);
+    packet[0x28] = marker;
+    packet[0x2c] = action;
+    packet[0x2e] = u8::from(pressed);
+    debug_assert_eq!(packet.len(), 56);
+    packet
+}
+
+fn stagehand_correlation_byte(bind_ip: Ipv4Addr) -> u8 {
+    bind_ip.octets()[3] ^ (std::process::id() as u8).rotate_left(3)
+}
+
 async fn run_load_command_actor(
     state: Arc<ServerState>,
     sock: Arc<UdpSocket>,
@@ -2408,6 +2531,8 @@ struct ServerState {
     bind_ip: Ipv4Addr,
     broadcast_ip: Ipv4Addr,
     mac_addr: String,
+    stagehand_ip: Option<Ipv4Addr>,
+    stagehand_link_mac: Option<[u8; 6]>,
     interface_name: Option<String>,
     raw_udp: RawUdpTx,
     library: Arc<LibrarySnapshot>,
@@ -2415,6 +2540,9 @@ struct ServerState {
     actor_tx: ServerActorSender,
     telemetry_tx: broadcast::Sender<DjLinkTelemetryEvent>,
     mixer_telemetry_tx: broadcast::Sender<DjLinkMixerTelemetryEvent>,
+    vu_telemetry_tx: broadcast::Sender<DjLinkVuTelemetryEvent>,
+    stagehand_last_a9_ms: AtomicU64,
+    stagehand_rejoin_requested_ms: AtomicU64,
     log_path: Option<PathBuf>,
     cue_overrides_ms: RwLock<HashMap<u32, u32>>,
     master_bpm_hundreds: AtomicU16,
@@ -3687,6 +3815,31 @@ fn default_broadcast_ip(ip: Ipv4Addr) -> Ipv4Addr {
     Ipv4Addr::new(octets[0], octets[1], octets[2], 255)
 }
 
+fn isolated_stagehand_ip(bind_ip: Ipv4Addr, launch_nonce: u64) -> Ipv4Addr {
+    let [a, b, c, d] = bind_ip.octets();
+    let mut host = 2 + (launch_nonce % 252) as u8;
+    if host == d {
+        host = if host == 253 { 2 } else { host + 1 };
+    }
+    Ipv4Addr::new(a, b, c, host)
+}
+
+fn stagehand_link_mac(interface_mac: [u8; 6], launch_nonce: u64) -> [u8; 6] {
+    let entropy = stagehand::protocol_mac(interface_mac, launch_nonce);
+    [
+        0x5a, entropy[1], entropy[2], entropy[3], entropy[4], entropy[5],
+    ]
+}
+
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 fn default_mac(ip: Ipv4Addr) -> String {
     for entry in ifconfig_ipv4_entries() {
         if entry.ip == ip {
@@ -4753,6 +4906,26 @@ fn spawn_keepalive_rx(
                 continue;
             }
             let packet = &buf[..len];
+            let keepalive_header = keepalive::decode_header(packet).ok();
+            let is_stagehand_target = state.config.stagehand_monitor
+                && (state.config.stagehand_target_ip == Some(src_ip)
+                    || keepalive_header
+                        .as_ref()
+                        .is_some_and(|header| header.model.eq_ignore_ascii_case("DJM-A9")));
+            // A9 Stagehand endpoints are sensitive to the normal virtual-CDJ
+            // collision protocol. They must see only the abbreviated Stagehand
+            // handshake, never our Rekordbox source's compatibility replies.
+            if is_stagehand_target {
+                if keepalive_header
+                    .as_ref()
+                    .is_some_and(|header| header.kind == KeepaliveKind::CompatibilityRequest)
+                {
+                    state
+                        .stagehand_rejoin_requested_ms
+                        .store(epoch_millis(), Ordering::Relaxed);
+                }
+                continue;
+            }
             if let Some(frame_type) = keepalive_frame_type(packet) {
                 if frame_type == KeepaliveKind::CompatibilityRequest {
                     let reply = build_keepalive_compat_response_packet(&state.config.model_name);
@@ -4836,11 +5009,23 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
                 &state.mac_addr,
                 state.device_count().await,
             );
-            let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
-            if let Err(err) =
-                send_udp_packet(&state, &sock, &packet, target, "keepalive announce").await
-            {
-                debug!(target: "djtools_link::udp", %target, %err, "keepalive_announce_failed");
+            let targets = if state.config.stagehand_monitor {
+                state
+                    .devices_sorted()
+                    .await
+                    .into_iter()
+                    .filter(|device| !device.model.eq_ignore_ascii_case("DJM-A9"))
+                    .map(|device| SocketAddrV4::new(device.ip_addr, KEEPALIVE_PORT))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT)]
+            };
+            for target in targets {
+                if let Err(err) =
+                    send_udp_packet(&state, &sock, &packet, target, "keepalive announce").await
+                {
+                    debug!(target: "djtools_link::udp", %target, %err, "keepalive_announce_failed");
+                }
             }
         }
     })
@@ -4850,52 +5035,146 @@ fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> To
     tokio::spawn(async move {
         const MODEL: &str = "Stagehand";
         let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
-        let mac = match parse_mac(&state.mac_addr) {
+        let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
+        let link_mac = match parse_mac(&state.mac_addr) {
             Ok(mac) => mac,
             Err(err) => {
                 warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
                 return;
             }
         };
-        let runtime_number = 0x80
-            | (state.bind_ip.octets()[3] ^ (std::process::id() as u8)).wrapping_add(0x3a) & 0x7f;
+        // AlphaTheta Connect generates both values once per Stagehand app
+        // launch. The supervising process may restart this native worker, so
+        // keep using the parent-owned launch identity across worker lifetimes.
+        let launch_nonce = state
+            .config
+            .stagehand_session_nonce
+            .unwrap_or_else(stagehand_launch_nonce);
+        let mac = stagehand::protocol_mac(link_mac, launch_nonce);
+        let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
 
-        for _ in 0..3 {
-            let packet = stagehand::build_announcement(MODEL);
-            if let Err(err) =
-                send_stagehand_packet(&state, &sock, &packet, target, "stagehand announcement")
-                    .await
-            {
-                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_announcement_failed");
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-        }
-        for iteration in 1..=3 {
-            let packet = stagehand::build_claim(MODEL, state.bind_ip, mac, iteration);
-            if let Err(err) =
-                send_stagehand_packet(&state, &sock, &packet, target, "stagehand claim").await
-            {
-                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_claim_failed");
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-        }
+        send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
 
         tracing::info!(
             target: "djtools_link::stagehand",
             runtime_number,
-            ip = %state.bind_ip,
+            ip = %stagehand_ip,
+            link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
+            protocol_mac = %format_mac(mac),
             "stagehand_joined"
         );
         let mut interval = tokio::time::interval(Duration::from_secs(2));
+        let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
         loop {
             interval.tick().await;
-            let packet = stagehand::build_keepalive(MODEL, runtime_number, state.bind_ip, mac, 1);
+            let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
             if let Err(err) =
                 send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
             {
                 debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
             }
+            let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+            if requested_rejoin_ms > handled_rejoin_ms
+                && epoch_millis().saturating_sub(requested_rejoin_ms) >= 4_000
+            {
+                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                handled_rejoin_ms = requested_rejoin_ms;
+            }
         }
+    })
+}
+
+fn stagehand_launch_nonce() -> u64 {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    (elapsed as u64)
+        ^ ((elapsed >> 64) as u64).rotate_left(23)
+        ^ u64::from(std::process::id()).rotate_left(41)
+}
+
+async fn send_stagehand_join_sequence(
+    state: &ServerState,
+    sock: &UdpSocket,
+    target: SocketAddrV4,
+    stagehand_ip: Ipv4Addr,
+    mac: [u8; 6],
+) {
+    for _ in 0..3 {
+        let packet = stagehand::build_announcement("Stagehand");
+        if let Err(err) =
+            send_stagehand_packet(state, sock, &packet, target, "stagehand announcement").await
+        {
+            debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_announcement_failed");
+        }
+        tokio::time::sleep(Duration::from_millis(305)).await;
+    }
+    for iteration in 1..=3 {
+        let packet = stagehand::build_claim("Stagehand", stagehand_ip, mac, iteration);
+        if let Err(err) =
+            send_stagehand_packet(state, sock, &packet, target, "stagehand claim").await
+        {
+            debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_claim_failed");
+        }
+        tokio::time::sleep(Duration::from_millis(305)).await;
+    }
+}
+
+fn spawn_stagehand_raw_rx(
+    state: Arc<ServerState>,
+    mut receiver: mpsc::Receiver<RawUdpReceived>,
+) -> TokioJoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(datagram) = receiver.recv().await {
+            let packet = datagram.payload.as_slice();
+            if let Some(channels) = parse_a9_vu(packet) {
+                state
+                    .stagehand_last_a9_ms
+                    .store(epoch_millis(), Ordering::Relaxed);
+                let _ = state.vu_telemetry_tx.send(DjLinkVuTelemetryEvent {
+                    source_ip: datagram.src_ip,
+                    channels,
+                });
+                tracing::trace!(
+                    target: "djtools_link::stagehand",
+                    source_ip = %datagram.src_ip,
+                    source_port = datagram.src_port,
+                    destination_port = datagram.dst_port,
+                    "a9_vu"
+                );
+                continue;
+            }
+            if let Some(mixer) = parse_a9_mixer_state(packet) {
+                state
+                    .stagehand_last_a9_ms
+                    .store(epoch_millis(), Ordering::Relaxed);
+                let _ = state.mixer_telemetry_tx.send(DjLinkMixerTelemetryEvent {
+                    source_ip: datagram.src_ip,
+                    mixer,
+                });
+                tracing::trace!(
+                    target: "djtools_link::stagehand",
+                    source_ip = %datagram.src_ip,
+                    source_port = datagram.src_port,
+                    destination_port = datagram.dst_port,
+                    "a9_mixer_state"
+                );
+                continue;
+            }
+            if stagehand::is_peer_packet(packet) {
+                tracing::trace!(
+                    target: "djtools_link::stagehand",
+                    source_ip = %datagram.src_ip,
+                    source_port = datagram.src_port,
+                    destination_port = datagram.dst_port,
+                    packet_type = packet.get(0x0a).copied().unwrap_or_default(),
+                    len = packet.len(),
+                    "stagehand_raw_peer_packet"
+                );
+            }
+        }
+        tracing::warn!(target: "djtools_link::stagehand", "stagehand_raw_receiver_stopped");
     })
 }
 
@@ -4906,40 +5185,70 @@ async fn send_stagehand_packet(
     broadcast_target: SocketAddrV4,
     context: &str,
 ) -> std::io::Result<usize> {
-    let sent = send_udp_packet(state, sock, packet, broadcast_target, context).await?;
-    let configured_target = if let (Some(target_ip), Some(target_mac)) = (
-        state.config.stagehand_target_ip,
-        state.config.stagehand_target_mac.as_deref(),
-    ) {
-        send_raw_udp_packet_to_mac(
-            state,
-            sock.local_addr()?.port(),
-            target_ip,
-            KEEPALIVE_PORT,
-            target_mac,
-            packet,
+    if let Some(stagehand_ip) = state.stagehand_ip.filter(|ip| *ip != state.bind_ip) {
+        let src_mac = state
+            .stagehand_link_mac
+            .unwrap_or(parse_mac(&state.mac_addr)?);
+        state
+            .raw_udp
+            .send(RawUdpDatagram {
+                src_mac,
+                dst_mac: [0xff; 6],
+                src_ip: stagehand_ip,
+                src_port: KEEPALIVE_PORT,
+                dst_ip: *broadcast_target.ip(),
+                dst_port: broadcast_target.port(),
+                payload: packet.to_vec(),
+            })
+            .await?;
+        debug!(
+            target: "djtools_link::stagehand",
             context,
-        )
-        .await?;
-        Some(target_ip)
-    } else {
-        None
-    };
-    for device in state.devices_sorted().await.into_iter().filter(|device| {
-        device.model.eq_ignore_ascii_case("DJM-A9") && configured_target != Some(device.ip_addr)
-    }) {
-        send_raw_udp_packet_to_mac(
-            state,
-            sock.local_addr()?.port(),
-            device.ip_addr,
-            KEEPALIVE_PORT,
-            &device.mac_addr,
-            packet,
-            context,
-        )
-        .await?;
+            source_ip = %stagehand_ip,
+            target = %broadcast_target,
+            "stagehand_raw_udp_sent"
+        );
+        return Ok(packet.len());
     }
-    Ok(sent)
+    // The real Stagehand client sends one subnet broadcast per frame. Some
+    // mixers stop responding when the same identity arrives again by unicast.
+    send_udp_packet(state, sock, packet, broadcast_target, context).await
+}
+
+async fn send_stagehand_transport_packet(
+    state: &ServerState,
+    sock: &UdpSocket,
+    packet: &[u8],
+    target_ip: Ipv4Addr,
+) -> std::io::Result<usize> {
+    if let Some(stagehand_ip) = state.stagehand_ip.filter(|ip| *ip != state.bind_ip) {
+        let device = state.device_for_ip(target_ip).await.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "unknown target player MAC")
+        })?;
+        state
+            .raw_udp
+            .send(RawUdpDatagram {
+                src_mac: state
+                    .stagehand_link_mac
+                    .unwrap_or(parse_mac(&state.mac_addr)?),
+                dst_mac: parse_mac(&device.mac_addr)?,
+                src_ip: stagehand_ip,
+                src_port: BEAT_PORT,
+                dst_ip: target_ip,
+                dst_port: BEAT_PORT,
+                payload: packet.to_vec(),
+            })
+            .await?;
+        return Ok(packet.len());
+    }
+    send_udp_packet(
+        state,
+        sock,
+        packet,
+        SocketAddrV4::new(target_ip, BEAT_PORT),
+        "stagehand transport command",
+    )
+    .await
 }
 
 fn spawn_link_init(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
@@ -4973,11 +5282,7 @@ fn spawn_mixer_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoi
                     bpm_hundreds,
                 )
             };
-            let target = SocketAddrV4::new(state.broadcast_ip, STATUS_PORT);
-            if let Err(err) = send_udp_packet(&state, &sock, &packet, target, "mixer status").await
-            {
-                debug!(target: "djtools_link::udp", %target, %err, "mixer_status_send_failed");
-            }
+            send_regular_djlink_packet(&state, &sock, &packet, STATUS_PORT, "mixer status").await;
         }
     })
 }
@@ -5648,10 +5953,7 @@ fn spawn_beat_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoin
                 bpm_hundreds,
                 beat_in_bar,
             );
-            let target = SocketAddrV4::new(state.broadcast_ip, BEAT_PORT);
-            if let Err(err) = send_udp_packet(&state, &sock, &packet, target, "beat status").await {
-                debug!(target: "djtools_link::udp", %target, %err, "beat_status_send_failed");
-            }
+            send_regular_djlink_packet(&state, &sock, &packet, BEAT_PORT, "beat status").await;
             beat_in_bar = beat_in_bar % 4 + 1;
             let beat_ns = 6_000_000_000_000u64 / u64::from(bpm_hundreds);
             tokio::time::sleep(Duration::from_nanos(beat_ns)).await;
@@ -5673,7 +5975,14 @@ fn spawn_beat_rx(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHand
                 continue;
             }
             let packet = &buf[..len];
-            if stagehand::is_a9_vu(packet) {
+            if let Some(channels) = parse_a9_vu(packet) {
+                state
+                    .stagehand_last_a9_ms
+                    .store(epoch_millis(), Ordering::Relaxed);
+                let _ = state.vu_telemetry_tx.send(DjLinkVuTelemetryEvent {
+                    source_ip: *addr.ip(),
+                    channels,
+                });
                 tracing::trace!(
                     target: "djtools_link::stagehand",
                     %addr,
@@ -5798,6 +6107,9 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
             }
             let packet = &buf[..len];
             if let Some(mixer) = parse_a9_mixer_state(packet) {
+                state
+                    .stagehand_last_a9_ms
+                    .store(epoch_millis(), Ordering::Relaxed);
                 let _ = state.mixer_telemetry_tx.send(DjLinkMixerTelemetryEvent {
                     source_ip: ip,
                     mixer,
@@ -5983,6 +6295,28 @@ fn parse_a9_mixer_state(packet: &[u8]) -> Option<DjLinkMixerState> {
         channels,
         crossfader: packet[0xb4],
     })
+}
+
+fn parse_a9_vu(packet: &[u8]) -> Option<BTreeMap<u8, Vec<[u16; 2]>>> {
+    if !stagehand::is_a9_vu(packet) {
+        return None;
+    }
+    let channels = (1u8..=4)
+        .map(|channel| {
+            let offset = 44 + usize::from(channel - 1) * 60;
+            let frames = (0..15)
+                .map(|frame| {
+                    let frame_offset = offset + frame * 4;
+                    [
+                        u16::from_be_bytes([packet[frame_offset], packet[frame_offset + 1]]),
+                        u16::from_be_bytes([packet[frame_offset + 2], packet[frame_offset + 3]]),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            (channel, frames)
+        })
+        .collect();
+    Some(channels)
 }
 
 fn build_status_extension_reply(request: &[u8], model: &str, player_number: u8) -> Option<Vec<u8>> {
@@ -9216,9 +9550,36 @@ async fn send_link_init_once(state: &ServerState, sock: &UdpSocket, ip: Ipv4Addr
 
 async fn send_link_init_broadcast(state: &ServerState, sock: &UdpSocket, context: &str) {
     let packet = build_status_link_init(&state.config.model_name, state.config.player_number);
-    let target = SocketAddrV4::new(state.broadcast_ip, STATUS_PORT);
-    let _ = send_udp_packet(state, sock, &packet, target, context).await;
+    send_regular_djlink_packet(state, sock, &packet, STATUS_PORT, context).await;
     state.mark_link_init_broadcast().await;
+}
+
+async fn send_regular_djlink_packet(
+    state: &ServerState,
+    sock: &UdpSocket,
+    packet: &[u8],
+    port: u16,
+    context: &str,
+) {
+    let targets = if state.config.stagehand_monitor {
+        state
+            .devices_sorted()
+            .await
+            .into_iter()
+            .filter(|device| {
+                (1..=6).contains(&device.player_number)
+                    && !device.model.eq_ignore_ascii_case("DJM-A9")
+            })
+            .map(|device| SocketAddrV4::new(device.ip_addr, port))
+            .collect::<Vec<_>>()
+    } else {
+        vec![SocketAddrV4::new(state.broadcast_ip, port)]
+    };
+    for target in targets {
+        if let Err(err) = send_udp_packet(state, sock, packet, target, context).await {
+            debug!(target: "djtools_link::udp", %target, %err, "regular_djlink_send_failed");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -9256,6 +9617,22 @@ en11: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert!(!config.tcp_track_file_side_channel);
         assert!(config.serve_extended_anlz_tags);
         assert_eq!(config.announce_interval, FAST_ANNOUNCE_INTERVAL);
+    }
+
+    #[test]
+    fn stagehand_uses_a_neighboring_network_identity() {
+        assert_eq!(
+            isolated_stagehand_ip(Ipv4Addr::new(169, 254, 51, 208), 0),
+            Ipv4Addr::new(169, 254, 51, 2)
+        );
+        assert_eq!(
+            isolated_stagehand_ip(Ipv4Addr::new(192, 168, 1, 2), 0),
+            Ipv4Addr::new(192, 168, 1, 3)
+        );
+
+        let link_mac = stagehand_link_mac([0xc8, 0x3d, 0xfc, 0x15, 0x71, 0xed], 42);
+        assert_eq!(link_mac[0] & 0x03, 0x02, "must be local and unicast");
+        assert_ne!(&link_mac[..3], &[0xc8, 0x3d, 0xfc]);
     }
 
     #[test]
@@ -11135,6 +11512,25 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(on_air.channels, vec![1, 0, 1, 0, 1, 1]);
         assert!(on_air.summary().contains("on-air"));
         assert!(build_on_air_command("rekordbox", 33, &[5], false).is_err());
+    }
+
+    #[test]
+    fn stagehand_transport_command_matches_documented_offsets() {
+        let pressed = build_stagehand_transport_command(0x7b, 0x3b, 0x0f, true);
+        assert_eq!(pressed.len(), 56);
+        assert_eq!(pressed[0x0a], 0x07);
+        assert_eq!(&pressed[0x0b..0x14], b"Stagehand");
+        assert_eq!(pressed[0x1f], 1);
+        assert_eq!(pressed[0x20], 3);
+        assert_eq!(pressed[0x21], 0x7b);
+        assert_eq!(&pressed[0x22..0x24], &[0, 0x30]);
+        assert_eq!(pressed[0x28], 0x3b);
+        assert_eq!(pressed[0x2c], 0x0f);
+        assert_eq!(pressed[0x2e], 1);
+
+        let released = build_stagehand_transport_command(0x7b, 0x3b, 0x14, false);
+        assert_eq!(released[0x2c], 0x14);
+        assert_eq!(released[0x2e], 0);
     }
 
     #[test]
@@ -13372,10 +13768,33 @@ notes: []
         assert_eq!(mixer.crossfader, 0x78);
     }
 
+    #[test]
+    fn parses_a9_stagehand_vu_frames() {
+        let mut packet = vec![0u8; 584];
+        packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
+        packet[0x0a] = 0x58;
+        packet[0x1e] = 0x3a;
+        for channel in 1u8..=4 {
+            let offset = 44 + usize::from(channel - 1) * 60;
+            for frame in 0..15 {
+                let frame_offset = offset + frame * 4;
+                packet[frame_offset..frame_offset + 2]
+                    .copy_from_slice(&(u16::from(channel) * 1_000 + frame as u16).to_be_bytes());
+                packet[frame_offset + 2..frame_offset + 4]
+                    .copy_from_slice(&(u16::from(channel) * 2_000 + frame as u16).to_be_bytes());
+            }
+        }
+
+        let vu = parse_a9_vu(&packet).expect("valid A9 VU packet");
+        assert_eq!(vu[&1][0], [1_000, 2_000]);
+        assert_eq!(vu[&4][14], [4_014, 8_014]);
+    }
+
     fn test_state() -> ServerState {
         let (actor_tx, actor_rx) = ServerActor::channel();
         let (telemetry_tx, _) = broadcast::channel(32);
         let (mixer_telemetry_tx, _) = broadcast::channel(32);
+        let (vu_telemetry_tx, _) = broadcast::channel(32);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(ServerActor::default().run(actor_rx));
         }
@@ -13391,6 +13810,8 @@ notes: []
             bind_ip: Ipv4Addr::LOCALHOST,
             broadcast_ip: Ipv4Addr::LOCALHOST,
             mac_addr: "02:00:00:00:00:01".to_string(),
+            stagehand_ip: None,
+            stagehand_link_mac: None,
             interface_name: None,
             raw_udp: RawUdpTx::disabled(),
             library,
@@ -13398,6 +13819,9 @@ notes: []
             actor_tx,
             telemetry_tx,
             mixer_telemetry_tx,
+            vu_telemetry_tx,
+            stagehand_last_a9_ms: AtomicU64::new(0),
+            stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path: None,
             cue_overrides_ms: RwLock::new(HashMap::new()),
             master_bpm_hundreds: AtomicU16::new(0),

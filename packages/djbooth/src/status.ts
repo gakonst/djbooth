@@ -13,6 +13,7 @@ const serveStatusOutput = z.discriminatedUnion("running", [
     url: z.string(),
     assistantEnabled: z.boolean(),
     logPath: z.string(),
+    monitorUrl: z.string(),
   }),
   z.object({
     running: z.literal(false),
@@ -110,6 +111,7 @@ export const statusCli = Cli.create("status", {
               url: serve.url,
               assistantEnabled: serve.assistantEnabled,
               logPath: serve.logPath,
+              monitorUrl: serve.monitorUrl,
             }
           : serve,
         link: link.running

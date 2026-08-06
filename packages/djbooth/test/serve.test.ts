@@ -11,7 +11,7 @@ function linkStatus(pid: number, resumed: boolean) {
     playerNumber: 17,
     playlists: 4,
     remoteDeckPreparationSupported: true as const,
-    remoteTransportSupported: false as const,
+    remoteTransportSupported: true,
     resumed,
     running: true as const,
     socketPath: "/tmp/djbooth.sock",
@@ -25,7 +25,10 @@ function linkStatus(pid: number, resumed: boolean) {
 function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
   const closeWeb = vi.fn(async () => undefined);
   const stopLink = vi.fn(async () => ({ stopped: true, wasRunning: true, pid: 42 }));
-  const startLink = vi.fn(async () => linkStatus(42, options.resumed ?? false));
+  const startLink = vi.fn<DjBoothServerDependencies["startRekordboxDjLink"]>(async () =>
+    linkStatus(42, options.resumed ?? false),
+  );
+  const closeMonitor = vi.fn(async () => undefined);
   const value: DjBoothServerDependencies = {
     async startLibraryServer() {
       if (options.webError) throw options.webError;
@@ -37,10 +40,18 @@ function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
         url: "http://127.0.0.1:4179/",
       };
     },
+    async startMonitorServer() {
+      return {
+        close: closeMonitor,
+        host: "127.0.0.1",
+        port: 4183,
+        url: "http://127.0.0.1:4183/",
+      };
+    },
     startRekordboxDjLink: startLink,
     stopDjLink: stopLink,
   };
-  return { closeWeb, startLink, stopLink, value };
+  return { closeMonitor, closeWeb, startLink, stopLink, value };
 }
 
 describe("combined djbooth server", () => {
@@ -52,6 +63,7 @@ describe("combined djbooth server", () => {
     await expect(server.close()).resolves.toEqual({ linkStopped: true });
     await server.close();
     expect(fake.closeWeb).toHaveBeenCalledTimes(1);
+    expect(fake.closeMonitor).toHaveBeenCalledTimes(1);
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
   });
 
@@ -75,6 +87,21 @@ describe("combined djbooth server", () => {
     expect(server.link).toMatchObject({ pid: 84 });
     await expect(server.close()).resolves.toEqual({ linkStopped: true });
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses one in-memory Stagehand identity across native worker restarts", async () => {
+    const fake = dependencies();
+    fake.startLink
+      .mockResolvedValueOnce(linkStatus(42, false))
+      .mockResolvedValueOnce(linkStatus(84, false));
+    const server = await startDjBoothServer({}, fake.value);
+
+    await server.reconcileLink();
+    const first = fake.startLink.mock.calls[0]?.[0];
+    const second = fake.startLink.mock.calls[1]?.[0];
+    expect(first?.stagehandSessionNonce).toMatch(/^\d+$/);
+    expect(second?.stagehandSessionNonce).toBe(first?.stagehandSessionNonce);
+    await server.close();
   });
 
   it("does not claim an externally replaced resumed DJ Link daemon", async () => {
