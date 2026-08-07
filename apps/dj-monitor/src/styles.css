@@ -135,7 +135,9 @@ body {
 
 .booth-grid {
   display: grid;
-  grid-template-columns: minmax(300px, 329fr) minmax(370px, 407fr) minmax(300px, 329fr);
+  grid-template-columns:
+    minmax(235px, 329fr) minmax(235px, 329fr) minmax(370px, 407fr)
+    minmax(235px, 329fr);
   gap: 3px;
   align-items: end;
   isolation: isolate;
@@ -896,7 +898,7 @@ body {
   }
 
   .booth-grid {
-    grid-template-columns: 320px 397px 320px;
+    grid-template-columns: 235px 235px 370px 235px;
     justify-content: center;
   }
 }

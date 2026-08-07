@@ -60,6 +60,16 @@ struct BoothState {
     observed_at_us: u64,
     mixer: MixerState,
     decks: Vec<DeckState>,
+    #[serde(skip_serializing)]
+    latest_mixer_frame: Option<RawMixerFrame>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMixerFrame {
+    source_ip: String,
+    observed_at_us: u64,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -182,7 +192,12 @@ impl StateApiServer {
                     controls: BTreeMap::new(),
                     meters: BTreeMap::new(),
                 },
-                decks: vec![disconnected_deck(1), disconnected_deck(2)],
+                decks: vec![
+                    disconnected_deck(1),
+                    disconnected_deck(2),
+                    disconnected_deck(3),
+                ],
+                latest_mixer_frame: None,
             })),
             messages,
             started: Instant::now(),
@@ -192,6 +207,7 @@ impl StateApiServer {
             .route("/", get(discovery))
             .route("/health", get(health))
             .route("/v1/state", get(current_state))
+            .route("/v1/debug/mixer-frame", get(current_mixer_frame))
             .route("/v1/tracks/{track_id}/waveform", get(track_waveform))
             .route("/v1/events", any(websocket))
             .with_state(state.clone());
@@ -232,6 +248,11 @@ impl StatePublisher {
             booth.sequence += 1;
             booth.observed_at_us = observed_at_us;
             booth.mixer.connected = true;
+            booth.latest_mixer_frame = Some(RawMixerFrame {
+                source_ip: event.source_ip.to_string(),
+                observed_at_us,
+                bytes: event.raw_packet,
+            });
             for channel in event.mixer.channels {
                 let prefix = format!("channel.{}", channel.channel);
                 set_link_control(
@@ -500,9 +521,12 @@ impl StatePublisher {
             hydrate_track_metadata(&mut deck, server);
             decks.push(deck);
         }
-        if decks.is_empty() {
-            decks.extend([disconnected_deck(1), disconnected_deck(2)]);
+        for player in 1..=3 {
+            if !decks.iter().any(|deck| deck.player == player) {
+                decks.push(disconnected_deck(player));
+            }
         }
+        decks.sort_by_key(|deck| deck.player);
 
         let changed = {
             let mut booth = self.state.booth.write().await;
@@ -629,6 +653,13 @@ async fn health(State(state): State<ApiState>) -> impl IntoResponse {
 
 async fn current_state(State(state): State<ApiState>) -> impl IntoResponse {
     axum::Json(state.booth.read().await.clone())
+}
+
+async fn current_mixer_frame(State(state): State<ApiState>) -> Response {
+    match state.booth.read().await.latest_mixer_frame.clone() {
+        Some(frame) => axum::Json(frame).into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn websocket(ws: WebSocketUpgrade, State(state): State<ApiState>) -> Response {
@@ -851,6 +882,7 @@ mod tests {
                         meters: BTreeMap::new(),
                     },
                     decks: Vec::new(),
+                    latest_mixer_frame: None,
                 })),
                 messages,
                 started: Instant::now(),
@@ -994,6 +1026,7 @@ mod tests {
                     ],
                     crossfader: 120,
                 },
+                raw_packet: vec![0; 266],
             })
             .await
             .unwrap();

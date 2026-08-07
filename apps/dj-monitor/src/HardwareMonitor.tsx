@@ -67,8 +67,7 @@ export function LiveHardwareMonitor() {
 }
 
 export function HardwareMonitor({ snapshot, status, activity = [] }: HardwareMonitorProps) {
-  const decks = [...snapshot.decks];
-  while (decks.length < 2) decks.push(emptyDeck(decks.length + 1));
+  const decks = monitorDecks(snapshot.decks);
 
   return (
     <main className="monitor-shell">
@@ -90,20 +89,37 @@ export function HardwareMonitor({ snapshot, status, activity = [] }: HardwareMon
         </div>
       </header>
 
-      <section className="booth-grid" aria-label="Two CDJ-3000 players and a DJM-A9 mixer">
+      <section className="booth-grid" aria-label="Three CDJ-3000 players and a DJM-A9 mixer">
         <Cdj3000 deck={decks[0] ?? emptyDeck(1)} />
+        <Cdj3000 deck={decks[1] ?? emptyDeck(2)} />
         <DjmA9
           controls={snapshot.mixer.controls}
           meters={snapshot.mixer.meters ?? {}}
           connected={snapshot.mixer.connected}
           bpm={snapshot.mixer.bpm}
         />
-        <Cdj3000 deck={decks[1] ?? emptyDeck(2)} />
+        <Cdj3000 deck={decks[2] ?? emptyDeck(3)} />
       </section>
 
       <Activity events={activity} />
     </main>
   );
+}
+
+function monitorDecks(decks: DeckState[]): DeckState[] {
+  const byPlayer = new Map(decks.map((deck) => [deck.player, deck]));
+  const players = [
+    ...decks.filter((deck) => deck.connected).map((deck) => deck.player),
+    ...decks.map((deck) => deck.player),
+    1,
+    2,
+    3,
+  ].filter((player, index, all) => all.indexOf(player) === index);
+
+  return players
+    .slice(0, 3)
+    .sort((a, b) => a - b)
+    .map((player) => byPlayer.get(player) ?? emptyDeck(player));
 }
 
 function Cdj3000({ deck }: { deck: DeckState }) {

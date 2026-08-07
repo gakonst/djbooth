@@ -456,6 +456,7 @@ pub struct DjLinkMixerState {
 pub struct DjLinkMixerTelemetryEvent {
     pub source_ip: Ipv4Addr,
     pub mixer: DjLinkMixerState,
+    pub raw_packet: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5239,6 +5240,7 @@ fn spawn_stagehand_raw_rx(
                 let _ = state.mixer_telemetry_tx.send(DjLinkMixerTelemetryEvent {
                     source_ip: datagram.src_ip,
                     mixer,
+                    raw_packet: packet.to_vec(),
                 });
                 tracing::trace!(
                     target: "djtools_link::stagehand",
@@ -6200,6 +6202,7 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
                 let _ = state.mixer_telemetry_tx.send(DjLinkMixerTelemetryEvent {
                     source_ip: ip,
                     mixer,
+                    raw_packet: packet.to_vec(),
                 });
                 tracing::trace!(
                     target: "djtools_link::stagehand",
