@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use crate::plugin::{Sequence, SequenceNote, validate_sequence};
 
+const SAMPLE_VOICE_COUNT: usize = 8;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AbletonGraph {
@@ -324,6 +326,111 @@ pub(crate) fn render(
             .spawn()
             .context("failed to start afplay")?;
     }
+    Ok(())
+}
+
+pub(crate) fn sum_audio_files(
+    inputs: &[PathBuf],
+    output: &Path,
+    max_contents: &Path,
+) -> Result<()> {
+    ensure!(inputs.len() >= 2, "parallel rack sum requires two inputs");
+    let mut duration_ms = 0.0_f64;
+    for input in inputs {
+        let reader = hound::WavReader::open(input)
+            .with_context(|| format!("failed to inspect rack branch {}", input.display()))?;
+        ensure!(reader.spec().channels == 2, "rack branch must be stereo");
+        ensure!(
+            reader.spec().sample_rate == 44_100,
+            "rack branch must be 44.1 kHz"
+        );
+        duration_ms = duration_ms
+            .max(f64::from(reader.duration()) * 1_000.0 / f64::from(reader.spec().sample_rate));
+    }
+    let max_binary = max_contents.join("MacOS/Max");
+    ensure!(
+        max_binary.is_file(),
+        "Ableton bundled Max runtime is missing"
+    );
+    let mut boxes = Vec::new();
+    let mut lines = Vec::new();
+    add_box(&mut boxes, "load", "newobj", "loadbang");
+    add_box(&mut boxes, "dsp", "message", "; dsp start");
+    add_line(&mut lines, "load", 0, "dsp", 0);
+    add_box(&mut boxes, "start-delay", "newobj", "delay 1500");
+    add_box(&mut boxes, "start", "newobj", "t b b");
+    add_line(&mut lines, "load", 0, "start-delay", 0);
+    add_line(&mut lines, "start-delay", 0, "start", 0);
+    add_box(&mut boxes, "record-start", "message", "1");
+    add_box(&mut boxes, "play", "message", "1");
+    add_line(&mut lines, "start", 1, "record-start", 0);
+    add_line(&mut lines, "start", 0, "play", 0);
+    add_box(
+        &mut boxes,
+        "stop-delay",
+        "newobj",
+        &format!("delay {duration_ms:.3}"),
+    );
+    add_box(&mut boxes, "record-stop", "message", "0");
+    add_line(&mut lines, "start", 0, "stop-delay", 0);
+    add_line(&mut lines, "stop-delay", 0, "record-stop", 0);
+    add_box(&mut boxes, "quit-delay", "newobj", "delay 500");
+    add_box(&mut boxes, "quit", "message", "; max quit");
+    add_line(&mut lines, "stop-delay", 0, "quit-delay", 0);
+    add_line(&mut lines, "quit-delay", 0, "quit", 0);
+    add_recorder(
+        &mut boxes,
+        &mut lines,
+        "rack-sum",
+        output,
+        "record-start",
+        "record-stop",
+    );
+    for (index, input) in inputs.iter().enumerate() {
+        let source = format!("branch-{index}");
+        let open = format!("branch-open-{index}");
+        add_box(&mut boxes, &source, "newobj", "sfplay~ 2");
+        add_box(
+            &mut boxes,
+            &open,
+            "message",
+            &format!("open \"{}\"", max_path(input)),
+        );
+        add_line(&mut lines, "load", 0, &open, 0);
+        add_line(&mut lines, &open, 0, &source, 0);
+        add_line(&mut lines, "play", 0, &source, 0);
+        add_line(&mut lines, &source, 0, "rack-sum-recorder", 0);
+        add_line(&mut lines, &source, 1, "rack-sum-recorder", 1);
+    }
+    let patch = json!({
+        "patcher": {
+            "fileversion": 1,
+            "appversion": {"major": 9, "minor": 0, "revision": 5, "architecture": "x64", "modernui": 1},
+            "classnamespace": "box",
+            "rect": [0.0, 0.0, 1200.0, 800.0],
+            "boxes": boxes,
+            "lines": lines
+        }
+    });
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let patch_path = std::env::temp_dir().join(format!(
+        "djbooth-ableton-rack-sum-{}-{nonce}.maxpat",
+        std::process::id()
+    ));
+    fs::write(&patch_path, serde_json::to_vec_pretty(&patch)?)?;
+    let status = Command::new(&max_binary)
+        .arg("--nocef")
+        .arg(&patch_path)
+        .status()?;
+    let _ = fs::remove_file(&patch_path);
+    ensure!(
+        status.success(),
+        "Ableton Max branch mixer failed: {status}"
+    );
+    ensure!(
+        output.is_file(),
+        "Ableton Max branch mixer created no output"
+    );
     Ok(())
 }
 
@@ -688,7 +795,13 @@ fn build_mix_patch(
                 add_box(&mut boxes, &play, "message", "1");
                 add_line(&mut lines, "start", 0, &play, 0);
                 add_line(&mut lines, &play, 0, &source, 0);
-                (0, if wav_has_right_signal(path)? { 1 } else { 0 })
+                (
+                    (source.clone(), 0),
+                    (
+                        source.clone(),
+                        if wav_has_right_signal(path)? { 1 } else { 0 },
+                    ),
+                )
             }
             GraphSource::Sample {
                 sample,
@@ -696,22 +809,41 @@ fn build_mix_patch(
                 velocity_amount,
             } => {
                 let sample = resolve_path(base, sample);
-                add_box(&mut boxes, &source, "newobj", "sfplay~ 2");
-                let open = format!("{prefix}-open");
-                add_box(
-                    &mut boxes,
-                    &open,
-                    "message",
-                    &format!("open \"{}\"", max_path(&sample)),
-                );
-                add_line(&mut lines, "load", 0, &open, 0);
-                add_line(&mut lines, &open, 0, &source, 0);
+                let source_right_outlet = if audio_channels(&sample)? > 1 { 1 } else { 0 };
+                let mix_left = format!("{source}-mix-left");
+                let mix_right = format!("{source}-mix-right");
+                add_box(&mut boxes, &mix_left, "newobj", "*~ 1.");
+                add_box(&mut boxes, &mix_right, "newobj", "*~ 1.");
+                for voice in 0..SAMPLE_VOICE_COUNT {
+                    let player = format!("{source}-voice-{voice}");
+                    let open = format!("{prefix}-open-{voice}");
+                    let velocity_left = format!("{prefix}-voice-{voice}-velocity-left");
+                    let velocity_right = format!("{prefix}-voice-{voice}-velocity-right");
+                    add_box(&mut boxes, &player, "newobj", "sfplay~ 2");
+                    add_box(
+                        &mut boxes,
+                        &open,
+                        "message",
+                        &format!("open \"{}\"", max_path(&sample)),
+                    );
+                    add_line(&mut lines, "load", 0, &open, 0);
+                    add_line(&mut lines, &open, 0, &player, 0);
+                    add_box(&mut boxes, &velocity_left, "newobj", "*~ 0.");
+                    add_box(&mut boxes, &velocity_right, "newobj", "*~ 0.");
+                    add_line(&mut lines, &player, 0, &velocity_left, 0);
+                    add_line(&mut lines, &player, source_right_outlet, &velocity_right, 0);
+                    add_line(&mut lines, &velocity_left, 0, &mix_left, 0);
+                    add_line(&mut lines, &velocity_right, 0, &mix_right, 0);
+                }
                 for (index, trigger) in triggers.iter().enumerate() {
                     let delay = format!("{prefix}-event-{index}");
                     let fire = format!("{prefix}-fire-{index}");
-                    let amplitude_left = format!("{prefix}-amplitude-left-{index}");
-                    let amplitude_right = format!("{prefix}-amplitude-right-{index}");
+                    let amplitude = format!("{prefix}-amplitude-{index}");
                     let start = format!("{prefix}-sample-start-{index}");
+                    let voice = index % SAMPLE_VOICE_COUNT;
+                    let player = format!("{source}-voice-{voice}");
+                    let velocity_left = format!("{prefix}-voice-{voice}-velocity-left");
+                    let velocity_right = format!("{prefix}-voice-{voice}-velocity-right");
                     let millis = trigger.beat * 60_000.0 / graph.bpm;
                     add_box(&mut boxes, &delay, "newobj", &format!("delay {millis:.3}"));
                     add_box(&mut boxes, &fire, "newobj", "t b b");
@@ -719,39 +851,20 @@ fn build_mix_patch(
                         + velocity_amount * f64::from(trigger.velocity) / 127.0;
                     add_box(
                         &mut boxes,
-                        &amplitude_left,
+                        &amplitude,
                         "message",
-                        &format!("{:.8}", left_gain * velocity_gain),
-                    );
-                    add_box(
-                        &mut boxes,
-                        &amplitude_right,
-                        "message",
-                        &format!("{:.8}", right_gain * velocity_gain),
+                        &format!("{velocity_gain:.8}"),
                     );
                     add_box(&mut boxes, &start, "message", "1");
                     add_line(&mut lines, "start", 0, &delay, 0);
                     add_line(&mut lines, &delay, 0, &fire, 0);
-                    add_line(&mut lines, &fire, 1, &amplitude_left, 0);
-                    add_line(&mut lines, &fire, 1, &amplitude_right, 0);
+                    add_line(&mut lines, &fire, 1, &amplitude, 0);
                     add_line(&mut lines, &fire, 0, &start, 0);
-                    add_line(&mut lines, &start, 0, &source, 0);
-                    add_line(
-                        &mut lines,
-                        &amplitude_left,
-                        0,
-                        &format!("{prefix}-gain-left"),
-                        1,
-                    );
-                    add_line(
-                        &mut lines,
-                        &amplitude_right,
-                        0,
-                        &format!("{prefix}-gain-right"),
-                        1,
-                    );
+                    add_line(&mut lines, &start, 0, &player, 0);
+                    add_line(&mut lines, &amplitude, 0, &velocity_left, 1);
+                    add_line(&mut lines, &amplitude, 0, &velocity_right, 1);
                 }
-                (0, if audio_channels(&sample)? > 1 { 1 } else { 0 })
+                ((mix_left, 0), (mix_right, 0))
             }
             GraphSource::MaxObject { object, notes } => {
                 let class = max_object_class(object)?;
@@ -802,7 +915,7 @@ fn build_mix_patch(
                     add_line(&mut lines, &note_off_delay, 0, &note_off, 0);
                     add_line(&mut lines, &note_off, 0, &midi, 0);
                 }
-                (0, 1)
+                ((source.clone(), 0), (source.clone(), 1))
             }
         };
 
@@ -820,8 +933,8 @@ fn build_mix_patch(
             "newobj",
             &format!("*~ {right_gain:.8}"),
         );
-        add_line(&mut lines, &source, source_left, &gain_left, 0);
-        add_line(&mut lines, &source, source_right, &gain_right, 0);
+        add_line(&mut lines, &source_left.0, source_left.1, &gain_left, 0);
+        add_line(&mut lines, &source_right.0, source_right.1, &gain_right, 0);
 
         let mut chain_left = (gain_left, 0_u8);
         let mut chain_right = (gain_right, 0_u8);

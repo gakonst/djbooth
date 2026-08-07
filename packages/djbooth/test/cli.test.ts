@@ -72,6 +72,7 @@ describe("djbooth CLI", () => {
         "produce ableton inspect-rack",
         "produce ableton library",
         "produce ableton probe-engine",
+        "produce ableton render-audio-rack",
         "produce profile-compare",
         "produce reference-profile",
         "produce render",
@@ -135,6 +136,14 @@ describe("djbooth CLI", () => {
     expect(exitCode).toBeUndefined();
     expect(output).toContain("--all");
     expect(output).toContain("every eligible installed ADV preset");
+  });
+
+  test("exposes native Ableton audio-rack rendering", async () => {
+    const { output, exitCode } = await serve(["produce", "ableton", "render-audio-rack", "--help"]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("<rack> <input> <output>");
+    expect(output).toContain("chain selection");
+    expect(output).toContain("--max-contents <string>");
   });
 
   test("retains package command schemas after mounting", async () => {

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString, c_void};
 use std::fs;
 use std::io::{Read, Write};
@@ -201,6 +201,18 @@ enum AbletonCommand {
         #[arg(long, default_value = DEFAULT_MAX_CONTENTS)]
         max_contents: PathBuf,
         /// Start macOS playback after a successful render.
+        #[arg(long)]
+        play: bool,
+    },
+    /// Render an installed audio-effect ADG through its native serial/parallel graph.
+    RenderAudioRack {
+        rack: PathBuf,
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(long, default_value = DEFAULT_LIVE_ENGINE)]
+        engine: PathBuf,
+        #[arg(long, default_value = DEFAULT_MAX_CONTENTS)]
+        max_contents: PathBuf,
         #[arg(long)]
         play: bool,
     },
@@ -475,6 +487,10 @@ struct AbletonDeviceGraphAuditReport {
     complete_families: usize,
     partial_families: usize,
     blocked_families: usize,
+    audio_effect_racks: usize,
+    runnable_audio_effect_racks: usize,
+    blocked_audio_effect_racks: usize,
+    audio_rack_blockers: Vec<AbletonAudioRackBlocker>,
     device_families: Vec<AbletonGraphFamilyCount>,
     custom_dsp: bool,
 }
@@ -497,6 +513,13 @@ struct AbletonGraphFamilyCount {
     headless_status: String,
     implementation: Option<String>,
     blocker: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbletonAudioRackBlocker {
+    blocker: String,
+    racks: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -580,6 +603,32 @@ struct AbletonPresetAuditSuccess {
     peak: f32,
     delta: f32,
     audible: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbletonAudioRackRenderReport {
+    rack: PathBuf,
+    name: String,
+    input: PathBuf,
+    output: PathBuf,
+    rendered_devices: usize,
+    rendered_chains: usize,
+    nested_racks: usize,
+    channels: u16,
+    sample_rate: u32,
+    input_frames: u32,
+    frames: u32,
+    frame_delta: i64,
+    peak: f32,
+    custom_dsp: bool,
+}
+
+#[derive(Default)]
+struct AbletonAudioRackRenderCounts {
+    devices: usize,
+    chains: usize,
+    nested_racks: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1193,6 +1242,14 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             &max_contents,
             play,
         ),
+        AbletonCommand::RenderAudioRack {
+            rack,
+            input,
+            output,
+            engine,
+            max_contents,
+            play,
+        } => render_audio_rack(&rack, &input, &output, &engine, &max_contents, play),
         AbletonCommand::ProbeMax { max_contents } => probe_max_runtime(&max_contents),
         AbletonCommand::ProbeLiveEngine {
             engine,
@@ -4974,6 +5031,333 @@ fn inspect_asset(path: &Path, core_library: &Path) -> Result<AssetSummary> {
     })
 }
 
+fn render_audio_rack(
+    rack_path: &Path,
+    input: &Path,
+    output: &Path,
+    engine: &Path,
+    max_contents: &Path,
+    play: bool,
+) -> Result<()> {
+    ensure!(
+        std::env::consts::ARCH == "x86_64",
+        "Ableton audio-rack rendering requires an x86_64 djbooth-rs host"
+    );
+    let rack_path = fs::canonicalize(rack_path)
+        .with_context(|| format!("Ableton rack does not exist: {}", rack_path.display()))?;
+    let input = fs::canonicalize(input)
+        .with_context(|| format!("rack input does not exist: {}", input.display()))?;
+    let engine = fs::canonicalize(engine)
+        .with_context(|| format!("Ableton Live Engine does not exist: {}", engine.display()))?;
+    ensure!(
+        max_contents.join("MacOS/Max").is_file(),
+        "Ableton bundled Max runtime does not exist: {}",
+        max_contents.display()
+    );
+    let input_reader = hound::WavReader::open(&input)
+        .with_context(|| format!("failed to inspect rack input {}", input.display()))?;
+    ensure!(
+        input_reader.spec().sample_rate == DEFAULT_SAMPLE_RATE,
+        "audio rack input must be 44.1 kHz"
+    );
+    let input_frames = input_reader.duration();
+    drop(input_reader);
+    let xml = read_ableton_xml(&rack_path)?;
+    let graph = parse_device_graph(&rack_path, &xml)?;
+    ensure!(
+        graph.roots.len() == 1,
+        "audio rack must have one root device"
+    );
+    let root = &graph.roots[0];
+    ensure!(
+        root.family == "AudioEffectGroupDevice",
+        "{} is a {}, not an audio-effect rack",
+        rack_path.display(),
+        root.family
+    );
+    let rack = root
+        .rack
+        .as_deref()
+        .context("audio rack root has no chain graph")?;
+    let directory = tempfile::tempdir()?;
+    let executable = std::env::current_exe()?;
+    let mut counts = AbletonAudioRackRenderCounts::default();
+    let rendered = render_audio_rack_graph(
+        rack,
+        &rack_path,
+        &input,
+        directory.path(),
+        &executable,
+        &engine,
+        max_contents,
+        &mut counts,
+    )?;
+    let output = if output.is_absolute() {
+        output.to_owned()
+    } else {
+        std::env::current_dir()?.join(output)
+    };
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(&rendered, &output).with_context(|| {
+        format!(
+            "failed to copy rendered rack {} to {}",
+            rendered.display(),
+            output.display()
+        )
+    })?;
+    let mut reader = hound::WavReader::open(&output)?;
+    let spec = reader.spec();
+    let frames = reader.duration();
+    let peak = match spec.sample_format {
+        hound::SampleFormat::Float => {
+            reader.samples::<f32>().try_fold(0.0_f32, |peak, sample| {
+                sample.map(|value| peak.max(value.abs()))
+            })?
+        }
+        hound::SampleFormat::Int => {
+            let scale = 2.0_f32.powi(i32::from(spec.bits_per_sample) - 1);
+            reader.samples::<i32>().try_fold(0.0_f32, |peak, sample| {
+                sample.map(|value| peak.max((value as f32 / scale).abs()))
+            })?
+        }
+    };
+    ensure!(peak.is_finite(), "audio rack produced a non-finite peak");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&AbletonAudioRackRenderReport {
+            rack: rack_path,
+            name: graph.name,
+            input,
+            output: output.clone(),
+            rendered_devices: counts.devices,
+            rendered_chains: counts.chains,
+            nested_racks: counts.nested_racks,
+            channels: spec.channels,
+            sample_rate: spec.sample_rate,
+            input_frames,
+            frames,
+            frame_delta: i64::from(frames) - i64::from(input_frames),
+            peak,
+            custom_dsp: false,
+        })?
+    );
+    if play {
+        Command::new("afplay").arg(&output).spawn()?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_audio_rack_graph(
+    rack: &AbletonRackGraph,
+    rack_source: &Path,
+    input: &Path,
+    directory: &Path,
+    executable: &Path,
+    engine: &Path,
+    max_contents: &Path,
+    counts: &mut AbletonAudioRackRenderCounts,
+) -> Result<PathBuf> {
+    ensure!(
+        rack.return_chains.is_empty(),
+        "rack return chains require native send-routing execution"
+    );
+    let selector = rack
+        .chain_selector
+        .as_ref()
+        .and_then(|parameter| parameter.numeric_value)
+        .unwrap_or(0.0);
+    let soloed = rack.chains.iter().any(|chain| chain.soloed);
+    let mut rendered_branches = Vec::new();
+    for chain in &rack.chains {
+        if soloed && !chain.soloed {
+            continue;
+        }
+        let selector_gain = chain_selector_gain(chain.selector.as_ref(), selector);
+        if selector_gain <= 0.0 {
+            continue;
+        }
+        let mixer_on = chain
+            .mixer
+            .as_ref()
+            .is_none_or(|mixer| mixer.enabled.unwrap_or(true));
+        let speaker_on = chain
+            .mixer
+            .as_ref()
+            .and_then(|mixer| graph_parameter_value(mixer, "Speaker"))
+            .is_none_or(|value| value >= 0.5);
+        if !mixer_on || !speaker_on {
+            continue;
+        }
+        if let Some(mixer) = &chain.mixer {
+            ensure!(
+                !mixer.parameters.iter().any(|parameter| {
+                    parameter.name.contains("SendInfos")
+                        && parameter.numeric_value.is_some_and(|value| value != 0.0)
+                }),
+                "rack chain '{}' has active sends that require return routing",
+                chain.name
+            );
+        }
+        counts.chains += 1;
+        let mut current = input.to_owned();
+        for device in &chain.devices {
+            if device.enabled == Some(false) {
+                continue;
+            }
+            if let Some(nested) = device.rack.as_deref() {
+                counts.nested_racks += 1;
+                current = render_audio_rack_graph(
+                    nested,
+                    rack_source,
+                    &current,
+                    directory,
+                    executable,
+                    engine,
+                    max_contents,
+                    counts,
+                )?;
+                continue;
+            }
+            let (mechanism, engine_status, preset_status, _, implementation, blocker) =
+                device_capability(&device.family);
+            ensure!(
+                mechanism == "liveEngineBundle"
+                    && engine_status == "nativeAudioRenderProven"
+                    && matches!(
+                        preset_status,
+                        "exhaustiveAdvRenderProven" | "installedAdvRenderPartial"
+                    ),
+                "rack device {} cannot yet execute faithfully: {}",
+                device.family,
+                blocker.unwrap_or("native runtime mapping is incomplete")
+            );
+            let processor = implementation.context("rack device has no native processor")?;
+            let stage = directory.join(format!("device-{}.wav", counts.devices));
+            run_live_engine_rack_stage(
+                executable,
+                engine,
+                processor,
+                rack_source,
+                device.source_offset,
+                &current,
+                &stage,
+                &[],
+            )?;
+            counts.devices += 1;
+            current = stage;
+        }
+        let volume = chain
+            .mixer
+            .as_ref()
+            .and_then(|mixer| graph_parameter_value(mixer, "Volume"))
+            .unwrap_or(1.0)
+            * selector_gain;
+        let panorama = chain
+            .mixer
+            .as_ref()
+            .and_then(|mixer| graph_parameter_value(mixer, "Panorama"))
+            .unwrap_or(0.0);
+        let mixed = directory.join(format!("mixer-{}.wav", counts.chains));
+        run_live_engine_rack_stage(
+            executable,
+            engine,
+            "StereoGain",
+            rack_source,
+            0,
+            &current,
+            &mixed,
+            &[
+                format!("Gain={volume}"),
+                format!("Balance={panorama}"),
+                "On/Off=1".to_owned(),
+            ],
+        )?;
+        counts.devices += 1;
+        rendered_branches.push(mixed);
+    }
+    ensure!(
+        !rendered_branches.is_empty(),
+        "rack has no active output chains"
+    );
+    if rendered_branches.len() == 1 {
+        return Ok(rendered_branches.remove(0));
+    }
+    let output = directory.join(format!("parallel-{}.wav", counts.nested_racks));
+    crate::ableton_graph::sum_audio_files(&rendered_branches, &output, max_contents)?;
+    Ok(output)
+}
+
+fn graph_parameter_value(device: &AbletonGraphDevice, name: &str) -> Option<f64> {
+    device
+        .parameters
+        .iter()
+        .find(|parameter| parameter.name == name || parameter.name.ends_with(&format!("/{name}")))
+        .and_then(|parameter| parameter.numeric_value)
+}
+
+fn chain_selector_gain(range: Option<&AbletonChainSelectorRange>, selector: f64) -> f64 {
+    let Some(range) = range else {
+        return 1.0;
+    };
+    if selector < range.minimum || selector > range.maximum {
+        return 0.0;
+    }
+    let fade_in = if range.crossfade_minimum > range.minimum && selector < range.crossfade_minimum {
+        (selector - range.minimum) / (range.crossfade_minimum - range.minimum)
+    } else {
+        1.0
+    };
+    let fade_out = if range.maximum > range.crossfade_maximum && selector > range.crossfade_maximum
+    {
+        (range.maximum - selector) / (range.maximum - range.crossfade_maximum)
+    } else {
+        1.0
+    };
+    fade_in.min(fade_out).clamp(0.0, 1.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_live_engine_rack_stage(
+    executable: &Path,
+    engine: &Path,
+    processor: &str,
+    preset: &Path,
+    preset_device_offset: usize,
+    input: &Path,
+    output: &Path,
+    parameters: &[String],
+) -> Result<()> {
+    let mut command = Command::new(executable);
+    command
+        .args(["ableton", "probe-live-engine", "--bootstrap", "--engine"])
+        .arg(engine)
+        .args(["--processor", processor, "--construct", "--input"])
+        .arg(input)
+        .arg("--output")
+        .arg(output);
+    if preset_device_offset > 0 {
+        command
+            .arg("--preset")
+            .arg(preset)
+            .arg("--preset-device-offset")
+            .arg(preset_device_offset.to_string());
+    }
+    for parameter in parameters {
+        command.arg("--parameter").arg(parameter);
+    }
+    let result = command.output()?;
+    ensure!(
+        result.status.success(),
+        "Ableton rack processor {processor} failed: {}",
+        String::from_utf8_lossy(&result.stderr).trim()
+    );
+    ensure!(output.is_file(), "Ableton rack stage did not create output");
+    Ok(())
+}
+
 fn parse_device_graph(path: &Path, xml: &str) -> Result<AbletonDeviceGraphReport> {
     let document = Document::parse(xml)
         .with_context(|| format!("failed to parse Ableton XML in {}", path.display()))?;
@@ -5050,6 +5434,9 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
     let mut failed_assets = Vec::new();
     let mut counts = AbletonGraphCounts::default();
     let mut families = BTreeMap::<String, usize>::new();
+    let mut audio_effect_racks = 0;
+    let mut runnable_audio_effect_racks = 0;
+    let mut audio_rack_blockers = BTreeMap::<String, usize>::new();
     for asset in assets {
         let result = read_ableton_xml(&asset).and_then(|xml| parse_device_graph(&asset, &xml));
         match result {
@@ -5060,6 +5447,22 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
                 counts.chains += report.chains;
                 counts.parameters += report.parameters;
                 counts.macro_mappings += report.macro_mappings;
+                if let Some(root) = report
+                    .roots
+                    .iter()
+                    .find(|root| root.family == "AudioEffectGroupDevice")
+                {
+                    audio_effect_racks += 1;
+                    let mut blockers = BTreeSet::new();
+                    collect_audio_rack_runtime_blockers(root, &mut blockers);
+                    if blockers.is_empty() {
+                        runnable_audio_effect_racks += 1;
+                    } else {
+                        for blocker in blockers {
+                            *audio_rack_blockers.entry(blocker).or_default() += 1;
+                        }
+                    }
+                }
                 for root in &report.roots {
                     collect_graph_families(root, &mut families);
                 }
@@ -5106,6 +5509,10 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
         .iter()
         .filter(|family| family.headless_status == "blocked")
         .count();
+    let audio_rack_blockers = audio_rack_blockers
+        .into_iter()
+        .map(|(blocker, racks)| AbletonAudioRackBlocker { blocker, racks })
+        .collect();
     println!(
         "{}",
         serde_json::to_string_pretty(&AbletonDeviceGraphAuditReport {
@@ -5121,6 +5528,10 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
             complete_families,
             partial_families,
             blocked_families,
+            audio_effect_racks,
+            runnable_audio_effect_racks,
+            blocked_audio_effect_racks: audio_effect_racks - runnable_audio_effect_racks,
+            audio_rack_blockers,
             device_families,
             custom_dsp: false,
         })?
@@ -5468,6 +5879,47 @@ fn collect_graph_families(device: &AbletonGraphDevice, families: &mut BTreeMap<S
         if let Some(mixer) = &chain.mixer {
             collect_graph_families(mixer, families);
         }
+    }
+}
+
+fn collect_audio_rack_runtime_blockers(
+    device: &AbletonGraphDevice,
+    blockers: &mut BTreeSet<String>,
+) {
+    if let Some(rack) = &device.rack {
+        if !rack.return_chains.is_empty() {
+            blockers.insert("return/send routing".to_owned());
+        }
+        for chain in &rack.chains {
+            if chain.mixer.as_ref().is_some_and(|mixer| {
+                mixer.parameters.iter().any(|parameter| {
+                    parameter.name.contains("SendInfos")
+                        && parameter.numeric_value.is_some_and(|value| value != 0.0)
+                })
+            }) {
+                blockers.insert("return/send routing".to_owned());
+            }
+            for child in &chain.devices {
+                collect_audio_rack_runtime_blockers(child, blockers);
+            }
+        }
+        return;
+    }
+    if matches!(
+        device.family.as_str(),
+        "AudioBranchMixerDevice" | "MidiBranchMixerDevice"
+    ) {
+        return;
+    }
+    let (mechanism, engine_status, preset_status, _, _, _) = device_capability(&device.family);
+    if mechanism != "liveEngineBundle"
+        || engine_status != "nativeAudioRenderProven"
+        || !matches!(
+            preset_status,
+            "exhaustiveAdvRenderProven" | "installedAdvRenderPartial"
+        )
+    {
+        blockers.insert(device.family.clone());
     }
 }
 
@@ -6987,6 +7439,9 @@ mod tests {
             63.0
         );
         assert!(rack.chains[1].soloed);
+        let mut blockers = BTreeSet::new();
+        collect_audio_rack_runtime_blockers(&graph.roots[0], &mut blockers);
+        assert!(blockers.is_empty());
     }
 
     #[test]
@@ -7002,5 +7457,25 @@ mod tests {
             parameters,
             vec![("On/Off".to_owned(), 1.0), ("DelayTime1".to_owned(), 3.5)]
         );
+    }
+
+    #[test]
+    fn computes_ableton_chain_selector_crossfades() {
+        let wet = AbletonChainSelectorRange {
+            minimum: 0.0,
+            maximum: 127.0,
+            crossfade_minimum: 127.0,
+            crossfade_maximum: 127.0,
+        };
+        let dry = AbletonChainSelectorRange {
+            minimum: 0.0,
+            maximum: 127.0,
+            crossfade_minimum: 0.0,
+            crossfade_maximum: 0.0,
+        };
+        assert!((chain_selector_gain(Some(&wet), 63.5) - 0.5).abs() < 1.0e-9);
+        assert!((chain_selector_gain(Some(&dry), 63.5) - 0.5).abs() < 1.0e-9);
+        assert_eq!(chain_selector_gain(Some(&wet), 0.0), 0.0);
+        assert_eq!(chain_selector_gain(Some(&dry), 127.0), 0.0);
     }
 }

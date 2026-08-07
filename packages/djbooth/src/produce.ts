@@ -315,6 +315,15 @@ const deviceGraphAuditOutput = z.object({
   completeFamilies: z.number().int().nonnegative(),
   partialFamilies: z.number().int().nonnegative(),
   blockedFamilies: z.number().int().nonnegative(),
+  audioEffectRacks: z.number().int().nonnegative(),
+  runnableAudioEffectRacks: z.number().int().nonnegative(),
+  blockedAudioEffectRacks: z.number().int().nonnegative(),
+  audioRackBlockers: z.array(
+    z.object({
+      blocker: z.string(),
+      racks: z.number().int().positive(),
+    }),
+  ),
   deviceFamilies: z.array(
     z.object({
       family: z.string(),
@@ -379,6 +388,23 @@ const presetAuditOutput = z.object({
   ),
   exhaustive: z.boolean(),
   jobs: z.number().int().positive(),
+  customDsp: z.literal(false),
+});
+
+const audioRackRenderOutput = z.object({
+  rack: z.string(),
+  name: z.string(),
+  input: z.string(),
+  output: z.string(),
+  renderedDevices: z.number().int().nonnegative(),
+  renderedChains: z.number().int().positive(),
+  nestedRacks: z.number().int().nonnegative(),
+  channels: z.number().int().positive(),
+  sampleRate: z.number().int().positive(),
+  inputFrames: z.number().int().positive(),
+  frames: z.number().int().positive(),
+  frameDelta: z.number().int(),
+  peak: z.number().nonnegative(),
   customDsp: z.literal(false),
 });
 
@@ -892,6 +918,42 @@ abletonCli.command("audit-presets", {
         : []),
     ];
     return presetAuditOutput.parse(
+      await runNative(resolveProducerBinary(context.options.binary), args),
+    );
+  },
+});
+
+abletonCli.command("render-audio-rack", {
+  description:
+    "Render an audio-effect ADG with native nested devices, chain selection, branch mixers and parallel summing.",
+  args: z.object({
+    rack: z.string().min(1).describe("Installed Ableton audio-effect ADG"),
+    input: z.string().min(1).describe("Stereo 44.1 kHz input WAV"),
+    output: z.string().min(1).describe("Destination WAV"),
+  }),
+  options: z.object({
+    binary: z.string().optional().describe("Native x86_64 djbooth-rs helper override"),
+    engine: z.string().optional().describe("Ableton Live Engine executable override"),
+    maxContents: z.string().optional().describe("Ableton bundled Max.app Contents override"),
+    play: z.boolean().default(false).describe("Play the rendered rack output with afplay"),
+  }),
+  output: audioRackRenderOutput,
+  async run(context) {
+    const args = [
+      "ableton",
+      "render-audio-rack",
+      resolveInvocationPath(context.args.rack),
+      resolveInvocationPath(context.args.input),
+      resolveInvocationPath(context.args.output),
+      ...(context.options.engine
+        ? ["--engine", resolveInvocationPath(context.options.engine)]
+        : []),
+      ...(context.options.maxContents
+        ? ["--max-contents", resolveInvocationPath(context.options.maxContents)]
+        : []),
+      ...(context.options.play ? ["--play"] : []),
+    ];
+    return audioRackRenderOutput.parse(
       await runNative(resolveProducerBinary(context.options.binary), args),
     );
   },
