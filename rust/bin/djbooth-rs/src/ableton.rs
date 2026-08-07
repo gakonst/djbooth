@@ -2786,7 +2786,7 @@ fn device_capability(
         "Tube" => live_engine_device_capability("Tube"),
         "Vinyl" => live_engine_device_capability("Vinyl"),
         "Vocoder" => live_engine_device_capability("Vocoder"),
-        "ChannelEq" => compiled_device_capability("abl.device.channeleq~"),
+        "ChannelEq" => compiled_device_capability_exact("abl.device.channeleq~"),
         "Compressor2" => compiled_device_capability("abl.device.compressor~"),
         "Delay" => live_engine_device_capability("ODelayProcessor"),
         "Drift" => live_engine_device_capability("ODriftProcessor"),
@@ -5399,6 +5399,17 @@ fn integer_graph_parameter(device: &AbletonGraphDevice, name: &str) -> Result<i6
 }
 
 fn compiled_max_rack_object(device: &AbletonGraphDevice) -> Result<Option<String>> {
+    if device.family == "ChannelEq" {
+        return Ok(Some(format!(
+            "abl.device.channeleq~ @highpass {} @lowgain {} @midgain {} @midfreq {} @highgain {} @gain {}",
+            integer_graph_parameter(device, "HighpassOn")?,
+            required_graph_parameter(device, "LowShelfGain")?,
+            required_graph_parameter(device, "MidGain")?,
+            required_graph_parameter(device, "MidFrequency")?,
+            required_graph_parameter(device, "HighShelfGain")?,
+            required_graph_parameter(device, "Gain")?,
+        )));
+    }
     if device.family != "Limiter" {
         return Ok(None);
     }
@@ -7519,6 +7530,27 @@ mod tests {
         let mut blockers = BTreeSet::new();
         collect_audio_rack_runtime_blockers(device, &mut blockers);
         assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn maps_channel_eq_adv_parameters_to_compiled_ableton_object() {
+        let xml = r#"<Ableton><ChannelEq>
+          <On><Manual Value="true"/></On>
+          <HighpassOn><Manual Value="true"/></HighpassOn>
+          <LowShelfGain><Manual Value="-2"/></LowShelfGain>
+          <MidGain><Manual Value="3"/></MidGain>
+          <MidFrequency><Manual Value="1200"/></MidFrequency>
+          <HighShelfGain><Manual Value="1.5"/></HighShelfGain>
+          <Gain><Manual Value="-0.5"/></Gain>
+        </ChannelEq></Ableton>"#;
+        let graph = parse_device_graph(Path::new("Channel EQ.adv"), xml).expect("Channel EQ graph");
+        let object = compiled_max_rack_object(&graph.roots[0])
+            .expect("valid mapping")
+            .expect("mapped object");
+        assert_eq!(
+            object,
+            "abl.device.channeleq~ @highpass 1 @lowgain -2 @midgain 3 @midfreq 1200 @highgain 1.5 @gain -0.5"
+        );
     }
 
     #[test]
