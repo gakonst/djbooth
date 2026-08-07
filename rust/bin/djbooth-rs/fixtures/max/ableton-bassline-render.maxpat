@@ -20,6 +20,7 @@
 
       __INPUT_BOXES__
       { "box": { "id": "device", "maxclass": "newobj", "text": "amxd~ \"__AMXD__\"", "patching_rect": [330.0, 250.0, 500.0, 22.0], "numinlets": 3, "numoutlets": 4, "outlettype": ["signal", "signal", "signal", ""] } },
+      __PARAMETER_BOXES__
       { "box": { "id": "record", "maxclass": "newobj", "text": "sfrecord~ 2", "patching_rect": [430.0, 410.0, 75.0, 22.0], "numinlets": 2, "numoutlets": 1, "outlettype": ["int"] } },
 
       { "box": { "id": "open-delay", "maxclass": "newobj", "text": "delay 1200", "patching_rect": [30.0, 130.0, 75.0, 22.0], "numinlets": 2, "numoutlets": 1, "outlettype": ["bang"] } },
@@ -51,11 +52,10 @@
       { "patchline": { "source": ["load", 0], "destination": ["open-delay", 0] } },
       { "patchline": { "source": ["open-delay", 0], "destination": ["open", 0] } },
       { "patchline": { "source": ["open", 0], "destination": ["record", 0] } },
-      { "patchline": { "source": ["load", 0], "destination": ["record-delay", 0] } },
-      { "patchline": { "source": ["record-delay", 0], "destination": ["record-on", 0] } },
-      { "patchline": { "source": ["record-on", 0], "destination": ["record", 0] } },
+      __RECORD_START_LINES__
 
       __INPUT_LINES__
+      __PARAMETER_LINES__
       { "patchline": { "source": ["load", 0], "destination": ["note1-delay", 0] } },
       { "patchline": { "source": ["note1-delay", 0], "destination": ["note1", 0] } },
       { "patchline": { "source": ["note1", 0], "destination": ["device", 0] } },
@@ -74,10 +74,10 @@
       { "patchline": { "source": ["device", 0], "destination": ["dac", 0] } },
       { "patchline": { "source": ["device", 1], "destination": ["dac", 1] } },
 
-      { "patchline": { "source": ["load", 0], "destination": ["stop-delay", 0] } },
+      __STOP_TRIGGER_LINE__
       { "patchline": { "source": ["stop-delay", 0], "destination": ["record-off", 0] } },
       { "patchline": { "source": ["record-off", 0], "destination": ["record", 0] } },
-      { "patchline": { "source": ["load", 0], "destination": ["quit-delay", 0] } },
+      __QUIT_TRIGGER_LINE__
       { "patchline": { "source": ["quit-delay", 0], "destination": ["quit", 0] } }
     ]
   }

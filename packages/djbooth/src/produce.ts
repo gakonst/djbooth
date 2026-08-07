@@ -598,6 +598,26 @@ const abletonEngineProbeOutput = z.object({
   customDsp: z.boolean(),
 });
 
+const abletonGraphRenderOutput = z.object({
+  manifest: z.string(),
+  title: z.string(),
+  output: z.string(),
+  stemsDir: z.string(),
+  tracks: z.number().int().positive(),
+  nativeTracks: z.number().int().nonnegative(),
+  sampleTracks: z.number().int().nonnegative(),
+  maxObjectTracks: z.number().int().nonnegative(),
+  nativeEffects: z.number().int().nonnegative(),
+  maxEffects: z.number().int().nonnegative(),
+  maxObjectEffects: z.number().int().nonnegative(),
+  channels: z.number().int().positive(),
+  sampleRate: z.number().int().positive(),
+  frames: z.number().int().positive(),
+  durationSeconds: z.number().positive(),
+  peak: z.number().nonnegative(),
+  customDsp: z.boolean(),
+});
+
 const abletonEngineAuditOutput = z.object({
   engine: z.string(),
   engineSha256: z.string(),
@@ -611,7 +631,14 @@ const abletonEngineAuditOutput = z.object({
     }),
   ),
   renderAttempted: z.boolean(),
+  audioProcessorCandidates: z.number().int().nonnegative(),
   renderableProcessors: z.number().int().nonnegative(),
+  skippedRenders: z.array(
+    z.object({
+      processor: z.string(),
+      reason: z.string(),
+    }),
+  ),
   renderedProcessors: z.number().int().nonnegative(),
   renderedProcessorNames: z.array(z.string()),
   failedRenders: z.array(
@@ -965,6 +992,44 @@ abletonCli.command("render-audio-rack", {
       ...(context.options.play ? ["--play"] : []),
     ];
     return audioRackRenderOutput.parse(
+      await runNative(resolveProducerBinary(context.options.binary), args),
+    );
+  },
+});
+
+abletonCli.command("render-graph", {
+  description:
+    "Render a complete declarative arrangement through Ableton native instruments, samples and effects.",
+  args: z.object({
+    manifest: z.string().min(1).describe("Ableton production graph JSON"),
+    output: z.string().min(1).describe("Destination stereo WAV"),
+  }),
+  options: z.object({
+    stemsDir: z.string().optional().describe("Destination directory for per-track stems"),
+    binary: z.string().optional().describe("Native x86_64 djbooth-rs helper override"),
+    devicesRoot: z.string().optional().describe("Ableton standalone device bundles override"),
+    maxContents: z.string().optional().describe("Ableton bundled Max.app Contents override"),
+    play: z.boolean().default(false).describe("Play the rendered output with afplay"),
+  }),
+  output: abletonGraphRenderOutput,
+  async run(context) {
+    const args = [
+      "ableton",
+      "render-graph",
+      resolveInvocationPath(context.args.manifest),
+      resolveInvocationPath(context.args.output),
+      ...(context.options.stemsDir
+        ? ["--stems-dir", resolveInvocationPath(context.options.stemsDir)]
+        : []),
+      ...(context.options.devicesRoot
+        ? ["--devices-root", resolveInvocationPath(context.options.devicesRoot)]
+        : []),
+      ...(context.options.maxContents
+        ? ["--max-contents", resolveInvocationPath(context.options.maxContents)]
+        : []),
+      ...(context.options.play ? ["--play"] : []),
+    ];
+    return abletonGraphRenderOutput.parse(
       await runNative(resolveProducerBinary(context.options.binary), args),
     );
   },
