@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use flate2::read::GzDecoder;
+use fs2::FileExt as _;
 use roxmltree::{Document, Node};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -95,6 +96,20 @@ const MAX_DSP_EFFECT_RENDER_TEMPLATE: &str =
     include_str!("../fixtures/max/ableton-dsp-effect-render.maxpat");
 const MAX_DSP_INSTRUMENT_RENDER_TEMPLATE: &str =
     include_str!("../fixtures/max/ableton-dsp-instrument-render.maxpat");
+
+pub(crate) fn acquire_max_runtime_lock() -> Result<fs::File> {
+    let path = std::env::temp_dir().join("djbooth-ableton-max-runtime.lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("failed to open Max runtime lock {}", path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("failed to lock Max runtime {}", path.display()))?;
+    Ok(file)
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -2193,6 +2208,7 @@ fn render_max_amxd(
     eprintln!("render-max-amxd: engine {}", max_binary.display());
     eprintln!("render-max-amxd: device {}", amxd.display());
     eprintln!("render-max-amxd: output {}", output.display());
+    let _max_lock = acquire_max_runtime_lock()?;
     let status = Command::new(&max_binary)
         .arg("--nocef")
         .arg(&patch_path)
@@ -2322,6 +2338,7 @@ fn render_max_object(
     eprintln!("render-max-object: engine {}", max_binary.display());
     eprintln!("render-max-object: object {object}");
     eprintln!("render-max-object: output {}", output.display());
+    let _max_lock = acquire_max_runtime_lock()?;
     let status = Command::new(&max_binary)
         .arg("--nocef")
         .arg(&patch_path)
@@ -2432,6 +2449,7 @@ fn render_max_instrument(
     eprintln!("render-max-instrument: engine {}", max_binary.display());
     eprintln!("render-max-instrument: object {object}");
     eprintln!("render-max-instrument: output {}", output.display());
+    let _max_lock = acquire_max_runtime_lock()?;
     let status = Command::new(&max_binary)
         .arg("--nocef")
         .arg(&patch_path)

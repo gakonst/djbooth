@@ -231,6 +231,7 @@ pub(crate) fn render(
     eprintln!("render-graph: Max engine {}", max_binary.display());
     eprintln!("render-graph: arrangement {}", graph.title);
     eprintln!("render-graph: output {}", output.display());
+    let _max_lock = crate::ableton::acquire_max_runtime_lock()?;
     let status = Command::new(&max_binary)
         .arg("--nocef")
         .arg(&patch_path)
@@ -418,6 +419,7 @@ pub(crate) fn sum_audio_files(
         std::process::id()
     ));
     fs::write(&patch_path, serde_json::to_vec_pretty(&patch)?)?;
+    let _max_lock = crate::ableton::acquire_max_runtime_lock()?;
     let status = Command::new(&max_binary)
         .arg("--nocef")
         .arg(&patch_path)
