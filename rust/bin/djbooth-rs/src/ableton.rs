@@ -211,6 +211,8 @@ enum AbletonCommand {
         output: PathBuf,
         #[arg(long, default_value = DEFAULT_LIVE_ENGINE)]
         engine: PathBuf,
+        #[arg(long, default_value = DEFAULT_NATIVE_DEVICES)]
+        devices_root: PathBuf,
         #[arg(long, default_value = DEFAULT_MAX_CONTENTS)]
         max_contents: PathBuf,
         #[arg(long)]
@@ -491,6 +493,7 @@ struct AbletonDeviceGraphAuditReport {
     runnable_audio_effect_racks: usize,
     blocked_audio_effect_racks: usize,
     audio_rack_blockers: Vec<AbletonAudioRackBlocker>,
+    audio_rack_results: Vec<AbletonAudioRackAudit>,
     device_families: Vec<AbletonGraphFamilyCount>,
     custom_dsp: bool,
 }
@@ -520,6 +523,14 @@ struct AbletonGraphFamilyCount {
 struct AbletonAudioRackBlocker {
     blocker: String,
     racks: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbletonAudioRackAudit {
+    asset: PathBuf,
+    runnable: bool,
+    blockers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1247,9 +1258,18 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             input,
             output,
             engine,
+            devices_root,
             max_contents,
             play,
-        } => render_audio_rack(&rack, &input, &output, &engine, &max_contents, play),
+        } => render_audio_rack(
+            &rack,
+            &input,
+            &output,
+            &engine,
+            &devices_root,
+            &max_contents,
+            play,
+        ),
         AbletonCommand::ProbeMax { max_contents } => probe_max_runtime(&max_contents),
         AbletonCommand::ProbeLiveEngine {
             engine,
@@ -2771,7 +2791,7 @@ fn device_capability(
         "Delay" => live_engine_device_capability("ODelayProcessor"),
         "Drift" => live_engine_device_capability("ODriftProcessor"),
         "Echo" => compiled_device_capability("abl.device.echo~"),
-        "Limiter" => compiled_device_capability("abl.device.limiter~"),
+        "Limiter" => compiled_device_capability_exact("abl.device.limiter~"),
         "Redux2" => live_engine_device_capability("ORedux2Processor"),
         "Reverb" => compiled_device_capability("abl.device.reverb~"),
         "Roar" => live_engine_device_capability("ORoarProcessor"),
@@ -2944,6 +2964,27 @@ fn compiled_device_capability(
         "partial",
         Some(object),
         Some("ADV-to-object attribute translation is not mapped yet"),
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn compiled_device_capability_exact(
+    object: &'static str,
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+) {
+    (
+        "compiledAbletonMaxObject",
+        "renderProven",
+        "exactAdvAttributeMapping",
+        "partial",
+        Some(object),
+        Some("standalone object rendering is proven; composite rack differentials remain"),
     )
 }
 
@@ -5036,6 +5077,7 @@ fn render_audio_rack(
     input: &Path,
     output: &Path,
     engine: &Path,
+    devices_root: &Path,
     max_contents: &Path,
     play: bool,
 ) -> Result<()> {
@@ -5049,6 +5091,12 @@ fn render_audio_rack(
         .with_context(|| format!("rack input does not exist: {}", input.display()))?;
     let engine = fs::canonicalize(engine)
         .with_context(|| format!("Ableton Live Engine does not exist: {}", engine.display()))?;
+    let devices_root = fs::canonicalize(devices_root).with_context(|| {
+        format!(
+            "Ableton native devices directory does not exist: {}",
+            devices_root.display()
+        )
+    })?;
     ensure!(
         max_contents.join("MacOS/Max").is_file(),
         "Ableton bundled Max runtime does not exist: {}",
@@ -5089,6 +5137,7 @@ fn render_audio_rack(
         directory.path(),
         &executable,
         &engine,
+        &devices_root,
         max_contents,
         &mut counts,
     )?;
@@ -5157,6 +5206,7 @@ fn render_audio_rack_graph(
     directory: &Path,
     executable: &Path,
     engine: &Path,
+    devices_root: &Path,
     max_contents: &Path,
     counts: &mut AbletonAudioRackRenderCounts,
 ) -> Result<PathBuf> {
@@ -5216,6 +5266,7 @@ fn render_audio_rack_graph(
                     directory,
                     executable,
                     engine,
+                    devices_root,
                     max_contents,
                     counts,
                 )?;
@@ -5223,29 +5274,59 @@ fn render_audio_rack_graph(
             }
             let (mechanism, engine_status, preset_status, _, implementation, blocker) =
                 device_capability(&device.family);
-            ensure!(
-                mechanism == "liveEngineBundle"
-                    && engine_status == "nativeAudioRenderProven"
-                    && matches!(
-                        preset_status,
-                        "exhaustiveAdvRenderProven" | "installedAdvRenderPartial"
-                    ),
-                "rack device {} cannot yet execute faithfully: {}",
-                device.family,
-                blocker.unwrap_or("native runtime mapping is incomplete")
-            );
-            let processor = implementation.context("rack device has no native processor")?;
             let stage = directory.join(format!("device-{}.wav", counts.devices));
-            run_live_engine_rack_stage(
-                executable,
-                engine,
-                processor,
-                rack_source,
-                device.source_offset,
-                &current,
-                &stage,
-                &[],
-            )?;
+            if mechanism == "liveEngineBundle"
+                && engine_status == "nativeAudioRenderProven"
+                && matches!(
+                    preset_status,
+                    "exhaustiveAdvRenderProven" | "installedAdvRenderPartial"
+                )
+            {
+                let processor = implementation.context("rack device has no native processor")?;
+                run_live_engine_rack_stage(
+                    executable,
+                    engine,
+                    processor,
+                    rack_source,
+                    device.source_offset,
+                    &current,
+                    &stage,
+                    &[],
+                )?;
+            } else if mechanism == "compiledAbletonMaxObject"
+                && engine_status == "renderProven"
+                && preset_status == "exactAdvAttributeMapping"
+            {
+                let object = compiled_max_rack_object(device)?.with_context(|| {
+                    format!("rack device {} has no exact Max mapping", device.family)
+                })?;
+                run_max_object_rack_stage(executable, max_contents, &object, &current, &stage)?;
+            } else if mechanism == "standaloneNativeBundle"
+                && engine_status == "renderProven"
+                && preset_status == "exact"
+            {
+                let (native_device, parameters) = standalone_native_rack_parameters(device)?
+                    .with_context(|| {
+                        format!(
+                            "rack device {} has no exact standalone mapping",
+                            device.family
+                        )
+                    })?;
+                run_standalone_native_rack_stage(
+                    executable,
+                    devices_root,
+                    native_device,
+                    &parameters,
+                    &current,
+                    &stage,
+                )?;
+            } else {
+                bail!(
+                    "rack device {} cannot yet execute faithfully: {}",
+                    device.family,
+                    blocker.unwrap_or("native runtime mapping is incomplete")
+                );
+            }
             counts.devices += 1;
             current = stage;
         }
@@ -5296,6 +5377,87 @@ fn graph_parameter_value(device: &AbletonGraphDevice, name: &str) -> Option<f64>
         .iter()
         .find(|parameter| parameter.name == name || parameter.name.ends_with(&format!("/{name}")))
         .and_then(|parameter| parameter.numeric_value)
+}
+
+fn required_graph_parameter(device: &AbletonGraphDevice, name: &str) -> Result<f64> {
+    graph_parameter_value(device, name).with_context(|| {
+        format!(
+            "Ableton {} device is missing numeric parameter {name}",
+            device.family
+        )
+    })
+}
+
+fn integer_graph_parameter(device: &AbletonGraphDevice, name: &str) -> Result<i64> {
+    let value = required_graph_parameter(device, name)?;
+    ensure!(
+        value.fract().abs() < f64::EPSILON,
+        "Ableton {} parameter {name} must be an integer, got {value}",
+        device.family
+    );
+    Ok(value as i64)
+}
+
+fn compiled_max_rack_object(device: &AbletonGraphDevice) -> Result<Option<String>> {
+    if device.family != "Limiter" {
+        return Ok(None);
+    }
+    let routing = integer_graph_parameter(device, "Routing")?;
+    ensure!(matches!(routing, 0 | 1), "Limiter Routing must be 0 or 1");
+    let link = if routing == 1 {
+        required_graph_parameter(device, "LinkAmountMidSide")?
+    } else {
+        required_graph_parameter(device, "LinkAmount")?
+    };
+    let release_seconds = required_graph_parameter(device, "Release")? / 1_000.0;
+    let object = format!(
+        "abl.device.limiter~ @gain {} @ceiling {} @release {} @autorelease {} @link {} @lookahead {} @routing {} @mode {} @maximize {} @threshold {} @output {}",
+        required_graph_parameter(device, "Gain")?,
+        required_graph_parameter(device, "Ceiling")?,
+        release_seconds,
+        integer_graph_parameter(device, "AutoRelease")?,
+        link,
+        integer_graph_parameter(device, "Lookahead")?,
+        routing,
+        integer_graph_parameter(device, "Mode")?,
+        integer_graph_parameter(device, "Maximize")?,
+        required_graph_parameter(device, "MaximizeThreshold")?,
+        required_graph_parameter(device, "MaximizeOutput")?,
+    );
+    Ok(Some(object))
+}
+
+fn standalone_native_rack_parameters(
+    device: &AbletonGraphDevice,
+) -> Result<Option<(&'static str, Vec<String>)>> {
+    let (native_device, mapping): (&str, &[(u64, &str)]) = match device.family.as_str() {
+        "Amp" => (
+            "Amp",
+            &[
+                (0, "AmpType"),
+                (1, "Bass"),
+                (2, "Middle"),
+                (3, "Treble"),
+                (4, "Presence"),
+                (5, "Gain"),
+                (6, "Volume"),
+            ],
+        ),
+        "Cabinet" => (
+            "Cabinet",
+            &[
+                (0, "CabinetType"),
+                (1, "MicrophoneTypeSwitch"),
+                (2, "MicrophonePosition"),
+            ],
+        ),
+        _ => return Ok(None),
+    };
+    let parameters = mapping
+        .iter()
+        .map(|(id, name)| Ok(format!("{id}={}", required_graph_parameter(device, name)?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some((native_device, parameters)))
 }
 
 fn chain_selector_gain(range: Option<&AbletonChainSelectorRange>, selector: f64) -> f64 {
@@ -5355,6 +5517,59 @@ fn run_live_engine_rack_stage(
         String::from_utf8_lossy(&result.stderr).trim()
     );
     ensure!(output.is_file(), "Ableton rack stage did not create output");
+    Ok(())
+}
+
+fn run_max_object_rack_stage(
+    executable: &Path,
+    max_contents: &Path,
+    object: &str,
+    input: &Path,
+    output: &Path,
+) -> Result<()> {
+    let status = Command::new(executable)
+        .args(["ableton", "render-max-object", object])
+        .arg(input)
+        .arg(output)
+        .arg("--max-contents")
+        .arg(max_contents)
+        .args(["--tail-seconds", "0"])
+        .status()
+        .with_context(|| format!("failed to launch Ableton Max object {object}"))?;
+    ensure!(
+        status.success(),
+        "Ableton Max rack object {object} failed: {status}"
+    );
+    Ok(())
+}
+
+fn run_standalone_native_rack_stage(
+    executable: &Path,
+    devices_root: &Path,
+    device: &str,
+    parameters: &[String],
+    input: &Path,
+    output: &Path,
+) -> Result<()> {
+    let mut command = Command::new(executable);
+    command
+        .args(["ableton", "render-native-device"])
+        .arg(output)
+        .args(["--device", device, "--devices-root"])
+        .arg(devices_root)
+        .arg("--input")
+        .arg(input)
+        .args(["--tail-seconds", "0"]);
+    for parameter in parameters {
+        command.arg("--parameter").arg(parameter);
+    }
+    let status = command
+        .status()
+        .with_context(|| format!("failed to launch Ableton native device {device}"))?;
+    ensure!(
+        status.success(),
+        "Ableton native rack device {device} failed: {status}"
+    );
     Ok(())
 }
 
@@ -5437,6 +5652,7 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
     let mut audio_effect_racks = 0;
     let mut runnable_audio_effect_racks = 0;
     let mut audio_rack_blockers = BTreeMap::<String, usize>::new();
+    let mut audio_rack_results = Vec::new();
     for asset in assets {
         let result = read_ableton_xml(&asset).and_then(|xml| parse_device_graph(&asset, &xml));
         match result {
@@ -5455,13 +5671,20 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
                     audio_effect_racks += 1;
                     let mut blockers = BTreeSet::new();
                     collect_audio_rack_runtime_blockers(root, &mut blockers);
-                    if blockers.is_empty() {
+                    let blockers = blockers.into_iter().collect::<Vec<_>>();
+                    let runnable = blockers.is_empty();
+                    if runnable {
                         runnable_audio_effect_racks += 1;
                     } else {
-                        for blocker in blockers {
-                            *audio_rack_blockers.entry(blocker).or_default() += 1;
+                        for blocker in &blockers {
+                            *audio_rack_blockers.entry(blocker.clone()).or_default() += 1;
                         }
                     }
+                    audio_rack_results.push(AbletonAudioRackAudit {
+                        asset: asset.clone(),
+                        runnable,
+                        blockers,
+                    });
                 }
                 for root in &report.roots {
                     collect_graph_families(root, &mut families);
@@ -5532,6 +5755,7 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
             runnable_audio_effect_racks,
             blocked_audio_effect_racks: audio_effect_racks - runnable_audio_effect_racks,
             audio_rack_blockers,
+            audio_rack_results,
             device_families,
             custom_dsp: false,
         })?
@@ -5912,13 +6136,20 @@ fn collect_audio_rack_runtime_blockers(
         return;
     }
     let (mechanism, engine_status, preset_status, _, _, _) = device_capability(&device.family);
-    if mechanism != "liveEngineBundle"
-        || engine_status != "nativeAudioRenderProven"
-        || !matches!(
+    let live_engine_ready = mechanism == "liveEngineBundle"
+        && engine_status == "nativeAudioRenderProven"
+        && matches!(
             preset_status,
             "exhaustiveAdvRenderProven" | "installedAdvRenderPartial"
-        )
-    {
+        );
+    let compiled_max_ready = mechanism == "compiledAbletonMaxObject"
+        && engine_status == "renderProven"
+        && preset_status == "exactAdvAttributeMapping";
+    let standalone_native_ready = mechanism == "standaloneNativeBundle"
+        && engine_status == "renderProven"
+        && preset_status == "exact"
+        && standalone_native_rack_parameters(device).is_ok_and(|mapping| mapping.is_some());
+    if !live_engine_ready && !compiled_max_ready && !standalone_native_ready {
         blockers.insert(device.family.clone());
     }
 }
@@ -7254,7 +7485,40 @@ mod tests {
         assert!(serialized.contains("sfrecord~ 2"));
         assert!(serialized.contains("delay 5000"));
         assert!(serialized.contains("delay 5500"));
+        assert!(serialized.contains("t b b"));
+        assert!(!serialized.contains("input with spaces.wav\", 1"));
         assert!(!serialized.contains("__DEVICE__"));
+    }
+
+    #[test]
+    fn maps_limiter_adv_parameters_to_compiled_ableton_object() {
+        let xml = r#"<Ableton><Limiter>
+          <On><Manual Value="true"/></On>
+          <Gain><Manual Value="3.5"/></Gain>
+          <Ceiling><Manual Value="-0.3"/></Ceiling>
+          <Release><Manual Value="100"/></Release>
+          <AutoRelease><Manual Value="true"/></AutoRelease>
+          <LinkAmount><Manual Value="1"/></LinkAmount>
+          <LinkAmountMidSide><Manual Value="0.25"/></LinkAmountMidSide>
+          <Lookahead><Manual Value="2"/></Lookahead>
+          <Routing><Manual Value="1"/></Routing>
+          <Mode><Manual Value="2"/></Mode>
+          <Maximize><Manual Value="true"/></Maximize>
+          <MaximizeThreshold><Manual Value="-6"/></MaximizeThreshold>
+          <MaximizeOutput><Manual Value="-1"/></MaximizeOutput>
+        </Limiter></Ableton>"#;
+        let graph = parse_device_graph(Path::new("Limiter.adv"), xml).expect("Limiter graph");
+        let device = &graph.roots[0];
+        let object = compiled_max_rack_object(device)
+            .expect("valid mapping")
+            .expect("mapped object");
+        assert_eq!(
+            object,
+            "abl.device.limiter~ @gain 3.5 @ceiling -0.3 @release 0.1 @autorelease 1 @link 0.25 @lookahead 2 @routing 1 @mode 2 @maximize 1 @threshold -6 @output -1"
+        );
+        let mut blockers = BTreeSet::new();
+        collect_audio_rack_runtime_blockers(device, &mut blockers);
+        assert!(blockers.is_empty());
     }
 
     #[test]
@@ -7346,6 +7610,7 @@ mod tests {
         fs::write(
             &preset,
             r#"<Ableton><Amp>
+              <On><Manual Value="true"/></On>
               <AmpType><Manual Value="2"/></AmpType>
               <Bass><Manual Value="6.25"/></Bass>
               <Middle><Manual Value="5.75"/></Middle>
@@ -7362,6 +7627,14 @@ mod tests {
         assert_eq!(parameters[0].value, 2.0);
         assert_eq!(parameters[6].id, 6);
         assert_eq!(parameters[6].value, 8.25);
+        let xml = fs::read_to_string(&preset).expect("Amp fixture XML");
+        let graph = parse_device_graph(&preset, &xml).expect("Amp graph");
+        let (device, arguments) = standalone_native_rack_parameters(&graph.roots[0])
+            .expect("valid rack mapping")
+            .expect("standalone Amp mapping");
+        assert_eq!(device, "Amp");
+        assert_eq!(arguments[0], "0=2");
+        assert_eq!(arguments[6], "6=8.25");
     }
 
     #[test]

@@ -324,6 +324,13 @@ const deviceGraphAuditOutput = z.object({
       racks: z.number().int().positive(),
     }),
   ),
+  audioRackResults: z.array(
+    z.object({
+      asset: z.string(),
+      runnable: z.boolean(),
+      blockers: z.array(z.string()),
+    }),
+  ),
   deviceFamilies: z.array(
     z.object({
       family: z.string(),
@@ -934,6 +941,7 @@ abletonCli.command("render-audio-rack", {
   options: z.object({
     binary: z.string().optional().describe("Native x86_64 djbooth-rs helper override"),
     engine: z.string().optional().describe("Ableton Live Engine executable override"),
+    devicesRoot: z.string().optional().describe("Ableton standalone device bundles override"),
     maxContents: z.string().optional().describe("Ableton bundled Max.app Contents override"),
     play: z.boolean().default(false).describe("Play the rendered rack output with afplay"),
   }),
@@ -947,6 +955,9 @@ abletonCli.command("render-audio-rack", {
       resolveInvocationPath(context.args.output),
       ...(context.options.engine
         ? ["--engine", resolveInvocationPath(context.options.engine)]
+        : []),
+      ...(context.options.devicesRoot
+        ? ["--devices-root", resolveInvocationPath(context.options.devicesRoot)]
         : []),
       ...(context.options.maxContents
         ? ["--max-contents", resolveInvocationPath(context.options.maxContents)]
