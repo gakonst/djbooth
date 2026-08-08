@@ -1238,6 +1238,7 @@ struct NativeParameter {
 
 #[derive(Clone, Debug)]
 struct NativePresetControl {
+    name: String,
     value: f32,
 }
 
@@ -1714,26 +1715,41 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
             if let Some(preset) = &preset
                 && !compiled_parameter_slots.is_empty()
             {
-                let recovered_ids = recover_ordered_native_preset_map(
-                    canonical_name,
-                    preset,
-                    &compiled_parameter_slots,
-                )?;
-                ensure!(
-                    recovered_ids.len() == preset_parameter_count,
-                    "Ableton {canonical_name} recovered parameter count changed after verification"
-                );
-                for (parameter, id) in parameters[..preset_parameter_count]
-                    .iter_mut()
-                    .zip(recovered_ids)
-                {
-                    parameter.id = id;
+                if canonical_name == "Tension" {
+                    verify_tension_compiled_parameter_slots(&compiled_parameter_slots)?;
+                } else {
+                    let recovered_ids = recover_ordered_native_preset_map(
+                        canonical_name,
+                        preset,
+                        &compiled_parameter_slots,
+                    )?;
+                    ensure!(
+                        recovered_ids.len() == preset_parameter_count,
+                        "Ableton {canonical_name} recovered parameter count changed after verification"
+                    );
+                    for (parameter, id) in parameters[..preset_parameter_count]
+                        .iter_mut()
+                        .zip(recovered_ids)
+                    {
+                        parameter.id = id;
+                    }
                 }
                 preset_parameter_map_verified = Some(true);
             }
         }
         for parameter in &parameters {
             unsafe { set_parameter(instance.pointer, parameter.id, parameter.value) };
+        }
+        if instances.is_empty()
+            && std::env::var_os("DJBOOTH_DEBUG_NATIVE_PARAMETERS_AFTER").is_some()
+        {
+            eprintln!(
+                "DJBOOTH_NATIVE_PARAMETERS_AFTER={}",
+                serde_json::to_string(&native_compiled_parameter_slots(
+                    canonical_name,
+                    instance.pointer
+                )?)?
+            );
         }
         instances.push(instance);
     }
@@ -2181,7 +2197,10 @@ fn native_preset_parameters(device: &str, preset: &Path) -> Result<Vec<NativePar
         "preset contains {}, not {expected_root}",
         root.tag_name().name()
     );
-    if matches!(device, "Analog" | "Collision" | "Corpus" | "Tension") {
+    if device == "Tension" {
+        return tension_native_preset_parameters(root);
+    }
+    if matches!(device, "Analog" | "Collision" | "Corpus") {
         return ordered_native_preset_parameters(root);
     }
     let parameters: &[(u64, &str)] = match device {
@@ -2259,9 +2278,257 @@ fn ordered_native_preset_controls(root: Node<'_, '_>) -> Result<Vec<NativePreset
                     .parse::<f32>()
                     .with_context(|| format!("invalid native preset value {name}={value}"))?,
             };
-            Ok(NativePresetControl { value })
+            Ok(NativePresetControl { name, value })
         })
         .collect()
+}
+
+fn tension_native_preset_parameters(root: Node<'_, '_>) -> Result<Vec<NativeParameter>> {
+    let controls = ordered_native_preset_controls(root)?;
+    tension_native_parameters(&controls)
+}
+
+fn tension_native_parameters(controls: &[NativePresetControl]) -> Result<Vec<NativeParameter>> {
+    let value = |name: &str| {
+        controls
+            .iter()
+            .find(|control| control.name == name)
+            .map(|control| control.value)
+            .with_context(|| format!("Tension preset is missing {name}"))
+    };
+    let mut parameters = Vec::with_capacity(130);
+    let mut direct = |id, name| -> Result<()> {
+        parameters.push(NativeParameter {
+            id,
+            value: value(name)?,
+        });
+        Ok(())
+    };
+
+    for (id, name) in [
+        (0, "Polyphony"),
+        (1, "PitchBendRange"),
+        (3, "Octave"),
+        (4, "Transpose"),
+        (5, "KeyboardFineTune"),
+        (6, "KeyboardPriority"),
+        (7, "KeyboardUnisonToggle"),
+        (8, "KeyboardUnison"),
+        (9, "KeyboardDetune"),
+        (10, "KeyboardUnisonDelay"),
+        (11, "KeyboardStretch"),
+        (12, "KeyboardError"),
+        (13, "VibratoToggle"),
+        (14, "VibratoSpeed"),
+        (15, "VibratoFadeIn"),
+        (16, "VibratoAmount"),
+        (17, "VibratoError"),
+        (18, "VibratoDelay"),
+        (19, "VibratoModWheel"),
+        (20, "PortamentoToggle"),
+        (21, "PortamentoTime"),
+        (22, "PortamentoProportional"),
+        (23, "PortamentoLegato"),
+        (24, "GeoExcitatorPosition"),
+        (25, "GeoExcitatorAbsolute"),
+    ] {
+        direct(id, name)?;
+    }
+    drop(direct);
+
+    let mut bipolar = |amount_id, invert_id, name| -> Result<()> {
+        let value = value(name)?;
+        parameters.push(NativeParameter {
+            id: amount_id,
+            value: value.abs(),
+        });
+        parameters.push(NativeParameter {
+            id: invert_id,
+            value: f32::from(u8::from(value < 0.0)),
+        });
+        Ok(())
+    };
+    bipolar(26, 27, "GeoExcitatorKbdModulation")?;
+    bipolar(28, 29, "GeoExcitatorVelModulation")?;
+    drop(bipolar);
+
+    let direct_and_bipolar = [
+        (30, None, "GeoDamperPosition"),
+        (31, None, "GeoDamperAbsolute"),
+        (32, Some(33), "GeoDamperKbdModulation"),
+        (34, Some(35), "GeoDamperVelModulation"),
+        (36, None, "ExcitatorToggle"),
+        (37, None, "ExcitatorType"),
+        (38, None, "ExcitatorParameterX"),
+        (39, Some(40), "ExcitatorParameterXKbdMod"),
+        (41, Some(42), "ExcitatorParameterXVelMod"),
+        (43, None, "ExcitatorStiffness"),
+        (44, Some(45), "ExcitatorStiffnessKbdMod"),
+        (46, Some(47), "ExcitatorStiffnessVelMod"),
+        (48, None, "ExcitatorVelocity"),
+        (49, Some(50), "ExcitatorVelocityKbdMod"),
+        (51, Some(52), "ExcitatorVelocityVelMod"),
+        (53, None, "ExcitatorDamping"),
+        (54, None, "PickupToggle"),
+        (55, None, "PickupPosition"),
+        (56, None, "DamperToggle"),
+        (57, None, "DamperMass"),
+        (58, Some(59), "DamperMassKbdMod"),
+        (60, None, "DamperStiffness"),
+        (61, Some(62), "DamperStiffnessKbdMod"),
+        (63, None, "DamperVelocity"),
+        (64, Some(65), "DamperVelocityKbdMod"),
+        (66, None, "DamperDamping"),
+        (67, None, "DamperGated"),
+        (68, None, "StringDamping"),
+        (69, Some(70), "StringDampingKbdMod"),
+        (71, None, "StringDecay"),
+        (72, Some(73), "StringDecayKbdMod"),
+        (74, None, "StringDecayRatio"),
+        (75, None, "StringInharmonicity"),
+        (76, None, "TerminationToggle"),
+        (77, None, "TerminationFingerStiffness"),
+        (78, None, "TerminationFingerForce"),
+        (79, Some(80), "TerminationFingerForceKbdMod"),
+        (81, Some(82), "TerminationFingerForceVelMod"),
+        (83, None, "TerminationFretStiffness"),
+        (84, None, "LFOToggle"),
+        (85, None, "LFOWaveShape"),
+    ];
+    for (id, invert_id, name) in direct_and_bipolar {
+        let control_value = value(name)?;
+        parameters.push(NativeParameter {
+            id,
+            value: if invert_id.is_some() {
+                control_value.abs()
+            } else {
+                control_value
+            },
+        });
+        if let Some(invert_id) = invert_id {
+            parameters.push(NativeParameter {
+                id: invert_id,
+                value: f32::from(u8::from(control_value < 0.0)),
+            });
+        }
+    }
+
+    parameters.push(NativeParameter {
+        id: 86,
+        value: if value("LFOSyncToggle")? != 0.0 {
+            value("LFOSync")?
+        } else {
+            24.0
+        },
+    });
+    for (id, name) in [
+        (87, "LFODelay"),
+        (88, "LFOSpeed"),
+        (89, "LFOFadeIn"),
+        (90, "FilterToggle"),
+    ] {
+        parameters.push(NativeParameter {
+            id,
+            value: value(name)?,
+        });
+    }
+    let filter_type = value("FilterType")?;
+    parameters.push(NativeParameter {
+        id: 91,
+        value: if filter_type >= 6.0 {
+            filter_type - 6.0
+        } else {
+            filter_type
+        },
+    });
+    parameters.push(NativeParameter {
+        id: 92,
+        value: f32::from(u8::from(filter_type >= 6.0)),
+    });
+    for (id, invert_id, name) in [
+        (93, None, "FilterCutoffFrequency"),
+        (94, Some(95), "FilterCutoffFrequencyKbdMod"),
+        (96, Some(97), "FilterCutoffFrequencyLFOMod"),
+        (98, Some(99), "FilterCutoffFrequencyEnvMod"),
+        (100, None, "FilterQFactor"),
+        (101, Some(102), "FilterQFactorKbdMod"),
+        (103, Some(104), "FilterQFactorLFOMod"),
+        (105, Some(106), "FilterQFactorEnvMod"),
+    ] {
+        let control_value = value(name)?;
+        parameters.push(NativeParameter {
+            id,
+            value: if invert_id.is_some() {
+                control_value.abs()
+            } else {
+                control_value
+            },
+        });
+        if let Some(invert_id) = invert_id {
+            parameters.push(NativeParameter {
+                id: invert_id,
+                value: f32::from(u8::from(control_value < 0.0)),
+            });
+        }
+    }
+    for (id, name) in [
+        (107, "FilterEnvelopeToggle"),
+        (108, "FilterEnvelopeAttack"),
+        (109, "FilterEnvelopeDecay"),
+        (110, "FilterEnvelopeSustain"),
+        (111, "FilterEnvelopeRelease"),
+        (112, "FilterEnvelopeAttackMod"),
+        (113, "FilterEnvelopeAmpMod"),
+        (114, "BodyType"),
+        (115, "BodySize"),
+        (116, "BodyDecay"),
+        (117, "BodyLowCut"),
+        (118, "BodyHighCut"),
+        (119, "BodyLevel"),
+    ] {
+        parameters.push(NativeParameter {
+            id,
+            value: value(name)?,
+        });
+    }
+    parameters.push(NativeParameter {
+        id: 120,
+        value: if value("BodyToggle")? != 0.0 {
+            value("BodyMix")?
+        } else {
+            0.0
+        },
+    });
+    for (id, name) in [
+        (121, "PerNotePitchBendRange"),
+        (122, "ChannelPressureTarget1"),
+        (123, "ChannelPressureRange1"),
+        (124, "ChannelPressureTarget2"),
+        (125, "ChannelPressureRange2"),
+        (126, "SlideTarget1"),
+        (127, "SlideRange1"),
+        (128, "SlideTarget2"),
+        (129, "SlideRange2"),
+    ] {
+        parameters.push(NativeParameter {
+            id,
+            value: value(name)?,
+        });
+    }
+    ensure!(
+        parameters.len() == 129
+            && parameters
+                .iter()
+                .enumerate()
+                .all(|(index, parameter)| parameter.id
+                    == if index < 2 {
+                        index as u64
+                    } else {
+                        index as u64 + 1
+                    }),
+        "Tension ADV fan-out did not cover every compiled parameter except inert slot 2"
+    );
+    Ok(parameters)
 }
 
 fn native_compiled_parameter_slots(
@@ -2311,6 +2578,26 @@ fn native_compiled_parameter_slots(
         });
     }
     Ok(slots)
+}
+
+fn verify_tension_compiled_parameter_slots(slots: &[NativeCompiledParameterSlot]) -> Result<()> {
+    ensure!(
+        slots.len() == 130
+            && slots
+                .iter()
+                .enumerate()
+                .all(|(index, slot)| slot.id == index as u64)
+            && !slots[2].initialized
+            && slots
+                .iter()
+                .enumerate()
+                .all(|(index, slot)| index == 2 || slot.initialized)
+            && slots[0].virtual_control
+            && slots[7].virtual_control
+            && slots[122..].iter().all(|slot| slot.virtual_control),
+        "Ableton Tension compiled parameter ABI no longer matches its 130-slot companion graph"
+    );
+    Ok(())
 }
 
 fn recover_ordered_native_preset_map(
@@ -2962,13 +3249,11 @@ fn device_capability(
         ),
         "StringStudio" => (
             "standaloneNativeBundle",
-            "abiRecovered",
-            "disabled",
-            "partial",
+            "renderProven",
+            "exhaustiveAdvRenderProven",
+            "complete",
             Some("Tension"),
-            Some(
-                "factory ADV mapping is not yet safe; recovered assignments can silence the engine",
-            ),
+            None,
         ),
         "OriginalSimpler" | "MultiSampler" => (
             "coreLibrarySamples",
@@ -7683,6 +7968,29 @@ fn standalone_native_rack_parameters(
             "Corpus"
         };
         return Ok(Some((native_device, parameters)));
+    }
+    if device.family == "StringStudio" {
+        let controls = device
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.name != "On")
+            .map(|parameter| {
+                Ok(NativePresetControl {
+                    name: parameter.name.clone(),
+                    value: parameter.numeric_value.with_context(|| {
+                        format!(
+                            "Ableton Tension parameter {} is not numeric",
+                            parameter.name
+                        )
+                    })? as f32,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let parameters = tension_native_parameters(&controls)?
+            .into_iter()
+            .map(|parameter| format!("{}={}", parameter.id, parameter.value))
+            .collect();
+        return Ok(Some(("Tension", parameters)));
     }
     let (native_device, mapping): (&str, &[(u64, &str)]) = match device.family.as_str() {
         "Amp" => (
