@@ -555,6 +555,7 @@ const abletonEngineProbeOutput = z.object({
       callback: z.string(),
     }),
   ),
+  processorMidiOutputEvents: z.number().int().nonnegative(),
   processorRenderPeak: z.number().nonnegative(),
   processorRenderDelta: z.number().nonnegative(),
   processorRenderFrames: z.number().int().nonnegative(),

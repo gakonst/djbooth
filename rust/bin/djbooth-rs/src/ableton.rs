@@ -585,6 +585,7 @@ struct AbletonPresetAuditJob {
     family: String,
     processor: String,
     midi: bool,
+    event_only: bool,
     sample: Option<PathBuf>,
 }
 
@@ -950,6 +951,7 @@ struct LiveEngineProbeReport {
     preset_parameters_applied: usize,
     applied_parameters: Vec<LiveEngineAppliedParameter>,
     applied_midi_events: Vec<LiveEngineAppliedMidiEvent>,
+    processor_midi_output_events: usize,
     processor_render_peak: f32,
     processor_render_delta: f32,
     processor_render_frames: usize,
@@ -2969,6 +2971,24 @@ fn live_engine_device_capability(
     Option<&'static str>,
     Option<&'static str>,
 ) {
+    if [
+        "MidiChord",
+        "MidiPitcher",
+        "MidiRandom",
+        "MidiScale",
+        "MidiVelocity",
+    ]
+    .contains(&processor)
+    {
+        return (
+            "liveEngineBundle",
+            "nativeMidiEventRenderProven",
+            "exhaustiveAdvEventRenderProven",
+            "partial",
+            Some(processor),
+            Some("native MIDI rack-chain and nested scheduler differentials remain"),
+        );
+    }
     let render_proven = [
         "AutoFilter",
         "BeatRepeatMixer + BeatRepeatRingBuffer",
@@ -3474,6 +3494,13 @@ unsafe extern "C" fn discard_live_engine_float_event(_: *mut u8, _: f32) {}
 
 unsafe extern "C" fn discard_live_engine_pointer_event(_: *mut u8, _: *const u8) {}
 
+unsafe extern "C" fn capture_live_engine_midi_event(context: *mut u8, _: *const u8) {
+    let count = context.cast::<usize>();
+    unsafe {
+        *count += 1;
+    }
+}
+
 #[derive(Clone, Copy)]
 enum BeatRepeatParameterTarget {
     Control,
@@ -3921,6 +3948,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
     let mut preset_parameters_applied = 0_usize;
     let mut applied_parameters = Vec::new();
     let mut applied_midi_events = Vec::new();
+    let mut processor_midi_output_events = 0_usize;
     let mut processor_render_peak = 0.0_f32;
     let mut processor_render_delta = 0.0_f32;
     let mut processor_render_frames = 0_usize;
@@ -4347,7 +4375,13 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                     // lifecycle call RunningBeatTime remains the native
                     // -DBL_MAX sentinel; tempo-synced processors then receive it
                     // from ProvideInitialTimeInfo and poison their phase state.
-                    initialize_engine_transport(engine_domain, 0.0, 0.0, 0.0, false);
+                    initialize_engine_transport(
+                        engine_domain,
+                        0.0,
+                        0.0,
+                        0.0,
+                        !scheduled_midi.is_empty(),
+                    );
                     set_engine_tempo(engine_domain, 120.0, 120.0, false);
                     let event_buffering_manager_handle = allocate_handle();
                     ensure!(
@@ -4819,12 +4853,20 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                     let output_port_count = *(processor_record.add(0x17c) as *const u32) as usize;
                     for port_index in 0..output_port_count {
                         let port = processor_record.add(0x180 + port_index * 0x120);
+                        let port_name =
+                            CStr::from_ptr(port as *const libc::c_char).to_string_lossy();
                         let kind_id = *(port.add(0x100) as *const u32);
                         let offset = *(port.add(0x104) as *const u32);
                         if !matches!(kind_id, 8 | 10) || offset == u32::MAX {
                             continue;
                         }
                         let callback = processor_object.add(offset as usize) as *mut usize;
+                        if kind_id == 10 && port_name == "OutMidi" && !scheduled_midi.is_empty() {
+                            *callback = capture_live_engine_midi_event as usize;
+                            *(processor_object.add(offset as usize + 8) as *mut *mut u8) =
+                                std::ptr::from_mut(&mut processor_midi_output_events).cast();
+                            continue;
+                        }
                         if *callback == 0 {
                             *callback = if kind_id == 8 {
                                 discard_live_engine_float_event as usize
@@ -5032,6 +5074,11 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             "0x{:016x}",
                             *(working_chain.add(0x18) as *const usize)
                         ));
+                    } else if processor_rate == 1 && !scheduled_midi.is_empty() {
+                        processor_graph =
+                            Some("native MIDI event input/output + scheduler".to_owned());
+                        processor_graph_attached = true;
+                        processor_graph_entries = 1;
                     } else if audio_processor && processor_rate == 3 && calc_function != 0 {
                         ensure!(
                             calc_function >= image_base,
@@ -5250,8 +5297,10 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 }
                             }
                         }
-                        processor_calc_function =
-                            Some(format!("image+0x{:x}", calc_function - image_base));
+                        if calc_function != 0 {
+                            processor_calc_function =
+                                Some(format!("image+0x{:x}", calc_function - image_base));
+                        }
                         enter_engine_domain(engine_domain, std::ptr::null());
                         if processor_rate == 3 {
                             let port_count = *(processor_record.add(0x17c) as *const u32) as usize;
@@ -5591,347 +5640,258 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                     if render_requested {
                         let analysis_tap =
                             matches!(processor, "SpectrumAnalyzer" | "TunerProcessor");
-                        ensure!(
-                            audio_processor
-                                && matches!(processor_rate, 2 | 3)
-                                && processor_graph_attached,
-                            "audio rendering is not available for {processor}"
-                        );
-                        let port_count = *(processor_record.add(0x17c) as *const u32) as usize;
-                        let mut source_frames = if let Some(input) = input {
-                            read_wav_stereo(input, DEFAULT_SAMPLE_RATE)?
-                        } else if !scheduled_midi.is_empty() {
-                            vec![[0.0, 0.0]; midi_total_frames]
-                        } else {
-                            (0..DEFAULT_SAMPLE_RATE as usize * 2)
-                                .map(|frame| {
-                                    let sample = (std::f32::consts::TAU * 4_000.0 * frame as f32
-                                        / DEFAULT_SAMPLE_RATE as f32)
-                                        .sin()
-                                        * 0.25;
-                                    [sample, sample]
-                                })
-                                .collect()
-                        };
-                        if let Some(render_frames) = render_frames {
-                            source_frames.truncate(render_frames);
+                        if processor_rate == 1 && !scheduled_midi.is_empty() {
+                            let callback_address = midi_callback_address
+                                .context("Ableton MIDI event graph has no input callback")?;
+                            type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
+                            type ConstructNoteOn =
+                                unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
+                            type ConstructNoteOff =
+                                unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
+                            let callback: MidiCallback = std::mem::transmute(callback_address);
+                            let mut next_midi_event = 0_usize;
+                            let total_frames = render_frames.unwrap_or(midi_total_frames);
                             ensure!(
                                 scheduled_midi
                                     .last()
-                                    .is_none_or(|event| event.frame < source_frames.len()),
+                                    .is_none_or(|event| event.frame < total_frames),
                                 "--render-frames truncates scheduled MIDI events"
                             );
-                        }
-                        let mut rendered_frames = Vec::with_capacity(source_frames.len());
-                        if processor_rate == 3 {
-                            let mut audio_input_offsets = Vec::new();
-                            let mut audio_output_offsets = Vec::new();
-                            for port_index in 0..port_count {
-                                let port = processor_record.add(0x180 + port_index * 0x120);
-                                let kind_id = *(port.add(0x100) as *const u32);
-                                let offset = *(port.add(0x104) as *const u32);
-                                if offset == u32::MAX {
-                                    continue;
+                            let mut sample_offset = 0_usize;
+                            while sample_offset < total_frames {
+                                let chunk_frames = (total_frames - sample_offset).min(512);
+                                let chunk_end = sample_offset + chunk_frames;
+                                while let Some(scheduled) =
+                                    scheduled_midi.get(next_midi_event).copied()
+                                {
+                                    if scheduled.frame >= chunk_end {
+                                        break;
+                                    }
+                                    ensure!(
+                                        scheduled.frame >= sample_offset,
+                                        "native MIDI event is behind the render cursor"
+                                    );
+                                    let event_offset = scheduled.frame - sample_offset;
+                                    *(engine_domain.add(0x48) as *mut i32) =
+                                        i32::try_from(event_offset)?;
+                                    let mut event = LiveEngineMidiEvent([0; 0x30]);
+                                    if scheduled.note_on {
+                                        let construct: ConstructNoteOn =
+                                            std::mem::transmute(image_base + 0x1772a0);
+                                        construct(
+                                            event.0.as_mut_ptr(),
+                                            i32::from(scheduled.note),
+                                            // Ocean's OMidiNote ABI uses the
+                                            // MIDI 1..127 velocity domain.
+                                            // Native devices normalize it at
+                                            // their own controller boundary.
+                                            f32::from(scheduled.velocity),
+                                            0,
+                                            scheduled.note_id,
+                                            0,
+                                        );
+                                    } else {
+                                        let construct: ConstructNoteOff =
+                                            std::mem::transmute(image_base + 0x177340);
+                                        construct(
+                                            event.0.as_mut_ptr(),
+                                            i32::from(scheduled.note),
+                                            0.0,
+                                            0,
+                                            scheduled.note_id,
+                                        );
+                                    }
+                                    callback(processor_object, event.0.as_mut_ptr());
+                                    applied_midi_events.push(LiveEngineAppliedMidiEvent {
+                                        kind: if scheduled.note_on {
+                                            "noteOn"
+                                        } else {
+                                            "noteOff"
+                                        },
+                                        note: scheduled.note,
+                                        velocity: scheduled.velocity,
+                                        note_id: scheduled.note_id,
+                                        sample_offset: scheduled.frame,
+                                        callback: format!(
+                                            "image+0x{:x}",
+                                            callback_address - image_base
+                                        ),
+                                    });
+                                    next_midi_event += 1;
                                 }
-                                match kind_id {
-                                    1 => audio_input_offsets.push(offset as usize),
-                                    2 => audio_output_offsets.push(offset as usize),
-                                    _ => {}
-                                }
+                                calc_engine_domain(engine_domain, 0, i32::try_from(chunk_frames)?);
+                                sample_offset = chunk_end;
                             }
                             ensure!(
-                                !audio_input_offsets.is_empty(),
-                                "Ableton {processor} has no sample-rate audio input"
+                                next_midi_event == scheduled_midi.len(),
+                                "native MIDI scheduler did not dispatch every event"
                             );
                             ensure!(
-                                analysis_tap || !audio_output_offsets.is_empty(),
-                                "Ableton {processor} has no sample-rate audio output"
+                                processor_midi_output_events > 0,
+                                "Ableton {processor} emitted no MIDI output events"
                             );
-                            let beat_repeat_audio = if processor == "BeatRepeatMixer" {
-                                let (record, object) = beat_repeat_ring_buffer.context(
-                                    "Ableton Beat Repeat ring-buffer companion is absent",
-                                )?;
-                                let count = *(record.add(0x17c) as *const u32) as usize;
-                                let mut inputs = Vec::new();
-                                let mut outputs = Vec::new();
-                                for index in 0..count {
-                                    let port = record.add(0x180 + index * 0x120);
-                                    let kind = *(port.add(0x100) as *const u32);
+                            processor_render_frames = total_frames;
+                        } else {
+                            ensure!(
+                                audio_processor
+                                    && matches!(processor_rate, 2 | 3)
+                                    && processor_graph_attached,
+                                "audio rendering is not available for {processor}"
+                            );
+                            let port_count = *(processor_record.add(0x17c) as *const u32) as usize;
+                            let mut source_frames = if let Some(input) = input {
+                                read_wav_stereo(input, DEFAULT_SAMPLE_RATE)?
+                            } else if !scheduled_midi.is_empty() {
+                                vec![[0.0, 0.0]; midi_total_frames]
+                            } else {
+                                (0..DEFAULT_SAMPLE_RATE as usize * 2)
+                                    .map(|frame| {
+                                        let sample =
+                                            (std::f32::consts::TAU * 4_000.0 * frame as f32
+                                                / DEFAULT_SAMPLE_RATE as f32)
+                                                .sin()
+                                                * 0.25;
+                                        [sample, sample]
+                                    })
+                                    .collect()
+                            };
+                            if let Some(render_frames) = render_frames {
+                                source_frames.truncate(render_frames);
+                                ensure!(
+                                    scheduled_midi
+                                        .last()
+                                        .is_none_or(|event| event.frame < source_frames.len()),
+                                    "--render-frames truncates scheduled MIDI events"
+                                );
+                            }
+                            let mut rendered_frames = Vec::with_capacity(source_frames.len());
+                            if processor_rate == 3 {
+                                let mut audio_input_offsets = Vec::new();
+                                let mut audio_output_offsets = Vec::new();
+                                for port_index in 0..port_count {
+                                    let port = processor_record.add(0x180 + port_index * 0x120);
+                                    let kind_id = *(port.add(0x100) as *const u32);
                                     let offset = *(port.add(0x104) as *const u32);
                                     if offset == u32::MAX {
                                         continue;
                                     }
-                                    match kind {
-                                        1 => inputs.push(offset as usize),
-                                        2 => outputs.push(offset as usize),
+                                    match kind_id {
+                                        1 => audio_input_offsets.push(offset as usize),
+                                        2 => audio_output_offsets.push(offset as usize),
                                         _ => {}
                                     }
                                 }
                                 ensure!(
-                                    inputs.len() == 2
-                                        && outputs.len() == 2
-                                        && audio_input_offsets.len() == 4,
-                                    "Ableton Beat Repeat audio companion ports changed"
+                                    !audio_input_offsets.is_empty(),
+                                    "Ableton {processor} has no sample-rate audio input"
                                 );
-                                Some((object, inputs, outputs))
-                            } else {
-                                None
-                            };
-                            type SampleUpdate = unsafe extern "C" fn(*mut u8);
-                            let update_before_calc: Option<SampleUpdate> =
-                                (processor == "AutoFilter").then(|| {
-                                    std::mem::transmute::<usize, SampleUpdate>(
-                                        image_base + 0x1cb8d0,
-                                    )
-                                });
-                            for source in &source_frames {
-                                let input_samples = [source[0], source[1], source[0], source[1]];
-                                if let Some((ring_object, ring_inputs, ring_outputs)) =
-                                    &beat_repeat_audio
-                                {
-                                    for (index, offset) in ring_inputs.iter().enumerate() {
-                                        *(ring_object.add(*offset) as *mut *const f32) =
-                                            &input_samples[index];
-                                    }
-                                    for (index, offset) in
-                                        audio_input_offsets.iter().take(2).enumerate()
-                                    {
-                                        *(processor_object.add(*offset) as *mut *const f32) =
-                                            &input_samples[index];
-                                    }
-                                    for (index, offset) in
-                                        audio_input_offsets.iter().skip(2).enumerate()
-                                    {
-                                        *(processor_object.add(*offset) as *mut *const f32) =
-                                            ring_object.add(ring_outputs[index]).cast::<f32>();
+                                ensure!(
+                                    analysis_tap || !audio_output_offsets.is_empty(),
+                                    "Ableton {processor} has no sample-rate audio output"
+                                );
+                                let beat_repeat_audio = if processor == "BeatRepeatMixer" {
+                                    let (record, object) = beat_repeat_ring_buffer.context(
+                                        "Ableton Beat Repeat ring-buffer companion is absent",
+                                    )?;
+                                    let count = *(record.add(0x17c) as *const u32) as usize;
+                                    let mut inputs = Vec::new();
+                                    let mut outputs = Vec::new();
+                                    for index in 0..count {
+                                        let port = record.add(0x180 + index * 0x120);
+                                        let kind = *(port.add(0x100) as *const u32);
+                                        let offset = *(port.add(0x104) as *const u32);
+                                        if offset == u32::MAX {
+                                            continue;
+                                        }
+                                        match kind {
+                                            1 => inputs.push(offset as usize),
+                                            2 => outputs.push(offset as usize),
+                                            _ => {}
+                                        }
                                     }
                                     ensure!(
-                                        audio_input_offsets.iter().all(|offset| {
-                                            !(*(processor_object.add(*offset) as *const *const f32))
-                                                .is_null()
-                                        }),
-                                        "Ableton Beat Repeat mixer input binding failed"
+                                        inputs.len() == 2
+                                            && outputs.len() == 2
+                                            && audio_input_offsets.len() == 4,
+                                        "Ableton Beat Repeat audio companion ports changed"
                                     );
+                                    Some((object, inputs, outputs))
                                 } else {
-                                    for (index, offset) in audio_input_offsets.iter().enumerate() {
-                                        let sample = &input_samples[index & 3];
-                                        *(processor_object.add(*offset) as *mut *const f32) =
-                                            sample;
-                                    }
-                                }
-                                if let Some(callback_address) = sample_event_callback_address {
-                                    type FloatEventCallback = unsafe extern "C" fn(*mut u8, f32);
-                                    let callback: FloatEventCallback =
-                                        std::mem::transmute(callback_address);
-                                    callback(processor_object, 0.0);
-                                }
-                                if let Some(update) = update_before_calc {
-                                    update(processor_object);
-                                }
-                                calc_engine_domain(engine_domain, 0, 1);
-                                if analysis_tap {
-                                    processor_render_peak = processor_render_peak
-                                        .max(source[0].abs())
-                                        .max(source[1].abs());
-                                    rendered_frames.push(*source);
-                                    continue;
-                                }
-                                let output_left =
-                                    *(processor_object.add(audio_output_offsets[0]) as *const f32);
-                                let output_right = if audio_output_offsets.len() > 1 {
-                                    *(processor_object.add(audio_output_offsets[1]) as *const f32)
-                                } else {
-                                    output_left
+                                    None
                                 };
-                                ensure!(
-                                    output_left.is_finite() && output_right.is_finite(),
-                                    "Ableton {processor} produced non-finite audio at frame {}",
-                                    rendered_frames.len()
-                                );
-                                processor_render_peak = processor_render_peak
-                                    .max(output_left.abs())
-                                    .max(output_right.abs());
-                                processor_render_delta = processor_render_delta
-                                    .max((output_left - source[0]).abs())
-                                    .max((output_right - source[1]).abs());
-                                rendered_frames.push([output_left, output_right]);
-                            }
-                        } else {
-                            let mut buffer_input_offsets = Vec::new();
-                            let mut buffer_output_offsets = Vec::new();
-                            for port_index in 0..port_count {
-                                let port = processor_record.add(0x180 + port_index * 0x120);
-                                let kind_id = *(port.add(0x100) as *const u32);
-                                let offset = *(port.add(0x104) as *const u32);
-                                if offset == u32::MAX {
-                                    continue;
-                                }
-                                match kind_id {
-                                    5 => buffer_input_offsets.push(offset as usize),
-                                    6 => buffer_output_offsets.push(offset as usize),
-                                    _ => {}
-                                }
-                            }
-                            ensure!(
-                                !buffer_input_offsets.is_empty(),
-                                "Ableton {processor} has no buffer-rate audio input"
-                            );
-                            ensure!(
-                                analysis_tap || !buffer_output_offsets.is_empty(),
-                                "Ableton {processor} has no buffer-rate audio output"
-                            );
-                            type AllocateAudioBuffer = unsafe extern "C" fn(i32, u32) -> *mut u8;
-                            type FreeAudioBuffer = unsafe extern "C" fn(*mut u8);
-                            let allocate_audio_buffer: AllocateAudioBuffer =
-                                std::mem::transmute(image_base + 0x71d70);
-                            let free_audio_buffer: FreeAudioBuffer =
-                                std::mem::transmute(image_base + 0x72240);
-                            let silent_output =
-                                *(image_base.wrapping_add(0x168f008) as *const *mut u8);
-                            let mut next_midi_event = 0_usize;
-                            for chunk in source_frames.chunks(512) {
-                                let sample_offset = rendered_frames.len();
-                                let chunk_end = sample_offset + chunk.len();
-                                if let Some(callback_address) = midi_callback_address {
-                                    type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
-                                    type ConstructNoteOn =
-                                        unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
-                                    type ConstructNoteOff =
-                                        unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
-                                    let callback: MidiCallback =
-                                        std::mem::transmute(callback_address);
-                                    while let Some(scheduled) =
-                                        scheduled_midi.get(next_midi_event).copied()
+                                type SampleUpdate = unsafe extern "C" fn(*mut u8);
+                                let update_before_calc: Option<SampleUpdate> =
+                                    (processor == "AutoFilter").then(|| {
+                                        std::mem::transmute::<usize, SampleUpdate>(
+                                            image_base + 0x1cb8d0,
+                                        )
+                                    });
+                                for source in &source_frames {
+                                    let input_samples =
+                                        [source[0], source[1], source[0], source[1]];
+                                    if let Some((ring_object, ring_inputs, ring_outputs)) =
+                                        &beat_repeat_audio
                                     {
-                                        if scheduled.frame >= chunk_end {
-                                            break;
+                                        for (index, offset) in ring_inputs.iter().enumerate() {
+                                            *(ring_object.add(*offset) as *mut *const f32) =
+                                                &input_samples[index];
+                                        }
+                                        for (index, offset) in
+                                            audio_input_offsets.iter().take(2).enumerate()
+                                        {
+                                            *(processor_object.add(*offset) as *mut *const f32) =
+                                                &input_samples[index];
+                                        }
+                                        for (index, offset) in
+                                            audio_input_offsets.iter().skip(2).enumerate()
+                                        {
+                                            *(processor_object.add(*offset) as *mut *const f32) =
+                                                ring_object.add(ring_outputs[index]).cast::<f32>();
                                         }
                                         ensure!(
-                                            scheduled.frame >= sample_offset,
-                                            "native MIDI event is behind the render cursor"
+                                            audio_input_offsets.iter().all(|offset| {
+                                                !(*(processor_object.add(*offset)
+                                                    as *const *const f32))
+                                                    .is_null()
+                                            }),
+                                            "Ableton Beat Repeat mixer input binding failed"
                                         );
-                                        let event_offset = scheduled.frame - sample_offset;
-                                        *(engine_domain.add(0x48) as *mut i32) =
-                                            i32::try_from(event_offset)?;
-                                        let mut event = LiveEngineMidiEvent([0; 0x30]);
-                                        if scheduled.note_on {
-                                            let construct: ConstructNoteOn =
-                                                std::mem::transmute(image_base + 0x1772a0);
-                                            construct(
-                                                event.0.as_mut_ptr(),
-                                                i32::from(scheduled.note),
-                                                f32::from(scheduled.velocity) / 127.0,
-                                                0,
-                                                scheduled.note_id,
-                                                0,
-                                            );
-                                        } else {
-                                            let construct: ConstructNoteOff =
-                                                std::mem::transmute(image_base + 0x177340);
-                                            construct(
-                                                event.0.as_mut_ptr(),
-                                                i32::from(scheduled.note),
-                                                0.0,
-                                                0,
-                                                scheduled.note_id,
-                                            );
+                                    } else {
+                                        for (index, offset) in
+                                            audio_input_offsets.iter().enumerate()
+                                        {
+                                            let sample = &input_samples[index & 3];
+                                            *(processor_object.add(*offset) as *mut *const f32) =
+                                                sample;
                                         }
-                                        callback(processor_object, event.0.as_mut_ptr());
-                                        applied_midi_events.push(LiveEngineAppliedMidiEvent {
-                                            kind: if scheduled.note_on {
-                                                "noteOn"
-                                            } else {
-                                                "noteOff"
-                                            },
-                                            note: scheduled.note,
-                                            velocity: scheduled.velocity,
-                                            note_id: scheduled.note_id,
-                                            sample_offset: scheduled.frame,
-                                            callback: format!(
-                                                "image+0x{:x}",
-                                                callback_address - image_base
-                                            ),
-                                        });
-                                        next_midi_event += 1;
                                     }
-                                    *(engine_domain.add(0x48) as *mut i32) = 0;
-                                }
-                                let mut input_slots =
-                                    Vec::with_capacity(buffer_input_offsets.len());
-                                for (input_index, offset) in buffer_input_offsets.iter().enumerate()
-                                {
-                                    let buffer =
-                                        allocate_audio_buffer(2, u32::try_from(chunk.len())?);
-                                    ensure!(
-                                        !buffer.is_null(),
-                                        "Ableton audio-buffer allocation failed"
-                                    );
-                                    ensure!(
-                                        *(buffer.add(4) as *const u16) >= 2
-                                            && usize::from(*(buffer.add(6) as *const u16))
-                                                >= chunk.len(),
-                                        "Ableton returned an invalid input audio buffer"
-                                    );
-                                    let right = *(buffer.add(8) as *const *mut u8);
-                                    ensure!(
-                                        !right.is_null(),
-                                        "Ableton returned a mono buffer for stereo input"
-                                    );
-                                    let left_samples = buffer.add(0x10) as *mut f32;
-                                    let right_samples = right.add(0x10) as *mut f32;
-                                    for (frame, source) in chunk.iter().enumerate() {
-                                        *left_samples.add(frame) =
-                                            if input_index == 0 { source[0] } else { 0.0 };
-                                        *right_samples.add(frame) =
-                                            if input_index == 0 { source[1] } else { 0.0 };
+                                    if let Some(callback_address) = sample_event_callback_address {
+                                        type FloatEventCallback =
+                                            unsafe extern "C" fn(*mut u8, f32);
+                                        let callback: FloatEventCallback =
+                                            std::mem::transmute(callback_address);
+                                        callback(processor_object, 0.0);
                                     }
-                                    let mut slot = Box::new(buffer);
-                                    *(processor_object.add(*offset) as *mut *mut *mut u8) =
-                                        slot.as_mut();
-                                    *(processor_object.add(*offset + 8) as *mut i32) = 1;
-                                    input_slots.push(slot);
-                                }
-                                for offset in &buffer_output_offsets {
-                                    *(processor_object.add(*offset) as *mut *mut u8) =
-                                        std::ptr::null_mut();
-                                    *(processor_object.add(*offset + 8) as *mut i32) = 1;
-                                }
-                                calc_engine_domain(engine_domain, 0, chunk.len() as i32);
-                                if analysis_tap {
-                                    for source in chunk {
+                                    if let Some(update) = update_before_calc {
+                                        update(processor_object);
+                                    }
+                                    calc_engine_domain(engine_domain, 0, 1);
+                                    if analysis_tap {
                                         processor_render_peak = processor_render_peak
                                             .max(source[0].abs())
                                             .max(source[1].abs());
                                         rendered_frames.push(*source);
+                                        continue;
                                     }
-                                    continue;
-                                }
-                                let output_buffer = *(processor_object.add(buffer_output_offsets[0])
-                                    as *const *mut u8);
-                                if output_buffer.is_null() || output_buffer == silent_output {
-                                    rendered_frames.extend((0..chunk.len()).map(|_| [0.0, 0.0]));
-                                    continue;
-                                }
-                                let channels = *(output_buffer.add(4) as *const u16);
-                                let samples = usize::from(*(output_buffer.add(6) as *const u16));
-                                ensure!(
-                                    channels >= 1 && samples >= chunk.len(),
-                                    "Ableton returned an invalid output audio buffer"
-                                );
-                                let left_samples = output_buffer.add(0x10) as *const f32;
-                                let right_buffer = *(output_buffer.add(8) as *const *mut u8);
-                                let right_samples = if channels >= 2 {
-                                    ensure!(
-                                        !right_buffer.is_null(),
-                                        "Ableton returned an invalid stereo output buffer"
-                                    );
-                                    right_buffer.add(0x10) as *const f32
-                                } else {
-                                    left_samples
-                                };
-                                for (frame, source) in chunk.iter().enumerate() {
-                                    let output_left = *left_samples.add(frame);
-                                    let output_right = *right_samples.add(frame);
+                                    let output_left = *(processor_object
+                                        .add(audio_output_offsets[0])
+                                        as *const f32);
+                                    let output_right = if audio_output_offsets.len() > 1 {
+                                        *(processor_object.add(audio_output_offsets[1])
+                                            as *const f32)
+                                    } else {
+                                        output_left
+                                    };
                                     ensure!(
                                         output_left.is_finite() && output_right.is_finite(),
                                         "Ableton {processor} produced non-finite audio at frame {}",
@@ -5945,17 +5905,212 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                         .max((output_right - source[1]).abs());
                                     rendered_frames.push([output_left, output_right]);
                                 }
-                                free_audio_buffer(output_buffer);
+                            } else {
+                                let mut buffer_input_offsets = Vec::new();
+                                let mut buffer_output_offsets = Vec::new();
+                                for port_index in 0..port_count {
+                                    let port = processor_record.add(0x180 + port_index * 0x120);
+                                    let kind_id = *(port.add(0x100) as *const u32);
+                                    let offset = *(port.add(0x104) as *const u32);
+                                    if offset == u32::MAX {
+                                        continue;
+                                    }
+                                    match kind_id {
+                                        5 => buffer_input_offsets.push(offset as usize),
+                                        6 => buffer_output_offsets.push(offset as usize),
+                                        _ => {}
+                                    }
+                                }
+                                ensure!(
+                                    !buffer_input_offsets.is_empty(),
+                                    "Ableton {processor} has no buffer-rate audio input"
+                                );
+                                ensure!(
+                                    analysis_tap || !buffer_output_offsets.is_empty(),
+                                    "Ableton {processor} has no buffer-rate audio output"
+                                );
+                                type AllocateAudioBuffer =
+                                    unsafe extern "C" fn(i32, u32) -> *mut u8;
+                                type FreeAudioBuffer = unsafe extern "C" fn(*mut u8);
+                                let allocate_audio_buffer: AllocateAudioBuffer =
+                                    std::mem::transmute(image_base + 0x71d70);
+                                let free_audio_buffer: FreeAudioBuffer =
+                                    std::mem::transmute(image_base + 0x72240);
+                                let silent_output =
+                                    *(image_base.wrapping_add(0x168f008) as *const *mut u8);
+                                let mut next_midi_event = 0_usize;
+                                for chunk in source_frames.chunks(512) {
+                                    let sample_offset = rendered_frames.len();
+                                    let chunk_end = sample_offset + chunk.len();
+                                    if let Some(callback_address) = midi_callback_address {
+                                        type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
+                                        type ConstructNoteOn =
+                                            unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
+                                        type ConstructNoteOff =
+                                            unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
+                                        let callback: MidiCallback =
+                                            std::mem::transmute(callback_address);
+                                        while let Some(scheduled) =
+                                            scheduled_midi.get(next_midi_event).copied()
+                                        {
+                                            if scheduled.frame >= chunk_end {
+                                                break;
+                                            }
+                                            ensure!(
+                                                scheduled.frame >= sample_offset,
+                                                "native MIDI event is behind the render cursor"
+                                            );
+                                            let event_offset = scheduled.frame - sample_offset;
+                                            *(engine_domain.add(0x48) as *mut i32) =
+                                                i32::try_from(event_offset)?;
+                                            let mut event = LiveEngineMidiEvent([0; 0x30]);
+                                            if scheduled.note_on {
+                                                let construct: ConstructNoteOn =
+                                                    std::mem::transmute(image_base + 0x1772a0);
+                                                construct(
+                                                    event.0.as_mut_ptr(),
+                                                    i32::from(scheduled.note),
+                                                    f32::from(scheduled.velocity) / 127.0,
+                                                    0,
+                                                    scheduled.note_id,
+                                                    0,
+                                                );
+                                            } else {
+                                                let construct: ConstructNoteOff =
+                                                    std::mem::transmute(image_base + 0x177340);
+                                                construct(
+                                                    event.0.as_mut_ptr(),
+                                                    i32::from(scheduled.note),
+                                                    0.0,
+                                                    0,
+                                                    scheduled.note_id,
+                                                );
+                                            }
+                                            callback(processor_object, event.0.as_mut_ptr());
+                                            applied_midi_events.push(LiveEngineAppliedMidiEvent {
+                                                kind: if scheduled.note_on {
+                                                    "noteOn"
+                                                } else {
+                                                    "noteOff"
+                                                },
+                                                note: scheduled.note,
+                                                velocity: scheduled.velocity,
+                                                note_id: scheduled.note_id,
+                                                sample_offset: scheduled.frame,
+                                                callback: format!(
+                                                    "image+0x{:x}",
+                                                    callback_address - image_base
+                                                ),
+                                            });
+                                            next_midi_event += 1;
+                                        }
+                                        *(engine_domain.add(0x48) as *mut i32) = 0;
+                                    }
+                                    let mut input_slots =
+                                        Vec::with_capacity(buffer_input_offsets.len());
+                                    for (input_index, offset) in
+                                        buffer_input_offsets.iter().enumerate()
+                                    {
+                                        let buffer =
+                                            allocate_audio_buffer(2, u32::try_from(chunk.len())?);
+                                        ensure!(
+                                            !buffer.is_null(),
+                                            "Ableton audio-buffer allocation failed"
+                                        );
+                                        ensure!(
+                                            *(buffer.add(4) as *const u16) >= 2
+                                                && usize::from(*(buffer.add(6) as *const u16))
+                                                    >= chunk.len(),
+                                            "Ableton returned an invalid input audio buffer"
+                                        );
+                                        let right = *(buffer.add(8) as *const *mut u8);
+                                        ensure!(
+                                            !right.is_null(),
+                                            "Ableton returned a mono buffer for stereo input"
+                                        );
+                                        let left_samples = buffer.add(0x10) as *mut f32;
+                                        let right_samples = right.add(0x10) as *mut f32;
+                                        for (frame, source) in chunk.iter().enumerate() {
+                                            *left_samples.add(frame) =
+                                                if input_index == 0 { source[0] } else { 0.0 };
+                                            *right_samples.add(frame) =
+                                                if input_index == 0 { source[1] } else { 0.0 };
+                                        }
+                                        let mut slot = Box::new(buffer);
+                                        *(processor_object.add(*offset) as *mut *mut *mut u8) =
+                                            slot.as_mut();
+                                        *(processor_object.add(*offset + 8) as *mut i32) = 1;
+                                        input_slots.push(slot);
+                                    }
+                                    for offset in &buffer_output_offsets {
+                                        *(processor_object.add(*offset) as *mut *mut u8) =
+                                            std::ptr::null_mut();
+                                        *(processor_object.add(*offset + 8) as *mut i32) = 1;
+                                    }
+                                    calc_engine_domain(engine_domain, 0, chunk.len() as i32);
+                                    if analysis_tap {
+                                        for source in chunk {
+                                            processor_render_peak = processor_render_peak
+                                                .max(source[0].abs())
+                                                .max(source[1].abs());
+                                            rendered_frames.push(*source);
+                                        }
+                                        continue;
+                                    }
+                                    let output_buffer = *(processor_object
+                                        .add(buffer_output_offsets[0])
+                                        as *const *mut u8);
+                                    if output_buffer.is_null() || output_buffer == silent_output {
+                                        rendered_frames
+                                            .extend((0..chunk.len()).map(|_| [0.0, 0.0]));
+                                        continue;
+                                    }
+                                    let channels = *(output_buffer.add(4) as *const u16);
+                                    let samples =
+                                        usize::from(*(output_buffer.add(6) as *const u16));
+                                    ensure!(
+                                        channels >= 1 && samples >= chunk.len(),
+                                        "Ableton returned an invalid output audio buffer"
+                                    );
+                                    let left_samples = output_buffer.add(0x10) as *const f32;
+                                    let right_buffer = *(output_buffer.add(8) as *const *mut u8);
+                                    let right_samples = if channels >= 2 {
+                                        ensure!(
+                                            !right_buffer.is_null(),
+                                            "Ableton returned an invalid stereo output buffer"
+                                        );
+                                        right_buffer.add(0x10) as *const f32
+                                    } else {
+                                        left_samples
+                                    };
+                                    for (frame, source) in chunk.iter().enumerate() {
+                                        let output_left = *left_samples.add(frame);
+                                        let output_right = *right_samples.add(frame);
+                                        ensure!(
+                                            output_left.is_finite() && output_right.is_finite(),
+                                            "Ableton {processor} produced non-finite audio at frame {}",
+                                            rendered_frames.len()
+                                        );
+                                        processor_render_peak = processor_render_peak
+                                            .max(output_left.abs())
+                                            .max(output_right.abs());
+                                        processor_render_delta = processor_render_delta
+                                            .max((output_left - source[0]).abs())
+                                            .max((output_right - source[1]).abs());
+                                        rendered_frames.push([output_left, output_right]);
+                                    }
+                                    free_audio_buffer(output_buffer);
+                                }
+                                ensure!(
+                                    next_midi_event == scheduled_midi.len(),
+                                    "native MIDI scheduler did not dispatch every event"
+                                );
                             }
-                            ensure!(
-                                next_midi_event == scheduled_midi.len(),
-                                "native MIDI scheduler did not dispatch every event"
-                            );
-                        }
-                        processor_render_frames = rendered_frames.len();
-                        if let Some(output) = output {
-                            write_wav(output, DEFAULT_SAMPLE_RATE, &rendered_frames)?;
-                            processor_render_output = Some(output.to_owned());
+                            processor_render_frames = rendered_frames.len();
+                            if let Some(output) = output {
+                                write_wav(output, DEFAULT_SAMPLE_RATE, &rendered_frames)?;
+                                processor_render_output = Some(output.to_owned());
+                            }
                         }
                     }
                 }
@@ -5995,6 +6150,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         preset_parameters_applied,
         applied_parameters,
         applied_midi_events,
+        processor_midi_output_events,
         processor_render_peak,
         processor_render_delta,
         processor_render_frames,
@@ -7796,15 +7952,22 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
     for (family, presets) in by_family {
         let (mechanism, engine_status, preset_status, _, implementation, blocker) =
             device_capability(&family);
-        let processor = (mechanism == "liveEngineBundle"
-            && engine_status == "nativeAudioRenderProven"
+        let event_only = mechanism == "liveEngineBundle"
+            && engine_status == "nativeMidiEventRenderProven"
             && matches!(
                 preset_status,
-                "representativeAdvRenderProven"
-                    | "exhaustiveAdvRenderProven"
-                    | "exhaustiveAdvAndRackRenderProven"
-                    | "installedAdvRenderPartial"
-            ))
+                "representativeAdvEventRenderProven" | "exhaustiveAdvEventRenderProven"
+            );
+        let processor = (event_only
+            || (mechanism == "liveEngineBundle"
+                && engine_status == "nativeAudioRenderProven"
+                && matches!(
+                    preset_status,
+                    "representativeAdvRenderProven"
+                        | "exhaustiveAdvRenderProven"
+                        | "exhaustiveAdvAndRackRenderProven"
+                        | "installedAdvRenderPartial"
+                )))
         .then_some(implementation)
         .flatten()
         .filter(|processor| !processor.contains(" + "));
@@ -7832,8 +7995,17 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                 processor: processor.to_owned(),
                 midi: matches!(
                     family.as_str(),
-                    "Drift" | "InstrumentMeld" | "InstrumentVector" | "DrumCell"
+                    "Drift"
+                        | "InstrumentMeld"
+                        | "InstrumentVector"
+                        | "DrumCell"
+                        | "MidiChord"
+                        | "MidiPitcher"
+                        | "MidiRandom"
+                        | "MidiScale"
+                        | "MidiVelocity"
                 ),
+                event_only,
                 sample: (family == "DrumCell")
                     .then(|| drum_sample.clone())
                     .flatten(),
@@ -7849,12 +8021,48 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
     let successes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let failures = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let directory = tempfile::tempdir()?;
+    let midi_event_sequence = directory.path().join("midi-event-audit.json");
+    fs::write(
+        &midi_event_sequence,
+        serde_json::to_vec(&Sequence {
+            bpm: 600.0,
+            bars: 1,
+            beats_per_bar: 4,
+            notes: vec![
+                crate::plugin::SequenceNote {
+                    beat: 0.0,
+                    duration_beats: 0.1,
+                    note: 24,
+                    velocity: 32,
+                },
+                crate::plugin::SequenceNote {
+                    beat: 0.25,
+                    duration_beats: 0.1,
+                    note: 48,
+                    velocity: 64,
+                },
+                crate::plugin::SequenceNote {
+                    beat: 0.5,
+                    duration_beats: 0.1,
+                    note: 72,
+                    velocity: 96,
+                },
+                crate::plugin::SequenceNote {
+                    beat: 0.75,
+                    duration_beats: 0.1,
+                    note: 96,
+                    velocity: 127,
+                },
+            ],
+        })?,
+    )?;
     std::thread::scope(|scope| {
         for _ in 0..jobs.min(tested_presets.max(1)) {
             let queue = std::sync::Arc::clone(&queue);
             let successes = std::sync::Arc::clone(&successes);
             let failures = std::sync::Arc::clone(&failures);
             let directory = directory.path();
+            let midi_event_sequence = &midi_event_sequence;
             let executable = &executable;
             let engine = &engine;
             scope.spawn(move || loop {
@@ -7869,12 +8077,16 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                     .args(["ableton", "probe-live-engine", "--bootstrap", "--engine"])
                     .arg(engine)
                     .args(["--processor", &job.processor, "--construct", "--preset"])
-                    .arg(&job.asset)
-                    .arg("--output")
-                    .arg(&output_path)
+                    .arg(&job.asset);
+                if !job.event_only {
+                    command.arg("--output").arg(&output_path);
+                }
+                command
                     .arg("--render-frames")
                     .arg(expected_frames.to_string());
-                if job.midi {
+                if job.event_only {
+                    command.arg("--sequence").arg(midi_event_sequence);
+                } else if job.midi {
                     command.args(["--note", "48", "--gate-seconds", "0.05"]);
                 }
                 if let Some(sample) = &job.sample {
@@ -7895,12 +8107,19 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                                 let delta = report["processorRenderDelta"]
                                     .as_f64()
                                     .map(|value| value as f32);
+                                let midi_output_events = report["processorMidiOutputEvents"]
+                                    .as_u64()
+                                    .unwrap_or(0);
                                 if let (Some(parameters_applied), Some(peak), Some(delta)) =
                                     (parameters_applied, peak, delta)
                                     && parameters_applied > 0
                                     && report["processorRenderFrames"].as_u64()
                                         == Some(expected_frames)
-                                    && peak <= 8.0
+                                    && if job.event_only {
+                                        midi_output_events > 0
+                                    } else {
+                                        peak <= 8.0
+                                    }
                                 {
                                     successes.lock().expect("preset successes poisoned").push(
                                         AbletonPresetAuditSuccess {
@@ -7910,7 +8129,7 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                                             parameters_applied,
                                             peak,
                                             delta,
-                                            audible: peak > 1.0e-7,
+                                            audible: job.event_only || peak > 1.0e-7,
                                         },
                                     );
                                     continue;
@@ -7922,8 +8141,8 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                                         processor: job.processor,
                                         exit_code: output.status.code(),
                                         error: format!(
-                                            "native render failed validation: parameters={parameters_applied:?}, frames={}, peak={peak:?}",
-                                            report["processorRenderFrames"]
+                                            "native render failed validation: parameters={parameters_applied:?}, frames={}, peak={peak:?}, midiOutputEvents={midi_output_events}",
+                                            report["processorRenderFrames"],
                                         ),
                                     },
                                 );
