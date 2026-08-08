@@ -112,6 +112,9 @@ export type DjLinkServerStatus = {
   bindIp: string;
   broadcastIp: string;
   playerNumber: number;
+  stagehandSessionIp?: string;
+  stagehandSessionNonce?: string;
+  stagehandProtocolNonce?: string;
   tracks: number;
   playlists: number;
   uptimeMs: number;

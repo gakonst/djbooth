@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DjLinkError } from "@gakonst/djlink";
+
 import { startDjBoothServer, type DjBoothServerDependencies } from "../src/serve.js";
 
 function linkStatus(pid: number, resumed: boolean) {
@@ -89,7 +91,7 @@ describe("combined djbooth server", () => {
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses one in-memory Stagehand identity across native worker restarts", async () => {
+  it("lets the DJ Link runtime reuse its durable Stagehand identity across worker restarts", async () => {
     const fake = dependencies();
     fake.startLink
       .mockResolvedValueOnce(linkStatus(42, false))
@@ -99,11 +101,10 @@ describe("combined djbooth server", () => {
     await server.reconcileLink();
     const first = fake.startLink.mock.calls[0]?.[0];
     const second = fake.startLink.mock.calls[1]?.[0];
-    expect(first?.stagehandSessionNonce).toMatch(/^\d+$/);
+    expect(first?.stagehandSessionNonce).toBeUndefined();
     expect(second?.stagehandSessionNonce).toBe(first?.stagehandSessionNonce);
-    expect(first?.stagehandProtocolNonce).toMatch(/^\d+$/);
+    expect(first?.stagehandProtocolNonce).toBeUndefined();
     expect(second?.stagehandProtocolNonce).toBe(first?.stagehandProtocolNonce);
-    expect(first?.stagehandProtocolNonce).not.toBe(first?.stagehandSessionNonce);
     await server.close();
   });
 
@@ -135,5 +136,17 @@ describe("combined djbooth server", () => {
 
     await expect(startDjBoothServer({}, fake.value)).rejects.toThrow("port busy");
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transient native link startup failure", async () => {
+    const fake = dependencies();
+    fake.startLink
+      .mockRejectedValueOnce(new DjLinkError("START_FAILED", "interface settling"))
+      .mockResolvedValueOnce(linkStatus(42, false));
+
+    const server = await startDjBoothServer({}, fake.value);
+
+    expect(fake.startLink).toHaveBeenCalledTimes(2);
+    await server.close();
   });
 });

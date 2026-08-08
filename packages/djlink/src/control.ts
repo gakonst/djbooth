@@ -208,6 +208,13 @@ export function toServerStatus(state: DjLinkDaemonState, native: NativeStatus): 
     bindIp: native.bindIp,
     broadcastIp: native.broadcastIp,
     playerNumber: native.playerNumber,
+    ...(native.stagehandSessionIp ? { stagehandSessionIp: native.stagehandSessionIp } : {}),
+    ...(native.stagehandSessionNonce
+      ? { stagehandSessionNonce: native.stagehandSessionNonce }
+      : {}),
+    ...(native.stagehandProtocolNonce
+      ? { stagehandProtocolNonce: native.stagehandProtocolNonce }
+      : {}),
     tracks: native.tracks,
     playlists: native.playlists,
     uptimeMs: native.uptimeMs,

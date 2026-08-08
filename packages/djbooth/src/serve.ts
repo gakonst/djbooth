@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
 
 import {
   startLibraryServer,
@@ -7,6 +6,7 @@ import {
   type RunningLibraryServer,
 } from "@gakonst/djbooth-app";
 import {
+  DjLinkError,
   startRekordboxDjLink,
   stopDjLink,
   type DjLinkServerStatus,
@@ -57,16 +57,16 @@ const defaultDependencies: DjBoothServerDependencies = {
   stopDjLink,
 };
 
+const initialLinkStartAttempts = 3;
+
 /** Start the browser workstation/API and the matching master.db DJ Link source as one runtime. */
 export async function startDjBoothServer(
   options: DjBoothServerOptions = {},
   dependencies: DjBoothServerDependencies = defaultDependencies,
 ): Promise<RunningDjBoothServer> {
   const assistantEnabled = options.assistant ?? true;
-  const stagehandSessionNonce =
-    process.env.DJBOOTH_STAGEHAND_SESSION_NONCE ?? randomBytes(8).readBigUInt64BE().toString();
-  const stagehandProtocolNonce =
-    process.env.DJBOOTH_STAGEHAND_PROTOCOL_NONCE ?? randomBytes(8).readBigUInt64BE().toString();
+  const stagehandSessionNonce = process.env.DJBOOTH_STAGEHAND_SESSION_NONCE;
+  const stagehandProtocolNonce = process.env.DJBOOTH_STAGEHAND_PROTOCOL_NONCE;
   const stagehandSessionIp = process.env.DJBOOTH_STAGEHAND_SESSION_IP;
   const linkOptions: StartRekordboxDjLinkOptions = {
     allowMissingAnalysis: options.allowMissingAnalysis ?? true,
@@ -77,8 +77,8 @@ export async function startDjBoothServer(
     name: options.name ?? "djbooth",
     playerNumber: options.playerNumber ?? 17,
     ...(stagehandSessionIp ? { stagehandSessionIp } : {}),
-    stagehandSessionNonce,
-    stagehandProtocolNonce,
+    ...(stagehandSessionNonce ? { stagehandSessionNonce } : {}),
+    ...(stagehandProtocolNonce ? { stagehandProtocolNonce } : {}),
   };
   let link: (DjLinkServerStatus & { resumed: boolean }) | null = null;
   let ownedLinkPid: number | undefined;
@@ -86,7 +86,7 @@ export async function startDjBoothServer(
   let monitor: RunningMonitorServer | undefined;
   try {
     if (options.link !== false) {
-      link = await dependencies.startRekordboxDjLink(linkOptions);
+      link = await startInitialLink(linkOptions, dependencies);
       if (!link.resumed) ownedLinkPid = link.pid;
     }
     web = await dependencies.startLibraryServer({
@@ -140,6 +140,30 @@ export async function startDjBoothServer(
       return closePromise;
     },
   };
+}
+
+async function startInitialLink(
+  options: StartRekordboxDjLinkOptions,
+  dependencies: DjBoothServerDependencies,
+): Promise<DjLinkServerStatus & { resumed: boolean }> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await dependencies.startRekordboxDjLink(options);
+    } catch (error) {
+      if (
+        !(error instanceof DjLinkError) ||
+        error.code !== "START_FAILED" ||
+        attempt >= initialLinkStartAttempts
+      ) {
+        throw error;
+      }
+      await delay(500);
+    }
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 }
 
 const linkStatusOutput = z.object({

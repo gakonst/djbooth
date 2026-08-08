@@ -1,6 +1,51 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 
-import { parseStagehandTargetFromArp, shouldResumeDjLinkBind } from "../src/runtime.js";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  parseStagehandTargetFromArp,
+  resolveStagehandIdentity,
+  shouldResumeDjLinkBind,
+} from "../src/runtime.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })));
+});
+
+describe("Stagehand identity", () => {
+  it("persists one identity across complete runtime restarts", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "djbooth-stagehand-"));
+    temporaryDirectories.push(root);
+    const path = resolve(root, "stagehand-identity.json");
+
+    const first = await resolveStagehandIdentity(path);
+    const second = await resolveStagehandIdentity(path);
+
+    expect(second).toEqual(first);
+    expect(first.sessionNonce).toMatch(/^\d+$/);
+    expect(first.protocolNonce).toMatch(/^\d+$/);
+    expect(first.protocolNonce).not.toBe(first.sessionNonce);
+    await expect(readFile(path, "utf8")).resolves.toContain(first.sessionNonce);
+  });
+
+  it("migrates a running peer identity and keeps it", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "djbooth-stagehand-"));
+    temporaryDirectories.push(root);
+    const path = resolve(root, "stagehand-identity.json");
+    const running = {
+      sessionIp: "169.254.51.174",
+      sessionNonce: "1774010559151420552",
+      protocolNonce: "1774010559660464898",
+    };
+
+    await expect(resolveStagehandIdentity(path, {}, running)).resolves.toMatchObject(running);
+    await expect(resolveStagehandIdentity(path)).resolves.toMatchObject(running);
+  });
+});
 
 describe("DJ Link bind reconciliation", () => {
   it("restarts a Wi-Fi fallback when DJ Link Ethernet appears", () => {

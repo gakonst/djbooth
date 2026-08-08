@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { closeSync, constants, openSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { networkInterfaces, tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { getConfig } from "@gakonst/rekordbox";
 
@@ -136,6 +137,13 @@ type DjLinkSource = {
   snapshot?: DjLinkSnapshot;
 };
 
+type StagehandIdentity = {
+  schemaVersion: 1;
+  sessionIp?: string;
+  sessionNonce: string;
+  protocolNonce: string;
+};
+
 export { DjLinkError, statusDjLink } from "./control.js";
 
 /** Validate a manifest projection through the imported native implementation. */
@@ -181,6 +189,7 @@ export async function startDjLink(
   options: StartDjLinkOptions,
 ): Promise<DjLinkServerStatus & { resumed: boolean }> {
   assertDarwin();
+  options = await withStableStagehandIdentity(options);
   const manifestPath = resolve(options.manifestPath);
   const resumed = await resumeOrRestartDjLink("manifest", manifestPath, options);
   if (resumed) return resumed;
@@ -193,6 +202,7 @@ export async function startRekordboxDjLink(
   options: StartRekordboxDjLinkOptions = {},
 ): Promise<DjLinkServerStatus & { resumed: boolean }> {
   assertDarwin();
+  options = await withStableStagehandIdentity(options);
   const databasePath = resolveRekordboxDatabasePath(options.databasePath);
   const resumed = await resumeOrRestartDjLink("rekordbox", databasePath, options);
   if (resumed) return resumed;
@@ -339,6 +349,100 @@ function assertStagehandNonce(kind: "session" | "protocol", value: string | unde
   if (!/^\d+$/.test(value) || BigInt(value) > 0xffff_ffff_ffff_ffffn) {
     throw new TypeError(`Invalid Stagehand ${kind} nonce: ${value}`);
   }
+}
+
+async function withStableStagehandIdentity<T extends StartRekordboxDjLinkOptions>(
+  options: T,
+): Promise<T> {
+  const env = options.env ?? process.env;
+  const paths = runtimePaths(env);
+  const current = await statusDjLink({ env });
+  const identity = await resolveStagehandIdentity(
+    resolve(paths.root, "stagehand-identity.json"),
+    {
+      ...(options.stagehandSessionIp ? { sessionIp: options.stagehandSessionIp } : {}),
+      ...(options.stagehandSessionNonce ? { sessionNonce: options.stagehandSessionNonce } : {}),
+      ...(options.stagehandProtocolNonce ? { protocolNonce: options.stagehandProtocolNonce } : {}),
+    },
+    current.running
+      ? {
+          ...(current.stagehandSessionIp ? { sessionIp: current.stagehandSessionIp } : {}),
+          ...(current.stagehandSessionNonce ? { sessionNonce: current.stagehandSessionNonce } : {}),
+          ...(current.stagehandProtocolNonce
+            ? { protocolNonce: current.stagehandProtocolNonce }
+            : {}),
+        }
+      : undefined,
+  );
+  return {
+    ...options,
+    ...(identity.sessionIp ? { stagehandSessionIp: identity.sessionIp } : {}),
+    stagehandSessionNonce: identity.sessionNonce,
+    stagehandProtocolNonce: identity.protocolNonce,
+  };
+}
+
+export async function resolveStagehandIdentity(
+  path: string,
+  requested: Partial<Omit<StagehandIdentity, "schemaVersion">> = {},
+  running: Partial<Omit<StagehandIdentity, "schemaVersion">> = {},
+): Promise<StagehandIdentity> {
+  const stored = await readStagehandIdentity(path);
+  const sessionNonce =
+    requested.sessionNonce ?? stored?.sessionNonce ?? running.sessionNonce ?? randomNonce();
+  let protocolNonce =
+    requested.protocolNonce ?? stored?.protocolNonce ?? running.protocolNonce ?? randomNonce();
+  if (protocolNonce === sessionNonce && requested.protocolNonce === undefined) {
+    do protocolNonce = randomNonce();
+    while (protocolNonce === sessionNonce);
+  }
+  assertStagehandNonce("session", sessionNonce);
+  assertStagehandNonce("protocol", protocolNonce);
+  if (protocolNonce === sessionNonce) {
+    throw new TypeError("Stagehand session and protocol nonces must differ");
+  }
+  const sessionIp = requested.sessionIp ?? stored?.sessionIp ?? running.sessionIp;
+  const identity: StagehandIdentity = {
+    schemaVersion: 1,
+    ...(sessionIp ? { sessionIp } : {}),
+    sessionNonce,
+    protocolNonce,
+  };
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeJsonAtomically(path, identity);
+  return identity;
+}
+
+async function readStagehandIdentity(path: string): Promise<StagehandIdentity | undefined> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as Partial<StagehandIdentity>;
+    if (
+      value.schemaVersion !== 1 ||
+      typeof value.sessionNonce !== "string" ||
+      typeof value.protocolNonce !== "string" ||
+      (value.sessionIp !== undefined && typeof value.sessionIp !== "string")
+    ) {
+      throw new TypeError("invalid identity document");
+    }
+    assertStagehandNonce("session", value.sessionNonce);
+    assertStagehandNonce("protocol", value.protocolNonce);
+    return value as StagehandIdentity;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new DjLinkError("INVALID_STATE", `Could not read Stagehand identity: ${path}`, {
+      cause: error,
+    });
+  }
+}
+
+function randomNonce(): string {
+  return randomBytes(8).readBigUInt64BE().toString();
+}
+
+async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporary, path);
 }
 
 function toDoctorResult(
@@ -716,9 +820,7 @@ async function readSnapshot(path: string): Promise<DjLinkSnapshot> {
 }
 
 async function writeState(path: string, state: DjLinkDaemonState): Promise<void> {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
-  await rename(temporary, path);
+  await writeJsonAtomically(path, state);
 }
 
 async function clearConfirmedStaleRuntime(paths: RuntimePaths): Promise<void> {
