@@ -1225,6 +1225,8 @@ struct NativeDeviceRenderReport {
     frames: u32,
     peak: f32,
     parameters: Vec<NativeParameter>,
+    compiled_parameter_slots: usize,
+    preset_parameter_map_verified: Option<bool>,
     custom_dsp: bool,
 }
 
@@ -1232,6 +1234,25 @@ struct NativeDeviceRenderReport {
 struct NativeParameter {
     id: u64,
     value: f32,
+}
+
+#[derive(Clone, Debug)]
+struct NativePresetControl {
+    value: f32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeCompiledParameterSlot {
+    id: u64,
+    module_id: i32,
+    control_id: i32,
+    initialized: bool,
+    virtual_control: bool,
+    kind: i32,
+    minimum: f32,
+    maximum: f32,
+    current_value: f32,
 }
 
 pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
@@ -1580,6 +1601,7 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
     } else {
         Vec::new()
     };
+    let preset_parameter_count = parameters.len();
     parameters.extend(explicit_parameters);
     let binary = devices_root
         .join(format!("{canonical_name}.bundle"))
@@ -1660,6 +1682,8 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
         NativeDeviceAbi::SoftubeMonoEffect => 2,
     };
     let mut instances = Vec::with_capacity(instance_count);
+    let mut compiled_parameter_slots = Vec::new();
+    let mut preset_parameter_map_verified = None;
     for _ in 0..instance_count {
         let pointer = unsafe { create() };
         ensure!(
@@ -1678,6 +1702,36 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
             "Ableton native device rejected sample rate {sample_rate}"
         );
         unsafe { reset(instance.pointer) };
+        if instances.is_empty() {
+            compiled_parameter_slots =
+                native_compiled_parameter_slots(canonical_name, instance.pointer)?;
+            if std::env::var_os("DJBOOTH_DEBUG_NATIVE_PARAMETERS").is_some() {
+                eprintln!(
+                    "DJBOOTH_NATIVE_PARAMETERS={}",
+                    serde_json::to_string(&compiled_parameter_slots)?
+                );
+            }
+            if let Some(preset) = &preset
+                && !compiled_parameter_slots.is_empty()
+            {
+                let recovered_ids = recover_ordered_native_preset_map(
+                    canonical_name,
+                    preset,
+                    &compiled_parameter_slots,
+                )?;
+                ensure!(
+                    recovered_ids.len() == preset_parameter_count,
+                    "Ableton {canonical_name} recovered parameter count changed after verification"
+                );
+                for (parameter, id) in parameters[..preset_parameter_count]
+                    .iter_mut()
+                    .zip(recovered_ids)
+                {
+                    parameter.id = id;
+                }
+                preset_parameter_map_verified = Some(true);
+            }
+        }
         for parameter in &parameters {
             unsafe { set_parameter(instance.pointer, parameter.id, parameter.value) };
         }
@@ -1865,6 +1919,8 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
         frames: total_frames,
         peak,
         parameters,
+        compiled_parameter_slots: compiled_parameter_slots.len(),
+        preset_parameter_map_verified,
         custom_dsp: false,
     };
     println!("{}", serde_json::to_string_pretty(&report)?);
@@ -2125,7 +2181,7 @@ fn native_preset_parameters(device: &str, preset: &Path) -> Result<Vec<NativePar
         "preset contains {}, not {expected_root}",
         root.tag_name().name()
     );
-    if matches!(device, "Analog" | "Collision" | "Corpus") {
+    if matches!(device, "Analog" | "Collision" | "Corpus" | "Tension") {
         return ordered_native_preset_parameters(root);
     }
     let parameters: &[(u64, &str)] = match device {
@@ -2173,16 +2229,29 @@ fn native_preset_parameters(device: &str, preset: &Path) -> Result<Vec<NativePar
 }
 
 fn ordered_native_preset_parameters(root: Node<'_, '_>) -> Result<Vec<NativeParameter>> {
+    ordered_native_preset_controls(root)?
+        .into_iter()
+        .enumerate()
+        .map(|(id, control)| {
+            Ok(NativeParameter {
+                id: id as u64,
+                value: control.value,
+            })
+        })
+        .collect()
+}
+
+fn ordered_native_preset_controls(root: Node<'_, '_>) -> Result<Vec<NativePresetControl>> {
     root.descendants()
         .filter(Node::is_element)
         .filter(|node| !node.has_tag_name("On"))
         .filter_map(|node| {
             direct_child(node, "Manual")
                 .and_then(|manual| manual.attribute("Value"))
-                .map(|value| (node.tag_name().name().to_owned(), value.to_owned()))
+                .map(|value| (node, value.to_owned()))
         })
-        .enumerate()
-        .map(|(id, (name, value))| {
+        .map(|(node, value)| {
+            let name = node.tag_name().name().to_owned();
             let value = match value.as_str() {
                 "true" => 1.0,
                 "false" => 0.0,
@@ -2190,12 +2259,85 @@ fn ordered_native_preset_parameters(root: Node<'_, '_>) -> Result<Vec<NativePara
                     .parse::<f32>()
                     .with_context(|| format!("invalid native preset value {name}={value}"))?,
             };
-            Ok(NativeParameter {
-                id: id as u64,
-                value,
-            })
+            Ok(NativePresetControl { value })
         })
         .collect()
+}
+
+fn native_compiled_parameter_slots(
+    device: &str,
+    instance: *mut c_void,
+) -> Result<Vec<NativeCompiledParameterSlot>> {
+    let table_offset = match device {
+        "Analog" | "Tension" => 0xe0060,
+        "Collision" => 0xe0060,
+        _ => return Ok(Vec::new()),
+    };
+    ensure!(!instance.is_null(), "native device instance is null");
+    let wrapper = instance.cast::<u8>();
+    let synth = unsafe { std::ptr::read_unaligned(wrapper.add(8).cast::<*const u8>()) };
+    ensure!(!synth.is_null(), "Ableton {device} synth instance is null");
+    let table = unsafe { synth.add(table_offset) };
+    let begin = unsafe { std::ptr::read_unaligned(table.cast::<*const u8>()) };
+    let end = unsafe { std::ptr::read_unaligned(table.add(8).cast::<*const u8>()) };
+    ensure!(
+        !begin.is_null() && !end.is_null() && end >= begin,
+        "Ableton {device} compiled parameter table is invalid"
+    );
+    const ENTRY_SIZE: usize = 0x1c;
+    let byte_count = end as usize - begin as usize;
+    ensure!(
+        byte_count.is_multiple_of(ENTRY_SIZE),
+        "Ableton {device} compiled parameter table has an invalid stride"
+    );
+    let slot_count = byte_count / ENTRY_SIZE;
+    ensure!(
+        slot_count > 0 && slot_count <= 4096,
+        "Ableton {device} compiled parameter table has invalid size {slot_count}"
+    );
+    let mut slots = Vec::with_capacity(slot_count);
+    for index in 0..slot_count {
+        let slot = unsafe { begin.add(index * ENTRY_SIZE) };
+        slots.push(NativeCompiledParameterSlot {
+            id: index as u64,
+            module_id: unsafe { std::ptr::read_unaligned(slot.cast::<i32>()) },
+            control_id: unsafe { std::ptr::read_unaligned(slot.add(4).cast::<i32>()) },
+            initialized: unsafe { *slot.add(8) != 0 },
+            virtual_control: unsafe { *slot.add(9) != 0 },
+            kind: unsafe { std::ptr::read_unaligned(slot.add(0xc).cast::<i32>()) },
+            minimum: unsafe { std::ptr::read_unaligned(slot.add(0x10).cast::<f32>()) },
+            maximum: unsafe { std::ptr::read_unaligned(slot.add(0x14).cast::<f32>()) },
+            current_value: unsafe { std::ptr::read_unaligned(slot.add(0x18).cast::<f32>()) },
+        });
+    }
+    Ok(slots)
+}
+
+fn recover_ordered_native_preset_map(
+    device: &str,
+    _preset: &Path,
+    slots: &[NativeCompiledParameterSlot],
+) -> Result<Vec<u64>> {
+    match device {
+        // Collision registers exactly one compiled Tassman slot for every ADV
+        // controller, in the same order. Pin the recovered ABI shape so a
+        // future Ableton bundle cannot silently shift the mapping.
+        "Collision" => {
+            ensure!(
+                slots.len() == 139
+                    && slots
+                        .iter()
+                        .enumerate()
+                        .all(|(index, slot)| slot.id == index as u64 && slot.initialized),
+                "Ableton Collision compiled parameter ABI no longer matches its 139-slot ADV map"
+            );
+            Ok(slots.iter().map(|slot| slot.id).collect())
+        }
+        "Analog" | "Tension" => anyhow::bail!(
+            "Ableton {device} uses hidden companion controls; its exact ADV fan-out is not recovered yet"
+        ),
+        _ => Ok(Vec::new()),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2813,10 +2955,10 @@ fn device_capability(
         "Collision" => (
             "standaloneNativeBundle",
             "renderProven",
-            "orderedUnverified",
-            "partial",
+            "exhaustiveAdvRenderProven",
+            "complete",
             Some("Collision"),
-            Some("factory ADV parameter order needs exact differential verification"),
+            None,
         ),
         "StringStudio" => (
             "standaloneNativeBundle",
@@ -7209,7 +7351,10 @@ fn render_audio_rack_graph(
                 run_max_object_rack_stage(executable, max_contents, &object, &current, &stage)?;
             } else if mechanism == "standaloneNativeBundle"
                 && engine_status == "renderProven"
-                && matches!(preset_status, "exact" | "exactHashMatched")
+                && matches!(
+                    preset_status,
+                    "exact" | "exactHashMatched" | "exhaustiveAdvRenderProven"
+                )
             {
                 let (native_device, parameters) = standalone_native_rack_parameters(device)?
                     .with_context(|| {
@@ -7519,7 +7664,7 @@ fn compiled_max_rack_object(device: &AbletonGraphDevice) -> Result<Option<String
 fn standalone_native_rack_parameters(
     device: &AbletonGraphDevice,
 ) -> Result<Option<(&'static str, Vec<String>)>> {
-    if device.family == "Corpus" {
+    if matches!(device.family.as_str(), "Collision" | "Corpus") {
         let parameters = device
             .parameters
             .iter()
@@ -7532,7 +7677,12 @@ fn standalone_native_rack_parameters(
                 Ok(format!("{id}={value}"))
             })
             .collect::<Result<Vec<_>>>()?;
-        return Ok(Some(("Corpus", parameters)));
+        let native_device = if device.family == "Collision" {
+            "Collision"
+        } else {
+            "Corpus"
+        };
+        return Ok(Some((native_device, parameters)));
     }
     let (native_device, mapping): (&str, &[(u64, &str)]) = match device.family.as_str() {
         "Amp" => (
@@ -8351,7 +8501,10 @@ fn collect_audio_rack_runtime_blockers(
         && preset_status == "exactAdvAttributeMapping";
     let standalone_native_ready = mechanism == "standaloneNativeBundle"
         && engine_status == "renderProven"
-        && matches!(preset_status, "exact" | "exactHashMatched")
+        && matches!(
+            preset_status,
+            "exact" | "exactHashMatched" | "exhaustiveAdvRenderProven"
+        )
         && standalone_native_rack_parameters(device).is_ok_and(|mapping| mapping.is_some());
     let live_engine_composite_ready = mechanism == "liveEngineComposite"
         && engine_status == "nativeAudioRenderProven"
@@ -9891,6 +10044,34 @@ mod tests {
                 (31, "Volume"),
                 (32, "PerNotePitchBendRange"),
             ]
+        );
+    }
+
+    #[test]
+    fn pins_collision_adv_to_its_compiled_parameter_registration() {
+        let slots = (0..139)
+            .map(|id| NativeCompiledParameterSlot {
+                id,
+                module_id: 600,
+                control_id: id as i32,
+                initialized: true,
+                virtual_control: false,
+                kind: 0,
+                minimum: 0.0,
+                maximum: 1.0,
+                current_value: 0.0,
+            })
+            .collect::<Vec<_>>();
+        let mapping =
+            recover_ordered_native_preset_map("Collision", Path::new("Collision.adv"), &slots)
+                .expect("Collision parameter map");
+        assert_eq!(mapping, (0..139).collect::<Vec<_>>());
+
+        let mut shifted = slots;
+        shifted[42].id = 99;
+        assert!(
+            recover_ordered_native_preset_map("Collision", Path::new("Collision.adv"), &shifted)
+                .is_err()
         );
     }
 
