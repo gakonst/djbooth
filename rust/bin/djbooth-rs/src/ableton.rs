@@ -1715,8 +1715,8 @@ fn render_native_device(request: NativeDeviceRenderRequest<'_>) -> Result<()> {
             if let Some(preset) = &preset
                 && !compiled_parameter_slots.is_empty()
             {
-                if canonical_name == "Tension" {
-                    verify_tension_compiled_parameter_slots(&compiled_parameter_slots)?;
+                if matches!(canonical_name, "Analog" | "Tension") {
+                    verify_companion_parameter_slots(canonical_name, &compiled_parameter_slots)?;
                 } else {
                     let recovered_ids = recover_ordered_native_preset_map(
                         canonical_name,
@@ -2197,10 +2197,15 @@ fn native_preset_parameters(device: &str, preset: &Path) -> Result<Vec<NativePar
         "preset contains {}, not {expected_root}",
         root.tag_name().name()
     );
-    if device == "Tension" {
-        return tension_native_preset_parameters(root);
+    if matches!(device, "Analog" | "Tension") {
+        let controls = ordered_native_preset_controls(root)?;
+        return if device == "Analog" {
+            analog_native_parameters(&controls)
+        } else {
+            tension_native_parameters(&controls)
+        };
     }
-    if matches!(device, "Analog" | "Collision" | "Corpus") {
+    if matches!(device, "Collision" | "Corpus") {
         return ordered_native_preset_parameters(root);
     }
     let parameters: &[(u64, &str)] = match device {
@@ -2283,9 +2288,296 @@ fn ordered_native_preset_controls(root: Node<'_, '_>) -> Result<Vec<NativePreset
         .collect()
 }
 
-fn tension_native_preset_parameters(root: Node<'_, '_>) -> Result<Vec<NativeParameter>> {
-    let controls = ordered_native_preset_controls(root)?;
-    tension_native_parameters(&controls)
+fn set_native_parameter(
+    parameters: &mut [Option<NativeParameter>],
+    id: u64,
+    value: f32,
+) -> Result<()> {
+    let slot = parameters
+        .get_mut(usize::try_from(id)?)
+        .with_context(|| format!("native parameter ID {id} is outside the recovered graph"))?;
+    ensure!(slot.is_none(), "native parameter ID {id} is assigned twice");
+    *slot = Some(NativeParameter { id, value });
+    Ok(())
+}
+
+fn set_native_bipolar_parameter(
+    parameters: &mut [Option<NativeParameter>],
+    amount_id: u64,
+    invert_id: u64,
+    value: f32,
+) -> Result<()> {
+    set_native_parameter(parameters, amount_id, value.abs())?;
+    set_native_parameter(parameters, invert_id, f32::from(u8::from(value < 0.0)))
+}
+
+fn set_native_filter_type(
+    parameters: &mut [Option<NativeParameter>],
+    type_id: u64,
+    response_id: u64,
+    value: f32,
+) -> Result<()> {
+    set_native_parameter(
+        parameters,
+        type_id,
+        if value >= 6.0 { value - 6.0 } else { value },
+    )?;
+    set_native_parameter(parameters, response_id, f32::from(u8::from(value >= 6.0)))
+}
+
+fn analog_native_parameters(controls: &[NativePresetControl]) -> Result<Vec<NativeParameter>> {
+    ensure!(
+        controls.len() == 171,
+        "Analog ADV has {} controls, expected 171",
+        controls.len()
+    );
+    let value = |index: usize, name: &str| {
+        let control = controls
+            .get(index)
+            .with_context(|| format!("Analog preset is missing control {index} ({name})"))?;
+        ensure!(
+            control.name == name,
+            "Analog control {index} is {}, expected {name}",
+            control.name
+        );
+        Ok(control.value)
+    };
+    let mut parameters = vec![None; 203];
+    for (id, index, name) in [
+        (0, 0, "Polyphony"),
+        (1, 1, "PitchBendRange"),
+        (2, 2, "Volume"),
+        (194, 3, "PerNotePitchBendRange"),
+        (195, 4, "ChannelPressureTarget1"),
+        (196, 5, "ChannelPressureAmount1"),
+        (197, 6, "ChannelPressureTarget2"),
+        (198, 7, "ChannelPressureAmount2"),
+        (199, 8, "MpeCC74Target1"),
+        (200, 9, "MpeCC74Amount1"),
+        (201, 10, "MpeCC74Target2"),
+        (202, 11, "MpeCC74Amount2"),
+        (3, 12, "Octave"),
+        (4, 13, "Transpose"),
+        (5, 14, "KeyboardFineTune"),
+        (7, 15, "KeyboardUnisonToggle"),
+        (8, 16, "KeyboardUnison"),
+        (9, 17, "KeyboardDetune"),
+        (10, 18, "KeyboardUnisonDelay"),
+        (6, 19, "KeyboardPriority"),
+        (11, 20, "KeyboardStretch"),
+        (12, 21, "KeyboardError"),
+        (13, 22, "VibratoToggle"),
+        (14, 23, "VibratoSpeed"),
+        (15, 24, "VibratoFadeIn"),
+        (16, 25, "VibratoAmount"),
+        (17, 26, "VibratoError"),
+        (18, 27, "VibratoDelay"),
+        (19, 28, "VibratoModWheel"),
+        (20, 29, "PortamentoToggle"),
+        (21, 30, "PortamentoTime"),
+        (22, 31, "PortamentoMode"),
+        (23, 32, "PortamentoLegato"),
+        (24, 33, "NoiseToggle"),
+        (25, 34, "NoiseColor"),
+        (26, 35, "NoiseBalance"),
+        (27, 36, "NoiseLevel"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+
+    for (id, index, name) in [
+        (28, 37, "OscillatorToggle"),
+        (29, 38, "OscillatorWaveShape"),
+        (30, 39, "OscillatorOct"),
+        (31, 40, "OscillatorSemi"),
+        (32, 41, "OscillatorMode"),
+        (33, 42, "OscillatorEnvTime"),
+        (34, 43, "OscillatorDetune"),
+        (35, 44, "OscillatorModulation1"),
+        (36, 45, "OscillatorPulseWidth"),
+        (37, 46, "OscillatorSubAmount"),
+        (38, 47, "OscillatorBalance"),
+        (45, 51, "OscillatorLevel"),
+        (46, 52, "FilterToggle"),
+        (49, 54, "FilterDrive"),
+        (52, 56, "FilterCutoffFrequency"),
+        (55, 58, "FilterQFactor"),
+        (56, 103, "FilterToFilter2"),
+        (65, 63, "AmplifierToggle"),
+        (68, 65, "AmplifierLevel"),
+        (71, 67, "AmplifierPan"),
+        (78, 71, "LFOToggle"),
+        (79, 72, "LFOWaveShape"),
+        (81, 75, "LFOGateReset"),
+        (82, 76, "LFOPulseWidth"),
+        (83, 77, "LFOSpeed"),
+        (84, 78, "LFOPhase"),
+        (85, 79, "LFODelay"),
+        (86, 80, "LFOFadeIn"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+    for (amount_id, invert_id, index, name) in [
+        (39, 40, 48, "OscillatorEnvAmount"),
+        (41, 42, 49, "OscillatorLFOModPitch"),
+        (43, 44, 50, "OscillatorLFOModPW"),
+        (50, 51, 55, "FilterKbdCutoffMod"),
+        (53, 54, 57, "FilterKbdQMod"),
+        (57, 58, 59, "FilterLFOCutoffMod"),
+        (59, 60, 60, "FilterEnvCutoffMod"),
+        (61, 62, 61, "FilterLFOQMod"),
+        (63, 64, 62, "FilterEnvQMod"),
+        (66, 67, 64, "AmplifierKbdAmpMod"),
+        (69, 70, 66, "AmplifierKbdPanMod"),
+        (72, 73, 68, "AmplifierLFOAmpMod"),
+        (74, 75, 69, "AmplifierLFOPanMod"),
+        (76, 77, 70, "AmplifierEnvPanMod"),
+    ] {
+        set_native_bipolar_parameter(&mut parameters, amount_id, invert_id, value(index, name)?)?;
+    }
+    set_native_filter_type(&mut parameters, 47, 48, value(53, "FilterType")?)?;
+    set_native_parameter(
+        &mut parameters,
+        80,
+        if value(74, "LFOSyncToggle")? != 0.0 {
+            value(73, "LFOSync")?
+        } else {
+            24.0
+        },
+    )?;
+    set_native_parameter(&mut parameters, 87, 1.0)?;
+    for (id, index, name) in [
+        (88, 81, "ExponentialSlope"),
+        (89, 82, "Loop"),
+        (90, 83, "FreeRun"),
+        (91, 84, "Legato"),
+        (92, 85, "AttackMod"),
+        (93, 86, "AttackTime"),
+        (94, 87, "DecayTime"),
+        (95, 88, "AmpMod"),
+        (96, 89, "SustainLevel"),
+        (97, 90, "SustainTime"),
+        (98, 91, "ReleaseTime"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+    set_native_parameter(&mut parameters, 99, 1.0)?;
+    for (id, index, name) in [
+        (100, 92, "ExponentialSlope"),
+        (101, 93, "Loop"),
+        (102, 94, "FreeRun"),
+        (103, 95, "Legato"),
+        (104, 96, "AttackMod"),
+        (105, 97, "AttackTime"),
+        (106, 98, "DecayTime"),
+        (107, 99, "AmpMod"),
+        (108, 100, "SustainLevel"),
+        (109, 101, "SustainTime"),
+        (110, 102, "ReleaseTime"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+
+    for (id, index, name) in [
+        (111, 104, "OscillatorToggle"),
+        (112, 105, "OscillatorWaveShape"),
+        (113, 106, "OscillatorOct"),
+        (114, 107, "OscillatorSemi"),
+        (115, 108, "OscillatorMode"),
+        (116, 109, "OscillatorEnvTime"),
+        (117, 110, "OscillatorDetune"),
+        (118, 111, "OscillatorModulation1"),
+        (119, 112, "OscillatorPulseWidth"),
+        (120, 113, "OscillatorSubAmount"),
+        (121, 114, "OscillatorBalance"),
+        (128, 118, "OscillatorLevel"),
+        (129, 119, "FilterToggle"),
+        (132, 121, "FilterDrive"),
+        (135, 123, "FilterCutoffFrequency"),
+        (138, 125, "FilterQFactor"),
+        (139, 170, "FilterControllee"),
+        (148, 130, "AmplifierToggle"),
+        (151, 132, "AmplifierLevel"),
+        (154, 134, "AmplifierPan"),
+        (161, 138, "LFOToggle"),
+        (162, 139, "LFOWaveShape"),
+        (164, 142, "LFOGateReset"),
+        (165, 143, "LFOPulseWidth"),
+        (166, 144, "LFOSpeed"),
+        (167, 145, "LFOPhase"),
+        (168, 146, "LFODelay"),
+        (169, 147, "LFOFadeIn"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+    for (amount_id, invert_id, index, name) in [
+        (122, 123, 115, "OscillatorEnvAmount"),
+        (124, 125, 116, "OscillatorLFOModPitch"),
+        (126, 127, 117, "OscillatorLFOModPW"),
+        (133, 134, 122, "FilterKbdCutoffMod"),
+        (136, 137, 124, "FilterKbdQMod"),
+        (140, 141, 126, "FilterLFOCutoffMod"),
+        (142, 143, 127, "FilterEnvCutoffMod"),
+        (144, 145, 128, "FilterLFOQMod"),
+        (146, 147, 129, "FilterEnvQMod"),
+        (149, 150, 131, "AmplifierKbdAmpMod"),
+        (152, 153, 133, "AmplifierKbdPanMod"),
+        (155, 156, 135, "AmplifierLFOAmpMod"),
+        (157, 158, 136, "AmplifierLFOPanMod"),
+        (159, 160, 137, "AmplifierEnvPanMod"),
+    ] {
+        set_native_bipolar_parameter(&mut parameters, amount_id, invert_id, value(index, name)?)?;
+    }
+    set_native_filter_type(&mut parameters, 130, 131, value(120, "FilterType")?)?;
+    set_native_parameter(
+        &mut parameters,
+        163,
+        if value(141, "LFOSyncToggle")? != 0.0 {
+            value(140, "LFOSync")?
+        } else {
+            24.0
+        },
+    )?;
+    set_native_parameter(&mut parameters, 170, 1.0)?;
+    for (id, index, name) in [
+        (171, 148, "ExponentialSlope"),
+        (172, 149, "Loop"),
+        (173, 150, "FreeRun"),
+        (174, 151, "Legato"),
+        (175, 152, "AttackMod"),
+        (176, 153, "AttackTime"),
+        (177, 154, "DecayTime"),
+        (178, 155, "AmpMod"),
+        (179, 156, "SustainLevel"),
+        (180, 157, "SustainTime"),
+        (181, 158, "ReleaseTime"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+    set_native_parameter(&mut parameters, 182, 1.0)?;
+    for (id, index, name) in [
+        (183, 159, "ExponentialSlope"),
+        (184, 160, "Loop"),
+        (185, 161, "FreeRun"),
+        (186, 162, "Legato"),
+        (187, 163, "AttackMod"),
+        (188, 164, "AttackTime"),
+        (189, 165, "DecayTime"),
+        (190, 166, "AmpMod"),
+        (191, 167, "SustainLevel"),
+        (192, 168, "SustainTime"),
+        (193, 169, "ReleaseTime"),
+    ] {
+        set_native_parameter(&mut parameters, id, value(index, name)?)?;
+    }
+
+    parameters
+        .into_iter()
+        .enumerate()
+        .map(|(id, parameter)| {
+            parameter.with_context(|| format!("Analog compiled parameter {id} is unmapped"))
+        })
+        .collect()
 }
 
 fn tension_native_parameters(controls: &[NativePresetControl]) -> Result<Vec<NativeParameter>> {
@@ -2580,22 +2872,38 @@ fn native_compiled_parameter_slots(
     Ok(slots)
 }
 
-fn verify_tension_compiled_parameter_slots(slots: &[NativeCompiledParameterSlot]) -> Result<()> {
+fn verify_companion_parameter_slots(
+    device: &str,
+    slots: &[NativeCompiledParameterSlot],
+) -> Result<()> {
+    let valid = match device {
+        "Analog" => {
+            slots.len() == 203
+                && slots.iter().all(|slot| slot.initialized)
+                && slots[0].virtual_control
+                && slots[7].virtual_control
+                && slots[195..].iter().all(|slot| slot.virtual_control)
+        }
+        "Tension" => {
+            slots.len() == 130
+                && !slots[2].initialized
+                && slots
+                    .iter()
+                    .enumerate()
+                    .all(|(index, slot)| index == 2 || slot.initialized)
+                && slots[0].virtual_control
+                && slots[7].virtual_control
+                && slots[122..].iter().all(|slot| slot.virtual_control)
+        }
+        _ => false,
+    };
     ensure!(
-        slots.len() == 130
+        valid
             && slots
                 .iter()
                 .enumerate()
-                .all(|(index, slot)| slot.id == index as u64)
-            && !slots[2].initialized
-            && slots
-                .iter()
-                .enumerate()
-                .all(|(index, slot)| index == 2 || slot.initialized)
-            && slots[0].virtual_control
-            && slots[7].virtual_control
-            && slots[122..].iter().all(|slot| slot.virtual_control),
-        "Ableton Tension compiled parameter ABI no longer matches its 130-slot companion graph"
+                .all(|(index, slot)| slot.id == index as u64),
+        "Ableton {device} compiled parameter ABI no longer matches its companion graph"
     );
     Ok(())
 }
@@ -3234,10 +3542,10 @@ fn device_capability(
         "UltraAnalog" => (
             "standaloneNativeBundle",
             "renderProven",
-            "orderedUnverified",
-            "partial",
+            "exhaustiveAdvRenderProven",
+            "complete",
             Some("Analog"),
-            Some("factory ADV parameter order needs exact differential verification"),
+            None,
         ),
         "Collision" => (
             "standaloneNativeBundle",
@@ -7969,7 +8277,7 @@ fn standalone_native_rack_parameters(
         };
         return Ok(Some((native_device, parameters)));
     }
-    if device.family == "StringStudio" {
+    if matches!(device.family.as_str(), "StringStudio" | "UltraAnalog") {
         let controls = device
             .parameters
             .iter()
@@ -7979,18 +8287,23 @@ fn standalone_native_rack_parameters(
                     name: parameter.name.clone(),
                     value: parameter.numeric_value.with_context(|| {
                         format!(
-                            "Ableton Tension parameter {} is not numeric",
-                            parameter.name
+                            "Ableton {} parameter {} is not numeric",
+                            device.family, parameter.name
                         )
                     })? as f32,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let parameters = tension_native_parameters(&controls)?
+        let (native_device, parameters) = if device.family == "UltraAnalog" {
+            ("Analog", analog_native_parameters(&controls)?)
+        } else {
+            ("Tension", tension_native_parameters(&controls)?)
+        };
+        let parameters = parameters
             .into_iter()
             .map(|parameter| format!("{}={}", parameter.id, parameter.value))
             .collect();
-        return Ok(Some(("Tension", parameters)));
+        return Ok(Some((native_device, parameters)));
     }
     let (native_device, mapping): (&str, &[(u64, &str)]) = match device.family.as_str() {
         "Amp" => (
