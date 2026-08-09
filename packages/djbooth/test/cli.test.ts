@@ -32,6 +32,7 @@ describe("djbooth CLI", () => {
     expect(canDispatchDirectly(["import", "https://example.com/set"])).toBe(true);
     expect(canDispatchDirectly(["playlist", "list"])).toBe(true);
     expect(canDispatchDirectly(["produce", "transcribe", "input.wav", "output.mid"])).toBe(true);
+    expect(canDispatchDirectly(["tracks", "loudness", "show"])).toBe(true);
     expect(canDispatchDirectly(["--help"])).toBe(false);
     expect(canDispatchDirectly(["--mcp"])).toBe(false);
     expect(canDispatchDirectly([])).toBe(false);
@@ -47,7 +48,7 @@ describe("djbooth CLI", () => {
     expect(stdout).toContain("--path <string>");
   });
 
-  test("exposes workflow verbs directly and omits package namespaces", async () => {
+  test("exposes workflow verbs directly and uses tracks only for library maintenance", async () => {
     const { output } = await serve(["--llms-full", "--format", "json"]);
     const manifest = JSON.parse(output) as { commands: { name: string }[] };
     const names = manifest.commands.map((command) => command.name);
@@ -68,6 +69,9 @@ describe("djbooth CLI", () => {
         "status",
         "stop",
         "stems",
+        "tracks loudness analyze",
+        "tracks loudness show",
+        "tracks loudness normalize",
         "usb",
         "slsk search",
         "soundcloud playlist create",
@@ -84,6 +88,21 @@ describe("djbooth CLI", () => {
         "usb sync",
       ]),
     );
+  });
+
+  test("exposes true-peak-safe loudness maintenance under tracks", async () => {
+    const analyze = await serve(["tracks", "loudness", "analyze", "--help"]);
+    expect(analyze.exitCode).toBeUndefined();
+    expect(analyze.output).toContain("djbooth tracks loudness analyze");
+    expect(analyze.output).toContain("--folder");
+    expect(analyze.output).toContain("--refresh");
+
+    const normalize = await serve(["tracks", "loudness", "normalize", "--help"]);
+    expect(normalize.exitCode).toBeUndefined();
+    expect(normalize.output).toContain("djbooth tracks loudness normalize");
+    expect(normalize.output).toContain("--target");
+    expect(normalize.output).toContain("--true-peak");
+    expect(normalize.output).toContain("dry run");
   });
 
   test("exposes local Rekordbox playlist CRUD at the product root", async () => {

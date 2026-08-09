@@ -37,6 +37,11 @@ import {
   type YtdlpReferenceClient,
 } from "./integrations/ytdlp-library.js";
 import { defaultTrackLibraryRoot } from "./library-paths.js";
+import {
+  analyzeRekordboxLoudness,
+  inspectRekordboxLoudness,
+  planRekordboxLoudnessNormalization,
+} from "./loudness.js";
 import { createManifest } from "./manifest.js";
 import { enrichRekordboxMetadata, type MetadataFieldSource } from "./metadata-enrichment.js";
 import { runProcess } from "./process.js";
@@ -832,6 +837,196 @@ export const enrichCli = Cli.create("enrich", {
 });
 
 tracksCli.command(enrichCli);
+
+const loudnessScopeOutput = z.union([
+  z.object({ kind: z.literal("library") }),
+  z.object({ kind: z.literal("folder"), name: z.string() }),
+]);
+
+const loudnessRecordOutput = z.object({
+  contentId: z.string(),
+  title: z.string(),
+  artist: z.string().optional(),
+  path: z.string(),
+  artifactSha256: z.string(),
+  artifactSize: z.number().int().nonnegative(),
+  artifactMtimeMs: z.number().nonnegative(),
+  integratedLufs: z.number(),
+  loudnessRangeLu: z.number().nonnegative(),
+  truePeakDbtp: z.number(),
+  thresholdLufs: z.number(),
+  measurementMethod: z.literal("ffmpeg-loudnorm-v1"),
+  measuredAt: z.string(),
+});
+
+const loudnessDatabaseOptionShape = {
+  folder: z.string().optional().describe("Optional direct-child playlist-folder scope"),
+  dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
+  dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
+};
+
+function createLoudnessCli(): ReturnType<typeof Cli.create> {
+  const cli = Cli.create("loudness", {
+    description:
+      "Measure EBU R128 loudness and plan true-peak-safe level matching for Rekordbox tracks.",
+    hint: "Measurements live in master.db. Audio files and tags remain immutable.",
+  });
+
+  cli.command("analyze", {
+    description:
+      "Measure integrated LUFS, loudness range, and inter-sample true peak for complete audio files.",
+    options: z.object({
+      ...loudnessDatabaseOptionShape,
+      ffmpeg: z.string().optional().describe("ffmpeg executable override"),
+      concurrency: z.number().int().min(1).max(16).default(2),
+      refresh: z.boolean().default(false).describe("Remeasure unchanged artifacts"),
+      progress: z.enum(["auto", "always", "never"]).default("auto"),
+    }),
+    output: z.object({
+      dbPath: z.string(),
+      scope: loudnessScopeOutput,
+      tracks: z.number().int().nonnegative(),
+      measured: z.number().int().nonnegative(),
+      reused: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      records: z.array(loudnessRecordOutput),
+      failures: z.array(
+        z.object({
+          contentId: z.string(),
+          title: z.string(),
+          path: z.string().optional(),
+          message: z.string(),
+        }),
+      ),
+    }),
+    async run(context) {
+      try {
+        const showProgress =
+          context.options.progress === "always" ||
+          (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
+        return await analyzeRekordboxLoudness({
+          concurrency: context.options.concurrency,
+          refresh: context.options.refresh,
+          ...(context.options.folder ? { folder: context.options.folder } : {}),
+          ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+          ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+          ...(context.options.ffmpeg ? { ffmpeg: context.options.ffmpeg } : {}),
+          ...(showProgress
+            ? {
+                onProgress(progress) {
+                  if (
+                    progress.phase !== "measure" ||
+                    progress.current === progress.total ||
+                    progress.current % 10 === 0
+                  ) {
+                    process.stderr.write(`[loudness:${progress.phase}] ${progress.message}\n`);
+                  }
+                },
+              }
+            : {}),
+        });
+      } catch (error) {
+        return fail(context, error);
+      }
+    },
+  });
+
+  cli.command("show", {
+    description: "Show persisted loudness measurements without reading or modifying audio.",
+    options: z.object(loudnessDatabaseOptionShape),
+    output: z.object({
+      dbPath: z.string(),
+      scope: loudnessScopeOutput,
+      tracks: z.number().int().nonnegative(),
+      measured: z.number().int().nonnegative(),
+      missing: z.number().int().nonnegative(),
+      records: z.array(loudnessRecordOutput),
+    }),
+    run(context) {
+      try {
+        return inspectRekordboxLoudness({
+          ...(context.options.folder ? { folder: context.options.folder } : {}),
+          ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+          ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+        });
+      } catch (error) {
+        return fail(context, error);
+      }
+    },
+  });
+
+  cli.command("normalize", {
+    description:
+      "Plan static gain that matches a target LUFS while respecting a true-peak ceiling.",
+    hint: "This first version is always a dry run: it changes no audio, tags, or Rekordbox mixer rows.",
+    options: z.object({
+      ...loudnessDatabaseOptionShape,
+      target: z
+        .number()
+        .min(-70)
+        .max(0)
+        .optional()
+        .describe("Explicit LUFS target; defaults to the scoped collection median"),
+      truePeak: z
+        .number()
+        .min(-20)
+        .max(0)
+        .default(-1)
+        .describe("Maximum projected inter-sample peak in dBTP"),
+      dryRun: z.boolean().default(true).describe("Plan only; applying gain is not yet enabled"),
+    }),
+    output: z.object({
+      dbPath: z.string(),
+      scope: loudnessScopeOutput,
+      tracks: z.number().int().nonnegative(),
+      missing: z.number().int().nonnegative(),
+      dryRun: z.literal(true),
+      targetLufs: z.number(),
+      targetSource: z.enum(["explicit", "median"]),
+      truePeakCeilingDbtp: z.number(),
+      measured: z.number().int().positive(),
+      ceilingLimited: z.number().int().nonnegative(),
+      entries: z.array(
+        loudnessRecordOutput.extend({
+          requestedGainDb: z.number(),
+          gainDb: z.number(),
+          projectedTruePeakDbtp: z.number(),
+          ceilingLimited: z.boolean(),
+        }),
+      ),
+    }),
+    run(context) {
+      try {
+        if (!context.options.dryRun) {
+          throw new TracksError(
+            "INVALID_SOURCE",
+            "Applying loudness gain is not enabled yet; omit --no-dry-run to inspect the plan",
+            { exitCode: 2 },
+          );
+        }
+        return planRekordboxLoudnessNormalization({
+          truePeakCeilingDbtp: context.options.truePeak,
+          ...(context.options.target === undefined ? {} : { targetLufs: context.options.target }),
+          ...(context.options.folder ? { folder: context.options.folder } : {}),
+          ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+          ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+        });
+      } catch (error) {
+        return fail(context, error);
+      }
+    },
+  });
+  return cli;
+}
+
+export const loudnessCli = createLoudnessCli();
+tracksCli.command(loudnessCli);
+
+/** Product-level namespace containing library maintenance commands owned by tracks. */
+export const tracksMaintenanceCli = Cli.create("tracks", {
+  description: "Inspect and maintain the local Rekordbox-backed track library.",
+});
+tracksMaintenanceCli.command(createLoudnessCli());
 
 const setWorkflowArgs = z.object({
   source: z

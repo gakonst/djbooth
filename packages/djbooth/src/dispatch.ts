@@ -16,6 +16,7 @@ const directlyRoutableCommands = new Set([
   "status",
   "stems",
   "stop",
+  "tracks",
   "usb",
   "ytdlp-ts",
 ]);
@@ -64,6 +65,9 @@ export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
       break;
     case "stems":
       cli.command((await import("@gakonst/rekordbox/cli")).stemsCli);
+      break;
+    case "tracks":
+      cli.command((await import("@gakonst/tracks/cli")).tracksMaintenanceCli);
       break;
     case "usb":
       cli.command((await import("@gakonst/cdj-usb/cli")).usbCli);
