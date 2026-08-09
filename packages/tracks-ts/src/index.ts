@@ -112,6 +112,26 @@ export {
   type RekordboxMetadataGapSummary,
 } from "./metadata-enrichment.js";
 export {
+  analyzeRekordboxLoudness,
+  inspectRekordboxLoudness,
+  measureAudioLoudness,
+  planLoudnessNormalization,
+  planRekordboxLoudnessNormalization,
+  type AnalyzeRekordboxLoudnessOptions,
+  type AnalyzeRekordboxLoudnessResult,
+  type AudioLoudnessMeasurement,
+  type InspectRekordboxLoudnessOptions,
+  type InspectRekordboxLoudnessResult,
+  type LoudnessNormalizationPlan,
+  type LoudnessNormalizationPlanEntry,
+  type PlanRekordboxLoudnessNormalizationOptions,
+  type PlanRekordboxLoudnessNormalizationResult,
+  type RekordboxLoudnessFailure,
+  type RekordboxLoudnessProgress,
+  type RekordboxLoudnessRecord,
+  type RekordboxLoudnessScope,
+} from "./loudness.js";
+export {
   AppleSourceMetadataClient,
   canonicalSourceUrl,
   DeezerSourceMetadataClient,

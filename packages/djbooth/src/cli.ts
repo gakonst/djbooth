@@ -9,7 +9,14 @@ import { linkCli } from "@gakonst/djlink/cli";
 import { enhanceCli, enhancementGroupCli, playlistCli, stemsCli } from "@gakonst/rekordbox/cli";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
-import { analyzeCli, downloadCli, enrichCli, importCli, resolveCli } from "@gakonst/tracks/cli";
+import {
+  analyzeCli,
+  downloadCli,
+  enrichCli,
+  importCli,
+  resolveCli,
+  tracksMaintenanceCli,
+} from "@gakonst/tracks/cli";
 import ytdlpCli from "@gakonst/ytdlp-ts/cli";
 import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
@@ -37,6 +44,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "produce_*",
     "status",
     "stems",
+    "tracks_loudness_*",
     "usb",
     "spots_auth_status",
     "spots_me",
@@ -87,6 +95,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(playlistCli);
   cli.command(produceCli);
   cli.command(stemsCli);
+  cli.command(tracksMaintenanceCli);
   cli.command(linkCli);
   cli.command(serveCli);
   cli.command(statusCli);
