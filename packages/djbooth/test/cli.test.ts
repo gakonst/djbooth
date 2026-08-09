@@ -31,6 +31,7 @@ describe("djbooth CLI", () => {
     expect(canDispatchDirectly(["status", "--format", "json"])).toBe(true);
     expect(canDispatchDirectly(["import", "https://example.com/set"])).toBe(true);
     expect(canDispatchDirectly(["playlist", "list"])).toBe(true);
+    expect(canDispatchDirectly(["produce", "transcribe", "input.wav", "output.mid"])).toBe(true);
     expect(canDispatchDirectly(["--help"])).toBe(false);
     expect(canDispatchDirectly(["--mcp"])).toBe(false);
     expect(canDispatchDirectly([])).toBe(false);
@@ -60,6 +61,8 @@ describe("djbooth CLI", () => {
         "link",
         "playlist create",
         "playlist add",
+        "produce setup",
+        "produce transcribe",
         "resolve",
         "serve",
         "status",
@@ -127,6 +130,11 @@ describe("djbooth CLI", () => {
 
     const stop = await serve(["stop", "--help"]);
     expect(stop.output).toContain("Stop the managed djbooth");
+
+    const transcription = await serve(["produce", "transcribe", "--help"]);
+    expect(transcription.output).toContain("djbooth produce transcribe <audio> <output>");
+    expect(transcription.output).toContain("--instrument");
+    expect(transcription.output).toContain("--max-tokens");
   });
 
   test("preserves the full-library DJ Link one-shot guidance", async () => {

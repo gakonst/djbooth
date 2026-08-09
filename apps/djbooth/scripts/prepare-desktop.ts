@@ -25,6 +25,13 @@ const enhancementProjectFiles = [
   "uv.lock",
   "README.md",
 ];
+const muscriptorProjectDirectory = resolve(workspaceRoot, "python/muscriptor-mlx");
+const muscriptorProjectFiles = [
+  "djbooth_muscriptor_mlx.py",
+  "pyproject.toml",
+  "uv.lock",
+  "README.md",
+];
 const sidecarPath = resolve(binariesDirectory, `djbooth-node-${targetTriple}`);
 
 if (!supportedTarget(targetTriple))
@@ -87,6 +94,13 @@ for (const file of enhancementProjectFiles)
   await copyFile(
     resolve(enhancementProjectDirectory, file),
     resolve(packagedEnhancementProjectDirectory, file),
+  );
+const packagedMuscriptorProjectDirectory = resolve(toolsDirectory, "muscriptor-mlx");
+await mkdir(packagedMuscriptorProjectDirectory, { recursive: true });
+for (const file of muscriptorProjectFiles)
+  await copyFile(
+    resolve(muscriptorProjectDirectory, file),
+    resolve(packagedMuscriptorProjectDirectory, file),
   );
 
 const nodeLicense = resolve(dirname(dirname(nodePath)), "LICENSE");

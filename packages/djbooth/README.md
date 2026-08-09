@@ -63,6 +63,12 @@ import { MasterDatabase } from "@gakonst/djbooth/rekordbox";
 import { DjBoothLibraryService, LibraryMutationConflictError } from "@gakonst/djbooth/library";
 import { loadDjLinkTrack, startRekordboxDjLink } from "@gakonst/djbooth/djlink";
 import { exportLegacyDeviceLibrary } from "@gakonst/djbooth/usb";
+import { transcribeAudioToMidi } from "@gakonst/djbooth/transcription";
+
+await transcribeAudioToMidi("reference.wav", "reference.mid", {
+  eventsPath: "reference.events.json",
+  tempo: 126,
+});
 ```
 
 ## CLI
@@ -83,6 +89,7 @@ djbooth serve --open --no-assistant
 djbooth stop --format json
 djbooth link "Artist - Track" --player 3 --format json
 djbooth usb /mnt/cdj --playlist-folder "DJ Sets I Like" --format json
+djbooth produce transcribe reference.wav reference.mid --tempo 126 --format json
 
 # Specialist provider APIs remain namespaced.
 djbooth spots auth status --format json

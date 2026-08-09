@@ -18,7 +18,8 @@ webview or WASM worker. `OPENAI_API_KEY` remains a fallback for machines without
 
 `desktop:build` creates `src-tauri/target/release/bundle/macos/djbooth.ai.app`. The bundle is
 self-contained: it carries Node.js 22, the production dependency tree and encrypted SQLite addon,
-the clean analyzer, uv, the standalone `python/stems-mlx` project, and the built web/WASM assets.
+the clean analyzer, uv, the standalone `python/stems-mlx`, `python/a2sb-mlx`, and
+`python/muscriptor-mlx` projects, and the built web/WASM assets.
 Python 3.12, locked MLX wheels, and the pinned
 model are installed into the existing user cache on first stems use rather than inflating every app
 download. Release preparation strips the copied Node sidecar and removes type maps, source maps,

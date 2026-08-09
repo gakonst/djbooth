@@ -18,6 +18,7 @@ import { serveCli } from "./serve.js";
 import { statusCli } from "./status.js";
 import { stopCli } from "./stop.js";
 import { loadDjBoothEnvironment } from "./environment.js";
+import { produceCli } from "./produce.js";
 import { createDjBoothRoot, DJBOOTH_VERSION } from "./root.js";
 
 export { DJBOOTH_VERSION } from "./root.js";
@@ -33,6 +34,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "import",
     "link",
     "playlist_*",
+    "produce_*",
     "status",
     "stems",
     "usb",
@@ -83,6 +85,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(enhancementGroupCli);
   cli.command(importCli);
   cli.command(playlistCli);
+  cli.command(produceCli);
   cli.command(stemsCli);
   cli.command(linkCli);
   cli.command(serveCli);

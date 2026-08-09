@@ -53,6 +53,7 @@ fn start_packaged_backend(app: &mut tauri::App) -> Result<(), Box<dyn std::error
     let analyzer = resources.join("tools/djbooth-rs");
     let uv = resources.join("tools/uv");
     let stems_project = resources.join("tools/stems-mlx");
+    let muscriptor_project = resources.join("tools/muscriptor-mlx");
     let (mut events, child) = app
         .shell()
         .sidecar("djbooth-node")?
@@ -62,9 +63,11 @@ fn start_packaged_backend(app: &mut tauri::App) -> Result<(), Box<dyn std::error
             static_directory.to_string_lossy().as_ref(),
         ])
         .env("REKORDBOX_CLEAN_ANALYZER_BINARY", analyzer)
-        .env("REKORDBOX_STEMS_UV_BINARY", uv)
+        .env("REKORDBOX_STEMS_UV_BINARY", &uv)
         .env("DJBOOTH_STEMS_MLX_PROJECT", &stems_project)
         .env("MUSIC_STEMS_MLX_PROJECT", stems_project)
+        .env("DJBOOTH_MUSCRIPTOR_UV_BINARY", uv)
+        .env("DJBOOTH_MUSCRIPTOR_MLX_PROJECT", muscriptor_project)
         .spawn()?;
     *app.state::<BackendProcess>()
         .0

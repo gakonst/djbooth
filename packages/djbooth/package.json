@@ -64,6 +64,10 @@
       "types": "./dist/library.d.ts",
       "import": "./dist/library.js"
     },
+    "./transcription": {
+      "types": "./dist/transcription.d.ts",
+      "import": "./dist/transcription.js"
+    },
     "./mcp": {
       "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js"

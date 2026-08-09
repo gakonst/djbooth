@@ -7,6 +7,7 @@ const directlyRoutableCommands = new Set([
   "import",
   "link",
   "playlist",
+  "produce",
   "resolve",
   "serve",
   "slsk",
@@ -48,6 +49,9 @@ export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
       break;
     case "playlist":
       cli.command((await import("@gakonst/rekordbox/cli")).playlistCli);
+      break;
+    case "produce":
+      cli.command((await import("./produce.js")).produceCli);
       break;
     case "serve":
       cli.command((await import("./serve.js")).serveCli);
