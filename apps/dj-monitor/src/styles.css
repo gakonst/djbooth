@@ -1,29 +1,19 @@
-:root {
+.hardware-view {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #e9edf0;
   background: #030405;
   font-synthesis: none;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html {
   min-width: 1120px;
   min-height: 100%;
-  background: #030405;
-}
-
-body {
-  min-width: 1120px;
-  min-height: 100vh;
-  margin: 0;
   overflow-x: auto;
   background:
     radial-gradient(ellipse at 50% -18%, rgb(38 50 59 / 56%), transparent 45%),
     linear-gradient(#090b0d, #020303 72%);
+}
+
+.hardware-view * {
+  box-sizing: border-box;
 }
 
 .monitor-shell {

@@ -82,6 +82,9 @@ pub(crate) const DB_REQ_ANLZ_TAG: u16 = 0x2c04;
 pub(crate) const DB_REQ_INTRODUCE: u16 = 0x3007;
 pub(crate) const DB_REQ_RENDER: u16 = 0x3000;
 pub(crate) const DB_REQ_EXT_3001: u16 = 0x3001;
+/// CDJ-3000 LINK-source availability request. Current players send this with
+/// only the r:m:s:t context after rendering playback metadata.
+pub(crate) const DB_REQ_EXT_3006: u16 = 0x3006;
 
 pub(crate) const DB_RES_SUCCESS: u16 = 0x4000;
 pub(crate) const DB_RES_MENU_HEADER: u16 = 0x4001;
@@ -274,6 +277,7 @@ pub(crate) fn db_request_name(msg_type: u16) -> String {
         DB_REQ_INTRODUCE => "INTRODUCE",
         DB_REQ_RENDER => "RENDER",
         DB_REQ_EXT_3001 => "EXT_3001",
+        DB_REQ_EXT_3006 => "EXT_3006",
         DB_REQ_SORT_MENU => "SORT_MENU",
         0x0001 => "INVALID_DATA_OR_CLOSE",
         DB_REQ_TEARDOWN => "TEARDOWN",
@@ -447,6 +451,10 @@ pub(crate) fn strip_rmst_arg(args: &[DbValue]) -> &[DbValue] {
 
 pub(crate) fn rmst_menu_from_args(args: &[DbValue]) -> Option<u8> {
     rmst_from_args(args).map(|value| ((value >> 16) & 0xff) as u8)
+}
+
+pub(crate) fn rmst_slot_from_args(args: &[DbValue]) -> Option<u8> {
+    rmst_from_args(args).map(|value| ((value >> 8) & 0xff) as u8)
 }
 
 pub(crate) fn rmst_from_args(args: &[DbValue]) -> Option<u32> {

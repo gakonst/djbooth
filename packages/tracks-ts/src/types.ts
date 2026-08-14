@@ -1,4 +1,4 @@
-export type RecognitionProvider = "description" | "1001tracklists" | "audd" | "acrcloud";
+export type RecognitionProvider = "description" | "agent" | "audd" | "acrcloud";
 export type Environment = Record<string, string | undefined>;
 
 export interface TrackMatch {
@@ -75,7 +75,7 @@ export interface Tracklist {
   sampledEverySeconds?: number;
   complete: boolean;
   tracks: TracklistEntry[];
-  suggestions?: DatabaseTrackSuggestion[];
+  suggestions?: TracklistSuggestion[];
   warnings?: string[];
   matches?: RecognitionMoment[];
 }
@@ -83,7 +83,6 @@ export interface Tracklist {
 export interface IdentifyOptions {
   provider?: "auto" | RecognitionProvider;
   strategy?: "enterprise" | "samples";
-  preferDatabase?: boolean;
   preferDescription?: boolean;
   full?: boolean;
   every?: number;
@@ -109,37 +108,19 @@ export interface IdentifyOptions {
 }
 
 export interface IdentifyProgress {
-  phase: "metadata" | "database" | "download" | "recognize" | "aggregate";
+  phase: "metadata" | "download" | "recognize" | "aggregate";
   current?: number;
   total?: number;
   message: string;
 }
 
 export interface IdentifyStageTiming {
-  stage: "metadata" | "database-media" | "database-search" | "database-tracklist";
-  outcome: "completed" | "matched" | "missed" | "failed" | "cancelled";
+  stage: "metadata";
+  outcome: "completed" | "failed" | "cancelled";
   durationMs: number;
 }
 
-export interface DatabaseTrack {
-  order: number;
-  isId?: boolean;
-  positionId?: string;
-  trackId?: string;
-  mediaItemId?: string;
-  mediaObjectId?: 5 | 8;
-  kind?: "position" | "mashup-part";
-  durationSeconds?: number;
-  artist?: string | null;
-  title?: string | null;
-  label?: string | null;
-  mix?: string | null;
-  timestamp?: string | null;
-  links?: Record<string, string> | string[] | null;
-  media?: TrackMediaLink[];
-}
-
-export type DatabaseTrackSuggestion = {
+export type TracklistSuggestion = {
   id: string;
   position: number;
   positionId: string;
@@ -149,45 +130,4 @@ export type DatabaseTrackSuggestion = {
   startSeconds?: number;
   submitter?: string;
 };
-
-export interface DatabaseTracklist {
-  url: string;
-  durationSeconds?: number;
-  event: {
-    name: string;
-    date?: string;
-    djName?: string;
-    lineup: string[];
-  };
-  tracks: DatabaseTrack[];
-  suggestions?: DatabaseTrackSuggestion[];
-}
-
-export interface TracklistSummary {
-  title: string;
-  url: string;
-  djName?: string;
-  durationSeconds?: number;
-}
-
-export interface ChartTrack {
-  name: string;
-  url: string;
-  rank?: number;
-}
-
-export interface LatestTracklists {
-  items: TracklistSummary[];
-}
-
-export interface SearchTracklists {
-  items: TracklistSummary[];
-}
-
-export interface ChartTracks {
-  chart: string;
-  items: ChartTrack[];
-}
-
-export type FindTracklistResult = { found: false } | ({ found: true } & DatabaseTracklist);
 import type { MediaMetadataClient } from "./integrations/ytdlp.js";

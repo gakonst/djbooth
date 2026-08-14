@@ -4,6 +4,13 @@ export function assistantEnabledFromSearch(search: string): boolean {
   return value !== "0" && value !== "false";
 }
 
+export type DjBoothView = "booth" | "library";
+
+/** Resolve one same-origin workstation route into its top-level view. */
+export function djBoothViewFromPath(pathname: string): DjBoothView {
+  return pathname === "/booth" || pathname.startsWith("/booth/") ? "booth" : "library";
+}
+
 /** Build the browser URL for an embedded-assistant or agent-hosted workbench. */
 export function workbenchUrl(serverUrl: string, assistantEnabled: boolean): string {
   const url = new URL(serverUrl);

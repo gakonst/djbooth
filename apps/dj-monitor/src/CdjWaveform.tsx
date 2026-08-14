@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import type { TrackWaveform } from "./types";
+import type { TrackWaveform } from "./types.js";
 
 type CdjWaveformProps = {
   progress: number;

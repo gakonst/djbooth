@@ -14,6 +14,10 @@ const serveStatusOutput = z.discriminatedUnion("running", [
     assistantEnabled: z.boolean(),
     logPath: z.string(),
     monitorUrl: z.string(),
+    views: z.object({ library: z.string(), booth: z.string() }),
+    sonos: z
+      .object({ room: z.string(), coordinatorIp: z.string(), streamUrl: z.string() })
+      .nullable(),
   }),
   z.object({
     running: z.literal(false),
@@ -112,6 +116,8 @@ export const statusCli = Cli.create("status", {
               assistantEnabled: serve.assistantEnabled,
               logPath: serve.logPath,
               monitorUrl: serve.monitorUrl,
+              views: { library: serve.url, booth: serve.monitorUrl },
+              sonos: serve.sonos,
             }
           : serve,
         link: link.running

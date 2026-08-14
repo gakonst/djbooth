@@ -23,6 +23,7 @@ import {
   MAX_VERIFICATION_CONCURRENCY,
   type TrackAcquirer,
 } from "./acquire-manifest.js";
+import { parseAgentTracklist, type AgentResolutionRequest } from "./agent-resolution.js";
 import { cacheDigest, type CacheMode } from "./cache.js";
 import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
@@ -37,10 +38,9 @@ import {
   type YtdlpReferenceClient,
 } from "./integrations/ytdlp-library.js";
 import { defaultTrackLibraryRoot } from "./library-paths.js";
-import { createManifest } from "./manifest.js";
+import { createManifest, type SetManifest } from "./manifest.js";
 import { enrichRekordboxMetadata, type MetadataFieldSource } from "./metadata-enrichment.js";
 import { runProcess } from "./process.js";
-import { DEFAULT_PARSE_API_BASE, Tracklists1001Client } from "./providers/tracklists1001.js";
 import {
   DEFAULT_RECOGNITION_CONCURRENCY,
   MAX_RECOGNITION_CONCURRENCY,
@@ -92,23 +92,11 @@ function ancestorEnvironmentFiles(start: string): string[] {
 }
 
 const provider = z
-  .enum(["auto", "description", "1001tracklists", "audd", "acrcloud"])
+  .enum(["auto", "description", "agent", "audd", "acrcloud"])
   .default("auto")
   .describe("Resolution provider");
 
 const providerEnv = z.object({
-  PARSE_API_KEY: z.string().optional().describe("Parse API key for 1001Tracklists access"),
-  PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
-  PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
-  TRACKS_1001_BROWSER_PATH: z
-    .string()
-    .optional()
-    .describe("NanoCodex profile-session executable for headed 1001 fallback"),
-  TRACKS_1001_BROWSER_SOURCE: z
-    .enum(["brave", "chrome"])
-    .optional()
-    .describe("Source browser for allowlisted 1001 cookies"),
-  TRACKS_1001_BROWSER_PROFILE: z.string().optional().describe("Source browser profile directory"),
   AUDD_API_TOKEN: z.string().optional().describe("AudD API token"),
   ACR_HOST: z.string().optional().describe("ACRCloud identification project host"),
   ACR_ACCESS_KEY: z.string().optional().describe("ACRCloud identification access key"),
@@ -116,18 +104,6 @@ const providerEnv = z.object({
   YTDLP_TS_PATH: z.string().optional().describe("ytdlp-ts executable or dist/cli.js path"),
   FFMPEG_PATH: z.string().optional().describe("ffmpeg executable path"),
   FFPROBE_PATH: z.string().optional().describe("ffprobe executable path"),
-});
-
-const parseEnv = z.object({
-  PARSE_API_KEY: z.string().optional().describe("Parse API key from https://parse.bot"),
-  PARSE_API_BASE: z.string().optional().describe("Override the complete Parse scraper base URL"),
-  PARSE_SCRAPER_ID: z.string().optional().describe("Override the Parse canonical scraper ID"),
-  TRACKS_1001_BROWSER_PATH: z
-    .string()
-    .optional()
-    .describe("NanoCodex profile-session executable for headed 1001 fallback"),
-  TRACKS_1001_BROWSER_SOURCE: z.enum(["brave", "chrome"]).optional(),
-  TRACKS_1001_BROWSER_PROFILE: z.string().optional(),
 });
 
 const importEnv = providerEnv.extend({
@@ -178,10 +154,6 @@ const identifyOptions = z.object({
     .enum(["enterprise", "samples"])
     .default("enterprise")
     .describe("AudD long-file scan or local clip sampling"),
-  preferDatabase: z
-    .boolean()
-    .default(true)
-    .describe("Check 1001Tracklists before paid audio recognition"),
   preferDescription: z
     .boolean()
     .default(true)
@@ -430,7 +402,7 @@ const manifestOutput = z.object({
     durationSeconds: z.number().positive().optional(),
   }),
   tracklist: z.object({
-    provider: z.enum(["description", "1001tracklists", "audd", "acrcloud"]),
+    provider: z.enum(["description", "agent", "audd", "acrcloud"]),
     url: z.string().optional(),
     complete: z.boolean(),
     sampledEverySeconds: z.number().positive().optional(),
@@ -497,54 +469,24 @@ const manifestOutput = z.object({
   }),
 });
 
-const databaseTrackOutput = z.object({
-  order: z.number().int().positive(),
-  isId: z.boolean().optional(),
-  positionId: z.string().optional(),
-  trackId: z.string().optional(),
-  mediaItemId: z.string().optional(),
-  kind: z.enum(["position", "mashup-part"]).optional(),
-  durationSeconds: z.number().int().positive().optional(),
-  artist: z.string().nullable().optional(),
-  title: z.string().nullable().optional(),
-  label: z.string().nullable().optional(),
-  mix: z.string().nullable().optional(),
-  timestamp: z.string().nullable().optional(),
-  links: z.union([z.record(z.string(), z.string()), z.array(z.string()), z.null()]).optional(),
-  media: z.array(mediaLinkOutput).optional(),
-});
-
-const databaseTracklistOutput = z.object({
-  url: z.string(),
-  durationSeconds: z.number().positive().optional(),
-  event: z.object({
-    name: z.string(),
-    date: z.string().optional(),
-    djName: z.string().optional(),
-    lineup: z.array(z.string()),
+const agentResolutionOutput = z.object({
+  action: z.literal("agent-resolution-required"),
+  source: z.string(),
+  context: z.object({
+    sourceId: z.string().optional(),
+    title: z.string().optional(),
+    uploader: z.string().optional(),
+    durationSeconds: z.number().positive().optional(),
+    webpageUrl: z.string().optional(),
+    description: z.string().optional(),
+    warning: z.string().optional(),
   }),
-  tracks: z.array(databaseTrackOutput),
-  suggestions: z
-    .array(
-      z.object({
-        id: z.string(),
-        position: z.number().int().positive(),
-        positionId: z.string(),
-        type: z.number().int(),
-        text: z.string(),
-        timestamp: z.string().optional(),
-        startSeconds: z.number().nonnegative().optional(),
-        submitter: z.string().optional(),
-      }),
-    )
-    .optional(),
-});
-
-const summaryOutput = z.object({
-  title: z.string(),
-  url: z.string(),
-  djName: z.string().optional(),
-  durationSeconds: z.number().positive().optional(),
+  prompt: z.string(),
+  submit: z.object({
+    option: z.literal("--agent-result-json"),
+    format: z.literal("Tracklist"),
+    requiredProvider: z.literal("agent"),
+  }),
 });
 
 const providerStatusOutput = z.object({
@@ -555,7 +497,7 @@ const providerStatusOutput = z.object({
 
 const providersOutput = z.object({
   description: providerStatusOutput,
-  tracklists1001: providerStatusOutput,
+  agent: providerStatusOutput,
   audd: providerStatusOutput,
   acrcloud: providerStatusOutput,
 });
@@ -839,6 +781,10 @@ const setWorkflowArgs = z.object({
     .describe("Spotify/SoundCloud playlist, YouTube/SoundCloud DJ set, or local set"),
 });
 const setWorkflowOptions = z.object({
+  agentResultJson: z
+    .string()
+    .optional()
+    .describe("Agent-resolved Tracklist JSON returned by a prior handoff"),
   outputDirectory: z
     .string()
     .optional()
@@ -935,7 +881,7 @@ const setWorkflowOptions = z.object({
   playlistName: z.string().optional().describe("Destination Rekordbox playlist"),
   progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
 });
-const setWorkflowOutput = z.object({
+const completedSetWorkflowOutput = z.object({
   outputDirectory: z.string(),
   source: z.string(),
   sourceKind: z.enum(["dj-set", "soundcloud-playlist", "spotify-playlist"]),
@@ -955,6 +901,7 @@ const setWorkflowOutput = z.object({
   playlistId: z.string().optional(),
   performance: workflowPerformanceOutput,
 });
+const setWorkflowOutput = z.union([completedSetWorkflowOutput, agentResolutionOutput]);
 
 type SetWorkflowContext = Parameters<typeof fail>[0] & {
   agent: boolean;
@@ -1018,6 +965,49 @@ async function runSetWorkflowCommand(
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
+    const showProgress =
+      context.options.progress === "always" ||
+      (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
+    const outputDirectory =
+      context.options.outputDirectory ??
+      defaultTrackLibraryRoot({ ...process.env, ...context.env });
+    stateStore = new RekordboxPipelineStore({
+      source: context.args.source,
+      outputDirectory,
+      keepOpen: true,
+      ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+      ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+    });
+    let initialState = (await stateStore.load()) ?? null;
+    let sourceKind: ImportSourceKind = inferImportSourceKind(initialState ?? undefined);
+    const replacementPlaylistId = agentReplacementPlaylistId(
+      initialState,
+      context.options.agentResultJson !== undefined,
+    );
+    if (context.options.agentResultJson) {
+      const submitted = createManifest(
+        parseAgentTracklist(context.args.source, context.options.agentResultJson),
+      );
+      submitted.artifacts.root = stateStore.artifactDirectory;
+      submitted.artifacts.downloadDirectory = outputDirectory;
+      await stateStore.save(submitted);
+      initialState = submitted;
+      sourceKind = "dj-set";
+    }
+    if (!initialState && !isHostedPlaylistCandidate(context.args.source)) {
+      const resolved = createManifest(
+        await identify(context.args.source, {
+          provider: context.options.provider,
+          cacheMode: context.options.cacheMode,
+          env: { ...process.env, ...context.env },
+          signal: controller.signal,
+        }),
+      );
+      resolved.artifacts.root = stateStore.artifactDirectory;
+      resolved.artifacts.downloadDirectory = outputDirectory;
+      await stateStore.save(resolved);
+      initialState = resolved;
+    }
     const spotify = await workflowSpotifyClient(context.options.cacheMode);
     soulseek = new SoulseekClient();
     const acquirers = orderedImportSetAcquirers(context.options.referenceYtdlp, {
@@ -1037,21 +1027,6 @@ async function runSetWorkflowCommand(
       referenceYtdlp: () =>
         createImportSetReferenceAcquirer(new ReferenceClient(), context.options.cacheMode),
     });
-    const showProgress =
-      context.options.progress === "always" ||
-      (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
-    const outputDirectory =
-      context.options.outputDirectory ??
-      defaultTrackLibraryRoot({ ...process.env, ...context.env });
-    stateStore = new RekordboxPipelineStore({
-      source: context.args.source,
-      outputDirectory,
-      keepOpen: true,
-      ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
-      ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
-    });
-    let initialState = (await stateStore.load()) ?? null;
-    let sourceKind: ImportSourceKind = inferImportSourceKind(initialState ?? undefined);
     if (!initialState) {
       const hosted = await prepareHostedImportSource(context.args.source, {
         spotify,
@@ -1118,6 +1093,7 @@ async function runSetWorkflowCommand(
       },
       signal: controller.signal,
       rekordbox: {
+        ...(replacementPlaylistId ? { playlistId: replacementPlaylistId } : {}),
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
         ...(context.options.folderName ? { folderName: context.options.folderName } : {}),
@@ -1162,6 +1138,8 @@ async function runSetWorkflowCommand(
       performance: result.performance,
     };
   } catch (error) {
+    const handoff = agentResolutionFromError(error);
+    if (handoff) return handoff;
     return fail(context, error);
   } finally {
     process.removeListener("SIGINT", cancel);
@@ -1169,6 +1147,14 @@ async function runSetWorkflowCommand(
     stateStore?.close();
     if (soulseek?.state !== "disconnected") await soulseek?.disconnect();
   }
+}
+
+/** Keep the exact local playlist target when browser research replaces resolved identities. */
+export function agentReplacementPlaylistId(
+  state: SetManifest | null | undefined,
+  replacingResolution: boolean,
+): string | undefined {
+  return replacingResolution ? state?.artifacts.rekordbox?.playlistId : undefined;
 }
 
 function inferImportSourceKind(
@@ -1185,10 +1171,23 @@ function inferImportSourceKind(
   return "dj-set";
 }
 
+function isHostedPlaylistCandidate(source: string): boolean {
+  if (source.startsWith("spotify:playlist:")) return true;
+  try {
+    const url = new URL(source);
+    return (
+      /(^|\.)soundcloud\.com$/iu.test(url.hostname) ||
+      (/(^|\.)spotify\.com$/iu.test(url.hostname) && url.pathname.startsWith("/playlist/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const resolveCli = Cli.create("resolve", {
   aliases: ["identify"],
   description:
-    "Resolve a set by inspecting its URL, reading timestamped metadata, matching 1001Tracklists by URL then title/uploader, and only then using recognition—without downloading the remote set.",
+    "Resolve a set from timestamped publisher metadata or return a browser-research prompt to the calling agent, without downloading the remote set.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud URL or local audio file") }),
   options: identifyOptions.extend({
     outputDirectory: z
@@ -1198,9 +1197,13 @@ export const resolveCli = Cli.create("resolve", {
     dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     refresh: z.boolean().default(false).describe("Resolve the source again and replace its state"),
+    agentResultJson: z
+      .string()
+      .optional()
+      .describe("Agent-resolved Tracklist JSON returned by a prior handoff"),
   }),
   env: providerEnv,
-  output: manifestOutput,
+  output: z.union([manifestOutput, agentResolutionOutput]),
   alias: {
     provider: "p",
     interval: "i",
@@ -1210,7 +1213,7 @@ export const resolveCli = Cli.create("resolve", {
     {
       args: { source: "https://www.youtube.com/watch?v=vtJ100Znqw0" },
       description:
-        "Inspect the YouTube title/uploader, read timestamps, then match 1001Tracklists by URL or title before recognition",
+        "Use timestamped YouTube metadata or hand browser research back to the calling agent",
     },
     {
       args: { source: "set.mp3" },
@@ -1229,6 +1232,15 @@ export const resolveCli = Cli.create("resolve", {
         ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
         ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
       });
+      if (context.options.agentResultJson) {
+        const submitted = createManifest(
+          parseAgentTracklist(context.args.source, context.options.agentResultJson),
+        );
+        submitted.artifacts.root = stateStore.artifactDirectory;
+        submitted.artifacts.downloadDirectory = resolve(outputDirectory);
+        await stateStore.save(submitted);
+        return submitted;
+      }
       if (!context.options.refresh) {
         const existing = await stateStore.load();
         if (existing) return existing;
@@ -1237,7 +1249,6 @@ export const resolveCli = Cli.create("resolve", {
         await identify(context.args.source, {
           provider: context.options.provider,
           strategy: context.options.strategy,
-          preferDatabase: context.options.preferDatabase,
           preferDescription: context.options.preferDescription,
           full: context.options.full,
           every: context.options.every,
@@ -1279,112 +1290,14 @@ export const resolveCli = Cli.create("resolve", {
       await stateStore.save(manifest);
       return manifest;
     } catch (error) {
+      const handoff = agentResolutionFromError(error);
+      if (handoff) return handoff;
       return fail(context, error);
     }
   },
 });
 
 tracksCli.command(resolveCli);
-
-const one001 = Cli.create("1001", {
-  description:
-    "Resolve and cache 1001Tracklists through Parse, with headed page recovery and exact per-track media links.",
-});
-
-one001.command("get", {
-  description:
-    "Get an ordered tracklist plus all available Spotify, SoundCloud, YouTube, and store identities.",
-  args: z.object({ url: z.url().describe("1001Tracklists tracklist URL") }),
-  env: parseEnv,
-  options: z.object({ cacheMode: cacheModeOption }),
-  output: databaseTracklistOutput,
-  async run(context) {
-    try {
-      return await parseClient(context.env, context.options.cacheMode).get(context.args.url);
-    } catch (error) {
-      return fail(context, error);
-    }
-  },
-});
-
-one001.command("find", {
-  description: "Find the tracklist referencing a YouTube or SoundCloud URL.",
-  args: z.object({ url: z.url().describe("YouTube or SoundCloud media URL") }),
-  env: parseEnv,
-  options: z.object({ cacheMode: cacheModeOption }),
-  output: z.union([
-    z.object({ found: z.literal(false) }),
-    databaseTracklistOutput.extend({ found: z.literal(true) }),
-  ]),
-  async run(context) {
-    try {
-      return await parseClient(context.env, context.options.cacheMode).findByMediaUrl(
-        context.args.url,
-      );
-    } catch (error) {
-      return fail(context, error);
-    }
-  },
-});
-
-one001.command("search", {
-  description: "Search DJ-set tracklist pages by title.",
-  args: z.object({ title: z.string().min(1).describe("Set title or search text") }),
-  options: z.object({
-    uploader: z.string().optional().describe("DJ or uploader used to narrow results"),
-    cacheMode: cacheModeOption,
-  }),
-  env: parseEnv,
-  output: z.object({ items: z.array(summaryOutput) }),
-  async run(context) {
-    try {
-      return await parseClient(context.env, context.options.cacheMode).search(
-        context.args.title,
-        context.options.uploader,
-      );
-    } catch (error) {
-      return fail(context, error);
-    }
-  },
-});
-
-one001.command("latest", {
-  description: "List tracklists most recently added to 1001Tracklists.",
-  env: parseEnv,
-  options: z.object({ cacheMode: cacheModeOption }),
-  output: z.object({ items: z.array(summaryOutput) }),
-  async run(context) {
-    try {
-      return await parseClient(context.env, context.options.cacheMode).latest();
-    } catch (error) {
-      return fail(context, error);
-    }
-  },
-});
-
-one001.command("charts", {
-  description: "List a current 1001Tracklists chart.",
-  options: z.object({
-    type: z.enum(["weekly", "trending", "mostheard"]).default("weekly").describe("Chart type"),
-    cacheMode: cacheModeOption,
-  }),
-  env: parseEnv,
-  output: z.object({
-    chart: z.string(),
-    items: z.array(
-      z.object({ name: z.string(), url: z.string(), rank: z.number().int().positive().optional() }),
-    ),
-  }),
-  async run(context) {
-    try {
-      return await parseClient(context.env, context.options.cacheMode).charts(context.options.type);
-    } catch (error) {
-      return fail(context, error);
-    }
-  },
-});
-
-tracksCli.command(one001);
 
 tracksCli.command("render", {
   description: "Render a JSON tracklist as text, YouTube chapters, or a CUE sheet.",
@@ -1446,9 +1359,7 @@ tracksCli.command("doctor", {
     const readyForRecognition = Boolean(
       env.AUDD_API_TOKEN || (acrConfigured && tools[1]?.available && tools[2]?.available),
     );
-    const readyForResolution = Boolean(
-      tools[0]?.available || env.PARSE_API_KEY || readyForRecognition,
-    );
+    const readyForResolution = true;
     return {
       providers: providerStatus(env),
       tools: {
@@ -1456,51 +1367,13 @@ tracksCli.command("doctor", {
         ffmpeg: tools[1],
         ffprobe: tools[2],
       },
-      readyForLookup: Boolean(env.PARSE_API_KEY),
+      readyForLookup: true,
       readyForResolution,
       readyForRecognition,
       ready: readyForResolution,
     };
   },
 });
-
-function parseClient(
-  env: {
-    PARSE_API_KEY?: string | undefined;
-    PARSE_API_BASE?: string | undefined;
-    PARSE_SCRAPER_ID?: string | undefined;
-    TRACKS_1001_BROWSER_PATH?: string | undefined;
-    TRACKS_1001_BROWSER_SOURCE?: "brave" | "chrome" | undefined;
-    TRACKS_1001_BROWSER_PROFILE?: string | undefined;
-  },
-  cacheMode: "default" | "refresh" | "off" = "default",
-): Tracklists1001Client {
-  if (!env.PARSE_API_KEY) {
-    throw new TracksError("AUTH_REQUIRED", "PARSE_API_KEY is required for 1001Tracklists access", {
-      exitCode: 2,
-    });
-  }
-  return new Tracklists1001Client({
-    apiKey: env.PARSE_API_KEY,
-    baseUrl:
-      env.PARSE_API_BASE ??
-      (env.PARSE_SCRAPER_ID
-        ? `https://api.parse.bot/scraper/${env.PARSE_SCRAPER_ID}`
-        : DEFAULT_PARSE_API_BASE),
-    cacheMode,
-    ...(env.TRACKS_1001_BROWSER_PATH
-      ? {
-          browser: {
-            command: env.TRACKS_1001_BROWSER_PATH,
-            sourceBrowser: env.TRACKS_1001_BROWSER_SOURCE ?? "chrome",
-            ...(env.TRACKS_1001_BROWSER_PROFILE
-              ? { profile: env.TRACKS_1001_BROWSER_PROFILE }
-              : {}),
-          },
-        }
-      : {}),
-  });
-}
 
 function providerStatus(env: Environment) {
   return {
@@ -1509,16 +1382,11 @@ function providerStatus(env: Environment) {
       env: ["YTDLP_TS_PATH"],
       capability: "Metadata-only YouTube/SoundCloud description resolution via ytdlp-ts",
     },
-    tracklists1001: {
-      configured: Boolean(env.PARSE_API_KEY),
-      env: [
-        "PARSE_API_KEY",
-        "TRACKS_1001_BROWSER_PATH",
-        "TRACKS_1001_BROWSER_SOURCE",
-        "TRACKS_1001_BROWSER_PROFILE",
-      ],
+    agent: {
+      configured: true,
+      env: [],
       capability:
-        "Cached 1001 lookup plus exact per-track media URLs; headed NanoCodex fallback when Parse cannot render a page",
+        "Structured browser/VM handoff for ordinary 1001Tracklists research and direct master.db submission",
     },
     audd: {
       configured: Boolean(env.AUDD_API_TOKEN),
@@ -1663,6 +1531,20 @@ function fail(
   });
 }
 
+function agentResolutionFromError(error: unknown): AgentResolutionRequest | undefined {
+  if (!(error instanceof TracksError) || error.code !== "AGENT_REQUIRED") return undefined;
+  const details = error.details;
+  if (
+    typeof details !== "object" ||
+    details === null ||
+    !("action" in details) ||
+    details.action !== "agent-resolution-required"
+  ) {
+    return undefined;
+  }
+  return details as AgentResolutionRequest;
+}
+
 function tracksErrorCta(
   error: TracksError,
   displayName: string,
@@ -1689,7 +1571,7 @@ function tracksErrorCta(
       commands: [
         {
           command: tracksCtaCommand(displayName, "doctor"),
-          description: "check Parse and recognition configuration",
+          description: "check metadata and explicit recognition configuration",
         },
         tracksCtaCommand(displayName, "resolve --help"),
       ],

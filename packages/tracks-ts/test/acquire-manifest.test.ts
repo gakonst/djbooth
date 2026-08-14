@@ -1520,7 +1520,7 @@ describe("acquireManifest", () => {
       const manifestPath = join(directory, "manifest.json");
       const manifest = createManifest({
         source: "https://youtube.test/26-track-set",
-        provider: "1001tracklists",
+        provider: "agent",
         complete: true,
         tracks: Array.from({ length: 26 }, (_, index) => ({
           order: index + 1,

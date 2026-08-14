@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { TrackWaveform } from "./types";
+import type { TrackWaveform } from "./types.js";
 
 export function useTrackWaveform(trackId: number | null): TrackWaveform | null {
   const [waveform, setWaveform] = useState<TrackWaveform | null>(null);

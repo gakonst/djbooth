@@ -30,7 +30,13 @@ function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
   const startLink = vi.fn<DjBoothServerDependencies["startRekordboxDjLink"]>(async () =>
     linkStatus(42, options.resumed ?? false),
   );
-  const closeMonitor = vi.fn(async () => undefined);
+  const closeSonos = vi.fn(async () => undefined);
+  const startSonos = vi.fn<DjBoothServerDependencies["startSonosBridge"]>(async ({ room }) => ({
+    close: closeSonos,
+    coordinatorIp: "192.168.1.20",
+    room,
+    streamUrl: "http://192.168.1.10:4183/master.mp3",
+  }));
   const value: DjBoothServerDependencies = {
     async startLibraryServer() {
       if (options.webError) throw options.webError;
@@ -42,18 +48,11 @@ function dependencies(options: { resumed?: boolean; webError?: Error } = {}) {
         url: "http://127.0.0.1:4179/",
       };
     },
-    async startMonitorServer() {
-      return {
-        close: closeMonitor,
-        host: "127.0.0.1",
-        port: 4183,
-        url: "http://127.0.0.1:4183/",
-      };
-    },
     startRekordboxDjLink: startLink,
     stopDjLink: stopLink,
+    startSonosBridge: startSonos,
   };
-  return { closeMonitor, closeWeb, startLink, stopLink, value };
+  return { closeSonos, closeWeb, startLink, startSonos, stopLink, value };
 }
 
 describe("combined djbooth server", () => {
@@ -62,10 +61,10 @@ describe("combined djbooth server", () => {
     const server = await startDjBoothServer({ assistant: false }, fake.value);
 
     expect(server.url).toBe("http://127.0.0.1:4179/?assistant=0");
+    expect(server.boothUrl).toBe("http://127.0.0.1:4179/booth");
     await expect(server.close()).resolves.toEqual({ linkStopped: true });
     await server.close();
     expect(fake.closeWeb).toHaveBeenCalledTimes(1);
-    expect(fake.closeMonitor).toHaveBeenCalledTimes(1);
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
   });
 
@@ -136,6 +135,16 @@ describe("combined djbooth server", () => {
 
     await expect(startDjBoothServer({}, fake.value)).rejects.toThrow("port busy");
     expect(fake.stopLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns a Sonos master-mix bridge for the managed runtime", async () => {
+    const fake = dependencies();
+    const server = await startDjBoothServer({ sonos: "Kitchen" }, fake.value);
+
+    expect(fake.startSonos).toHaveBeenCalledWith({ room: "Kitchen", port: 0 });
+    expect(server.sonos).toMatchObject({ room: "Kitchen", coordinatorIp: "192.168.1.20" });
+    await server.close();
+    expect(fake.closeSonos).toHaveBeenCalledTimes(1);
   });
 
   it("retries a transient native link startup failure", async () => {

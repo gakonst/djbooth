@@ -20,7 +20,7 @@ function manifest(
 ): SetManifest {
   return createManifest({
     source: "https://youtube.test/set",
-    provider: "1001tracklists",
+    provider: "agent",
     complete: true,
     tracks: tracks.map((track, index) => ({
       order: index + 1,

@@ -177,11 +177,20 @@ describe("pipeline manifests", () => {
     expect(parseManifest(manifest).tracklist.url).toBe(manifest.tracklist.url);
   });
 
+  test("migrates durable manifests created by the retired API provider", () => {
+    const manifest: unknown = cloneManifest();
+    const legacy = manifest as { tracklist: { provider: string } };
+    legacy.tracklist.provider = "1001tracklists";
+
+    expect(parseManifest(manifest).tracklist.provider).toBe("agent");
+    expect(legacy.tracklist.provider).toBe("1001tracklists");
+  });
+
   test("maps a 1001Tracklists page separately from its source set", () => {
     const manifest = createManifest({
       ...tracklist(),
       source: "https://soundcloud.com/dj/example-set",
-      provider: "1001tracklists",
+      provider: "agent",
       url: "https://www.1001tracklists.com/tracklist/example.html",
       suggestions: [
         {
@@ -249,7 +258,7 @@ describe("pipeline manifests", () => {
     const manifest = createManifest({
       ...tracklist(),
       source: page,
-      provider: "1001tracklists",
+      provider: "agent",
       url: page,
     });
 

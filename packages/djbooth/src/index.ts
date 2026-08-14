@@ -10,7 +10,9 @@ export * as slsk from "slsk-ts";
 
 export * from "./mcp.js";
 export * from "./transcription.js";
+export * from "./replay.js";
 export * from "./serve.js";
+export * from "./sonos.js";
 export * from "./runtime.js";
 export * from "./status.js";
 export * from "./stop.js";

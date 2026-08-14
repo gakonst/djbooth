@@ -9,6 +9,7 @@ description = "Native analyzer, USB, and DJ Link runtime for djbooth.ai"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+bytes.workspace = true
 clap.workspace = true
 cpal.workspace = true
 nusb.workspace = true
@@ -20,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 tokio.workspace = true
+tokio-stream.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

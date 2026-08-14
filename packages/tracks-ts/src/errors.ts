@@ -1,4 +1,5 @@
 export type TracksErrorCode =
+  | "AGENT_REQUIRED"
   | "AUTH_REQUIRED"
   | "API_ERROR"
   | "INVALID_RESPONSE"

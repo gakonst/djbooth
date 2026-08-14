@@ -95,7 +95,7 @@ status/resume`. Completed stages must resume offline without loading unrelated c
 ## Agent-side corrections
 
 - Use the composed `music`/Incur CLI instead of ad hoc scripts when a primitive exists.
-- Use the typed 1001Tracklists Parse API; browser extraction is an explicit fallback.
+- Return a typed handoff that asks the calling agent to resolve the ordinary 1001Tracklists page with browser/VM tools.
 - Never use the reference/bundled downloader unless the user explicitly selects it or a typed native
   capability preflight permits `auto` fallback.
 - Keep the library UI running during short coordinated CLI writes.

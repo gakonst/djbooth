@@ -2205,6 +2205,9 @@ export function App({ assistantEnabled = true }: AppProps) {
             </nav>
           </div>
           <div className="topbar-actions">
+            <a className="view-link" href={assistantEnabled ? "/booth" : "/booth?assistant=0"}>
+              <AudioLines size={14} /> Live booth
+            </a>
             <button
               className={`split-editor-button ${dualDeck ? "is-active" : ""}`}
               type="button"

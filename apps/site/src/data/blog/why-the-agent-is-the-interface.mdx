@@ -1,0 +1,48 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "Why the agent is the interface",
+  description: "The case for installing deep DJ capabilities into Codex and Claude Code instead of putting another shallow assistant inside music software.",
+  publishedAt: "2026-07-30",
+  topic: "Agents",
+  tags: ["codex", "claude-code", "mcp", "workflow", "product"],
+  readingTime: "6 min read",
+};
+
+An assistant inside a DJ application can answer questions about that application. A coding agent with a complete DJ runtime can finish work across the filesystem, providers, native analyzers, databases, removable media and networked hardware.
+
+That is a categorical difference.
+
+djbooth therefore treats Codex and Claude Code as the primary conversational surfaces. The local workstation remains essential, but it becomes a visual and audible instrument rather than another place to maintain a second AI conversation.
+
+<SignalFlow
+  steps={["human intent", "Codex / Claude", "djbooth tools", "library + hardware"]}
+  caption="The agent plans; typed product commands own execution and durable state."
+/>
+
+## High-level commands are product boundaries
+
+An agent could chain dozens of package commands, write temporary manifests and patch databases directly. That flexibility is useful for development and terrible as a normal workflow.
+
+The golden path is one intent, one highest-level command, and the same command to resume or reconcile. `tracks resolve`, `tracks enrich`, `tracks download`, `tracks analyze`, `usb sync` and `djlink rekordbox` own meaningful stages with typed inputs and machine-readable output.
+
+The agent reasons about which workflow the user wants. The command owns invariants such as database transactions, file validation and safe USB completion.
+
+## The UI still matters
+
+Music becomes difficult to reason about in text alone. Track order is spatial. Waveforms show structure. Transitions must be heard. Cues and deck state benefit from direct manipulation.
+
+The agent can open the workstation at the relevant playlist or recording. The user can audition, reorder or adjust something directly, and both surfaces continue operating on the same local library.
+
+<Note label="Division of labor">
+  Conversation is best for intent, delegation and explanation. The workstation is best for perception and direct control. The runtime is best for preserving invariants. None of the three should impersonate the others.
+</Note>
+
+## Typed tools keep the magic honest
+
+The MCP surface comes from the same command definitions as the CLI. Help text, schemas and errors remain runtime truth instead of drifting into a parallel prompt manual.
+
+Destructive or externally visible actions can remain explicit. Long operations can report bounded progress. Machine output gives the agent enough structure to distinguish “completed” from “process exited without obvious errors.”
+
+The result should feel magical to the user—install the app and ask for a booth-ready set—but the implementation stays deliberately boring at its boundaries. That is how an ambitious demo becomes a workflow someone can trust with a real library and a USB needed tonight.

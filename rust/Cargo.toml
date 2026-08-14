@@ -15,6 +15,7 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
+bytes = "1"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4.5", features = ["derive"] }
 cpal = "0.18.1"
@@ -40,11 +41,13 @@ tokio = { version = "1", features = [
   "io-util",
   "macros",
   "net",
+  "process",
   "rt-multi-thread",
   "signal",
   "sync",
   "time",
 ] }
+tokio-stream = "0.1"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "std"] }

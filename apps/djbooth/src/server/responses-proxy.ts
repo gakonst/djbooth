@@ -31,6 +31,13 @@ export function attachResponsesProxy(
   const sockets = new Set<WebSocket>();
 
   const upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (
+      !request.url ||
+      new URL(request.url, `http://${request.headers.host ?? "localhost"}`).pathname !==
+        "/api/responses"
+    ) {
+      return;
+    }
     const rejection = validateResponsesUpgrade(request);
     if (rejection) {
       console.error(

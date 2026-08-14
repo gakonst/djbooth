@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 const apiTarget = process.env.MUSIC_LIBRARY_API_URL ?? "http://127.0.0.1:4180";
+const hardwareTarget = process.env.DJBOOTH_STATE_API_URL ?? "http://127.0.0.1:4182";
 
 export default defineConfig({
   plugins: [react()],
@@ -18,6 +19,10 @@ export default defineConfig({
       "/api": {
         target: apiTarget,
         changeOrigin: false,
+        ws: true,
+      },
+      "/v1": {
+        target: hardwareTarget,
         ws: true,
       },
     },

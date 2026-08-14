@@ -23,6 +23,8 @@
     "app:dev": "pnpm --filter @gakonst/djbooth-app dev",
     "library": "pnpm app",
     "library:dev": "pnpm app:dev",
+    "site": "pnpm --filter @gakonst/djbooth-site build",
+    "site:dev": "pnpm --filter @gakonst/djbooth-site dev",
     "music": "pnpm djbooth",
     "music:mcp": "pnpm djbooth:mcp",
     "music:mcp:code": "pnpm djbooth:mcp:code",

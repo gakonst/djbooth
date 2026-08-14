@@ -24,7 +24,7 @@ sidecar databases, or checkpoint files.
 Resolution order:
 
 ```text
-published description → 1001Tracklists identity enrichment → configured audio recognition
+timestamped publisher description → agent browser/VM resolution through 1001Tracklists
 ```
 
 Acquisition reuses verified local files first, then configured Soulseek and web downloaders.

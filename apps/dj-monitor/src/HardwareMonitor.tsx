@@ -7,13 +7,15 @@ import type {
   DecodedEvent,
   DeckState,
   MeterState,
-} from "./types";
-import { CdjWaveform } from "./CdjWaveform";
-import { useHardwareMonitor } from "./useHardwareMonitor";
-import { useTrackWaveform } from "./useTrackWaveform";
+} from "./types.js";
+import { CdjWaveform } from "./CdjWaveform.js";
+import { useHardwareMonitor } from "./useHardwareMonitor.js";
+import { useTrackWaveform } from "./useTrackWaveform.js";
+import cdj3000Image from "./assets/CDJ-3000_top.webp";
+import djmA9Image from "./assets/djm-a9_2.png";
 
-const CDJ_3000_IMAGE = "/hardware/CDJ-3000_top.webp";
-const DJM_A9_IMAGE = "/hardware/djm-a9_2.png";
+const CDJ_3000_IMAGE = cdj3000Image;
+const DJM_A9_IMAGE = djmA9Image;
 
 type HardwareMonitorProps = {
   snapshot: DashboardSnapshot;
@@ -63,10 +65,16 @@ const A9_KNOB_BODY_RADIUS: Record<A9KnobFamily, number> = {
 
 export function LiveHardwareMonitor() {
   const monitor = useHardwareMonitor();
-  return <HardwareMonitor {...monitor} />;
+  const replay = new URLSearchParams(window.location.search).has("hardwareWs");
+  return <HardwareMonitor {...monitor} mode={replay ? "replay" : "live"} />;
 }
 
-export function HardwareMonitor({ snapshot, status, activity = [] }: HardwareMonitorProps) {
+export function HardwareMonitor({
+  snapshot,
+  status,
+  activity = [],
+  mode = "live",
+}: HardwareMonitorProps & { mode?: "live" | "replay" }) {
   const decks = monitorDecks(snapshot.decks);
 
   return (
@@ -75,11 +83,11 @@ export function HardwareMonitor({ snapshot, status, activity = [] }: HardwareMon
         <div className="brand-lockup">
           <span>DJBOOTH</span>
           <i />
-          <strong>LIVE HARDWARE</strong>
+          <strong>{mode === "replay" ? "SESSION REPLAY" : "LIVE HARDWARE"}</strong>
         </div>
         <div className="header-status">
           <span className={`status-pill status-${status}`}>
-            <i /> {status}
+            <i /> {mode === "replay" && status === "live" ? "replay" : status}
           </span>
           <span className="clock-readout">
             <strong>{formatBpm(snapshot.mixer.bpm)}</strong>

@@ -20,6 +20,7 @@ use tokio::task::JoinSet;
 
 use crate::a9_usb::{A9MeterRouting, configure_meter_routes};
 use crate::audio_meter::{MeterEvent, audio_input_present, connect_audio_meter};
+use crate::audio_stream::AudioStreamSource;
 use crate::mixer::{Decoder, MixerMidiConnection, RawMidiEvent, connect_midi, midi_input_present};
 use crate::state_api::{StateApiConfig, StateApiServer};
 
@@ -1022,12 +1023,14 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let mut audio_meter_connection = None;
     let mut audio_meter_events: Option<mpsc::UnboundedReceiver<MeterEvent>> = None;
     let mut audio_meter_device = None;
+    let audio_stream = AudioStreamSource::new();
     let state_api = StateApiServer::start(StateApiConfig {
         bind: args.api_bind,
         mixer_device: device_name.clone(),
         mixer_connected: false,
         audio_meter_device: audio_meter_device.clone(),
         audio_meter_connected: false,
+        audio_stream: audio_stream.clone(),
         djlink: server.clone(),
     })
     .await?;
@@ -1160,6 +1163,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             }, if audio_meter_events.is_some() => {
                 let Some(meter_event) = meter_event else {
                     tracing::warn!("state_api_audio_meter_disconnected");
+                    audio_stream.set_disconnected();
                     audio_meter_events = None;
                     audio_meter_connection = None;
                     state_api.publisher().set_audio_meter_connection(audio_meter_device.clone(), false).await?;
@@ -1171,6 +1175,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
                     }
                     MeterEvent::Disconnected { device, error } => {
                         tracing::warn!(%device, %error, "state_api_audio_meter_disconnected");
+                        audio_stream.set_disconnected();
                         audio_meter_events = None;
                         audio_meter_connection = None;
                         state_api.publisher().set_audio_meter_connection(Some(device), false).await?;
@@ -1207,6 +1212,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
                         Ok(true) => {}
                         Ok(false) => {
                             tracing::warn!(device = ?audio_meter_device, "state_api_audio_meter_device_removed");
+                            audio_stream.set_disconnected();
                             audio_meter_events = None;
                             audio_meter_connection = None;
                             state_api.publisher().set_audio_meter_connection(audio_meter_device.clone(), false).await?;
@@ -1216,13 +1222,14 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 }
                 if audio_meter_connection.is_none() && audio_connect_task.is_none() {
                     let selector = args.audio_device.clone();
+                    let audio_stream = audio_stream.clone();
                     audio_connect_task = Some(tokio::task::spawn_blocking(move || {
                         let routing = if selector.to_ascii_lowercase().contains("djm-a9") {
                             Some(configure_meter_routes()?)
                         } else {
                             None
                         };
-                        let (connection, receiver, name) = connect_audio_meter(&selector)?;
+                        let (connection, receiver, name) = connect_audio_meter(&selector, audio_stream)?;
                         Ok::<_, anyhow::Error>((routing, connection, receiver, name))
                     }));
                 }

@@ -6,10 +6,12 @@ import { describe, expect, it } from "vitest";
 
 import type { TrackAcquirer } from "../src/acquire-manifest.js";
 import {
+  agentReplacementPlaylistId,
   createImportSetReferenceAcquirer,
   orderedImportSetAcquirers,
   tracksCli,
 } from "../src/cli.js";
+import type { SetManifest } from "../src/manifest.js";
 import type { YtdlpReferenceClient } from "../src/integrations/ytdlp-library.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -75,6 +77,16 @@ describe("CLI version", () => {
     expect(createImportSetReferenceAcquirer(client, "off").requiresPriorCapabilityFailure).toBe(
       false,
     );
+  });
+
+  it("keeps the checkpointed playlist target when agent research replaces identities", () => {
+    const state = {
+      artifacts: { rekordbox: { playlistId: "stable-playlist" } },
+    } as SetManifest;
+
+    expect(agentReplacementPlaylistId(state, true)).toBe("stable-playlist");
+    expect(agentReplacementPlaylistId(state, false)).toBeUndefined();
+    expect(agentReplacementPlaylistId(null, true)).toBeUndefined();
   });
 });
 

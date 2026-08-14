@@ -1,0 +1,51 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "Toward an open Ableton session",
+  description: "A research agenda for understanding arrangement, devices, automation and media references without reducing a Live Set to opaque application state.",
+  publishedAt: "2026-08-01",
+  topic: "Reverse engineering",
+  tags: ["ableton", "live-set", "arrangement", "interoperability"],
+  readingTime: "6 min read",
+};
+
+A DJ library is only one side of the music workflow. The moment a set becomes an edit, mashup or original production, the durable state moves into a DAW session.
+
+Ableton Live Sets contain arrangement, clips, devices, automation, routing and references to external media. Understanding that structure could give agents the same kind of grounded, inspectable control that djbooth is building around Rekordbox.
+
+This is research work, not a shipped compatibility promise.
+
+<SignalFlow
+  steps={["musical intent", "session graph", "media + devices", "Ableton Live"]}
+  caption="The goal is source-level manipulation with the DAW remaining the final interpreter."
+/>
+
+## The session is a graph
+
+An arrangement is not simply a timeline of audio files. Tracks contain clips. Clips reference media and warping state. Devices create signal chains. Automation targets parameters elsewhere in the document. Groups, returns and routing turn the project into a directed graph.
+
+Any useful model must preserve those identities and references. Flattening the file into a list of clips would make simple demos easy while making round trips unsafe.
+
+## Start with narrow transformations
+
+The right clean-room questions resemble the Rekordbox work:
+
+- What changes when one audio clip moves by exactly one bar?
+- How is a warp marker represented?
+- Which identity connects an automation envelope to a device parameter?
+- Which values are defaults, derived caches or user-authored state?
+
+Controlled fixtures make each diff interpretable. Schema guesses without fixture discipline tend to encode one project’s accidents as universal rules.
+
+<Note label="Research boundary">
+  We should not claim general Live Set compatibility until generated sessions survive semantic round trips across representative projects and open correctly in the target versions of Ableton Live.
+</Note>
+
+## Why agents change the payoff
+
+Traditional interchange aims to move a session between applications. Agentic interchange adds another goal: make musical structures addressable through intent.
+
+“Turn the second drop into a 32-bar extended mix” requires the agent to understand arrangement sections, clips, tempo, transitions and downstream references. A typed session graph can make that operation reviewable before anything writes back to disk.
+
+The eventual loop is compelling: identify a track, separate or transcribe useful material, construct an edit, open the session for human work, render the result, analyze it and return it to the performance library. The DAW becomes another instrument in the complete workflow rather than an opaque final island.

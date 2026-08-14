@@ -27,7 +27,7 @@ three times.
 | Phase                                   | Cold/miss | Warm/hit | Notes                                                   |
 | --------------------------------------- | --------: | -------: | ------------------------------------------------------- |
 | YouTube set metadata                    |  3,150 ms |  3.25 ms | Sanitized six-hour disk cache; warm includes bounded GC |
-| Exact 1001 tracklist                    | 10,545 ms |  7.17 ms | Parsed seven-day disk cache; one Parse credit on miss   |
+| Agent 1001Tracklists handoff            |       n/a |      n/a | Browser/VM research is performed by the calling agent   |
 | Spotify enrichment, 24 searches         |  2,520 ms |  5.29 ms | Four workers; zero warm network requests                |
 | Spotify refresh, 22 IDs                 |  2,258 ms | 11.62 ms | Individual endpoint; four workers                       |
 | Acquisition resume                      |  2,313 ms | 45.60 ms | Cold scoped Spotify population vs fully warm receipts   |

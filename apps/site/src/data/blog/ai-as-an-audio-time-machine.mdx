@@ -1,0 +1,56 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "AI as an audio time machine",
+  description: "Stems, restoration, upsampling and MIDI transcription all ask the same provocative question: what musical structure can we recover from a finished recording?",
+  publishedAt: "2026-08-03",
+  topic: "Audio engineering",
+  tags: ["stems", "source-separation", "restoration", "midi", "mlx"],
+  readingTime: "8 min read",
+};
+
+A finished recording looks irreversible. Vocals, drums, bass, instruments, room sound and mastering decisions have been collapsed into two channels. The original multitrack session may be gone—or may never have been available outside the studio.
+
+Modern audio models do not literally recover that session. They infer plausible hidden structure from the evidence left in the mix. Used carefully, that makes them less like an “AI effect” and more like a musical time machine.
+
+<SignalFlow
+  steps={["stereo master", "learned prior", "latent sources", "editable artifacts"]}
+  caption="The model estimates useful structure; it does not reveal a unique historical truth."
+/>
+
+## Source separation is the clearest example
+
+The djbooth stem runtime uses a Mel-Band RoFormer model on Apple Silicon to estimate vocals, drums, bass and other. Frequency bands make the attention problem tractable; the model can reason about long musical context without treating every time-frequency bin as equally related to every other.
+
+Operational engineering matters as much as model quality. Four full-length outputs are expensive to decode and move. The workstation synchronizes original audio, the four-stem sum and solo stems without eagerly decoding the whole set into browser memory. Compatible requests arriving together can share one model load.
+
+That turns separation into part of a DJ workflow instead of a research notebook.
+
+## Upsampling is reconstruction, not extra truth
+
+Bandwidth extension can infer high-frequency content missing from an old or low-rate source. Restoration can suppress noise, clicks or codec artifacts. Both can make material more useful, but neither should silently replace archival provenance.
+
+A responsible pipeline keeps the source immutable, records the transformation and allows comparison. The enhanced version is a derived creative artifact—not evidence that those exact harmonics existed in the original room.
+
+<Note label="Epistemic honesty">
+  An estimated stem, restored transient or transcribed note can be musically convincing without being historically exact. The interface should preserve that distinction instead of laundering inference into fact.
+</Note>
+
+## MIDI transcription goes further back
+
+Transcription attempts to move from sound to symbolic musical intent: pitches, onsets, durations, instruments and sometimes performance expression. It is the most ambitious reversal because the same audio can admit several valid scores.
+
+For creators, that ambiguity is useful. A transcription can become a starting point for reharmonization, sound replacement or arrangement study. For agents, symbolic notes create handles that are far easier to reason about than raw samples.
+
+## A common artifact model
+
+Stems, enhanced audio and MIDI should all behave like analysis in the wider system:
+
+- the source recording remains immutable;
+- derived artifacts carry model and parameter provenance;
+- generation is idempotent and resumable;
+- users can audition source and derivative side by side;
+- publishing never obscures what was inferred.
+
+That common model is what lets “make me an instrumental edit of this old record” become a complete workflow rather than a bag of disconnected AI demos.

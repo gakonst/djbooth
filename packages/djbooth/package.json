@@ -15,7 +15,6 @@
   },
   "files": [
     "dist",
-    "monitor",
     "README.md",
     "LICENSE"
   ],
@@ -83,8 +82,7 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint src test",
-    "monitor:build": "pnpm --filter @gakonst/dj-monitor build && node scripts/copy-monitor.mjs",
-    "prepack": "pnpm build && pnpm monitor:build",
+    "prepack": "pnpm build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -105,10 +103,12 @@
     "incur": "0.4.13",
     "secure-exec": "0.3.3",
     "slsk-ts": "workspace:*",
+    "ws": "8.18.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.19.7",
+    "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "^4.1.10",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",

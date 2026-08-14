@@ -7240,6 +7240,22 @@ async fn handle_db_client(
                 );
                 send_response!(success_with_count(tx, msg.msg_type, 0));
             }
+            DB_REQ_EXT_3006 => {
+                // Native Rekordbox returns one when this request targets its
+                // LINK source slot (4), and zero for any other source slot.
+                // Returning zero leaves CDJ-3000 browsers on "Waiting" when
+                // navigating back after a track begins playing.
+                let available = u32::from(rmst_slot_from_args(&msg.args) == Some(4));
+                trace!(
+                    target: "djtools_link::db",
+                    %addr,
+                    tx,
+                    args = msg.args.len(),
+                    available,
+                    "db_extension_3006_ack"
+                );
+                send_response!(success_with_count(tx, msg.msg_type, available));
+            }
             DB_REQ_WAVEFORM_DETAIL => {
                 let track_id = track_id_from_request_at(&state.library, &msg.args, 0);
                 let blob = load_waveform_detail(&state.library, &msg.args).await;
@@ -12708,7 +12724,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
-    fn db_known_browse_request_names_are_not_unknown() {
+    fn db_known_request_names_are_not_unknown() {
         for request in [
             DB_REQ_BPM_MENU,
             DB_REQ_RATING_MENU,
@@ -12745,9 +12761,27 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             DB_REQ_TRACKS_FOR_REMIXER_ALBUM,
             DB_REQ_TRACKS_FOR_DATE_ADDED,
             DB_REQ_FOLDER_MENU,
+            DB_REQ_EXT_3006,
         ] {
             assert!(!db_request_name(request).starts_with("UNKNOWN"));
         }
+    }
+
+    #[test]
+    fn db_extension_3006_reports_link_source_available() {
+        let link_args = [DbValue::Int32(0x0109_0401)];
+        let usb_args = [DbValue::Int32(0x0109_0301)];
+
+        assert_eq!(rmst_slot_from_args(&link_args), Some(4));
+        assert_eq!(rmst_slot_from_args(&usb_args), Some(3));
+        assert_eq!(
+            success_with_count(0x451, DB_REQ_EXT_3006, 1),
+            encode_db_message(
+                0x451,
+                DB_RES_SUCCESS,
+                &[DbValue::Int32(0x3006), DbValue::Int32(1)],
+            )
+        );
     }
 
     #[test]

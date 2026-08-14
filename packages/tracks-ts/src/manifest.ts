@@ -2,11 +2,11 @@ import { TracksError } from "./errors.js";
 import { is1001Url, isHttpUrl } from "./media.js";
 import { parseTimestamp } from "./time.js";
 import type {
-  DatabaseTrackSuggestion,
   RecognitionMoment,
   RecognitionProvider,
   Tracklist,
   TracklistEntry,
+  TracklistSuggestion,
   TrackMediaLink,
   TracklistOverlap,
 } from "./types.js";
@@ -47,7 +47,7 @@ export type ManifestTracklist = {
   complete: boolean;
   sampledEverySeconds?: number;
   matches?: RecognitionMoment[];
-  suggestions?: DatabaseTrackSuggestion[];
+  suggestions?: TracklistSuggestion[];
 };
 
 export type TrackCue = {
@@ -285,9 +285,13 @@ export type SetManifest = {
 };
 
 export function createManifest(tracklist: Tracklist): SetManifest {
-  const providerUrl = tracklist.provider === "1001tracklists" ? tracklist.url : undefined;
+  const providerUrl =
+    tracklist.provider === "agent" &&
+    (tracklist.url !== tracklist.source || is1001Url(tracklist.source))
+      ? tracklist.url
+      : undefined;
   const sourceUrl =
-    tracklist.provider === "1001tracklists"
+    tracklist.provider === "agent"
       ? isHttpUrl(tracklist.source) && !is1001Url(tracklist.source)
         ? tracklist.source
         : undefined
@@ -385,7 +389,8 @@ export function createManifest(tracklist: Tracklist): SetManifest {
 }
 
 export function parseManifest(value: unknown): SetManifest {
-  const root = strictObject(value, "$", [
+  const migrated = migrateLegacyProvider(value);
+  const root = strictObject(migrated, "$", [
     "schemaVersion",
     "kind",
     "source",
@@ -451,7 +456,17 @@ export function parseManifest(value: unknown): SetManifest {
       }
     });
   }
-  return value as SetManifest;
+  return migrated as SetManifest;
+}
+
+function migrateLegacyProvider(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  const tracklist = (value as Record<string, unknown>).tracklist;
+  if (typeof tracklist !== "object" || tracklist === null || Array.isArray(tracklist)) return value;
+  if ((tracklist as Record<string, unknown>).provider !== "1001tracklists") return value;
+  const migrated = structuredClone(value) as Record<string, unknown>;
+  (migrated.tracklist as Record<string, unknown>).provider = "agent";
+  return migrated;
 }
 
 function isSkippedEntry(entry: ResolvedTrack): boolean {
@@ -531,7 +546,7 @@ function validateTracklist(value: unknown, path: string): void {
     "matches",
     "suggestions",
   ]);
-  oneOf(record.provider, ["description", "1001tracklists", "audd", "acrcloud"], `${path}.provider`);
+  oneOf(record.provider, ["description", "agent", "audd", "acrcloud"], `${path}.provider`);
   optionalString(record, "url", path);
   boolean(record.complete, `${path}.complete`);
   if (record.sampledEverySeconds !== undefined)

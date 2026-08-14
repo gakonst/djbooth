@@ -33,7 +33,7 @@ function completedManifest(): SetManifest {
       uploader: "DJ Example",
       durationSeconds: 600,
     },
-    tracklist: { provider: "1001tracklists", complete: true },
+    tracklist: { provider: "agent", complete: true },
     entries: [
       {
         id: "track-001",

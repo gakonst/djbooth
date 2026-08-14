@@ -5,9 +5,10 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use axum::Router;
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use djtools_link::{
@@ -20,6 +21,7 @@ use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
 
 use crate::audio_meter::MeterFrame;
+use crate::audio_stream::{AudioStreamSource, open_live_mp3};
 use crate::mixer::DecodedEvent;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -30,6 +32,7 @@ pub(crate) struct StateApiConfig {
     pub(crate) mixer_connected: bool,
     pub(crate) audio_meter_device: Option<String>,
     pub(crate) audio_meter_connected: bool,
+    pub(crate) audio_stream: AudioStreamSource,
     pub(crate) djlink: Arc<DjLinkServer>,
 }
 
@@ -50,6 +53,7 @@ struct ApiState {
     messages: broadcast::Sender<String>,
     started: Instant,
     djlink: Option<Arc<DjLinkServer>>,
+    audio_stream: AudioStreamSource,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -202,6 +206,7 @@ impl StateApiServer {
             messages,
             started: Instant::now(),
             djlink: Some(config.djlink),
+            audio_stream: config.audio_stream,
         };
         let app = Router::new()
             .route("/", get(discovery))
@@ -209,6 +214,7 @@ impl StateApiServer {
             .route("/v1/state", get(current_state))
             .route("/v1/debug/mixer-frame", get(current_mixer_frame))
             .route("/v1/tracks/{track_id}/waveform", get(track_waveform))
+            .route("/v1/audio/master.mp3", get(live_master_audio))
             .route("/v1/events", any(websocket))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind(config.bind)
@@ -606,6 +612,7 @@ async fn discovery() -> impl IntoResponse {
         "schemaVersion": SCHEMA_VERSION,
         "state": "/v1/state",
         "waveform": "/v1/tracks/{trackId}/waveform",
+        "masterAudio": "/v1/audio/master.mp3",
         "events": "/v1/events",
         "health": "/health",
     }))
@@ -640,6 +647,21 @@ async fn track_waveform(Path(track_id): Path<u32>, State(state): State<ApiState>
     .into_response()
 }
 
+async fn live_master_audio(State(state): State<ApiState>) -> Response {
+    let stream = match open_live_mp3(&state.audio_stream) {
+        Ok(stream) => stream,
+        Err(error) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, format!("{error}\n")).into_response();
+        }
+    };
+    Response::builder()
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("icy-name", "djbooth master")
+        .body(Body::from_stream(stream))
+        .expect("live audio response headers are valid")
+}
+
 async fn health(State(state): State<ApiState>) -> impl IntoResponse {
     let booth = state.booth.read().await;
     axum::Json(json!({
@@ -647,6 +669,7 @@ async fn health(State(state): State<ApiState>) -> impl IntoResponse {
         "schemaVersion": SCHEMA_VERSION,
         "sequence": booth.sequence,
         "mixerConnected": booth.mixer.connected,
+        "masterAudioConnected": state.audio_stream.is_connected(),
         "connectedDecks": booth.decks.iter().filter(|deck| deck.connected).count(),
     }))
 }
@@ -887,6 +910,7 @@ mod tests {
                 messages,
                 started: Instant::now(),
                 djlink: None,
+                audio_stream: AudioStreamSource::new(),
             },
         }
     }

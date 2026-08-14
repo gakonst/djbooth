@@ -15,6 +15,7 @@ import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
 import { serveCli } from "./serve.js";
+import { replayCli } from "./replay.js";
 import { statusCli } from "./status.js";
 import { stopCli } from "./stop.js";
 import { loadDjBoothEnvironment } from "./environment.js";
@@ -33,6 +34,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "enhancement_*",
     "import",
     "link",
+    "replay",
     "playlist_*",
     "produce_*",
     "status",
@@ -88,6 +90,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(produceCli);
   cli.command(stemsCli);
   cli.command(linkCli);
+  cli.command(replayCli);
   cli.command(serveCli);
   cli.command(statusCli);
   cli.command(stopCli);

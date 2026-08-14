@@ -127,6 +127,7 @@ describe("djbooth CLI", () => {
     expect(server.output).toContain("Pro DJ Link");
     expect(server.output).toContain("managed background");
     expect(server.output).toContain("--assistant");
+    expect(server.output).toContain("--sonos <string>");
 
     const stop = await serve(["stop", "--help"]);
     expect(stop.output).toContain("Stop the managed djbooth");

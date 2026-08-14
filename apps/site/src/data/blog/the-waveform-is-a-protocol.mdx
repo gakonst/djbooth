@@ -1,0 +1,69 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "The waveform is a protocol",
+  description: "What rebuilding Rekordbox analysis taught us about the difference between understanding audio and producing the exact artifacts a CDJ expects.",
+  publishedAt: "2026-08-09",
+  topic: "Reverse engineering",
+  tags: ["rekordbox", "anlz", "waveforms", "clean-room"],
+  featured: true,
+  readingTime: "8 min read",
+};
+
+A waveform on a laptop looks like a visualization problem. A waveform on a CDJ is a compatibility problem.
+
+The player does not receive an array of amplitudes and improvise. It asks for a family of analysis artifacts with specific tags, widths, paths and relationships to the source audio. A file can be musically correct and still be operationally useless if one of those contracts is wrong.
+
+That distinction shaped the clean-room analyzer in djbooth.ai. We are not trying to imitate the Rekordbox interface. We are trying to produce the boundary artifacts that the hardware actually consumes.
+
+<SignalFlow
+  steps={["decoded PCM", "audio features", "ANLZ tags", "USB / DJ Link", "CDJ"]}
+  caption="The visual waveform is only the final, visible consequence of a longer compatibility chain."
+/>
+
+## Start with observable behavior
+
+Reverse engineering goes faster when the question is bounded. “How does Rekordbox analyze music?” is too large. “Which bytes change when this transient moves by 20 milliseconds?” is useful.
+
+Our loop looks more like a laboratory protocol than ordinary application development:
+
+1. Hold the audio constant and change one controlled property.
+2. Generate a reference analysis with a known Rekordbox version.
+3. Decode the resulting `DAT`, `EXT` and `2EX` structures.
+4. Compare semantic values before comparing raw bytes.
+5. Rebuild the supported shape and ask physical hardware to read it.
+
+The semantic comparison matters. Container offsets, padding and identifiers can make byte diffs noisy even when the decoded waveform is identical. Conversely, two files can be structurally valid while encoding meaningfully different beat positions.
+
+## Three kinds of waveform
+
+The word *waveform* hides several products. A small preview is a different data structure from a detailed, zoomable waveform. A color waveform adds frequency-band energy rather than merely tinting amplitude values. Each representation trades space, decoding work and visual stability differently.
+
+That gives us three separate tests:
+
+- Does the generated file parse?
+- Do its decoded values match the intended audio features?
+- Does the target player request and render it correctly?
+
+Passing only the first test is how reverse-engineered formats become fragile demos.
+
+<Note label="Compatibility rule">
+  Files are immutable artifacts referenced by the library. They are never allowed to become a second workflow database. If an analysis file is missing or wrong, the durable recording row tells us what must be regenerated.
+</Note>
+
+## Beat grids are where errors accumulate
+
+A BPM estimate can be numerically close and still produce a bad grid. A small phase error at the first beat becomes obvious at every phrase boundary. A tiny tempo error becomes obvious near the end of a seven-minute track.
+
+So the analyzer compares endpoints, per-beat timing and match rates at bounded tolerances. It also preserves the distinction between tempo detection and beat placement. “124 BPM” is not enough information to tell a deck where beat one lives.
+
+Phrase analysis adds another layer. The useful unit is no longer a sample or transient but a beat-synchronous window with energy, spectral and change features. Those features eventually become sections a DJ recognizes as intro, build, drop or outro.
+
+## The hardware is the final parser
+
+Software fixtures are necessary, but the CDJ is the compatibility authority. It may request tags in a surprising order, ignore valid-looking optional structures, or expose a path assumption only when loading over DJ Link instead of USB.
+
+That is why the project keeps a compatibility journal and physical-player validation beside the code. Every recovered field should carry evidence: the reference version, the controlled input, the decoded observation and the player behavior.
+
+The outcome is bigger than a waveform renderer. Once the format is understood, an agent can acquire a recording, analyze it, write compatible artifacts, update the library and carry that same track to a USB or a connected deck. The protocol knowledge removes an entire manual handoff.

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { DjLinkServerStatus } from "@gakonst/djlink";
 
 import type { DjBoothServerOptions } from "./serve.js";
+import type { SonosBridgeStatus } from "./sonos.js";
 
 export const DJBOOTH_RUNTIME_VERSION = 2 as const;
 
@@ -21,6 +22,7 @@ export type DjBoothRuntimeState = {
   link: (DjLinkServerStatus & { resumed: boolean }) | null;
   logPath: string;
   monitorUrl: string;
+  sonos: SonosBridgeStatus | null;
 };
 
 export type DjBoothRuntimeStatus =
@@ -88,7 +90,7 @@ export async function startManagedDjBoothServer(
   }
   if (!child.pid) throw new Error(`Failed to start djbooth; inspect ${paths.log}`);
   child.unref();
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + (options.sonos ? 45_000 : 20_000);
   while (Date.now() < deadline) {
     const status = await statusDjBoothRuntime(env);
     if (status.running && status.pid === child.pid) return { ...status, resumed: false };
@@ -133,7 +135,7 @@ function parseRuntimeState(value: unknown): DjBoothRuntimeState | undefined {
   ) {
     return undefined;
   }
-  return state as DjBoothRuntimeState;
+  return { ...(state as DjBoothRuntimeState), sonos: state.sonos ?? null };
 }
 
 function sameServerOptions(left: DjBoothServerOptions, right: DjBoothServerOptions): boolean {
@@ -155,6 +157,8 @@ function normalizeServerOptions(options: DjBoothServerOptions): Required<DjBooth
     name: options.name ?? "djbooth",
     playerNumber: options.playerNumber ?? 17,
     port: options.port ?? 4179,
+    sonos: options.sonos ?? "",
+    sonosPort: options.sonosPort ?? 0,
   };
 }
 

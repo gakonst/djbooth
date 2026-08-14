@@ -9,7 +9,14 @@ import {
   watchFile,
 } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
+import { createConnection, type Socket } from "node:net";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 
@@ -230,6 +237,8 @@ export type LibraryServerOptions = {
   writeEnabled?: boolean;
   hosted?: HostedPlaylistApi | false;
   hostedStatePath?: string;
+  hardwareStateHost?: string;
+  hardwareStatePort?: number;
 };
 
 export type RunningLibraryServer = {
@@ -647,6 +656,74 @@ async function serveStatic(
   response.end(bytes);
 }
 
+function proxyHardwareStateHttp(
+  incoming: IncomingMessage,
+  response: ServerResponse,
+  host: string,
+  port: number,
+): void {
+  const upstream = httpRequest(
+    {
+      headers: { ...incoming.headers, host: `${host}:${String(port)}` },
+      host,
+      method: incoming.method,
+      path: incoming.url,
+      port,
+    },
+    (upstreamResponse) => {
+      response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(response);
+    },
+  );
+  upstream.on("error", () => {
+    if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain" });
+    response.end("DJ Link state API unavailable\n");
+  });
+  incoming.pipe(upstream);
+}
+
+function attachHardwareStateProxy(
+  server: HttpServer,
+  options: { host: string; port: number },
+): { close(): void } {
+  const sockets = new Set<Socket>();
+  const upgrade = (incoming: IncomingMessage, socket: Socket, head: Buffer) => {
+    if (!incoming.url?.startsWith("/v1/")) return;
+    if (incoming.headers.upgrade?.toLocaleLowerCase() !== "websocket") {
+      socket.end("HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const upstream = createConnection(options, () => {
+      const headers = Object.entries(incoming.headers)
+        .filter(([name, value]) => name !== "host" && value !== undefined)
+        .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`);
+      upstream.write(
+        `${incoming.method ?? "GET"} ${incoming.url} HTTP/${incoming.httpVersion}\r\nHost: ${options.host}:${String(options.port)}\r\n${headers.join("\r\n")}\r\n\r\n`,
+      );
+      if (head.length > 0) upstream.write(head);
+      socket.pipe(upstream).pipe(socket);
+    });
+    sockets.add(socket);
+    sockets.add(upstream);
+    const forget = () => {
+      sockets.delete(socket);
+      sockets.delete(upstream);
+    };
+    upstream.once("close", forget);
+    socket.once("close", forget);
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+  };
+  server.on("upgrade", upgrade);
+  return {
+    close() {
+      server.off("upgrade", upgrade);
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+    },
+  };
+}
+
 function assertMethod(request: IncomingMessage, allowed: readonly string[]): void {
   if (request.method && allowed.includes(request.method)) return;
   throw new HttpError(405, "METHOD_NOT_ALLOWED", "Method not allowed", {
@@ -726,6 +803,8 @@ export async function startLibraryServer(
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost")
     throw new TypeError("The djbooth.ai server only binds to a loopback address");
   const port = options.port ?? 4179;
+  const hardwareStateHost = options.hardwareStateHost ?? "127.0.0.1";
+  const hardwareStatePort = options.hardwareStatePort ?? 4182;
   const token = randomBytes(32).toString("base64url");
   const ownsApi = options.api === undefined;
   const api =
@@ -839,6 +918,11 @@ export async function startLibraryServer(
     try {
       assertRequestHost(request);
       const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+      if (url.pathname.startsWith("/v1/")) {
+        assertMethod(request, ["GET", "HEAD"]);
+        proxyHardwareStateHttp(request, response, hardwareStateHost, hardwareStatePort);
+        return;
+      }
       if (url.pathname === "/api/bootstrap") {
         assertMethod(request, ["GET", "HEAD"]);
         json(request, response, 200, api.getBootstrap(token));
@@ -1131,6 +1215,10 @@ export async function startLibraryServer(
       json(request, response, responseError.status, responseError.body);
     }
   });
+  const hardwareStateProxy = attachHardwareStateProxy(server, {
+    host: hardwareStateHost,
+    port: hardwareStatePort,
+  });
   const responsesProxy = responsesCredentials
     ? attachResponsesProxy(server, { credentials: responsesCredentials })
     : { close: () => undefined };
@@ -1144,6 +1232,7 @@ export async function startLibraryServer(
       });
     });
   } catch (error) {
+    hardwareStateProxy.close();
     responsesProxy.close();
     clearInterval(heartbeat);
     stopHostedJobEvents?.();
@@ -1204,6 +1293,7 @@ export async function startLibraryServer(
     url: `http://${displayHost}:${address.port}/`,
     close: () => {
       closePromise ??= new Promise<void>((resolveClose, reject) => {
+        hardwareStateProxy.close();
         responsesProxy.close();
         clearInterval(heartbeat);
         if (externalChangeTimer) clearTimeout(externalChangeTimer);

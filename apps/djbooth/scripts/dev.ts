@@ -24,6 +24,7 @@ const host = values.host ?? "127.0.0.1";
 const port = parsePort(values.port, "port");
 const apiPort = parsePort(values["api-port"], "api-port");
 const packageRoot = resolve(import.meta.dirname, "..");
+const hardwareTarget = process.env.DJBOOTH_STATE_API_URL ?? "http://127.0.0.1:4182";
 process.env.NODE_ENV = "development";
 
 const api = await startLibraryServer({
@@ -46,6 +47,10 @@ try {
         "/api": {
           target: api.url,
           changeOrigin: false,
+          ws: true,
+        },
+        "/v1": {
+          target: hardwareTarget,
           ws: true,
         },
       },

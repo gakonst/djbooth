@@ -1,10 +1,13 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer, type Server as HttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { MasterDatabase } from "@gakonst/rekordbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import WebSocket, { WebSocketServer } from "ws";
 
 import type {
   LibraryBootstrap,
@@ -22,9 +25,23 @@ import { LibraryMutationConflictError, RekordboxLibraryService } from "../src/se
 
 const roots: string[] = [];
 const servers: RunningLibraryServer[] = [];
+const hardwareServers: HttpServer[] = [];
+const hardwareSockets: WebSocket[] = [];
+const hardwareWebSockets: WebSocketServer[] = [];
 
 afterEach(async () => {
+  for (const socket of hardwareSockets.splice(0)) socket.terminate();
+  await Promise.all(
+    hardwareWebSockets
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+  );
   await Promise.all(servers.splice(0).map((server) => server.close()));
+  await Promise.all(
+    hardwareServers
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+  );
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
 
@@ -128,6 +145,50 @@ function mockApi(
 }
 
 describe("library server", () => {
+  it("serves the booth route and proxies hardware HTTP/WebSocket state on the same origin", async () => {
+    const files = fixture();
+    const hardware = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ path: request.url, source: "djlink" }));
+    });
+    const hardwareWs = new WebSocketServer({ server: hardware });
+    hardwareWs.on("connection", (socket) => {
+      socket.send(JSON.stringify({ type: "snapshot", sequence: 1 }));
+    });
+    await new Promise<void>((resolve) => hardware.listen(0, "127.0.0.1", resolve));
+    hardwareServers.push(hardware);
+    hardwareWebSockets.push(hardwareWs);
+    const hardwarePort = (hardware.address() as AddressInfo).port;
+    const server = await startLibraryServer({
+      api: mockApi(files.audioPath),
+      assistantEnabled: false,
+      hardwareStatePort: hardwarePort,
+      port: 0,
+      staticDirectory: files.staticDirectory,
+    });
+    servers.push(server);
+
+    const booth = await fetch(new URL("booth", server.url));
+    expect(booth.status).toBe(200);
+    expect(await booth.text()).toContain("library");
+    const waveform = await fetch(new URL("v1/tracks/42/waveform", server.url));
+    await expect(waveform.json()).resolves.toEqual({
+      path: "/v1/tracks/42/waveform",
+      source: "djlink",
+    });
+
+    const eventsUrl = new URL("v1/events", server.url);
+    eventsUrl.protocol = "ws:";
+    const socket = new WebSocket(eventsUrl);
+    hardwareSockets.push(socket);
+    await expect(
+      new Promise<string>((resolve, reject) => {
+        socket.once("message", (data) => resolve(data.toString()));
+        socket.once("error", reject);
+      }),
+    ).resolves.toBe(JSON.stringify({ type: "snapshot", sequence: 1 }));
+  });
+
   it("does not expose assistant authorization in agent-hosted mode", async () => {
     const files = fixture();
     const server = await startLibraryServer({

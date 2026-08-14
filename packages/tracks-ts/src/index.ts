@@ -128,7 +128,12 @@ export {
   type ExactSourceProvider,
   type ExactTrackSource,
 } from "./source-metadata.js";
-export { identify, mergeDescriptionWithDatabase } from "./identify.js";
+export {
+  createAgentResolutionRequest,
+  parseAgentTracklist,
+  type AgentResolutionRequest,
+} from "./agent-resolution.js";
+export { identify } from "./identify.js";
 export {
   getYtdlpTsCommand,
   inspectMediaMetadata,
@@ -236,16 +241,6 @@ export {
   buildBrunelloAcquisitionPlan,
   reconcileBrunelloManifest,
 } from "./presets/brunello-lib-2026.js";
-export {
-  DEFAULT_PARSE_API_BASE,
-  Tracklists1001Client,
-  databaseTracklistToEntries,
-  isDatabaseMediaUrl,
-  normalizeMediaUrl,
-  parse1001TracklistHtml,
-  type Tracklists1001BrowserOptions,
-  type Tracklists1001ClientOptions,
-} from "./providers/tracklists1001.js";
 export {
   DEFAULT_RECOGNITION_CONCURRENCY,
   MAX_RECOGNITION_CONCURRENCY,

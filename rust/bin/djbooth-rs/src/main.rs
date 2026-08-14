@@ -1,6 +1,7 @@
 mod a9_usb;
 mod analyzer;
 mod audio_meter;
+mod audio_stream;
 mod link;
 mod mixer;
 mod state_api;

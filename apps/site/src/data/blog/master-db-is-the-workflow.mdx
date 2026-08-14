@@ -1,0 +1,54 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "The music library is the workflow",
+  description: "Why djbooth uses Rekordbox master.db as durable state instead of introducing another manifest, checkpoint store or shadow library.",
+  publishedAt: "2026-08-07",
+  topic: "Agents",
+  tags: ["sqlite", "rekordbox", "agents", "local-first"],
+  readingTime: "7 min read",
+};
+
+Most automation projects begin by inventing a manifest. Then a cache. Then a checkpoint file. Soon the filesystem, the new database and the music library all disagree about what exists.
+
+djbooth takes the opposite approach: the active Rekordbox `master.db` is the durable workflow state and source of truth.
+
+That sounds like an implementation detail. It is actually the architecture that makes a complete agentic workflow possible.
+
+<SignalFlow
+  steps={["intent", "master.db rows", "audio + ANLZ", "workbench", "USB / CDJ"]}
+  caption="Every surface reads the same recording and playlist identities."
+/>
+
+## A track is not a file
+
+A filename is a weak identity. It can be renamed, duplicated, transcoded or downloaded again from another provider. A useful library row connects the recording to releases, artists, provider provenance, local media and analysis artifacts.
+
+Resolve therefore writes ordered pipeline state into the database before the entire workflow is complete. Enrichment and acquisition can advance independently. Analysis begins per track as soon as verified audio lands. A serialized writer commits the resulting library changes.
+
+The agent can stop halfway through, lose its process, and resume by inspecting the same rows. There is no need to reconstruct intent from terminal output.
+
+## Idempotence is a product feature
+
+“Run the same command again” should be the recovery model.
+
+If twelve recordings already exist, they are reused. If seven analyses are current, they are not regenerated. If a USB already contains identical media and analysis, synchronization becomes a verification pass instead of another copy.
+
+This is particularly important for agents. Long workflows cross provider requests, downloads, CPU analysis, GPU stem separation and removable hardware. A chat transcript is not a safe checkpoint for any of those operations.
+
+<Note label="Golden path">
+  One intent maps to the highest-level command. The same command resumes and reconciles. Lower-level commands remain available for explicit diagnosis, not as a ritual the user must memorize.
+</Note>
+
+## Extensions without a shadow system
+
+Rekordbox does not have columns for every piece of acquisition provenance or agent workflow state we need. Internal `djbooth_*` extension tables can live beside the compatible schema inside the same encrypted SQLite database.
+
+This preserves one transaction boundary. A recording does not become “downloaded” in one store while remaining absent from the library another process reads. The extension rows can evolve without pretending that immutable audio files are a ledger.
+
+## The payoff at the edges
+
+The visual workstation can open the library directly. USB synchronization can consume ready rows directly. DJ Link can project the same tracks and playlists into RemoteDB and NFS responses. Play histories can return from the stick and update the same source.
+
+The database is not merely where metadata rests. It is the shared language between the agent, the DJ and the hardware. Once all three operate on the same identities, an end-to-end prompt stops being a chain of brittle imports and becomes one resumable transactionally grounded workflow.

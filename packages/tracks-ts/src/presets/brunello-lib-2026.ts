@@ -390,7 +390,7 @@ export function reconcileBrunelloManifest(value: SetManifest): SetManifest {
     durationSeconds: SET_DURATION,
   };
   manifest.tracklist = {
-    provider: "1001tracklists",
+    provider: "agent",
     url: BRUNELLO_1001_URL,
     complete: true,
   };

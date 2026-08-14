@@ -1,0 +1,54 @@
+import { Note } from "../../components/Note";
+import { SignalFlow } from "../../components/SignalFlow";
+
+export const metadata = {
+  title: "Speaking DJ Link from the wire up",
+  description: "Discovery packets, RemoteDB queries, NFS media and the strange path from a local SQLite row to a track loaded on a physical CDJ.",
+  publishedAt: "2026-08-05",
+  topic: "Performance",
+  tags: ["dj-link", "cdj", "remotedb", "nfs", "networking"],
+  readingTime: "9 min read",
+};
+
+Putting a track on a CDJ over the network is not one protocol operation. It is a conversation between discovery, database browsing, file serving and player control.
+
+The surprising part is how little of that conversation resembles “stream this song.” The player wants to join a network of known devices, browse a library in its native shapes, request metadata and analysis, then mount media through paths it understands.
+
+<SignalFlow
+  steps={["master.db", "RemoteDB", "metadata + ANLZ", "NFS audio", "CDJ"]}
+  caption="A deck load crosses database and filesystem protocols before audio is ready."
+/>
+
+## First, become a device
+
+Pro DJ Link devices announce themselves over the local network. Discovery is sensitive to the selected interface, broadcast address and the identities already in the room. A laptop on Wi-Fi and decks on Ethernet may technically share routes while still failing the assumptions made by broadcast discovery.
+
+The safe debugging order is physical before semantic: select the interface, observe announcements, verify the deck address with a bounded ARP probe, and only then change protocol code.
+
+This ordering saved us from “fixing” packet parsers when the packets never reached the machine.
+
+## RemoteDB is the browse surface
+
+When a player browses artists, playlists or search results, it is not reading `master.db` directly. It issues RemoteDB requests and expects native-shaped rows with stable identifiers and menu semantics.
+
+A useful implementation therefore needs more than a list of tracks. It must preserve playlist hierarchy and order, map metadata fields, respond to artwork and analysis requests, and make search behavior predictable enough for a physical jog wheel and keyboard.
+
+Search was especially instructive. Incremental edits from a CDJ-3000 have a different observable shape from some legacy players. A reconnect after every keystroke means something very different from receiving no request at all. Packet traces turn those UI symptoms into bounded protocol questions.
+
+<Note label="Operational boundary">
+  Loading a track and starting playback are separate authorities. The normal bounded path loads and cues the selected player while leaving PLAY physical unless the user explicitly requested transport control.
+</Note>
+
+## The database row eventually becomes a file path
+
+After browsing comes media. The deck requests audio and ANLZ artifacts over NFS using paths derived from the library response. One incorrect separator, volume identity or analysis path can let metadata browse perfectly while the load itself fails.
+
+That is why djbooth validates the complete source before opening the link: every projected track needs local audio, compatible analysis and a path the server can actually expose.
+
+The direct Rekordbox mode opens `master.db` read-only and prewarms the metadata and playlist membership the RemoteDB server will need. A manifest-backed mode exists for bounded development cases, but it is not allowed to become a competing library.
+
+## Physical feedback closes the loop
+
+The network can report discovered players, loaded tracks, tempo and play state. Mixer MIDI adds another source of truth about faders and controls. Together they make possible a workstation that reflects what is happening on the hardware rather than merely issuing hopeful commands.
+
+For an agent, this turns “load Apathy on player 3” into a verifiable workflow: discover the player, resolve one unambiguous recording, validate the served media, send the bounded load, and report the confirmed deck state.

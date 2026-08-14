@@ -103,9 +103,11 @@ and `enrich` can advance independently; `analyze` checkpoints compatible ANLZ ar
 `import` runs through an ordered playlist in one resumable command. Files are immutable
 artifacts referenced by the database, not a second workflow ledger.
 
-`serve` starts or resumes the managed Pro DJ Link source, loopback workstation/API, and live hardware
-monitor at `http://127.0.0.1:4183/`, then returns readiness JSON immediately. `status` reports library, import, UI, and Link state; `stop` shuts down
-the managed runtime. `link [track]` is the bounded deck path when only serving or playback is needed.
+`serve --open` is the one-command startup: it starts or resumes the managed Pro DJ Link source,
+hardware telemetry, and one loopback web app. The app has Library at `http://127.0.0.1:4179/` and
+Live Booth at `http://127.0.0.1:4179/booth`. It returns readiness JSON immediately. `status` reports
+library, import, UI, and Link state; `stop` shuts down the managed runtime. `link [track]` is the
+bounded deck path when only serving or playback is needed.
 Loading starts the selected deck and confirms playback from CDJ status.
 
 `djbooth usb` is the separate front-panel content path. It first imports each unseen CDJ history

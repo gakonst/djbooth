@@ -6,7 +6,7 @@ import type {
   DecodedEvent,
   DeckState,
   ServerMessage,
-} from "./types";
+} from "./types.js";
 
 function emptyDeck(player: number): DeckState {
   return {
@@ -54,6 +54,16 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
 };
 
 function websocketUrl(): string {
+  const replayUrl = new URLSearchParams(window.location.search).get("hardwareWs");
+  if (replayUrl) {
+    const candidate = new URL(replayUrl);
+    if (
+      (candidate.protocol === "ws:" || candidate.protocol === "wss:") &&
+      ["127.0.0.1", "localhost", "::1"].includes(candidate.hostname)
+    ) {
+      return candidate.toString();
+    }
+  }
   const configured = import.meta.env.VITE_HARDWARE_WS_URL as string | undefined;
   if (configured) return configured;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";

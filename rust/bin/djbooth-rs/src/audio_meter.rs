@@ -1,9 +1,12 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample as _, SampleFormat, Stream};
 use tokio::sync::mpsc;
+
+use crate::audio_stream::AudioStreamSource;
 
 const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
 const SILENCE_DBFS: f64 = -120.0;
@@ -34,6 +37,7 @@ pub(crate) struct StereoMeter {
 
 pub(crate) fn connect_audio_meter(
     selector: &str,
+    audio_stream: AudioStreamSource,
 ) -> Result<(Stream, mpsc::UnboundedReceiver<MeterEvent>, String)> {
     let host = cpal::default_host();
     let selector_lower = selector.to_ascii_lowercase();
@@ -66,7 +70,7 @@ pub(crate) fn connect_audio_meter(
             let error_tx = tx.clone();
             device.build_input_stream(
                 config,
-                meter_callback::<f32>(channels, tx),
+                meter_callback::<f32>(channels, tx, audio_stream.clone()),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
                     let _ = error_tx.send(MeterEvent::Disconnected {
@@ -82,7 +86,7 @@ pub(crate) fn connect_audio_meter(
             let error_tx = tx.clone();
             device.build_input_stream(
                 config,
-                meter_callback::<i16>(channels, tx),
+                meter_callback::<i16>(channels, tx, audio_stream.clone()),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
                     let _ = error_tx.send(MeterEvent::Disconnected {
@@ -98,7 +102,7 @@ pub(crate) fn connect_audio_meter(
             let error_tx = tx.clone();
             device.build_input_stream(
                 config,
-                meter_callback::<u16>(channels, tx),
+                meter_callback::<u16>(channels, tx, audio_stream.clone()),
                 move |error| {
                     tracing::warn!(device = %error_name, %error, "audio_meter_stream_error");
                     let _ = error_tx.send(MeterEvent::Disconnected {
@@ -115,6 +119,7 @@ pub(crate) fn connect_audio_meter(
     stream
         .play()
         .with_context(|| format!("start audio meter stream for '{name}'"))?;
+    audio_stream.set_connected(config.sample_rate);
     tracing::info!(
         device = %name,
         channels,
@@ -127,6 +132,7 @@ pub(crate) fn connect_audio_meter(
 fn meter_callback<T>(
     channels: usize,
     tx: mpsc::UnboundedSender<MeterEvent>,
+    audio_stream: AudioStreamSource,
 ) -> impl FnMut(&[T], &cpal::InputCallbackInfo) + Send + 'static
 where
     T: cpal::Sample + Send + 'static,
@@ -137,13 +143,24 @@ where
     let mut samples_per_channel = 0u64;
     let mut last_publish = Instant::now();
     move |data, _| {
+        let mut master_pcm = audio_stream
+            .has_listeners()
+            .then(|| Vec::with_capacity((data.len() / channels) * 8));
         for frame in data.chunks_exact(channels) {
             for (channel, sample) in frame.iter().enumerate() {
                 let value = f32::from_sample(*sample).clamp(-1.0, 1.0);
                 peaks[channel] = peaks[channel].max(value.abs());
                 square_sums[channel] += f64::from(value) * f64::from(value);
             }
+            if let Some(master_pcm) = master_pcm.as_mut() {
+                for sample in &frame[..2] {
+                    master_pcm.extend_from_slice(&f32::from_sample(*sample).to_le_bytes());
+                }
+            }
             samples_per_channel += 1;
+        }
+        if let Some(master_pcm) = master_pcm {
+            audio_stream.publish(Bytes::from(master_pcm));
         }
         if last_publish.elapsed() < PUBLISH_INTERVAL || samples_per_channel == 0 {
             return;

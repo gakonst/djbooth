@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { assistantEnabledFromSearch, workbenchUrl } from "../src/workbench-mode.js";
+import {
+  assistantEnabledFromSearch,
+  djBoothViewFromPath,
+  workbenchUrl,
+} from "../src/workbench-mode.js";
 
 describe("agent-hosted workbench mode", () => {
   it("keeps the embedded assistant enabled by default", () => {
@@ -20,5 +24,11 @@ describe("agent-hosted workbench mode", () => {
     expect(workbenchUrl("http://127.0.0.1:4179/?playlistId=42&assistant=0", true)).toBe(
       "http://127.0.0.1:4179/?playlistId=42",
     );
+  });
+
+  it("exposes library and live booth as views of one application", () => {
+    expect(djBoothViewFromPath("/")).toBe("library");
+    expect(djBoothViewFromPath("/booth")).toBe("booth");
+    expect(djBoothViewFromPath("/booth/decks")).toBe("booth");
   });
 });

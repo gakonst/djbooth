@@ -23,7 +23,8 @@ let state: DjBoothRuntimeState = {
   options,
   link: server.link,
   logPath: paths.log,
-  monitorUrl: server.monitor.url,
+  monitorUrl: server.boothUrl,
+  sonos: server.sonos,
 };
 await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
 
@@ -65,7 +66,7 @@ async function monitorLink(): Promise<void> {
       const link = await server.reconcileLink();
       if (closing) break;
       if (link?.pid !== previousPid || link?.bindIp !== previousBindIp) {
-        state = { ...state, link };
+        state = { ...state, link, sonos: server.sonos };
         await writeFile(paths.state, `${JSON.stringify(state)}\n`, { mode: 0o600 });
         process.stderr.write(
           `DJ Link reconciled on ${link?.bindIp ?? "no interface"} (PID ${String(link?.pid ?? 0)})\n`,

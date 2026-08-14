@@ -15,7 +15,12 @@ import {
 import { Cli, z } from "incur";
 
 import { startManagedDjBoothServer } from "./runtime.js";
-import { startMonitorServer, type RunningMonitorServer } from "./monitor.js";
+import {
+  startSonosBridge,
+  type RunningSonosBridge,
+  type SonosBridgeOptions,
+  type SonosBridgeStatus,
+} from "./sonos.js";
 
 export type DjBoothServerOptions = {
   allowMissingAnalysis?: boolean;
@@ -29,32 +34,35 @@ export type DjBoothServerOptions = {
   name?: string;
   playerNumber?: number;
   port?: number;
+  sonos?: string;
+  sonosPort?: number;
 };
 
 export type RunningDjBoothServer = {
   assistantEnabled: boolean;
+  boothUrl: string;
   close(): Promise<{ linkStopped: boolean }>;
   link: (DjLinkServerStatus & { resumed: boolean }) | null;
-  monitor: RunningMonitorServer;
   reconcileLink(): Promise<(DjLinkServerStatus & { resumed: boolean }) | null>;
+  sonos: SonosBridgeStatus | null;
   url: string;
   web: RunningLibraryServer;
 };
 
 export type DjBoothServerDependencies = {
   startLibraryServer(options: LibraryServerOptions): Promise<RunningLibraryServer>;
-  startMonitorServer(): Promise<RunningMonitorServer>;
   startRekordboxDjLink(
     options: StartRekordboxDjLinkOptions,
   ): Promise<DjLinkServerStatus & { resumed: boolean }>;
   stopDjLink(): Promise<{ stopped: boolean; wasRunning: boolean; pid?: number }>;
+  startSonosBridge(options: SonosBridgeOptions): Promise<RunningSonosBridge>;
 };
 
 const defaultDependencies: DjBoothServerDependencies = {
   startLibraryServer,
-  startMonitorServer,
   startRekordboxDjLink,
   stopDjLink,
+  startSonosBridge,
 };
 
 const initialLinkStartAttempts = 3;
@@ -83,7 +91,7 @@ export async function startDjBoothServer(
   let link: (DjLinkServerStatus & { resumed: boolean }) | null = null;
   let ownedLinkPid: number | undefined;
   let web: RunningLibraryServer | undefined;
-  let monitor: RunningMonitorServer | undefined;
+  let sonos: RunningSonosBridge | undefined;
   try {
     if (options.link !== false) {
       link = await startInitialLink(linkOptions, dependencies);
@@ -96,21 +104,38 @@ export async function startDjBoothServer(
       port: options.port ?? 4179,
       writeEnabled: true,
     });
-    monitor = await dependencies.startMonitorServer();
+    if (options.sonos) {
+      if (options.link === false) throw new Error("Sonos output requires the DJ Link runtime");
+      sonos = await dependencies.startSonosBridge({
+        room: options.sonos,
+        port: options.sonosPort ?? 0,
+      });
+    }
   } catch (error) {
-    await monitor?.close().catch(() => undefined);
+    await sonos?.close().catch(() => undefined);
     await web?.close().catch(() => undefined);
     if (link && !link.resumed) await dependencies.stopDjLink().catch(() => undefined);
     throw error;
   }
 
   const url = workbenchUrl(web.url, assistantEnabled);
+  const boothUrl = new URL("/booth", web.url).toString();
   let closePromise: Promise<{ linkStopped: boolean }> | undefined;
   let reconcilePromise: Promise<(DjLinkServerStatus & { resumed: boolean }) | null> | undefined;
   return {
     assistantEnabled,
+    boothUrl,
     get link() {
       return link;
+    },
+    get sonos() {
+      return sonos
+        ? {
+            room: sonos.room,
+            coordinatorIp: sonos.coordinatorIp,
+            streamUrl: sonos.streamUrl,
+          }
+        : null;
     },
     reconcileLink() {
       if (options.link === false || closePromise) return Promise.resolve(link);
@@ -119,6 +144,13 @@ export async function startDjBoothServer(
         if (!next.resumed) ownedLinkPid = next.pid;
         else if (ownedLinkPid !== next.pid) ownedLinkPid = undefined;
         link = next;
+        if (options.sonos && !next.resumed) {
+          await sonos?.close();
+          sonos = await dependencies.startSonosBridge({
+            room: options.sonos,
+            port: options.sonosPort ?? 0,
+          });
+        }
         return link;
       })().finally(() => {
         reconcilePromise = undefined;
@@ -127,11 +159,10 @@ export async function startDjBoothServer(
     },
     url,
     web,
-    monitor,
     close() {
       closePromise ??= (async () => {
         await reconcilePromise?.catch(() => undefined);
-        await monitor.close();
+        await sonos?.close();
         await web.close();
         if (!link || ownedLinkPid !== link.pid) return { linkStopped: false };
         const stopped = await dependencies.stopDjLink();
@@ -179,8 +210,9 @@ const linkStatusOutput = z.object({
 });
 
 export const serveCli = Cli.create("serve", {
-  description: "Start or resume a managed background workstation/API and Pro DJ Link runtime.",
-  hint: "Returns readiness JSON immediately. Rerun with the same options safely; use status and stop instead of babysitting a foreground process.",
+  description:
+    "Start or resume the complete DJ booth: unified web app, hardware telemetry, and Pro DJ Link source.",
+  hint: "Use `serve --open` as the one-command startup. It returns readiness JSON immediately; use status and stop for the managed background runtime.",
   options: z.object({
     allowMissingAnalysis: z
       .boolean()
@@ -206,6 +238,20 @@ export const serveCli = Cli.create("serve", {
       .default(17)
       .describe("Virtual Rekordbox player number"),
     port: z.number().int().min(0).max(65_535).default(4179),
+    sonos: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Mirror the DJM master mix to this Sonos room; use 'auto' for a single-room system",
+      ),
+    sonosPort: z
+      .number()
+      .int()
+      .min(0)
+      .max(65_535)
+      .default(0)
+      .describe("LAN audio relay port; zero selects a free port"),
   }),
   output: z.object({
     action: z.enum(["started", "resumed"]),
@@ -215,6 +261,10 @@ export const serveCli = Cli.create("serve", {
     monitorUrl: z.string(),
     pid: z.number().int().positive(),
     url: z.string(),
+    views: z.object({ library: z.string(), booth: z.string() }),
+    sonos: z
+      .object({ room: z.string(), coordinatorIp: z.string(), streamUrl: z.string() })
+      .nullable(),
   }),
   async run(context) {
     const server = await startManagedDjBoothServer({
@@ -229,6 +279,8 @@ export const serveCli = Cli.create("serve", {
       name: context.options.name,
       playerNumber: context.options.playerNumber,
       port: context.options.port,
+      ...(context.options.sonos ? { sonos: context.options.sonos } : {}),
+      sonosPort: context.options.sonosPort,
     });
     if (context.options.open) openBrowser(server.url);
     return {
@@ -239,6 +291,8 @@ export const serveCli = Cli.create("serve", {
       monitorUrl: server.monitorUrl,
       pid: server.pid,
       url: server.url,
+      views: { library: server.url, booth: server.monitorUrl },
+      sonos: server.sonos,
     };
   },
 });

@@ -232,10 +232,5 @@ function stringArray(value: unknown): string[] | undefined {
 }
 
 function isProvider(value: unknown): value is Tracklist["provider"] {
-  return (
-    value === "description" ||
-    value === "1001tracklists" ||
-    value === "audd" ||
-    value === "acrcloud"
-  );
+  return value === "description" || value === "agent" || value === "audd" || value === "acrcloud";
 }
