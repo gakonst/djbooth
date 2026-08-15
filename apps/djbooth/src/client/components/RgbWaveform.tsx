@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import type { TrackWaveform } from "../../shared/types.js";
+import { displayWaveform } from "../waveform-display.js";
 
 type Peaks = Array<Float32Array | number[]>;
 
@@ -66,8 +67,12 @@ export const RgbWaveform = forwardRef<
       if (!context) return;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, width, height);
-      if (waveform?.peaks.length)
-        renderRgbWaveform([waveform.peaks], waveform.colors, context, { width, height });
+      const visibleWaveform = displayWaveform(waveform);
+      if (visibleWaveform)
+        renderRgbWaveform([visibleWaveform.peaks], visibleWaveform.colors, context, {
+          width,
+          height,
+        });
     };
     draw();
     const observer = new ResizeObserver(draw);

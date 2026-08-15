@@ -40,6 +40,7 @@ import type {
   TracksResponse,
   TrackSort,
   TrackSortField,
+  UsbMediaResponse,
 } from "../shared/types.js";
 import {
   HostedPlaylistCapabilityError,
@@ -59,6 +60,7 @@ import { planLibraryPrompt } from "./prompt.js";
 import { ProcessingJobManager } from "./processing-jobs.js";
 import { createResponsesCredentialProvider } from "./openai-auth.js";
 import { attachResponsesProxy } from "./responses-proxy.js";
+import { MountedUsbMediaService } from "./usb-media.js";
 
 const hostedMutationSchema = z.discriminatedUnion("type", [
   z.object({
@@ -226,6 +228,13 @@ export type HostedPlaylistApi = {
   mutate(mutation: HostedPlaylistMutation): Promise<HostedMutationReceipt>;
 };
 
+export type UsbMediaApi = {
+  scan(): Promise<UsbMediaResponse>;
+  getTracks(playlistId: string): Promise<TrackSummary[]>;
+  getAudioPath(trackId: string): Promise<string>;
+  getWaveform(trackId: string): Promise<TrackWaveform>;
+};
+
 export type LibraryServerOptions = {
   api?: LibraryApi;
   assistantEnabled?: boolean;
@@ -237,6 +246,8 @@ export type LibraryServerOptions = {
   writeEnabled?: boolean;
   hosted?: HostedPlaylistApi | false;
   hostedStatePath?: string;
+  usbMedia?: UsbMediaApi | false;
+  usbMountRoots?: string[];
   hardwareStateHost?: string;
   hardwareStatePort?: number;
 };
@@ -829,6 +840,13 @@ export async function startLibraryServer(
               key: options.key,
             })
           : undefined));
+  const usbMedia =
+    options.usbMedia === false
+      ? undefined
+      : (options.usbMedia ??
+        new MountedUsbMediaService(
+          options.usbMountRoots ? { mountRoots: options.usbMountRoots } : {},
+        ));
   let ownedDatabasePath: string | undefined;
   if (ownsApi) {
     try {
@@ -1016,6 +1034,16 @@ export async function startLibraryServer(
         json(request, response, 200, result);
         return;
       }
+      if (url.pathname === "/api/usb-media") {
+        assertMethod(request, ["GET", "HEAD"]);
+        json(
+          request,
+          response,
+          200,
+          usbMedia ? await usbMedia.scan() : { devices: [], playlists: [] },
+        );
+        return;
+      }
       if (url.pathname === "/api/tracks") {
         assertMethod(request, ["GET", "HEAD"]);
         const filter = url.searchParams.get("filter") ?? "all";
@@ -1042,6 +1070,24 @@ export async function startLibraryServer(
         const offset = queryInteger(url, "offset", 0, 10_000_000);
         const playlistId = url.searchParams.get("playlistId");
         const q = url.searchParams.get("q") ?? undefined;
+        if (playlistId?.startsWith("usb:")) {
+          if (!usbMedia)
+            throw new HttpError(503, "USB_MEDIA_UNAVAILABLE", "USB media browsing is disabled");
+          json(
+            request,
+            response,
+            200,
+            hostedTracksResponse(await usbMedia.getTracks(playlistId), {
+              filter,
+              limit,
+              offset,
+              direction,
+              ...(q ? { q } : {}),
+              ...(sort ? { sort: sort as TrackSortField } : {}),
+            }),
+          );
+          return;
+        }
         if (playlistId?.startsWith("hosted:")) {
           if (!hosted)
             throw new HttpError(
@@ -1109,6 +1155,18 @@ export async function startLibraryServer(
         );
         return;
       }
+      const usbAudioMatch = /^\/api\/usb-audio\/([^/]+)$/u.exec(url.pathname);
+      if (usbAudioMatch) {
+        assertMethod(request, ["GET", "HEAD"]);
+        if (!usbMedia)
+          throw new HttpError(503, "USB_MEDIA_UNAVAILABLE", "USB media browsing is disabled");
+        await streamAudio(
+          request,
+          response,
+          await usbMedia.getAudioPath(decodeURIComponent(usbAudioMatch[1]!)),
+        );
+        return;
+      }
       const artworkMatch = /^\/api\/artwork\/([^/]+)$/u.exec(url.pathname);
       if (artworkMatch) {
         assertMethod(request, ["GET", "HEAD"]);
@@ -1122,8 +1180,13 @@ export async function startLibraryServer(
       const waveformMatch = /^\/api\/waveforms\/([^/]+)$/u.exec(url.pathname);
       if (waveformMatch) {
         assertMethod(request, ["GET", "HEAD"]);
+        const trackId = decodeURIComponent(waveformMatch[1]!);
+        if (trackId.startsWith("usb:") && !usbMedia)
+          throw new HttpError(503, "USB_MEDIA_UNAVAILABLE", "USB media browsing is disabled");
         json(request, response, 200, {
-          waveform: api.getWaveform(decodeURIComponent(waveformMatch[1]!)),
+          waveform: trackId.startsWith("usb:")
+            ? await usbMedia!.getWaveform(trackId)
+            : api.getWaveform(trackId),
         });
         return;
       }

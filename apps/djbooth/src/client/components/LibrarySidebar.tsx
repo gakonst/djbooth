@@ -19,6 +19,7 @@ import type {
   HostedPlaylistsResponse,
   LibraryBootstrap,
   PlaylistItem,
+  UsbMediaResponse,
 } from "../../shared/types.js";
 import { compactCount } from "../format.js";
 import {
@@ -27,6 +28,7 @@ import {
   hostedProviderStatus,
 } from "../hosted-playlists.js";
 import { HostedPlaylistSection } from "./HostedPlaylistSection.js";
+import { UsbMediaSection } from "./UsbMediaSection.js";
 
 type Props = {
   bootstrap?: LibraryBootstrap;
@@ -39,12 +41,16 @@ type Props = {
   hosted?: HostedPlaylistsResponse;
   hostedLoading?: boolean;
   selectedHostedPlaylistId?: string | null;
+  usb?: UsbMediaResponse;
+  usbLoading?: boolean;
+  selectedUsbPlaylistId?: string | null;
   onClose(): void;
   onSelectPlaylist(id: string | null): void;
   onSelectFilter(filter: string): void;
   onCreatePlaylist(parentId?: string): void;
   onEditPlaylist?(playlist: PlaylistItem): void;
   onSelectHostedPlaylist?(playlist: PlaylistItem): void;
+  onSelectUsbPlaylist?(playlist: PlaylistItem): void;
   onEditHostedPlaylist?(playlist: PlaylistItem): void;
   onToggleHostedDownload?(playlist: PlaylistItem, enabled: boolean): void;
   onPlaylistContextMenu?(
@@ -71,12 +77,16 @@ export function LibrarySidebar({
   hosted,
   hostedLoading = false,
   selectedHostedPlaylistId = null,
+  usb,
+  usbLoading = false,
+  selectedUsbPlaylistId = null,
   onClose,
   onSelectPlaylist,
   onSelectFilter,
   onCreatePlaylist,
   onEditPlaylist,
   onSelectHostedPlaylist,
+  onSelectUsbPlaylist,
   onEditHostedPlaylist,
   onToggleHostedDownload,
   onPlaylistContextMenu,
@@ -210,6 +220,17 @@ export function LibrarySidebar({
             onPlaylistContextMenu={onPlaylistContextMenu}
           />
         ))}
+
+        <UsbMediaSection
+          media={usb}
+          loading={usbLoading}
+          query={normalizedQuery}
+          selectedPlaylistId={selectedUsbPlaylistId}
+          onSelectPlaylist={(playlist) => {
+            onSelectUsbPlaylist?.(playlist);
+            onClose();
+          }}
+        />
 
         <div className="sidebar-section playlists-section local-playlists-section">
           <div className="sidebar-section-heading">

@@ -15,6 +15,7 @@ import type {
   TrackSort,
   TrackWaveform,
   TracksResponse,
+  UsbMediaResponse,
 } from "../shared/types.js";
 
 export class LibraryApiError extends Error {
@@ -60,6 +61,10 @@ export async function getPlaylists(signal?: AbortSignal): Promise<PlaylistItem[]
 
 export function getHostedPlaylists(signal?: AbortSignal): Promise<HostedPlaylistsResponse> {
   return apiRequest<HostedPlaylistsResponse>("/api/hosted-playlists", { signal });
+}
+
+export function getUsbMedia(signal?: AbortSignal): Promise<UsbMediaResponse> {
+  return apiRequest<UsbMediaResponse>("/api/usb-media", { signal });
 }
 
 export function getTracks(query: TrackQuery, signal?: AbortSignal): Promise<TracksResponse> {

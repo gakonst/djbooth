@@ -54,6 +54,28 @@ describe("library query cache", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("routes USB previews through the universal analysis endpoint", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            waveform: { durationSeconds: 180, peaks: [0.2, 1], source: "rekordbox" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const queryClient = new QueryClient();
+
+    await queryClient.fetchQuery(trackWaveformQueryOptions("usb:device:track:42"));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/waveforms/usb%3Adevice%3Atrack%3A42",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("retries active placeholder waveforms but keeps Rekordbox peaks indefinitely", () => {
     const options = trackWaveformQueryOptions("track-1");
     const placeholder = { state: { data: { source: "placeholder" } } } as never;

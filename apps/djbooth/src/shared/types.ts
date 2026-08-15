@@ -55,6 +55,39 @@ export type PlaylistItem = {
   type: PlaylistKind;
   trackCount: number | null;
   hosted?: HostedPlaylist;
+  usb?: UsbPlaylist;
+};
+
+export type UsbLibraryFormat = "device-library" | "one-library" | "dual";
+
+export type UsbMediaDevice = {
+  id: string;
+  name: string;
+  mountPath: string;
+  libraryFormat: UsbLibraryFormat | null;
+  status: "ready" | "empty" | "staging" | "error";
+  tracks: number;
+  playlists: number;
+  histories: number;
+  totalBytes: number | null;
+  availableBytes: number | null;
+  error?: string;
+};
+
+export type UsbPlaylist = {
+  deviceId: string;
+  kind: "all" | "playlist" | "history";
+  nativeId: number | null;
+};
+
+export type UsbTrack = {
+  deviceId: string;
+  nativeId: number;
+};
+
+export type UsbMediaResponse = {
+  devices: UsbMediaDevice[];
+  playlists: PlaylistItem[];
 };
 
 export type HostedTrackDownloadState = "remote" | "queued" | "downloading" | "downloaded" | "error";
@@ -100,6 +133,7 @@ export type TrackSummary = {
   playlistMembershipId?: string;
   trackNumber?: number;
   hosted?: HostedTrack;
+  usb?: UsbTrack;
 };
 
 export type TrackSortField =

@@ -51,6 +51,7 @@ import {
   getPlaylists,
   getTrackDetail,
   getTracks,
+  getUsbMedia,
   LibraryApiError,
   mutateLibrary,
   mutateHostedPlaylist,
@@ -225,13 +226,15 @@ export function App({ assistantEnabled = true }: AppProps) {
   const playerAdapter = useMemo<PlayerAdapter>(
     () => ({
       getAudioUrl: (track) =>
-        track.hosted?.provider === "soundcloud"
-          ? `/api/hosted-audio/${encodeURIComponent(track.id)}`
-          : track.hosted
-            ? undefined
-            : `/api/audio/${encodeURIComponent(track.id)}`,
+        track.usb
+          ? `/api/usb-audio/${encodeURIComponent(track.id)}`
+          : track.hosted?.provider === "soundcloud"
+            ? `/api/hosted-audio/${encodeURIComponent(track.id)}`
+            : track.hosted
+              ? undefined
+              : `/api/audio/${encodeURIComponent(track.id)}`,
       getArtworkUrl: (track) =>
-        track.hosted ? undefined : `/api/artwork/${encodeURIComponent(track.id)}`,
+        track.hosted || track.usb ? undefined : `/api/artwork/${encodeURIComponent(track.id)}`,
       loadWaveform: (track) =>
         track.hosted
           ? Promise.resolve(null)
@@ -263,7 +266,7 @@ export function App({ assistantEnabled = true }: AppProps) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [playerTrackId, setPlayerTrackId] = useState<string | null>(urlState.trackId);
   const [playerSummary, setPlayerSummary] = useState<TrackSummary>();
-  const [dualDeck, setDualDeck] = useState(true);
+  const [dualDeck, setDualDeck] = useState(false);
   const [deckBTrackId, setDeckBTrackId] = useState<string | null>(null);
   const [deckBSummary, setDeckBSummary] = useState<TrackSummary>();
   const [deckAEq, setDeckAEq] = useState<DeckEq>(FLAT_DECK_EQ);
@@ -334,6 +337,13 @@ export function App({ assistantEnabled = true }: AppProps) {
         : 60_000,
     refetchIntervalInBackground: true,
   });
+  const usbMediaQuery = useQuery({
+    queryKey: ["usb-media"],
+    queryFn: ({ signal }) => getUsbMedia(signal),
+    staleTime: 2_000,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: true,
+  });
   const processingJobsQuery = useQuery({
     queryKey: ["processing-jobs"],
     queryFn: ({ signal }) => getProcessingJobs(signal),
@@ -344,19 +354,29 @@ export function App({ assistantEnabled = true }: AppProps) {
   });
   const playlists = playlistsQuery.data ?? [];
   const hostedPlaylists = hostedPlaylistsQuery.data?.items ?? [];
-  const allPlaylists = [...playlists, ...hostedPlaylists];
+  const usbPlaylists = usbMediaQuery.data?.playlists ?? [];
+  const allPlaylists = [...playlists, ...hostedPlaylists, ...usbPlaylists];
   const selectedPlaylist = allPlaylists.find((playlist) => playlist.id === urlState.playlistId);
   const selectedHostedPlaylist = selectedPlaylist?.hosted ? selectedPlaylist : undefined;
+  const selectedUsbPlaylist = selectedPlaylist?.usb ? selectedPlaylist : undefined;
   const normalPlaylist =
-    selectedPlaylist?.type === "playlist" && !selectedPlaylist.hosted
+    selectedPlaylist?.type === "playlist" && !selectedPlaylist.hosted && !selectedPlaylist.usb
       ? selectedPlaylist
       : undefined;
   const editingPlaylist = allPlaylists.find(
-    (playlist) => playlist.id === editingPlaylistId && playlist.type === "playlist",
+    (playlist) =>
+      playlist.id === editingPlaylistId && playlist.type === "playlist" && !playlist.usb,
   );
   const canvasPlaylist = playlists.find(
     (playlist) => playlist.id === canvasPlaylistId && playlist.type === "playlist",
   );
+
+  useEffect(() => {
+    if (!urlState.playlistId?.startsWith("usb:") || !usbMediaQuery.data) return;
+    if (usbPlaylists.some((playlist) => playlist.id === urlState.playlistId)) return;
+    setTemporaryCrate(undefined);
+    updateUrl({ playlistId: null, trackId: null, filter: "all" }, { replace: true });
+  }, [updateUrl, urlState.playlistId, usbMediaQuery.data, usbPlaylists]);
 
   const tracksQuery = useQuery({
     queryKey: [
@@ -410,17 +430,23 @@ export function App({ assistantEnabled = true }: AppProps) {
   const playerDetailQuery = useQuery({
     queryKey: ["track", playerTrackId],
     queryFn: ({ signal }) => getTrackDetail(playerTrackId!, signal),
-    enabled: Boolean(playerTrackId && !playerTrackId.startsWith("hosted-track:")),
+    enabled: Boolean(
+      playerTrackId &&
+      !playerTrackId.startsWith("hosted-track:") &&
+      !playerTrackId.startsWith("usb:"),
+    ),
   });
   const deckBDetailQuery = useQuery({
     queryKey: ["track", deckBTrackId],
     queryFn: ({ signal }) => getTrackDetail(deckBTrackId!, signal),
-    enabled: Boolean(deckBTrackId && !deckBTrackId.startsWith("hosted-track:")),
+    enabled: Boolean(
+      deckBTrackId && !deckBTrackId.startsWith("hosted-track:") && !deckBTrackId.startsWith("usb:"),
+    ),
   });
   const metadataDetailQuery = useQuery({
     queryKey: ["track", metadataTarget?.id],
     queryFn: ({ signal }) => getTrackDetail(metadataTarget!.id, signal),
-    enabled: Boolean(metadataTarget),
+    enabled: Boolean(metadataTarget && !metadataTarget.usb),
   });
 
   const writeEnabled = bootstrapQuery.data?.library.writeEnabled === true;
@@ -443,6 +469,7 @@ export function App({ assistantEnabled = true }: AppProps) {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: ["bootstrap"] }),
       queryClient.invalidateQueries({ queryKey: ["hosted-playlists"] }),
+      queryClient.invalidateQueries({ queryKey: ["usb-media"] }),
       queryClient.invalidateQueries({ queryKey: ["playlists"] }),
       queryClient.invalidateQueries({ queryKey: ["tracks"] }),
       queryClient.invalidateQueries({ queryKey: ["playlist-tracks"] }),
@@ -1065,7 +1092,11 @@ export function App({ assistantEnabled = true }: AppProps) {
 
   const quickCue = useCallback(
     (kind: "memory" | "hot", startSeconds: number, slot?: HotCueSlot) => {
-      if (!playerTrackId || playerTrackId.startsWith("hosted-track:")) {
+      if (
+        !playerTrackId ||
+        playerTrackId.startsWith("hosted-track:") ||
+        playerTrackId.startsWith("usb:")
+      ) {
         setToast({ tone: "error", message: "Select a track before setting a cue." });
         return;
       }
@@ -1265,6 +1296,7 @@ export function App({ assistantEnabled = true }: AppProps) {
   ].find((track) => track.id === selectedTrackIdRef.current);
   const selectedTrackCanAddToEditingPlaylist = Boolean(
     selectedTrack &&
+    !selectedTrack.usb &&
     editingPlaylist &&
     (editingPlaylist.hosted
       ? editingPlaylist.hosted.capabilities.itemsEditable &&
@@ -1579,10 +1611,11 @@ export function App({ assistantEnabled = true }: AppProps) {
       label: editorOpen ? "Close playlist editor" : "Edit current playlist",
       category: "Playlist",
       shortcut: "shift+e",
-      enabled: editorOpen || selectedPlaylist?.type === "playlist",
+      enabled:
+        editorOpen || Boolean(selectedPlaylist?.type === "playlist" && !selectedPlaylist.usb),
       handler: () => {
         if (editorOpen) setEditorOpen(false);
-        else if (selectedPlaylist?.type === "playlist") {
+        else if (selectedPlaylist?.type === "playlist" && !selectedPlaylist.usb) {
           setEditingPlaylistId(selectedPlaylist.id);
           setEditorOpen(true);
         }
@@ -1594,9 +1627,9 @@ export function App({ assistantEnabled = true }: AppProps) {
       label: "Edit selected track metadata",
       category: "Library",
       shortcut: "e",
-      enabled: Boolean(canWrite && selectedTrack && !selectedTrack.hosted),
+      enabled: Boolean(canWrite && selectedTrack && !selectedTrack.hosted && !selectedTrack.usb),
       handler: () => {
-        if (selectedTrack) setMetadataTarget(selectedTrack);
+        if (selectedTrack && !selectedTrack.usb) setMetadataTarget(selectedTrack);
       },
       when: () => !modalOpen,
     },
@@ -1844,7 +1877,8 @@ export function App({ assistantEnabled = true }: AppProps) {
         : undefined;
     const track = target.kind === "track" ? target.track : node?.track;
     if (!track) return [];
-    const localContentId = localTrackContentId(track);
+    const readOnlyTrack = Boolean(track.hosted || track.usb);
+    const localContentId = track.usb ? null : localTrackContentId(track);
     const editingHosted = editingPlaylist?.hosted;
     const canAddToEditingPlaylist = Boolean(
       editingPlaylist &&
@@ -1875,7 +1909,7 @@ export function App({ assistantEnabled = true }: AppProps) {
         label: "Edit metadata…",
         icon: <Pencil size={14} />,
         shortcut: "E",
-        disabled: !canWrite || Boolean(track.hosted),
+        disabled: !canWrite || readOnlyTrack,
       },
       {
         id: "add-canvas",
@@ -1889,9 +1923,7 @@ export function App({ assistantEnabled = true }: AppProps) {
                 : "Add to set canvas",
         icon: <Workflow size={14} />,
         disabled:
-          Boolean(track.hosted) ||
-          target.kind === "canvas-node" ||
-          (!canvasPlaylist && !normalPlaylist),
+          readOnlyTrack || target.kind === "canvas-node" || (!canvasPlaylist && !normalPlaylist),
       },
       ...(editingPlaylist
         ? [
@@ -1937,26 +1969,26 @@ export function App({ assistantEnabled = true }: AppProps) {
         id: "memory-cue",
         label: "Set memory cue at playhead",
         icon: <Flag size={14} />,
-        disabled: !canWrite || Boolean(track.hosted),
+        disabled: !canWrite || readOnlyTrack,
       },
       {
         id: "hot-cue",
         label: "Configure Hot Cue…",
         icon: <Sparkles size={14} />,
-        disabled: !canWrite || Boolean(track.hosted),
+        disabled: !canWrite || readOnlyTrack,
       },
       { kind: "separator" },
       {
         id: "analyze-track",
         label: "Run clean-room analysis",
         icon: <TestTube2 size={14} />,
-        disabled: Boolean(track.hosted) || !track.path || !track.fileExists,
+        disabled: readOnlyTrack || !track.path || !track.fileExists,
       },
       {
         id: "separate-stems",
         label: "Generate MLX stems",
         icon: <AudioLines size={14} />,
-        disabled: Boolean(track.hosted) || !track.path || !track.fileExists,
+        disabled: readOnlyTrack || !track.path || !track.fileExists,
       },
       ...(target.kind === "canvas-node"
         ? [
@@ -2033,11 +2065,11 @@ export function App({ assistantEnabled = true }: AppProps) {
     if (!track) return;
     if (id === "play-track") selectTrack(track, true);
     if (id === "load-deck-b") loadDeckB(track);
-    if (id === "edit-track" && !track.hosted) {
+    if (id === "edit-track" && !track.hosted && !track.usb) {
       selectTrack(track);
       setMetadataTarget(track);
     }
-    if (id === "add-canvas" && !track.hosted) addTrackToCanvas(track);
+    if (id === "add-canvas" && !track.hosted && !track.usb) addTrackToCanvas(track);
     if (id === "add-editing-playlist" && editingPlaylist) addTrackToEditingPlaylist(track);
     if (id === "add-selected-playlist" && normalPlaylist)
       applyMutation({ type: "add-track", playlistId: normalPlaylist.id, contentId: track.id });
@@ -2066,7 +2098,7 @@ export function App({ assistantEnabled = true }: AppProps) {
         setToast({ tone: "error", message: errorMessage(error) });
       }
     }
-    if (id === "memory-cue" && !track.hosted) {
+    if (id === "memory-cue" && !track.hosted && !track.usb) {
       selectTrack(track);
       const startSeconds =
         playerTrack?.id === track.id ? (playerRef.current?.getCurrentTime() ?? 0) : 0;
@@ -2077,7 +2109,7 @@ export function App({ assistantEnabled = true }: AppProps) {
         initial: { kind: "memory", startSeconds },
       });
     }
-    if (id === "hot-cue" && !track.hosted) {
+    if (id === "hot-cue" && !track.hosted && !track.usb) {
       selectTrack(track);
       const startSeconds =
         playerTrack?.id === track.id ? (playerRef.current?.getCurrentTime() ?? 0) : 0;
@@ -2109,11 +2141,11 @@ export function App({ assistantEnabled = true }: AppProps) {
     if (id === "remove-canvas-node" && node) {
       setCanvasState((current) => removeCanvasNode(current, node.id));
     }
-    if (id === "analyze-track" && !track.hosted)
+    if (id === "analyze-track" && !track.hosted && !track.usb)
       void enqueueProcessingJob(track.id, "analyze").catch((error) =>
         setToast({ tone: "error", message: errorMessage(error) }),
       );
-    if (id === "separate-stems" && !track.hosted)
+    if (id === "separate-stems" && !track.hosted && !track.usb)
       void enqueueProcessingJob(track.id, "stems").catch((error) =>
         setToast({ tone: "error", message: errorMessage(error) }),
       );
@@ -2131,6 +2163,9 @@ export function App({ assistantEnabled = true }: AppProps) {
         hosted={hostedPlaylistsQuery.data}
         hostedLoading={hostedPlaylistsQuery.isLoading}
         selectedHostedPlaylistId={selectedHostedPlaylist?.id ?? null}
+        usb={usbMediaQuery.data}
+        usbLoading={usbMediaQuery.isLoading}
+        selectedUsbPlaylistId={selectedUsbPlaylist?.id ?? null}
         selectedPlaylistId={urlState.playlistId}
         activeFilter={urlState.filter}
         loading={playlistsQuery.isLoading}
@@ -2152,6 +2187,11 @@ export function App({ assistantEnabled = true }: AppProps) {
         }
         onEditPlaylist={openPlaylistEditor}
         onSelectHostedPlaylist={openHostedPlaylist}
+        onSelectUsbPlaylist={(playlist) => {
+          setTemporaryCrate(undefined);
+          updateUrl({ playlistId: playlist.id, filter: "all", trackId: null });
+          setViewMode("table");
+        }}
         onEditHostedPlaylist={openPlaylistEditor}
         onToggleHostedDownload={(playlist, enabled) =>
           applyHostedMutation({
@@ -2314,19 +2354,21 @@ export function App({ assistantEnabled = true }: AppProps) {
           />
         ) : null}
 
-        <div className={`player-dock${dualDeck ? " is-dual" : ""}`}>
+        <div className={`player-dock is-minimal${dualDeck ? " is-dual" : ""}`}>
           <PlayerPanel
             ref={playerRef}
             adapter={playerAdapter}
             track={playerTrack}
             cues={playerDetailQuery.data?.cues ?? []}
             compact={dualDeck}
+            minimal
             deckLabel={dualDeck ? "A" : undefined}
             eq={deckAEq}
+            showEqControls={false}
             outputGain={deckGains.a}
             stemsPending={Boolean(playerTrack && pendingStemTrackIds.has(playerTrack.id))}
             stemJob={completedStemJobFor(playerTrack?.id)}
-            canEditCues={canWrite && !playerTrack?.hosted}
+            canEditCues={canWrite && !playerTrack?.hosted && !playerTrack?.usb}
             cueMutationPending={false}
             previousDisabled={!previousTrack}
             nextDisabled={!nextTrack}
@@ -2355,9 +2397,8 @@ export function App({ assistantEnabled = true }: AppProps) {
             onDeleteCue={(cue) =>
               applyMutation({ type: "delete-cue", contentId: cue.contentId, cueId: cue.id })
             }
-            onEqChange={setDeckAEq}
             onSeparateStems={() => {
-              if (!playerTrack) return;
+              if (!playerTrack || playerTrack.usb) return;
               void enqueueProcessingJob(playerTrack.id, "stems").catch((error) =>
                 setToast({ tone: "error", message: errorMessage(error) }),
               );
@@ -2411,16 +2452,6 @@ export function App({ assistantEnabled = true }: AppProps) {
                     }}
                   />
                 </label>
-                <button
-                  className="deck-reset-button"
-                  type="button"
-                  onClick={() => {
-                    setDeckAEq(FLAT_DECK_EQ);
-                    setDeckBEq(FLAT_DECK_EQ);
-                  }}
-                >
-                  Reset EQ
-                </button>
               </section>
               <PlayerPanel
                 ref={deckBRef}
@@ -2428,8 +2459,10 @@ export function App({ assistantEnabled = true }: AppProps) {
                 track={deckBTrack}
                 cues={deckBDetailQuery.data?.cues ?? []}
                 compact
+                minimal
                 deckLabel="B"
                 eq={deckBEq}
+                showEqControls={false}
                 outputGain={deckGains.b}
                 mediaSessionEnabled={false}
                 stemsPending={Boolean(deckBTrack && pendingStemTrackIds.has(deckBTrack.id))}
@@ -2437,9 +2470,8 @@ export function App({ assistantEnabled = true }: AppProps) {
                 canEditCues={false}
                 previousDisabled
                 nextDisabled
-                onEqChange={setDeckBEq}
                 onSeparateStems={() => {
-                  if (!deckBTrack) return;
+                  if (!deckBTrack || deckBTrack.usb) return;
                   void enqueueProcessingJob(deckBTrack.id, "stems").catch((error) =>
                     setToast({ tone: "error", message: errorMessage(error) }),
                   );
@@ -2536,8 +2568,13 @@ export function App({ assistantEnabled = true }: AppProps) {
                       : errorMessage(tracksQuery.error)
                   }
                   selectedTrackId={urlState.trackId}
-                  ordered={Boolean(temporaryCrate || normalPlaylist || selectedHostedPlaylist)}
-                  canEdit={canWrite && !selectedHostedPlaylist}
+                  ordered={Boolean(
+                    temporaryCrate ||
+                    normalPlaylist ||
+                    selectedHostedPlaylist ||
+                    selectedUsbPlaylist,
+                  )}
+                  canEdit={canWrite && !selectedHostedPlaylist && !selectedUsbPlaylist}
                   canWrite={
                     selectedPlaylistCanWrite &&
                     !urlState.query.trim() &&

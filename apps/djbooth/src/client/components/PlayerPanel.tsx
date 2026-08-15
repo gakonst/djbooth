@@ -30,6 +30,7 @@ import type {
   ProcessingJob,
   TrackCue,
   TrackWaveform,
+  UsbTrack,
 } from "../../shared/types.js";
 import { getTrackWaveform } from "../api.js";
 import { rekordboxHotCueColor } from "../cue-palette.js";
@@ -47,7 +48,7 @@ import {
   type TrackSource,
   type TrackSourceProvider,
 } from "../track-sources.js";
-import { waveformWithFallback } from "../waveform-fallback.js";
+import { displayWaveform } from "../waveform-display.js";
 import { PlayerWaveformCanvas } from "./PlayerWaveformCanvas.js";
 import { RgbWaveform } from "./RgbWaveform.js";
 import { SpotifyEmbedPlayer, type SpotifyEmbedPlayerHandle } from "./SpotifyEmbedPlayer.js";
@@ -69,6 +70,7 @@ export type PlayerTrack = {
   rating?: number;
   comment?: string | null;
   hosted?: HostedTrack;
+  usb?: UsbTrack;
 };
 
 export type PlayerCue = TrackCue;
@@ -78,9 +80,8 @@ export type PlayerWaveform = TrackWaveform;
  * Trusted media boundary for {@link PlayerPanel}.
  *
  * The player never receives filesystem paths. The host supplies same-origin media URLs and may
- * supply precomputed Rekordbox peaks. The player always supplies peak data to WaveSurfer—even a
- * flat placeholder—so it streams the media element instead of fetching and decoding the full
- * recording in browser memory.
+ * supply precomputed Rekordbox peaks. The hidden WaveSurfer transport receives a flat peak solely
+ * to prevent browser-side decoding; visible canvases render only real analysis data.
  */
 export interface PlayerAdapter {
   getAudioUrl(track: PlayerTrack): string | undefined;
@@ -115,7 +116,9 @@ export type PlayerPanelProps = {
   deckLabel?: "A" | "B";
   eq?: DeckEq;
   outputGain?: number;
+  showEqControls?: boolean;
   mediaSessionEnabled?: boolean;
+  minimal?: boolean;
   stemsPending?: boolean;
   stemJob?: ProcessingJob;
   canEditCues?: boolean;
@@ -168,7 +171,9 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     deckLabel,
     eq,
     outputGain = 1,
+    showEqControls = true,
     mediaSessionEnabled = true,
+    minimal = false,
     stemsPending = false,
     stemJob,
     canEditCues = false,
@@ -389,7 +394,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
     setCurrentTime(0);
     setDuration(finitePositive(track?.durationSeconds) ?? 0);
     setMediaError(undefined);
-    setWaveformData(track ? waveformWithFallback(null, track.id, track.durationSeconds) : null);
+    setWaveformData(null);
     soundCloudReadyRef.current = false;
     soundCloudPlayPendingRef.current = false;
     if (
@@ -506,7 +511,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       try {
         if (controller.signal.aborted) return;
         // Begin streaming immediately. Precomputed RGB peaks are an enhancement, not a gate on
-        // playback readiness, and can be drawn over the placeholder without reloading the media.
+        // playback readiness and can be drawn later without reloading the media.
         if (soundCloudStreaming && soundCloudProgressive) {
           await waveSurfer.load(
             audioUrl,
@@ -552,8 +557,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
           );
         }
         const waveform = await waveformRequest;
-        if (!controller.signal.aborted)
-          setWaveformData(waveformWithFallback(waveform, track.id, track.durationSeconds));
+        if (!controller.signal.aborted) setWaveformData(displayWaveform(waveform));
       } catch (error) {
         if (!controller.signal.aborted) reportError(error);
       }
@@ -685,7 +689,7 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
 
   return (
     <section
-      className={`player-panel${compact ? " is-compact" : ""}`}
+      className={`player-panel${compact ? " is-compact" : ""}${minimal ? " is-minimal" : ""}`}
       aria-label={deckLabel ? `Deck ${deckLabel}` : "Track player"}
     >
       {spotifyStreaming && track?.hosted ? (
@@ -802,7 +806,11 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
                   className="player-stems-button"
                   type="button"
                   disabled={
-                    !track || track.fileExists === false || Boolean(track.hosted) || stemsPending
+                    !track ||
+                    track.fileExists === false ||
+                    Boolean(track.hosted) ||
+                    Boolean(track.usb) ||
+                    stemsPending
                   }
                   onClick={onSeparateStems}
                   title="Generate four MLX stems"
@@ -960,8 +968,8 @@ export const PlayerPanel = forwardRef<PlayerPanelHandle, PlayerPanelProps>(funct
       </div>
 
       <div className="player-volume">
-        <span className="player-volume-label">{eq ? "Deck EQ" : "Level"}</span>
-        {eq && onEqChange ? (
+        <span className="player-volume-label">{showEqControls && eq ? "Deck EQ" : "Level"}</span>
+        {showEqControls && eq && onEqChange ? (
           <div className="player-eq-controls">
             <EqControl
               label="Low"

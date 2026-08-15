@@ -356,6 +356,41 @@ function beatGridEntries(value: unknown, maximum = 20_000): TrackBeatGridEntry[]
   });
 }
 
+type ReadableAnlzFile = {
+  get(key: string): unknown;
+  has(key: string): boolean;
+};
+
+/** Convert already-parsed Rekordbox ANLZ files into the bounded waveform sent to the UI. */
+export function waveformFromAnlzFiles(
+  files: readonly ReadableAnlzFile[],
+  durationSeconds: number | null,
+): TrackWaveform {
+  let peaks: number[] = [];
+  let colors: Array<[number, number, number]> = [];
+  let beatGrid: TrackBeatGridEntry[] = [];
+  for (const file of files) {
+    if (!file.has("PQTZ")) continue;
+    beatGrid = beatGridEntries(file.get("PQTZ"));
+    if (beatGrid.length) break;
+  }
+  for (const key of ["PWV5", "PWV4", "PWV3", "PWV2", "PWAV"]) {
+    for (const file of files) {
+      if (!file.has(key)) continue;
+      peaks = waveformHeights(file.get(key));
+      colors = waveformColors(file.get(key));
+      if (peaks.length) break;
+    }
+    if (peaks.length) break;
+  }
+  return {
+    durationSeconds,
+    ...normalizeWaveform(peaks, colors),
+    ...(beatGrid.length ? { beatGrid } : {}),
+    source: peaks.length ? "rekordbox" : "placeholder",
+  };
+}
+
 function normalizeArtworkContentType(format: string, source: string): string {
   const normalized = format.trim().toLocaleLowerCase();
   if (normalized === "image/jpg" || normalized === "jpg" || normalized === "jpeg")

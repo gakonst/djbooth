@@ -20,6 +20,7 @@ import {
   startLibraryServer,
   type LibraryApi,
   type RunningLibraryServer,
+  type UsbMediaApi,
 } from "../src/server/server.js";
 import { LibraryMutationConflictError, RekordboxLibraryService } from "../src/server/library.js";
 
@@ -203,6 +204,107 @@ describe("library server", () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
       error: { code: "NOT_FOUND", message: "The embedded assistant is disabled" },
+    });
+  });
+
+  it("serves mounted USB media, playlist tracks, and audio through read-only endpoints", async () => {
+    const files = fixture();
+    const deviceId = "device-1";
+    const playlistId = `usb:${deviceId}:playlist:7`;
+    const trackId = `usb:${deviceId}:track:42`;
+    const usbMedia: UsbMediaApi = {
+      scan: async () => ({
+        devices: [
+          {
+            id: deviceId,
+            name: "MIXSTICK",
+            mountPath: "/Volumes/MIXSTICK",
+            libraryFormat: "device-library",
+            status: "ready",
+            tracks: 1,
+            playlists: 1,
+            histories: 0,
+            totalBytes: 1_000,
+            availableBytes: 400,
+          },
+        ],
+        playlists: [
+          {
+            id: playlistId,
+            name: "Friday Night",
+            parentId: `usb:${deviceId}:root`,
+            seq: 1,
+            type: "playlist",
+            trackCount: 1,
+            usb: { deviceId, kind: "playlist", nativeId: 7 },
+          },
+        ],
+      }),
+      getTracks: async () => [
+        {
+          id: trackId,
+          title: "USB Track",
+          artist: "Artist",
+          album: null,
+          genre: "House",
+          key: "Am",
+          colorId: null,
+          bpm: 125,
+          durationSeconds: 180,
+          rating: 0,
+          playCount: 0,
+          analyzed: true,
+          artworkAvailable: false,
+          fileExists: true,
+          path: files.audioPath,
+          usb: { deviceId, nativeId: 42 },
+        },
+      ],
+      getAudioPath: async () => files.audioPath,
+      getWaveform: async () => ({
+        durationSeconds: 180,
+        peaks: [0.25, 1, 0.5],
+        source: "rekordbox",
+      }),
+    };
+    const server = await startLibraryServer({
+      api: mockApi(files.audioPath),
+      port: 0,
+      staticDirectory: files.staticDirectory,
+      usbMedia,
+    });
+    servers.push(server);
+
+    const media = await fetch(new URL("api/usb-media", server.url));
+    expect(media.status).toBe(200);
+    await expect(media.json()).resolves.toMatchObject({
+      devices: [{ name: "MIXSTICK", status: "ready" }],
+      playlists: [{ id: playlistId, name: "Friday Night" }],
+    });
+
+    const tracksUrl = new URL("api/tracks", server.url);
+    tracksUrl.searchParams.set("playlistId", playlistId);
+    const tracks = await fetch(tracksUrl);
+    expect(tracks.status).toBe(200);
+    await expect(tracks.json()).resolves.toMatchObject({
+      count: 1,
+      items: [{ id: trackId, title: "USB Track" }],
+    });
+
+    const audio = await fetch(new URL(`api/usb-audio/${encodeURIComponent(trackId)}`, server.url));
+    expect(audio.status).toBe(200);
+    expect(await audio.text()).toBe("0123456789");
+
+    const waveform = await fetch(
+      new URL(`api/waveforms/${encodeURIComponent(trackId)}`, server.url),
+    );
+    expect(waveform.status).toBe(200);
+    await expect(waveform.json()).resolves.toEqual({
+      waveform: {
+        durationSeconds: 180,
+        peaks: [0.25, 1, 0.5],
+        source: "rekordbox",
+      },
     });
   });
 
