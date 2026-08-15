@@ -34,6 +34,11 @@ import <source> → database rows
 - `link` and `usb` consume ready database rows directly.
 
 - One intent → highest-level command → rerun same command to resume/reconcile.
+- Every long-running umbrella command must expose observable progress. Use
+  `--progress auto|always|never`, emit phase plus bounded current/total updates to stderr, produce
+  an initial update promptly and periodic updates while work continues, and finish with a terminal
+  success phase. Keep stdout reserved for the selected human or machine result format; progress
+  callbacks are diagnostic and must never interrupt or become durable workflow state.
 - No package CLI, direct `dist`, manual SQL/filesystem, Rust binary, or Python bypass.
 - Lower-level command only for explicit low-level work or diagnosis; missing workflow → add umbrella route.
 - `enrich` is normal idempotent maintenance.

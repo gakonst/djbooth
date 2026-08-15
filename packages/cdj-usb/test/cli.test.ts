@@ -79,6 +79,8 @@ describe("CDJ USB CLI", () => {
     expect(output).toContain("play counts advance exactly once");
     expect(output).toContain("unchanged audio is not recopied");
     expect(output).toContain("--playlist-folder");
+    expect(output).toContain("--progress");
+    expect(output).toContain("structured stdout remains machine-readable");
     expect(output).toContain("Shared tracks copy once");
     expect(output).not.toContain("--write");
   });

@@ -278,10 +278,26 @@ function createUsbSyncCli<const Name extends string>(name: Name) {
         .max(32)
         .default(4)
         .describe("Parallel changed-media copy workers"),
+      progress: z
+        .enum(["auto", "always", "never"])
+        .default("auto")
+        .describe("Progress on stderr; structured stdout remains machine-readable"),
     }),
     output: z.union([syncOutput, playlistFolderSyncOutput]),
     async run(c) {
       try {
+        const showProgress =
+          c.options.progress === "always" ||
+          (c.options.progress === "auto" && (c.agent || !c.formatExplicit));
+        const onProgress = showProgress
+          ? (progress: { phase: string; current?: number; total?: number; message: string }) => {
+              const count =
+                progress.current === undefined
+                  ? ""
+                  : ` ${String(progress.current)}/${String(progress.total ?? "?")}`;
+              process.stderr.write(`[usb:${progress.phase}]${count} ${progress.message}\n`);
+            }
+          : undefined;
         if (c.options.playlistFolder)
           return await syncLegacyDevicePlaylistFolder({
             targetDirectory: c.args.target,
@@ -291,16 +307,24 @@ function createUsbSyncCli<const Name extends string>(name: Name) {
             databaseUnlock: !c.options.plain,
             copyConcurrency: c.options.copyConcurrency,
             fresh: c.options.fresh,
+            onProgress,
           });
         if (c.options.fresh)
           throw new TypeError("--fresh requires --playlist-folder for filtered dual-library sync");
-        return await syncLegacyDeviceLibrary({
+        if (showProgress)
+          process.stderr.write("[usb:prepare] Reconciling the complete USB library\n");
+        const result = await syncLegacyDeviceLibrary({
           targetDirectory: c.args.target,
           databasePath: c.options.database,
           databaseKey: c.options.databaseKey,
           databaseUnlock: !c.options.plain,
           copyConcurrency: c.options.copyConcurrency,
         });
+        if (showProgress)
+          process.stderr.write(
+            `[usb:complete] ${String(result.export.tracks)} tracks and ${String(result.export.playlists)} playlists synchronized\n`,
+          );
+        return result;
       } catch (error) {
         return failSync(c, error);
       }

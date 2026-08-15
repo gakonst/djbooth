@@ -105,8 +105,27 @@ export type SyncLegacyDevicePlaylistFolderOptions = {
   databaseUnlock?: boolean;
   /** Parallel unique-media copy workers. */
   copyConcurrency?: number;
+  /** Observe bounded phase and item progress without affecting the sync. */
+  onProgress?: (progress: SyncLegacyDevicePlaylistFolderProgress) => void;
   /** Deterministic clock override for tests. */
   now?: Date;
+};
+
+/** One machine-readable progress update for a filtered folder sync. */
+export type SyncLegacyDevicePlaylistFolderProgress = {
+  phase:
+    | "prepare"
+    | "inventory"
+    | "history"
+    | "plan"
+    | "catalog"
+    | "copy"
+    | "publish"
+    | "verify"
+    | "complete";
+  current?: number;
+  total?: number;
+  message: string;
 };
 
 /** Result of one filtered, batched, dual-format USB round trip. */
@@ -254,7 +273,7 @@ export async function syncLegacyDevicePlaylist(
         const usbAnalysisDirectory = posix.dirname(usbAnalysisDatPath);
         writer.addTrack({
           id: pdbId,
-          title: track.title ?? filename,
+          title: stringValue(track.title) ?? filename,
           artist: track.artist,
           key: track.key,
           filePath: usbAudioPath,
@@ -286,7 +305,7 @@ export async function syncLegacyDevicePlaylist(
         oneLibraryTracks.push({
           masterDbId: stringValue(content.get("MasterDBID")),
           masterContentId: track.contentId,
-          title: track.title ?? filename,
+          title: stringValue(track.title) ?? filename,
           artist: track.artist,
           key: track.key,
           subtitle: stringValue(content.get("Subtitle")),
@@ -449,6 +468,10 @@ export async function syncLegacyDevicePlaylistFolder(
     throw new RangeError("Playlist-folder copy concurrency must be between 1 and 32");
 
   const targetDirectory = await realpath(resolve(options.targetDirectory));
+  emitPlaylistFolderProgress(options.onProgress, {
+    phase: "prepare",
+    message: `Preparing '${targetDirectory}'`,
+  });
   const pdbPath = join(targetDirectory, EXPORT_PDB);
   const oneLibraryPath = join(targetDirectory, ONE_LIBRARY_DB);
   const markerPath = join(targetDirectory, PLAYLIST_MARKER);
@@ -486,6 +509,12 @@ export async function syncLegacyDevicePlaylistFolder(
       .sort((left, right) => left.sequence - right.sequence || left.name.localeCompare(right.name));
     if (!summaries.length)
       throw new Error(`Playlist folder '${options.folderName}' contains no direct playlists`);
+    emitPlaylistFolderProgress(options.onProgress, {
+      phase: "inventory",
+      current: summaries.length,
+      total: summaries.length,
+      message: `Found ${String(summaries.length)} playlists in '${options.folderName}'`,
+    });
 
     const rawMarker = options.fresh
       ? ({
@@ -529,6 +558,14 @@ export async function syncLegacyDevicePlaylistFolder(
       marker = { ...marker, importedHistories: history.receipts };
       await writePlaylistMarker(markerPath, marker);
     }
+    emitPlaylistFolderProgress(options.onProgress, {
+      phase: "history",
+      current: history.historiesImported + history.historiesAlreadyImported,
+      total: history.historiesFound,
+      message: history.historiesFound
+        ? `Reconciled ${String(history.historiesFound)} CDJ histories`
+        : "No CDJ histories to import",
+    });
 
     const priorByPlaylistId = new Map(marker.records.map((record) => [record.playlistId, record]));
     const selected = summaries.map((summary) => {
@@ -547,8 +584,20 @@ export async function syncLegacyDevicePlaylistFolder(
       return { summary, tracks, contentIds, prior };
     });
     const pending = selected.filter(({ prior }) => !prior);
+    emitPlaylistFolderProgress(options.onProgress, {
+      phase: "plan",
+      current: selected.length - pending.length,
+      total: selected.length,
+      message: `${String(pending.length)} playlists require synchronization`,
+    });
     if (!pending.length && !original.histories.length) {
       await writePlaylistMarker(markerPath, marker);
+      emitPlaylistFolderProgress(options.onProgress, {
+        phase: "complete",
+        current: selected.length,
+        total: selected.length,
+        message: "USB folder is already synchronized",
+      });
       return playlistFolderResult({
         databasePath,
         targetDirectory,
@@ -670,7 +719,7 @@ export async function syncLegacyDevicePlaylistFolder(
             const usbAnalysisPath = legacyUsbAnalysisPath(usbAudioPath);
             writer.addTrack({
               id: pdbId,
-              title: track.title ?? filename,
+              title: stringValue(track.title) ?? filename,
               artist: track.artist,
               key: track.key,
               filePath: usbAudioPath,
@@ -729,7 +778,13 @@ export async function syncLegacyDevicePlaylistFolder(
       if (!options.fresh) await copyFile(oneLibraryPath, stagedOneLibrary);
       let createOneLibrary = options.fresh ?? false;
       const nextRecords = [...marker.records];
-      for (const item of prepared) {
+      for (const [index, item] of prepared.entries()) {
+        emitPlaylistFolderProgress(options.onProgress, {
+          phase: "catalog",
+          current: index,
+          total: prepared.length,
+          message: `Writing OneLibrary playlist '${item.item.summary.name}'`,
+        });
         const oneLibrary = writeOneLibraryPlaylist({
           create: createOneLibrary,
           folderName: options.folderName,
@@ -752,13 +807,41 @@ export async function syncLegacyDevicePlaylistFolder(
           oneLibraryContentIds: oneLibrary.contentIds,
           syncedAt: now.toISOString(),
         });
+        emitPlaylistFolderProgress(options.onProgress, {
+          phase: "catalog",
+          current: index + 1,
+          total: prepared.length,
+          message: `Wrote OneLibrary playlist '${item.item.summary.name}'`,
+        });
       }
-      await runBounded(mediaJobs, copyConcurrency, (job) => job());
+      let completedMediaJobs = 0;
+      emitPlaylistFolderProgress(options.onProgress, {
+        phase: "copy",
+        current: 0,
+        total: mediaJobs.length,
+        message: `Copying ${String(mediaJobs.length)} unique tracks and analysis artifacts`,
+      });
+      await runBounded(mediaJobs, copyConcurrency, async (job) => {
+        await job();
+        completedMediaJobs++;
+        emitPlaylistFolderProgress(options.onProgress, {
+          phase: "copy",
+          current: completedMediaJobs,
+          total: mediaJobs.length,
+          message: `Copied ${String(completedMediaJobs)} of ${String(mediaJobs.length)} unique tracks`,
+        });
+      });
 
       const installed: string[] = [];
       let oneLibraryPublished = false;
       let pdbPublished = false;
       try {
+        emitPlaylistFolderProgress(options.onProgress, {
+          phase: "publish",
+          current: 0,
+          total: stagedInstalls.length + 2,
+          message: "Publishing staged media and both Rekordbox catalogs",
+        });
         for (const install of stagedInstalls) {
           await mkdir(dirname(install.target), { recursive: true });
           await rename(install.staged, install.target);
@@ -775,15 +858,27 @@ export async function syncLegacyDevicePlaylistFolder(
           generationId: randomUUID(),
           records: nextRecords,
         };
-        for (const record of nextRecords) {
+        for (const [index, record] of nextRecords.entries()) {
           verifyPriorRecord(inspectLegacyDevicePdb(await readFile(pdbPath)), record);
           verifyPriorOneLibrary(oneLibraryPath, record);
+          emitPlaylistFolderProgress(options.onProgress, {
+            phase: "verify",
+            current: index + 1,
+            total: nextRecords.length,
+            message: `Verified playlist '${record.playlistName}'`,
+          });
         }
         await verifyInstalledMedia(
           targetDirectory,
           stagedInstalls.map(({ target }) => target),
         );
         await writePlaylistMarker(markerPath, publishedMarker);
+        emitPlaylistFolderProgress(options.onProgress, {
+          phase: "complete",
+          current: selected.length,
+          total: selected.length,
+          message: `Synchronized ${String(selected.length)} playlists`,
+        });
         return playlistFolderResult({
           databasePath,
           targetDirectory,
@@ -812,18 +907,41 @@ export async function syncLegacyDevicePlaylistFolder(
   }
 }
 
+function emitPlaylistFolderProgress(
+  observer: SyncLegacyDevicePlaylistFolderOptions["onProgress"],
+  progress: SyncLegacyDevicePlaylistFolderProgress,
+): void {
+  try {
+    observer?.(progress);
+  } catch {
+    // Progress observers are diagnostic and must never interrupt USB publication.
+  }
+}
+
 function hydratePlaylistMarker(
   marker: PlaylistSyncMarker,
   database: MasterDatabase,
   databasePath: string,
   inspection: ReturnType<typeof inspectLegacyDevicePdb>,
 ): HydratedPlaylistSyncMarker {
-  const records = marker.records.map((record) => {
+  const activePlaylistIds = new Set(
+    database
+      .listPlaylists()
+      .filter(({ type }) => type !== "folder")
+      .map(({ id }) => id),
+  );
+  const records = marker.records.flatMap((record) => {
     if (record.databasePath !== databasePath)
       throw new Error(
         `Scoped USB receipt belongs to '${record.databasePath}', not '${databasePath}'`,
       );
     verifyPriorRecord(inspection, record);
+    if (!activePlaylistIds.has(record.playlistId)) {
+      if (!record.contentIds) return [];
+      if (record.contentIds.length !== record.trackIds.length)
+        throw new Error(`Scoped USB receipt for '${record.playlistName}' has no stable track map`);
+      return [{ ...record, contentIds: record.contentIds }];
+    }
     const current = database.getPlaylistTracks(record.playlistId);
     const contentIds = record.contentIds ?? current.map(({ contentId }) => contentId);
     if (contentIds.length !== record.trackIds.length)
@@ -831,7 +949,7 @@ function hydratePlaylistMarker(
     if (record.contentIds) {
       const currentIds = current.map(({ contentId }) => contentId);
       if (JSON.stringify(currentIds) !== JSON.stringify(record.contentIds))
-        return { ...record, contentIds: record.contentIds };
+        return [{ ...record, contentIds: record.contentIds }];
     } else {
       for (const [index, pdbId] of record.trackIds.entries()) {
         const deviceTrack = inspection.tracks.find(({ id }) => id === pdbId);
@@ -842,7 +960,7 @@ function hydratePlaylistMarker(
           );
       }
     }
-    return { ...record, contentIds };
+    return [{ ...record, contentIds }];
   });
   return {
     ...marker,
@@ -866,7 +984,7 @@ function oneLibraryTrack(
   return {
     masterDbId: stringValue(content.get("MasterDBID")),
     masterContentId: track.contentId,
-    title: track.title ?? filename,
+    title: stringValue(track.title) ?? filename,
     artist: track.artist,
     key: track.key,
     subtitle: stringValue(content.get("Subtitle")),

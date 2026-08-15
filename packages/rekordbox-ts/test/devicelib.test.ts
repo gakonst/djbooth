@@ -476,12 +476,16 @@ describe("master.db to legacy Device Library export", () => {
     connection.close();
     mkdirSync(fixture.output);
 
+    const progress: string[] = [];
     const first = await syncLegacyDevicePlaylistFolder({
       databasePath: fixture.databasePath,
       databaseUnlock: false,
       folderName: "Gigs",
       fresh: true,
       now: new Date("2026-08-04T12:00:00Z"),
+      onProgress(update) {
+        progress.push(update.phase);
+      },
       targetDirectory: fixture.output,
     });
     expect(first).toMatchObject({
@@ -497,6 +501,18 @@ describe("master.db to legacy Device Library export", () => {
       "Tonight",
       "Tomorrow",
     ]);
+    expect(progress).toEqual(
+      expect.arrayContaining([
+        "prepare",
+        "inventory",
+        "plan",
+        "catalog",
+        "copy",
+        "publish",
+        "verify",
+        "complete",
+      ]),
+    );
     const pdbPath = join(fixture.output, "PIONEER", "rekordbox", "export.pdb");
     let inspection = inspectLegacyDevicePdb(readFileSync(pdbPath));
     expect(inspection.tracks).toHaveLength(2);
@@ -545,6 +561,74 @@ describe("master.db to legacy Device Library export", () => {
       connection.prepare("SELECT Name FROM djmdPlaylist WHERE Name LIKE 'DJ Set %'").pluck().all(),
     ).toEqual(["DJ Set 2026-08-04"]);
     connection.close();
+  });
+
+  it("retires a legacy scoped receipt after its host playlist is deleted", async () => {
+    const fixture = exportFixture();
+    let connection = new Database(fixture.databasePath);
+    connection.exec(`
+      INSERT INTO djmdPlaylist (ID, Seq, Name, Attribute, ParentID, SmartList, rb_local_deleted)
+      VALUES ('playlist-2', 2, 'Tomorrow', 0, 'folder', NULL, 0);
+      INSERT INTO djmdSongPlaylist (ID, PlaylistID, ContentID, TrackNo, rb_local_deleted)
+      VALUES ('membership-3', 'playlist-2', '1', 1, 0);
+    `);
+    connection.close();
+    mkdirSync(fixture.output);
+
+    await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      fresh: true,
+      targetDirectory: fixture.output,
+    });
+
+    const markerPath = join(fixture.output, ".music-cdj-playlist-sync.json");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+      records: Array<{ contentIds?: string[]; playlistId: string; playlistName: string }>;
+    };
+    const deletedRecord = marker.records.find(({ playlistId }) => playlistId === "playlist");
+    if (!deletedRecord) throw new Error("Expected the Tonight scoped receipt");
+    delete deletedRecord.contentIds;
+    writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
+    connection = new Database(fixture.databasePath);
+    connection.prepare("UPDATE djmdPlaylist SET rb_local_deleted = 1 WHERE ID = ?").run("playlist");
+    connection.close();
+
+    const result = await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      targetDirectory: fixture.output,
+    });
+    expect(result).toMatchObject({ changed: false, playlistsChanged: 0, tracks: 1 });
+    const updatedMarker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+      records: Array<{ playlistId: string }>;
+    };
+    expect(updatedMarker.records.map(({ playlistId }) => playlistId)).toEqual(["playlist-2"]);
+  });
+
+  it("uses the audio filename when a scoped playlist track has an empty title", async () => {
+    const fixture = exportFixture();
+    const connection = new Database(fixture.databasePath);
+    connection.prepare("UPDATE djmdContent SET Title = '' WHERE ID = ?").run("1");
+    connection.close();
+    mkdirSync(fixture.output);
+
+    await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      fresh: true,
+      targetDirectory: fixture.output,
+    });
+
+    const inspection = inspectLegacyDevicePdb(
+      readFileSync(join(fixture.output, "PIONEER", "rekordbox", "export.pdb")),
+    );
+    expect(inspection.tracks.find(({ filePath }) => filePath.endsWith("/one.mp3"))?.title).toBe(
+      "one.mp3",
+    );
   });
 
   it("keeps SQLite authoritative and emits audio, rewritten ANLZ, playlists, and export.pdb", async () => {
