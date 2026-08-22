@@ -166,6 +166,27 @@ describe("SoulseekLibraryAcquirer", () => {
     expect(fake.search).toHaveBeenCalledTimes(2);
   });
 
+  test("shares one lazy connection across distinct concurrent searches", async () => {
+    const fake = fakeClient([]);
+    fake.connect.mockImplementation(async function (this: SoulseekLibraryClient) {
+      if (this.state !== "disconnected") throw new Error(`Cannot connect while ${this.state}`);
+      this.state = "connecting";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      this.state = "connected";
+    });
+    const acquirer = new SoulseekLibraryAcquirer(fake.client, {
+      credentials: { username: "local", password: "secret" },
+    });
+
+    await Promise.all([
+      acquirer.search({ title: "First", artists: ["Artist"] }),
+      acquirer.search({ title: "Second", artists: ["Artist"] }),
+    ]);
+
+    expect(fake.connect).toHaveBeenCalledTimes(1);
+    expect(fake.search).toHaveBeenCalledTimes(2);
+  });
+
   test("passes a stable staging path and explicit resume file to the direct client download", async () => {
     const fake = fakeClient([
       response("peer name", [
