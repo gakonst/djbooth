@@ -344,7 +344,7 @@ fn connect_a9_usb_midi() -> Result<(
                     }
                     Err(_) => break,
                 };
-                for packet in buffer[..length].chunks_exact(4) {
+                for packet in buffer[..length].as_chunks::<4>().0 {
                     let midi_length = usb_midi_message_length(packet[0] & 0x0f);
                     if midi_length == 0 {
                         continue;
