@@ -18,7 +18,9 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/install-dependencies
 
+      - name: Build packages
+        run: pnpm run build
+
       - name: Publish preview packages
-        run: |
-          pnpm run build
-          pnpx pkg-pr-new publish --pnpm
+        continue-on-error: true
+        run: pnpx pkg-pr-new publish --pnpm

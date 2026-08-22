@@ -29,6 +29,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
+      - name: Set up Rust formatting
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
