@@ -32,7 +32,7 @@ jobs:
       - name: Set up Rust formatting
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
