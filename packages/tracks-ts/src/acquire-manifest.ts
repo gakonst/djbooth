@@ -286,9 +286,13 @@ export async function acquireManifest(
   const waitForArtifactCallbacks = async (): Promise<void> => {
     await Promise.all(artifactCallbacks.values());
     if (artifactCallbackErrors.length) {
+      const sample = artifactCallbackErrors
+        .slice(0, 3)
+        .map((error) => error.message)
+        .join("; ");
       throw new AggregateError(
         artifactCallbackErrors,
-        `Verified-artifact callbacks failed for ${String(artifactCallbackErrors.length)} track(s)`,
+        `Verified-artifact callbacks failed for ${String(artifactCallbackErrors.length)} track(s): ${sample}`,
       );
     }
   };
