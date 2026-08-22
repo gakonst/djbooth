@@ -38,6 +38,11 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev
 
+      - name: Configure OpenSSL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_DIR=$env:ProgramFiles\OpenSSL" >> $env:GITHUB_ENV'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

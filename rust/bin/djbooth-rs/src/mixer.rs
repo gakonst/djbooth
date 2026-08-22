@@ -263,7 +263,9 @@ pub(crate) fn connect_midi(
             },
             (),
         )
-        .with_context(|| format!("failed to connect to MIDI input '{device_name}'"))?;
+        .map_err(|error| {
+            anyhow::anyhow!("failed to connect to MIDI input '{device_name}': {error}")
+        })?;
     Ok((
         MixerMidiConnection::CoreMidi {
             _connection: connection,
