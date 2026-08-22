@@ -63,9 +63,11 @@ jobs:
         run: |
           pnpm plugin:check
           pnpm format:check
-          pnpm --filter '!@gakonst/cdj-usb' -r --if-present run lint
+          pnpm --filter '!djbooth.ai' --filter '!@gakonst/cdj-usb' \
+            -r --if-present run lint
           pnpm typecheck
-          pnpm --filter '!@gakonst/cdj-usb' --filter '!@gakonst/djlink' \
+          pnpm --filter '!djbooth.ai' --filter '!@gakonst/cdj-usb' \
+            --filter '!@gakonst/djlink' \
             -r --workspace-concurrency=2 run test
           pnpm --filter @gakonst/cdj-usb exec vitest run
           pnpm --filter @gakonst/djlink exec vitest run
