@@ -133,6 +133,7 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
   }
 
   shouldContinueAfterError(error: unknown) {
+    if (isForbiddenMediaError(error)) return { from: "native" as const, code: "HTTP_ERROR" };
     return nativeFallbackFor(error) ?? false;
   }
 
@@ -233,6 +234,8 @@ function isForbiddenMediaError(error: unknown): boolean {
   );
 }
 
+const YOUTUBE_REFERENCE_EXTRACTOR_ARGS = ["youtube:player_client=tv_embedded"];
+
 export class YtdlpReferenceAcquirer implements TrackAcquirer {
   readonly backend = "ytdlp" as const;
   readonly requiresPriorCapabilityFailure: boolean;
@@ -283,7 +286,7 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     const source = `ytsearch${this.#searchLimit}:${query}`;
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       flatPlaylist: true,
-      extractorArgs: ["youtube:player_client=android_vr"],
+      extractorArgs: YOUTUBE_REFERENCE_EXTRACTOR_ARGS,
     };
     const result = await this.#inspect("search", source, inspectOptions, this.#searchTtlMs);
     return (result.entries ?? []).flatMap((entry) => {
@@ -325,7 +328,7 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     }
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       playlist: false,
-      extractorArgs: ["youtube:player_client=android_vr"],
+      extractorArgs: YOUTUBE_REFERENCE_EXTRACTOR_ARGS,
     };
     const info = await this.#inspect(
       "media",
@@ -347,7 +350,7 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
       audioFormat: "m4a",
       audioQuality: "0",
       embedMetadata: false,
-      extractorArgs: ["youtube:player_client=android_vr"],
+      extractorArgs: YOUTUBE_REFERENCE_EXTRACTOR_ARGS,
     });
     const path = await findOutputFile(result.files, destinationDirectory, basename);
     return {
