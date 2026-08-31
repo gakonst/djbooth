@@ -4,13 +4,26 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
+import { YtdlpError } from "@gakonst/ytdlp-ts";
+
 import { JsonDiskCache } from "../src/cache.js";
 import {
+  YtdlpNativeAcquirer,
   YtdlpReferenceAcquirer,
   type YtdlpReferenceClient,
 } from "../src/integrations/ytdlp-library.js";
 
 describe("YtdlpReferenceAcquirer", () => {
+  test("delegates forbidden native media URLs to the reference backend", () => {
+    const acquirer = new YtdlpNativeAcquirer({ cache: false });
+
+    expect(
+      acquirer.shouldContinueAfterError(
+        new YtdlpError("HTTP_ERROR", "Forbidden", { status: 403 }),
+      ),
+    ).toEqual({ from: "native", code: "HTTP_ERROR" });
+  });
+
   test("searches one track and downloads a direct M4A through the injected library", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-ytdlp-library-"));
     const calls: Array<{ kind: string; url: string; options: unknown }> = [];
@@ -74,7 +87,10 @@ describe("YtdlpReferenceAcquirer", () => {
     expect(calls[0]).toMatchObject({
       kind: "inspect",
       url: "ytsearch4:Artist Track",
-      options: { flatPlaylist: true },
+      options: {
+        flatPlaylist: true,
+        extractorArgs: ["youtube:player_client=tv_embedded"],
+      },
     });
     expect(calls[2]).toMatchObject({
       kind: "download",
@@ -84,6 +100,7 @@ describe("YtdlpReferenceAcquirer", () => {
         extractAudio: true,
         audioFormat: "m4a",
         noOverwrites: true,
+        extractorArgs: ["youtube:player_client=tv_embedded"],
       },
     });
   });

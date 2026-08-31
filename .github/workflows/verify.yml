@@ -29,11 +29,48 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
+      - name: Set up Rust formatting
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux native development libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+
+      - name: Configure OpenSSL on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"OPENSSL_DIR=$env:ProgramFiles\OpenSSL" >> $env:GITHUB_ENV'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Validate workspace
+        if: runner.os != 'Windows'
         run: pnpm validate
+
+      - name: Validate portable workspace on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pnpm plugin:check
+          pnpm format:check
+          pnpm --filter '!djbooth.ai' --filter '!@gakonst/cdj-usb' \
+            -r --if-present run lint
+          pnpm typecheck
+          pnpm --filter '!djbooth.ai' --filter '!@gakonst/cdj-usb' \
+            --filter '!@gakonst/djlink' \
+            -r --workspace-concurrency=2 run test
+          pnpm --filter @gakonst/cdj-usb exec vitest run
+          pnpm --filter @gakonst/djlink exec vitest run
 
   coverage:
     name: Coverage

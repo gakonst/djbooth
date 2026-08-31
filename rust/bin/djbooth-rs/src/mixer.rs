@@ -263,7 +263,9 @@ pub(crate) fn connect_midi(
             },
             (),
         )
-        .with_context(|| format!("failed to connect to MIDI input '{device_name}'"))?;
+        .map_err(|error| {
+            anyhow::anyhow!("failed to connect to MIDI input '{device_name}': {error}")
+        })?;
     Ok((
         MixerMidiConnection::CoreMidi {
             _connection: connection,
@@ -344,7 +346,7 @@ fn connect_a9_usb_midi() -> Result<(
                     }
                     Err(_) => break,
                 };
-                for packet in buffer[..length].chunks_exact(4) {
+                for packet in buffer[..length].as_chunks::<4>().0 {
                     let midi_length = usb_midi_message_length(packet[0] & 0x0f);
                     if midi_length == 0 {
                         continue;
