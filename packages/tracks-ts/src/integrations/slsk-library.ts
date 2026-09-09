@@ -270,22 +270,18 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
 
   async #connectedClient(): Promise<SoulseekLibraryClient> {
     this.#signal?.throwIfAborted();
-    if (this.#connecting) {
-      await this.#connecting;
-      this.#signal?.throwIfAborted();
-      return this.#client!;
-    }
-    const availability = await this.availability();
-    if (!availability.available) throw new Error(`Soulseek unavailable: ${availability.reason}`);
     const client = this.#client!;
     if (client.state === "connected") return client;
-    if (!client.connect) return client;
-    const connecting = this.#signal
-      ? client.connect(this.#credentials.username!, this.#credentials.password!, {
-          signal: this.#signal,
-        })
-      : client.connect(this.#credentials.username!, this.#credentials.password!);
-    this.#connecting ??= connecting.finally(() => {
+    this.#connecting ??= (async () => {
+      const availability = await this.availability();
+      if (!availability.available) throw new Error(`Soulseek unavailable: ${availability.reason}`);
+      if (client.state === "connected" || !client.connect) return;
+      await (this.#signal
+        ? client.connect(this.#credentials.username!, this.#credentials.password!, {
+            signal: this.#signal,
+          })
+        : client.connect(this.#credentials.username!, this.#credentials.password!));
+    })().finally(() => {
       this.#connecting = undefined;
     });
     await this.#connecting;
