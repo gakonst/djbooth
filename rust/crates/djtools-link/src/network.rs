@@ -7,13 +7,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 use std::ffi::CString;
 #[cfg(target_os = "macos")]
 use std::io::Read;
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 use std::num::NonZeroU32;
 #[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
@@ -170,7 +170,6 @@ impl RawUdpTx {
         Ok(Self { tx })
     }
 
-    #[cfg(test)]
     pub(crate) fn disabled() -> Self {
         let (tx, rx) = mpsc::channel(1);
         drop(rx);
@@ -325,9 +324,13 @@ pub(crate) fn bind_udp(
     interface_name: Option<&str>,
     broadcast: bool,
 ) -> io::Result<UdpSocket> {
-    #[cfg(target_os = "macos")]
+    #[cfg(target_vendor = "apple")]
     {
         let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        // Darwin's default UDP send space is only 9 KiB. NFSv2 replies can
+        // approach 64 KiB; let the kernel fragment them on iOS, where the
+        // desktop raw BPF fallback is unavailable.
+        socket.set_send_buffer_size(128 * 1024)?;
         if let Some(interface_name) = interface_name {
             socket.bind_device_by_index_v4(Some(interface_index(interface_name)?))?;
         }
@@ -337,7 +340,7 @@ pub(crate) fn bind_udp(
         return UdpSocket::from_std(socket.into());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_vendor = "apple"))]
     {
         let socket = std::net::UdpSocket::bind(address)?;
         socket.set_broadcast(broadcast)?;
@@ -351,7 +354,7 @@ pub(crate) async fn connect_tcp(
     target: SocketAddrV4,
     interface_name: Option<&str>,
 ) -> io::Result<TcpStream> {
-    #[cfg(target_os = "macos")]
+    #[cfg(target_vendor = "apple")]
     {
         if let Some(interface_name) = interface_name {
             let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
@@ -379,7 +382,7 @@ pub(crate) async fn connect_tcp(
     TcpStream::connect(target).await
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 fn interface_index(interface_name: &str) -> io::Result<NonZeroU32> {
     let name = CString::new(interface_name).map_err(|_| {
         io::Error::new(

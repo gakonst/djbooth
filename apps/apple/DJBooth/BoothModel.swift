@@ -201,6 +201,12 @@ struct PlaylistRemovalUndo {
     private var lastSessionSave = Date.distantPast
     private var queueCollection: String?
     private var queueFilter = "All music"
+    #if os(iOS)
+    var djLink = DJLinkConnection()
+    var showDJLink = false
+    #endif
+    var cdjDownloadStatus: String?
+    private var cdjDownloads: Task<Void, Never>?
     private var audioDownloads: [String: Task<(URL, String), Error>] = [:]
     private var exportingCollection = false
     #if DEBUG
@@ -503,6 +509,7 @@ struct PlaylistRemovalUndo {
             guard generation == connectionGeneration else { return }
             try await reload()
             await fulfillOfflineLaunchRequest()
+            downloadOfflineCDJAnalysis()
         } catch {
             guard generation == connectionGeneration, !(error is CancellationError) else { return }
             // Background sync is optional for local use. A server outage must
@@ -934,9 +941,39 @@ struct PlaylistRemovalUndo {
         }
         #endif
     }
+    /// Fetch immutable desktop analysis during normal sync/download, independently of DJ Link.
+    private func downloadOfflineCDJAnalysis() {
+        guard cdjDownloads == nil, let cloud else { return }
+        let generation = connectionGeneration
+        cdjDownloads = Task { [weak self, audio] in
+            defer {
+                if self?.connectionGeneration == generation {
+                    self?.cdjDownloads = nil; self?.cdjDownloadStatus = nil
+                }
+            }
+            var visited = Set<String>()
+            while !Task.isCancelled, self?.connectionGeneration == generation {
+                guard let track = self?.tracks.first(where: {
+                    !visited.contains($0.id) && self?.offlineIDs.contains($0.id) == true &&
+                    $0.analysis != nil && $0.analysis?.mediaHash == $0.mediaHash
+                }), let analysis = track.analysis else { return }
+                visited.insert(track.id)
+                do {
+                    for hash in analysis.hashes {
+                        if await audio.existing(hash: hash) != nil { continue }
+                        self?.cdjDownloadStatus = "Downloading CDJ files · " + track.title
+                        _ = try await audio.download(cloud.mediaRequest(hash: hash), expectedHash: hash)
+                    }
+                } catch {
+                    guard !(error is CancellationError) else { return }
+                    self?.syncStatus = "CDJ analysis download interrupted · will retry on sync"
+                }
+            }
+        }
+    }
     private func offlineAudio(_ track: Track) async throws -> URL {
         let generation = connectionGeneration
-        if let hash = track.mediaHash, let file = await audio.existing(hash: hash) { return file }
+        if let hash = track.mediaHash, let file = await audio.existing(hash: hash) { downloadOfflineCDJAnalysis(); return file }
         guard generation == connectionGeneration else { throw CancellationError() }
         let download: Task<(URL, String), Error>
         if let existing = audioDownloads[track.id] { download = existing }
@@ -974,6 +1011,7 @@ struct PlaylistRemovalUndo {
             applyTrackUpdate(updated)
         }
         offlineIDs.insert(track.id)
+        downloadOfflineCDJAnalysis()
         pendingCount = try store.pendingCount()
         return result.0
     }
@@ -1034,12 +1072,16 @@ struct PlaylistRemovalUndo {
             try Keychain.remove(endpoint.accountScope(cloudAccountID))
             UserDefaults.standard.removeObject(forKey: "cloudAccount:" + endpoint.scope)
         }
+        #if os(iOS)
+        await djLink.disconnect()
+        #endif
         persistPlaybackSession()
         clearAgent()
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
         cloud = nil; cloudAccountID = nil; cloudURL = ""
         UserDefaults.standard.removeObject(forKey: "cloudURL")
         connectionGeneration = UUID(); playbackRequest = UUID()
+        cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
         player.stop(); selectedCollection = nil
@@ -1071,6 +1113,9 @@ struct PlaylistRemovalUndo {
         try Keychain.save(token, key: scope)
         UserDefaults.standard.set(account.id, forKey: "cloudAccount:" + endpoint.scope)
         UserDefaults.standard.set(endpoint.url.absoluteString, forKey: "cloudURL")
+        #if os(iOS)
+        await djLink.disconnect()
+        #endif
         persistPlaybackSession()
         playbackSessionReady = false
         playbackPreferences = PlaybackSessionPreferences(scope: scope)
@@ -1089,6 +1134,7 @@ struct PlaylistRemovalUndo {
         offlineCollectionID = UserDefaults.standard.string(forKey: "\(offlineKey).collection")
         offlineCollectionSelected = false
         #endif
+        cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
         player.stop(); selectedCollection = nil

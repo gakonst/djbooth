@@ -16,22 +16,33 @@ public struct Track: Codable, Identifiable, Sendable, Equatable {
     // Only content hashes cross devices; workstation filesystem paths never do.
     public var mediaHash: String?
     public var mediaExtension: String?
+    public var analysis: CDJAnalysis?
     public var waveform: Waveform?
 
     public init(id: String, title: String, artist: String? = nil, album: String? = nil,
                 genre: String? = nil, key: String? = nil, bpm: Double? = nil,
                 durationSeconds: Double? = nil, artworkAvailable: Bool = false,
                 fileExists: Bool = false, analyzed: Bool = false, hosted: HostedTrack? = nil,
-                mediaHash: String? = nil, mediaExtension: String? = nil, waveform: Waveform? = nil) {
+                mediaHash: String? = nil, mediaExtension: String? = nil, waveform: Waveform? = nil, analysis: CDJAnalysis? = nil) {
         self.id = id; self.title = title; self.artist = artist; self.album = album
         self.genre = genre; self.key = key; self.bpm = bpm; self.durationSeconds = durationSeconds
         self.artworkAvailable = artworkAvailable; self.fileExists = fileExists
         self.analyzed = analyzed; self.hosted = hosted; self.mediaHash = mediaHash
         self.mediaExtension = mediaExtension
+        self.analysis = analysis
         self.waveform = waveform
     }
     public var source: String { hosted?.provider.capitalized ?? "Library" }
     public var localContentID: String? { hosted == nil ? id : hosted?.localContentId }
+}
+
+/// Original desktop ANLZ objects, tied to the exact recording hash.
+public struct CDJAnalysis: Codable, Sendable, Equatable {
+    public var mediaHash, dat, ext, twoEx: String
+    public init(mediaHash: String, dat: String, ext: String, twoEx: String) {
+        self.mediaHash = mediaHash; self.dat = dat; self.ext = ext; self.twoEx = twoEx
+    }
+    public var hashes: [String] { [dat, ext, twoEx] }
 }
 
 public struct Waveform: Codable, Sendable, Equatable {

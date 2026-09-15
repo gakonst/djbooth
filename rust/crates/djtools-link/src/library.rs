@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,8 @@ const BASE85_ALPHABET: &[u8] =
 const SPECIAL_REKORDBOX_PLAYLIST_IDS: &[u32] = &[100_000, 200_000];
 const OMITTED_AUDIO_SAMPLE_LIMIT: usize = 25;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct TrackRecord {
     pub track_id: u32,
     pub title: String,
@@ -58,7 +59,8 @@ pub struct TrackRecord {
     pub date_added: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlaylistRecord {
     pub playlist_id: u32,
     pub name: String,
@@ -111,7 +113,52 @@ impl LibraryValidationReport {
     }
 }
 
+/// Precomputed once per immutable library: never scan every track on each audio read.
+#[derive(Default)]
+pub(crate) struct NfsExports {
+    pub files: HashSet<PathBuf>,
+    pub paths: HashSet<PathBuf>,
+}
+
 impl LibrarySnapshot {
+    pub(crate) fn nfs_exports(&self) -> NfsExports {
+        let files: HashSet<PathBuf> = self
+            .all_tracks
+            .iter()
+            .flat_map(|track| {
+                [
+                    Some(track.mount_path.clone()),
+                    track.analysis_dat_path.clone(),
+                    track.analysis_ext_path.clone().or_else(|| {
+                        track
+                            .analysis_dat_path
+                            .as_ref()
+                            .map(|path| path.with_extension("EXT"))
+                    }),
+                    track.analysis_twoex_path.clone().or_else(|| {
+                        track
+                            .analysis_dat_path
+                            .as_ref()
+                            .map(|path| path.with_extension("2EX"))
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .filter(|path| {
+                path.is_absolute()
+                    && !path
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+            })
+            .collect();
+        let paths = files
+            .iter()
+            .flat_map(|file| file.ancestors().map(Path::to_path_buf))
+            .collect();
+        NfsExports { files, paths }
+    }
+
     pub fn from_rekordbox_master_db(
         database_path: &Path,
         include_missing: bool,
@@ -843,7 +890,7 @@ fn rekordbox_share_path(share_directory: &Path, value: &str) -> Option<PathBuf> 
     Some(share_directory.join(normalized.trim_start_matches('/')))
 }
 
-fn normalize_camelot_key(value: &str) -> String {
+pub fn normalize_camelot_key(value: &str) -> String {
     let normalized = value
         .trim()
         .replace('♯', "#")
@@ -1400,5 +1447,42 @@ mod tests {
         assert_eq!(normalize_camelot_key("G♯m"), "1A");
         assert_eq!(normalize_camelot_key("10b"), "10B");
         assert_eq!(normalize_camelot_key("not a key"), "");
+    }
+}
+
+#[cfg(test)]
+mod export_boundary_tests {
+    use super::*;
+    #[test]
+    fn nfs_exports_only_library_files_and_their_ancestors() {
+        let track = TrackRecord {
+            mount_path: PathBuf::from("/app/session/audio.mp3"),
+            analysis_dat_path: Some(PathBuf::from("/app/session/1.DAT")),
+            ..Default::default()
+        };
+        let library = LibrarySnapshot {
+            master_db_id: 1,
+            tracks_by_id: BTreeMap::new(),
+            all_tracks: vec![track],
+            playlists: vec![],
+        };
+        let exports = library.nfs_exports();
+        assert!(exports.paths.contains(Path::new("/")));
+        assert!(exports.paths.contains(Path::new("/app/session")));
+        assert!(exports.files.contains(Path::new("/app/session/audio.mp3")));
+        assert!(exports.files.contains(Path::new("/app/session/1.DAT")));
+        assert!(exports.files.contains(Path::new("/app/session/1.EXT")));
+        assert!(!exports.files.contains(Path::new("/app/session")));
+        assert!(!exports.paths.contains(Path::new("/app/library.sqlite")));
+        assert!(
+            !exports
+                .paths
+                .contains(Path::new("/app/session/../library.sqlite"))
+        );
+        assert!(
+            !exports
+                .paths
+                .contains(Path::new("/app/session/audio.mp3/child"))
+        );
     }
 }

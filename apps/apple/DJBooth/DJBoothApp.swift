@@ -59,6 +59,9 @@ struct BoothRoot: View {
             .background(BoothStyle.background)
             .sheet(isPresented: $model.showSettings) { ConnectionSettings(model: model) }
             .sheet(isPresented: $model.showAgent) { MusicAgentView(model: model) }
+            #if os(iOS)
+            .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
+            #endif
             .sheet(isPresented: $model.showImport) { ImportSheet(model: model) }
             .alert("Remove from playlist?", isPresented: Binding(
                 get: { model.pendingPlaylistRemoval != nil },
@@ -83,7 +86,13 @@ struct BoothRoot: View {
                 if !PerformanceProbe.offline { await model.startup() }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { model.persistPlaybackSession(); model.stopPhoneTools() }
+                if phase != .active {
+                    model.persistPlaybackSession()
+                    model.stopPhoneTools()
+                    #if os(iOS)
+                    if model.djLink.status.running || model.djLink.busy { Task { await model.djLink.disconnect() } }
+                    #endif
+                }
             }
             .task(id: "\(model.accountConnectionID):\(scenePhase)") {
                 guard scenePhase == .active, !model.demo else { return }
@@ -93,6 +102,9 @@ struct BoothRoot: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     await model.refreshUSBConnection()
+                    #if os(iOS)
+                    await model.djLink.autoConnect(model: model)
+                    #endif
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }

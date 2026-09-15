@@ -21,6 +21,8 @@ struct MobileLibraryNavigation: View {
                         if model.cloudAccountID != nil {
                             Button { model.showAgent = true } label: { Label("Music agent", systemImage: "bubble.left.and.bubble.right") }
                         }
+                        Button { model.showDJLink = true } label: { Label("Connect to CDJ", systemImage: "network") }
+                            .accessibilityIdentifier("library.drawer.djlink")
                         Button { model.showSettings = true } label: { Label("Sync & settings", systemImage: "gearshape") }
                             .accessibilityIdentifier("library.drawer.settings")
                     } label: { Label("Library", systemImage: "line.3.horizontal") }

@@ -10,7 +10,7 @@ deunicode.workspace = true
 djtools-core.workspace = true
 flate2.workspace = true
 image.workspace = true
-rusqlite.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
@@ -18,7 +18,13 @@ tracing-subscriber.workspace = true
 tokio.workspace = true
 walkdir.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+rusqlite = { workspace = true, features = ["bundled-sqlcipher"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
 libc.workspace = true
 socket2.workspace = true
 

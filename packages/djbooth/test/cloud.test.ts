@@ -150,9 +150,17 @@ describe("cloud publishing", () => {
     try {
       const path = join(directory, "recording.flac");
       await writeFile(path, "recording bytes");
+      const paths = {
+        DAT: join(directory, "ANLZ.DAT"),
+        EXT: join(directory, "ANLZ.EXT"),
+        "2EX": join(directory, "ANLZ.2EX"),
+      };
+      for (const [type, path] of Object.entries(paths))
+        await writeFile(path, `original ${type} bytes`);
+      const source = { ...library(path), getAnalysisPaths: () => paths };
       const server = cloud();
       const options = { endpoint: "https://sync.example.com", token: "test-token" };
-      const first = await publishCloudLibrary(library(path), options, server.request);
+      const first = await publishCloudLibrary(source, options, server.request);
       expect(first).toMatchObject({
         tracks: 1,
         published: 3,
@@ -173,7 +181,19 @@ describe("cloud publishing", () => {
         mediaExtension: "flac",
         mediaHash: [...server.media.keys()][0],
       });
-      const second = await publishCloudLibrary(library(path), options, server.request);
+      const published = JSON.parse(server.changes[2]!.payload!);
+      expect(published.analysis.mediaHash).toBe(published.mediaHash);
+      expect(server.media.size).toBe(4);
+      for (const [key, type] of [
+        ["dat", "DAT"],
+        ["ext", "EXT"],
+        ["twoEx", "2EX"],
+      ]) {
+        expect(Buffer.from(server.media.get(published.analysis[key!])!).toString()).toBe(
+          `original ${type} bytes`,
+        );
+      }
+      const second = await publishCloudLibrary(source, options, server.request);
       expect(second).toMatchObject({
         published: 0,
         uploaded: 0,
