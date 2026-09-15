@@ -47,7 +47,11 @@ public enum USBDeviceFiles {
         let options: URL.BookmarkCreationOptions = []
         #endif
         let bookmark = try root.bookmarkData(options: options, includingResourceValuesForKeys: nil, relativeTo: nil)
-        return (USBDeviceAccess(id: identity ?? UUID().uuidString, name: root.lastPathComponent, bookmark: bookmark), library)
+        let names = try? root.resourceValues(forKeys: [.isVolumeKey, .localizedNameKey, .volumeLocalizedNameKey, .volumeNameKey])
+        let volumeName = names?.isVolume == true ? (names?.volumeLocalizedName ?? names?.volumeName) : nil
+        let name = [volumeName, names?.localizedName, root.lastPathComponent]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty } ?? "USB stick"
+        return (USBDeviceAccess(id: identity ?? UUID().uuidString, name: name, bookmark: bookmark), library)
     }
 
     public static func resolve(_ access: USBDeviceAccess) throws -> URL {

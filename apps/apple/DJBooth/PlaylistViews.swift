@@ -58,6 +58,10 @@ struct PlaylistBrowserView: View {
             guard collectionPath.count > path.count,
                   collectionPath.starts(with: path) else { continue }
             let name = collectionPath[path.count]
+            #if os(iOS)
+            // The connected device has one named entry, not a second folder row.
+            if path.isEmpty, model.pendingQuickAddTrackID == nil, name == model.usbDevice?.folderName { continue }
+            #endif
             folderCounts[name, default: 0] += 1
         }
         let visibleFolders = folderCounts.sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
@@ -110,13 +114,13 @@ struct PlaylistBrowserView: View {
             #endif
             #if os(iOS)
             List {
-                if path.isEmpty, model.pendingQuickAddTrackID == nil {
+                if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected || model.usbDevice == nil {
                     Button {
                         if model.usbConnected, let device = model.usbDevice { model.openPlaylistFolder([device.folderName]) }
                         else { showUSBLibrary = true }
                     } label: {
-                        browserNavigationRow(title: model.usbDevice == nil ? "Open USB library" : model.usbConnected ? "USB connected" : "Reconnect USB",
-                                             detail: model.usbDevice?.name ?? "Rekordbox", symbol: "externaldrive")
+                        browserNavigationRow(title: model.usbDevice?.name ?? "Open USB library",
+                                             detail: model.usbDevice == nil ? "Rekordbox" : "USB · Connected", symbol: "externaldrive")
                     }.buttonStyle(.plain).accessibilityIdentifier("usb.open")
                         .accessibilityValue(model.usbConnected ? "Connected" : "Disconnected")
                         .contextMenu { Button("Choose USB folder") { showUSBLibrary = true } }

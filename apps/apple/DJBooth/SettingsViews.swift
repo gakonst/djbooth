@@ -9,6 +9,7 @@ struct ConnectionSettings: View {
     @State private var workstationURL = ""
     @State private var runtime = DesktopRuntime()
     @State private var connecting = false
+    @State private var showUSBLibrary = false
     var body: some View {
         NavigationStack {
             Form {
@@ -17,6 +18,15 @@ struct ConnectionSettings: View {
                     Text("Your library, collections, and downloaded audio stay available offline. Cloud sync carries changes between your devices.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                #if os(iOS)
+                Section("USB library") {
+                    if let device = model.usbDevice {
+                        LabeledContent(device.name, value: model.usbConnected ? "Connected" : "Disconnected")
+                    }
+                    Button("Choose USB folder") { showUSBLibrary = true }
+                        .accessibilityIdentifier("settings.usb.chooseFolder")
+                }
+                #endif
                 Section("Cloud library") {
                     Text(model.syncStatus).font(.caption).foregroundStyle(.secondary)
                     Button("Sync now") { Task { await model.synchronize() } }
@@ -75,6 +85,7 @@ struct ConnectionSettings: View {
                 .toolbar { Button("Done") { dismiss() } }
                 .onAppear { cloudURL = model.cloudURL; workstationURL = model.workstationURL }
         }
+        .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
         #if os(macOS)
         .frame(minWidth: 560, minHeight: 530)
         #endif

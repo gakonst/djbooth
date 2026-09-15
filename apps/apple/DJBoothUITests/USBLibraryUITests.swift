@@ -131,7 +131,7 @@ final class USBLibraryUITests: XCTestCase {
         capture(synced, "CLI imported history exported back to USB")
     }
 
-    func testPlaybackAnnotationsCacheAndAutomaticReconnectSurviveRelaunch() throws {
+    func testLiveUSBPlaybackAnnotationsAndAutomaticReconnectSurviveRelaunch() throws {
         let root = try copyUSB("PlaybackUSB")
         let app = open(root)
         enterFolder("Gigs", in: app); openPlaylist("Tonight", in: app)
@@ -141,7 +141,8 @@ final class USBLibraryUITests: XCTestCase {
         let playing = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: pause)
         XCTAssertEqual(XCTWaiter.wait(for: [playing], timeout: 20), .completed)
         XCTAssertTrue(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label.contains("Second"))
-        let time = app.descendants(matching: .any)["nowPlaying.progress"].firstMatch
+        let elapsed = app.staticTexts["nowPlaying.elapsed"].firstMatch
+        let time = elapsed.exists ? elapsed : app.descendants(matching: .any)["nowPlaying.progress"].firstMatch
         XCTAssertTrue(time.waitForExistence(timeout: 5))
         let initial = time.value as? String
         let progressing = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in (time.value as? String) != initial }, object: time)
@@ -173,24 +174,72 @@ final class USBLibraryUITests: XCTestCase {
         capture(app, "Real USB playback with ordinary annotations")
         returnToRoot(app)
         waitForValue("Connected", app.buttons["usb.open"])
+        XCTAssertTrue(app.buttons["usb.open"].label.contains(root.lastPathComponent))
+        XCTAssertFalse(app.buttons["playlist.folder.USB · \(root.lastPathComponent)"].exists)
         let pioneer = root.appendingPathComponent("PIONEER"), audio = root.appendingPathComponent("Contents")
         try FileManager.default.moveItem(at: pioneer, to: root.appendingPathComponent("ejected-PIONEER"))
         try FileManager.default.moveItem(at: audio, to: root.appendingPathComponent("ejected-Contents"))
-        waitForValue("Disconnected", app.buttons["usb.open"])
+        XCTAssertTrue(app.buttons["usb.open"].waitForNonExistence(timeout: 15))
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["usb.open"].waitForExistence(timeout: 20))
-        waitForValue("Disconnected", app.buttons["usb.open"])
-        app.buttons["nowPlaying.play"].tap()
-        let cachedPlaying = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: app.buttons["nowPlaying.play"])
-        XCTAssertEqual(XCTWaiter.wait(for: [cachedPlaying], timeout: 15), .completed)
-        app.buttons["nowPlaying.play"].tap()
-        XCTAssertEqual(app.textFields["nowPlaying.annotation"].value as? String, "USB sunrise")
-        XCTAssertEqual(app.buttons["nowPlaying.color"].value as? String, "Red")
+        XCTAssertTrue(app.buttons["nowPlaying.play"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label.contains("No track selected"))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'nowPlaying.queue.track.usb:'")).count, 0)
         try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-PIONEER"), to: pioneer)
         try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-Contents"), to: audio)
         waitForValue("Connected", app.buttons["usb.open"])
         XCTAssertFalse(app.buttons["usb.chooseFolder"].exists)
-        capture(app, "Saved USB grant reconnects without selection")
+        app.buttons["usb.open"].tap()
+        enterFolder("Gigs", in: app); openPlaylist("Tonight", in: app)
+        expectOrder(["Second", "First"], in: app)
+        tracks(app).element(boundBy: 0).tap()
+        let reconnectedPlaying = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: app.buttons["nowPlaying.play"])
+        XCTAssertEqual(XCTWaiter.wait(for: [reconnectedPlaying], timeout: 15), .completed)
+        app.buttons["nowPlaying.play"].tap()
+        XCTAssertEqual(app.textFields["nowPlaying.annotation"].value as? String, "USB sunrise")
+        XCTAssertEqual(app.buttons["nowPlaying.color"].value as? String, "Red")
+        capture(app, "Live USB reconnects with saved annotations")
+    }
+
+    func testUnplugRemovesUSBFromAllTracksArtistsAndAlbums() throws {
+        let root = try copyUSB("PlaybackUSB")
+        let live = open(root)
+        returnToRoot(live)
+        func browse(_ id: String) {
+            live.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.25))
+                .press(forDuration: 0.05, thenDragTo: live.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.25)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+            let button = live.buttons["library.drawer.\(id)"]
+            XCTAssertTrue(button.waitForExistence(timeout: 5)); button.tap()
+        }
+        // The drawer is a newer surface; the USB reader also runs on older shells.
+        live.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.25))
+            .press(forDuration: 0.05, thenDragTo: live.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.25)),
+                   withVelocity: .slow, thenHoldForDuration: 0.2)
+        guard live.buttons["library.drawer.tracks"].waitForExistence(timeout: 3) else { throw XCTSkip("This shell has no library drawer") }
+        live.buttons["library.drawer.tracks"].tap()
+        let source = tracks(live).firstMatch
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        browse("artists")
+        XCTAssertTrue(live.buttons["library.group.Stavöstranos"].waitForExistence(timeout: 5))
+        browse("albums")
+        XCTAssertTrue(live.buttons["library.group.Album"].waitForExistence(timeout: 5))
+        browse("tracks")
+        let pioneer = root.appendingPathComponent("PIONEER")
+        try FileManager.default.moveItem(at: pioneer, to: root.appendingPathComponent("ejected-PIONEER"))
+        XCTAssertTrue(source.waitForNonExistence(timeout: 15))
+        XCTAssertTrue(live.buttons["track.waveform.demo-1"].exists, "Normal library tracks remain available")
+        browse("artists")
+        XCTAssertFalse(live.buttons["library.group.Stavöstranos"].exists)
+        browse("albums")
+        XCTAssertFalse(live.buttons["library.group.Album"].exists)
+        browse("playlists")
+        XCTAssertFalse(live.buttons["usb.open"].exists)
+        try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-PIONEER"), to: pioneer)
+        XCTAssertTrue(live.buttons["usb.open"].waitForExistence(timeout: 15))
+        browse("tracks")
+        XCTAssertTrue(source.waitForExistence(timeout: 10))
+        capture(live, "USB tracks return only while connected")
     }
 
     func testInvalidMissingAndOneLibraryOnlyUSBsShowRecoverableErrors() throws {

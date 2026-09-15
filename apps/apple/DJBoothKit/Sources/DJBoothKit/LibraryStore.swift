@@ -80,12 +80,18 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         }
         let container = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
         try Task.checkCancellation()
-        return LibraryStore(container: container)
+        return try LibraryStore(container: container)
     }
-    private init(container: ModelContainer) {
+    private init(container: ModelContainer) throws {
         self.container = container
         context = ModelContext(container)
         context.autosaveEnabled = false
+        // Older USB-reader builds queued external source rows as library imports.
+        // Keep their metadata local and stop any pending automatic cloud imports.
+        let prefix = "usb:"
+        let pending = try context.fetch(FetchDescriptor<PendingEdit>(predicate: #Predicate { $0.entityID.starts(with: prefix) }))
+        for edit in pending { context.delete(edit) }
+        if !pending.isEmpty { try context.save() }
     }
     private nonisolated static func makeContainer(directory: URL?, inMemory: Bool) throws -> ModelContainer {
         let schema = Schema([StoredEntity.self, PendingEdit.self, SyncPosition.self])
@@ -193,7 +199,10 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
             if row.modelContext == nil { context.insert(row); usbRows?[row.key] = row }
             // Keystrokes may replace an undispatched annotation operation. Once
             // handed to the transport its ID and payload remain immutable forever.
-            if coalesce, let pending = try lastEdit(key: row.key),
+            if id.hasPrefix("usb:") {
+                // External source metadata and edits belong to the remembered USB,
+                // not the ordinary cloud library. Audio is never copied by browsing.
+            } else if coalesce, let pending = try lastEdit(key: row.key),
                !pending.submitted, pending.conflictVersion == nil {
                 pending.payload = payload; pending.tombstone = deleted
             } else {
@@ -350,7 +359,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
                 let old = try JSONDecoder().decode(Track.self, from: payload)
                 track.mediaHash = old.mediaHash; track.mediaExtension = old.mediaExtension
                 if track.waveform == nil { track.waveform = old.waveform }
-                if track == old, row.version > 0 || pendingKeys.contains("track:\(track.id)") { continue }
+                if track == old, track.id.hasPrefix("usb:") || row.version > 0 || pendingKeys.contains("track:\(track.id)") { continue }
             }
             try save(track, kind: .track, id: track.id)
         }
@@ -391,8 +400,8 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         }
         try destination.context.save()
     }
-    /// Portable track/playlist metadata uses the normal replica and outbox. Security
-    /// bookmarks and file locations stay in local-only rows, excluded from snapshots.
+    /// Cache external source metadata locally for normal browsing and fast reconnects.
+    /// USB rows and edits never enter the cloud outbox; browsing never copies audio.
     public func ingestUSB(_ library: USBRekordboxLibrary, access: USBDeviceAccess) throws {
         // One indexed read per table, not repeated SwiftData fetches as unsaved
         // rows grow. Keep the whole import atomic and reuse lookups for notes.
@@ -491,6 +500,8 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     /// Otherwise a lost POST response could make us skip that remote edit forever
     /// while still advancing the pull cursor past it.
     private func receive(_ change: SyncChange, pending: inout [PendingEdit]) throws {
+        // Ignore external rows sent by older clients while still advancing the page cursor.
+        guard !change.entityID.hasPrefix("usb:") else { return }
         let key = "\(change.kind.rawValue):\(change.entityID)"
         let row = try entity(change.kind, change.entityID) ?? StoredEntity(kind: change.kind, id: change.entityID, payload: nil)
         if row.modelContext == nil { context.insert(row) }

@@ -56,7 +56,6 @@ struct PlaylistRemovalUndo {
     private var loadingUSBWaveforms: Set<String> = []
     private var unavailableUSBWaveforms: Set<String> = []
     private let usbAnalysisReader = USBAnalysisReader()
-    private var usbPlaybackCache: Task<Void, Never>?
     var syncing = false
     var downloading: Set<String> = []
     var workstationConnected = false
@@ -225,11 +224,14 @@ struct PlaylistRemovalUndo {
             try Task.checkCancellation()
             guard request == reloadRequest, source === store else { return }
             guard snapshot.revision == source.revision else { continue }
-            if tracks != snapshot.tracks { tracks = snapshot.tracks }
-            if collections != snapshot.collections { collections = snapshot.collections }
+            let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) }
+            let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) }
+            if tracks != availableTracks { tracks = availableTracks }
+            if collections != availableCollections { collections = availableCollections }
             if favorites != snapshot.favorites { favorites = snapshot.favorites }
             if annotations != snapshot.annotations { annotations = snapshot.annotations }
-            if offlineIDs != snapshot.offlineIDs { offlineIDs = snapshot.offlineIDs }
+            let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }
+            if offlineIDs != availableOffline { offlineIDs = availableOffline }
             prunePlaylistRemovalHistory()
             try reloadSyncState()
             if playbackSessionReady { reconcilePlaybackSession() }
@@ -240,7 +242,7 @@ struct PlaylistRemovalUndo {
         pendingCount = try store.pendingCount(); conflicts = try store.conflicts()
     }
     private func reloadCollections() throws {
-        collections = try store.values(.collection, as: Collection.self).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        collections = try store.values(.collection, as: Collection.self).filter { sourceIsAvailable($0.id) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         prunePlaylistRemovalHistory()
         try reloadSyncState()
         if playbackSessionReady { reconcilePlaybackSession() }
@@ -278,6 +280,9 @@ struct PlaylistRemovalUndo {
         }
         return result
     }
+    private func sourceIsAvailable(_ id: String) -> Bool {
+        !id.hasPrefix("usb:") || (usbConnected && usbDevice.map { id.hasPrefix("usb:\($0.id):") } == true)
+    }
     func connectUSB(_ root: URL, browse: Bool = true) async throws {
         guard !usbReading else { return }
         usbReading = true; usbError = nil
@@ -310,7 +315,21 @@ struct PlaylistRemovalUndo {
             usbConnected = true; usbError = nil
         } catch {
             guard generation == connectionGeneration else { return }
+            let wasConnected = usbConnected
             usbConnected = false
+            // Remove the external source from every view and playback queue at once.
+            // Its local metadata/annotations remain available for the next connection.
+            if wasConnected {
+                tracks.removeAll { $0.id.hasPrefix("usb:") }
+                collections.removeAll { $0.id.hasPrefix("usb:") }
+                offlineIDs = offlineIDs.filter { !$0.hasPrefix("usb:") }
+            }
+            if player.track?.id.hasPrefix("usb:") == true {
+                playbackRequest = UUID(); player.stop()
+            } else if wasConnected { reconcilePlaybackSession() }
+            if wasConnected, playlistFolderPath.first == access.folderName || selectedCollection?.hasPrefix("usb:\(access.id):") == true {
+                openPlaylistFolder([])
+            }
             usbError = "Reconnect your USB stick, or choose its folder again to renew access."
         }
     }
@@ -621,7 +640,7 @@ struct PlaylistRemovalUndo {
         lastSessionSave = Date()
     }
     private func localAudioURL(_ track: Track) -> URL? {
-        guard offlineIDs.contains(track.id), let hash = track.mediaHash else { return nil }
+        guard !track.id.hasPrefix("usb:"), offlineIDs.contains(track.id), let hash = track.mediaHash else { return nil }
         return audio.url(hash: hash)
     }
     private func restorePlaybackSession() {
@@ -682,7 +701,6 @@ struct PlaylistRemovalUndo {
     private func preparePlayback(_ track: Track, queue: [Track], elapsed: Double, queueIndex: Int? = nil) async {
         PerformanceProbe.playRequested(trackID: track.id)
         let request = UUID(); playbackRequest = request
-        usbPlaybackCache?.cancel(); usbPlaybackCache = nil
         let generation = connectionGeneration
         // Selection advances immediately, including rapid Next taps and downloads.
         // Resolving the URL later attaches audio to this preparation only once.
@@ -690,6 +708,18 @@ struct PlaylistRemovalUndo {
         // Preview gestures select a paused fixture without pretending to acquire audio.
         if demo && !track.id.hasPrefix("usb:") { return }
         do {
+            if track.id.hasPrefix("usb:") {
+                guard sourceIsAvailable(track.id), let location = try store.usbFile(track.id), let access = usbDevice else {
+                    throw USBLibraryError.disconnected
+                }
+                let source = try await Task.detached(priority: .userInitiated) {
+                    try USBDeviceFiles.openForPlayback(location, access: access)
+                }.value
+                guard request == playbackRequest, generation == connectionGeneration, sourceIsAvailable(track.id) else { return }
+                player.attachUSB(source, autoplay: true)
+                if track.waveform == nil { Task { await loadWaveform(track) } }
+                return
+            }
             // Do the cheap filesystem check off MainActor. A local hit attaches
             // audio without a second player teardown or session write.
             let cached = if let hash = track.mediaHash { await audio.existing(hash: hash) } else { nil as URL? }
@@ -700,25 +730,6 @@ struct PlaylistRemovalUndo {
                 player.track = current
                 player.queue = queue.compactMap { tracksByID[$0.id] }
                 player.attach(url: url, autoplay: true)
-            } else if let location = try store.usbFile(track.id), let access = usbDevice {
-                let source = try await Task.detached(priority: .userInitiated) {
-                    try USBDeviceFiles.openForPlayback(location, access: access)
-                }.value
-                guard request == playbackRequest, generation == connectionGeneration else { return }
-                player.attachUSB(source, autoplay: true)
-                // Start immediately from USB; caching must never delay Play. Only
-                // the current automatic copy runs, so rapid Next taps stay cheap.
-                usbPlaybackCache = Task { [weak self, audio] in
-                    do {
-                        let (_, hash) = try await audio.readUSB(location, access: access, priority: .utility)
-                        guard let self, !Task.isCancelled, generation == self.connectionGeneration,
-                              var updated = self.tracksByID[track.id], updated.mediaHash == nil else { return }
-                        updated.mediaHash = hash
-                        try self.store.save(updated, kind: .track, id: updated.id)
-                        self.applyTrackUpdate(updated); self.offlineIDs.insert(updated.id)
-                        self.pendingCount = try self.store.pendingCount()
-                    } catch { /* Playback continues directly from USB if optional caching fails. */ }
-                }
             } else {
                 guard track.id.hasPrefix("usb:") || (track.mediaHash != nil && cloud != nil) else {
                     throw ClientError.http(404, "This recording needs to be acquired on your Mac before it can play here")
@@ -917,7 +928,6 @@ struct PlaylistRemovalUndo {
         importJobs = []; importError = nil
         cloud = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
         connectionGeneration = UUID(); playbackRequest = UUID()
-        usbPlaybackCache?.cancel(); usbPlaybackCache = nil
         #if DEBUG
         let offlineKey = "djbooth.debug.offline.\(endpoint.scope)"
         offlineLaunchRequestKey = offlineKey

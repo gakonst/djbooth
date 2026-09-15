@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import SwiftData
 @testable import DJBoothKit
 
 struct USBDeviceTests {
@@ -20,6 +21,8 @@ struct USBDeviceTests {
         try store.ingestUSB(library, access: access)
         let tracks = try store.values(.track, as: Track.self)
         #expect(tracks.count == 40)
+        #expect(try store.pendingCount() == 0)
+        #expect(tracks.allSatisfy { $0.mediaHash == nil })
         let id = "usb:\(access.id):track:1"
         #expect(tracks.first { $0.id == id }?.key == "Am")
         let playlistID = "usb:\(access.id):playlist:3"
@@ -31,6 +34,7 @@ struct USBDeviceTests {
         try store.ingestUSB(library, access: access)
         #expect(try store.annotation(for: id) == TrackAnnotation(note: "Play at sunrise", color: .red))
         #expect(try store.collection(playlistID)?.name == "My opening")
+        #expect(try store.pendingCount() == 0)
         #expect(try store.usbDevice() == access)
         #expect(try store.usbFile(id)?.path == "/Contents/Artist/Track 1.mp3")
         let reopened = try LibraryStore(directory: state)
@@ -53,6 +57,47 @@ struct USBDeviceTests {
                                             entityID: operation.entityID, payload: operation.payload, deleted: operation.deleted))
             sequence += 1
         }
+    }
+
+    @Test @MainActor func upgradeCancelsOnlyLegacyUSBImportOperations() throws {
+        let root = try fixture(), state = root.appendingPathComponent("legacy-state")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        let schema = Schema([StoredEntity.self, PendingEdit.self, SyncPosition.self])
+        let configuration = ModelConfiguration(schema: schema, url: state.appendingPathComponent("Library.sqlite"), cloudKitDatabase: .none)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = ModelContext(container)
+        let track = Track(id: "usb:remembered:track:1", title: "External recording")
+        let payload = String(decoding: try JSONEncoder().encode(track), as: UTF8.self)
+        context.insert(StoredEntity(kind: .track, id: track.id, payload: payload))
+        context.insert(PendingEdit(kind: .track, id: track.id, payload: payload, baseVersion: 0, deleted: false))
+        context.insert(PendingEdit(kind: .favorite, id: "normal-track", payload: "{\"enabled\":true}", baseVersion: 0, deleted: false))
+        try context.save()
+        let upgraded = try LibraryStore(directory: state)
+        #expect(try upgraded.values(.track, as: Track.self) == [track])
+        #expect(try upgraded.pendingCount() == 1)
+        #expect(try upgraded.nextOperation()?.entityID == "normal-track")
+    }
+
+    @Test @MainActor func cloudReplayCannotImportUSBRowsOrOverwriteLocalAnnotations() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (access, library) = try USBDeviceFiles.authorize(root)
+        let store = try LibraryStore(inMemory: true)
+        try store.ingestUSB(library, access: access)
+        let id = "usb:\(access.id):track:1"
+        try store.setNote("My USB note", trackID: id)
+        let remote = Track(id: "usb:another-stick:track:1", title: "Other device")
+        try store.apply(SyncPage(changes: [
+            SyncChange(sequence: 1, operationID: "old-note", kind: .annotation, entityID: id,
+                       payload: String(decoding: try JSONEncoder().encode(TrackAnnotation(note: "Old cloud note")), as: UTF8.self), deleted: false),
+            SyncChange(sequence: 2, operationID: "old-track", kind: .track, entityID: remote.id,
+                       payload: String(decoding: try JSONEncoder().encode(remote), as: UTF8.self), deleted: false)
+        ], cursor: 2, hasMore: false))
+        #expect(try store.annotation(for: id).note == "My USB note")
+        #expect(try store.values(.track, as: Track.self).count == 40)
+        #expect(try store.cursor() == 2)
+        #expect(try store.pendingCount() == 0)
     }
 
     @Test @MainActor func reExportedMediaDoesNotReuseThePreviousAudioCache() throws {
