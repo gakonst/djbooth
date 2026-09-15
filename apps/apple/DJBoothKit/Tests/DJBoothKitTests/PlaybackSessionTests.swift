@@ -12,6 +12,13 @@ import Testing
                                       queueCollection: "set", queueFilter: "All music")
         #expect(session.resolved(tracks: tracks, collections: [collection]) == session)
     }
+    @Test func repeatedHistoryTracksRestoreTheSelectedOccurrence() throws {
+        let session = PlaybackSession(trackID: "b", queueIDs: ["missing", "b", "a", "b"], elapsed: 12, queueIndex: 3)
+        let restored = session.resolved(tracks: tracks, collections: [])
+        #expect(restored.queueIDs == ["b", "a", "b"])
+        #expect(restored.queueIndex == 2 && restored.trackID == "b" && restored.elapsed == 12)
+        #expect(try JSONDecoder().decode(PlaybackSession.self, from: JSONEncoder().encode(restored)) == restored)
+    }
     @Test func missingTracksCollectionsAndInvalidPositionRecoverSafely() {
         let session = PlaybackSession(trackID: "gone", queueIDs: ["gone", "b", "b", "a"], elapsed: 45,
                                       selectedCollection: "gone", filter: "obsolete", queueCollection: "gone")

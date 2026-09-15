@@ -9,6 +9,8 @@ import DJBoothKit
     var elapsed: Double = 0
     var duration: Double = 0
     var queue: [Track] = []
+    var queueIndex = 0
+    private var usbPlaybackAccess: USBPlaybackAccess?
     private(set) var timing = PlaybackTiming()
     private(set) var mediaClock = PlaybackMediaClock()
     var error: String?
@@ -81,19 +83,24 @@ import DJBoothKit
             Task { @MainActor in self?.seek(position) }; return .success
         }
     }
-    func prepare(_ track: Track, url: URL?, queue: [Track], elapsed: Double = 0, autoplay: Bool = false) {
+    func prepare(_ track: Track, url: URL?, queue: [Track], elapsed: Double = 0, autoplay: Bool = false, queueIndex: Int? = nil) {
         cancelStartingPlayback()
         let generation = UUID(); playbackGeneration = generation
         wantsToPlay = autoplay
-        player.pause(); player.replaceCurrentItem(with: nil)
+        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil; pendingSeek = nil; inFlightSeek = nil; seekGeneration = UUID()
+        self.queueIndex = queueIndex.flatMap { queue.indices.contains($0) && queue[$0].id == track.id ? $0 : nil } ?? queue.firstIndex { $0.id == track.id } ?? 0
         self.track = track; self.queue = queue; duration = track.durationSeconds ?? 0
         self.elapsed = elapsed.isFinite ? max(0, duration > 0 ? min(elapsed, duration) : elapsed) : 0
         playing = false; error = nil
         preparingItem = false
         if let url { attach(url: url, autoplay: autoplay) }
         updateNowPlaying(); onStateChange?(true)
+    }
+    func attachUSB(_ access: USBPlaybackAccess, autoplay: Bool) {
+        usbPlaybackAccess = access
+        attach(url: access.url, autoplay: autoplay)
     }
     /// Resolve audio for an already-selected recording without resetting its
     /// player state, queue, or any seek made while the file was being located.
@@ -219,7 +226,7 @@ import DJBoothKit
         cancelStartingPlayback()
         playbackGeneration = UUID(); wantsToPlay = false; pendingSeek = nil
         seekGeneration = UUID(); inFlightSeek = nil
-        player.pause(); player.replaceCurrentItem(with: nil)
+        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil
         preparingItem = false
@@ -229,10 +236,12 @@ import DJBoothKit
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
     func advance(_ step: Int) {
-        guard let track, let index = queue.firstIndex(where: { $0.id == track.id }) else { return }
+        guard let track else { return }
+        guard let index = queue.indices.contains(queueIndex) && queue[queueIndex].id == track.id ? queueIndex : queue.firstIndex(where: { $0.id == track.id }) else { return }
         if step < 0 && elapsed > 3 { seek(0); return }
         let next = index + step
         guard queue.indices.contains(next) else { pause(); return }
+        queueIndex = next
         onAdvance?(queue[next])
     }
     private func updateNowPlaying() {

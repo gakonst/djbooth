@@ -111,9 +111,15 @@ struct PlaylistBrowserView: View {
             #if os(iOS)
             List {
                 if path.isEmpty, model.pendingQuickAddTrackID == nil {
-                    Button { showUSBLibrary = true } label: {
-                        browserNavigationRow(title: "Open USB library", detail: "Rekordbox", symbol: "externaldrive")
+                    Button {
+                        if model.usbConnected, let device = model.usbDevice { model.openPlaylistFolder([device.folderName]) }
+                        else { showUSBLibrary = true }
+                    } label: {
+                        browserNavigationRow(title: model.usbDevice == nil ? "Open USB library" : model.usbConnected ? "USB connected" : "Reconnect USB",
+                                             detail: model.usbDevice?.name ?? "Rekordbox", symbol: "externaldrive")
                     }.buttonStyle(.plain).accessibilityIdentifier("usb.open")
+                        .accessibilityValue(model.usbConnected ? "Connected" : "Disconnected")
+                        .contextMenu { Button("Choose USB folder") { showUSBLibrary = true } }
                         .listRowInsets(EdgeInsets()).listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
                 }
                 browserContent(rows)
@@ -131,7 +137,7 @@ struct PlaylistBrowserView: View {
         }
         .accessibilityIdentifier("playlist.browser")
         .sheet(item: $editing) { PlaylistEditSheet(collection: $0, model: model) }
-        .sheet(isPresented: $showUSBLibrary) { USBLibraryView() }
+        .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
         .alert("Delete playlist?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { collection in
             Button("Delete playlist", role: .destructive) { withAnimation(animation) { model.deleteCollection(collection) }; pendingDelete = nil }
             Button("Cancel", role: .cancel) { pendingDelete = nil }

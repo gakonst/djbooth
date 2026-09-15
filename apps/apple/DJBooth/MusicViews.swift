@@ -145,8 +145,8 @@ struct MobileTrackList: View {
                 ContentUnavailableView("No tracks", systemImage: "music.note.list")
                     .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
             } else {
-                ForEach(tracks) { track in
-                    TrackRow(track: track, model: model, collection: selected)
+                ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
+                    TrackRow(track: track, model: model, collection: selected, queuePosition: position)
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                         .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
                 }
@@ -163,10 +163,14 @@ struct TrackRow: View {
     @Bindable var model: BoothModel
     var collection: Collection? = nil
     var preservingQueue = false
+    var queuePosition: Int? = nil
     @State private var editingAnnotation = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         SwipeRow(left: leftSwipe, right: rightSwipe, identity: track.id) { activation in rowContent(activation: activation) }
+            .task(id: track.id) {
+                if track.id.hasPrefix("usb:"), track.waveform == nil { await model.loadWaveform(track) }
+            }
             .sheet(isPresented: $editingAnnotation) { TrackAnnotationEditor(track: track, model: model) }
             .contextMenu {
                 Button("Comment & color") { editingAnnotation = true }
@@ -209,7 +213,7 @@ struct TrackRow: View {
         HStack(spacing: 10) {
             Button {
                 guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
+                Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
             } label: {
                 HStack(spacing: 10) {
                     TrackArtwork(track: track, model: model, size: artworkSize)
@@ -266,7 +270,7 @@ struct TrackRow: View {
         HStack(spacing: 7) {
             Button {
                 guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
+                Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
             } label: {
                 AnalysisWaveform(waveform: track.waveform, compact: true)
                     .frame(width: 72, height: 38).allowsHitTesting(false)
@@ -276,7 +280,7 @@ struct TrackRow: View {
                 .accessibilityIdentifier("track.waveform.\(track.id)")
             Button {
                 guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
+                Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)

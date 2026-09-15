@@ -228,14 +228,14 @@ private struct PlaybackQueueStrip: View {
     @Bindable var model: BoothModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
-        let currentID = model.player.track?.id
+        let currentIndex = model.player.queueIndex
         let queue = model.player.queue
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 6) {
-                    ForEach(queue) { track in
-                        let selected = track.id == currentID
-                        Button { Task { await model.play(track, preservingQueue: true) } } label: {
+                    ForEach(Array(queue.enumerated()), id: \.offset) { position, track in
+                        let selected = position == currentIndex
+                        Button { Task { await model.play(track, preservingQueue: true, queuePosition: position) } } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(track.title).font(.system(size: 11, weight: selected ? .semibold : .regular)).lineLimit(1)
                                 Text(track.artist ?? "Unknown artist").font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
@@ -244,7 +244,7 @@ private struct PlaybackQueueStrip: View {
                                 .overlay(alignment: .bottom) {
                                     Rectangle().fill(selected ? Color.white.opacity(0.85) : .clear).frame(height: 1)
                                 }.contentShape(Rectangle())
-                        }.buttonStyle(.plain).id(track.id)
+                        }.buttonStyle(.plain).id(position)
                             .accessibilityLabel("Play \(track.title)")
                             .accessibilityValue(selected ? (model.player.playing ? "Playing" : "Paused") : "Queued")
                             .accessibilityIdentifier("nowPlaying.queue.track.\(track.id)")
@@ -253,9 +253,11 @@ private struct PlaybackQueueStrip: View {
             }
             .frame(height: queue.isEmpty ? 0 : 43)
             .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.queue")
-            .onChange(of: currentID, initial: true) { _, id in
-                guard let id else { return }
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { proxy.scrollTo(id, anchor: .leading) }
+            .onChange(of: currentIndex, initial: true) { _, index in
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { proxy.scrollTo(index, anchor: .leading) }
+            }
+            .onChange(of: model.player.track?.id) { _, _ in
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { proxy.scrollTo(currentIndex, anchor: .leading) }
             }
         }
     }

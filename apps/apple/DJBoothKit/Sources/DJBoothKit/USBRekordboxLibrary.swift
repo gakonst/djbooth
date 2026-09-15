@@ -1,7 +1,7 @@
 import Foundation
 
 /// A read-only snapshot of a removable Rekordbox Device Library. IDs belong to this
-/// snapshot, never to the local/cloud library. No media or database files are copied.
+/// snapshot; the native library namespaces them by device when importing.
 public struct USBRekordboxLibrary: Sendable {
     public struct Track: Identifiable, Sendable {
         public let id: UInt32
@@ -14,6 +14,9 @@ public struct USBRekordboxLibrary: Sendable {
         public let duration: Int
         public let comment: String
         public let filePath: String
+        public let analysisPath: String
+        public let colorID: Int
+        public var fileSize: UInt32 = 0
     }
 
     public struct Playlist: Identifiable, Sendable {
@@ -43,18 +46,12 @@ public struct USBRekordboxLibrary: Sendable {
         let accessed = root.startAccessingSecurityScopedResource()
         defer { if accessed { root.stopAccessingSecurityScopedResource() } }
         let directory = root.appendingPathComponent("PIONEER/rekordbox", isDirectory: true)
-        let database = directory.appendingPathComponent("export.pdb")
+        let database = try USBDeviceFiles.containedURL("PIONEER/rekordbox/export.pdb", root: root)
         if !FileManager.default.fileExists(atPath: database.path) {
             if FileManager.default.fileExists(atPath: directory.appendingPathComponent("exportLibrary.db").path) {
                 throw USBLibraryError.oneLibraryOnly
             }
             throw USBLibraryError.libraryNotFound
-        }
-        // Resolve symlinks before coordinating so a selected folder cannot grant
-        // access to an unrelated database via a symlink inside PIONEER.
-        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
-        guard database.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(rootPath + "/") else {
-            throw USBLibraryError.invalidDatabase
         }
         var coordinationError: NSError?
         var result: Result<Self, Error>?
@@ -92,7 +89,7 @@ public struct USBRekordboxLibrary: Sendable {
                              artist: artists[row.u32(0x44)] ?? "", album: albums[row.u32(0x40)] ?? "",
                              genre: genres[row.u32(0x3c)] ?? "", key: keys[row.u32(0x20)] ?? "",
                              bpm: Double(row.u32(0x38)) / 100, duration: row.u16(0x54),
-                             comment: string(16), filePath: string(20))
+                             comment: string(16), filePath: string(20), analysisPath: string(14), colorID: row.u8(0x58), fileSize: row.u32(0x10))
         }
         var tracksByID: [UInt32: Track] = [:]
         for track in tracks {
@@ -159,7 +156,7 @@ public struct USBRekordboxLibrary: Sendable {
 }
 
 public enum USBLibraryError: LocalizedError, Equatable {
-    case libraryNotFound, oneLibraryOnly, invalidDatabase, tooLarge
+    case libraryNotFound, oneLibraryOnly, invalidDatabase, tooLarge, disconnected
 
     public var errorDescription: String? {
         switch self {
@@ -171,6 +168,8 @@ public enum USBLibraryError: LocalizedError, Equatable {
             "The Rekordbox Device Library is damaged or uses an unsupported format. Try exporting it again from Rekordbox."
         case .tooLarge:
             "This USB library exceeds the current 256 MB database limit."
+        case .disconnected:
+            "Reconnect your USB stick to play this track, or choose its folder again to renew access."
         }
     }
 }

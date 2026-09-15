@@ -5,14 +5,20 @@ workstation palette and dense library layout. Apple system glass is used for con
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
 On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
-Connect a USB stick and choose its top-level folder containing `PIONEER`. The app reads
-`PIONEER/rekordbox/export.pdb` locally and shows nested playlists, their original track order,
-and track metadata (including BPM, key, comments, and file paths).
-CDJ histories appear in a separate section with their original play order. The existing
+Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
+that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
+iOS requires the initial folder permission; it cannot silently open an arbitrary newly connected stick.
+`PIONEER/rekordbox/export.pdb` playlists open in the normal library with their nested folders,
+original order, BPM, keys, notes, colors, and available ANLZ waveforms/beat grids. USB tracks use
+the normal player, queue, seeking, favorites, and playlist editing. Playback starts directly from
+USB while verified audio caching runs in the background; completed downloads remain playable
+after disconnecting the stick. Scrolling serializes analysis reads and updates only changed tracks.
+CDJ histories retain repeated tracks in their original play order. The existing
 `pnpm djbooth usb <mount>` workflow imports unseen histories into `master.db` and exports
-them as dated `DJ Set` playlists, visible when the mobile browser reopens the folder.
-The browser is a read-only snapshot; reopen the folder to refresh it. It does not import, sync,
-play, or modify USB tracks.
+them as dated `DJ Set` playlists; the phone refreshes them automatically.
+App notes/colors and playlist edits survive reconnects. These edits use the normal local library
+and sync outbox; security bookmarks and USB file locations remain device-local. The phone does
+not write edits back to the USB database or export libraries to the stick yet.
 OneLibrary-only (`exportLibrary.db`) sticks are explicitly reported as unsupported; a classic
 Device Library export is required. Databases larger than 256 MB are currently unsupported.
 The footer keeps a horizontally scrollable queue above the title, a moving eight-bar waveform,
@@ -74,7 +80,10 @@ Cloudflare service in `apps/cloud`; it does not expose or connect to an unauthen
 `pnpm native:test:usb --simulator <uuid>` creates an isolated fake Rekordbox `master.db`,
 exports simulated USB folders through `pnpm djbooth usb`, then renames/reorders a playlist
 through `pnpm djbooth playlist` and syncs again. The iOS tests cover metadata, playlist order,
-refresh, disconnect/reconnect, missing/corrupt libraries, and OneLibrary-only errors.
+automatic refresh/reconnect, missing/corrupt libraries, and OneLibrary-only errors.
+A second synthetic source contains playable MP3/FLAC tones and deterministic ANLZ; it tests
+real playback, seeking, notes/colors, relaunch, and cached playback after disconnect.
+Generating this fixture requires `ffmpeg` on PATH.
 The round-trip test also appends a simulated CDJ history, syncs twice through the CLI, and
 checks the dated playlist, repeated tracks, and exactly-once play counts in the fake database.
 SHA-256 checks verify that browsing leaves every source and USB file unchanged. The simulator replaces

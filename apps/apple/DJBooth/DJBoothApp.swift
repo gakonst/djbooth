@@ -85,6 +85,13 @@ struct BoothRoot: View {
                 if phase != .active { model.persistPlaybackSession() }
             }
             .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                while !Task.isCancelled {
+                    await model.refreshUSBConnection()
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
+            }
+            .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(20)) } catch { return }
