@@ -24,6 +24,7 @@ import {
   assertContentCueMirrorMatches,
   performGuardedCueMutation,
 } from "../src/masterdb/safe-cue-write.js";
+import { createDeviceLibraryFixture } from "./helpers/device-library-fixture.js";
 
 const roots: Array<string> = [];
 
@@ -347,6 +348,45 @@ describe("CLI process boundary", () => {
       page: { total: 2, offset: 1, limit: 1, returned: 1, hasMore: false },
       entries: [{ id: "smart-1", type: "smart" }],
     });
+  }, 20_000);
+
+  it("accepts a numeric command-line position when moving a playlist track", () => {
+    const fixture = createDeviceLibraryFixture();
+    roots.push(fixture.root);
+    const result = runCli(
+      "db",
+      "playlist",
+      "move-track",
+      "Tonight",
+      "membership-2",
+      "1",
+      "--path",
+      fixture.databasePath,
+      "--plain",
+      "--json",
+    );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const database = new Database(fixture.databasePath, { readonly: true });
+    try {
+      expect(
+        database.prepare("SELECT ContentID FROM djmdSongPlaylist ORDER BY TrackNo").all(),
+      ).toEqual([{ ContentID: "1" }, { ContentID: "2" }]);
+    } finally {
+      database.close();
+    }
+    const invalid = runCli(
+      "db",
+      "playlist",
+      "move-track",
+      "Tonight",
+      "membership-2",
+      "not-a-number",
+      "--path",
+      fixture.databasePath,
+      "--plain",
+      "--json",
+    );
+    expect(invalid.status).not.toBe(0);
   }, 20_000);
 
   it("shows an exact-name playlist as ordered JSON and Markdown", () => {

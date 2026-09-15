@@ -2240,7 +2240,7 @@ playlistCli.command("move-track", {
   args: z.object({
     playlist: z.string().describe("Playlist ID, exact name, or hierarchy path"),
     songId: z.string().describe("djmdSongPlaylist ID"),
-    trackNumber: z.number().int().positive().describe("New one-based track number"),
+    trackNumber: z.coerce.number().int().positive().describe("New one-based track number"),
   }),
   options: dbWriteOptions,
   run(c) {
