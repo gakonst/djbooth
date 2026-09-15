@@ -36,3 +36,5 @@ downloads/
 cookies.txt
 cookies-*.txt
 test/fixtures/private/
+
+/apps/cloud/public/

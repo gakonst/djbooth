@@ -1,0 +1,28 @@
+# Cloudflare Containers require linux/amd64. Build the real clean-room analyzer.
+FROM rust:1-bookworm AS native
+RUN apt-get update && apt-get install -y --no-install-recommends libasound2-dev libudev-dev libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY rust ./rust
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/build/rust/target cargo build --manifest-path rust/Cargo.toml --locked --release -p djbooth-rs && cp rust/target/release/djbooth-rs /djbooth-rs
+
+FROM node:22-bookworm-slim AS engine
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@10.30.2 --activate
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
+COPY packages ./packages
+COPY apps/djbooth ./apps/djbooth
+COPY apps/dj-monitor ./apps/dj-monitor
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @gakonst/djbooth... --workspace-concurrency=2 run build
+
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libasound2 libudev1 libssl3 ca-certificates python3 && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=engine /app /app
+COPY --from=native /djbooth-rs /usr/local/bin/djbooth-rs
+RUN chmod +x /app/packages/djbooth/dist/bin.js && ln -s /app/packages/djbooth/dist/bin.js /usr/local/bin/djbooth
+ENV NODE_ENV=production
+EXPOSE 8080
+ENTRYPOINT ["djbooth", "cloud", "container", "--progress", "always", "--format", "json"]

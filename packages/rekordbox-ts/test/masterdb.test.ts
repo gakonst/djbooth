@@ -23,6 +23,7 @@ import {
   DjmdCategory,
   DjmdContent,
   DjmdHistory,
+  DjmdKey,
   DjmdMixerParam,
   DjmdMyTag,
   DjmdPlaylist,
@@ -719,64 +720,72 @@ describe("MasterDatabase mutations", () => {
     expect(() => normalizeRekordboxKeyName("not-a-key")).toThrow("Unsupported musical key");
   });
 
-  it("installs native analysis files and updates the content row", () => {
-    const { dbPath, root } = fixture();
-    const audioPath = join(root, "Demo 1.mp3");
-    writeFileSync(audioPath, "audio");
-    const raw = new Database(dbPath);
-    raw.exec(
-      "ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
-    );
-    raw
-      .prepare("UPDATE djmdContent SET FolderPath = ?, FileNameL = ? WHERE ID = ?")
-      .run(audioPath, "Demo 1.mp3", "1");
-    raw.prepare("INSERT INTO djmdKey VALUES (?, ?)").run("301", "10A");
-    raw.close();
-    const analysisDirectory = join(root, "analysis");
-    mkdirSync(analysisDirectory);
-    for (const type of ["DAT", "EXT", "2EX"])
-      writeFileSync(join(analysisDirectory, `ANLZ0000.${type}`), analysisFixture("/old/path.mp3"));
-    writeAnalysisSummary(analysisDirectory, audioPath);
+  it.each(["10A", "Bm", null])(
+    "installs native analysis with an existing or missing key (%s)",
+    (existingKey) => {
+      const { dbPath, root } = fixture();
+      const audioPath = join(root, "Demo 1.mp3");
+      writeFileSync(audioPath, "audio");
+      const raw = new Database(dbPath);
+      raw.exec(
+        "ALTER TABLE djmdContent ADD COLUMN AnalysisUpdated TEXT; ALTER TABLE djmdContent ADD COLUMN TrackInfoUpdated TEXT;",
+      );
+      raw
+        .prepare("UPDATE djmdContent SET FolderPath = ?, FileNameL = ? WHERE ID = ?")
+        .run(audioPath, "Demo 1.mp3", "1");
+      if (existingKey) raw.prepare("INSERT INTO djmdKey VALUES (?, ?)").run("301", existingKey);
+      raw.close();
+      const analysisDirectory = join(root, "analysis");
+      mkdirSync(analysisDirectory);
+      for (const type of ["DAT", "EXT", "2EX"])
+        writeFileSync(
+          join(analysisDirectory, `ANLZ0000.${type}`),
+          analysisFixture("/old/path.mp3"),
+        );
+      writeAnalysisSummary(analysisDirectory, audioPath);
 
-    const db = new MasterDatabase({
-      path: dbPath,
-      readonly: false,
-      unlock: false,
-    });
-    const result = db.installContentAnalysis("1", analysisDirectory, {});
-    expect(result.analysisDataPath).toBe("/PIONEER/USBANLZ/con/tent-1/ANLZ0000.DAT");
-    expect(result.bpmHundredths).toBe(12_801);
-    expect(result.keyId).toBe("301");
-    expect(result.keyName).toBe("10A");
-    expect(result.tempoBpm).toBe(128.006_827);
-    expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe(audioPath);
-    const installedDat = readFileSync(result.paths.DAT);
-    const synced = db.syncContentAnalysisMetadata("1", analysisDirectory, {});
-    expect(synced).toEqual({
-      bpmHundredths: 12_801,
-      contentId: "1",
-      keyId: "301",
-      keyName: "10A",
-      tempoBpm: 128.006_827,
-    });
-    expect(readFileSync(result.paths.DAT)).toEqual(installedDat);
-    writeFileSync(audioPath, "changed after analysis");
-    expect(() => db.syncContentAnalysisMetadata("1", analysisDirectory)).toThrow(
-      "source fingerprint does not match",
-    );
-    db.close();
+      const db = new MasterDatabase({
+        path: dbPath,
+        readonly: false,
+        unlock: false,
+      });
+      const result = db.installContentAnalysis("1", analysisDirectory, {});
+      expect(result.analysisDataPath).toBe("/PIONEER/USBANLZ/con/tent-1/ANLZ0000.DAT");
+      expect(result.bpmHundredths).toBe(12_801);
+      expect(result.keyId).toEqual(expect.any(String));
+      if (existingKey) expect(result.keyId).toBe("301");
+      expect(result.keyName).toBe("10A");
+      expect(result.tempoBpm).toBe(128.006_827);
+      expect(AnlzFile.parseFile(result.paths.DAT).get("PPTH")).toBe(audioPath);
+      const installedDat = readFileSync(result.paths.DAT);
+      const synced = db.syncContentAnalysisMetadata("1", analysisDirectory, {});
+      expect(synced).toEqual({
+        bpmHundredths: 12_801,
+        contentId: "1",
+        keyId: result.keyId,
+        keyName: "10A",
+        tempoBpm: 128.006_827,
+      });
+      expect(readFileSync(result.paths.DAT)).toEqual(installedDat);
+      writeFileSync(audioPath, "changed after analysis");
+      expect(() => db.syncContentAnalysisMetadata("1", analysisDirectory)).toThrow(
+        "source fingerprint does not match",
+      );
+      db.close();
 
-    const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
-    const content = reopened.query(DjmdContent).where({ ID: "1" }).one();
-    expect(content.AnalysisDataPath).toBe(result.analysisDataPath);
-    expect(content.Analysed).toBe(105);
-    expect(content.AnalysisUpdated).toBe("2");
-    expect(content.TrackInfoUpdated).toBe("2");
-    expect(content.BPM).toBe(12_801);
-    expect(content.KeyID).toBe("301");
-    expect(content.Key?.ScaleName).toBe("10A");
-    reopened.close();
-  });
+      const reopened = new MasterDatabase({ path: dbPath, readonly: true, unlock: false });
+      const content = reopened.query(DjmdContent).where({ ID: "1" }).one();
+      expect(content.AnalysisDataPath).toBe(result.analysisDataPath);
+      expect(content.Analysed).toBe(105);
+      expect(content.AnalysisUpdated).toBe("2");
+      expect(content.TrackInfoUpdated).toBe("2");
+      expect(content.BPM).toBe(12_801);
+      expect(content.KeyID).toBe(result.keyId);
+      expect(content.Key?.ScaleName).toBe(existingKey ?? "10A");
+      expect(reopened.query(DjmdKey).count()).toBe(2);
+      reopened.close();
+    },
+  );
 
   it("allows the same album name for different album artists", () => {
     const { dbPath } = fixture();

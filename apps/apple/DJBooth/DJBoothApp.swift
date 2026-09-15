@@ -58,6 +58,7 @@ struct BoothRoot: View {
         platformRoot
             .background(BoothStyle.background)
             .sheet(isPresented: $model.showSettings) { ConnectionSettings(model: model) }
+            .sheet(isPresented: $model.showAgent) { MusicAgentView(model: model) }
             .sheet(isPresented: $model.showImport) { ImportSheet(model: model) }
             .alert("Remove from playlist?", isPresented: Binding(
                 get: { model.pendingPlaylistRemoval != nil },

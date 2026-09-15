@@ -1,0 +1,128 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #f4f1e9;
+  background: #151719;
+  color-scheme: dark;
+  line-height: 1.5;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 850px;
+  margin: auto;
+  padding: 32px 24px;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 72px;
+  letter-spacing: 0.12em;
+}
+section {
+  max-width: 700px;
+}
+h1 {
+  font-size: clamp(40px, 7vw, 72px);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  margin: 16px 0 28px;
+}
+p {
+  max-width: 620px;
+  color: #c4c7c7;
+}
+button,
+a#return {
+  display: inline-block;
+  background: #def879;
+  color: #171b13;
+  border: 0;
+  border-radius: 8px;
+  padding: 13px 22px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  text-decoration: none;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+header button,
+#manage {
+  background: #303538;
+  color: #f4f1e9;
+  font-size: 14px;
+}
+.eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.15em;
+  color: #def879;
+}
+fieldset {
+  border: 1px solid #444b4e;
+  border-radius: 8px;
+  padding: 20px;
+  margin: 32px 0;
+}
+fieldset label {
+  margin-right: 24px;
+}
+input[type="checkbox"] {
+  accent-color: #def879;
+}
+.hint {
+  font-size: 13px;
+  color: #999f9f;
+}
+#error {
+  color: #ffb7ae;
+  white-space: pre-wrap;
+}
+#status {
+  color: #def879;
+}
+form {
+  margin-top: 32px;
+}
+form label {
+  display: block;
+  margin-bottom: 8px;
+}
+textarea,
+input[type="url"] {
+  display: block;
+  resize: vertical;
+  width: 100%;
+  padding: 14px;
+  background: #24282b;
+  border: 1px solid #586064;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  margin-bottom: 12px;
+}
+textarea {
+  min-height: 110px;
+}
+#conversation p {
+  white-space: pre-wrap;
+  background: #24282b;
+  padding: 20px;
+  border-radius: 8px;
+}
+#imports p {
+  overflow-wrap: anywhere;
+  font-size: 14px;
+}
+#return {
+  margin-top: 20px;
+}
+[hidden] {
+  display: none !important;
+}

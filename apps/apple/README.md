@@ -4,6 +4,7 @@ SwiftUI applications for macOS and iOS, sharing `DJBoothKit`. The interface foll
 workstation palette and dense library layout. Apple system glass is used for controls; track
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
+In **Sync & settings**, choose **Continue with Nanocodex** to connect your account and approve Spotify or SoundCloud access. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. The **Music agent** opens a native chat with your connected agent. Signing out clears the active account; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
 On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
@@ -99,3 +100,25 @@ or acquisition activity. Release builds ignore it. Production data is never repl
 This is the native library/listening surface. The existing web workstation retains its advanced
 two-deck mixing, cue editor, stems controls, USB management, and assistant while those interfaces
 are migrated. The shared acquisition, analysis, and Rekordbox engine remains authoritative.
+
+
+## Local Connect integration test
+
+Start the local test Worker in one terminal:
+
+```sh
+pnpm --filter @gakonst/djbooth-cloud test:mobile-server
+```
+
+Then run on a dedicated empty simulator (pass its UUID):
+
+```sh
+pnpm --filter @gakonst/djbooth-apple test:ui --simulator <uuid> --only-testing DJBoothUITests-iOS/ConnectUITests
+```
+
+The test uses the real browser Connect SDK, system authentication sheet, one-time
+code exchange, Keychain, native chat, and Worker/D1 account isolation. Only the
+Nanocodex approval and agent boundary is simulated, with Alice/Bob fixture accounts.
+It does not connect real Spotify/SoundCloud accounts, download music, or spend money.
+The test skips when its fixture is absent; use an empty dedicated simulator to avoid
+mixing previous sessions. Fixture servers listen only on loopback ports 8791/8792.

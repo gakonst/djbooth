@@ -13,6 +13,21 @@ struct MobileLibraryNavigation: View {
         let selected = model.showPlaylistBrowser ? nil : model.collections.first { $0.id == model.selectedCollection }
         let destinations = folders + (selected.map { [.collection($0.id)] } ?? [])
         NativeLibraryStack(model: model, destinations: destinations, reduceMotion: reduceMotion)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Menu {
+                        Button { model.showImport = true } label: { Label("Download", systemImage: "arrow.down.circle") }
+                            .accessibilityIdentifier("library.drawer.download")
+                        if model.cloudAccountID != nil {
+                            Button { model.showAgent = true } label: { Label("Music agent", systemImage: "bubble.left.and.bubble.right") }
+                        }
+                        Button { model.showSettings = true } label: { Label("Sync & settings", systemImage: "gearshape") }
+                            .accessibilityIdentifier("library.drawer.settings")
+                    } label: { Label("Library", systemImage: "line.3.horizontal") }
+                        .accessibilityIdentifier("library.drawer.open")
+                    Spacer()
+                }.padding(.horizontal, 16).padding(.vertical, 8).background(BoothStyle.background)
+            }
     }
 }
 

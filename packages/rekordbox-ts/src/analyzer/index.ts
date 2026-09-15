@@ -675,6 +675,16 @@ export function getAnalyzerBinary(explicit?: string, engine: AnalyzerEngine = "c
           fileURLToPath(
             new URL(`../../../../rust/target/release/${cleanHelperName}`, import.meta.url),
           ),
+          ...(process.platform === "darwin" && ["arm64", "x64"].includes(process.arch)
+            ? [
+                fileURLToPath(
+                  new URL(
+                    `../../../../rust/target/${process.arch === "arm64" ? "aarch64" : "x86_64"}-apple-darwin/release/${cleanHelperName}`,
+                    import.meta.url,
+                  ),
+                ),
+              ]
+            : []),
           ...pathCandidates.flatMap((candidate) =>
             legacyCleanHelperNames.map((name) => join(dirname(candidate), name)),
           ),

@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "djbooth-library",
+  "account_id": "16ce0442a940f01beefdb15a196a43ea",
+  "main": "src/index.ts",
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "compatibility_date": "2026-08-01",
+  "workers_dev": true,
+  "browser": { "binding": "BROWSER" },
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": ["* * * * *"] },
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "PlaylistContainer",
+      "image": "../../Dockerfile.playlist",
+      "image_build_context": "../..",
+      "instance_type": "standard-3",
+      "max_instances": 5,
+      "rollout_step_percentage": 100,
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "PLAYLIST_CONTAINERS", "class_name": "PlaylistContainer" }],
+  },
+  "migrations": [{ "tag": "playlist-containers-v1", "new_sqlite_classes": ["PlaylistContainer"] }],
+  "d1_databases": [
+    {
+      "binding": "LIBRARY_DB",
+      "database_name": "djbooth-library",
+      "database_id": "17ee62ff-a602-49a4-a35e-bd9316cabf13",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "djbooth-library-media" }],
+}

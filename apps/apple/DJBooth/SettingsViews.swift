@@ -5,11 +5,13 @@ struct ConnectionSettings: View {
     @Bindable var model: BoothModel
     @Environment(\.dismiss) private var dismiss
     @State private var cloudURL = ""
-    @State private var token = ""
+    @State private var login = ConnectLogin()
     @State private var workstationURL = ""
     @State private var runtime = DesktopRuntime()
     @State private var connecting = false
     @State private var showUSBLibrary = false
+    @State private var connectionError: String?
+    @State private var showAgent = false
     var body: some View {
         NavigationStack {
             Form {
@@ -31,18 +33,32 @@ struct ConnectionSettings: View {
                     Text(model.syncStatus).font(.caption).foregroundStyle(.secondary)
                     Button("Sync now") { Task { await model.synchronize() } }
                         .disabled(model.cloudURL.isEmpty || model.syncing || model.demo)
-                    TextField("https://your-library.workers.dev", text: $cloudURL).autocorrectionDisabled()
-                    SecureField("Sync token", text: $token)
-                    Button("Connect cloud library") {
+                    TextField("https://your-library.workers.dev", text: $cloudURL).autocorrectionDisabled().accessibilityIdentifier("connect.url")
+                    Button(model.cloudAccountID == nil ? "Continue with Nanocodex" : "Manage connections or switch account") {
                         connecting = true
+                        connectionError = nil
                         Task {
                             defer { connecting = false }
-                            do { try await model.configureCloud(url: cloudURL, token: token); token = ""; dismiss() }
-                            catch { model.message = error.localizedDescription }
+                            do {
+                                let token = try await login.signIn(endpoint: Endpoint(cloudURL))
+                                try await model.configureCloud(url: cloudURL, token: token)
+                                dismiss()
+                            }
+                            catch { connectionError = error.localizedDescription }
                         }
-                    }.disabled(cloudURL.isEmpty || token.isEmpty || model.demo || connecting)
+                    }.disabled(cloudURL.isEmpty || model.demo || connecting).accessibilityIdentifier("connect.login")
+                    if model.cloudAccountID != nil {
+                        ForEach(["spotify", "soundcloud"], id: \.self) { provider in
+                            LabeledContent(provider == "spotify" ? "Spotify" : "SoundCloud", value: model.cloudCapabilities.contains(provider) ? "Connected" : "Not approved")
+                        }
+                        Button("Open your music agent") { showAgent = true }.accessibilityIdentifier("connect.agent")
+                        Button("Sign out", role: .destructive) {
+                            Task { do { try await model.signOutCloud(); dismiss() } catch { model.message = error.localizedDescription } }
+                        }.disabled(connecting || model.syncing).accessibilityIdentifier("connect.logout")
+                    }
+                    if let connectionError { Text(connectionError).foregroundStyle(.red).accessibilityIdentifier("connect.error") }
                     if connecting { ProgressView("Opening library…") }
-                    Text("Credentials are saved in this device’s Keychain.").font(.caption).foregroundStyle(.secondary)
+                    Text("Connect Spotify and SoundCloud through Nanocodex. Your login is saved in this device’s Keychain.").font(.caption).foregroundStyle(.secondary)
                 }
                 if !model.conflicts.isEmpty {
                     Section("Review changes") {
@@ -63,10 +79,8 @@ struct ConnectionSettings: View {
                     Button("Connect to Mac library") {
                         do {
                             _ = try Endpoint(workstationURL, loopbackOnly: true)
-                            model.workstationURL = workstationURL
-                            UserDefaults.standard.set(workstationURL, forKey: "workstationURL")
-                            Task { await model.refreshWorkstation() }
-                        } catch { model.message = error.localizedDescription }
+                            Task { do { try await model.connectWorkstation(url: workstationURL) } catch { connectionError = error.localizedDescription } }
+                        } catch { connectionError = error.localizedDescription }
                     }
                     #if os(macOS)
                     Button("Start library service") { Task { await runtime.run(["serve", "--no-assistant", "--no-link", "--format", "json"]); await model.refreshWorkstation() } }
@@ -82,8 +96,10 @@ struct ConnectionSettings: View {
                     LabeledContent("Pending changes", value: "\(model.pendingCount)")
                 }
             }.formStyle(.grouped).navigationTitle("Sync & settings")
-                .toolbar { Button("Done") { dismiss() } }
-                .onAppear { cloudURL = model.cloudURL; workstationURL = model.workstationURL }
+                .toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("connect.done") }
+                .sheet(isPresented: $showAgent) { MusicAgentView(model: model) }
+                .task { await model.refreshCloudAccount() }
+                .onAppear { cloudURL = model.cloudURL.isEmpty ? "https://djbooth-library.gakonst.workers.dev" : model.cloudURL; workstationURL = model.workstationURL }
         }
         .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
         #if os(macOS)
@@ -111,7 +127,7 @@ struct ImportSheet: View {
                 Section {
                     Text("Found something good?").font(.title2.bold())
                     Text("Paste a playlist or set link. Cloudflare downloads and analyzes the tracks, then adds them to your cloud library. You can close the app while it runs.").font(.subheadline).foregroundStyle(.secondary)
-                    TextField("Paste a playlist or set link", text: $source).autocorrectionDisabled()
+                    TextField("Paste a playlist or set link", text: $source).autocorrectionDisabled().accessibilityIdentifier("import.source")
                 }
                 Section {
                     if model.canImportToCloud {
@@ -158,7 +174,7 @@ struct ImportSheet: View {
                     if let error = runtime.error { Text(error).font(.caption).foregroundStyle(.red) }
                 }
                 #endif
-            }.formStyle(.grouped).navigationTitle("Bring music in").toolbar { Button("Done") { dismiss() } }
+            }.formStyle(.grouped).navigationTitle("Bring music in").toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("import.done") }
                 .sheet(isPresented: $showCloudSettings) { ConnectionSettings(model: model) }
                 .onAppear { source = model.pendingImportSource }
                 .task {

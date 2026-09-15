@@ -20,6 +20,8 @@ export type BuildAcquisitionPlanOptions = {
   allowSourceSetClips?: boolean;
   /** Absolute path matching manifest.artifacts.sourceSet.path. Never downloaded by this builder. */
   sourceSetPath?: string;
+  /** Keep an entire verified mix as one recording, instead of acquiring its constituent tracks. */
+  wholeSet?: boolean;
   /** Absolute scratch directory. Defaults to `<outputDirectory>/.staging`. */
   stagingDirectory?: string;
 };
@@ -74,6 +76,48 @@ export async function buildAcquisitionPlan(
     requireAbsolute(directory, "localDirectories");
   }
   const sourceSet = sourceSetForClips(manifest, options);
+  if (options.wholeSet) {
+    if (
+      !sourceSet ||
+      manifest.entries.length !== 1 ||
+      manifest.entries[0]!.identity.status !== "identified"
+    )
+      throw new Error(
+        "Whole-set acquisition requires one identified entry and a verified source set",
+      );
+    const entry = manifest.entries[0]!;
+    const identity = tracklistIdentity(entry);
+    return {
+      stagingDirectory,
+      recordings: [],
+      sourceSets: [sourceSet.descriptor],
+      clips: [
+        {
+          entryOrder: entry.order,
+          sourcePath: sourceSet.descriptor.path,
+          sourceUrl: sourceSet.artifact.url,
+          outputPath: canonicalTrackPath(outputDirectory, {
+            title: identity.title,
+            artists: identity.artists,
+            qualifier: `full-set-${sourceSet.artifact.sha256.slice(0, 12)}`,
+            extension: clipOutputExtension(sourceSet.artifact.path),
+          }),
+          startSeconds: 0,
+          endSeconds: sourceSet.artifact.durationSeconds,
+          metadata: {
+            title: identity.title,
+            artists: identity.artists,
+            album: "DJ Sets",
+            grouping: "djbooth full DJ set",
+            comment: `Full DJ set\nSource: ${sourceSet.artifact.url}`,
+          },
+          qualityNote:
+            "Complete original DJ mix; transitions and original source quality preserved.",
+          containsTransitions: true,
+        },
+      ],
+    };
+  }
   const localDirectories = [...new Set([outputDirectory, ...(options.localDirectories ?? [])])];
   const artifacts = await discoverLocalArtifacts(localDirectories);
   const adoptedPaths = new Set<string>();
@@ -118,7 +162,8 @@ function recordingIdentities(entry: ResolvedTrack): RecordingIdentity[] {
       ? [spotifyIdentity(entry.spotify, entry)]
       : entry.spotify.status === "ambiguous"
         ? entry.spotify.candidates.map((candidate) => spotifyIdentity(candidate, entry))
-        : entry.spotify.status === "unmatched" && entry.identity.status === "identified"
+        : (entry.spotify.status === "unmatched" || entry.spotify.status === "pending") &&
+            entry.identity.status === "identified"
           ? [tracklistIdentity(entry)]
           : [];
   const overlaps = primary.length
