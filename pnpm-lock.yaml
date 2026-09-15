@@ -17,6 +17,8 @@ importers:
         specifier: latest
         version: 2.31.0(@types/node@24.13.3)
 
+  apps/apple: {}
+
   apps/dj-monitor:
     dependencies:
       react:

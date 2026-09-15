@@ -1,0 +1,18 @@
+{
+  "name": "@gakonst/djbooth-apple",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first native DJ Booth for macOS and iOS",
+  "scripts": {
+    "project": "node scripts/project.mjs",
+    "build": "node scripts/native.mjs build macos",
+    "build:ios": "node scripts/native.mjs build ios",
+    "dev": "node scripts/native.mjs run macos",
+    "ios": "node scripts/native.mjs run ios",
+    "device": "node scripts/native.mjs device",
+    "check": "node scripts/native.mjs check",
+    "test": "node scripts/native.mjs test-kit",
+    "test:ui": "node scripts/native.mjs test-ui",
+    "test:usb": "node scripts/test-usb.mjs"
+  }
+}
