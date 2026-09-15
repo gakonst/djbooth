@@ -1,5 +1,15 @@
 # Account-scoped library and music agent
 
+Native login signs the exact app tool catalog shared with DJBoothKit. The authenticated
+`POST /v1/agent/tool-host/ticket` endpoint verifies that catalog digest and obtains a
+one-use Nanocodex ticket for the grant's agent. The foreground app attaches directly
+over WebSocket and executes `djbooth_query` against its current account's local model.
+Tool calls read current state on demand, with bounded, paginated results; credentials,
+filesystem paths, audio bytes, and other account stores are never query sources.
+The integration fixture exercises native WebSocket calls and answers using phone-owned
+data: start `pnpm --filter @gakonst/djbooth-cloud test:mobile-server`, then run
+`DJBOOTH_PHONE_TOOL_FIXTURE=1 pnpm native:test`.
+
 The Cloudflare Worker hosts the Nanocodex Connect login, music-agent page, and
 account-scoped D1/R2 API. Native chat uses the narrow `/v1/agent/turns` adapter to
 the same Connect grant-bound managed API. The verified issuer response selects the

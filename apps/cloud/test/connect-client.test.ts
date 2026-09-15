@@ -1,5 +1,6 @@
 import { Client, Dialog, Transport } from "nanocodex/connect";
 import { expect, test, vi } from "vitest";
+import { phoneTools, phoneToolDigest } from "../src/phone-tools";
 
 test("the installed SDK signs and retains Spotify and SoundCloud in the hosted grant", async () => {
   const wallet = vi.fn(async () => ({
@@ -27,6 +28,7 @@ test("the installed SDK signs and retains Spotify and SoundCloud in the hosted g
         "chatgpt",
       ],
       mcp_connections: [],
+      app_tool_catalog_digest: await phoneToolDigest(),
     },
   }));
   const client = Client.create({
@@ -46,6 +48,7 @@ test("the installed SDK signs and retains Spotify and SoundCloud in the hosted g
   const connection = await client.connection.connect({
     authorization: "hosted",
     permission: "agent.run",
+    tools: phoneTools,
     capabilities: { cloudAccounts: { chatgpt: true, spotify: true, soundcloud: true } },
   });
   const call = wallet.mock.calls[0] as unknown as [
@@ -56,9 +59,16 @@ test("the installed SDK signs and retains Spotify and SoundCloud in the hosted g
   );
   expect(call[0].params[0].capabilities.authorizeAccessKey).toBeUndefined();
   expect(connection.grant.connectors).toEqual(["spotify", "soundcloud", "chatgpt"]);
+  expect(connection.grant.appToolCatalogDigest).toBe(await phoneToolDigest());
+  expect(call[0].params[0].capabilities.auth.resources).toContain(
+    `urn:nanocodex:app-tool-catalog:sha256:${(await phoneToolDigest()).slice(2)}`,
+  );
   expect(request).toHaveBeenCalledWith(
     expect.objectContaining({
-      body: expect.objectContaining({ requested_connectors: ["spotify", "soundcloud", "chatgpt"] }),
+      body: expect.objectContaining({
+        requested_connectors: ["spotify", "soundcloud", "chatgpt"],
+        requested_app_tool_catalog_digest: await phoneToolDigest(),
+      }),
     }),
   );
 });

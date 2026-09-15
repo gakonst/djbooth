@@ -83,7 +83,11 @@ struct BoothRoot: View {
                 if !PerformanceProbe.offline { await model.startup() }
             }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { model.persistPlaybackSession() }
+                if phase != .active { model.persistPlaybackSession(); model.stopPhoneTools() }
+            }
+            .task(id: "\(model.accountConnectionID):\(scenePhase)") {
+                guard scenePhase == .active, !model.demo else { return }
+                await model.servePhoneTools()
             }
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
@@ -115,13 +119,17 @@ struct BoothRoot: View {
                 }
         }
         #else
-        MobileLibraryNavigation(model: model)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    PlaylistRemovalNotice(model: model)
-                    MobileNowPlaying(model: model)
+        if model.needsMobileSignIn {
+            MobileSignInView(model: model)
+        } else {
+            MobileLibraryNavigation(model: model)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        PlaylistRemovalNotice(model: model)
+                        MobileNowPlaying(model: model)
+                    }
                 }
-            }
+        }
         #endif
     }
     #if os(macOS)

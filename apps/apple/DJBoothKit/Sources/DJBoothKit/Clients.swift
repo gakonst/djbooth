@@ -145,6 +145,14 @@ public struct AgentTurn: Codable, Sendable {
 }
 
 public struct CloudClient: Sendable {
+    public struct PhoneToolTicket: Decodable, Sendable {
+        public let url: URL
+        public let catalogDigest: String
+    }
+    public func phoneToolTicket() async throws -> PhoneToolTicket {
+        let (data, response) = try await session.data(for: request("v1/agent/tool-host/ticket", method: "POST"))
+        return try await decodeResponse(PhoneToolTicket.self, from: checked(data, response))
+    }
     public func agentTurn(id: String, input: String? = nil, cancel: Bool = false) async throws -> AgentTurn {
         guard id.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil else { throw ClientError.http(400, "Invalid agent turn") }
         var request = request(input != nil ? "v1/agent/turns" : "v1/agent/turns/\(id)\(cancel ? "/cancel" : "")", method: input != nil || cancel ? "POST" : "GET")

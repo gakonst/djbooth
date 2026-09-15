@@ -14,6 +14,28 @@ let issuerStatus = 200;
 let grantStatus = "active";
 let expired = false;
 let agentRequests = [];
+const phoneCatalog = JSON.parse(
+  await readFile(
+    new URL(
+      "../../apple/DJBoothKit/Sources/DJBoothKit/Resources/phone-tools.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+      .join(",")}}`;
+  return JSON.stringify(value);
+}
+const phoneDigest = `0x${createHash("sha256")
+  .update(`nanocodex-app-tool-catalog-v1\0${canonical(phoneCatalog)}`)
+  .digest("hex")}`;
+let approvedPhoneDigest;
 let capabilities = ["nanocodex.agent", "chatgpt", "spotify", "soundcloud", "agent.output.final"];
 async function connectIssuer(request) {
   assert.equal(request.headers.get("x-nanocodex-app-id"), "djbooth");
@@ -30,6 +52,11 @@ async function connectIssuer(request) {
   const path = new URL(request.url).pathname;
   const who = token.endsWith("b") ? "b" : "a";
   if (path.includes("/agents/")) {
+    if (path.endsWith("/tool-host/ticket")) {
+      assert.equal(path, `/v1/grants/${GRANT}/agents/agent-${who}/tool-host/ticket`);
+      assert.equal(request.method, "POST");
+      return Response.json({ ticket: `ticket-${who}` });
+    }
     assert.ok(path.startsWith(`/v1/grants/${GRANT}/agents/agent-${who}/turns`));
     assert.equal(request.method, "POST");
     const body = await request.text();
@@ -57,6 +84,7 @@ async function connectIssuer(request) {
       status: grantStatus,
       expires_at: Math.floor(Date.now() / 1000) + (expired ? -1 : 3600),
       capabilities,
+      ...(approvedPhoneDigest ? { app_tool_catalog_digest: approvedPhoneDigest } : {}),
     },
   });
 }
@@ -1070,4 +1098,37 @@ test("a new grant for the same Nanocodex account reopens the same library and me
     ).status,
     200,
   );
+});
+
+test("phone tool tickets require the exact approved catalog and stay bound to the verified agent", async () => {
+  assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 403);
+  approvedPhoneDigest = `0x${"0".repeat(64)}`;
+  assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 403);
+  try {
+    approvedPhoneDigest = phoneDigest;
+    for (const [token, owner] of [
+      [TOKEN, "a"],
+      [TOKEN_B, "b"],
+    ]) {
+      const response = await request("/v1/agent/tool-host/ticket", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ agentId: "other-agent", accountId: "other-user" }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "private, no-store");
+      const value = await response.json();
+      assert.equal(value.catalogDigest, phoneDigest);
+      assert.equal(
+        value.url,
+        `wss://nanocodex-connect-api.gakonst.workers.dev/v1/grants/${GRANT}/agents/agent-${owner}/tool-host?ticket=ticket-${owner}`,
+      );
+      assert.deepEqual(Object.keys(value).sort(), ["catalogDigest", "url"]);
+    }
+    revoked = true;
+    assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 401);
+  } finally {
+    approvedPhoneDigest = undefined;
+    revoked = false;
+  }
 });

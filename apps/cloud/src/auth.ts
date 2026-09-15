@@ -9,6 +9,7 @@ export interface Account {
   id: string;
   grantId: string;
   agentId?: string;
+  appToolCatalogDigest?: string;
   expiresAt: number;
   capabilities: string[];
 }
@@ -70,7 +71,13 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
   const wire = await response.json<{
     account_id?: string;
     agent_id?: string;
-    grant?: { id?: string; status?: string; expires_at?: number; capabilities?: string[] };
+    grant?: {
+      id?: string;
+      status?: string;
+      expires_at?: number;
+      capabilities?: string[];
+      app_tool_catalog_digest?: string;
+    };
   }>();
   const grant = wire.grant;
   if (
@@ -94,6 +101,9 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
       : {}),
     expiresAt: grant.expires_at!,
     capabilities: grant.capabilities,
+    ...(typeof grant.app_tool_catalog_digest === "string"
+      ? { appToolCatalogDigest: grant.app_tool_catalog_digest }
+      : {}),
   };
 }
 const json = (body: unknown, status = 200, headers = {}) =>

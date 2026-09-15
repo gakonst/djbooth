@@ -26,6 +26,10 @@ struct MobileLibraryNavigation: View {
                     } label: { Label("Library", systemImage: "line.3.horizontal") }
                         .accessibilityIdentifier("library.drawer.open")
                     Spacer()
+                    if model.hasCloudSession {
+                        Button { model.showAgent = true } label: { Label("Ask DJ Booth", systemImage: "bubble.left.and.bubble.right") }
+                            .accessibilityIdentifier("library.agent")
+                    }
                 }.padding(.horizontal, 16).padding(.vertical, 8).background(BoothStyle.background)
             }
     }

@@ -22,7 +22,10 @@ struct MusicAgentView: View {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 20) {
                                 if model.agentMessages.isEmpty {
-                                    Text("Explore your saved music, discover tracks, or plan your next set with your Spotify and SoundCloud connections.").foregroundStyle(.secondary)
+                                    Text("Ask about your library, playlists, what's playing, or your downloads. Your agent can look things up in DJ Booth on this phone.").foregroundStyle(.secondary)
+                                    ForEach(["What's in my library?", "Which tracks are available offline?", "What's playing and what's next?"], id: \.self) { suggestion in
+                                        Button(suggestion) { model.beginAgentTurn(suggestion) }.disabled(!model.phoneToolsReady || model.agentPendingID != nil)
+                                    }
                                 }
                                 ForEach(model.agentMessages) { message in
                                     VStack(alignment: .leading, spacing: 4) {
@@ -34,6 +37,14 @@ struct MusicAgentView: View {
                         }.onChange(of: model.agentMessages.count) { _, _ in
                             if let last = model.agentMessages.last { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
+                    }
+                    HStack {
+                        Image(systemName: model.phoneToolsReady ? "iphone.gen3.radiowaves.left.and.right" : "iphone.gen3")
+                        Text(model.phoneToolsReady ? "Connected to this phone · Can read your library and app state" : (model.phoneToolsError ?? "Connecting to this phone…"))
+                            .accessibilityIdentifier("agent.phoneStatus")
+                    }.font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                    if model.phoneToolsError != nil {
+                        Button("Reconnect Nanocodex") { dismiss(); model.showSettings = true }
                     }
                     if let error = model.agentError {
                         Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal).accessibilityIdentifier("agent.error")
@@ -47,16 +58,16 @@ struct MusicAgentView: View {
                         }.padding(.horizontal)
                     }
                     HStack(alignment: .bottom) {
-                        TextField("Ask about your music…", text: $input, axis: .vertical)
+                        TextField("Ask about your library or app…", text: $input, axis: .vertical)
                             .lineLimit(1...5).textFieldStyle(.roundedBorder).accessibilityIdentifier("agent.input")
                         Button("Send") {
                             model.beginAgentTurn(input)
                             input = ""
-                        }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || input.count > 16000 || model.agentPendingID != nil)
+                        }.disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || input.count > 16000 || model.agentPendingID != nil || !model.phoneToolsReady)
                             .accessibilityIdentifier("agent.send")
                     }.padding()
                 }
-            }.navigationTitle("Music agent")
+            }.navigationTitle("DJ Booth agent")
                 .toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("agent.done") }
                 .task(id: "\(model.cloudAccountID ?? ""): \(model.agentPendingID ?? ""): \(model.agentRetry)") { await model.observeAgentTurn() }
         }

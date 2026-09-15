@@ -12,7 +12,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchEnvironment["DJBOOTH_CLOUD_URL"] = "http://127.0.0.1:8791"
         app.launch()
-        openSettings(app)
+        XCTAssertTrue(app.buttons["connect.login"].waitForExistence(timeout: 20))
         login("Alice", app)
         XCTAssertTrue(app.buttons["playlist.row.shared-playlist-id"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.staticTexts["Alice private playlist"].exists)
@@ -21,6 +21,10 @@ import XCTest
         app.buttons["connect.agent"].tap()
         let input = app.descendants(matching: .any)["agent.input"].firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Connected to this phone · Can read your library and app state"].waitForExistence(timeout: 20))
+        input.tap(); input.typeText("What's in my library?")
+        app.buttons["agent.send"].tap()
+        XCTAssertTrue(app.staticTexts["On this phone: Alice private playlist."].waitForExistence(timeout: 20))
         input.tap(); input.typeText("Suggest an opening set")
         app.buttons["agent.send"].tap()
         XCTAssertTrue(app.staticTexts["Alice's Spotify and SoundCloud: try a warm opening set. Local test reply."].waitForExistence(timeout: 20))
@@ -50,6 +54,7 @@ import XCTest
         openSettings(app)
         app.buttons["connect.agent"].tap()
         XCTAssertTrue(input.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Connected to this phone · Can read your library and app state"].waitForExistence(timeout: 20))
         XCTAssertFalse(app.staticTexts["Alice's Spotify and SoundCloud: try a warm opening set. Local test reply."].exists)
         input.tap(); input.typeText("Suggest music")
         app.buttons["agent.send"].tap()
@@ -63,11 +68,10 @@ import XCTest
         XCTAssertTrue(app.buttons["agent.stop"].waitForNonExistence(timeout: 10))
         app.buttons["agent.done"].tap()
         app.buttons["connect.logout"].tap()
-        XCTAssertTrue(app.buttons["library.drawer.open"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["connect.login"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["Bob private playlist"].exists)
         app.terminate(); app.launch()
-        openSettings(app)
-        XCTAssertTrue(app.buttons["Continue with Nanocodex"].exists)
+        XCTAssertTrue(app.buttons["connect.login"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["connect.agent"].exists)
         capture(app, "Signed out after relaunch")
     }
@@ -81,7 +85,8 @@ import XCTest
     private func login(_ who: String, _ app: XCUIApplication) {
         app.buttons["connect.login"].tap()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        if springboard.buttons["Continue"].waitForExistence(timeout: 3) { springboard.buttons["Continue"].tap() }
+        if app.alerts.buttons["Continue"].waitForExistence(timeout: 5) { app.alerts.buttons["Continue"].tap() }
+        else if springboard.buttons["Continue"].waitForExistence(timeout: 3) { springboard.buttons["Continue"].tap() }
         let web = XCUIApplication(bundleIdentifier: "com.apple.SafariViewService")
         let connect = web.buttons["Continue with Nanocodex"]
         if connect.waitForExistence(timeout: 10) { connect.tap() }

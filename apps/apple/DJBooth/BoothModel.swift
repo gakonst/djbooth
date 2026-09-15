@@ -77,6 +77,13 @@ struct PlaylistRemovalUndo {
     var agentPendingID: String?
     var agentError: String?
     var agentRetry = 0
+    var phoneToolsReady = false
+    var phoneToolsError: String?
+    private let phoneToolHost = PhoneToolHost()
+    private var phoneToolsRunID = UUID()
+    var accountConnectionID = UUID()
+    var needsMobileSignIn: Bool { !demo && cloud == nil }
+    var hasCloudSession: Bool { cloud != nil }
     private var agentPendingInput: String?
     var cloudCapabilities: [String] = []
     func refreshCloudAccount() async {
@@ -89,7 +96,7 @@ struct PlaylistRemovalUndo {
         } catch { if generation == connectionGeneration { message = error.localizedDescription } }
     }
     func beginAgentTurn(_ input: String) {
-        guard cloud != nil, agentPendingID == nil else { return }
+        guard cloud != nil, phoneToolsReady, agentPendingID == nil else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 16000 else { return }
         agentMessages.append(MusicAgentMessage(role: "You", text: text))
@@ -130,7 +137,47 @@ struct PlaylistRemovalUndo {
         } catch { if generation == connectionGeneration { agentError = error.localizedDescription } }
     }
     private func clearAgent() {
+        stopPhoneTools(); phoneToolsError = nil
+        accountConnectionID = UUID()
         agentMessages = []; agentPendingID = nil; agentPendingInput = nil; agentError = nil; cloudCapabilities = []
+    }
+    func servePhoneTools() async {
+        guard let cloud else { return }
+        let generation = connectionGeneration
+        let runID = UUID(); phoneToolsRunID = runID
+        await phoneToolHost.run(client: cloud, status: { [weak self] ready, error in
+            guard let self, self.connectionGeneration == generation, self.phoneToolsRunID == runID else { return }
+            self.phoneToolsReady = ready
+            self.phoneToolsError = error
+        }, query: { [weak self] arguments, budget in
+            guard let self, self.connectionGeneration == generation, self.phoneToolsRunID == runID, self.cloud != nil else {
+                throw ClientError.http(401, "This phone is no longer connected to that account")
+            }
+            return try self.phoneLibraryQuery().execute(arguments, byteBudget: budget)
+        })
+        if connectionGeneration == generation, phoneToolsRunID == runID { phoneToolsReady = false }
+    }
+    func stopPhoneTools() { phoneToolsRunID = UUID(); phoneToolHost.stop(); phoneToolsReady = false }
+    private func phoneLibraryQuery() -> PhoneLibraryQuery {
+        var library = PhoneLibraryQuery()
+        library.tracks = tracks; library.collections = collections; library.favorites = favorites
+        library.offlineIDs = offlineIDs; library.annotations = annotations; library.downloading = downloading
+        library.queue = player.queue; library.imports = importJobs
+        library.conflicts = conflicts.map { ["id": $0.id, "kind": $0.kind.rawValue, "entityID": $0.entityID] }
+        library.state = [
+            "trackCount": tracks.count, "playlistCount": collections.count, "favoriteCount": favorites.count,
+            "offlineTrackCount": offlineIDs.count, "downloadCount": downloading.count,
+            "pendingSyncChanges": pendingCount, "conflictCount": conflicts.count, "syncing": syncing,
+            "syncStatus": syncStatus, "search": query, "filter": filter,
+            "screen": showPlaylistBrowser ? "playlists" : "tracks", "playlistFolderPath": playlistFolderPath,
+            "selectedPlaylistID": selectedCollection ?? "", "visibleTrackCount": visibleTracks.count,
+            "playback": ["trackID": player.track?.id ?? "", "title": player.track?.title ?? "",
+                         "playing": player.playing, "elapsedSeconds": player.elapsed, "durationSeconds": player.duration,
+                         "queueIndex": player.queueIndex, "queueCount": player.queue.count],
+            "activeImports": importJobs.filter(\.isActive).count, "usbConnected": usbConnected,
+            "connectedMusicProviders": cloudCapabilities.filter { ["spotify", "soundcloud"].contains($0) }
+        ]
+        return library
     }
     var cloudAccountID: String?
     var cloudURL: String

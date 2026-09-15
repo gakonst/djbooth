@@ -1,5 +1,6 @@
 import { Client, Dialog, Transport, type ConnectAgent, type Connection } from "nanocodex/connect";
 import "./style.css";
+import { phoneTools } from "../src/phone-tools";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
 const status = (message: string) => {
@@ -56,6 +57,11 @@ async function main() {
   const challenge = params.get("challenge");
   const state = params.get("state");
   const returnTo = params.get("return");
+  if (native && !returnTo) {
+    el("welcome-title").textContent = "Sign in to DJ Booth";
+    el("welcome-detail").textContent =
+      "Continue with your phone number in Nanocodex. Approve your agent to read this phone's DJ Booth library and app state. You can also connect your music services below.";
+  }
   const callback = returnTo ? new URL(returnTo) : new URL("djbooth://connect");
   if (
     returnTo &&
@@ -134,7 +140,11 @@ async function main() {
     if (polling) clearInterval(polling);
     status("Waiting for Nanocodex…");
     try {
+      // Reserve the SDK popup during the tap. Hashing the signed phone tool
+      // catalog is asynchronous and otherwise loses Safari's user activation.
+      client.dialog.showWallet?.();
       const connection = await client.connection.connect({
+        ...(native && !returnTo ? { tools: phoneTools } : {}),
         authorization: "hosted",
         permission: "agent.run",
         capabilities: {
@@ -153,6 +163,7 @@ async function main() {
       });
       await connected(connection);
     } catch (error) {
+      client.dialog.hideWallet?.();
       status("");
       fail(error);
     } finally {
