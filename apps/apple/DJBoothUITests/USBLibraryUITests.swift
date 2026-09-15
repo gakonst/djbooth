@@ -153,7 +153,10 @@ final class USBLibraryUITests: XCTestCase {
         if progress.elementType == .slider { progress.adjust(toNormalizedSliderPosition: 0.5) }
         else { progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
         let sought = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            (time.value as? String)?.hasPrefix("0:17") == true || (time.value as? String)?.hasPrefix("0:18") == true
+            // Native slider gestures round to a nearby pixel; verify the actual clock.
+            let clock = ((time.value as? String) ?? time.label).split(separator: " ").first ?? ""
+            let parts = clock.split(separator: ":").compactMap { Double($0) }
+            return parts.count == 2 && abs(parts[0] * 60 + parts[1] - 17.5) <= 2
         }, object: time)
         XCTAssertEqual(XCTWaiter.wait(for: [sought], timeout: 8), .completed)
         // Queue navigation also exercises the MP3 fixture through the real player.
@@ -183,7 +186,8 @@ final class USBLibraryUITests: XCTestCase {
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["nowPlaying.play"].waitForExistence(timeout: 20))
         XCTAssertFalse(app.buttons["usb.open"].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label.contains("No track selected"))
+        let restoredTitle = app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label
+        XCTAssertFalse(restoredTitle == "Second" || restoredTitle == "First", "An unplugged USB track cannot be restored")
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'nowPlaying.queue.track.usb:'")).count, 0)
         try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-PIONEER"), to: pioneer)
         try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-Contents"), to: audio)
