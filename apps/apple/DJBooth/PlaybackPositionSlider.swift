@@ -44,11 +44,12 @@ struct PlaybackPositionSlider: UIViewRepresentable {
         CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: 44)
     }
     static func dismantleUIView(_ uiView: PlaybackUISlider, coordinator: ()) {
-        uiView.cancelTracking(with: nil)
+        // Teardown must not write back into SwiftUI's disappearing state graph.
         uiView.onBegin = nil
         uiView.onPreview = nil
         uiView.onCommit = nil
         uiView.onCancel = nil
+        uiView.cancelTracking(with: nil)
     }
 }
 
