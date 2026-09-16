@@ -67,8 +67,12 @@ test("scheduled cloud maintenance resumes old completed imports once, without re
     await library.default.scheduled({} as any, env as any);
     expect(launched).toEqual(["account-a:old"]);
     expect(
-      db.prepare("SELECT status,message FROM import_requests WHERE id='old'").get(),
-    ).toMatchObject({ status: "queued", message: "Updating CDJ files in the cloud" });
+      db.prepare("SELECT status,message,analysis_repair FROM import_requests WHERE id='old'").get(),
+    ).toMatchObject({
+      status: "queued",
+      message: "Updating CDJ files in the cloud",
+      analysis_repair: 1,
+    });
     db.exec("UPDATE import_requests SET status='complete',analysis_version=1 WHERE id='old'");
     launched.length = 0;
     await library.default.scheduled({} as any, env as any);
@@ -77,7 +81,7 @@ test("scheduled cloud maintenance resumes old completed imports once, without re
     db.close();
   }
 });
-function setup(admit = true) {
+function setup(admit = true, repair = false) {
   const state = new Map<string, unknown>();
   const writes: unknown[][] = [];
   const storage = {
@@ -93,7 +97,11 @@ function setup(admit = true) {
       prepare: (sql: string) => ({
         bind: (...args: unknown[]) => ({
           first: async () =>
-            sql.includes("RETURNING") ? (admit ? { id } : null) : { status: "queued" },
+            sql.includes("RETURNING")
+              ? admit
+                ? { id }
+                : null
+              : { status: "queued", analysis_repair: repair ? 1 : 0 },
           run: async () => {
             writes.push(args);
             return {};
@@ -110,6 +118,14 @@ function setup(admit = true) {
 
 describe("playlist container lifecycle", () => {
   beforeEach(() => vi.restoreAllMocks());
+  test("maintenance restores the saved import with artifact-only publication", async () => {
+    const { runner, state } = setup(true, true);
+    await runner.enqueue("account-a", id, "https://youtu.be/existing");
+    expect((state.get("job") as any).analysisRepair).toBe(true);
+    await runner.poll();
+    const startup = vi.mocked(runner.startAndWaitForPorts).mock.calls[0]![0] as any;
+    expect(startup.startOptions.envVars.DJBOOTH_ANALYSIS_REPAIR).toBe("1");
+  });
   test("a durable scheduled job progresses with no phone connection and shuts down on completion", async () => {
     const { runner, state, writes } = setup();
     await runner.enqueue("account-a", id, "https://soundcloud.com/artist/sets/playlist");
