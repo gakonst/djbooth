@@ -145,7 +145,11 @@ if (command === "test-kit") {
       const remote = "Library/Application Support/DJBooth/HardwareControl";
       const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "10"];
       writeFileSync(request, JSON.stringify({ id, operation, arguments: input, expires_ms: Date.now() + 60_000 }));
-      run("xcrun", ["devicectl", "device", "copy", "to", ...domain, "--source", request, "--destination", `${remote}/request.json`]);
+      // The app claims a command by deleting request.json. It can do that before
+      // devicectl's post-copy metadata lookup, which reports error 7000 even
+      // though the command ran. Always check its ID-specific reply; never resend.
+      const upload = spawnSync("xcrun", ["devicectl", "device", "copy", "to", ...domain, "--source", request, "--destination", `${remote}/request.json`], { encoding: "utf8" });
+      if (upload.status !== 0) console.error("Device upload was not confirmed; checking the command acknowledgment without resending.");
       const deadline = Date.now() + 60_000;
       while (Date.now() < deadline) {
         await new Promise((done) => setTimeout(done, 500));
