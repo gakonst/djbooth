@@ -3,7 +3,14 @@ import { accountFetch, type Env } from "./index.js";
 import { snapshots } from "./snapshots.js";
 import { resolveTracklist } from "./resolver.js";
 
-type Job = { accountId: string; id: string; source: string; startedAt: number; failures: number };
+type Job = {
+  accountId: string;
+  id: string;
+  source: string;
+  startedAt: number;
+  failures: number;
+  analysisRepair?: boolean;
+};
 
 /** Stable Durable Object identity = one playlist = one container, across retries. */
 export class PlaylistContainer extends Container<Env> {
@@ -24,12 +31,18 @@ export class PlaylistContainer extends Container<Env> {
       }
       return;
     }
+    const row = await this.env.LIBRARY_DB.prepare(
+      "SELECT analysis_repair FROM import_requests WHERE account_id=? AND id=?",
+    )
+      .bind(accountId, id)
+      .first<{ analysis_repair: number }>();
     await this.ctx.storage.put("job", {
       accountId,
       id,
       source,
       startedAt: Date.now(),
       failures: 0,
+      analysisRepair: row?.analysis_repair === 1,
     } satisfies Job);
     await this.schedule(1, "poll");
   }
@@ -107,6 +120,7 @@ export class PlaylistContainer extends Container<Env> {
             DJBOOTH_IMPORT_ID: job.id,
             DJBOOTH_IMPORT_SOURCE: job.source,
             DJBOOTH_CONTAINER_BINDINGS: "1",
+            DJBOOTH_ANALYSIS_REPAIR: job.analysisRepair ? "1" : "0",
           },
         },
         cancellationOptions: { portReadyTimeoutMS: 60_000 },

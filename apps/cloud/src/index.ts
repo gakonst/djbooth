@@ -700,7 +700,7 @@ export default {
       .run();
     if (!env.PLAYLIST_CONTAINERS) return;
     await env.LIBRARY_DB.prepare(
-      "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Updating CDJ files in the cloud', updated_at=? WHERE status='complete' AND analysis_version<1",
+      "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Updating CDJ files in the cloud', analysis_repair=1, updated_at=? WHERE status='complete' AND analysis_version<1",
     )
       .bind(Date.now())
       .run();

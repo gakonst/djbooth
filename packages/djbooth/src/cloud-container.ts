@@ -123,6 +123,7 @@ export async function runPlaylistContainer(
           token,
           namespace: `cloud:${id}`,
           outputDirectory: join(root, "audio"),
+          artifactsOnly: process.env.DJBOOTH_ANALYSIS_REPAIR === "1",
           resolve: async (request, signal) => {
             const response = await fetch(`${endpoint}/resolve`, {
               method: "POST",

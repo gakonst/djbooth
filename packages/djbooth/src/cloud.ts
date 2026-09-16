@@ -50,6 +50,7 @@ export type CloudPublishOptions = {
   playlist?: string[];
   namespace?: string;
   metadataOnly?: boolean;
+  artifactsOnly?: boolean;
   uploadConcurrency?: number;
   dryRun?: boolean;
   onProgress?: (progress: Progress) => void;
@@ -216,6 +217,8 @@ export async function publishCloudLibrary(
   options: CloudPublishOptions,
   request: typeof fetch = fetch,
 ) {
+  if (options.metadataOnly && options.artifactsOnly)
+    throw new TypeError("Choose metadata-only or artifacts-only publishing");
   if (options.namespace && !/^cloud:[a-f0-9-]{36}$/i.test(options.namespace))
     throw new TypeError("Invalid cloud playlist namespace");
   const trackID = (id: string) => (options.namespace ? `${options.namespace}:track:${id}` : id);
@@ -291,7 +294,10 @@ export async function publishCloudLibrary(
     async function call(path: string, init: RequestInit = {}, timeout = 60_000): Promise<Response> {
       // JSON sync writes carry stable operation IDs. Audio streams must instead
       // resume through the outer workflow because their bodies cannot be replayed.
-      const attempts = init.body == null || typeof init.body === "string" ? 3 : 1;
+      const attempts =
+        init.body == null || typeof init.body === "string" || init.body instanceof Uint8Array
+          ? 3
+          : 1;
       for (let attempt = 0; ; attempt++) {
         try {
           const response = await request(new URL(path, endpoint), {
@@ -338,6 +344,7 @@ export async function publishCloudLibrary(
       kind: "track" | "collection",
       entityID: string,
       value: CloudTrack | Collection,
+      artifactsOnly = false,
     ): Promise<boolean> {
       const key = entityKey(kind, entityID);
       const previous = remote.get(key);
@@ -346,14 +353,15 @@ export async function publishCloudLibrary(
         return true;
       }
       // A mobile edit is never silently replaced by a workstation snapshot.
-      if (previous && !previous.operationID.startsWith(publisherPrefix)) {
+      const mobileOwned = previous && !previous.operationID.startsWith(publisherPrefix);
+      if (mobileOwned && !artifactsOnly) {
         result.conflicts.push(key);
         return false;
       }
       const payload = JSON.stringify(value);
       const baseVersion = previous?.sequence ?? 0;
       const operationID =
-        publisherPrefix +
+        (mobileOwned ? "cdj-analysis:" : publisherPrefix) +
         createHash("sha256")
           .update(JSON.stringify({ kind, entityID, baseVersion, payload }))
           .digest("hex");
@@ -378,7 +386,7 @@ export async function publishCloudLibrary(
     let current = 0;
     const metadataTotal = tracks.length + collections.length;
     emit("metadata", 0, metadataTotal);
-    for (const track of tracks) {
+    for (const track of options.artifactsOnly ? [] : tracks) {
       if (track.analyzed && library.getWaveform)
         waveforms.set(track.id, cloudWaveform(library.getWaveform(track.id)));
       const value = portableTrack(track, remote.get(entityKey("track", trackID(track.id))));
@@ -387,7 +395,7 @@ export async function publishCloudLibrary(
       if (await publish("track", trackID(track.id), value)) accepted.add(track.id);
       emit("metadata", ++current, metadataTotal);
     }
-    for (const collection of collections) {
+    for (const collection of options.artifactsOnly ? [] : collections) {
       await publish("collection", collection.id, {
         ...collection,
         trackIDs: collection.trackIDs.map(trackID),
@@ -395,7 +403,9 @@ export async function publishCloudLibrary(
       emit("metadata", ++current, metadataTotal);
     }
     if (!options.metadataOnly) {
-      const audio = tracks.filter((track) => track.fileExists && accepted.has(track.id));
+      const audio = tracks.filter(
+        (track) => track.fileExists && (options.artifactsOnly || accepted.has(track.id)),
+      );
       current = 0;
       emit("audio", 0, audio.length);
       const uploadTrack = async (track: TrackSummary) => {
@@ -405,6 +415,13 @@ export async function publishCloudLibrary(
           const hash = createHash("sha256");
           for await (const chunk of createReadStream(path)) hash.update(chunk);
           const digest = hash.digest("hex");
+          const previous = remote.get(entityKey("track", trackID(track.id)));
+          const original =
+            options.artifactsOnly && previous?.payload && !previous.deleted
+              ? (JSON.parse(previous.payload) as CloudTrack)
+              : undefined;
+          if (options.artifactsOnly && original?.mediaHash !== digest)
+            throw new Error("Cloud recording changed or was deleted; retained its current version");
           const head = await call(`/v1/media/${digest}`, { method: "HEAD" });
           if (head.status === 404) {
             async function upload(hash: string, start: number, size: number): Promise<void> {
@@ -466,7 +483,7 @@ export async function publishCloudLibrary(
           const after = await stat(path);
           if (before.size !== after.size || before.mtimeMs !== after.mtimeMs)
             throw new Error("Recording changed while publishing; rerun cloud publish");
-          const value = portableTrack(track);
+          const value = original ? { ...original } : portableTrack(track);
           const waveform = waveforms.get(track.id);
           if (waveform) value.waveform = waveform;
           value.mediaHash = digest;
@@ -503,7 +520,7 @@ export async function publishCloudLibrary(
               twoEx: hashes[2]!,
             };
           }
-          if (await publish("track", trackID(track.id), value)) {
+          if (await publish("track", trackID(track.id), value, options.artifactsOnly)) {
             if (value.analysis) result.cdjReady++;
           }
         } catch (error) {
@@ -567,6 +584,12 @@ export const cloudCli = Cli.create("cloud", {
       .boolean()
       .default(false)
       .describe("Publish catalog now without uploading audio"),
+    artifactsOnly: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Attach existing CDJ analysis to matching cloud audio while preserving library edits",
+      ),
     uploadConcurrency: z
       .number()
       .int()
@@ -602,6 +625,7 @@ export const cloudCli = Cli.create("cloud", {
         ...(c.options.playlist ? { playlist: c.options.playlist } : {}),
         ...(c.options.namespace ? { namespace: c.options.namespace } : {}),
         metadataOnly: c.options.metadataOnly,
+        artifactsOnly: c.options.artifactsOnly,
         uploadConcurrency: c.options.uploadConcurrency,
         dryRun: c.options.dryRun,
         ...(c.options.progress === "always" ||

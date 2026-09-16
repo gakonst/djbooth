@@ -168,6 +168,7 @@ export async function processCloudImport(
     token: string;
     namespace: string;
     outputDirectory: string;
+    artifactsOnly?: boolean;
     checkpoint?: () => Promise<void>;
     resolve?: (request: unknown, signal: AbortSignal) => Promise<unknown>;
   },
@@ -330,6 +331,7 @@ export async function processCloudImport(
         options.namespace,
         "--db-path",
         result.dbPath,
+        ...(options.artifactsOnly ? ["--artifacts-only"] : []),
       ],
       signal,
       (line) => {
