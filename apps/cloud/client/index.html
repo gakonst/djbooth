@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DJ Booth</title>
+  </head>
+  <body>
+    <main>
+      <header><strong>DJ BOOTH</strong><button id="logout" hidden>Sign out</button></header>
+      <section id="welcome">
+        <p class="eyebrow">YOUR MUSIC. YOUR AGENT.</p>
+        <h1>Find your next<br />great set.</h1>
+        <p>
+          Bring your Spotify and SoundCloud into DJ Booth. Explore your taste, find new tracks, and
+          build playlists with your own agent.
+        </p>
+        <fieldset>
+          <legend>Connect your music</legend>
+          <label><input id="spotify" type="checkbox" checked /> Spotify</label
+          ><label><input id="soundcloud" type="checkbox" checked /> SoundCloud</label>
+        </fieldset>
+        <button id="connect">Continue with Nanocodex</button>
+        <p class="hint">
+          Review account access in Nanocodex before you continue. ChatGPT powers your agent.
+        </p>
+      </section>
+      <p id="status" role="status"></p>
+      <p id="error" role="alert"></p>
+      <section id="workspace" hidden>
+        <h1>Your booth</h1>
+        <p id="providers"></p>
+        <button id="manage">Manage connections</button><a id="return" hidden>Return to DJ Booth</a>
+        <div id="conversation" aria-live="polite"></div>
+        <form id="prompt">
+          <label for="message">Ask your agent</label
+          ><textarea
+            id="message"
+            placeholder="Look at my saved music and suggest an opening for a late-night set…"
+            required
+            maxlength="16000"
+          ></textarea
+          ><button id="send">Send</button>
+        </form>
+        <form id="import">
+          <label for="source">Import a playlist or DJ set</label
+          ><input id="source" type="url" placeholder="https://soundcloud.com/…" required /><button>
+            Import
+          </button>
+        </form>
+        <div id="imports"></div>
+      </section>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

@@ -6,11 +6,25 @@ import Testing
     private let tracks = [Track(id: "a", title: "A", durationSeconds: 100), Track(id: "b", title: "B", durationSeconds: 200)]
     private let collection = Collection(id: "set", name: "Set", trackIDs: ["b", "a"])
 
+    @Test func browsingContextRoundTripsAndOlderNavigationStillDecodes() throws {
+        let navigation = PlaylistNavigation(browseMode: "Artists", browseGroup: "Tycho")
+        #expect(try JSONDecoder().decode(PlaylistNavigation.self, from: JSONEncoder().encode(navigation)) == navigation)
+        let legacy = Data(#"{"showBrowser":true,"folderPath":[],"playlistSort":"title","playlistSortAscending":true,"trackSort":"default","trackSortAscending":true}"#.utf8)
+        let restored = try JSONDecoder().decode(PlaylistNavigation.self, from: legacy)
+        #expect(restored.browseMode == nil && restored.browseGroup == nil && restored.showBrowser)
+    }
     @Test func restoresOrderedQueuePositionAndIndependentBrowseContext() {
         let session = PlaybackSession(trackID: "a", queueIDs: ["b", "a"], elapsed: 45,
                                       selectedCollection: "set", filter: "Favorites", query: "bass",
                                       queueCollection: "set", queueFilter: "All music")
         #expect(session.resolved(tracks: tracks, collections: [collection]) == session)
+    }
+    @Test func repeatedHistoryTracksRestoreTheSelectedOccurrence() throws {
+        let session = PlaybackSession(trackID: "b", queueIDs: ["missing", "b", "a", "b"], elapsed: 12, queueIndex: 3)
+        let restored = session.resolved(tracks: tracks, collections: [])
+        #expect(restored.queueIDs == ["b", "a", "b"])
+        #expect(restored.queueIndex == 2 && restored.trackID == "b" && restored.elapsed == 12)
+        #expect(try JSONDecoder().decode(PlaybackSession.self, from: JSONEncoder().encode(restored)) == restored)
     }
     @Test func missingTracksCollectionsAndInvalidPositionRecoverSafely() {
         let session = PlaybackSession(trackID: "gone", queueIDs: ["gone", "b", "b", "a"], elapsed: 45,

@@ -18,6 +18,22 @@ struct PlaylistRemovalUndo {
     let connectionGeneration: UUID
 }
 
+enum LibraryBrowseMode: String, CaseIterable {
+    case playlists = "Playlists", artists = "Artists", albums = "Albums", tracks = "All Tracks"
+    var symbol: String {
+        switch self {
+        case .playlists: "music.note.list"
+        case .artists: "person.2"
+        case .albums: "square.stack"
+        case .tracks: "music.note"
+        }
+    }
+    func group(for track: Track) -> String {
+        let value = (self == .artists ? track.artist : track.album)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? (self == .artists ? "Unknown artist" : "Unknown album") : value
+    }
+}
+
 @MainActor @Observable final class BoothModel {
     var tracks: [Track] = [] {
         didSet { tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
@@ -29,6 +45,8 @@ struct PlaylistRemovalUndo {
     var offlineIDs: Set<String> = []
     var conflicts: [SyncConflict] = []
     var pendingCount = 0
+    var browseMode: LibraryBrowseMode = .playlists
+    var browseGroup: String?
     var query = "" { didSet { persistPlaybackSession() } }
     var selectedCollection: String? { didSet { persistPlaybackSession() } }
     var filter = "All music" { didSet { persistPlaybackSession() } }
@@ -47,6 +65,13 @@ struct PlaylistRemovalUndo {
     var message: String?
     var syncStatus = "Saved on this device"
     var loading = false
+    var usbDevice: USBDeviceAccess?
+    var usbConnected = false
+    var usbReading = false
+    var usbError: String?
+    private var usbSignature: String?
+    private var checkingUSB = false
+    private var loadingUSBWaveforms: Set<String> = []
     var syncing = false
     var downloading: Set<String> = []
     var workstationConnected = false
@@ -55,18 +80,81 @@ struct PlaylistRemovalUndo {
     var showImport = false
     var importJobs: [CloudImportJob] = []
     var importError: String?
+    var importRefreshError: String?
     var submittingImport = false
     private var refreshingImports = false
     var canImportToCloud: Bool { cloud != nil && !demo }
-    private var pendingImportKey: String { "pendingImport:" + ((try? Endpoint(cloudURL).scope) ?? "unconfigured") }
+    private var pendingImportKey: String { "pendingImport:" + cloudStorageScope }
+    private var cloudStorageScope: String { guard let endpoint = try? Endpoint(cloudURL), let cloudAccountID else { return "local" }; return endpoint.accountScope(cloudAccountID) }
     var pendingImportSource: String { UserDefaults.standard.dictionary(forKey: pendingImportKey)?["source"] as? String ?? "" }
     var showNewCollection = false
     var player = BoothPlayer()
+    var showAgent = false
+    var agentMessages: [MusicAgentMessage] = []
+    var agentPendingID: String?
+    var agentError: String?
+    var agentRetry = 0
+    private var agentPendingInput: String?
+    var cloudCapabilities: [String] = []
+    func refreshCloudAccount() async {
+        guard let cloud else { return }
+        let generation = connectionGeneration
+        do {
+            let account = try await cloud.account()
+            guard generation == connectionGeneration else { return }
+            cloudCapabilities = account.capabilities
+        } catch { if generation == connectionGeneration { message = error.localizedDescription } }
+    }
+    func beginAgentTurn(_ input: String) {
+        guard cloud != nil, agentPendingID == nil else { return }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 16000 else { return }
+        agentMessages.append(MusicAgentMessage(role: "You", text: text))
+        agentPendingInput = text; agentPendingID = UUID().uuidString
+        agentError = nil
+    }
+    func observeAgentTurn() async {
+        guard let cloud, let id = agentPendingID else { return }
+        let generation = connectionGeneration
+        do {
+            var turn = try await cloud.agentTurn(id: id, input: agentPendingInput)
+            guard generation == connectionGeneration, agentPendingID == id else { return }
+            agentPendingInput = nil
+            while !Task.isCancelled {
+                guard generation == connectionGeneration, agentPendingID == id else { return }
+                if turn.status == "completed" {
+                    agentMessages.append(MusicAgentMessage(role: "DJ Booth", text: turn.finalMessage ?? "No reply was shared by this connection."))
+                    agentPendingID = nil; agentError = nil; return
+                }
+                if turn.status == "failed" || turn.status == "cancelled" {
+                    agentError = turn.status == "cancelled" ? nil : (turn.error ?? "Your agent stopped.")
+                    agentPendingID = nil; return
+                }
+                try await Task.sleep(for: .seconds(1))
+                turn = try await cloud.agentTurn(id: id)
+            }
+        } catch {
+            if !Task.isCancelled, generation == connectionGeneration, agentPendingID == id { agentError = error.localizedDescription }
+        }
+    }
+    func cancelAgentTurn() async {
+        guard let cloud, let id = agentPendingID else { return }
+        let generation = connectionGeneration
+        do {
+            _ = try await cloud.agentTurn(id: id, cancel: true)
+            guard generation == connectionGeneration, agentPendingID == id else { return }
+            agentPendingInput = nil; agentError = nil; agentRetry += 1
+        } catch { if generation == connectionGeneration { agentError = error.localizedDescription } }
+    }
+    private func clearAgent() {
+        agentMessages = []; agentPendingID = nil; agentPendingInput = nil; agentError = nil; cloudCapabilities = []
+    }
+    var cloudAccountID: String?
     var cloudURL: String
     var workstationURL: String
     let demo: Bool
     private(set) var store: LibraryStore
-    let audio: AudioFiles
+    private(set) var audio: AudioFiles
     private let syncEngine = SyncEngine()
     private let snapshotDecoder = LibrarySnapshotDecoder()
     private var reloadRequest = UUID()
@@ -93,6 +181,7 @@ struct PlaylistRemovalUndo {
     private var offlineLaunchActionRunning = false
     #endif
     var workstation: WorkstationClient? {
+        guard cloudAccountID == nil || UserDefaults.standard.string(forKey: "workstationAllowed:" + cloudStorageScope) == workstationURL else { return nil }
         guard let endpoint = try? Endpoint(workstationURL, loopbackOnly: true) else { return nil }
         return WorkstationClient(endpoint: endpoint, session: PerformanceProbe.serverUnavailableSession)
     }
@@ -136,9 +225,12 @@ struct PlaylistRemovalUndo {
         else if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
         else { root = applicationRoot }
         // Connection changes never mix cursors, outboxes, or libraries from different servers.
-        let scope = (try? Endpoint(initialCloudURL).scope) ?? "local"
+        let initialEndpoint = try? Endpoint(initialCloudURL)
+        let savedAccount = initialEndpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
+        cloudAccountID = savedAccount
+        let scope = initialEndpoint.flatMap { endpoint in savedAccount.map { endpoint.accountScope($0) } } ?? "local"
         store = try await LibraryStore.open(directory: demo && uiTestID == nil ? nil : root.appendingPathComponent(scope), inMemory: demo && uiTestID == nil)
-        audio = try AudioFiles(directory: root.appendingPathComponent("Audio"), session: PerformanceProbe.serverUnavailableSession)
+        audio = try AudioFiles(directory: (scope == "local" ? root.appendingPathComponent("Audio") : root.appendingPathComponent(scope).appendingPathComponent("Audio")), session: PerformanceProbe.serverUnavailableSession)
         playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
         #if DEBUG
         if !demo {
@@ -160,11 +252,7 @@ struct PlaylistRemovalUndo {
         #endif
         if !demo, !cloudURL.isEmpty, let endpoint = try? Endpoint(cloudURL) {
             do {
-                if let token = ProcessInfo.processInfo.environment["DJBOOTH_SYNC_TOKEN"], !token.isEmpty {
-                    UserDefaults.standard.set(endpoint.url.absoluteString, forKey: "cloudURL")
-                    try Keychain.save(token, key: endpoint.scope)
-                }
-                if let token = try Keychain.read(endpoint.scope) {
+                if savedAccount != nil, let token = try Keychain.read(scope) {
                     cloud = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
                 }
             } catch {
@@ -184,6 +272,7 @@ struct PlaylistRemovalUndo {
             }
             #endif
         }
+        usbDevice = try store.usbDevice()
         try await reload()
         player.onStateChange = { [weak self] force in self?.persistPlaybackSession(force: force) }
         player.onResumeRequested = { [weak self] in Task { await self?.togglePlayback() } }
@@ -196,6 +285,14 @@ struct PlaylistRemovalUndo {
         }
         #endif
         restorePlaybackSession()
+        #if DEBUG
+        if !demo, let token = ProcessInfo.processInfo.environment["DJBOOTH_SYNC_TOKEN"], !token.isEmpty {
+            // Development bootstrap still goes through issuer verification and
+            // account-scoped storage, exactly like the interactive login.
+            do { try await configureCloud(url: initialCloudURL, token: token) }
+            catch { message = error.localizedDescription }
+        }
+        #endif
         PerformanceProbe.libraryReady(trackCount: tracks.count)
         #if DEBUG
         if demo, arguments.contains("--ui-test-player"), let track = tracks.first(where: { $0.id == "demo-5" }) {
@@ -240,9 +337,10 @@ struct PlaylistRemovalUndo {
         let candidates: [Track]
         if let members {
             var seen = Set<String>()
-            candidates = members.compactMap { seen.insert($0).inserted ? tracksByID[$0] : nil }
+            candidates = members.compactMap { (selectedCollection?.hasPrefix("usb:") == true || seen.insert($0).inserted) ? tracksByID[$0] : nil }
         } else { candidates = tracks }
         var result = candidates.filter { track in
+            (selectedCollection != nil || showPlaylistBrowser || browseGroup == nil || browseMode.group(for: track) == browseGroup) &&
             (filter != "Favorites" || favorites.contains(track.id)) &&
             (filter != "Unsorted" || !assigned.contains(track.id)) &&
             (filter != "On this device" || offlineIDs.contains(track.id)) &&
@@ -267,6 +365,42 @@ struct PlaylistRemovalUndo {
         }
         return result
     }
+    func connectUSB(_ root: URL, browse: Bool = true) async throws {
+        guard !usbReading else { return }
+        usbReading = true; usbError = nil
+        defer { usbReading = false }
+        let previous = usbDevice, generation = connectionGeneration
+        let job = Task.detached(priority: .userInitiated) {
+            let (access, library) = try USBDeviceFiles.authorize(root, previous: previous)
+            return (access, library, try USBDeviceFiles.signature(access))
+        }
+        let (access, library, signature) = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+        try Task.checkCancellation()
+        guard generation == connectionGeneration else { return }
+        try store.ingestUSB(library, access: access)
+        usbDevice = access; usbConnected = true; usbSignature = signature
+        try await reload()
+        if browse { openPlaylistFolder([access.folderName]) }
+    }
+    func refreshUSBConnection() async {
+        guard !checkingUSB, !usbReading, let access = usbDevice else { return }
+        checkingUSB = true; defer { checkingUSB = false }
+        let generation = connectionGeneration
+        do {
+            let signature = try await Task.detached(priority: .utility) { try USBDeviceFiles.signature(access) }.value
+            guard generation == connectionGeneration else { return }
+            if !usbConnected || signature != usbSignature {
+                let root = try await Task.detached(priority: .utility) { try USBDeviceFiles.resolve(access) }.value
+                try await connectUSB(root, browse: false)
+            }
+            guard generation == connectionGeneration, !Task.isCancelled else { return }
+            usbConnected = true; usbError = nil
+        } catch {
+            guard generation == connectionGeneration else { return }
+            usbConnected = false
+            usbError = "Reconnect your USB stick, or choose its folder again to renew access."
+        }
+    }
     func startup() async {
         guard !demo else { return }
         async let remote: Void = synchronize()
@@ -275,6 +409,13 @@ struct PlaylistRemovalUndo {
         #endif
         await remote
         await fulfillOfflineLaunchRequest()
+    }
+    func connectWorkstation(url: String) async throws {
+        _ = try Endpoint(url, loopbackOnly: true)
+        workstationURL = url
+        UserDefaults.standard.set(url, forKey: "workstationURL")
+        if cloudAccountID != nil { UserDefaults.standard.set(url, forKey: "workstationAllowed:" + cloudStorageScope) }
+        await refreshWorkstation()
     }
     func refreshWorkstation() async {
         guard !demo, !refreshRunning, let workstation else { return }
@@ -328,15 +469,16 @@ struct PlaylistRemovalUndo {
             let jobs = try await cloud.imports()
             guard generation == connectionGeneration else { return }
             let completed = jobs.contains { job in job.status == "complete" && !importJobs.contains { $0.id == job.id && $0.status == "complete" } }
-            importJobs = jobs; importError = nil
+            importJobs = jobs; importRefreshError = nil
             if completed { await synchronize() }
         } catch {
             guard generation == connectionGeneration else { return }
-            importError = error.localizedDescription
+            importRefreshError = error.localizedDescription
         }
     }
-    func submitImport(_ source: String) async {
-        guard let cloud, !demo, !submittingImport else { return }
+    @discardableResult
+    func submitImport(_ source: String) async -> Bool {
+        guard let cloud, !demo, !submittingImport else { return false }
         submittingImport = true; defer { submittingImport = false }
         let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = pendingImportKey
@@ -348,12 +490,14 @@ struct PlaylistRemovalUndo {
         do {
             let job = try await cloud.submitImport(id: id, source: source)
             UserDefaults.standard.removeObject(forKey: key)
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return false }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
             importError = nil
+            return true
         } catch {
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return false }
             importError = error.localizedDescription
+            return false
         }
     }
     func retryImport(_ job: CloudImportJob) async {
@@ -400,15 +544,24 @@ struct PlaylistRemovalUndo {
         update()
         playbackSessionReady = ready; persistPlaybackSession()
     }
+    func browse(_ mode: LibraryBrowseMode, group: String? = nil) {
+        changeNavigation {
+            browseMode = mode; browseGroup = group
+            trackSort = mode == .playlists ? "default" : "title"; trackSortAscending = true
+            selectedCollection = nil; playlistFolderPath = []; query = ""; filter = "All music"
+            showPlaylistBrowser = mode == .playlists
+        }
+    }
     func showLibrary(filter: String = "All music") {
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation { showPlaylistBrowser = false; selectedCollection = nil; self.filter = filter; query = "" }
     }
     func openPlaylistBrowser() {
-        changeNavigation { showPlaylistBrowser = true; selectedCollection = nil; query = "" }
+        changeNavigation { browseMode = .playlists; browseGroup = nil; showPlaylistBrowser = true; selectedCollection = nil; query = "" }
     }
     func openPlaylistFolder(_ path: [String]) {
         changeNavigation {
+            browseMode = .playlists; browseGroup = nil
             playlistFolderPath = path; showPlaylistBrowser = true; selectedCollection = nil; query = ""
         }
     }
@@ -422,6 +575,7 @@ struct PlaylistRemovalUndo {
             return
         }
         changeNavigation {
+            browseMode = .playlists; browseGroup = nil
             preferredCollectionID = current.id; selectedCollection = current.id
             // A pinned playlist may live elsewhere: Back returns to the folder
             // the user was browsing, including an explicitly selected root.
@@ -564,7 +718,8 @@ struct PlaylistRemovalUndo {
                         queueCollection: queueCollection, queueFilter: queueFilter,
                         navigation: PlaylistNavigation(showBrowser: showPlaylistBrowser, folderPath: playlistFolderPath,
                             preferredCollectionID: preferredCollectionID, playlistSort: playlistSort,
-                            playlistSortAscending: playlistSortAscending, trackSort: trackSort, trackSortAscending: trackSortAscending))
+                            playlistSortAscending: playlistSortAscending, trackSort: trackSort, trackSortAscending: trackSortAscending,
+                            browseMode: browseMode.rawValue, browseGroup: browseGroup), queueIndex: player.queueIndex)
     }
     func persistPlaybackSession(force: Bool = true) {
         guard playbackSessionReady, force || Date().timeIntervalSince(lastSessionSave) >= 10 else { return }
@@ -600,46 +755,49 @@ struct PlaylistRemovalUndo {
         #if os(iOS)
         // Mobile presents playlists directly. Retired search/filter controls must
         // not leave recordings invisibly filtered out of a restored playlist.
-        filter = "All music"; query = ""; trackSort = "default"; trackSortAscending = true
-        if selectedCollection == nil { showPlaylistBrowser = true }
+        filter = "All music"; query = ""; trackSort = browseMode == .playlists ? "default" : "title"; trackSortAscending = true
+        if selectedCollection == nil { showPlaylistBrowser = browseMode == .playlists }
         #endif
         queueCollection = session.queueCollection; queueFilter = session.queueFilter
         let queue = session.queueIDs.compactMap { tracksByID[$0] }
         guard let id = session.trackID, let track = tracksByID[id] else { player.stop(); return }
         if replacingItem {
-            player.prepare(track, url: localAudioURL(track), queue: queue, elapsed: session.elapsed)
+            player.prepare(track, url: localAudioURL(track), queue: queue, elapsed: session.elapsed, queueIndex: session.queueIndex)
         } else {
-            player.track = track; player.queue = queue
+            player.track = track; player.queue = queue; player.queueIndex = session.queueIndex ?? 0
         }
     }
     private func applyNavigation(_ navigation: PlaylistNavigation?) {
         let value = navigation ?? PlaylistNavigation()
+        browseMode = value.browseMode.flatMap(LibraryBrowseMode.init(rawValue:)) ?? .playlists
+        browseGroup = (browseMode == .artists || browseMode == .albums) ? value.browseGroup : nil
         showPlaylistBrowser = value.showBrowser; playlistFolderPath = value.folderPath
         preferredCollectionID = value.preferredCollectionID; playlistSort = value.playlistSort
         playlistSortAscending = value.playlistSortAscending; trackSort = value.trackSort; trackSortAscending = value.trackSortAscending
     }
     func togglePlayback() async {
-        if player.playing { player.pause(); return }
+        if player.transportPlaying { player.pause(); return }
         if player.hasPreparedItem { player.resume(); return }
         guard let track = player.track ?? visibleTracks.first ?? tracks.first else { return }
         await preparePlayback(track, queue: player.queue.isEmpty ? visibleTracks : player.queue,
-                              elapsed: player.track?.id == track.id ? player.elapsed : 0)
+                              elapsed: player.track?.id == track.id ? player.elapsed : 0, queueIndex: player.queueIndex)
     }
-    func play(_ track: Track, preservingQueue: Bool = false) async {
+    func play(_ track: Track, preservingQueue: Bool = false, queuePosition: Int? = nil) async {
         guard let canonical = tracksByID[track.id] else { return }
         if !preservingQueue { queueCollection = selectedCollection; queueFilter = filter }
         let queue = preservingQueue ? player.queue : visibleTracks
-        await preparePlayback(canonical, queue: queue.contains(where: { $0.id == canonical.id }) ? queue : [canonical] + queue, elapsed: 0)
+        let index = queuePosition ?? (preservingQueue ? player.queueIndex : nil)
+        await preparePlayback(canonical, queue: queue.contains(where: { $0.id == canonical.id }) ? queue : [canonical] + queue, elapsed: 0, queueIndex: index)
     }
-    private func preparePlayback(_ track: Track, queue: [Track], elapsed: Double) async {
+    private func preparePlayback(_ track: Track, queue: [Track], elapsed: Double, queueIndex: Int? = nil) async {
         PerformanceProbe.playRequested(trackID: track.id)
         let request = UUID(); playbackRequest = request
         let generation = connectionGeneration
         // Selection advances immediately, including rapid Next taps and downloads.
         // Resolving the URL later attaches audio to this preparation only once.
-        player.prepare(track, url: nil, queue: queue, elapsed: elapsed)
+        player.prepare(track, url: nil, queue: queue, elapsed: elapsed, queueIndex: queueIndex)
         // Preview gestures select a paused fixture without pretending to acquire audio.
-        if demo { return }
+        if demo && !track.id.hasPrefix("usb:") { return }
         do {
             // Do the cheap filesystem check off MainActor. A local hit attaches
             // audio without a second player teardown or session write.
@@ -652,7 +810,7 @@ struct PlaylistRemovalUndo {
                 player.queue = queue.compactMap { tracksByID[$0.id] }
                 player.attach(url: url, autoplay: true)
             } else {
-                guard track.mediaHash != nil, cloud != nil else {
+                guard track.id.hasPrefix("usb:") || (track.mediaHash != nil && cloud != nil) else {
                     throw ClientError.http(404, "This recording needs to be acquired on your Mac before it can play here")
                 }
                 let url = try await offlineAudio(current)
@@ -666,7 +824,7 @@ struct PlaylistRemovalUndo {
         } catch { if request == playbackRequest, generation == connectionGeneration, !(error is CancellationError) { message = error.localizedDescription } }
     }
     func keepOffline(_ track: Track) async {
-        guard !demo else { return }
+        guard !demo || track.id.hasPrefix("usb:") else { return }
         let generation = connectionGeneration
         do { _ = try await offlineAudio(track) }
         catch { if generation == connectionGeneration, !(error is CancellationError) { message = error.localizedDescription } }
@@ -738,10 +896,16 @@ struct PlaylistRemovalUndo {
         let download: Task<(URL, String), Error>
         if let existing = audioDownloads[track.id] { download = existing }
         else {
+            let usbLocation = try store.usbFile(track.id), usbAccess = usbDevice
             let cloud = cloud
             let workstation = workstationConnected ? workstation : nil
             let local = workstationTracks[track.id]
             download = Task { [audio] in
+                if let usbLocation {
+                    guard let usbAccess, usbAccess.id == usbLocation.deviceID else { throw USBLibraryError.disconnected }
+                    return try await audio.readUSB(usbLocation, access: usbAccess)
+                }
+                if track.id.hasPrefix("usb:"), track.mediaHash == nil { throw USBLibraryError.disconnected }
                 if let hash = track.mediaHash, let cloud {
                     do { return try await audio.download(cloud.mediaRequest(hash: hash), expectedHash: hash) }
                     catch ClientError.http(404, _) {
@@ -774,6 +938,23 @@ struct PlaylistRemovalUndo {
         }
     }
     func loadWaveform(_ track: Track) async {
+        if track.id.hasPrefix("usb:") {
+            guard track.waveform == nil, !loadingUSBWaveforms.contains(track.id), let access = usbDevice,
+                  let location = try? store.usbFile(track.id) else { return }
+            loadingUSBWaveforms.insert(track.id); defer { loadingUSBWaveforms.remove(track.id) }
+            let generation = connectionGeneration
+            do {
+                let waveform = try await Task.detached(priority: .utility) {
+                    try USBAnalysis.read(location, access: access, duration: track.durationSeconds ?? 0)
+                }.value
+                guard generation == connectionGeneration, let waveform, var updated = tracksByID[track.id] else { return }
+                updated.waveform = waveform
+                try store.save(updated, kind: .track, id: track.id)
+                try await reload()
+                if player.track?.id == track.id { player.track = updated }
+            } catch { /* Missing/corrupt optional analysis never interrupts USB playback. */ }
+            return
+        }
         guard workstationConnected, let workstation, let id = track.localContentID else { return }
         let generation = connectionGeneration
         struct Response: Decodable, Sendable { var waveform: Waveform }
@@ -792,33 +973,64 @@ struct PlaylistRemovalUndo {
             Task { do { try await reload() } catch { message = error.localizedDescription } }
         } catch { message = error.localizedDescription }
     }
+    func signOutCloud() async throws {
+        guard !syncing, !refreshRunning, !exportingCollection else { throw ClientError.http(409, "Wait for the current sync or export to finish") }
+        let localStore = try LibraryStore(directory: root.appendingPathComponent("local"))
+        let localAudio = try AudioFiles(directory: root.appendingPathComponent("Audio"), session: PerformanceProbe.serverUnavailableSession)
+        if let endpoint = try? Endpoint(cloudURL), let cloudAccountID {
+            try Keychain.remove(endpoint.accountScope(cloudAccountID))
+            UserDefaults.standard.removeObject(forKey: "cloudAccount:" + endpoint.scope)
+        }
+        persistPlaybackSession()
+        clearAgent()
+        workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
+        cloud = nil; cloudAccountID = nil; cloudURL = ""
+        UserDefaults.standard.removeObject(forKey: "cloudURL")
+        connectionGeneration = UUID(); playbackRequest = UUID()
+        for task in audioDownloads.values { task.cancel() }
+        audioDownloads.removeAll(); downloading.removeAll()
+        player.stop(); selectedCollection = nil
+        pendingQuickAddTrackID = nil; quickAddReturnSession = nil
+        pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
+        importJobs = []; importError = nil; importRefreshError = nil
+        tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []
+        #if DEBUG
+        pendingOfflineTrackID = nil; offlineCollectionID = nil; offlineCollectionSelected = false; offlineLaunchRequestKey = nil
+        #endif
+        playbackSessionReady = false
+        playbackPreferences = PlaybackSessionPreferences(scope: "local")
+        audio = localAudio; store = localStore
+        usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
+        try await reload(); restorePlaybackSession()
+        syncStatus = "Signed out"
+    }
     func configureCloud(url: String, token: String) async throws {
         guard !syncing, !refreshRunning, !exportingCollection else { throw ClientError.http(409, "Wait for the current sync or export to finish") }
         let endpoint = try Endpoint(url)
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { throw ClientError.http(401, "Enter your sync token") }
-        let newStore = try LibraryStore(directory: root.appendingPathComponent(endpoint.scope))
-        // Explicit offline edits join the first cloud; background workstation
-        // discoveries remain a local cache until the user selects them to publish.
-        if cloudURL.isEmpty {
-            let editedTrackIDs = try store.pendingEntityIDs(.track)
-            try newStore.ingest(tracks, enqueue: false)
-            for track in tracks where editedTrackIDs.contains(track.id) { try newStore.save(track, kind: .track, id: track.id) }
-            for collection in collections { try newStore.save(collection, kind: .collection, id: collection.id) }
-            for id in favorites { try newStore.toggleFavorite(id) }
-            for (id, annotation) in annotations { try newStore.saveAnnotation(annotation, trackID: id) }
-        }
-        try Keychain.save(token, key: endpoint.scope)
+        guard !token.isEmpty else { throw ClientError.http(401, "Sign in with Nanocodex") }
+        let client = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
+        let account = try await client.account()
+        guard !syncing, !refreshRunning, !exportingCollection else { throw ClientError.http(409, "Wait for the current sync or export to finish") }
+        let scope = endpoint.accountScope(account.id)
+        let newStore = try LibraryStore(directory: root.appendingPathComponent(scope))
+        let newAudio = try AudioFiles(directory: root.appendingPathComponent(scope).appendingPathComponent("Audio"), session: PerformanceProbe.serverUnavailableSession)
+        try Keychain.save(token, key: scope)
+        UserDefaults.standard.set(account.id, forKey: "cloudAccount:" + endpoint.scope)
         UserDefaults.standard.set(endpoint.url.absoluteString, forKey: "cloudURL")
         persistPlaybackSession()
         playbackSessionReady = false
-        playbackPreferences = PlaybackSessionPreferences(scope: endpoint.scope)
+        playbackPreferences = PlaybackSessionPreferences(scope: scope)
         cloudURL = endpoint.url.absoluteString
+        clearAgent()
+        workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
+        cloudCapabilities = account.capabilities
+        cloudAccountID = account.id
         importJobs = []; importError = nil
-        cloud = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
+        cloud = client
         connectionGeneration = UUID(); playbackRequest = UUID()
         #if DEBUG
-        let offlineKey = "djbooth.debug.offline.\(endpoint.scope)"
+        let offlineKey = "djbooth.debug.offline.\(scope)"
         offlineLaunchRequestKey = offlineKey
         pendingOfflineTrackID = UserDefaults.standard.string(forKey: offlineKey)
         offlineCollectionID = UserDefaults.standard.string(forKey: "\(offlineKey).collection")
@@ -830,7 +1042,9 @@ struct PlaylistRemovalUndo {
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []
-        store = newStore; try await reload()
+        audio = newAudio
+        store = newStore; usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
+        try await reload()
         restorePlaybackSession()
         Task { await synchronize() }
     }
@@ -857,6 +1071,12 @@ struct PlaylistRemovalUndo {
         if result == errSecItemNotFound { return nil }
         guard result == errSecSuccess, let data = value as? Data else { throw ClientError.http(Int(result), "Could not read saved credentials") }
         return String(data: data, encoding: .utf8)
+    }
+    static func remove(_ key: String) throws {
+        try withoutInteraction {
+            let result = SecItemDelete(base(key) as CFDictionary)
+            guard result == errSecSuccess || result == errSecItemNotFound else { throw ClientError.http(Int(result), "Could not remove saved credentials") }
+        }
     }
     static func save(_ value: String, key: String) throws {
         try withoutInteraction {

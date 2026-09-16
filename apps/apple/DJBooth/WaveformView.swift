@@ -42,6 +42,7 @@ struct PlaybackWaveform: View {
     let cache: PlaybackWaveformCache
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var scrub: WaveformScrubPreview?
 
     var body: some View {
@@ -51,20 +52,22 @@ struct PlaybackWaveform: View {
         let content = cache.content?.trackID == trackID ? cache.content : nil
         let waveformDuration = content?.duration ?? 0
         let duration = waveformDuration > 0 ? waveformDuration : timing.duration
-        let currentPosition = clock.position()
+        let heldPosition = player.scrubPosition
+        let currentPosition = heldPosition ?? clock.position()
         let hasWindow = content?.grid?.centeredBarWindow(at: currentPosition, bars: 8, duration: duration) != nil
         let overview = reduceMotion || !hasWindow
-        let preview = scrub.flatMap { $0.trackID == trackID ? $0 : nil }
-        let animated = timing.playing && scenePhase == .active && !overview && content != nil && preview == nil
+        let preview = scrub.flatMap { $0.trackID == trackID && player.isScrubbing($0.id) ? $0 : nil }
+        let animated = timing.playing && scenePhase == .active && !overview && content != nil && heldPosition == nil
+        let highContrast = contrast == .increased
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !animated)) { _ in
-            let position = preview?.position ?? clock.position()
+            let position = heldPosition ?? clock.position()
             let window = overview ? nil : content?.grid?.centeredBarWindow(at: position, bars: 8, duration: duration)
             Canvas { context, size in
                 let mid = size.height / 2
                 context.fill(Path(CGRect(x: 0, y: mid, width: size.width, height: 0.5)), with: .color(.white.opacity(0.12)))
                 guard let content, duration > 0, size.width > 0 else { return }
                 let span = preview?.span ?? window.map { $0.end - $0.start } ?? duration
-                let start = preview.map { $0.position - $0.span / 2 } ?? window?.start ?? 0
+                let start = preview.map { position - $0.span / 2 } ?? window?.start ?? 0
                 guard span > 0 else { return }
                 let scale = size.width / span
                 context.opacity = 0.86
@@ -83,8 +86,8 @@ struct PlaybackWaveform: View {
                             beats.move(to: CGPoint(x: x, y: 0)); beats.addLine(to: CGPoint(x: x, y: size.height))
                         }
                     }
-                    context.stroke(beats, with: .color(.white.opacity(0.28)), lineWidth: 0.5)
-                    context.stroke(downbeats, with: .color(.red.opacity(0.72)), lineWidth: 1)
+                    context.stroke(beats, with: .color(.white.opacity(highContrast ? 0.65 : 0.28)), lineWidth: 0.5)
+                    context.stroke(downbeats, with: .color(.red.opacity(highContrast ? 1 : 0.72)), lineWidth: 1)
                     context.fill(markers, with: .color(.red))
                 }
                 let playhead = min(size.width, max(0, (position - start) * scale))
@@ -98,7 +101,7 @@ struct PlaybackWaveform: View {
                                  began: { width in beginScrub(width: width, duration: duration) },
                                  changed: { translation in updateScrub(translation: translation) },
                                  ended: { translation in finishScrub(translation: translation) },
-                                 cancelled: { scrub = nil })
+                                 cancelled: { cancelScrub() })
         }
         #endif
         .accessibilityElement(children: .ignore).accessibilityLabel("Current track waveform")
@@ -110,36 +113,40 @@ struct PlaybackWaveform: View {
         }
         .accessibilityIdentifier("nowPlaying.waveform")
         .onChange(of: trackID) { _, _ in scrub = nil }
-        .onChange(of: scenePhase) { _, phase in if phase != .active { scrub = nil } }
-        .onDisappear { scrub = nil }
+        .onChange(of: player.seekRevision) { _, _ in scrub = nil }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { cancelScrub() } }
+        .onDisappear { cancelScrub() }
     }
     private func beginScrub(width: Double, duration: Double) {
         guard let trackID = player.track?.id, cache.content?.trackID == trackID, width > 0, duration > 0 else { return }
         let position = player.mediaClock.position()
-        guard let window = cache.content?.grid?.centeredBarWindow(at: position, bars: 8, duration: duration) else { return }
-        scrub = WaveformScrubPreview(trackID: trackID, start: position, span: window.end - window.start,
-                                     width: width, duration: duration, position: position)
+        guard let window = cache.content?.grid?.centeredBarWindow(at: position, bars: 8, duration: duration),
+              let id = player.beginScrubbing() else { return }
+        scrub = WaveformScrubPreview(id: id, trackID: trackID, start: position, span: window.end - window.start,
+                                     width: width, duration: duration)
     }
     private func updateScrub(translation: Double) {
-        guard var value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
-        value.position = value.target(translation: translation)
-        scrub = value
+        guard let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
+        player.updateScrubbing(value.id, to: value.target(translation: translation))
     }
     private func finishScrub(translation: Double) {
         guard let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
         scrub = nil
-        // Only release touches the player; dragging and cancellation are visual previews.
-        player.seek(value.target(translation: translation))
+        player.endScrubbing(value.id, at: value.target(translation: translation))
+    }
+    private func cancelScrub() {
+        if let scrub { player.cancelScrubbing(scrub.id) }
+        scrub = nil
     }
 }
 
 private struct WaveformScrubPreview {
+    let id: UUID
     let trackID: String
     let start: Double
     let span: Double
     let width: Double
     let duration: Double
-    var position: Double
     func target(translation: Double) -> Double { min(duration, max(0, start - translation * span / width)) }
 }
 
@@ -206,12 +213,14 @@ private struct WaveformScrubSurface: UIViewRepresentable {
 struct PlaybackOverviewBackground: View {
     let player: BoothPlayer
     let cache: PlaybackWaveformCache
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
         let content = cache.content?.trackID == player.track?.id ? cache.content : nil
         let progress = min(1, max(0, player.elapsed / max(1, player.duration)))
+        let waveformOpacity = contrast == .increased ? 0.18 : 0.34
         Canvas { context, size in
             guard let content else { return }
-            context.opacity = 0.34
+            context.opacity = waveformOpacity
             context.draw(Image(decorative: content.raster.overview, scale: 1), in: CGRect(origin: .zero, size: size))
             context.opacity = 1
             context.fill(Path(CGRect(x: progress * size.width, y: 0, width: 1, height: size.height)), with: .color(.white.opacity(0.45)))

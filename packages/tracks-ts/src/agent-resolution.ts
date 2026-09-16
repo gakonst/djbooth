@@ -114,6 +114,11 @@ export function parseAgentTracklist(source: string, json: string): Tracklist {
     }
     previousStart = track.startSeconds;
   }
+  for (const [index, track] of tracklist.tracks.entries()) {
+    const end = tracklist.tracks[index + 1]?.startSeconds ?? tracklist.durationSeconds;
+    if (track.endSeconds === undefined && end !== undefined && end > track.startSeconds!)
+      track.endSeconds = end;
+  }
   return tracklist;
 }
 

@@ -4,22 +4,56 @@ SwiftUI applications for macOS and iOS, sharing `DJBoothKit`. The interface foll
 workstation palette and dense library layout. Apple system glass is used for controls; track
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
+At the library root, swipe inward from the left edge or tap the library menu to open the drawer.
+Choose **Playlists**, **Artists**, **Albums**, or **All Tracks**. Artist and album groups open their
+tracks with a scoped playback queue; the edge gesture inside groups, folders, and playlists goes back.
+Choose **Download → Paste → Download** to start a playlist/set import in the cloud. The sheet shows
+submission confirmation, current progress, retry for failed jobs, and an **Open playlist** action when ready.
+An unconnected phone can open cloud settings from the same sheet. Choose **Continue with
+Nanocodex** to sign in and approve Spotify/SoundCloud access through Nanocodex Connect.
+The app exchanges a one-time callback code and saves the account credential in Keychain.
+Account switching separates the local library, sync cursor, pending imports, playback session,
+and downloaded media by endpoint and account. Existing unowned offline data stays local;
+use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
+The library menu and Settings open a native **Music agent** chat screen. It uses the same account grant for Spotify/SoundCloud access, supports stopping a turn, and clears the conversation when accounts change. Settings shows approved music connections and provides **Sign out**. The app can close while the import runs.
 On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
-Connect a USB stick and choose its top-level folder containing `PIONEER`. The app reads
-`PIONEER/rekordbox/export.pdb` locally and shows nested playlists, their original track order,
-and track metadata (including BPM, key, comments, and file paths).
-CDJ histories appear in a separate section with their original play order. The existing
+Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
+that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
+iOS requires the initial folder permission; it cannot silently open an arbitrary newly connected stick.
+`PIONEER/rekordbox/export.pdb` playlists open in the normal library with their nested folders,
+original order, BPM, keys, notes, colors, and available ANLZ waveforms/beat grids. USB tracks use
+the normal player, queue, seeking, favorites, and playlist editing. Played/downloaded audio is
+verified and cached locally, so it remains playable after disconnecting the stick.
+CDJ histories retain repeated tracks in their original play order. The existing
 `pnpm djbooth usb <mount>` workflow imports unseen histories into `master.db` and exports
-them as dated `DJ Set` playlists, visible when the mobile browser reopens the folder.
-The browser is a read-only snapshot; reopen the folder to refresh it. It does not import, sync,
-play, or modify USB tracks.
+them as dated `DJ Set` playlists; the phone refreshes them automatically.
+App notes/colors and playlist edits survive reconnects. These edits use the normal local library
+and sync outbox; security bookmarks and USB file locations remain device-local. The phone does
+not write edits back to the USB database or export libraries to the stick yet.
 OneLibrary-only (`exportLibrary.db`) sticks are explicitly reported as unsupported; a classic
 Device Library export is required. Databases larger than 256 MB are currently unsupported.
+Assigned track colors appear beside the key badge; uncolored rows have no marker. Edit colors from the bottom player.
+The bottom color square toggles a flat palette in the comment row immediately, with no popover or transition.
+Choosing a color (or None) saves it and returns to the comment; tapping the square again closes the palette.
+The mobile layout follows Apple's [typography](https://developer.apple.com/design/human-interface-guidelines/typography),
+[accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility), and
+[materials](https://developer.apple.com/design/human-interface-guidelines/materials) guidance while retaining the compact DJ palette.
+System text scales with Dynamic Type, large-text rows stack their metadata, and primary touch targets are at least 44 points.
+The player uses a native seek slider and a prominent system play button with opaque fallbacks for accessibility settings.
+The slider and focused waveform share a live scrub position. During a drag, audio pauses and the player
+prepares the latest position with one asynchronous seek at a time, following Apple's
+[AVPlayer scrubbing guidance](https://developer.apple.com/library/archive/qa/qa1820/_index.html).
+Release resumes the prior playback intent without repeating a completed seek; paused tracks remain paused.
+Cancellation restores the original position, and switching tracks invalidates the old gesture.
+Current-track symbols, selection marks, accessibility values, and optional lettered color swatches supplement color cues.
+Long current-track titles scroll only when they overflow, using native Core Animation with pauses to read each end.
+The animation pauses with playback or the app, resets for a new track, and becomes static with Reduce Motion;
+VoiceOver always receives one full title. Short titles stay still.
 The footer keeps a horizontally scrollable queue above the title, a moving eight-bar waveform,
 and a one-sided full-duration waveform behind the track details. The focused view follows real Rekordbox
 beat and downbeat positions, including tempo changes; tracks without a usable grid show an overview.
-Drag the focused waveform left to seek forward or right to rewind. It previews under the fixed
-playhead and seeks on release, preserving the queue and whether playback was paused.
+Drag the focused waveform left to seek forward or right to rewind. It follows the finger under the fixed
+playhead, and dragging the timeline moves the same waveform immediately. Both preserve the queue.
 Waveform display gain and its image are prepared off the UI thread and reused by both views; animation pauses when
 playback stops or the app backgrounds, with a static overview for Reduce Motion. There is no
 separate expanded player screen.
@@ -74,7 +108,10 @@ Cloudflare service in `apps/cloud`; it does not expose or connect to an unauthen
 `pnpm native:test:usb --simulator <uuid>` creates an isolated fake Rekordbox `master.db`,
 exports simulated USB folders through `pnpm djbooth usb`, then renames/reorders a playlist
 through `pnpm djbooth playlist` and syncs again. The iOS tests cover metadata, playlist order,
-refresh, disconnect/reconnect, missing/corrupt libraries, and OneLibrary-only errors.
+automatic refresh/reconnect, missing/corrupt libraries, and OneLibrary-only errors.
+A second synthetic source contains playable MP3/FLAC tones and deterministic ANLZ; it tests
+real playback, seeking, notes/colors, relaunch, and cached playback after disconnect.
+Generating this fixture requires `ffmpeg` on PATH.
 The round-trip test also appends a simulated CDJ history, syncs twice through the CLI, and
 checks the dated playlist, repeated tracks, and exactly-once play counts in the fake database.
 SHA-256 checks verify that browsing leaves every source and USB file unchanged. The simulator replaces
@@ -90,3 +127,25 @@ or acquisition activity. Release builds ignore it. Production data is never repl
 This is the native library/listening surface. The existing web workstation retains its advanced
 two-deck mixing, cue editor, stems controls, USB management, and assistant while those interfaces
 are migrated. The shared acquisition, analysis, and Rekordbox engine remains authoritative.
+
+
+## Local Connect integration test
+
+Start the local test Worker in one terminal:
+
+```sh
+pnpm --filter @gakonst/djbooth-cloud test:mobile-server
+```
+
+Then run on a dedicated empty simulator (pass its UUID):
+
+```sh
+pnpm --filter @gakonst/djbooth-apple test:ui --simulator <uuid> --only-testing DJBoothUITests-iOS/ConnectUITests
+```
+
+The test uses the real browser Connect SDK, system authentication sheet, one-time
+code exchange, Keychain, native chat, and Worker/D1 account isolation. Only the
+Nanocodex approval and agent boundary is simulated, with Alice/Bob fixture accounts.
+It does not connect real Spotify/SoundCloud accounts, download music, or spend money.
+The test skips when its fixture is absent; use an empty dedicated simulator to avoid
+mixing previous sessions. Fixture servers listen only on loopback ports 8791/8792.

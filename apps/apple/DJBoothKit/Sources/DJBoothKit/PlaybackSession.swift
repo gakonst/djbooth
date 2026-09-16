@@ -1,6 +1,8 @@
 import Foundation
 
 public struct PlaylistNavigation: Codable, Equatable, Sendable {
+    public var browseMode: String?
+    public var browseGroup: String?
     public var showBrowser: Bool
     public var folderPath: [String]
     public var preferredCollectionID: String?
@@ -10,7 +12,8 @@ public struct PlaylistNavigation: Codable, Equatable, Sendable {
     public var trackSortAscending: Bool
     public init(showBrowser: Bool = false, folderPath: [String] = [], preferredCollectionID: String? = nil,
                 playlistSort: String = "title", playlistSortAscending: Bool = true,
-                trackSort: String = "default", trackSortAscending: Bool = true) {
+                trackSort: String = "default", trackSortAscending: Bool = true, browseMode: String? = nil, browseGroup: String? = nil) {
+        self.browseMode = browseMode; self.browseGroup = browseGroup
         self.showBrowser = showBrowser; self.folderPath = folderPath; self.preferredCollectionID = preferredCollectionID
         self.playlistSort = playlistSort; self.playlistSortAscending = playlistSortAscending
         self.trackSort = trackSort; self.trackSortAscending = trackSortAscending
@@ -21,6 +24,7 @@ public struct PlaylistNavigation: Codable, Equatable, Sendable {
 public struct PlaybackSession: Codable, Equatable, Sendable {
     public var trackID: String?
     public var queueIDs: [String]
+    public var queueIndex: Int?
     public var elapsed: Double
     public var selectedCollection: String?
     public var filter: String
@@ -31,11 +35,11 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
 
     public init(trackID: String? = nil, queueIDs: [String] = [], elapsed: Double = 0,
                 selectedCollection: String? = nil, filter: String = "All music", query: String = "",
-                queueCollection: String? = nil, queueFilter: String = "All music", navigation: PlaylistNavigation? = nil) {
+                queueCollection: String? = nil, queueFilter: String = "All music", navigation: PlaylistNavigation? = nil, queueIndex: Int? = nil) {
         self.trackID = trackID; self.queueIDs = queueIDs; self.elapsed = elapsed
         self.selectedCollection = selectedCollection; self.filter = filter; self.query = query
         self.queueCollection = queueCollection; self.queueFilter = queueFilter
-        self.navigation = navigation
+        self.navigation = navigation; self.queueIndex = queueIndex
     }
 
     public func resolved(tracks: [Track], collections: [Collection]) -> PlaybackSession {
@@ -59,7 +63,9 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
         if !filters.contains(result.filter) { result.filter = "All music" }
         if !filters.contains(result.queueFilter) { result.queueFilter = "All music" }
         var seen = Set<String>()
-        result.queueIDs = queueIDs.filter { current[$0] != nil && seen.insert($0).inserted }
+        let entries = queueIDs.enumerated().filter { current[$0.element] != nil && (queueIndex != nil || seen.insert($0.element).inserted) }
+        result.queueIDs = entries.map(\.element)
+        result.queueIndex = entries.firstIndex { $0.offset == queueIndex && $0.element == trackID }
         if result.queueIDs.isEmpty {
             let fallbackCollection = result.queueCollection ?? result.selectedCollection
             result.queueIDs = fallbackCollection.flatMap { id in collections.first { $0.id == id }?.trackIDs.filter { current[$0] != nil } } ?? []
@@ -73,6 +79,7 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
             result.trackID = result.queueIDs.first
             result.elapsed = 0
         }
+        if queueIndex != nil, result.queueIndex == nil { result.queueIndex = result.queueIDs.firstIndex { $0 == result.trackID } }
         if !result.elapsed.isFinite { result.elapsed = 0 }
         result.elapsed = max(0, result.elapsed)
         if let id = result.trackID, let duration = current[id]?.durationSeconds, duration.isFinite, duration > 0 {

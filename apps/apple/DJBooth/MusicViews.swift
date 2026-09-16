@@ -118,23 +118,58 @@ struct LibraryView: View {
 }
 
 #if os(iOS)
+struct MobileGroupBrowser: View {
+    @Bindable var model: BoothModel
+    let mode: LibraryBrowseMode
+    var body: some View {
+        let groups = Dictionary(grouping: model.tracks) { mode.group(for: $0) }
+        List {
+            if groups.isEmpty { ContentUnavailableView("No music yet", systemImage: mode.symbol) }
+            ForEach(groups.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { name in
+                Button { model.browse(mode, group: name) } label: {
+                    HStack {
+                        Text(name).frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(groups[name]?.count ?? 0)").font(.caption).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                    }.frame(minHeight: 48).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("library.group.\(name)")
+                    .listRowBackground(BoothStyle.background)
+            }
+        }.listStyle(.plain).scrollContentBackground(.hidden).background(BoothStyle.background)
+            .accessibilityIdentifier("library.groups")
+    }
+}
+
 struct MobileTrackList: View {
     @Bindable var model: BoothModel
-    let collectionID: String
+    let collectionID: String?
+    var groupMode: LibraryBrowseMode? = nil
+    var groupName: String? = nil
     var body: some View {
         let selected = model.collections.first { $0.id == collectionID }
         let byID = model.tracksByID
-        let tracks = selected?.trackIDs.compactMap { byID[$0] } ?? []
+        let tracks = selected?.trackIDs.compactMap { byID[$0] } ?? model.tracks.filter {
+            groupName == nil || groupMode?.group(for: $0) == groupName
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         List {
+            if let groupMode, let groupName {
+                Button { model.browse(groupMode) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                        Text(groupName).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.vertical, 12)
+                }.buttonStyle(.plain).accessibilityIdentifier("library.group.back")
+                    .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+            }
             if let selected {
                 HStack(alignment: .center, spacing: 10) {
                     Button { model.backFromCollection() } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .medium)).frame(width: 36, height: 44)
+                            .font(.body.weight(.semibold)).frame(width: 44, height: 44)
                             .contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("Back to playlists")
+                    }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Back to playlists")
                         .accessibilityIdentifier("playlist.back")
-                    Text(selected.name).font(.system(size: 22, weight: .bold)).lineLimit(2)
+                    Text(selected.name).font(.title3.weight(.bold)).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier("playlist.title")
                 }.padding(.vertical, 12).padding(.trailing, 8)
@@ -145,8 +180,8 @@ struct MobileTrackList: View {
                 ContentUnavailableView("No tracks", systemImage: "music.note.list")
                     .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
             } else {
-                ForEach(tracks) { track in
-                    TrackRow(track: track, model: model, collection: selected)
+                ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
+                    TrackRow(track: track, model: model, collection: selected, queuePosition: position)
                         .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
                         .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
                 }
@@ -163,10 +198,17 @@ struct TrackRow: View {
     @Bindable var model: BoothModel
     var collection: Collection? = nil
     var preservingQueue = false
+    var queuePosition: Int? = nil
     @State private var editingAnnotation = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     var body: some View {
         SwipeRow(left: leftSwipe, right: rightSwipe, identity: track.id) { activation in rowContent(activation: activation) }
+            .task(id: track.id) {
+                if track.id.hasPrefix("usb:"), track.waveform == nil { await model.loadWaveform(track) }
+            }
             .sheet(isPresented: $editingAnnotation) { TrackAnnotationEditor(track: track, model: model) }
             .contextMenu {
                 Button("Comment & color") { editingAnnotation = true }
@@ -209,7 +251,7 @@ struct TrackRow: View {
         HStack(spacing: 10) {
             Button {
                 guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
+                Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
             } label: {
                 HStack(spacing: 10) {
                     TrackArtwork(track: track, model: model, size: artworkSize)
@@ -263,55 +305,84 @@ struct TrackRow: View {
         #endif
     }
     private func mobileRow(activation: RowSwipeActivation) -> some View {
-        HStack(spacing: 7) {
-            Button {
-                guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
-            } label: {
-                AnalysisWaveform(waveform: track.waveform, compact: true)
-                    .frame(width: 72, height: 38).allowsHitTesting(false)
-                    .background(BoothStyle.background)
-                    .overlay(Rectangle().stroke(BoothStyle.border, lineWidth: 0.5))
-            }.buttonStyle(.plain).accessibilityLabel("Play \(track.title)")
-                .accessibilityIdentifier("track.waveform.\(track.id)")
-            Button {
-                guard activation.canActivate() else { return }
-                Task { await model.play(track, preservingQueue: preservingQueue) }
-            } label: {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(track.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    HStack(spacing: 4) {
-                        if model.offlineIDs.contains(track.id) {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(BoothStyle.mint).font(.system(size: 8))
-                        }
-                        Text(track.artist ?? "Unknown artist").lineLimit(1)
-                    }.font(.system(size: 10)).foregroundStyle(.secondary)
-                    if !model.annotation(for: track).note.isEmpty {
-                        Text(model.annotation(for: track).note).font(.system(size: 10)).foregroundStyle(model.annotation(for: track).color?.tint ?? .secondary)
-                            .lineLimit(1).accessibilityIdentifier("track.note.\(track.id)")
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("Play \(track.title)")
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(spacing: 0) {
-                    TrackColorMenu(track: track, model: model)
-                    Text(track.bpm.map { String(format: "%.1f", $0) } ?? "—")
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .accessibilityIdentifier("track.bpm.\(track.id)")
-                    Text(" BPM").font(.system(size: 8)).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 5) {
-                    Text(track.key ?? "—").font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(BoothStyle.background).padding(.horizontal, 4).padding(.vertical, 2)
-                        .background(Color.white.opacity(0.85), in: RoundedRectangle(cornerRadius: 2))
-                        .accessibilityIdentifier("track.key.\(track.id)")
-                    Text(timeLabel(track.durationSeconds)).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
-                }
-            }.fixedSize(horizontal: true, vertical: false)
+        let selected = model.player.track?.id == track.id
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    guard activation.canActivate() else { return }
+                    Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
+                } label: {
+                    AnalysisWaveform(waveform: track.waveform, compact: true)
+                        .frame(width: 64, height: 40).allowsHitTesting(false)
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
+                    .accessibilityIdentifier("track.waveform.\(track.id)")
+                mobileTrackTitle(activation: activation, selected: selected)
+                if !typeSize.isAccessibilitySize { mobileTrackMetadata }
+            }
+            if typeSize.isAccessibilitySize {
+                mobileTrackMetadata.frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }.padding(.horizontal, 4).padding(.vertical, 7)
-            .background(model.player.track?.id == track.id ? BoothStyle.accent.opacity(0.12) : .clear)
-            .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border.opacity(0.55)).frame(height: 0.5) }
+            .background(selected ? BoothStyle.accent.opacity(contrast == .increased ? 0.24 : 0.12) : .clear)
+            .overlay(alignment: .leading) { if selected { Rectangle().fill(BoothStyle.accent).frame(width: 2) } }
+            .overlay(alignment: .bottom) { Rectangle().fill(contrast == .increased ? Color.secondary : BoothStyle.border).frame(height: 0.5) }
             .accessibilityElement(children: .contain).accessibilityIdentifier("track.row.\(track.id)")
+    }
+    private func mobileTrackTitle(activation: RowSwipeActivation, selected: Bool) -> some View {
+        let annotation = model.annotation(for: track)
+        return Button {
+            guard activation.canActivate() else { return }
+            Task { await model.play(track, preservingQueue: preservingQueue, queuePosition: queuePosition) }
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                    .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                HStack(spacing: 4) {
+                    if selected { Image(systemName: "speaker.wave.2.fill").foregroundStyle(BoothStyle.accent).accessibilityHidden(true) }
+                    else if model.offlineIDs.contains(track.id) { Image(systemName: "checkmark.circle.fill").foregroundStyle(BoothStyle.mint).accessibilityHidden(true) }
+                    Text(track.artist ?? "Unknown artist").lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                }.boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
+                if !annotation.note.isEmpty {
+                    Text(annotation.note).boothFont(11, relativeTo: .caption2)
+                        .foregroundStyle(contrast == .increased ? Color.primary : annotation.color?.tint ?? .secondary)
+                        .lineLimit(typeSize.isAccessibilitySize ? 2 : 1).accessibilityIdentifier("track.note.\(track.id)")
+                }
+            }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
+            .accessibilityValue("\(track.artist ?? "Unknown artist"), \(selected ? "Current track, " : "")\(model.offlineIDs.contains(track.id) ? "Available offline" : "Not on this device")")
+    }
+    private var mobileTrackMetadata: some View {
+        let color = model.annotation(for: track).color
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 3) {
+                Text(track.bpm.map { String(format: "%.1f", $0) } ?? "—")
+                    .boothFont(12, relativeTo: .caption, weight: .semibold, design: .monospaced)
+                    .accessibilityIdentifier("track.bpm.\(track.id)")
+                Text("BPM").boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                if let color {
+                    HStack(spacing: 3) {
+                        Rectangle().fill(color.tint).frame(width: 6, height: 12)
+                        if differentiateWithoutColor {
+                            Text(String(color.label.prefix(1)))
+                                .boothFont(11, relativeTo: .caption2, weight: .semibold, design: .monospaced)
+                                .foregroundStyle(.primary)
+                        }
+                    }.accessibilityHidden(true).allowsHitTesting(false)
+                }
+                Text(track.key ?? "—").boothFont(11, relativeTo: .caption2, weight: .semibold, design: .monospaced)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundStyle(.primary).padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(BoothStyle.raised, in: RoundedRectangle(cornerRadius: 3))
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(contrast == .increased ? Color.primary : Color.secondary.opacity(0.55), lineWidth: 0.5))
+                    .accessibilityIdentifier("track.key.\(track.id)")
+                    .accessibilityValue(color.map { "\($0.label) color" } ?? "")
+                Text(timeLabel(track.durationSeconds)).boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }.fixedSize(horizontal: true, vertical: false)
     }
     private var artworkSize: CGFloat {
         #if os(macOS)

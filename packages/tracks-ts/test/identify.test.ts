@@ -165,6 +165,26 @@ describe("agent tracklist submission", () => {
     });
   });
 
+  test("fills cue ends from the following start and recording duration, preserving explicit boundaries", () => {
+    const source = "https://youtu.be/set";
+    const result = parseAgentTracklist(
+      source,
+      JSON.stringify({
+        source,
+        provider: "agent",
+        complete: false,
+        durationSeconds: 600,
+        tracks: [
+          { order: 1, startSeconds: 0, endSeconds: 100, artist: "A", title: "B" },
+          { order: 2, startSeconds: 180, artist: "C", title: "D" },
+          { order: 3, startSeconds: 360, isId: true, title: "ID" },
+        ],
+      }),
+    );
+    expect(result.tracks.map((row) => row.endSeconds)).toEqual([100, 360, 600]);
+    expect(result.tracks[2]!.isId).toBe(true);
+  });
+
   test("rejects a mismatched source or missing cue", () => {
     expect(() =>
       parseAgentTracklist(

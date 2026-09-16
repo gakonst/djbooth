@@ -30,7 +30,7 @@ final class USBLibraryUITests: XCTestCase {
 
     private func open(_ root: URL) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-test-library", UUID().uuidString]
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-muted"]
         app.launchEnvironment["DJBOOTH_TEST_USB_ROOT"] = root.path
         app.launch()
         XCTAssertTrue(app.buttons["usb.open"].waitForExistence(timeout: 20))
@@ -41,7 +41,7 @@ final class USBLibraryUITests: XCTestCase {
     }
 
     private func playlist(_ name: String, in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'usb.playlist.'"))
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'playlist.row.usb:'"))
             .containing(.staticText, identifier: name).firstMatch
     }
 
@@ -65,82 +65,132 @@ final class USBLibraryUITests: XCTestCase {
         add(attachment)
     }
 
-    func testReadsExportedMetadataAndOriginalPlaylistOrder() throws {
-        let app = open(try fixture("InitialUSB"))
-        XCTAssertTrue(app.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["All tracks (2)"].exists)
-        openPlaylist("Gigs", in: app)
-        openPlaylist("Tonight", in: app)
-        XCTAssertTrue(app.buttons["usb.track.0"].staticTexts["Second"].exists)
-        XCTAssertTrue(app.buttons["usb.track.1"].staticTexts["First"].exists)
-        capture(app, "USB playlist preserves Rekordbox order")
-        app.buttons["usb.track.1"].tap()
-        // LabeledContent exposes its label and value as one accessibility element.
-        for value in ["Stavöstranos", "128.01", "Am", "3:00"] {
-            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", value))
-                .firstMatch.waitForExistence(timeout: 5), "Missing track detail: \(value)")
+    private func enterFolder(_ name: String, in app: XCUIApplication) {
+        let button = app.buttons["playlist.folder.\(name)"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15)); button.tap()
+    }
+    private func tracks(_ app: XCUIApplication) -> XCUIElementQuery {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'track.waveform.usb:'"))
+    }
+    private func expectOrder(_ titles: [String], in app: XCUIApplication) {
+        for (position, title) in titles.enumerated() {
+            XCTAssertTrue(tracks(app).element(boundBy: position).waitForExistence(timeout: 10))
+            XCTAssertEqual(tracks(app).element(boundBy: position).label, "Play \(title)")
         }
-        XCTAssertTrue(app.staticTexts["comment"].exists)
-        capture(app, "USB metadata from fake master.db")
+    }
+    private func returnToRoot(_ app: XCUIApplication) {
+        if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }
+        for _ in 0..<5 {
+            if app.buttons["usb.open"].exists { return }
+            if app.buttons["playlist.folder.back"].waitForExistence(timeout: 3) { app.buttons["playlist.folder.back"].tap() }
+        }
+        XCTFail("Could not return to playlist root")
+    }
+    private func waitForValue(_ value: String, _ element: XCUIElement, timeout: Double = 15) {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
     }
 
-    func testRefreshReadsRenamedAndReorderedPlaylistFromSameUSBFolder() throws {
+    func testReadsExportedMetadataAndOriginalPlaylistOrder() throws {
+        let app = open(try fixture("InitialUSB"))
+        enterFolder("Gigs", in: app)
+        openPlaylist("Tonight", in: app)
+        expectOrder(["Second", "First"], in: app)
+        for suffix in ["track.key.", "track.bpm.", "track.note."] {
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", suffix + "usb:")).firstMatch.exists)
+        }
+        XCTAssertTrue(app.staticTexts["comment"].exists)
+        capture(app, "USB tracks in the ordinary library")
+    }
+
+    func testAutomaticallyReadsRenamedAndReorderedPlaylistFromSameUSBFolder() throws {
         let root = try copyUSB("InitialUSB")
         let app = open(root)
-        XCTAssertTrue(app.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        openPlaylist("Gigs", in: app)
+        enterFolder("Gigs", in: app)
         XCTAssertTrue(playlist("Tonight", in: app).waitForExistence(timeout: 5))
         let database = root.appendingPathComponent("PIONEER/rekordbox/export.pdb")
         try Data(contentsOf: fixture("UpdatedUSB").appendingPathComponent("PIONEER/rekordbox/export.pdb")).write(to: database)
-        XCTAssertTrue(playlist("Tonight", in: app).exists, "The current view is a snapshot until explicitly refreshed")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        app.buttons["usb.openAnother"].tap()
-        XCTAssertTrue(app.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        openPlaylist("Gigs", in: app)
-        XCTAssertFalse(playlist("Tonight", in: app).exists)
         openPlaylist("Afterhours", in: app)
-        XCTAssertTrue(app.buttons["usb.track.0"].staticTexts["First"].exists)
-        XCTAssertTrue(app.buttons["usb.track.1"].staticTexts["Second"].exists)
-        capture(app, "Refreshed USB playlist after CLI mutation and sync")
+        expectOrder(["First", "Second"], in: app)
+        XCTAssertFalse(app.buttons["usb.chooseFolder"].exists)
+        capture(app, "USB refresh preserves browsing context")
     }
 
     func testCLIImportsCDJHistoryAndExportsItAsADatedPlaylist() throws {
         let played = open(try fixture("PlayedUSB"))
-        let history = played.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'usb.history.'")).firstMatch
-        XCTAssertTrue(history.waitForExistence(timeout: 15))
-        history.tap()
-        for (position, title) in ["Second", "First", "Second"].enumerated() {
-            XCTAssertTrue(played.buttons["usb.track.\(position)"].staticTexts[title].exists)
-        }
-        capture(played, "CDJ history before CLI sync")
+        enterFolder("CDJ histories", in: played)
+        let history = played.buttons.matching(NSPredicate(format: "identifier CONTAINS ':history:'")).firstMatch
+        XCTAssertTrue(history.waitForExistence(timeout: 10)); history.tap()
+        expectOrder(["Second", "First", "Second"], in: played)
+        capture(played, "Repeated CDJ history tracks in normal playlist")
         played.terminate()
-
         let synced = open(try fixture("HistoryUSB"))
-        XCTAssertTrue(synced.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        XCTAssertFalse(synced.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'usb.history.'")).firstMatch.exists)
-        let imported = synced.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'usb.playlist.' AND label CONTAINS 'DJ Set '")).firstMatch
-        XCTAssertTrue(imported.waitForExistence(timeout: 5))
-        imported.tap()
-        for (position, title) in ["Second", "First", "Second"].enumerated() {
-            XCTAssertTrue(synced.buttons["usb.track.\(position)"].staticTexts[title].exists)
-        }
+        let imported = synced.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'playlist.row.usb:' AND label CONTAINS 'DJ Set '")).firstMatch
+        XCTAssertTrue(imported.waitForExistence(timeout: 15)); imported.tap()
+        expectOrder(["Second", "First", "Second"], in: synced)
         capture(synced, "CLI imported history exported back to USB")
     }
 
-    func testDisconnectedUSBRecoversAndNeverChangesLocalLibrary() throws {
-        let root = try copyUSB("InitialUSB")
+    func testPlaybackAnnotationsCacheAndAutomaticReconnectSurviveRelaunch() throws {
+        let root = try copyUSB("PlaybackUSB")
         let app = open(root)
-        XCTAssertTrue(app.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        try FileManager.default.removeItem(at: root.appendingPathComponent("PIONEER"))
-        app.buttons["usb.openAnother"].tap()
-        expectError("No Rekordbox Device Library found", in: app)
-        try FileManager.default.copyItem(at: fixture("InitialUSB").appendingPathComponent("PIONEER"),
-                                         to: root.appendingPathComponent("PIONEER"))
-        app.buttons["usb.chooseFolder"].tap()
-        XCTAssertTrue(app.buttons["usb.allTracks"].waitForExistence(timeout: 15))
-        app.buttons["usb.done"].tap()
-        XCTAssertTrue(app.buttons["playlist.row.demo-c2"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["Gigs"].exists)
+        enterFolder("Gigs", in: app); openPlaylist("Tonight", in: app)
+        let play = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'track.waveform.usb:'")).firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 10)); play.tap()
+        let pause = app.buttons["nowPlaying.play"]
+        let playing = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: pause)
+        XCTAssertEqual(XCTWaiter.wait(for: [playing], timeout: 20), .completed)
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label.contains("Second"))
+        let time = app.descendants(matching: .any)["nowPlaying.progress"].firstMatch
+        XCTAssertTrue(time.waitForExistence(timeout: 5))
+        let initial = time.value as? String
+        let progressing = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in (time.value as? String) != initial }, object: time)
+        XCTAssertEqual(XCTWaiter.wait(for: [progressing], timeout: 8), .completed)
+        pause.tap()
+        let progress = app.descendants(matching: .any)["nowPlaying.progress"].firstMatch
+        XCTAssertTrue(progress.exists)
+        if progress.elementType == .slider { progress.adjust(toNormalizedSliderPosition: 0.5) }
+        else { progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        let sought = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            (time.value as? String)?.hasPrefix("0:17") == true || (time.value as? String)?.hasPrefix("0:18") == true
+        }, object: time)
+        XCTAssertEqual(XCTWaiter.wait(for: [sought], timeout: 8), .completed)
+        // Queue navigation also exercises the MP3 fixture through the real player.
+        let queued = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'nowPlaying.queue.track.usb:'"))
+        let first = queued.matching(NSPredicate(format: "label == 'Play First'")).firstMatch
+        XCTAssertTrue(first.exists); first.tap()
+        let mp3Playing = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: pause)
+        XCTAssertEqual(XCTWaiter.wait(for: [mp3Playing], timeout: 15), .completed)
+        XCTAssertTrue(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label.contains("First"))
+        queued.matching(NSPredicate(format: "label == 'Play Second'")).firstMatch.tap()
+        let flacPlaying = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: pause)
+        XCTAssertEqual(XCTWaiter.wait(for: [flacPlaying], timeout: 15), .completed)
+        pause.tap()
+        app.buttons["nowPlaying.color"].tap()
+        XCTAssertTrue(app.buttons["track.color.red"].waitForExistence(timeout: 5)); app.buttons["track.color.red"].tap()
+        let note = app.textFields["nowPlaying.annotation"]
+        XCTAssertTrue(note.waitForExistence(timeout: 5)); note.tap(); note.typeText("USB sunrise\n")
+        capture(app, "Real USB playback with ordinary annotations")
+        returnToRoot(app)
+        waitForValue("Connected", app.buttons["usb.open"])
+        let pioneer = root.appendingPathComponent("PIONEER"), audio = root.appendingPathComponent("Contents")
+        try FileManager.default.moveItem(at: pioneer, to: root.appendingPathComponent("ejected-PIONEER"))
+        try FileManager.default.moveItem(at: audio, to: root.appendingPathComponent("ejected-Contents"))
+        waitForValue("Disconnected", app.buttons["usb.open"])
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["usb.open"].waitForExistence(timeout: 20))
+        waitForValue("Disconnected", app.buttons["usb.open"])
+        app.buttons["nowPlaying.play"].tap()
+        let cachedPlaying = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Pause'"), object: app.buttons["nowPlaying.play"])
+        XCTAssertEqual(XCTWaiter.wait(for: [cachedPlaying], timeout: 15), .completed)
+        app.buttons["nowPlaying.play"].tap()
+        XCTAssertEqual(app.textFields["nowPlaying.annotation"].value as? String, "USB sunrise")
+        XCTAssertEqual(app.buttons["nowPlaying.color"].value as? String, "Red")
+        try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-PIONEER"), to: pioneer)
+        try FileManager.default.moveItem(at: root.appendingPathComponent("ejected-Contents"), to: audio)
+        waitForValue("Connected", app.buttons["usb.open"])
+        XCTAssertFalse(app.buttons["usb.chooseFolder"].exists)
+        capture(app, "Saved USB grant reconnects without selection")
     }
 
     func testInvalidMissingAndOneLibraryOnlyUSBsShowRecoverableErrors() throws {

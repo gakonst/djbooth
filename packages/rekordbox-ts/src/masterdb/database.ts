@@ -22,6 +22,7 @@ import { getConfig } from "../config/index.js";
 import { deobfuscate, warnDeprecated } from "../utils.js";
 import { MasterPlaylistXml } from "./aux-files.js";
 import * as models from "./models.js";
+import { managedLibrarySchema } from "./managed-schema.js";
 import {
   Property,
   propertyColumnMap,
@@ -663,6 +664,61 @@ export class MasterDatabase {
     if (supplied.playlistXml !== false) {
       const playlistPath = join(this.dbDirectory, "masterPlaylists6.xml");
       if (existsSync(playlistPath)) this.playlistXml = new MasterPlaylistXml(playlistPath);
+    }
+  }
+
+  /** Create an owned headless library without requiring a desktop Rekordbox installation. */
+  static createManaged(path: string): MasterDatabase {
+    if (existsSync(path)) throw new Error(`Refusing to replace database '${path}'`);
+    mkdirSync(dirname(path), { recursive: true });
+    const connection = new Database(path);
+    try {
+      connection.pragma("cipher='sqlcipher'");
+      connection.pragma("legacy=4");
+      connection.pragma(`key='${deobfuscate(defaultKeyBlob).replaceAll("'", "''")}'`);
+      connection.exec(managedLibrarySchema);
+      const now = new Date().toISOString();
+      connection
+        .prepare(
+          "INSERT INTO agentRegistry (registry_id, int_1, created_at, updated_at) VALUES ('localUpdateCount', 0, ?, ?)",
+        )
+        .run(now, now);
+      connection
+        .prepare("INSERT INTO djmdDevice (ID, MasterDBID, Name) VALUES ('1', ?, 'djbooth cloud')")
+        .run(randomUUID());
+    } finally {
+      connection.close();
+    }
+    writeFileSync(
+      join(dirname(path), "masterPlaylists6.xml"),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<MASTER_PLAYLIST Version="3.0.0" AutomaticSync="0"><PRODUCT Name="rekordbox" Version="7.0.0" Company="AlphaTheta"/><PLAYLISTS/></MASTER_PLAYLIST>\n',
+      { flag: "wx" },
+    );
+    return new MasterDatabase({ path, readonly: false });
+  }
+
+  /** Consistent logical snapshot, re-encrypted with this library's key. */
+  async backup(output: string): Promise<void> {
+    if (existsSync(output)) throw new Error(`Refusing to replace backup '${output}'`);
+    const source = this.requireConnection();
+    if (source.inTransaction) throw new Error("Back up through a separate read-only connection");
+    source.exec("BEGIN");
+    try {
+      await this.copyUnlocked(output);
+    } finally {
+      source.exec("ROLLBACK");
+    }
+    if (this.options.unlock) {
+      const destination = new Database(output);
+      try {
+        destination.pragma("cipher='sqlcipher'");
+        destination.pragma("legacy=4");
+        destination.pragma(
+          `rekey='${(this.options.key ?? deobfuscate(defaultKeyBlob)).replaceAll("'", "''")}'`,
+        );
+      } finally {
+        destination.close();
+      }
     }
   }
 
@@ -3111,13 +3167,28 @@ export class MasterDatabase {
           { cause },
         );
       }
-      const keys = this.query(models.DjmdKey)
+      const equivalentKeys = this.query(models.DjmdKey)
         .all()
         .filter(
           (key) =>
-            key.ScaleName?.trim().toUpperCase() === keyName &&
+            key.ScaleName != null &&
+            normalizeMusicalKey(key.ScaleName) !== undefined &&
+            normalizeRekordboxKeyName(key.ScaleName) === keyName &&
             (!this.hasColumn(models.DjmdKey.tableName, "rb_local_deleted") ||
               Number(key.get("rb_local_deleted") ?? 0) === 0),
+        );
+      const canonicalKeys = equivalentKeys.filter(
+        (key) => key.ScaleName?.trim().toUpperCase() === keyName,
+      );
+      const keys = canonicalKeys.length ? canonicalKeys : equivalentKeys;
+      // Fresh libraries may not yet contain every musical key. Stage the missing
+      // lookup through the same tracked transaction as the analyzed content row.
+      if (keys.length === 0)
+        keys.push(
+          this.create(models.DjmdKey, {
+            ID: String(this.generateUnusedId(models.DjmdKey)),
+            ScaleName: keyName,
+          }),
         );
       if (keys.length !== 1)
         throw new TypeError(

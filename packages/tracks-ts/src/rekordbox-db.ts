@@ -726,7 +726,9 @@ function metadataForDownload(
 ): RekordboxTrackMetadata {
   const spotify = spotifyMetadata(entry, download, variantIndex);
   const downloadedIdentity = recordingIdentityForDownload(entry, download);
-  const isSetExtract = download.kind === "source-set-clip" || download.clip !== undefined;
+  const isSetExtract =
+    (download.kind === "source-set-clip" || download.clip !== undefined) &&
+    !isWholeSetDownload(manifest, download);
   const isUnidentified = entry.identity.status === "unidentified" || entry.identity.isId === true;
   const identityTitle = downloadedIdentity?.title.trim() ?? entry.identity.title?.trim();
   const mix = entry.identity.mix?.trim();
@@ -837,6 +839,15 @@ function roundMilliseconds(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function isWholeSetDownload(manifest: SetManifest, download: AcquisitionDownload): boolean {
+  return (
+    manifest.source.input.startsWith("djbooth:whole-set:") &&
+    manifest.entries.length === 1 &&
+    download.clip?.startSeconds === 0 &&
+    download.clip.endSeconds === manifest.artifacts.sourceSet?.durationSeconds
+  );
+}
+
 function downloadComment(
   manifest: SetManifest,
   entry: ResolvedTrack,
@@ -847,7 +858,7 @@ function downloadComment(
   if (download.clip) {
     const range = `${formatTimestamp(download.clip.startSeconds)}–${formatTimestamp(download.clip.endSeconds)}`;
     return [
-      "[Set Extract]",
+      isWholeSetDownload(manifest, download) ? "[Full DJ Set]" : "[Set Extract]",
       `Source: ${download.clip.sourceSetTitle?.trim() || setTitle}`,
       `Source URL: ${download.clip.sourceSetUrl}`,
       `Set range: ${range}`,
@@ -1514,7 +1525,7 @@ function verifyContentAnalysis(
     assertMetadataValue(
       planned,
       "Key",
-      keys[0]?.ScaleName,
+      rekordbox.normalizeRekordboxKeyName(String(keys[0]?.ScaleName)),
       rekordbox.normalizeRekordboxKeyName(analyzer.key),
     );
   }

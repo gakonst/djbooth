@@ -31,7 +31,7 @@ import { prepareHostedImportSource, type ImportSourceKind } from "./import-sourc
 import { CachedSpotifyClient } from "./integrations/spotify-cache.js";
 import { RekordboxPipelineStore } from "./pipeline-state.js";
 import { SoulseekLibraryAcquirer } from "./integrations/slsk-library.js";
-import { getYtdlpTsCommand } from "./integrations/ytdlp.js";
+import { getYtdlpTsCommand, inspectMediaMetadata } from "./integrations/ytdlp.js";
 import {
   YtdlpNativeAcquirer,
   YtdlpReferenceAcquirer,
@@ -781,6 +781,12 @@ const setWorkflowArgs = z.object({
     .describe("Spotify/SoundCloud playlist, YouTube/SoundCloud DJ set, or local set"),
 });
 const setWorkflowOptions = z.object({
+  wholeSet: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Keep the complete DJ mix as one analyzed library track; constituent-track imports retain separate resumable state",
+    ),
   agentResultJson: z
     .string()
     .optional()
@@ -811,6 +817,12 @@ const setWorkflowOptions = z.object({
     .string()
     .optional()
     .describe("Canonical URL annotated on source-set clips; defaults to the input set URL"),
+  sourceSetDownloadUrl: z
+    .string()
+    .optional()
+    .describe(
+      "Verified alternate upload of this exact set; duration must match the resolved cue timeline",
+    ),
   acquisitionConcurrency: z
     .number()
     .int()
@@ -960,6 +972,7 @@ async function runSetWorkflowCommand(
 ): Promise<z.output<typeof setWorkflowOutput>> {
   let soulseek: SoulseekClient | undefined;
   let stateStore: RekordboxPipelineStore | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   const controller = new AbortController();
   const cancel = () => controller.abort(new DOMException("Import interrupted", "AbortError"));
   process.once("SIGINT", cancel);
@@ -968,17 +981,85 @@ async function runSetWorkflowCommand(
     const showProgress =
       context.options.progress === "always" ||
       (context.options.progress === "auto" && (context.agent || !context.formatExplicit));
+    let progressMessage = "[prepare] preparing 0/1";
+    const reportProgress = () => {
+      try {
+        process.stderr.write(`[${new Date().toISOString()}] ${progressMessage}\n`);
+      } catch {
+        /* Diagnostics cannot interrupt the import. */
+      }
+    };
+    if (showProgress) {
+      reportProgress();
+      heartbeat = setInterval(reportProgress, 2_000);
+      heartbeat.unref();
+    }
     const outputDirectory =
       context.options.outputDirectory ??
       defaultTrackLibraryRoot({ ...process.env, ...context.env });
+    const workflowSource = context.options.wholeSet
+      ? `djbooth:whole-set:${context.args.source}`
+      : context.args.source;
     stateStore = new RekordboxPipelineStore({
-      source: context.args.source,
+      source: workflowSource,
       outputDirectory,
       keepOpen: true,
       ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
       ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
     });
     let initialState = (await stateStore.load()) ?? null;
+    if (context.options.wholeSet && context.options.agentResultJson)
+      throw new TracksError(
+        "INVALID_SOURCE",
+        "--whole-set reads the publisher's mix metadata; omit --agent-result-json",
+        { exitCode: 2 },
+      );
+    if (context.options.wholeSet && !initialState) {
+      const metadata = await inspectMediaMetadata(context.args.source, {
+        cacheMode: context.options.cacheMode,
+        signal: controller.signal,
+      });
+      if (!metadata.title || !metadata.durationSeconds)
+        throw new TracksError(
+          "INVALID_SOURCE",
+          "Whole-set import requires a titled recording with a known duration",
+          { exitCode: 2 },
+        );
+      const manifest = createManifest({
+        source: workflowSource,
+        url: context.args.source,
+        provider: "description",
+        title: metadata.title,
+        ...(metadata.uploader ? { uploader: metadata.uploader } : {}),
+        durationSeconds: metadata.durationSeconds,
+        complete: true,
+        tracks: [
+          {
+            order: 1,
+            startSeconds: 0,
+            endSeconds: metadata.durationSeconds,
+            artist: metadata.uploader ?? "Unknown Artist",
+            title: metadata.title,
+          },
+        ],
+      });
+      manifest.artifacts.root = stateStore.artifactDirectory;
+      manifest.artifacts.downloadDirectory = outputDirectory;
+      const original = new RekordboxPipelineStore({
+        source: context.args.source,
+        outputDirectory,
+        ...(context.options.dbPath ? { dbPath: context.options.dbPath } : {}),
+        ...(context.options.dbDirectory ? { dbDirectory: context.options.dbDirectory } : {}),
+      });
+      try {
+        const prior = await original.load();
+        if (prior?.artifacts.sourceSet) manifest.artifacts.sourceSet = prior.artifacts.sourceSet;
+      } finally {
+        original.close();
+      }
+      await stateStore.save(manifest);
+      initialState = manifest;
+    }
     let sourceKind: ImportSourceKind = inferImportSourceKind(initialState ?? undefined);
     const replacementPlaylistId = agentReplacementPlaylistId(
       initialState,
@@ -1008,7 +1089,9 @@ async function runSetWorkflowCommand(
       await stateStore.save(resolved);
       initialState = resolved;
     }
-    const spotify = await workflowSpotifyClient(context.options.cacheMode);
+    const spotify = context.options.wholeSet
+      ? undefined
+      : await workflowSpotifyClient(context.options.cacheMode);
     soulseek = new SoulseekClient();
     const acquirers = orderedImportSetAcquirers(context.options.referenceYtdlp, {
       soulseek: () =>
@@ -1029,7 +1112,7 @@ async function runSetWorkflowCommand(
     });
     if (!initialState) {
       const hosted = await prepareHostedImportSource(context.args.source, {
-        spotify,
+        ...(spotify ? { spotify } : {}),
         createSoundcloud: () =>
           createSoundCloudUserClient({
             ...(context.env.SOUNDCLOUD_ACCESS_TOKEN
@@ -1051,7 +1134,7 @@ async function runSetWorkflowCommand(
       }
     }
     const result = await runSetToRekordbox({
-      source: context.args.source,
+      source: workflowSource,
       stateStore,
       initialState,
       outputDirectory,
@@ -1061,10 +1144,15 @@ async function runSetWorkflowCommand(
         cacheMode: context.options.cacheMode,
         env: { ...process.env, ...context.env },
       },
-      spotify,
+      ...(spotify ? { spotify } : {}),
       acquirers,
       localArtifactDirectories: context.options.localDirectory,
       allowSourceSetClips: sourceKind === "dj-set",
+      referenceYtdlp: context.options.referenceYtdlp,
+      ...(context.options.sourceSetDownloadUrl
+        ? { sourceSetDownloadUrl: context.options.sourceSetDownloadUrl }
+        : {}),
+      wholeSet: context.options.wholeSet,
       ...(context.options.sourceSetPath
         ? {
             sourceSet: {
@@ -1102,16 +1190,19 @@ async function runSetWorkflowCommand(
       ...(showProgress
         ? {
             onProgress(progress) {
-              process.stderr.write(
-                `[${new Date().toISOString()}] [${progress.stage}] ${progress.message}\n`,
-              );
+              progressMessage = `[${progress.stage}] ${progress.message}`;
+              reportProgress();
             },
           }
         : {}),
     });
+    if (showProgress) {
+      progressMessage = "[complete] complete 1/1";
+      reportProgress();
+    }
     return {
       outputDirectory: result.outputDirectory,
-      source: result.manifest.source.input,
+      source: context.args.source,
       sourceKind,
       entries: result.manifest.entries.length,
       downloaded: result.acquisition.downloaded.length,
@@ -1142,6 +1233,7 @@ async function runSetWorkflowCommand(
     if (handoff) return handoff;
     return fail(context, error);
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     process.removeListener("SIGINT", cancel);
     process.removeListener("SIGTERM", cancel);
     stateStore?.close();
@@ -1403,21 +1495,18 @@ function providerStatus(env: Environment) {
 
 async function workflowSpotifyClient(
   cacheMode: "default" | "refresh" | "off",
-): Promise<CachedSpotifyClient> {
+): Promise<CachedSpotifyClient | undefined> {
   const store = new FileSessionStore();
   const session = await store.load();
-  if (!session) {
-    throw new TracksError(
-      "AUTH_REQUIRED",
-      "No spots OAuth session found; run `spots auth login` before import",
-      { exitCode: 2 },
-    );
-  }
+  if (!session) return undefined;
   const credential = session.token.refreshToken ?? session.token.accessToken;
   const client = new SpotifyClient({
     auth: new SpotifyOAuth({
       clientId: session.clientId,
       redirectUri: session.redirectUri,
+      ...(process.env.SPOTIFY_CLIENT_SECRET
+        ? { clientSecret: process.env.SPOTIFY_CLIENT_SECRET }
+        : {}),
       store,
     }),
   });
@@ -1446,6 +1535,9 @@ async function metadataSourceClients(cacheMode: CacheMode): Promise<ExactSourceM
         auth: new SpotifyOAuth({
           clientId: session.clientId,
           redirectUri: session.redirectUri,
+          ...(process.env.SPOTIFY_CLIENT_SECRET
+            ? { clientSecret: process.env.SPOTIFY_CLIENT_SECRET }
+            : {}),
           store,
         }),
       }),

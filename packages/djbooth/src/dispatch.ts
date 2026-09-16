@@ -2,6 +2,7 @@ import { createDjBoothRoot } from "./root.js";
 
 const directlyRoutableCommands = new Set([
   "analyze",
+  "cloud",
   "download",
   "enrich",
   "import",
@@ -29,6 +30,9 @@ export function canDispatchDirectly(argv: readonly string[]): boolean {
 export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
   const cli = createDjBoothRoot();
   switch (argv[0]) {
+    case "cloud":
+      cli.command((await import("./cloud.js")).cloudCli);
+      break;
     case "analyze":
       cli.command((await import("@gakonst/tracks/cli")).analyzeCli);
       break;

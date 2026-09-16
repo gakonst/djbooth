@@ -34,6 +34,9 @@ public struct Endpoint: Sendable {
     public func path(_ parts: String...) -> URL {
         parts.reduce(url) { $0.appendingPathComponent($1) }
     }
+    public func accountScope(_ accountID: String) -> String {
+        SHA256.hash(data: Data("\(url.absoluteString)\n\(accountID)".utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     public var scope: String { SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined() }
 }
 
@@ -127,7 +130,51 @@ public struct CloudImportJob: Codable, Identifiable, Sendable, Equatable {
     public var isActive: Bool { status == "queued" || status == "running" }
 }
 
+public struct CloudAccount: Codable, Sendable {
+    public let id: String
+    public let grantId: String
+    public let expiresAt: Int
+    public let capabilities: [String]
+}
+
+public struct AgentTurn: Codable, Sendable {
+    public let id: String
+    public let status: String
+    public let finalMessage: String?
+    public let error: String?
+}
+
 public struct CloudClient: Sendable {
+    public func agentTurn(id: String, input: String? = nil, cancel: Bool = false) async throws -> AgentTurn {
+        guard id.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil else { throw ClientError.http(400, "Invalid agent turn") }
+        var request = request(input != nil ? "v1/agent/turns" : "v1/agent/turns/\(id)\(cancel ? "/cancel" : "")", method: input != nil || cancel ? "POST" : "GET")
+        if let input {
+            request.httpBody = try JSONEncoder().encode(["id": id, "input": input])
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await session.data(for: request)
+        return try await decodeResponse(AgentTurn.self, from: checked(data, response))
+    }
+
+    public func account() async throws -> CloudAccount {
+        struct Session: Decodable, Sendable { let account: CloudAccount }
+        let (data, response) = try await session.data(for: request("v1/auth/session"))
+        let account = try await decodeResponse(Session.self, from: checked(data, response)).account
+        guard account.id.range(of: "^nc_[a-f0-9]{64}$", options: .regularExpression) != nil else {
+            throw ClientError.http(401, "Invalid account identity")
+        }
+        return account
+    }
+    public static func exchangeLogin(endpoint: Endpoint, code: String, verifier: String) async throws -> String {
+        struct Login: Decodable, Sendable { let token: String }
+        var request = URLRequest(url: endpoint.path("v1", "auth", "exchange"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["code": code, "verifier": verifier])
+        let (data, response) = try await Transport.session.data(for: request)
+        return try await decodeResponse(Login.self, from: checked(data, response)).token
+    }
+
     public let endpoint: Endpoint
     private let token: String
     private let session: URLSession

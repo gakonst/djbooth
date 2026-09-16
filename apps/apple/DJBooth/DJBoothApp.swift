@@ -58,6 +58,7 @@ struct BoothRoot: View {
         platformRoot
             .background(BoothStyle.background)
             .sheet(isPresented: $model.showSettings) { ConnectionSettings(model: model) }
+            .sheet(isPresented: $model.showAgent) { MusicAgentView(model: model) }
             .sheet(isPresented: $model.showImport) { ImportSheet(model: model) }
             .alert("Remove from playlist?", isPresented: Binding(
                 get: { model.pendingPlaylistRemoval != nil },
@@ -83,6 +84,13 @@ struct BoothRoot: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { model.persistPlaybackSession() }
+            }
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                while !Task.isCancelled {
+                    await model.refreshUSBConnection()
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
             }
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
@@ -175,16 +183,16 @@ private struct PlaylistRemovalNotice: View {
         if let undo = model.undoablePlaylistRemoval {
             HStack(spacing: 8) {
                 Text("Removed “\(undo.trackTitle)”")
-                    .font(.system(size: 12)).lineLimit(1)
+                    .boothFont(12, relativeTo: .caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Removed \(undo.trackTitle) from \(undo.collectionName)")
                 Button { model.undoPlaylistRemoval() } label: {
-                    Text("Undo").font(.system(size: 13, weight: .semibold))
+                    Text("Undo").boothFont(13, relativeTo: .subheadline, weight: .semibold)
                         .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.foregroundStyle(BoothStyle.accent)
                     .accessibilityIdentifier("playlist.removal.undo")
                 Button { model.dismissPlaylistRemovalUndo() } label: {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "xmark").boothFont(12, relativeTo: .caption, weight: .medium)
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }.foregroundStyle(.secondary).accessibilityLabel("Dismiss removal notice")
                     .accessibilityIdentifier("playlist.removal.dismiss")

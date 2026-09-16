@@ -51,6 +51,24 @@ private final class RequestLog: @unchecked Sendable {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
+    @Test func accountIdentityIsVerifiedBeforeChoosingAnOfflineStore() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session)
+        let id = "nc_" + String(repeating: "a", count: 64)
+        StubProtocol.handler = { request in
+            #expect(request.url?.path == "/v1/auth/session")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private-test-token")
+            return (200, Data("{\"account\":{\"id\":\"\(id)\",\"grantId\":\"grant\",\"expiresAt\":2000000000,\"capabilities\":[]}}".utf8))
+        }
+        #expect(try await client.account().id == id)
+        let endpoint = try Endpoint("https://library.example")
+        #expect(endpoint.accountScope(id) != endpoint.accountScope("nc_" + String(repeating: "b", count: 64)))
+        #expect(endpoint.accountScope(id) == (try Endpoint("https://LIBRARY.example:443/")).accountScope(id))
+        #expect(endpoint.accountScope(id) != endpoint.scope)
+        StubProtocol.handler = { _ in (401, Data("{\"error\":{\"message\":\"Sign in again\"}}".utf8)) }
+        await #expect(throws: ClientError.self) { try await client.account() }
+    }
+
     @Test func cloudImportsPreserveRequestIdentityAndDecodeProgress() async throws {
         let session = session(); defer { session.invalidateAndCancel() }
         let client = try client(session)
@@ -236,4 +254,26 @@ private final class RequestLog: @unchecked Sendable {
         #expect(log.values().filter { $0.hasPrefix("PUT ") }.count == 1)
         #expect(log.values().last == "POST /v1/media/\(wholeHash)/compose")
     }
+    @Test func nativeAgentKeepsTurnIdentityAndAuthenticationAcrossSubmissionReadAndCancel() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session)
+        let log = RequestLog()
+        StubProtocol.handler = { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private-test-token")
+            log.append("\(request.httpMethod!) \(request.url!.path)")
+            if request.url!.path == "/v1/agent/turns" {
+                let body = try JSONSerialization.jsonObject(with: Self.body(request)) as! [String: String]
+                #expect(body == ["id": "my-turn", "input": "Find music"])
+                return (200, Data(#"{"id":"my-turn","status":"running"}"#.utf8))
+            }
+            return (200, Data(#"{"id":"my-turn","status":"completed","finalMessage":"Music ideas"}"#.utf8))
+        }
+        #expect(try await client.agentTurn(id: "my-turn", input: "Find music").status == "running")
+        #expect(try await client.agentTurn(id: "my-turn").finalMessage == "Music ideas")
+        _ = try await client.agentTurn(id: "my-turn", cancel: true)
+        #expect(log.values() == ["POST /v1/agent/turns", "GET /v1/agent/turns/my-turn", "POST /v1/agent/turns/my-turn/cancel"])
+        do { _ = try await client.agentTurn(id: "../other"); Issue.record("Accepted a path outside the turn") } catch {}
+        #expect(log.values().count == 3)
+    }
+
 }

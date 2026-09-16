@@ -34,6 +34,16 @@ import <source> → database rows
 - `link` and `usb` consume ready database rows directly.
 
 - One intent → highest-level command → rerun same command to resume/reconcile.
+- “Download/import a DJ set” means resolve its ordered constituent tracks, acquire individual
+  recordings, and analyze them through the normal `import <source>` workflow. Use `--whole-set`
+  only when the user explicitly requests the full continuous mix; never use it to bypass tracklist
+  resolution or acquisition failures.
+- When standalone acquisition fails, use the workflow's per-track source-set excerpt fallback.
+  Keep excerpts labeled as set extracts, preserve unresolved IDs and uncertain identifications,
+  and report these limitations instead of claiming standalone recordings were acquired.
+- When the request includes upload/publish to the CF Worker, publish the resulting constituent-track
+  playlist after analysis using `cloud publish`. Inspect per-track failures, rerun to resume failed
+  uploads, and verify completion before reporting success; import/analysis alone does not publish.
 - Every long-running umbrella command must expose observable progress. Use
   `--progress auto|always|never`, emit phase plus bounded current/total updates to stderr, produce
   an initial update promptly and periodic updates while work continues, and finish with a terminal

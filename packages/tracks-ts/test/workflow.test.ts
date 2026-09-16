@@ -209,10 +209,150 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
 }
 
 describe("runSetToRekordbox", () => {
+  test("uses the verified full-mix duration and resumes its source without Spotify", async () => {
+    const manifest = downloadedManifest();
+    manifest.entries[0]!.spotify = { status: "pending" };
+    manifest.artifacts.sourceSet = {
+      url: source,
+      path: "/tmp/verified-full-mix.m4a",
+      sha256: "b".repeat(64),
+      durationSeconds: 7064.375,
+      codec: "aac",
+      bitrate: 128_000,
+    };
+    const save = vi.fn();
+    const cacheSourceSet = vi.fn();
+    const enrichSpotify = vi.fn();
+    const result = await runSetToRekordbox({
+      source,
+      wholeSet: true,
+      initialState: manifest,
+      stateStore: { artifactDirectory: "/tmp/full-mix-artifacts", load: vi.fn(), save },
+      stopAfter: "download",
+      acquirers: [],
+      dependencies: {
+        exists: async () => true,
+        cacheSourceSet,
+        enrichSpotify,
+        buildPlan: async (current, options) => {
+          expect(options).toMatchObject({ wholeSet: true, allowSourceSetClips: true });
+          expect(current.entries[0]!.cue).toMatchObject({ startSeconds: 0, endSeconds: 7064.375 });
+          return { recordings: [], clips: [], stagingDirectory: "/tmp/full-mix-staging" };
+        },
+        acquire: async (options) => {
+          await (options.plan as (value: SetManifest) => Promise<unknown>)(manifest);
+          return acquisitionResult(manifest, true);
+        },
+      },
+    });
+    expect(cacheSourceSet).not.toHaveBeenCalled();
+    expect(enrichSpotify).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalled();
+    expect(result.manifest.source.durationSeconds).toBe(7064.375);
+  });
+
+  test("repairs missing agent cue boundaries on resume and reopens automatic acquisition failures", async () => {
+    const state = createManifest({
+      ...tracklist(),
+      provider: "agent",
+      durationSeconds: 360,
+      tracks: [
+        { order: 1, startSeconds: 0, artist: "Artist", title: "Track" },
+        { order: 2, startSeconds: 180, isId: true, title: "ID" },
+      ],
+    });
+    state.entries[0]!.acquisition = {
+      status: "skipped",
+      reason: "Recording unavailable: provider failed",
+    };
+    state.entries[0]!.rekordbox = {
+      status: "skipped",
+      reason: "Recording unavailable: provider failed",
+    };
+    const save = vi.fn();
+    const result = await runSetToRekordbox({
+      source,
+      manifestPath,
+      outputDirectory,
+      initialState: state,
+      acquirers: [],
+      stopAfter: "download",
+      dependencies: {
+        writeManifest: save,
+        cacheSourceSet: async () => ({ path: "/tmp/set.m4a", url: source }),
+        describeSourceSet: async () => ({
+          path: "/tmp/set.m4a",
+          url: source,
+          durationSeconds: 360,
+          codec: "aac",
+          bitrate: 256000,
+          sha256: "a".repeat(64),
+        }),
+        acquire: async () => {
+          expect(state.entries.map((entry) => entry.cue.endSeconds)).toEqual([180, 360]);
+          expect(state.entries[0]!.acquisition.status).toBe("pending");
+          expect(state.entries[0]!.errors).toContainEqual({
+            stage: "acquisition",
+            message: "Recording unavailable: provider failed",
+          });
+          expect(state.entries[1]!.identity.status).toBe("unidentified");
+          for (const entry of state.entries)
+            entry.acquisition = {
+              status: "downloaded",
+              download: {
+                backend: "local",
+                kind: "source-set-clip",
+                mediaPath,
+                files: [mediaPath],
+                source,
+              },
+            };
+          return acquisitionResult(state, false);
+        },
+      },
+    });
+    expect(save).toHaveBeenCalled();
+    expect(result.performance.automation.sourceSetFallbacks).toBe(2);
+  });
+
   test("uses a CPU-adaptive clean-room analysis default without lowering the explicit cap", () => {
     expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBeGreaterThan(0);
     expect(DEFAULT_NATIVE_ANALYSIS_CONCURRENCY).toBeLessThanOrEqual(12);
     expect(MAX_NATIVE_ANALYSIS_CONCURRENCY).toBe(64);
+  });
+
+  test("rejects an alternate upload whose duration would invalidate the saved cues", async () => {
+    const state = createManifest({
+      ...tracklist(),
+      durationSeconds: 360,
+      tracks: [{ order: 1, startSeconds: 0, endSeconds: 360, isId: true, title: "ID" }],
+    });
+    const acquire = vi.fn();
+    await expect(
+      runSetToRekordbox({
+        source,
+        manifestPath,
+        outputDirectory,
+        initialState: state,
+        acquirers: [],
+        sourceSetDownloadUrl: "https://soundcloud.com/publisher/different-upload",
+        dependencies: {
+          writeManifest: vi.fn(),
+          cacheSourceSet: async () => ({ path: "/tmp/alternate.m4a" }),
+          describeSourceSet: async () => ({
+            path: "/tmp/alternate.m4a",
+            url: "https://soundcloud.com/publisher/different-upload",
+            durationSeconds: 365,
+            codec: "aac",
+            bitrate: 256000,
+            sha256: "a".repeat(64),
+          }),
+          acquire,
+        },
+      }),
+    ).rejects.toThrow("duration does not match");
+    expect(acquire).not.toHaveBeenCalled();
+    expect(state.artifacts.sourceSet).toBeUndefined();
   });
 
   test("composes the entire flow as libraries and installs clean-room analysis", async () => {
@@ -722,6 +862,7 @@ describe("runSetToRekordbox", () => {
     expect(cacheSourceSet).toHaveBeenCalledWith(
       source,
       resolve("/tmp/music-ts-workflow/source"),
+      undefined,
       undefined,
     );
     expect(result.acquisition.downloaded).toEqual([mediaPath]);

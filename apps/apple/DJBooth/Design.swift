@@ -11,6 +11,50 @@ enum BoothStyle {
     static let mint = Color(red: 0.494, green: 0.886, blue: 0.722)
 }
 
+/// Compact system type that participates in Dynamic Type and Bold Text.
+private struct BoothFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    @Environment(\.legibilityWeight) private var legibility
+    let weight: Font.Weight
+    let design: Font.Design
+    init(size: CGFloat, relativeTo style: Font.TextStyle, weight: Font.Weight, design: Font.Design) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+        self.weight = weight; self.design = design
+    }
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: legibility == .bold && weight == .regular ? .semibold : weight, design: design))
+    }
+}
+
+extension View {
+    func boothFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .caption,
+                   weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(BoothFont(size: size, relativeTo: style, weight: weight, design: design))
+    }
+}
+
+/// Immediate touch feedback, without scaling content or competing with row pans.
+struct BoothRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.65 : 1)
+            .background(configuration.isPressed ? Color.primary.opacity(0.06) : .clear)
+    }
+}
+
+/// Glass belongs to the primary transport control, never to the music/waveform layer.
+struct BoothTransportStyle: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func body(content: Content) -> some View {
+        if #available(iOS 26, macOS 26, *), !reduceTransparency, contrast != .increased {
+            content.buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white)
+        } else {
+            content.buttonStyle(.borderedProminent).buttonBorderShape(.circle).tint(.white)
+        }
+    }
+}
+
 struct BoothGlass: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {

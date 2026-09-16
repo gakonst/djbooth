@@ -21,6 +21,7 @@ import { stopCli } from "./stop.js";
 import { loadDjBoothEnvironment } from "./environment.js";
 import { produceCli } from "./produce.js";
 import { createDjBoothRoot, DJBOOTH_VERSION } from "./root.js";
+import { cloudCli } from "./cloud.js";
 
 export { DJBOOTH_VERSION } from "./root.js";
 
@@ -33,6 +34,7 @@ export const DJBOOTH_MCP_TOOL_FILTER = {
     "enhance",
     "enhancement_*",
     "import",
+    "cloud_*",
     "link",
     "replay",
     "playlist_*",
@@ -86,6 +88,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(enhanceCli);
   cli.command(enhancementGroupCli);
   cli.command(importCli);
+  cli.command(cloudCli);
   cli.command(playlistCli);
   cli.command(produceCli);
   cli.command(stemsCli);

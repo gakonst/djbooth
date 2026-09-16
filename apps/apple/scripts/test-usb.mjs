@@ -67,6 +67,12 @@ for (const name of ["MissingUSB", "CorruptUSB", "OneLibraryUSB"]) {
 writeFileSync(join(root, "CorruptUSB/PIONEER/rekordbox/export.pdb"), Buffer.from("truncated"));
 cpSync(join(dualUSB, "PIONEER/rekordbox/exportLibrary.db"), join(root, "OneLibraryUSB/PIONEER/rekordbox/exportLibrary.db"));
 
+const playbackSource = join(root, "playback-source");
+run(["--filter", "@gakonst/rekordbox", "exec", "tsx", "test/helpers/usb-playback-fixture.ts", playbackSource]);
+const playbackUSB = join(root, "PlaybackUSB");
+mkdirSync(playbackUSB);
+cli("usb", playbackUSB, "--database", join(playbackSource, "master.db"), "--plain", "--progress", "always");
+
 const before = hashes(root);
 writeFileSync(join(root, "before.json"), JSON.stringify(before, null, 2));
 if (!extra.includes("--prepare-only")) {

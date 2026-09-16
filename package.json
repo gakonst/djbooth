@@ -66,7 +66,8 @@
       "better-sqlite3-multiple-ciphers"
     ],
     "patchedDependencies": {
-      "incur@0.4.13": "patches/incur@0.4.13.patch"
+      "incur@0.4.13": "patches/incur@0.4.13.patch",
+      "nanocodex@0.6.1": "patches/nanocodex@0.6.1.patch"
     }
   }
 }

@@ -21,6 +21,10 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         key = "\(kind.rawValue):\(id)"; self.kind = kind.rawValue; entityID = id
         self.payload = payload; self.version = version; self.tombstone = deleted
     }
+    init(localKind: String, id: String, payload: String) {
+        key = "\(localKind):\(id)"; kind = localKind; entityID = id
+        self.payload = payload; version = 0; tombstone = false
+    }
 }
 @Model final class PendingEdit {
     @Attribute(.unique) var id: String
@@ -50,6 +54,8 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
 @MainActor public final class LibraryStore {
     private let container: ModelContainer
     private let context: ModelContext
+    private var deferringUSBSave = false
+    private func persistContext() throws { if !deferringUSBSave { try context.save() } }
     private var cachedPayloadSnapshot: LibraryPayloadSnapshot?
     public private(set) var revision = 0
     // Replaying once on upgrade discovers annotations hidden from older clients.
@@ -178,7 +184,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
                 context.insert(PendingEdit(kind: kind, id: id, payload: payload, baseVersion: row.version, deleted: deleted))
             }
             row.payload = payload; row.tombstone = deleted
-            try context.save()
+            try persistContext()
             revision += 1
         } catch { context.rollback(); throw error }
     }
@@ -316,7 +322,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
                     else { context.insert(StoredEntity(kind: .track, id: track.id, payload: payload)) }
                     changed = true
                 }
-                if changed { try context.save(); revision += 1 }
+                if changed { try persistContext(); revision += 1 }
             } catch { context.rollback(); throw error }
             return
         }
@@ -332,6 +338,104 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
             try save(track, kind: .track, id: track.id)
         }
     }
+    private func localUSBValue<T: Decodable>(_ kind: String, id: String, as type: T.Type) throws -> T? {
+        let key = "\(kind):\(id)"
+        let row = try context.fetch(FetchDescriptor<StoredEntity>(predicate: #Predicate { $0.key == key })).first
+        guard let payload = row?.payload else { return nil }
+        return try JSONDecoder().decode(T.self, from: Data(payload.utf8))
+    }
+    private func saveLocalUSB<T: Encodable>(_ value: T, kind: String, id: String) throws {
+        let key = "\(kind):\(id)"
+        let payload = String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        if let row = try context.fetch(FetchDescriptor<StoredEntity>(predicate: #Predicate { $0.key == key })).first {
+            row.payload = payload
+        } else { context.insert(StoredEntity(localKind: kind, id: id, payload: payload)) }
+        try persistContext()
+    }
+    public func usbDevice() throws -> USBDeviceAccess? {
+        try localUSBValue("usb-access", id: "active", as: USBDeviceAccess.self)
+    }
+    public func usbFile(_ trackID: String) throws -> USBFileLocation? {
+        try localUSBValue("usb-file", id: trackID, as: USBFileLocation.self)
+    }
+    /// Keep the device's grant when its local library first joins a cloud account.
+    public func copyUSBAccess(to destination: LibraryStore) throws {
+        let kind = "usb-"
+        for row in try context.fetch(FetchDescriptor<StoredEntity>()) where row.kind.hasPrefix(kind) {
+            if let payload = row.payload {
+                let key = row.key
+                if try destination.context.fetch(FetchDescriptor<StoredEntity>(predicate: #Predicate { $0.key == key })).isEmpty {
+                    destination.context.insert(StoredEntity(localKind: row.kind, id: row.entityID, payload: payload))
+                }
+            }
+        }
+        try destination.context.save()
+    }
+    /// Portable track/playlist metadata uses the normal replica and outbox. Security
+    /// bookmarks and file locations stay in local-only rows, excluded from snapshots.
+    public func ingestUSB(_ library: USBRekordboxLibrary, access: USBDeviceAccess) throws {
+        deferringUSBSave = true
+        defer { deferringUSBSave = false }
+        do {
+            func trackID(_ id: UInt32) -> String { "usb:\(access.id):track:\(id)" }
+            let tracks = library.tracks.map { item in
+                Track(id: trackID(item.id), title: item.title, artist: item.artist, album: item.album,
+                      genre: item.genre, key: item.key, bpm: item.bpm, durationSeconds: Double(item.duration),
+                      analyzed: !item.analysisPath.isEmpty, mediaExtension: URL(fileURLWithPath: item.filePath).pathExtension)
+            }
+            try ingest(tracks)
+            for item in library.tracks {
+                let id = trackID(item.id)
+                let signature = "\(item.fileSize):\(item.duration):\(item.filePath)"
+                if let previous = try usbFile(id), previous.path != item.filePath || (previous.sourceSignature != nil && previous.sourceSignature != signature),
+                   let replacement = tracks.first(where: { $0.id == id }) {
+                    // A re-export can reuse a device ID for different media. Never
+                    // attach the old recording or analysis to the replacement row.
+                    try save(replacement, kind: .track, id: id)
+                }
+                try saveLocalUSB(USBFileLocation(trackID: id, deviceID: access.id, path: item.filePath, analysisPath: item.analysisPath, sourceSignature: signature), kind: "usb-file", id: id)
+                // Seed the exported notes/colors once; reopening never overwrites personal edits.
+                if try localUSBValue("usb-seeded", id: id, as: Bool.self) != true {
+                    let colors: [Int: TrackColor] = [1: .pink, 2: .red, 5: .cyan, 6: .blue]
+                    var note = item.comment
+                    while note.utf8.count > TrackAnnotation.maxNoteUTF8Bytes { note.removeLast() }
+                    if try annotation(for: id).isEmpty { try saveAnnotation(TrackAnnotation(note: note, color: colors[item.colorID]), trackID: id) }
+                    try saveLocalUSB(true, kind: "usb-seeded", id: id)
+                }
+            }
+            let folders = Dictionary(uniqueKeysWithValues: library.playlists.map { ($0.id, $0) })
+            func path(_ parent: UInt32) -> [String] {
+                var id = parent, names: [String] = []
+                while let node = folders[id] { names.insert(node.name, at: 0); id = node.parentID }
+                return [access.folderName] + names
+            }
+            var collections = library.playlists.filter { !$0.isFolder }.map { item in
+                Collection(id: "usb:\(access.id):playlist:\(item.id)", name: item.name,
+                           trackIDs: item.trackIDs.map(trackID), folderPath: path(item.parentID))
+            }
+            collections.insert(Collection(id: "usb:\(access.id):all", name: "All tracks", trackIDs: library.tracks.map { trackID($0.id) }, folderPath: [access.folderName]), at: 0)
+            collections += library.histories.map { item in
+                Collection(id: "usb:\(access.id):history:\(item.id)", name: item.name, trackIDs: item.trackIDs.map(trackID), folderPath: [access.folderName, "CDJ histories"])
+            }
+            for item in collections {
+                let current = try collection(item.id)
+                let previous = try localUSBValue("usb-playlist-base", id: item.id, as: Collection.self)
+                // Reconcile changes from the stick while retaining playlists edited in the app.
+                if (current == nil && previous == nil) || current == previous, current != item { try save(item, kind: .collection, id: item.id) }
+                try saveLocalUSB(item, kind: "usb-playlist-base", id: item.id)
+            }
+            let retained = Set(collections.map(\.id)), prefix = "usb:\(access.id):"
+            let baseKind = "usb-playlist-base"
+            for row in try context.fetch(FetchDescriptor<StoredEntity>(predicate: #Predicate { $0.kind == baseKind })) {
+                guard row.entityID.hasPrefix(prefix), !retained.contains(row.entityID), let payload = row.payload else { continue }
+                let previous = try JSONDecoder().decode(Collection.self, from: Data(payload.utf8))
+                if try collection(row.entityID) == previous { try delete(kind: .collection, id: row.entityID) }
+                context.delete(row)
+            }
+            try saveLocalUSB(access, kind: "usb-access", id: "active")
+            try context.save()
+        } catch { context.rollback(); throw error }
+    }
     public func pendingCount() throws -> Int { try edits().count }
     public func pendingEntityIDs(_ kind: EntityKind) throws -> Set<String> {
         Set(try edits().filter { $0.kind == kind.rawValue }.map(\.entityID))
@@ -341,7 +445,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         let blocked = Set(all.filter { $0.conflictVersion != nil }.map(\.key))
         guard let first = all.first(where: { !blocked.contains($0.key) }) else { return nil }
         if !first.submitted {
-            do { first.submitted = true; try context.save() }
+            do { first.submitted = true; try persistContext() }
             catch { context.rollback(); throw error }
         }
         return SyncOperation(operationID: first.id, kind: EntityKind(rawValue: first.kind)!, entityID: first.entityID,
@@ -351,7 +455,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         do {
             var pending = try edits()
             try receive(change, pending: &pending)
-            try context.save()
+            try persistContext()
             revision += 1
         } catch { context.rollback(); throw error }
     }
@@ -385,7 +489,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     public func markConflict(_ operation: SyncOperation, remote: SyncChange) throws {
         if let edit = try edits().first(where: { $0.id == operation.operationID }) {
             edit.conflictPayload = remote.payload; edit.conflictVersion = remote.sequence
-            try context.save()
+            try persistContext()
         }
     }
     public func conflicts() throws -> [SyncConflict] {
@@ -408,7 +512,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
             } else {
                 row.payload = pending.conflictPayload; row.tombstone = pending.conflictPayload == nil
             }
-            try context.save()
+            try persistContext()
             revision += 1
         } catch { context.rollback(); throw error }
     }
@@ -426,7 +530,7 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
             let position = try position() ?? SyncPosition(id: syncPositionID)
             if position.modelContext == nil { context.insert(position) }
             position.cursor = max(position.cursor, page.cursor)
-            try context.save()
+            try persistContext()
             if !page.changes.isEmpty { revision += 1 }
         } catch { context.rollback(); throw error }
     }

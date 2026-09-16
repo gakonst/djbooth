@@ -1172,6 +1172,37 @@ describe("Rekordbox direct database planning", () => {
     expect(alternative).not.toHaveProperty("isrc");
   });
 
+  test("preserves a full DJ mix title while retaining source provenance", () => {
+    const manifest = completedManifest();
+    manifest.source.input = "djbooth:whole-set:https://youtu.be/full-set";
+    manifest.entries = [manifest.entries[0]!];
+    manifest.entries[0]!.spotify = { status: "pending" };
+    manifest.artifacts.sourceSet = {
+      url: "https://youtu.be/full-set",
+      path: "/music/full-set.m4a",
+      durationSeconds: 7064,
+      sha256: "a".repeat(64),
+      codec: "aac",
+      bitrate: 128000,
+    };
+    const acquisition = manifest.entries[0]!.acquisition;
+    if (acquisition.status !== "downloaded") throw new Error();
+    delete acquisition.alternatives;
+    acquisition.download.kind = "source-set-clip";
+    acquisition.download.clip = {
+      sourceSetUrl: "https://youtu.be/full-set",
+      startSeconds: 0,
+      endSeconds: 7064,
+      containsTransitions: true,
+      qualityNote: "Complete original DJ mix",
+    };
+    const metadata = planRekordboxImport(manifest).items[0]!.metadata;
+    expect(metadata.title).not.toContain("[Set Extract]");
+    expect(metadata.comment).toContain("[Full DJ Set]");
+    acquisition.download.clip.endSeconds = 300;
+    expect(planRekordboxImport(manifest).items[0]!.metadata.title).toContain("[Set Extract]");
+  });
+
   test("rejects a media path reused by different recording metadata", () => {
     const manifest = completedManifest();
     const first = manifest.entries[0]!.acquisition;
