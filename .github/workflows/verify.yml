@@ -32,12 +32,16 @@ jobs:
       - name: Set up Rust formatting
         run: rustup component add --toolchain nightly rustfmt
 
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Build iOS app
         if: runner.os == 'macOS'
-        run: xcodebuild -project apps/apple/DJBooth.xcodeproj -target DJBooth-iOS -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -destination 'generic/platform=iOS Simulator' -configuration Debug CODE_SIGNING_ALLOWED=NO build
 
       - name: Validate workspace
         run: pnpm validate
