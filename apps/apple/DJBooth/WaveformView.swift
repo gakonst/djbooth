@@ -167,7 +167,7 @@ private struct WaveformScrubSurface: UIViewRepresentable {
         context.coordinator.parent = self
         if context.coordinator.pan?.isEnabled != enabled { context.coordinator.pan?.isEnabled = enabled }
     }
-    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.cancel() }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) { coordinator.detach() }
 
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: WaveformScrubSurface
@@ -198,6 +198,16 @@ private struct WaveformScrubSurface: UIViewRepresentable {
             }
         }
         func cancel() { activeTrackID = nil; parent.cancelled() }
+        func detach() {
+            // SwiftUI is destroying its graph; teardown must not invoke state callbacks.
+            if let pan {
+                pan.removeTarget(self, action: #selector(handle(_:)))
+                pan.delegate = nil
+                pan.view?.removeGestureRecognizer(pan)
+            }
+            pan = nil
+            activeTrackID = nil
+        }
     }
 }
 #endif
