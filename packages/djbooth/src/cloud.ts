@@ -273,6 +273,7 @@ export async function publishCloudLibrary(
       unchanged: 0,
       uploaded: 0,
       reusedMedia: 0,
+      cdjReady: 0,
       conflicts: [] as string[],
       failures: [] as { id: string; title: string; message: string }[],
     };
@@ -502,7 +503,9 @@ export async function publishCloudLibrary(
               twoEx: hashes[2]!,
             };
           }
-          await publish("track", trackID(track.id), value);
+          if (await publish("track", trackID(track.id), value)) {
+            if (value.analysis) result.cdjReady++;
+          }
         } catch (error) {
           result.failures.push({
             id: track.id,
@@ -671,5 +674,38 @@ cloudCli.command("logout", {
     if (!endpoint) throw new Error("Provide --endpoint or DJBOOTH_CLOUD_URL");
     await forgetCloudLogin(cloudEndpoint(endpoint));
     return { signedOut: true };
+  },
+});
+
+cloudCli.command("migrate-legacy", {
+  description:
+    "Copy the operator-assigned pre-login library, recordings, backups and import history into your signed-in account.",
+  hint: "Requires explicit LEGACY_LIBRARY_OWNER assignment by the operator. Rerun to resume; archived originals and newer account edits are preserved.",
+  options: z.object({
+    endpoint: z.string().optional().describe("Cloud library URL; otherwise DJBOOTH_CLOUD_URL"),
+    dryRun: z
+      .boolean()
+      .default(false)
+      .describe("Inspect the assigned migration without copying data"),
+    progress: z.enum(["auto", "always", "never"]).default("auto").describe("Progress on stderr"),
+  }),
+  async run(c) {
+    const value = c.options.endpoint ?? process.env.DJBOOTH_CLOUD_URL;
+    if (!value) throw new Error("Provide --endpoint or DJBOOTH_CLOUD_URL");
+    const endpoint = cloudEndpoint(value);
+    const token = await savedCloudToken(endpoint);
+    if (!token) throw new Error("Run cloud login before migrating your library");
+    const { migrateCloudLegacy } = await import("./cloud-migrate.js");
+    return migrateCloudLegacy({
+      endpoint,
+      token,
+      dryRun: c.options.dryRun,
+      ...(c.options.progress === "always" || (c.options.progress === "auto" && process.stderr.isTTY)
+        ? {
+            onProgress: (phase: string, current: number, total: number) =>
+              process.stderr.write(`cloud migrate ${phase} ${current}/${total}\n`),
+          }
+        : {}),
+    });
   },
 });

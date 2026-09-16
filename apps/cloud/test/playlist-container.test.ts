@@ -85,6 +85,7 @@ describe("playlist container lifecycle", () => {
       Response.json({
         status: "complete",
         phase: "complete",
+        analysisVersion: 1,
         current: 4,
         total: 4,
         message: "Published 4 tracks",
@@ -96,6 +97,7 @@ describe("playlist container lifecycle", () => {
     expect(state.size).toBe(0);
     expect(runner.schedules.has("poll")).toBe(false);
     expect(writes.at(-1)![0]).toBe("complete");
+    expect(writes.at(-1)![6]).toBe(1);
   });
   test("capacity keeps playlists queued without launching or consuming startup retries", async () => {
     const { runner, state } = setup(false);
@@ -127,6 +129,7 @@ describe("playlist container lifecycle", () => {
     expect(runner.containerFetch).toHaveBeenCalledOnce();
   });
   test("rejects corrupt progress", () => {
+    expect(validProgress({ status: "complete", phase: "complete", current: 3, total: 3, message: "Audio only" })).toBe(false);
     expect(
       validProgress({ status: "running", phase: "analyze", current: 5, total: 3, message: "bad" }),
     ).toBe(false);

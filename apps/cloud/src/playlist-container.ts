@@ -117,7 +117,7 @@ export class PlaylistContainer extends Container<Env> {
       if (!validProgress(progress)) throw new Error("Invalid container status");
       const terminal = progress.status === "complete" || progress.status === "failed";
       await this.env.LIBRARY_DB.prepare(
-        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, collection_id=COALESCE(?,collection_id), updated_at=? WHERE account_id=? AND id=?",
+        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, collection_id=COALESCE(?,collection_id), analysis_version=CASE WHEN ?=1 THEN 1 ELSE analysis_version END, updated_at=? WHERE account_id=? AND id=?",
       )
         .bind(
           progress.status,
@@ -126,6 +126,7 @@ export class PlaylistContainer extends Container<Env> {
           progress.total,
           progress.message,
           progress.collectionID ?? null,
+          progress.status === "complete" ? progress.analysisVersion : 0,
           Date.now(),
           job.accountId,
           job.id,
@@ -162,6 +163,7 @@ export class PlaylistContainer extends Container<Env> {
 export function validProgress(value: Record<string, unknown>): boolean {
   return (
     ["running", "complete", "failed"].includes(String(value.status)) &&
+    (value.status !== "complete" || value.analysisVersion === 1) &&
     [
       "restore",
       "import",

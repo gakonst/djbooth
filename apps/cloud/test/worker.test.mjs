@@ -98,6 +98,9 @@ before(async () => {
         modules: true,
         scriptPath: new URL("../dist/index.js", import.meta.url).pathname,
         compatibilityDate: "2026-08-01",
+        bindings: {
+          LEGACY_LIBRARY_OWNER: `nc_${createHash("sha256").update("account-a").digest("hex")}`,
+        },
         d1Databases: { LIBRARY_DB: "library" },
         r2Buckets: ["MEDIA"],
         serviceBindings: { CONNECT_API_SERVICE: connectIssuer },
@@ -153,6 +156,8 @@ before(async () => {
     "utf8",
   );
   await database.exec(accounts.replace(/^--.*$/gm, "").replace(/\n/g, " "));
+  const cdj = await readFile(new URL("../migrations/0005_cdj_analysis.sql", import.meta.url), "utf8");
+  await database.exec(cdj.replace(/^--.*$/gm, "").replace(/\n/g, " "));
   await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
@@ -1131,4 +1136,152 @@ test("phone tool tickets require the exact approved catalog and stay bound to th
     approvedPhoneDigest = undefined;
     revoked = false;
   }
+});
+
+test("explicit legacy migration isolates ownership, resumes copies and retains edits and tombstones", async () => {
+  const bucket = await runtime.getR2Bucket("MEDIA", "library");
+  const bytes = Buffer.from("legacy audio recording");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  await bucket.put(`sha256/${hash}`, bytes);
+  const legacyTrack = JSON.stringify({ id: "legacy-track", title: "Original", mediaHash: hash });
+  await database
+    .prepare(
+      "INSERT INTO legacy_sync_changes(operation_id,kind,entity_id,base_version,payload,deleted) VALUES (?,?,?,?,?,?)",
+    )
+    .bind("legacy-track-op", "track", "legacy-track", 0, legacyTrack, 0)
+    .run();
+  await database
+    .prepare(
+      "INSERT INTO legacy_sync_changes(operation_id,kind,entity_id,base_version,payload,deleted) VALUES (?,?,?,?,?,?)",
+    )
+    .bind("legacy-delete-op", "collection", "legacy-deleted", 0, null, 1)
+    .run();
+  const call = (token, body) =>
+    runtime.dispatchFetch("https://library.test/v1/migrations/legacy", {
+      method: body ? "POST" : "GET",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  assert.equal((await call(TOKEN_B)).status, 403);
+  assert.equal((await call(TOKEN_B, { phase: "entities" })).status, 403);
+  const plan = await (await call(TOKEN)).json();
+  assert.equal(plan.imports, 0);
+  const owner = plan.accountId;
+  const copy = await (await call(TOKEN, { phase: "objects", task: 0 })).json();
+  assert.ok(copy.copied >= 1);
+  assert.deepEqual(
+    Buffer.from(await (await bucket.get(`accounts/${owner}/sha256/${hash}`)).arrayBuffer()),
+    bytes,
+  );
+  assert.ok(await bucket.head(`sha256/${hash}`));
+  const again = await (await call(TOKEN, { phase: "objects", task: 0 })).json();
+  assert.equal(again.copied, 0);
+  const rows = await (await call(TOKEN, { phase: "entities" })).json();
+  assert.ok(rows.copied >= 3);
+  assert.deepEqual(rows.conflicts, []);
+  const repeated = await (await call(TOKEN, { phase: "entities" })).json();
+  assert.equal(repeated.copied, 0);
+  assert.ok(repeated.reused >= 3);
+  await database
+    .prepare(
+      "INSERT INTO sync_changes(account_id,operation_id,kind,entity_id,base_version,payload,deleted) VALUES (?,?,?,?,?,?,?)",
+    )
+    .bind(
+      owner,
+      "new-edit",
+      "track",
+      "legacy-track",
+      0,
+      JSON.stringify({ id: "legacy-track", title: "Keep my edit" }),
+      0,
+    )
+    .run();
+  const changed = await (await call(TOKEN, { phase: "entities" })).json();
+  assert.ok(changed.conflicts.includes("track:legacy-track"));
+  const deletion = await database
+    .prepare("SELECT deleted FROM sync_changes WHERE account_id=? AND entity_id='legacy-deleted'")
+    .bind(owner)
+    .first();
+  assert.equal(deletion.deleted, 1);
+  const kept = await database
+    .prepare(
+      "SELECT payload FROM sync_changes WHERE account_id=? AND entity_id='legacy-track' ORDER BY sequence DESC LIMIT 1",
+    )
+    .bind(owner)
+    .first();
+  assert.equal(JSON.parse(kept.payload).title, "Keep my edit");
+});
+
+test("legacy migration copies chunked media and import backups into the new container namespace", async () => {
+  const id = randomUUID();
+  await database
+    .prepare(
+      "INSERT INTO legacy_import_requests(id,source,status,phase,current,total,message,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      id,
+      `https://youtube.com/watch?v=${id}`,
+      "running",
+      "analyze",
+      1,
+      2,
+      "In progress",
+      100,
+      200,
+    )
+    .run();
+  const namespace = await runtime.getDurableObjectNamespace("PLAYLIST_CONTAINERS", "library");
+  const owner = `nc_${createHash("sha256").update("account-a").digest("hex")}`;
+  const oldID = namespace.idFromName(id).toString();
+  const newID = namespace.idFromName(`${owner}:${id}`).toString();
+  const bucket = await runtime.getR2Bucket("MEDIA", "library");
+  const bytes = Buffer.from("saved analysis and audio");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  await bucket.put(`sha256/${hash}`, bytes);
+  await bucket.put(
+    `compositions/${hash}`,
+    JSON.stringify({
+      version: 1,
+      size: bytes.length,
+      contentType: "audio/mpeg",
+      chunks: [{ hash, size: bytes.length }],
+    }),
+  );
+  await bucket.put(`playlist-snapshots/${oldID}/chunks/${hash}`, bytes);
+  await bucket.put(
+    `playlist-snapshots/${oldID}/files/master.db`,
+    JSON.stringify({ chunks: [{ hash, size: bytes.length }] }),
+  );
+  const call = (body) =>
+    runtime.dispatchFetch("https://library.test/v1/migrations/legacy", {
+      method: body ? "POST" : "GET",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  const plan = await (await call()).json();
+  for (const task of plan.objects) {
+    let cursor;
+    do {
+      const response = await call({ phase: "objects", task: task.id, cursor });
+      assert.equal(response.status, 200);
+      cursor = (await response.json()).cursor ?? undefined;
+    } while (cursor);
+  }
+  const result = await (await call({ phase: "imports" })).json();
+  assert.equal(result.copied, 1);
+  assert.equal((await (await call({ phase: "imports" })).json()).copied, 0);
+  assert.ok(await bucket.head(`playlist-snapshots/${owner}/${newID}/files/master.db`));
+  assert.ok(await bucket.head(`playlist-snapshots/${owner}/${newID}/chunks/${hash}`));
+  assert.ok(await bucket.head(`playlist-snapshots/${oldID}/files/master.db`));
+  const job = await database
+    .prepare("SELECT * FROM import_requests WHERE account_id=? AND id=?")
+    .bind(owner, id)
+    .first();
+  assert.equal(job.container_id, newID);
+  assert.equal(job.status, "failed");
+  const media = await runtime.dispatchFetch(`https://library.test/v1/media/${hash}`, {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(media.status, 200);
+  assert.deepEqual(Buffer.from(await media.arrayBuffer()), bytes);
 });

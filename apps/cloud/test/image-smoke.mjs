@@ -1,7 +1,8 @@
 // Runs inside the built Linux image. No external providers or paid services.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { MasterDatabase } from "@gakonst/rekordbox";
@@ -93,6 +94,62 @@ try {
   ]);
   assert.equal(library.tracks, 1);
   assert.equal(library.availableAudio, 1);
+  // Exercise publication from the actual Linux image, including Rust-generated
+  // ANLZ artifacts. A dry run alone cannot catch an old audio-only publisher.
+  const changes = [];
+  const media = new Map();
+  const server = createServer(async (request, response) => {
+    try {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/v1/sync/changes") {
+        if (request.method === "GET") {
+          response.end(JSON.stringify({ changes, cursor: changes.length, hasMore: false }));
+        } else {
+          const change = { ...JSON.parse(body), sequence: changes.length + 1 };
+          changes.push(change);
+          response.writeHead(201).end(JSON.stringify(change));
+        }
+        return;
+      }
+      const hash = request.url.split("/").at(-1);
+      if (request.method === "HEAD") {
+        response.writeHead(media.has(hash) ? 200 : 404).end();
+      } else if (request.method === "PUT") {
+        assert.equal(createHash("sha256").update(body).digest("hex"), hash);
+        media.set(hash, body);
+        response.writeHead(201).end("{}");
+      } else response.writeHead(404).end();
+    } catch (error) {
+      response.writeHead(500).end(JSON.stringify({ error: String(error) }));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn("djbooth", ["cloud", "publish", "--endpoint", `http://127.0.0.1:${server.address().port}`,
+        "--db-path", path, "--playlist", result.playlistId, "--namespace", "cloud:11111111-1111-1111-1111-111111111111",
+        "--progress", "never", "--format", "json"], {
+        env: { ...process.env, DJBOOTH_CLOUD_TOKEN: "fixture-token" }, stdio: ["ignore", "pipe", "inherit"],
+      });
+      let output = "";
+      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.on("error", reject);
+      child.on("close", (code) => code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)));
+    });
+    assert.equal((output.data ?? output).cdjReady, 1);
+    const published = JSON.parse(changes.findLast((change) => change.kind === "track").payload);
+    assert.equal(published.analysis.mediaHash, published.mediaHash);
+    for (const key of ["dat", "ext", "twoEx"]) {
+      const bytes = media.get(published.analysis[key]);
+      assert.equal(bytes.subarray(0, 4).toString(), "PMAI");
+    }
+    assert.ok(media.get(published.analysis.ext).includes(Buffer.from("PWV5")), "RGB waveform is published");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
   const resume = run([
     "import",
     source,
@@ -107,7 +164,7 @@ try {
   ]);
   assert.equal(resume.playlistId, result.playlistId);
   assert.equal(resume.entries, 1);
-  console.log("Linux playlist import, real analysis, publish selection, and resume passed");
+  console.log("Linux import, Rust analysis, audio + DAT/EXT/2EX/RGB publication, and resume passed");
 } finally {
   await rm(root, { recursive: true, force: true });
 }
