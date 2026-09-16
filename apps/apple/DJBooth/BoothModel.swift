@@ -86,6 +86,7 @@ private struct BoothLaunchConfiguration: Sendable {
         let pendingTrackID = pendingSpotifyTrackID
         let pendingRequest = playbackRequest
         guard musicCatalog.sources.contains(source), cloud != nil else { throw ClientError.http(403, "Connect this account first") }
+        spotifyPrewarm?.cancel(); spotifyPrewarm = nil
         try await spotifyStreaming.authorize(source, key: spotifyKey(source), token: token)
         guard generation == connectionGeneration else { await spotifyStreaming.disconnect(); throw CancellationError() }
         try Task.checkCancellation()
@@ -99,7 +100,16 @@ private struct BoothLaunchConfiguration: Sendable {
         do {
             guard let cloud, try await cloud.musicSources().contains(where: { $0.id == source.id && $0.accountID == source.accountID }) else { throw ClientError.http(403, "This Spotify connection is no longer approved") }
             guard request == playbackRequest, generation == connectionGeneration else { return }
+            PerformanceProbe.event("spotify_grant_verified", trackID: track.id)
             try await spotifyStreaming.play(track, source: source, key: spotifyKey(source), player: player)
+            guard request == playbackRequest, generation == connectionGeneration else { return }
+            // librespot, like ncspot, keeps one transient next-track decoder. This
+            // does not acquire a library file, persist audio, or run analysis.
+            if let next = player.queue.dropFirst(player.queueIndex + 1).first,
+               next.id.hasPrefix("connected:" + source.id + ":track:"),
+               let item = musicCatalog.snapshots.values.lazy.flatMap({ $0.tracks }).first(where: { $0.id == next.id }) {
+                await spotifyStreaming.preload(item, source: source, key: spotifyKey(source))
+            }
         }
         catch {
             guard request == playbackRequest, generation == connectionGeneration else { return }
@@ -168,6 +178,18 @@ private struct BoothLaunchConfiguration: Sendable {
             }
         }
     }
+    private var spotifyPrewarm: Task<Void, Never>?
+    private func warmSpotifySession(_ source: MusicSource) {
+        guard source.provider == "spotify", let cloud else { return }
+        spotifyPrewarm?.cancel()
+        let generation = connectionGeneration
+        spotifyPrewarm = Task {
+            guard let sources = try? await cloud.musicSources(), !Task.isCancelled,
+                  generation == connectionGeneration,
+                  sources.contains(where: { $0.id == source.id && $0.accountID == source.accountID }) else { return }
+            await spotifyStreaming.warm(source, key: spotifyKey(source))
+        }
+    }
     private var soundCloudPrewarm: Task<Void, Never>?
     private func warmSoundCloudStreams(_ tracks: [MusicTrack], source: MusicSource) {
         guard source.provider == "soundcloud", let cloud else { return }
@@ -186,6 +208,7 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func loadMusicPlaylist(_ item: MusicPlaylist, force: Bool = false) async {
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicPlaylistLoading.contains(item.id) else { return }
+        warmSpotifySession(source)
         if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 {
             warmSoundCloudStreams(cached.tracks, source: source)
             return
@@ -1378,6 +1401,9 @@ private struct BoothLaunchConfiguration: Sendable {
             try Keychain.remove(endpoint.accountScope(cloudAccountID))
             UserDefaults.standard.removeObject(forKey: "cloudAccount:" + endpoint.scope)
         }
+        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
+        spotifyPrewarm?.cancel(); spotifyPrewarm = nil
+        connectionGeneration = UUID(); playbackRequest = UUID()
         #if os(iOS)
         await djLink.disconnect()
         await spotifyStreaming.disconnect(); spotifySignIn = nil
@@ -1387,8 +1413,6 @@ private struct BoothLaunchConfiguration: Sendable {
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
         cloud = nil; cloudAccountID = nil; cloudURL = ""
         UserDefaults.standard.removeObject(forKey: "cloudURL")
-        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
-        connectionGeneration = UUID(); playbackRequest = UUID()
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
@@ -1424,6 +1448,9 @@ private struct BoothLaunchConfiguration: Sendable {
         try Keychain.save(token, key: scope)
         UserDefaults.standard.set(account.id, forKey: "cloudAccount:" + endpoint.scope)
         UserDefaults.standard.set(endpoint.url.absoluteString, forKey: "cloudURL")
+        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
+        spotifyPrewarm?.cancel(); spotifyPrewarm = nil
+        connectionGeneration = UUID(); playbackRequest = UUID()
         #if os(iOS)
         await djLink.disconnect()
         await spotifyStreaming.disconnect(); spotifySignIn = nil
@@ -1439,8 +1466,6 @@ private struct BoothLaunchConfiguration: Sendable {
         importJobs = []; importError = nil
         musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         cloud = client
-        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
-        connectionGeneration = UUID(); playbackRequest = UUID()
         #if DEBUG
         let offlineKey = "djbooth.debug.offline.\(scope)"
         offlineLaunchRequestKey = offlineKey

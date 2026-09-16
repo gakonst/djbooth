@@ -235,11 +235,7 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
     match operation {
         "load" => {
             let uri = input["uri"].as_str().context("Missing track")?;
-            let track = SpotifyUri::from_uri(uri)?;
-            ensure!(
-                matches!(track, SpotifyUri::Track { .. }),
-                "Only tracks can be streamed"
-            );
+            let track = stream_track(&input)?;
             let mut state = engine
                 .state
                 .lock()
@@ -257,6 +253,12 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
             clear_pcm();
             AUDIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
             engine.player.load(track, true, position(&input)?);
+        }
+        "preload" => {
+            let track = stream_track(&input)?;
+            // librespot's single preload slot is reused by load() even while
+            // loading. It never changes the active request, PCM, or play state.
+            engine.player.preload(track);
         }
         "play" => {
             AUDIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -365,6 +367,15 @@ fn apply_player_event(state: &mut Value, event: PlayerEvent) {
         _ => {}
     }
 }
+fn stream_track(input: &Value) -> Result<SpotifyUri> {
+    let track = SpotifyUri::from_uri(input["uri"].as_str().context("Missing track")?)?;
+    ensure!(
+        matches!(track, SpotifyUri::Track { .. }),
+        "Only tracks can be streamed"
+    );
+    Ok(track)
+}
+
 fn position(input: &Value) -> Result<u32> {
     let value = input["position"].as_u64().unwrap_or(0);
     ensure!(value <= u32::MAX as u64, "Invalid playback position");
@@ -374,6 +385,14 @@ fn position(input: &Value) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preload_accepts_only_track_uris() {
+        assert!(stream_track(&json!({"uri": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"})).is_ok());
+        assert!(stream_track(&json!({"uri": "spotify:album:6rqhFgbbKwnb9MLmUQDhG6"})).is_err());
+        assert!(stream_track(&json!({"uri": "https://example.com/audio"})).is_err());
+        assert!(stream_track(&json!({})).is_err());
+    }
+
     #[test]
     fn stereo_pcm_is_planar_silent_when_paused_and_silent_on_underrun() {
         clear_pcm();

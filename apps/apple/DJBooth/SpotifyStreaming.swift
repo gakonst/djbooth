@@ -39,29 +39,28 @@ private actor SpotifyBridge {
     private let audio = AVAudioEngine()
     private var node: AVAudioSourceNode?
     private var polling: Task<Void, Never>?
-    private var connectionKey: String?
+    private let connection = SpotifyPlaybackConnection()
     private var generation = UUID()
+    private var nextPreload: (request: UUID, uri: String)?
     #endif
     func authorize(_ source: MusicSource, key: String, token: String) async throws {
         #if os(iOS)
         let request = UUID(); generation = request
+        connection.reset()
         let credential = try await bridge.connect(account: source.accountID, device: deviceID(key), credentials: nil, token: token)
         try Task.checkCancellation()
         guard generation == request else { throw CancellationError() }
-        try Keychain.save(credential, key: key); connectionKey = key
+        try Keychain.save(credential, key: key); connection.adopt(key: key)
         #else
         throw ClientError.http(501, "Spotify streaming is available in the iPhone app")
         #endif
     }
     func play(_ track: DJBoothKit.MusicTrack, source: MusicSource, key: String, player: BoothPlayer) async throws {
         #if os(iOS)
-        let request = UUID(); generation = request
-        if connectionKey != key {
-            guard let credential = try Keychain.read(key) else { throw ClientError.http(401, "Enable Spotify streaming") }
-            let refreshed = try await bridge.connect(account: source.accountID, device: deviceID(key), credentials: credential, token: nil)
-            guard generation == request else { return }
-            try Keychain.save(refreshed, key: key); connectionKey = key
-        }
+        let request = UUID(); generation = request; nextPreload = nil
+        try await connectSaved(source, key: key)
+        guard generation == request else { return }
+        PerformanceProbe.event("spotify_session_ready", trackID: track.id)
         try await PlaybackAudioSession.shared.activate()
         guard generation == request, player.track?.id == track.id else { return }
         if node == nil {
@@ -77,6 +76,7 @@ private actor SpotifyBridge {
         }
         try await bridge.command("load", uri: "spotify:track:" + track.remoteID, position: player.elapsed, requestID: request.uuidString)
         guard generation == request, player.track?.id == track.id else { return }
+        PerformanceProbe.event("spotify_load_sent", trackID: track.id)
         polling?.cancel()
         polling = Task { [weak self, weak player] in
             while let self, let player, !Task.isCancelled, self.generation == request, player.track?.id == track.id {
@@ -84,6 +84,10 @@ private actor SpotifyBridge {
                     let state = try await self.bridge.status()
                     guard !Task.isCancelled, self.generation == request, state.track == "spotify:track:" + track.remoteID else { return }
                     player.updateStream(playing: state.playing, elapsed: state.position / 1000, error: state.error)
+                    if state.playing, let next = self.nextPreload, next.request == request {
+                        self.nextPreload = nil
+                        try? await self.bridge.command("preload", uri: next.uri, requestID: request.uuidString)
+                    }
                     if state.ended { player.advance(1); return }
                     if state.error != nil { return }
                     try await Task.sleep(for: .milliseconds(500))
@@ -94,10 +98,35 @@ private actor SpotifyBridge {
         throw ClientError.http(501, "Spotify streaming is available in the iPhone app")
         #endif
     }
+    // Browsing never opens sign-in UI or starts media. An active account is never
+    // displaced by warming a different folder in the background.
+    func warm(_ source: MusicSource, key: String) async {
+        #if os(iOS)
+        guard connection.connectedKey == nil || connection.connectedKey == key,
+              connection.pendingKey == nil || connection.pendingKey == key else { return }
+        try? await connectSaved(source, key: key)
+        #endif
+    }
+    func preload(_ track: DJBoothKit.MusicTrack, source: MusicSource, key: String) async {
+        #if os(iOS)
+        guard connection.connectedKey == key, track.available,
+              track.id.hasPrefix("connected:" + source.id + ":track:") else { return }
+        // Let the selected track produce audio before spending bandwidth on next.
+        nextPreload = (generation, "spotify:track:" + track.remoteID)
+        #endif
+    }
+    #if os(iOS)
+    private func connectSaved(_ source: MusicSource, key: String) async throws {
+        try await connection.connect(key: key, operation: {
+            guard let credential = try Keychain.read(key) else { throw ClientError.http(401, "Enable Spotify streaming") }
+            return try await self.bridge.connect(account: source.accountID, device: self.deviceID(key), credentials: credential, token: nil)
+        }, save: { try Keychain.save($0, key: key) })
+    }
+    #endif
     func disconnect() async {
         #if os(iOS)
-        generation = UUID(); polling?.cancel(); polling = nil
-        try? await bridge.command("disconnect"); connectionKey = nil; audio.stop()
+        generation = UUID(); polling?.cancel(); polling = nil; nextPreload = nil; connection.reset()
+        try? await bridge.command("disconnect"); audio.stop()
         #endif
     }
     #if os(iOS)
