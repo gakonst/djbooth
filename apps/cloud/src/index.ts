@@ -701,7 +701,9 @@ export default {
     if (!env.PLAYLIST_CONTAINERS) return;
     await env.LIBRARY_DB.prepare(
       "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Updating CDJ files in the cloud', updated_at=? WHERE status='complete' AND analysis_version<1",
-    ).bind(Date.now()).run();
+    )
+      .bind(Date.now())
+      .run();
     const pending = await env.LIBRARY_DB.prepare(
       "SELECT account_id, id, source FROM import_requests WHERE status IN ('queued','running') ORDER BY created_at LIMIT 100",
     ).all<{ account_id: string; id: string; source: string }>();

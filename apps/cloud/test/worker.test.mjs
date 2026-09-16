@@ -156,7 +156,10 @@ before(async () => {
     "utf8",
   );
   await database.exec(accounts.replace(/^--.*$/gm, "").replace(/\n/g, " "));
-  const cdj = await readFile(new URL("../migrations/0005_cdj_analysis.sql", import.meta.url), "utf8");
+  const cdj = await readFile(
+    new URL("../migrations/0005_cdj_analysis.sql", import.meta.url),
+    "utf8",
+  );
   await database.exec(cdj.replace(/^--.*$/gm, "").replace(/\n/g, " "));
   await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",

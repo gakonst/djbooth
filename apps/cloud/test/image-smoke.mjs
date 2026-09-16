@@ -129,15 +129,37 @@ try {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const output = await new Promise((resolve, reject) => {
-      const child = spawn("djbooth", ["cloud", "publish", "--endpoint", `http://127.0.0.1:${server.address().port}`,
-        "--db-path", path, "--playlist", result.playlistId, "--namespace", "cloud:11111111-1111-1111-1111-111111111111",
-        "--progress", "never", "--format", "json"], {
-        env: { ...process.env, DJBOOTH_CLOUD_TOKEN: "fixture-token" }, stdio: ["ignore", "pipe", "inherit"],
-      });
+      const child = spawn(
+        "djbooth",
+        [
+          "cloud",
+          "publish",
+          "--endpoint",
+          `http://127.0.0.1:${server.address().port}`,
+          "--db-path",
+          path,
+          "--playlist",
+          result.playlistId,
+          "--namespace",
+          "cloud:11111111-1111-1111-1111-111111111111",
+          "--progress",
+          "never",
+          "--format",
+          "json",
+        ],
+        {
+          env: { ...process.env, DJBOOTH_CLOUD_TOKEN: "fixture-token" },
+          stdio: ["ignore", "pipe", "inherit"],
+        },
+      );
       let output = "";
-      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+      });
       child.on("error", reject);
-      child.on("close", (code) => code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)));
+      child.on("close", (code) =>
+        code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)),
+      );
     });
     assert.equal((output.data ?? output).cdjReady, 1);
     const published = JSON.parse(changes.findLast((change) => change.kind === "track").payload);
@@ -146,7 +168,10 @@ try {
       const bytes = media.get(published.analysis[key]);
       assert.equal(bytes.subarray(0, 4).toString(), "PMAI");
     }
-    assert.ok(media.get(published.analysis.ext).includes(Buffer.from("PWV5")), "RGB waveform is published");
+    assert.ok(
+      media.get(published.analysis.ext).includes(Buffer.from("PWV5")),
+      "RGB waveform is published",
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -164,7 +189,9 @@ try {
   ]);
   assert.equal(resume.playlistId, result.playlistId);
   assert.equal(resume.entries, 1);
-  console.log("Linux import, Rust analysis, audio + DAT/EXT/2EX/RGB publication, and resume passed");
+  console.log(
+    "Linux import, Rust analysis, audio + DAT/EXT/2EX/RGB publication, and resume passed",
+  );
 } finally {
   await rm(root, { recursive: true, force: true });
 }

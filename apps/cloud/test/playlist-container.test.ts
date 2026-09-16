@@ -129,7 +129,15 @@ describe("playlist container lifecycle", () => {
     expect(runner.containerFetch).toHaveBeenCalledOnce();
   });
   test("rejects corrupt progress", () => {
-    expect(validProgress({ status: "complete", phase: "complete", current: 3, total: 3, message: "Audio only" })).toBe(false);
+    expect(
+      validProgress({
+        status: "complete",
+        phase: "complete",
+        current: 3,
+        total: 3,
+        message: "Audio only",
+      }),
+    ).toBe(false);
     expect(
       validProgress({ status: "running", phase: "analyze", current: 5, total: 3, message: "bad" }),
     ).toBe(false);
