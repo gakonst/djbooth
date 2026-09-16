@@ -244,23 +244,28 @@ struct PlaylistBrowserView: View {
         }
     }
     private func connectedRow(_ collection: Collection, item: MusicPlaylist) -> some View {
-        HStack(spacing: 12) {
+        let downloaded = model.musicIsDownloaded(item)
+        return HStack(spacing: 12) {
             LibraryNavigationButton { model.openCollection(collection) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.name).lineLimit(1)
-                    Text("\(model.musicIsDownloaded(item) ? collection.trackIDs.count : item.trackCount) tracks · \(model.musicIsDownloaded(item) ? "Downloaded" : "Stream")").font(.caption).foregroundStyle(.secondary)
+                    Text("\(downloaded ? collection.trackIDs.count : item.trackCount) tracks\(downloaded ? "" : " · Stream")").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             }.buttonStyle(.plain).accessibilityIdentifier("music.playlist.\(item.remoteID)")
             if model.musicDownloads.contains(item.id) || model.musicPlaylistLoading.contains(item.id) { ProgressView() }
-            if model.musicIsDownloaded(item) {
-                Button { Task { await model.keepCollectionOffline(collection) } } label: { Image(systemName: "arrow.down.circle") }
-                    .accessibilityLabel("Keep playlist on this phone")
+            if downloaded {
+                Image(systemName: "checkmark").foregroundStyle(.secondary)
+                    .accessibilityLabel("Downloaded")
+                    .accessibilityIdentifier("music.downloaded.\(item.remoteID)")
             } else {
                 Button { Task { await model.downloadMusic(item) } } label: { Image(systemName: "arrow.down.circle") }
                     .disabled(model.musicDownloads.contains(item.id)).accessibilityLabel("Download playlist")
                     .accessibilityIdentifier("music.download.\(item.remoteID)")
             }
         }.padding(.horizontal, 12).contextMenu {
+            if downloaded {
+                Button("Keep playlist on this phone") { Task { await model.keepCollectionOffline(collection) } }
+            }
             Button("Refresh playlist") { Task { await model.loadMusicPlaylist(item, force: true) } }
             if let url = URL(string: item.url) { Link("Open original playlist", destination: url) }
             if let source = model.musicCatalog.sources.first(where: { $0.id == item.sourceID }), source.provider == "spotify" {

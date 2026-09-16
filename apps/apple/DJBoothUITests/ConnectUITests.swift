@@ -207,7 +207,9 @@ import XCTest
             XCTAssertFalse(app.staticTexts["Published \(provider.lowercased()) copy"].exists)
             app.buttons["music.source.\(provider)"].tap()
             XCTAssertTrue(app.buttons["music.playlist.\(remoteID)"].waitForExistence(timeout: 20))
-            XCTAssertTrue(app.staticTexts["1 tracks · Downloaded"].exists)
+            XCTAssertTrue(app.images["music.downloaded.\(remoteID)"].exists)
+            XCTAssertFalse(app.buttons["music.download.\(remoteID)"].exists)
+            XCTAssertFalse(app.staticTexts["1 tracks · Downloaded"].exists)
             app.buttons["music.playlist.\(remoteID)"].tap()
             let trackID = "downloaded-\(provider.lowercased())-\(runID):track"
             let bpm = app.staticTexts["track.bpm.\(trackID)"]
