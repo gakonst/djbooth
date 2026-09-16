@@ -42,7 +42,7 @@ private struct LibrarySidebar: View {
                     }.accessibilityIdentifier("library.agent")
                 }
                 Button { guard !suppressSelection else { return }; close(); model.showDJLink = true } label: {
-                    row("Connect to CDJ", symbol: "network")
+                    row("CDJs", symbol: "network")
                 }.accessibilityIdentifier("library.drawer.djlink")
                 Button { guard !suppressSelection else { return }; close(); model.showSettings = true } label: {
                     row("Sync & settings", symbol: "gearshape")

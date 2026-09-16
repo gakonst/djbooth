@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::ffi::{CStr, CString, c_char};
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{
+    Arc, Mutex, RwLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -18,28 +21,59 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::runtime::Runtime;
 
-static SESSION: Mutex<Option<Session>> = Mutex::new(None);
+mod api;
+
+static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
 struct Session {
-    server: DjLinkServer,
-    runtime: Runtime,
+    server: RwLock<DjLinkServer>,
+    runtime: Option<Runtime>,
+    started: AtomicBool,
+    subscriptions: Mutex<api::Subscriptions>,
 }
 
 impl Session {
+    fn new(server: DjLinkServer, runtime: Runtime, started: bool) -> Self {
+        Self {
+            server: RwLock::new(server),
+            runtime: Some(runtime),
+            started: AtomicBool::new(started),
+            subscriptions: Mutex::new(Default::default()),
+        }
+    }
+    fn runtime(&self) -> &Runtime {
+        self.runtime.as_ref().expect("live runtime")
+    }
     fn status(&self) -> Value {
-        let devices = self.runtime.block_on(self.server.list_devices());
-        json!({"running": true, "ip": self.server.bind_ip(),
-            "trackCount": self.server.library_track_count(),
-            "playlistCount": self.server.library_playlist_count(),
+        let server = self.server.read().expect("DJ Link server lock");
+        let running = self.started.load(Ordering::Acquire);
+        let devices = if running {
+            self.runtime().block_on(server.list_devices())
+        } else {
+            Vec::new()
+        };
+        json!({"running": running, "ip": server.bind_ip(),
+            "trackCount": server.library_track_count(),
+            "playlistCount": server.library_playlist_count(),
             "devices": devices.iter().map(|device| json!({
                 "player": device.player_number, "ip": device.ip_addr, "model": device.model
             })).collect::<Vec<_>>()})
     }
-    fn stop(mut self) {
-        self.server.stop();
-        // Includes accepted RemoteDB connections and the raw fallback worker.
-        drop(self.server);
-        self.runtime.shutdown_timeout(Duration::from_secs(2));
+    fn stop(&self) {
+        self.server.write().expect("DJ Link server lock").stop();
+        self.started.store(false, Ordering::Release);
+        *self.subscriptions.lock().expect("Subscription lock") = Default::default();
+    }
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.server
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .stop();
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_timeout(Duration::from_secs(2));
+        }
     }
 }
 
@@ -49,6 +83,8 @@ struct StartRequest {
     bind_ip: Ipv4Addr,
     broadcast_ip: Ipv4Addr,
     unicast_discovery: bool,
+    #[serde(default)]
+    diagnostics: bool,
     tracks: Vec<TrackRecord>,
     playlists: Vec<PlaylistRecord>,
 }
@@ -185,6 +221,15 @@ fn request(operation: &str, input: &str) -> Result<Value> {
     if let Some(operation) = operation.strip_prefix("spotify.") {
         return spotify::request(operation, input);
     }
+    if operation == "api" {
+        return Ok(serde_json::from_str(api::SCHEMA)?);
+    }
+    if let Some(method) = operation.strip_prefix("server.") {
+        return api::request(method, input);
+    }
+    if let Some(function) = operation.strip_prefix("function.") {
+        return api::function(function, input);
+    }
     if operation == "relocateAnalysis" {
         return relocate_analysis(serde_json::from_str(input)?);
     }
@@ -208,6 +253,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     "The selected connection is no longer available. Reconnect the cable and refresh."
                 )?;
             let unicast_discovery_netmask = input.unicast_discovery.then_some(interface.netmask);
+            let diagnostics = input.diagnostics;
             let library = input.library()?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -224,7 +270,11 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     db_server_port: DEFAULT_DBSERVER_PORT,
                     mount_port: Some(DEFAULT_MOUNT_PORT),
                     announce_interval: Duration::from_millis(500),
-                    log_level: LogLevel::Info,
+                    log_level: if diagnostics {
+                        LogLevel::Debug
+                    } else {
+                        LogLevel::Info
+                    },
                     log_path: Some(std::env::temp_dir().join("DJBooth-DJLink.log")),
                     wire_capture_path: None,
                     serve_extended_anlz_tags: true,
@@ -248,7 +298,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
             });
             match server {
                 Ok(server) => {
-                    let running = Session { server, runtime };
+                    let running = Arc::new(Session::new(server, runtime, true));
                     let status = running.status();
                     *session = Some(running);
                     Ok(status)
@@ -261,7 +311,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
         }
         "status" => Ok(session
             .as_ref()
-            .map(Session::status)
+            .map(|session| session.status())
             .unwrap_or_else(|| json!({"running": false}))),
         "stop" => {
             if let Some(running) = session.take() {
@@ -384,6 +434,7 @@ mod tests {
             bind_ip: Ipv4Addr::LOCALHOST,
             broadcast_ip: Ipv4Addr::BROADCAST,
             unicast_discovery: true,
+            diagnostics: false,
             tracks: vec![TrackRecord {
                 track_id: 1,
                 mount_path: path.clone(),

@@ -138,16 +138,26 @@ const LOAD_TRACK_PAYLOAD_TEMPLATE: [u8; 57] = [
 
 const BEAT_STATUS_TEMPLATE_HEX: &str = "5173707431576d4a4f4c2872656b6f7264626f780000000000000000000000010111003c000001cd0000039a000001cd000007350000090200000e6affffffffffffffffffffffffffffffffffffffffffffffff00100000000032cd04000011";
 
-#[derive(Debug, Clone)]
+// Instant has no portable epoch; expose its age in milliseconds at serialization.
+fn serialize_last_seen<S: serde::Serializer>(
+    seen: &Instant,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(seen.elapsed().as_millis().min(u64::MAX as u128) as u64)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LinkDevice {
     pub player_number: u8,
     pub ip_addr: Ipv4Addr,
     pub mac_addr: String,
     pub model: String,
+    #[serde(serialize_with = "serialize_last_seen")]
     pub last_seen: Instant,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DjLinkConfig {
     pub source_name: String,
     pub model_name: String,
@@ -179,7 +189,7 @@ pub struct DjLinkConfig {
     pub load_payload_byte_overrides: Vec<(usize, u8)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SyncControlCommand {
     TempoMaster,
     SyncOn,
@@ -255,13 +265,13 @@ pub struct DjLinkServer {
     beat_tx: Option<Arc<UdpSocket>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct DjLinkWaveformBeat {
     pub beat: u8,
     pub time_seconds: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct DjLinkWaveform {
     pub duration_seconds: u32,
     pub peaks: Vec<f32>,
@@ -269,7 +279,7 @@ pub struct DjLinkWaveform {
     pub beat_grid: Vec<DjLinkWaveformBeat>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkTrackMetadata {
     pub track_id: u32,
     pub title: String,
@@ -304,7 +314,7 @@ struct ActiveLoadCommand {
     reply: oneshot::Sender<Result<usize>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkLoadProfile {
     pub track_id: u32,
     pub label: String,
@@ -322,7 +332,7 @@ pub struct DjLinkLoadProfile {
     pub nfs_ms: u128,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkPhraseCue {
     pub phrase_beat: u16,
     pub cue_beat: u16,
@@ -330,7 +340,7 @@ pub struct DjLinkPhraseCue {
     pub bars_before: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkAnlzProfile {
     pub tag: String,
     pub ext: String,
@@ -338,7 +348,7 @@ pub struct DjLinkAnlzProfile {
     pub elapsed_ms: u128,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkKeyBrowseProfile {
     pub total_tracks: usize,
     pub keyed_tracks: usize,
@@ -351,13 +361,13 @@ pub struct DjLinkKeyBrowseProfile {
     pub buckets: Vec<DjLinkKeyBucketProfile>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkTrackProfileItem {
     pub track_id: u32,
     pub label: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkKeyDistanceProfile {
     pub distance: u32,
     pub bucket_count: usize,
@@ -366,7 +376,7 @@ pub struct DjLinkKeyDistanceProfile {
     pub elapsed_us: u128,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkKeyBucketProfile {
     pub key_id: u32,
     pub key_label: String,
@@ -375,7 +385,7 @@ pub struct DjLinkKeyBucketProfile {
     pub elapsed_us: u128,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkSearchProfile {
     pub query: String,
     pub mode: DjLinkSearchMode,
@@ -385,14 +395,14 @@ pub struct DjLinkSearchProfile {
     pub items: Vec<DjLinkSearchProfileItem>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DjLinkSearchProfileItem {
     pub entry_id: u32,
     pub entry_type: u32,
     pub label: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkMonitorSnapshot {
     pub status: Option<String>,
     pub beat: Option<String>,
@@ -401,7 +411,7 @@ pub struct DjLinkMonitorSnapshot {
 }
 
 /// Stable, structured telemetry for applications monitoring one physical deck.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkDeckState {
     pub player: u8,
     pub active: bool,
@@ -423,7 +433,7 @@ pub struct DjLinkDeckState {
     pub playhead_ms: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum DjLinkTelemetryKind {
     Device,
     Status,
@@ -431,14 +441,14 @@ pub enum DjLinkTelemetryKind {
     Position,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkTelemetryEvent {
     pub kind: DjLinkTelemetryKind,
     pub player: u8,
     pub deck: Option<DjLinkDeckState>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkMixerChannelState {
     pub channel: u8,
     pub input_source: u8,
@@ -451,26 +461,26 @@ pub struct DjLinkMixerChannelState {
     pub crossfader_assign: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkMixerState {
     pub channels: [DjLinkMixerChannelState; 4],
     pub crossfader: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkMixerTelemetryEvent {
     pub source_ip: Ipv4Addr,
     pub mixer: DjLinkMixerState,
     pub raw_packet: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkVuTelemetryEvent {
     pub source_ip: Ipv4Addr,
     pub channels: BTreeMap<u8, Vec<[u16; 2]>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DjLinkSearchMode {
     Track,
     Artist,
@@ -5240,6 +5250,11 @@ fn spawn_unicast_discovery(
             1,
         );
         let init = build_status_link_init(&state.config.model_name, state.config.player_number);
+        // Keep a bounded, session-local address per real player. If a unicast
+        // deck goes quiet it disappears from the actor after ten seconds; it
+        // must not then wait for another complete /16 sweep to hear from us.
+        let mut known_players = BTreeMap::new();
+        let mut last_recovery = Instant::now();
         loop {
             // At most 128 candidates per second. Continue after permission or
             // ARP failures so granting Local Network access needs no restart.
@@ -5250,7 +5265,30 @@ fn spawn_unicast_discovery(
                 // Once a deck replies, prioritize its browsing and audio over
                 // finding additional decks. Avoid continuous ARP pressure on
                 // the phone's USB adapter while NFS is serving a recording.
-                if !state.devices_sorted().await.is_empty() {
+                let devices = state.devices_sorted().await;
+                let recovery_targets = unicast_recovery_targets(&mut known_players, &devices);
+                if last_recovery.elapsed() >= Duration::from_secs(2) {
+                    for ip in recovery_targets {
+                        let _ = send_udp_packet(
+                            &state,
+                            &keepalive,
+                            &hello,
+                            SocketAddrV4::new(ip, KEEPALIVE_PORT),
+                            "unicast recovery hello",
+                        )
+                        .await;
+                        let _ = send_udp_packet(
+                            &state,
+                            &status,
+                            &init,
+                            SocketAddrV4::new(ip, STATUS_PORT),
+                            "unicast recovery link-init",
+                        )
+                        .await;
+                    }
+                    last_recovery = Instant::now();
+                }
+                if !devices.is_empty() {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
                 interval.tick().await;
@@ -5282,6 +5320,23 @@ fn spawn_unicast_discovery(
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     })
+}
+
+fn unicast_recovery_targets(
+    known_players: &mut BTreeMap<u8, Ipv4Addr>,
+    devices: &[LinkDevice],
+) -> Vec<Ipv4Addr> {
+    for device in devices
+        .iter()
+        .filter(|device| (1..=6).contains(&device.player_number))
+    {
+        known_players.insert(device.player_number, device.ip_addr);
+    }
+    known_players
+        .values()
+        .copied()
+        .filter(|ip| !devices.iter().any(|device| device.ip_addr == *ip))
+        .collect()
 }
 
 fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
@@ -9991,6 +10046,128 @@ async fn send_regular_djlink_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unicast_recovery_retries_lost_decks_without_inventing_devices() {
+        let mut known = BTreeMap::new();
+        assert!(unicast_recovery_targets(&mut known, &[]).is_empty());
+        let mut deck = LinkDevice {
+            player_number: 1,
+            ip_addr: Ipv4Addr::new(169, 254, 7, 4),
+            mac_addr: String::new(),
+            model: "CDJ-3000".into(),
+            last_seen: Instant::now(),
+        };
+        assert!(unicast_recovery_targets(&mut known, &[deck.clone()]).is_empty());
+        assert_eq!(
+            unicast_recovery_targets(&mut known, &[]),
+            vec![deck.ip_addr]
+        );
+        deck.ip_addr = Ipv4Addr::new(169, 254, 7, 5);
+        assert!(unicast_recovery_targets(&mut known, &[deck.clone()]).is_empty());
+        assert_eq!(
+            unicast_recovery_targets(&mut known, &[]),
+            vec![deck.ip_addr]
+        );
+        assert_eq!(
+            known.len(),
+            1,
+            "a player changing address replaces the old recovery target"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_handler_browses_back_and_switches_tracks_on_one_connection() {
+        async fn receive(client: &mut TcpStream) -> DbMessage {
+            tokio::time::timeout(Duration::from_secs(1), recv_db_message(client))
+                .await
+                .expect("CDJ response deadline")
+                .expect("CDJ response")
+        }
+        async fn menu(
+            client: &mut TcpStream,
+            tx: u32,
+            request: u16,
+            args: &[u32],
+        ) -> Vec<DbMessage> {
+            let args = args.iter().copied().map(DbValue::Int32).collect::<Vec<_>>();
+            client
+                .write_all(&encode_db_message(tx, request, &args))
+                .await
+                .unwrap();
+            let response = receive(client).await;
+            assert_eq!(response.msg_type, DB_RES_SUCCESS);
+            let count = db_int(response.args.get(1)).unwrap();
+            let render = [
+                args[0].clone(),
+                DbValue::Int32(0),
+                DbValue::Int32(count),
+                DbValue::Int32(0),
+                DbValue::Int32(count),
+                DbValue::Int32(0),
+            ];
+            client
+                .write_all(&encode_db_message(tx + 1, DB_REQ_RENDER, &render))
+                .await
+                .unwrap();
+            assert_eq!(receive(client).await.msg_type, DB_RES_MENU_HEADER);
+            let mut rows = Vec::new();
+            for _ in 0..count {
+                let row = receive(client).await;
+                assert_eq!(row.msg_type, DB_RES_MENU_ITEM);
+                rows.push(row);
+            }
+            assert_eq!(receive(client).await.msg_type, DB_RES_MENU_FOOTER);
+            rows
+        }
+        let playlist = 123;
+        let mut state = test_state_with_sample_library(playlist);
+        let library = Arc::make_mut(&mut state.library);
+        let first = library.all_tracks[0].track_id;
+        let mut second = library.all_tracks[0].clone();
+        second.track_id = first + 1;
+        second.title = "Second track".into();
+        library.tracks_by_id.insert(second.track_id, second.clone());
+        library.playlists[0].tracks.push(second.track_id);
+        library.all_tracks.push(second);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (client, accepted) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept()
+        );
+        let mut client = client.unwrap();
+        let (server, peer) = accepted.unwrap();
+        let handler = tokio::spawn(handle_db_client(Arc::new(state), server, peer, None));
+        client
+            .write_all(&encode_db_field(&DbValue::Int32(DB_MAGIC)))
+            .await
+            .unwrap();
+        assert_eq!(recv_db_field(&mut client).await.unwrap(), DbValue::Int32(1));
+        let browse = 0x0101_0401;
+        let metadata = 0x0102_0401;
+        for (iteration, track) in [first, first + 1, first].into_iter().enumerate() {
+            let tx = iteration as u32 * 10;
+            let folders = menu(&mut client, tx, DB_REQ_PLAYLIST, &[browse, 0, 0, 1]).await;
+            assert_eq!(db_int(folders[0].args.get(1)), Some(playlist));
+            let tracks = menu(
+                &mut client,
+                tx + 2,
+                DB_REQ_PLAYLIST,
+                &[browse, 0, playlist, 0],
+            )
+            .await;
+            assert_eq!(tracks.len(), 2);
+            assert_eq!(db_int(tracks[0].args.get(1)), Some(first));
+            assert_eq!(db_int(tracks[1].args.get(1)), Some(first + 1));
+            let rows = menu(&mut client, tx + 4, DB_REQ_METADATA, &[metadata, track]).await;
+            assert!(
+                rows.iter()
+                    .any(|row| db_int(row.args.get(1)) == Some(track))
+            );
+            // The next iteration is the deck's Back → playlist → another track.
+        }
+        handler.abort();
+    }
 
     #[test]
     fn unicast_discovery_covers_only_usable_attached_subnet_addresses() {

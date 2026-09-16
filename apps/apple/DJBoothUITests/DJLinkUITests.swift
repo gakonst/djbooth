@@ -14,11 +14,10 @@ final class DJLinkUITests: XCTestCase {
         XCTAssertTrue(connectRow.waitForExistence(timeout: 5))
         connectRow.tap()
         XCTAssertTrue(app.staticTexts["Play from your iPhone"].waitForExistence(timeout: 5))
-        let connect = app.buttons["djlink.connect"]
-        XCTAssertTrue(connect.waitForExistence(timeout: 5))
-        XCTAssertFalse(connect.isEnabled, "Demo audio must never be advertised to hardware")
-        app.buttons["Refresh connections"].tap()
-        XCTAssertFalse(app.staticTexts["djlink.error"].exists, "The C bridge must return decoded interface data")
+        XCTAssertTrue(app.staticTexts["Waiting for a CDJ"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["djlink.connect"].exists, "Cable detection owns connection")
+        XCTAssertFalse(app.staticTexts["djlink.status"].exists, "Demo audio must never be advertised to hardware")
+        XCTAssertFalse(app.staticTexts["djlink.error"].exists, "The installed Rust API must match the generated Swift bindings")
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "iPhone DJ Link connection"
         screenshot.lifetime = .keepAlways

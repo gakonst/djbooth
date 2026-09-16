@@ -1,0 +1,73 @@
+// Generated from djtools-link by djbooth-mobile/build.rs. Do not edit.
+#if os(iOS)
+enum DJLinkServerMethod: String, CaseIterable, Sendable {
+    case `new`
+    case `bind_ip`
+    case `broadcast_ip`
+    case `player_number`
+    case `stagehand_session_nonce`
+    case `stagehand_session_ip`
+    case `stagehand_protocol_nonce`
+    case `library_track_count`
+    case `library_playlist_count`
+    case `resolve_library_track`
+    case `library_track_metadata`
+    case `library_waveform`
+    case `phrase_cue_before_chorus`
+    case `set_memory_cue_override`
+    case `set_player_bpm`
+    case `first_track_id`
+    case `log_path`
+    case `profile_track_load`
+    case `profile_key_browse`
+    case `profile_search`
+    case `list_devices`
+    case `probe_arp_device`
+    case `monitor_snapshot`
+    case `subscribe_telemetry`
+    case `subscribe_mixer_telemetry`
+    case `subscribe_vu_telemetry`
+    case `start`
+    case `send_load_track`
+    case `send_load_track_to_ip`
+    case `send_prepared_track`
+    case `send_load_track_control_datagrams`
+    case `send_fader_start_command`
+    case `start_player`
+    case `send_fader_start_control_datagram`
+    case `send_sync_control_command`
+    case `send_sync_control_datagram`
+    case `send_master_handoff_request_command`
+    case `send_master_handoff_request_datagram`
+    case `send_master_handoff_response_command`
+    case `send_master_handoff_response_datagram`
+    case `send_on_air_command`
+    case `send_on_air_datagram`
+    case `send_load_settings_command`
+    case `send_load_settings_datagram`
+    case `send_hot_cue_bank_command`
+    case `send_hot_cue_bank_datagram`
+    case `send_cdj_renew_command`
+    case `send_cdj_renew_datagram`
+    case `send_cue_renew_command`
+    case `send_cue_renew_datagram`
+    case `send_multi_wave_view_command`
+    case `send_multi_wave_view_datagram`
+    case `send_raw_udp_payload_datagram`
+    case `send_raw_udp_payload_datagram_with_options`
+    case `stop`
+}
+enum DJLinkFunction: String, CaseIterable, Sendable {
+    case `djlink_interfaces`
+    case `build_keepalive_status_packet`
+    case `parse_keepalive_device`
+    case `build_status_rekordbox_reply`
+    case `build_status_link_init`
+    case `build_status_link_reply`
+    case `parse_status_link_query`
+    case `build_status_load_track_command`
+    case `stable_text_id`
+    case `normalize_camelot_key`
+    case `audit_remote_db_cursors`
+}
+#endif

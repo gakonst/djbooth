@@ -1,10 +1,15 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
 
 use crate::{LinkError, LinkResult};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum LogLevel {
     Error,
     Warn,
@@ -43,14 +48,27 @@ pub(crate) async fn init_djlink_tracing(
     let Some(path) = log_path.as_ref() else {
         return Ok(());
     };
+    // iOS starts a new server on cable changes. The global subscriber and its
+    // writer outlive each server: never truncate the file they still write to.
+    if LOG_PATH.get() == Some(path) {
+        return Ok(());
+    }
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     let file = tokio::fs::File::create(path).await?.into_std().await;
     let (file_writer, guard) = tracing_appender::non_blocking(file);
     let writer = file_writer.and(std::io::stderr);
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.as_str()));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        // Browse transactions are low volume and essential to diagnosing a
+        // stalled deck. Keep packet/audio tracing off at the debug level.
+        let directive = if level == LogLevel::Debug {
+            "debug,djtools_link::db=trace"
+        } else {
+            level.as_str()
+        };
+        EnvFilter::new(directive)
+    });
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_thread_ids(true)
@@ -63,6 +81,7 @@ pub(crate) async fn init_djlink_tracing(
 
     match tracing::subscriber::set_global_default(subscriber) {
         Ok(()) => {
+            let _ = LOG_PATH.set(path.clone());
             let _ = Box::leak(Box::new(guard));
         }
         Err(_) => {

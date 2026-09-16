@@ -14,6 +14,7 @@ mod telemetry;
 
 pub use djlink::*;
 pub use error::{LinkError, LinkResult};
+pub use ids::stable_text_id;
 pub use library::{
     LibrarySnapshot, LibraryValidationReport, PlaylistRecord, RekordboxLibraryLoad,
     RekordboxLibraryLoadReport, TrackRecord, normalize_camelot_key,
