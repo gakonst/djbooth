@@ -767,8 +767,10 @@ dependencies = [
  "librespot-core",
  "librespot-playback",
  "librespot-protocol",
+ "quote",
  "serde",
  "serde_json",
+ "syn 2.0.119",
  "tempfile",
  "tokio",
 ]

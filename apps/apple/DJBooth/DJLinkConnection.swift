@@ -19,22 +19,20 @@ struct DJLinkStatus: Decodable, Sendable {
     var playlistCount: Int?
     var devices: [Device]?
 }
-private struct LinkResponse<T: Decodable>: Decodable { let ok: Bool; let value: T?; let error: String? }
 private struct LinkError: LocalizedError { let message: String; var errorDescription: String? { message } }
 
 /// Serializes C ABI calls and disk preparation away from the UI actor.
 private actor DJLinkEngine {
+    private var bindingsVerified = false
     private var directory: URL?
     private var preparation = UUID()
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
-        let pointer = operation.withCString { op in input.withCString { djbooth_link_request(op, $0) } }
-        guard let pointer else { throw LinkError(message: "DJ Link returned no response.") }
-        defer { djbooth_link_free(pointer) }
-        let result = try JSONDecoder().decode(LinkResponse<T>.self, from: Data(String(cString: pointer).utf8))
-        guard result.ok, let value = result.value else { throw LinkError(message: result.error ?? "DJ Link could not connect.") }
-        return value
+        try DJLinkBindings.decode(operation, input: input, as: type)
     }
-    func interfaces() throws -> [DJLinkInterface] { try request("interfaces", as: [DJLinkInterface].self) }
+    func interfaces() throws -> [DJLinkInterface] {
+        if !bindingsVerified { try DJLinkBindings.verifyInventory(); bindingsVerified = true }
+        return try request("interfaces", as: [DJLinkInterface].self)
+    }
     func status() throws -> DJLinkStatus { try request("status", as: DJLinkStatus.self) }
     func start(interface: DJLinkInterface, unicastDiscovery: Bool, tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) async throws -> (DJLinkStatus, Int) {
         guard directory == nil else { throw LinkError(message: "Disconnect before reconnecting.") }
@@ -45,7 +43,10 @@ private actor DJLinkEngine {
             .appendingPathComponent("DJBooth-DJLink/v1", isDirectory: true)
         do {
             let library = try DJLinkLibrary.prepare(tracks: tracks, collections: collections, annotations: annotations,
-                                                   audioDirectory: audio, sessionDirectory: folder)
+                                                   audioDirectory: audio, sessionDirectory: folder, idForIdentity: { identity in
+                let input = try JSONEncoder().encode(["value": identity])
+                return try self.request("function.stable_text_id", input: String(decoding: input, as: UTF8.self), as: UInt32.self)
+            })
             guard !library.tracks.isEmpty else { throw LinkError(message: "Download a playlist and its CDJ analysis files before connecting. Sync the phone after publishing analyzed tracks from your Mac.") }
             struct Prepare: Encodable { let audioPath, outputDirectory: String }
             struct Analysis: Decodable { let dat, ext, twoEx: String }
@@ -64,11 +65,18 @@ private actor DJLinkEngine {
             struct Start: Encodable {
                 let bindIp, broadcastIp: String
                 let unicastDiscovery: Bool
+                let diagnostics: Bool
                 let tracks: [DJLinkLibrary.TrackRow]
                 let playlists: [DJLinkLibrary.PlaylistRow]
             }
+            #if DEBUG
+            let diagnostics = true
+            #else
+            let diagnostics = false
+            #endif
             let data = try JSONEncoder().encode(Start(bindIp: interface.ip, broadcastIp: interface.broadcast,
                                                      unicastDiscovery: unicastDiscovery,
+                                                     diagnostics: diagnostics,
                                                      tracks: ready, playlists: library.playlists))
             let status = try request("start", input: String(decoding: data, as: UTF8.self), as: DJLinkStatus.self)
             directory = folder
@@ -100,7 +108,7 @@ private actor DJLinkEngine {
     var omittedTracks = 0
     private var wiredNames: Set<String> = []
     private let wiredMonitor = NWPathMonitor(requiredInterfaceType: .wiredEthernet)
-    private var pausedIP: String?
+    private weak var monitoredModel: BoothModel?
     private var lastAutomaticAttempt = Date.distantPast
     private var reportedInterfaces = ""
     private var generation = UUID()
@@ -112,6 +120,9 @@ private actor DJLinkEngine {
             let names = Set(path.availableInterfaces.filter { $0.type == .wiredEthernet }.map(\.name))
             Task { @MainActor [weak self] in
                 self?.wiredNames = names
+                if let self, let model = self.monitoredModel {
+                    await self.autoConnect(model: model)
+                }
                 #if DEBUG
                 NSLog("[DJLink] wired interfaces: %@", names.sorted().joined(separator: ", "))
                 #endif
@@ -121,18 +132,28 @@ private actor DJLinkEngine {
     }
     deinit { wiredMonitor.cancel() }
 
+    /// Network notifications trigger immediate checks. A cheap interface-only
+    /// fallback covers USB adapters that iOS does not classify as Ethernet.
+    /// Independent of USB storage enumeration, sheets, and library navigation.
+    func monitor(model: BoothModel) async {
+        monitoredModel = model
+        defer { monitoredModel = nil }
+        while !Task.isCancelled {
+            await autoConnect(model: model)
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+        }
+    }
+
     /// Called while foregrounded, even with the connection sheet closed.
     func autoConnect(model: BoothModel) async {
         guard !model.demo, !busy else { return }
         await refresh()
-        guard !Task.isCancelled, UIApplication.shared.applicationState != .background else { return }
-        if let pausedIP, !interfaces.contains(where: { $0.ip == pausedIP }) { self.pausedIP = nil }
+        guard !Task.isCancelled, !busy, UIApplication.shared.applicationState != .background else { return }
         // CDJ USB networking can appear as en5/link-local without being
         // classified as wiredEthernet by NWPathMonitor on a physical iPhone.
         guard let wired = interfaces.first(where: {
             wiredNames.contains($0.name) || ($0.name != "en0" && $0.ip.hasPrefix("169.254."))
-        }),
-              wired.ip != pausedIP else { return }
+        }) else { return }
         if status.running {
             guard status.ip != wired.ip else { return }
             await disconnect()
@@ -161,7 +182,6 @@ private actor DJLinkEngine {
     func connect(model: BoothModel) async {
         guard !Task.isCancelled, UIApplication.shared.applicationState != .background,
               !busy, !status.running, let interface = interfaces.first(where: { $0.ip == selectedIP }) else { return }
-        pausedIP = nil
         let request = UUID(); generation = request
         busy = true; error = nil
         UIApplication.shared.isIdleTimerDisabled = true
@@ -191,7 +211,7 @@ private actor DJLinkEngine {
                         let available = try await self.engine.interfaces()
                         guard !Task.isCancelled, self.generation == request else { return }
                         if !available.contains(where: { $0.ip == interface.ip && $0.broadcast == interface.broadcast }) {
-                            await self.disconnect(message: "Connection lost. Reconnect the cable, refresh connections, and connect again.")
+                            await self.disconnect()
                             return
                         }
                         #if DEBUG
@@ -216,8 +236,8 @@ private actor DJLinkEngine {
             #endif
         }
     }
-    func disconnect(message: String? = nil, pauseAutomatic: Bool = false) async {
-        if pauseAutomatic { pausedIP = status.ip ?? selectedIP }
+    func disconnect(message: String? = nil) async {
+        lastAutomaticAttempt = .distantPast
         generation = UUID(); updates?.cancel(); updates = nil
         busy = true
         UIApplication.shared.isIdleTimerDisabled = false
@@ -237,7 +257,7 @@ struct DJLinkConnectionView: View {
                 Section {
                     Text("Play from your iPhone").font(.title2.bold())
                     Text("Keep DJBooth open and connect the phone to the CDJ’s rear USB port. Sharing starts automatically when the wired network is ready. Choose DJ Booth iPhone on the CDJ’s LINK/source screen.")
-                    Text("You can also use an Ethernet adapter or the same local network as the CDJs.").font(.caption).foregroundStyle(.secondary)
+                    Text("An Ethernet adapter connected to the CDJ network also works.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Connection") {
                     if let download = model.cdjDownloadStatus {
@@ -246,7 +266,6 @@ struct DJLinkConnectionView: View {
                     if link.status.running {
                         Label(link.status.devices?.isEmpty == false ? "DJ equipment found" : "Looking for CDJs…", systemImage: "network")
                             .accessibilityIdentifier("djlink.status")
-                        Text("Sharing \(link.status.trackCount ?? 0) downloaded tracks").font(.subheadline)
                         ForEach(link.status.devices ?? []) { device in
                             LabeledContent(device.model, value: "Player \(device.player) · \(device.ip)")
                         }
@@ -258,23 +277,11 @@ struct DJLinkConnectionView: View {
                             Text("Discovering decks automatically. Large networks with 169.254 addresses can take several minutes to search.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Button("Disconnect", role: .destructive) { Task { await link.disconnect(pauseAutomatic: true) } }
-                            .disabled(link.busy).accessibilityIdentifier("djlink.disconnect")
                     } else {
-                        if link.interfaces.isEmpty {
-                            Text("No local connection found. Connect the cable, wait, then refresh.")
-                        } else {
-                            Picker("Connection", selection: Binding(get: { link.selectedIP }, set: { link.selectedIP = $0 })) {
-                                Text("Choose connection").tag("")
-                                ForEach(link.interfaces) { item in Text("\(item.ip) (\(item.name))").tag(item.ip) }
-                            }.disabled(link.busy)
-                        }
-                        Button("Refresh connections") { Task { await link.refresh() } }.disabled(link.busy)
-                        Button("Connect to CDJ") { Task { await link.connect(model: model) } }
-                            .disabled(link.selectedIP.isEmpty || link.busy || model.demo)
-                            .accessibilityIdentifier("djlink.connect")
+                        Label("Waiting for a CDJ", systemImage: "cable.connector")
+                        Text("Plug in the cable. Connection starts automatically.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    if link.busy { ProgressView("Connecting DJ Link…") }
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
                 }
                 Section("While connected") {
@@ -286,7 +293,7 @@ struct DJLinkConnectionView: View {
                         Text("\(link.omittedTracks) tracks need audio or CDJ analysis downloads, or use an unsupported file type.").font(.caption)
                     }
                 }
-            }.navigationTitle("Connect to CDJ")
+            }.navigationTitle("CDJs")
                 .toolbar { Button("Done") { dismiss() } }
                 .task { await link.refresh() }
         }

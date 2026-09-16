@@ -15,7 +15,7 @@ const DB_MAGIC_FIELD: [u8; 5] = [
 ];
 
 /// One RemoteDB RENDER request and its same-transaction MENU_HEADER response.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RemoteDbCursorExchange {
     pub tx_id: u32,
     pub rmst: Option<u32>,
@@ -34,7 +34,7 @@ impl RemoteDbCursorExchange {
 }
 
 /// Cursor-level RemoteDB audit decoded from one bidirectional TCP byte stream.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RemoteDbCursorAudit {
     pub decoded_requests: usize,
     pub decoded_responses: usize,

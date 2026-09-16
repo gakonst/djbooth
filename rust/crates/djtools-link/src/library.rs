@@ -28,7 +28,7 @@ const BASE85_ALPHABET: &[u8] =
 const SPECIAL_REKORDBOX_PLAYLIST_IDS: &[u32] = &[100_000, 200_000];
 const OMITTED_AUDIO_SAMPLE_LIMIT: usize = 25;
 
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TrackRecord {
     pub track_id: u32,
@@ -59,7 +59,7 @@ pub struct TrackRecord {
     pub date_added: String,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaylistRecord {
     pub playlist_id: u32,
@@ -70,7 +70,7 @@ pub struct PlaylistRecord {
     pub tracks: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LibrarySnapshot {
     pub master_db_id: u32,
     pub tracks_by_id: BTreeMap<u32, TrackRecord>,

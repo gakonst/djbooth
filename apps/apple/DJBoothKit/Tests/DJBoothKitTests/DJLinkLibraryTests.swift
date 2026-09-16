@@ -3,6 +3,12 @@ import Testing
 @testable import DJBoothKit
 
 @Test func djLinkSharesOnlyDownloadedAudioAndPreservesPlaylistOrder() throws {
+    // Test adapter only: production supplies the Rust stable_text_id binding.
+    var fixtureIDs: [String: UInt32] = [:]
+    func fixtureID(_ identity: String) -> UInt32 {
+        if let id = fixtureIDs[identity] { return id }
+        let id = UInt32(fixtureIDs.count + 1); fixtureIDs[identity] = id; return id
+    }
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let audio = root.appendingPathComponent("Audio")
@@ -21,7 +27,7 @@ import Testing
     let library = try DJLinkLibrary.prepare(tracks: tracks,
         collections: [Collection(name: "Set", trackIDs: ["two", "missing", "one", "two"], folderPath: ["Sets", "Live"])],
         annotations: ["one": TrackAnnotation(note: "Keep this note")], audioDirectory: audio,
-        sessionDirectory: root.appendingPathComponent("Session"))
+        sessionDirectory: root.appendingPathComponent("Session"), idForIdentity: fixtureID)
     #expect(library.tracks.count == 2)
     #expect(library.omittedTracks == 3)
     #expect(library.tracks[0].comment == "Keep this note")
@@ -29,8 +35,19 @@ import Testing
     #expect(library.playlists.map(\.parentId) == [0, library.playlists[0].playlistId, library.playlists[1].playlistId])
     let one = library.tracks[0].trackId, two = library.tracks[1].trackId
     #expect(library.playlists[2].tracks == [two, one, two])
+    let duplicateCollections = try DJLinkLibrary.prepare(tracks: tracks,
+        collections: [
+            Collection(id: "set", name: "Set", trackIDs: ["two", "one", "two"], folderPath: ["Sets"]),
+            Collection(id: "set", name: "Provider copy", trackIDs: [], folderPath: ["Provider"]),
+            Collection(id: "other", name: "Set", trackIDs: ["one"], folderPath: ["Sets"])
+        ], annotations: [:], audioDirectory: audio,
+        sessionDirectory: root.appendingPathComponent("Duplicates"), idForIdentity: fixtureID)
+    #expect(duplicateCollections.playlists.map(\.name) == ["Sets", "Set", "Set"])
+    #expect(Set(duplicateCollections.playlists.map(\.playlistId)).count == 3)
+    #expect(duplicateCollections.playlists[1].tracks == [two, one, two])
+    #expect(duplicateCollections.playlists[2].tracks == [one])
     let expanded = try DJLinkLibrary.prepare(tracks: tracks + [Track(id: "aaa", title: "Earlier", mediaHash: hash, mediaExtension: "mp3", analysis: analysis)],
-        collections: [], annotations: [:], audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Expanded"))
+        collections: [], annotations: [:], audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Expanded"), idForIdentity: fixtureID)
     #expect(expanded.tracks.first { $0.canonicalName == "one" }?.trackId == one)
     #expect(expanded.tracks.first { $0.canonicalName == "two" }?.trackId == two)
     let served = URL(fileURLWithPath: library.tracks[0].mountPath)
@@ -42,7 +59,7 @@ import Testing
     var absent = tracks[0]; absent.analysis = nil
     var stale = tracks[0]; stale.analysis?.mediaHash = String(repeating: "b", count: 64)
     let omitted = try DJLinkLibrary.prepare(tracks: [absent, stale], collections: [], annotations: [:],
-        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Omitted"))
+        audioDirectory: audio, sessionDirectory: root.appendingPathComponent("Omitted"), idForIdentity: fixtureID)
     #expect(omitted.tracks.isEmpty)
 
     try FileManager.default.removeItem(at: root.appendingPathComponent("Session"))

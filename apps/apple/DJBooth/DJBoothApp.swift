@@ -100,7 +100,9 @@ struct BoothRoot: View {
                     model.persistPlaybackSession()
                     model.stopPhoneTools()
                     #if os(iOS)
-                    if model.djLink.status.running || model.djLink.busy { Task { await model.djLink.disconnect() } }
+                    if phase == .background, model.djLink.status.running || model.djLink.busy {
+                        Task { await model.djLink.disconnect() }
+                    }
                     #endif
                 }
             }
@@ -112,12 +114,15 @@ struct BoothRoot: View {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     await model.refreshUSBConnection()
-                    #if os(iOS)
-                    await model.djLink.autoConnect(model: model)
-                    #endif
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }
+            #if os(iOS)
+            .task(id: scenePhase == .background) {
+                guard scenePhase != .background else { return }
+                await model.djLink.monitor(model: model)
+            }
+            #endif
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
                 while !Task.isCancelled {

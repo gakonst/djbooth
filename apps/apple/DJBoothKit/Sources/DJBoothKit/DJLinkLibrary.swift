@@ -23,7 +23,7 @@ public struct DJLinkLibrary: Encodable, Sendable {
     public let omittedTracks: Int
 
     public static func prepare(tracks source: [Track], collections: [Collection], annotations: [String: TrackAnnotation],
-                               audioDirectory: URL, sessionDirectory: URL) throws -> DJLinkLibrary {
+                               audioDirectory: URL, sessionDirectory: URL, idForIdentity: (String) throws -> UInt32) throws -> DJLinkLibrary {
         let files = FileManager.default
         try files.createDirectory(at: sessionDirectory, withIntermediateDirectories: true)
         var values = URLResourceValues(); values.isExcludedFromBackup = true
@@ -31,10 +31,9 @@ public struct DJLinkLibrary: Encodable, Sendable {
         var rows: [TrackRow] = [], ids: [String: UInt32] = [:]
         var identities: [UInt32: String] = [:]
         func stableID(_ identity: String) throws -> UInt32 {
-            // Same FNV-1a / positive-u32 convention as the shared Link engine.
-            // IDs must not shift when another track is downloaded between sessions.
-            let hash = identity.utf8.reduce(UInt32(0x811c9dc5)) { ($0 ^ UInt32($1)) &* 0x01000193 }
-            let id = max(1, hash & 0x7fffffff)
+            // Identity generation belongs to the shared Rust engine.
+            let id = try idForIdentity(identity)
+            guard id > 0 else { throw ClientError.http(409, "DJ Link returned a zero library ID.") }
             if let existing = identities[id], existing != identity {
                 throw ClientError.http(409, "Two library items have conflicting DJ Link IDs. Sharing was stopped to avoid loading the wrong track.")
             }
@@ -76,7 +75,11 @@ public struct DJLinkLibrary: Encodable, Sendable {
                                  mountPath: destination.path, analysisDatPath: analysisPaths[0].path, analysisExtPath: analysisPaths[1].path, analysisTwoexPath: analysisPaths[2].path))
         }
         var playlists: [PlaylistRow] = [], folders: [[String]: UInt32] = [:]
+        var collectionIDs = Set<String>()
         for collection in collections {
+            // The library can contain both durable and connected-provider copies.
+            // Keep the first (canonical library) row, as with track identity above.
+            guard collectionIDs.insert(collection.id).inserted else { continue }
             var parent: UInt32 = 0, path: [String] = []
             for name in collection.folderPath ?? [] {
                 path.append(name)

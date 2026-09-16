@@ -9,7 +9,7 @@ pub(crate) fn stable_id(path: &Path) -> u32 {
     (hash & 0x7fff_ffff).max(1)
 }
 
-pub(crate) fn stable_text_id(value: &str) -> u32 {
+pub fn stable_text_id(value: &str) -> u32 {
     if value.trim().is_empty() {
         return 0;
     }
