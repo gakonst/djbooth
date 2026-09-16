@@ -30,10 +30,8 @@ struct DJLinkConnectionCard: View {
                     .accessibilityLabel("\(title). \(detail)")
                 if !link.detectedDecks.isEmpty {
                     mixerHeader
-                    if showingMixer {
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            mixerRows
-                        }
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        mixerRows
                     }
                 }
             }.background(BoothStyle.raised, in: RoundedRectangle(cornerRadius: 12))
@@ -77,11 +75,16 @@ struct DJLinkConnectionCard: View {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
                     ForEach(link.detectedDecks) { device in
-                        mixerRow(device, mixer: mixer, now: now)
+                        VStack(spacing: 0) {
+                            DJLinkDeckPlayerRow(model: model, device: device,
+                                deck: link.decks.first { $0.id == device.player })
+                            if showingMixer { mixerRow(device, mixer: mixer, now: now) }
+                        }
                     }
                 }
-            }.frame(height: CGFloat(min(link.detectedDecks.count, 4)) * 66)
+            }.frame(height: CGFloat(min(link.detectedDecks.count, 2)) * (showingMixer ? 150 : 84))
                 .accessibilityIdentifier("djlink.mixer.rows")
+            if showingMixer {
             HStack(spacing: 8) {
                 Text(!link.midiMixers.isEmpty ? "DJM-A9 · USB MIDI" : mixer == nil ? "Waiting for mixer data" : (mixer?.isFresh(at: now) == true ? "DJM-A9" : "Mixer signal lost"))
                     .foregroundStyle(.secondary)
@@ -97,6 +100,7 @@ struct DJLinkConnectionCard: View {
                     .accessibilityLabel("Crossfader")
                     .accessibilityValue(crossfader.map { "\(Int($0.rounded())) percent from left" } ?? "Unavailable")
             }.boothFont(10, relativeTo: .caption2).padding(.horizontal, 14).padding(.bottom, 10)
+            }
         }
     }
     private func mixerRow(_ device: DJLinkStatus.Device, mixer: DJLinkMixerObservation?, now: TimeInterval) -> some View {
@@ -176,6 +180,48 @@ struct DJLinkConnectionCard: View {
             return devices.map { "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
         }
         return link.status.running ? "Connecting automatically" : "Starting your CDJ connection…"
+    }
+}
+
+/// One normal waveform renderer and cache per deck; no protocol or clock reducer.
+private struct DJLinkDeckPlayerRow: View {
+    @Bindable var model: BoothModel
+    let device: DJLinkStatus.Device
+    let deck: DJLinkDeck?
+    @State private var cache = PlaybackWaveformCache()
+    private var track: Track? { deck?.presentationTrack(in: model.tracksByID) }
+    private var display: PlaybackDisplay { PlaybackDisplay(track: track, deck: deck?.state) }
+    var body: some View {
+        VStack(spacing: 3) {
+            Button {
+                model.djLink.selectedPlayer = device.player
+                model.djLink.showingPhonePlayer = false
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Deck \(device.player)").fontWeight(.semibold)
+                    Text(track?.title ?? (deck == nil ? "Waiting for status" : "No track loaded")).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(deck?.state.effective_bpm_hundreds.map { String(format: "%.1f BPM", Double($0) / 100) } ?? "— BPM")
+                    Text(deck?.state.effective_key ?? "—")
+                }
+            }.buttonStyle(.plain).accessibilityIdentifier("djlink.deck.select.\(device.player)")
+            if let deck {
+                PlaybackWaveform(player: model.player, display: display, cache: cache,
+                                 accessibilityID: "djlink.deck.waveform.\(device.player)")
+                    .frame(height: 40)
+                HStack {
+                    Text(deck.state.tempo_master ? "MASTER · \(deck.state.play_state.capitalized)" : deck.state.play_state.capitalized)
+                    Spacer()
+                    Text(display.deckPosition.map { (deck.state.playhead_source == "beat_grid" ? "≈" : "") + timeLabel($0) } ?? "—:—")
+                        .accessibilityIdentifier("djlink.deck.elapsed.\(device.player)")
+                    Text("/ " + (display.deckDuration.map(timeLabel) ?? "—:—"))
+                }.foregroundStyle(.secondary)
+            } else {
+                Text("Waiting for deck telemetry").foregroundStyle(.secondary).frame(height: 56)
+            }
+        }.boothFont(10, relativeTo: .caption2).monospacedDigit()
+            .padding(.horizontal, 12).frame(height: 84)
+            .background { PlaybackWaveformLoader(track: track, cache: cache) }
     }
 }
 

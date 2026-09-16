@@ -215,6 +215,7 @@ actor BoothMIDIInput {
 
 @Observable @MainActor final class BoothRecordingController {
     var isRecording = false
+    private(set) var capturingAudio = false
     var busy = false
     var progress: RecordingProgress?
     var error: String?
@@ -231,44 +232,49 @@ actor BoothMIDIInput {
             .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("events.jsonl").path) }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
-    func start(model: BoothModel) async {
+    func start(model: BoothModel, includeAudio: Bool = false) async {
         guard !busy, !isRecording else { return }
-        busy = true; error = nil; link = model.djLink
+        busy = true; error = nil; sourceName = nil; link = model.djLink
         defer { busy = false }
         var timelineStarted = false
         do {
             guard model.djLink.status.running else { throw RecordingFailure(message: "Connect your CDJs before recording.") }
-            let allowed = await AVAudioApplication.requestRecordPermission()
-            guard allowed else { throw RecordingFailure(message: "Allow audio recording in Settings to capture the mixer.") }
-            model.player.pause()
+            if includeAudio {
+                let allowed = await AVAudioApplication.requestRecordPermission()
+                guard allowed else { throw RecordingFailure(message: "Allow audio recording in Settings to capture the mixer.") }
+                model.player.pause()
+            }
             let folder = root.appendingPathComponent(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-") + "-" + UUID().uuidString.prefix(8), isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: folder.path)
-            let input = try await PlaybackAudioSession.shared.prepareRecording()
-            inputUID = input.uid
-            sourceName = input.name
+            if includeAudio {
+                let input = try await PlaybackAudioSession.shared.prepareRecording()
+                inputUID = input.uid
+                sourceName = input.name
+            }
             let tracks: [[String: Any]] = model.tracks.map { track in
                 ["id": track.id, "title": track.title, "artist": track.artist ?? "", "mediaHash": track.mediaHash ?? "",
                  "durationSeconds": track.durationSeconds ?? 0, "key": track.key ?? "", "bpm": track.bpm ?? 0]
             }
             let served = try JSONSerialization.jsonObject(with: await model.djLink.recordingLibrary())
-            let arguments = try JSONSerialization.data(withJSONObject: ["directory": folder.path, "tracks": ["library": tracks, "served": served]])
+            let arguments = try JSONSerialization.data(withJSONObject: ["directory": folder.path, "audio": includeAudio, "tracks": ["library": tracks, "served": served]])
             progress = try await Task.detached { try JSONDecoder().decode(RecordingProgress.self, from: DJLinkBindings.request("recording.start", arguments: arguments)) }.value
             timelineStarted = true
-            try await PlaybackAudioSession.shared.startRecording(at: folder)
+            if includeAudio { try await PlaybackAudioSession.shared.startRecording(at: folder) }
             let midi = BoothMIDIInput(); self.midi = midi
             do { try await midi.start() } catch {
                 try await Task.detached { try RecordingBridge.event("midiUnavailable", ["error": error.localizedDescription]) }.value
             }
-            isRecording = true
+            isRecording = true; capturingAudio = includeAudio
             link?.recordingChanged(true)
-            observeAudio()
+            if includeAudio { observeAudio() }
+            AppDiagnostics.shared.event("booth_recording_started", ["audio": String(includeAudio), "directory": folder.path])
             monitor = Task { [weak self] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(1))
                     guard !Task.isCancelled, let self else { return }
                     do {
-                        if let failure = await PlaybackAudioSession.shared.recordingHealth() {
+                        if self.capturingAudio, let failure = await PlaybackAudioSession.shared.recordingHealth() {
                             await self.stop(reason: failure); return
                         }
                         let status = try await Task.detached { try DJLinkBindings.decode("recording.status", as: RecordingProgress.self) }.value
@@ -280,9 +286,10 @@ actor BoothMIDIInput {
         } catch {
             self.error = error.localizedDescription
             await midi?.stop(); midi = nil
-            _ = await PlaybackAudioSession.shared.stopRecording()
+            if includeAudio { _ = await PlaybackAudioSession.shared.stopRecording() }
             if timelineStarted { _ = try? await Task.detached { try DJLinkBindings.request("recording.stop") }.value }
-            inputUID = nil
+            inputUID = nil; capturingAudio = false
+            AppDiagnostics.shared.event("booth_recording_failed", ["audio": String(includeAudio), "error": error.localizedDescription])
         }
         refreshRecordings()
     }
@@ -291,13 +298,14 @@ actor BoothMIDIInput {
         busy = true; monitor?.cancel(); monitor = nil
         for observer in observers { NotificationCenter.default.removeObserver(observer) }; observers = []
         await midi?.stop(); midi = nil
-        let audioError = await PlaybackAudioSession.shared.stopRecording()
+        let audioError = capturingAudio ? await PlaybackAudioSession.shared.stopRecording() : nil
         do {
             if let reason { try await Task.detached { try RecordingBridge.event("interrupted", ["reason": reason]) }.value }
             progress = try await Task.detached { try DJLinkBindings.decode("recording.stop", as: RecordingProgress.self) }.value
         } catch { self.error = error.localizedDescription }
         error = reason ?? audioError ?? error
-        isRecording = false; busy = false; inputUID = nil
+        isRecording = false; capturingAudio = false; busy = false; inputUID = nil
+        AppDiagnostics.shared.event("booth_recording_stopped", ["reason": reason ?? "user", "error": error ?? ""])
         link?.recordingChanged(false)
         refreshRecordings()
     }
@@ -319,18 +327,22 @@ actor BoothMIDIInput {
 
 struct BoothRecordingView: View {
     @Bindable var model: BoothModel
+    @State private var includeAudio = false
     private var recorder: BoothRecordingController { model.djLink.recording }
     var body: some View {
         List {
             Section("Record your set") {
-                Text("Connect the mixer's USB audio output. Records the channels supplied by the mixer alongside all detected decks and available A9 controls.")
-                Button(recorder.isRecording ? "Stop recording" : "Record audio + timeline", systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle") {
-                    Task { if recorder.isRecording { await recorder.stop() } else { await recorder.start(model: model) } }
+                Toggle("Include USB mixer audio", isOn: $includeAudio)
+                    .disabled(recorder.isRecording || recorder.busy).accessibilityIdentifier("recording.audio")
+                Text(includeAudio ? "Records USB mixer audio alongside the timestamped deck and mixer timeline." : "Records track changes, positions, tempo, key and available mixer controls from every detected deck. Keep DJBooth open while recording the timeline.")
+                Button(recorder.isRecording ? "Stop recording" : (includeAudio ? "Record audio + timeline" : "Record deck timeline"), systemImage: recorder.isRecording ? "stop.circle.fill" : "record.circle") {
+                    Task { if recorder.isRecording { await recorder.stop() } else { await recorder.start(model: model, includeAudio: includeAudio) } }
                 }.disabled(recorder.busy || (!recorder.isRecording && !model.djLink.status.running))
                     .accessibilityIdentifier("recording.toggle")
                 if let progress = recorder.progress {
-                    Text("\(Int(progress.elapsedSeconds ?? 0)) seconds · \(progress.rows ?? 0) events · \(progress.gaps ?? 0) gaps")
+                    Text("\(timeLabel(progress.elapsedSeconds ?? 0)) · \(progress.rows ?? 0) events · \(progress.gaps ?? 0) gaps")
                         .font(.caption.monospacedDigit())
+                        .accessibilityIdentifier("recording.elapsed")
                     Text("Deck events: \(progress.deckEvents ?? 0) · Mixer: \(progress.mixerEvents ?? 0) · MIDI: \(progress.midiPackets ?? 0)")
                         .font(.caption.monospacedDigit())
                 }
@@ -343,7 +355,7 @@ struct BoothRecordingView: View {
                         Text(directory.lastPathComponent).font(.caption)
                         if !(recorder.isRecording && recorder.progress?.directory == directory.path) {
                             ShareLink(items: ["master.caf", "events.jsonl"].map { directory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }) {
-                                Label("Export audio and timeline", systemImage: "square.and.arrow.up")
+                                Label(FileManager.default.fileExists(atPath: directory.appendingPathComponent("master.caf").path) ? "Export audio and timeline" : "Export timeline", systemImage: "square.and.arrow.up")
                             }
                         }
                     }

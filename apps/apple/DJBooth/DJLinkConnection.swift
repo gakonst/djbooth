@@ -26,6 +26,15 @@ struct DJLinkDeck: Identifiable, Equatable, Sendable {
     let libraryTrackID: String?
     var waveform: Waveform? = nil
     var id: Int { state.player }
+    func presentationTrack(in tracks: [String: Track]) -> Track? {
+        guard let trackID = state.track_id else { return nil }
+        var track = libraryTrackID.flatMap { tracks[$0] }
+            ?? Track(id: "deck-\(id)-\(state.source_player)-\(state.source_slot)-\(trackID)", title: "Track \(trackID)", durationSeconds: state.track_length_sec.map(Double.init))
+        // Deck displays use only the ANLZ waveform decoded by shared Rust.
+        // Never inherit the cloud track's overview, including while loading.
+        track.waveform = waveform.flatMap { $0.peaks.isEmpty ? nil : $0 }
+        return track
+    }
 }
 private struct LinkError: LocalizedError { let message: String; var errorDescription: String? { message } }
 
@@ -318,9 +327,9 @@ private actor DJLinkEngine {
     private var backgroundAudio = false
     let recording = BoothRecordingController()
     func recordingLibrary() async throws -> Data { try await engine.recordingLibrary() }
-    private var hasBackgroundAudio: Bool { backgroundAudio || recording.isRecording }
+    private var hasBackgroundAudio: Bool { backgroundAudio || recording.capturingAudio }
     func recordingChanged(_ active: Bool) {
-        if active { backgroundExpired = false; endBackgroundTime() }
+        if active && recording.capturingAudio { backgroundExpired = false; endBackgroundTime() }
         else if UIApplication.shared.applicationState == .background { extendBackgroundSession() }
     }
     private var lastMonitorAt = ProcessInfo.processInfo.systemUptime
@@ -356,6 +365,13 @@ private actor DJLinkEngine {
             let event = try JSONDecoder().decode(DJLinkMixerEvent.self, from: JSONSerialization.data(withJSONObject:
                 ["source_ip": "192.0.2.33", "mixer": ["channels": channels, "crossfader": 128]]))
             mixers[event.source_ip] = DJLinkMixerObservation(event: event, receivedAt: ProcessInfo.processInfo.systemUptime)
+        }
+        if !ProcessInfo.processInfo.arguments.contains("--ui-test-missing-deck-waveform") {
+            for index in decks.indices {
+                decks[index].waveform = Waveform(peaks: [0.25, 0.75, 1, 0.5],
+                    colors: [[255, 0, 0], [0, 255, 0], [0, 128, 255], [255, 128, 0]],
+                    source: "rekordbox", durationSeconds: 240)
+            }
         }
         status = DJLinkStatus(running: true, trackCount: decks.count, devices: decks.map {
             DJLinkStatus.Device(player: $0.id, ip: "192.0.2.\($0.id)", model: $0.model)
@@ -696,7 +712,7 @@ struct DJLinkConnectionView: View {
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
                 }
                 Section("While connected") {
-                    NavigationLink("Record audio + deck timeline") { BoothRecordingView(model: model) }
+                    NavigationLink("Record your set") { BoothRecordingView(model: model) }
                     Text("An active USB audio recording keeps the audio session running in the background. Otherwise, keep DJBooth open for uninterrupted deck playback; iOS limits background time and returning to the app reconnects automatically.")
                     Text("Only audio already downloaded to this phone is shared. Reconnect after downloading more tracks or changing playlists.")
                     Text("CDJ waveforms, beat grids, seek tables, and cues download with your tracks. Connecting never analyzes audio.")

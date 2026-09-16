@@ -86,6 +86,7 @@ struct Progress {
 
 pub struct BoothRecording {
     directory: PathBuf,
+    audio: bool,
     started: Instant,
     elapsed_at_stop: Option<f64>,
     progress: Arc<Progress>,
@@ -98,6 +99,7 @@ impl BoothRecording {
         server: Arc<RwLock<DjLinkServer>>,
         directory: &Path,
         tracks: Value,
+        audio: bool,
     ) -> Result<Self> {
         anyhow::ensure!(
             directory.is_absolute(),
@@ -117,9 +119,10 @@ impl BoothRecording {
         writer.write(
             "recordingStarted",
             json!({"schemaVersion":1,"tracks":tracks,
-            "audioFile":"master.caf", "reconstruction": {
+            "mode":if audio {"audioAndTimeline"} else {"timeline"},
+            "audioFile":audio.then_some("master.caf"), "reconstruction": {
                 "mixerInitialState":"unknownUntilObserved", "mixerDsp":"notModelled",
-                "sourceAudio":"referencesOnly", "masterAudio":"pending", "audioRouting":"deviceConfiguredChannels", "bitExactResynthesis":false
+                "sourceAudio":"referencesOnly", "masterAudio":if audio {"pending"} else {"notRequested"}, "audioRouting":"deviceConfiguredChannels", "bitExactResynthesis":false
             }}),
         )?;
         writer.flush()?;
@@ -154,6 +157,7 @@ impl BoothRecording {
         }
         Ok(Self {
             directory: directory.into(),
+            audio,
             started: Instant::now(),
             elapsed_at_stop: None,
             progress,
@@ -181,6 +185,7 @@ impl BoothRecording {
     }
     pub fn status(&self) -> Value {
         json!({"recording":self.worker.as_ref().is_some_and(|worker| !worker.is_finished()),
+            "audio":self.audio,
             "directory":self.directory,"elapsedSeconds":self.elapsed_at_stop.unwrap_or_else(|| self.started.elapsed().as_secs_f64()),
             "rows":self.progress.rows.load(Ordering::Relaxed),"gaps":self.progress.gaps.load(Ordering::Relaxed),
             "deckEvents":self.progress.deck_events.load(Ordering::Relaxed),
@@ -236,7 +241,9 @@ impl Timeline {
         serde_json::to_writer(
             &mut self.output,
             &json!({"capturedAt":at.to_rfc3339_opts(chrono::SecondsFormat::Micros,true),
-            "capturedUnixUs":at.timestamp_micros(),"monotonicNs":now.to_string(),"sequence":sequence,"kind":kind,"payload":payload}),
+            "capturedUnixUs":at.timestamp_micros(),"monotonicNs":now.to_string(),
+            "elapsedUs":now.saturating_sub(self.started_ns)/1000,
+            "sequence":sequence,"kind":kind,"payload":payload}),
         )?;
         self.output.write_all(b"\n")?;
         match kind {
@@ -429,6 +436,7 @@ mod tests {
         drop(receiver);
         let mut recording = BoothRecording {
             directory: PathBuf::new(),
+            audio: false,
             started: Instant::now(),
             elapsed_at_stop: None,
             progress: Arc::new(Progress::default()),

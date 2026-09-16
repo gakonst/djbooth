@@ -15783,7 +15783,7 @@ notes: []
         );
         let server = Arc::new(std::sync::RwLock::new(server));
         let mut recording =
-            BoothRecording::start(server.clone(), directory.path(), json!([])).unwrap();
+            BoothRecording::start(server.clone(), directory.path(), json!([]), true).unwrap();
         recording
             .midi("DJM-A9".into(), 1_000_000, vec![0xb0, 0x00, 127])
             .unwrap();
@@ -15796,9 +15796,8 @@ notes: []
         let status = recording.stop().unwrap();
         assert_eq!(status["recording"], false);
         assert_eq!(status["gaps"], 0);
-        actor.abort();
         let bytes = std::fs::read(directory.path().join("events.jsonl")).unwrap();
-        assert!(BoothRecording::start(server.clone(), directory.path(), json!([])).is_err());
+        assert!(BoothRecording::start(server.clone(), directory.path(), json!([]), true).is_err());
         assert_eq!(
             std::fs::read(directory.path().join("events.jsonl")).unwrap(),
             bytes
@@ -15826,6 +15825,61 @@ notes: []
                 chrono::DateTime::parse_from_rfc3339(row["capturedAt"].as_str().unwrap()).is_ok()
             );
             assert!(row["monotonicNs"].as_str().unwrap().parse::<u64>().is_ok());
+            let origin = rows[0]["monotonicNs"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                - rows[0]["elapsedUs"].as_u64().unwrap() * 1000;
+            let host = row["monotonicNs"].as_str().unwrap().parse::<u64>().unwrap();
+            assert!(host.abs_diff(origin + row["elapsedUs"].as_u64().unwrap() * 1000) < 1000);
         }
+        let timeline_directory = tempfile::tempdir().unwrap();
+        let mut timeline =
+            BoothRecording::start(server.clone(), timeline_directory.path(), json!([]), false)
+                .unwrap();
+        for player in 1..=6 {
+            server
+                .read()
+                .unwrap()
+                .state
+                .telemetry_tx
+                .send(DjLinkTelemetryEvent {
+                    kind: DjLinkTelemetryKind::Status,
+                    player,
+                    deck: None,
+                })
+                .unwrap();
+        }
+        let status = timeline.stop().unwrap();
+        assert_eq!(status["audio"], false);
+        assert_eq!(status["deckEvents"], 6);
+        assert_eq!(status["audioFrames"], 0);
+        assert_eq!(status["gaps"], 0);
+        let rows: Vec<Value> =
+            std::fs::read_to_string(timeline_directory.path().join("events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        assert_eq!(rows[0]["payload"]["mode"], "timeline");
+        assert!(rows[0]["payload"]["audioFile"].is_null());
+        assert_eq!(
+            rows[0]["payload"]["reconstruction"]["masterAudio"],
+            "notRequested"
+        );
+        assert!(!timeline_directory.path().join("master.caf").exists());
+        let players: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "deckRaw")
+            .map(|row| row["payload"]["player"].as_u64().unwrap())
+            .collect();
+        assert_eq!(players, vec![1, 2, 3, 4, 5, 6]);
+        assert!(
+            rows.windows(2)
+                .all(|rows| rows[0]["elapsedUs"].as_u64().unwrap()
+                    <= rows[1]["elapsedUs"].as_u64().unwrap())
+        );
+        actor.abort();
     }
 }

@@ -139,8 +139,7 @@ struct MobileNowPlaying: View {
     private var display: PlaybackDisplay {
         #if os(iOS)
         if !model.djLink.showingPhonePlayer, model.djLink.status.running, let deck = model.djLink.selectedDeck {
-            var track = deck.libraryTrackID.flatMap { model.tracksByID[$0] }
-            if track?.waveform == nil, let waveform = deck.waveform { track?.waveform = waveform }
+            let track = deck.presentationTrack(in: model.tracksByID)
             return PlaybackDisplay(track: track, deck: deck.state)
         }
         #endif
@@ -238,7 +237,6 @@ struct MobileNowPlaying: View {
             .overlay(alignment: .top) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
             .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.bottom")
             .onChange(of: display.identity) { _, _ in noteFocused = false; colorPaletteOpen = false; swipeOffset = 0; horizontalSwipe = nil }
-            .task(id: track?.id) { if display.isDeck, let track, track.waveform == nil { await model.loadWaveform(track) } }
     }
     @ViewBuilder private var sourceSelector: some View {
         #if os(iOS)

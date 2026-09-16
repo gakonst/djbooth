@@ -50,6 +50,7 @@ struct PlaybackWaveform: View {
     let player: BoothPlayer
     let display: PlaybackDisplay
     let cache: PlaybackWaveformCache
+    var accessibilityID = "nowPlaying.waveform"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorSchemeContrast) private var contrast
@@ -121,7 +122,7 @@ struct PlaybackWaveform: View {
             guard !display.isDeck, player.track != nil else { return }
             player.seek(player.elapsed + (direction == .increment ? 5 : -5))
         }
-        .accessibilityIdentifier("nowPlaying.waveform")
+        .accessibilityIdentifier(accessibilityID)
         .onChange(of: display.identity) { _, _ in cancelScrub() }
         .onChange(of: player.seekRevision) { _, _ in scrub = nil }
         .onChange(of: scenePhase) { _, phase in if phase != .active { cancelScrub() } }

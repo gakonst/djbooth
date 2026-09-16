@@ -120,7 +120,8 @@ final class DJLinkHardwareControl: @unchecked Sendable {
             guard !recording.busy else { throw DJLinkBindingError(message: "Recording is changing state") }
             switch operation {
             case "phone.recording.start":
-                await recording.start(model: model)
+                let arguments = input["arguments"] as? [String: Any] ?? [:]
+                await recording.start(model: model, includeAudio: arguments["audio"] as? Bool ?? false)
                 guard recording.isRecording else { throw DJLinkBindingError(message: recording.error ?? "Recording did not start") }
             case "phone.recording.stop": await recording.stop()
             default: throw DJLinkBindingError(message: "Unknown recording command")

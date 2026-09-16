@@ -31,6 +31,8 @@ pub(crate) fn request(operation: &str, input: &str) -> Result<Value> {
         struct Args {
             directory: PathBuf,
             tracks: Value,
+            #[serde(default)]
+            audio: bool,
         }
         let args: Args = serde_json::from_str(input)?;
         let session_guard = crate::SESSION
@@ -51,8 +53,12 @@ pub(crate) fn request(operation: &str, input: &str) -> Result<Value> {
             "DJ Link stopped before recording could start"
         );
         anyhow::ensure!(slot.is_none(), "A recording is already running");
-        let recording =
-            BoothRecording::start(session.server.clone(), &args.directory, args.tracks)?;
+        let recording = BoothRecording::start(
+            session.server.clone(),
+            &args.directory,
+            args.tracks,
+            args.audio,
+        )?;
         let result = recording.status();
         *slot = Some(recording);
         return Ok(result);
