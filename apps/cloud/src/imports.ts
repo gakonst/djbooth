@@ -9,7 +9,7 @@ const json = (value: unknown, status = 200) =>
 const error = (message: string, status = 400) => json({ error: { message } }, status);
 
 /** Remote callers can submit provider links, never local paths or arbitrary CLI flags. */
-function sourceURL(value: unknown): string | undefined {
+export function sourceURL(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 4096) return;
   try {
     const url = new URL(value.trim());

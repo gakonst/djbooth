@@ -193,9 +193,13 @@ function recordingIdentities(entry: ResolvedTrack): RecordingIdentity[] {
 function tracklistIdentity(entry: ResolvedTrack): RecordingIdentity {
   if (entry.identity.status !== "identified") throw new Error("Track identity is unresolved");
   const title = displayIdentityTitle(entry.identity.title, entry.identity.mix);
+  const duration = entry.identity.mediaLinks?.find(
+    (link) => link.platform === "soundcloud",
+  )?.durationSeconds;
   return {
     ...(entry.identity.isrc ? { isrc: entry.identity.isrc } : {}),
     title,
+    ...(duration === undefined ? {} : { durationMs: duration * 1000 }),
     artists: [entry.identity.artist],
     ...(entry.identity.album ? { album: entry.identity.album } : {}),
     ...(entry.identity.label ? { label: entry.identity.label } : {}),
@@ -330,18 +334,20 @@ function exactMediaCandidate(
   ) {
     return undefined;
   }
-  const youtube = media.find((link) => link.platform === "youtube");
-  if (!youtube) return undefined;
+  const exact =
+    media.find((link) => link.platform === "soundcloud") ??
+    media.find((link) => link.platform === "youtube");
+  if (!exact) return undefined;
   return {
     backend: "ytdlp",
-    id: youtube.sourceId,
-    source: youtube.url,
+    id: exact.sourceId,
+    source: exact.url,
     title: identity.title,
     artist: identity.artists.join(", "),
-    ...(youtube.durationSeconds === undefined && identity.durationMs === undefined
+    ...(exact.durationSeconds === undefined && identity.durationMs === undefined
       ? {}
       : {
-          durationSeconds: youtube.durationSeconds ?? Math.round(identity.durationMs! / 1000),
+          durationSeconds: exact.durationSeconds ?? Math.round(identity.durationMs! / 1000),
         }),
   };
 }

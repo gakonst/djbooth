@@ -1,6 +1,6 @@
 import { AuthError, CONNECT_API, CONNECT_APP_ID, credential, type Account } from "./auth.js";
 import type { Env } from "./index.js";
-import { imports } from "./imports.js";
+import { imports, sourceURL } from "./imports.js";
 
 type Provider = "spotify" | "soundcloud";
 type Wire = Record<string, unknown>;
@@ -128,15 +128,20 @@ function playlist(source: MusicSource, item: Wire): MusicPlaylist | undefined {
     source.provider === "spotify" ? string(item.id) : string(item.urn) || String(item.id ?? "");
   const name = string(item.name) || string(item.title);
   if (!remoteID || !name) return;
+  // The catalog, immutable metadata input, and import queue must share one URL.
+  // SoundCloud includes tracking parameters that the queue strips on submission.
+  const url = sourceURL(
+    source.provider === "spotify"
+      ? `https://open.spotify.com/playlist/${remoteID}`
+      : item.permalink_url,
+  );
+  if (!url) return;
   return {
     id: `connected:${source.id}:playlist:${remoteID}`,
     remoteID,
     sourceID: source.id,
     name,
-    url:
-      source.provider === "spotify"
-        ? `https://open.spotify.com/playlist/${remoteID}`
-        : string(item.permalink_url),
+    url,
     trackCount:
       source.provider === "spotify"
         ? count(record(item.items ?? item.tracks).total)

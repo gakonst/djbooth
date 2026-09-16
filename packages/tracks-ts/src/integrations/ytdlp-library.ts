@@ -74,6 +74,8 @@ export type YtdlpReferenceClient = {
 };
 
 export type YtdlpNativeAcquirerOptions = {
+  /** An explicitly registered reference downloader may try a fresh rejected CDN URL. */
+  allowReferenceFallback?: boolean;
   searchLimit?: number;
   cache?: JsonDiskCache | false;
   cacheMode?: CacheMode;
@@ -103,6 +105,7 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
   readonly #cacheMode: CacheMode;
   readonly #searchTtlMs: number;
   readonly #signal: AbortSignal | undefined;
+  readonly #allowReferenceFallback: boolean;
   readonly #dependencies: YtdlpNativeAcquirerDependencies;
 
   constructor(
@@ -121,6 +124,7 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
           }));
     this.#searchTtlMs = options.searchTtlMs ?? 6 * 60 * 60 * 1000;
     this.#signal = options.signal;
+    this.#allowReferenceFallback = options.allowReferenceFallback ?? false;
     this.#dependencies = { ...defaultNativeDependencies, ...dependencies };
   }
 
@@ -133,6 +137,9 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
   }
 
   shouldContinueAfterError(error: unknown) {
+    // download() has already re-extracted and retried a rejected media URL.
+    // Preserve native-only behavior unless the caller opted into another engine.
+    if (this.#allowReferenceFallback && isForbiddenMediaError(error)) return undefined;
     return nativeFallbackFor(error) ?? false;
   }
 
@@ -184,7 +191,7 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
 
     const context = this.#signal ? { signal: this.#signal } : {};
     let info = await this.#dependencies.extract(candidate.source, context);
-    assertYoutubeIdentity(info.id, candidate.id);
+    assertMediaIdentity(info, candidate.id);
     const downloadOptions: NativeDownloadOptions = {
       format: "bestaudio[ext=m4a]",
       paths: destinationDirectory,
@@ -202,8 +209,8 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
     } catch (error) {
       if (!isForbiddenMediaError(error)) throw error;
       const refreshed = await this.#dependencies.extract(candidate.source, context);
-      assertYoutubeIdentity(refreshed.id, info.id);
-      assertYoutubeIdentity(refreshed.id, candidate.id);
+      assertMediaIdentity(refreshed, info.id);
+      assertMediaIdentity(refreshed, candidate.id);
       info = refreshed;
       result = await this.#dependencies.downloadMedia(info, downloadOptions);
     }
@@ -219,11 +226,13 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
   }
 }
 
-function assertYoutubeIdentity(actual: string, expected: string): void {
-  if (actual === expected) return;
+function assertMediaIdentity(info: MediaInfo, expected: string): void {
+  if (info.id === expected) return;
+  const soundcloudID = /^soundcloud:tracks:(\d+)$/.exec(expected)?.[1];
+  if (info.extractor === "soundcloud" && soundcloudID === info.id) return;
   throw new YtdlpError(
     "YOUTUBE_IDENTITY_MISMATCH",
-    `Native inspection returned '${actual}' for '${expected}'`,
+    `Native inspection returned '${info.id}' for '${expected}'`,
   );
 }
 
@@ -283,7 +292,6 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     const source = `ytsearch${this.#searchLimit}:${query}`;
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       flatPlaylist: true,
-      extractorArgs: ["youtube:player_client=android_vr"],
     };
     const result = await this.#inspect("search", source, inspectOptions, this.#searchTtlMs);
     return (result.entries ?? []).flatMap((entry) => {
@@ -325,7 +333,6 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     }
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       playlist: false,
-      extractorArgs: ["youtube:player_client=android_vr"],
     };
     const info = await this.#inspect(
       "media",
@@ -347,7 +354,6 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
       audioFormat: "m4a",
       audioQuality: "0",
       embedMetadata: false,
-      extractorArgs: ["youtube:player_client=android_vr"],
     });
     const path = await findOutputFile(result.files, destinationDirectory, basename);
     return {

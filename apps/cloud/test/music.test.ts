@@ -3,7 +3,10 @@ import { musicRoute, musicSources, pagePath, SoundCloudStreamCache } from "../sr
 import type { Env } from "../src/index.js";
 import type { Account } from "../src/auth.js";
 const submit = vi.hoisted(() => vi.fn(async (_r, _e, _a, read) => Response.json(await read())));
-vi.mock("../src/imports.js", () => ({ imports: submit }));
+vi.mock("../src/imports.js", async (original) => ({
+  ...(await original<typeof import("../src/imports.js")>()),
+  imports: submit,
+}));
 const account: Account = {
   id: "owner",
   grantId: "grant",
@@ -195,6 +198,41 @@ describe("connected music authorization and provider contracts", () => {
       order: 1,
     });
     expect(JSON.stringify(artifact)).not.toContain("token");
+  });
+  it("uses the same SoundCloud URL for catalog, download metadata, and queue identity", async () => {
+    const playlist = {
+      urn: "soundcloud:playlists:123",
+      title: "Playlist",
+      permalink_url:
+        "https://soundcloud.com/artist/sets/playlist/s-private?utm_source=api&si=tracking",
+      track_count: 1,
+      tracks: [
+        {
+          urn: "soundcloud:tracks:456",
+          title: "Track",
+          permalink_url: "https://soundcloud.com/artist/track",
+          duration: 300000,
+        },
+      ],
+    };
+    const { env, objects } = fixture({
+      "/me/playlists?limit=50&linked_partitioning=true": { collection: [playlist] },
+      "/playlists/soundcloud%3Aplaylists%3A123": playlist,
+    });
+    const source = "https://soundcloud.com/artist/sets/playlist/s-private";
+    const catalog = (await (
+      await musicRoute(request("soundcloud/soundcloud-a/playlists"), env, account, async () => ({}))
+    ).json()) as { playlists: Array<{ url: string }> };
+    expect(catalog.playlists[0]?.url).toBe(source);
+    const id = "11111111-1111-4111-8111-111111111111";
+    const response = await musicRoute(
+      request("soundcloud/soundcloud-a/playlists/soundcloud:playlists:123/download", "POST"),
+      env,
+      account,
+      async () => ({ id }),
+    );
+    expect(await response.json()).toEqual({ id, source });
+    expect(JSON.parse(objects.get(`connected-playlists/owner/${id}.json`)!).url).toBe(source);
   });
   it("resolves full SoundCloud API streams through the grant-bound broker", async () => {
     const path = "/tracks/soundcloud:tracks:123/streams/abc-123/hls";

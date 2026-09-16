@@ -209,6 +209,45 @@ function importResult(manifest: SetManifest, changed: boolean): ImportManifestTo
 }
 
 describe("runSetToRekordbox", () => {
+  test("attempts the full hosted playlist while retaining failed rows for retry", async () => {
+    const state = downloadedManifest();
+    const failed = structuredClone(state.entries[0]!);
+    failed.id = "failed-track";
+    failed.order = 2;
+    failed.acquisition = {
+      status: "failed",
+      query: "Artist Track",
+      error: { stage: "acquisition", message: "HTTP 403", retryable: true },
+    };
+    failed.errors = [{ stage: "acquisition", message: "HTTP 403", retryable: true }];
+    state.entries.push(failed);
+    const cacheSourceSet = vi.fn();
+    await expect(
+      runSetToRekordbox({
+        source,
+        manifestPath,
+        outputDirectory,
+        initialState: state,
+        allowSourceSetClips: false,
+        acquirers: [],
+        stopAfter: "download",
+        dependencies: {
+          cacheSourceSet,
+          writeManifest: vi.fn(),
+          acquire: async (options) => {
+            expect(options.continueOnError).toBe(true);
+            return {
+              ...acquisitionResult(state, true),
+              failures: [{ entryOrder: 2, message: "HTTP 403" }],
+            };
+          },
+        },
+      }),
+    ).rejects.toThrow("1 unresolved entries");
+    expect(state.entries[0]!.acquisition.status).toBe("downloaded");
+    expect(state.entries[1]!.acquisition.status).toBe("failed");
+    expect(cacheSourceSet).not.toHaveBeenCalled();
+  });
   test("uses the verified full-mix duration and resumes its source without Spotify", async () => {
     const manifest = downloadedManifest();
     manifest.entries[0]!.spotify = { status: "pending" };

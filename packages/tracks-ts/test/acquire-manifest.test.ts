@@ -1081,65 +1081,86 @@ describe("acquireManifest", () => {
     }
   });
 
-  audioToolTest("tries an audited provider source only after earlier backends", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-provider-fallback-"));
-    const manifestPath = join(directory, "manifest.json");
-    const bin = await installFakeAudioTools(directory);
-    await writeManifestAtomic(manifestPath, oneTrackManifest());
-    const events: string[] = [];
-    const soulseek: TrackAcquirer = {
-      backend: "slsk",
-      availability: () => Promise.resolve({ available: true }),
-      search: async () => {
-        events.push("slsk-search");
-        return [];
-      },
-      download: async () => {
-        throw new Error("Soulseek had no candidate");
-      },
-    };
-    const provider: TrackAcquirer = {
-      backend: "ytdlp",
-      availability: () => Promise.resolve({ available: true }),
-      search: async () => {
-        events.push("ytdlp-search");
-        return [];
-      },
-      download: async (candidate, destination) => {
-        events.push(`ytdlp-download:${candidate.id}`);
-        await mkdir(destination, { recursive: true });
-        const path = join(destination, "provider.wav");
-        await writeFile(path, "provider audio");
-        return { path, source: candidate.source, temporary: true };
-      },
-    };
-    const plan = recordingPlan(directory);
-    plan.recordings[0]!.variants[0]!.preferredCandidate = {
-      backend: "ytdlp",
-      id: "soundcloud:tracks:1",
-      source: "https://soundcloud.com/artist/track",
-      title: "Track",
-      artist: "Artist",
-      durationSeconds: 100,
-    };
-    plan.recordings[0]!.variants[0]!.preferredCandidatePlacement = "backend-fallback";
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-    try {
-      await expect(
-        acquireManifest({
-          manifestPath,
-          plan,
-          acquirers: [soulseek, provider],
-          requireCompletePlan: true,
-          continueOnError: false,
-        }),
-      ).resolves.toMatchObject({ failures: [] });
-      expect(events).toEqual(["slsk-search", "ytdlp-download:soundcloud:tracks:1"]);
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
+  audioToolTest(
+    "preserves the audited provider source across native and reference fallback",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-provider-fallback-"));
+      const manifestPath = join(directory, "manifest.json");
+      const bin = await installFakeAudioTools(directory);
+      await writeManifestAtomic(manifestPath, oneTrackManifest());
+      const events: string[] = [];
+      const soulseek: TrackAcquirer = {
+        backend: "slsk",
+        availability: () => Promise.resolve({ available: true }),
+        search: async () => {
+          events.push("slsk-search");
+          return [];
+        },
+        download: async () => {
+          throw new Error("Soulseek had no candidate");
+        },
+      };
+      const provider: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: () => Promise.resolve({ available: true }),
+        search: async () => {
+          events.push("ytdlp-search");
+          return [];
+        },
+        download: async (candidate, destination) => {
+          events.push(`ytdlp-download:${candidate.id}`);
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "provider.wav");
+          await writeFile(path, "provider audio");
+          return { path, source: candidate.source, temporary: true };
+        },
+      };
+      const native: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: async () => ({ available: true }),
+        search: async () => {
+          events.push("native-search");
+          return [];
+        },
+        download: async () => {
+          events.push("native-download");
+          throw new YtdlpError("FORMAT_UNAVAILABLE", "No compatible native audio");
+        },
+        shouldContinueAfterError: (error) => nativeFallbackFor(error) ?? false,
+      };
+      const plan = recordingPlan(directory);
+      plan.recordings[0]!.variants[0]!.preferredCandidate = {
+        backend: "ytdlp",
+        id: "soundcloud:tracks:1",
+        source: "https://soundcloud.com/artist/track",
+        title: "Track",
+        artist: "Artist",
+        durationSeconds: 100,
+      };
+      plan.recordings[0]!.variants[0]!.preferredCandidatePlacement = "backend-fallback";
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        await expect(
+          acquireManifest({
+            manifestPath,
+            plan,
+            acquirers: [soulseek, native, provider],
+            requireCompletePlan: true,
+            continueOnError: false,
+          }),
+        ).resolves.toMatchObject({ failures: [] });
+        expect(events).toEqual([
+          "slsk-search",
+          "native-download",
+          "native-search",
+          "ytdlp-download:soundcloud:tracks:1",
+        ]);
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
 
   test("does not download through a later acquirer after a fail-closed native error", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-fail-closed-acquirer-"));

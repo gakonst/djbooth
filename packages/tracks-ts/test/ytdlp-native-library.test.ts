@@ -29,6 +29,47 @@ const mediaInfo: MediaInfo = {
 };
 
 describe("YtdlpNativeAcquirer", () => {
+  test("accepts the same SoundCloud recording across URN and numeric identities", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-soundcloud-identity-"));
+    let downloads = 0;
+    const acquirer = new YtdlpNativeAcquirer(
+      { cache: false },
+      {
+        extract: async () => ({ ...mediaInfo, id: "1714597092", extractor: "soundcloud" }),
+        downloadMedia: async () => {
+          downloads++;
+          const path = join(directory, "track.m4a");
+          await writeFile(path, "audio");
+          return { files: [path], selectedFormats: ["aac"] };
+        },
+      },
+    );
+    const candidate = {
+      id: "soundcloud:tracks:1714597092",
+      title: "Track",
+      source: "https://soundcloud.com/artist/track",
+      score: 1,
+    };
+    await acquirer.download(candidate, directory, "track");
+    expect(downloads).toBe(1);
+    await expect(
+      acquirer.download({ ...candidate, id: "soundcloud:tracks:99" }, directory, "other"),
+    ).rejects.toMatchObject({ code: "YOUTUBE_IDENTITY_MISMATCH" });
+    expect(downloads).toBe(1);
+  });
+  test("allows exhausted CDN403 fallback only with explicit reference opt-in", () => {
+    const error = new YtdlpError("HTTP_ERROR", "Media forbidden", { status: 403 });
+    expect(new YtdlpNativeAcquirer({ cache: false }).shouldContinueAfterError(error)).toBe(false);
+    const optedIn = new YtdlpNativeAcquirer({ cache: false, allowReferenceFallback: true });
+    expect(optedIn.shouldContinueAfterError(error)).toBeUndefined();
+    for (const code of [
+      "ABORTED",
+      "WRITE_FAILED",
+      "YOUTUBE_IDENTITY_MISMATCH",
+      "CONTENT_TOO_SHORT",
+    ])
+      expect(optedIn.shouldContinueAfterError(new YtdlpError(code, code))).toBe(false);
+  });
   test("searches and downloads an exact M4A without a reference client", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-ytdlp-native-"));
     const calls: Array<{ kind: string; value: unknown }> = [];

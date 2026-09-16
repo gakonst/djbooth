@@ -17,6 +17,48 @@ const published = {
   playlists: [{ id: `${options.namespace}:playlist:17`, tracks: 3 }],
 };
 describe("playlist container pipeline", () => {
+  test("keeps playlist counters while per-track analysis overlaps downloads", async () => {
+    const progress = vi.fn();
+    const run = vi.fn(async (args, _signal, onLine) => {
+      if (args[0] !== "import") return published;
+      onLine("[acquisition] progress: 13/50 recordings processed");
+      onLine("[analysis] completed 1/1 track.m4a");
+      expect(progress.mock.calls.at(-1)?.[0]).toMatchObject({
+        phase: "download",
+        current: 13,
+        total: 50,
+        message: "Downloading and analyzing recordings",
+      });
+      onLine("[acquisition] progress: 50/50 recordings processed");
+      onLine("[analysis] started 0/1 final.m4a");
+      expect(progress.mock.calls.at(-1)?.[0].phase).toBe("analyze");
+      return imported;
+    });
+    await processCloudImport(
+      "https://open.spotify.com/playlist/example",
+      options,
+      new AbortController().signal,
+      progress,
+      run,
+    );
+  });
+  test("does not reinterpret a hosted playlist download failure as a DJ set", async () => {
+    const error = new CloudProcessingError("import failed: HTTP 403");
+    const run = vi.fn().mockRejectedValue(error);
+    const resolve = vi.fn();
+    await expect(
+      processCloudImport(
+        "https://open.spotify.com/playlist/example",
+        { ...options, providerPlaylistFile: "/tmp/playlist.json", resolve },
+        new AbortController().signal,
+        vi.fn(),
+        run,
+      ),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(run.mock.calls[0]![0]).toContain("--reference-ytdlp");
+  });
   test("cloud backfill attaches artifacts without replacing mobile library edits", async () => {
     const run = vi.fn().mockResolvedValueOnce(imported).mockResolvedValueOnce(published);
     const result = await processCloudImport(
@@ -205,6 +247,14 @@ describe("playlist container pipeline", () => {
     expect(run).toHaveBeenCalledOnce();
   });
   test("progress extracts only bounded counters and known phases", () => {
+    expect(
+      importProgress("[acquisition] progress: 13/50 recordings processed (pass 1 of 2)"),
+    ).toEqual({
+      phase: "download",
+      current: 13,
+      total: 50,
+      message: "Downloading recordings",
+    });
     expect(importProgress("[analysis] secret provider URL https://private.test 2/10")).toEqual({
       phase: "analyze",
       current: 2,

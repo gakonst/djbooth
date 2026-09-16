@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import { parseManifest } from "../src/manifest.js";
+import { buildAcquisitionPlan } from "../src/generic-acquisition-plan.js";
 import {
   buildProviderPlaylistManifest,
   type ProviderPlaylistManifestInput,
@@ -127,7 +128,7 @@ describe("buildProviderPlaylistManifest", () => {
     expect(parseManifest(structuredClone(manifest))).toEqual(manifest);
   });
 
-  test("retains exact SoundCloud URN and permalink as a preferred ytdlp candidate", () => {
+  test("retains exact SoundCloud acquisition identity through planning and failed retries", async () => {
     const permalink =
       "https://soundcloud.com/artist-one/exact-mix?secret_token=s-ExactProviderValue";
     const manifest = buildProviderPlaylistManifest({
@@ -181,6 +182,26 @@ describe("buildProviderPlaylistManifest", () => {
       });
     }
     expect(parseManifest(structuredClone(manifest))).toEqual(manifest);
+    const assertPreferred = async () => {
+      const plan = await buildAcquisitionPlan(manifest, {
+        outputDirectory: "/tmp/soundcloud-plan",
+      });
+      expect(plan.recordings[0]!.variants[0]).toMatchObject({
+        durationMs: 241000,
+        preferredCandidatePlacement: "backend-fallback",
+        preferredCandidate: { id: "soundcloud:tracks:123456789", source: permalink },
+      });
+    };
+    await assertPreferred();
+    manifest.entries[0]!.acquisition = {
+      status: "failed",
+      error: {
+        stage: "acquisition",
+        message: "Temporary download failure",
+        retryable: true,
+      },
+    };
+    await assertPreferred();
   });
 
   test("builds an empty hosted playlist as a valid durable checkpoint", () => {

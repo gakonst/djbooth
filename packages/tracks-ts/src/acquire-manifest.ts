@@ -138,6 +138,7 @@ export type AcquisitionPlan = {
 
 export type AcquireProgress =
   | { phase: "manifest" | "spotify" | "backend"; message: string }
+  | { phase: "progress"; current: number; total: number; message: string }
   | {
       phase: "clip" | "recording";
       message: string;
@@ -654,6 +655,16 @@ export async function acquireManifest(
     );
     let activeClips = 0;
     let activeVariants = 0;
+    let processed = 0;
+    const total = plan.clips.length + recordingJobs.length;
+    const reportProcessed = () =>
+      options.onProgress?.({
+        phase: "progress",
+        current: processed,
+        total,
+        message: `${processed}/${total} recordings processed`,
+      });
+    reportProcessed();
     const clipMetrics: Omit<AcquisitionPerformance["stages"][number], "stage" | "durationMs"> = {
       operations: plan.clips.length,
       maxConcurrency: 0,
@@ -717,6 +728,8 @@ export async function acquireManifest(
               if (options.continueOnError === false) throw error;
             } finally {
               activeClips -= 1;
+              processed += 1;
+              reportProcessed();
             }
           },
           options.signal,
@@ -1014,6 +1027,8 @@ export async function acquireManifest(
               if (options.continueOnError === false) throw error;
             } finally {
               activeVariants -= 1;
+              processed += 1;
+              reportProcessed();
             }
           },
           options.signal,
@@ -1272,7 +1287,7 @@ async function acquireVariant(
   const preferredAcquirer = preferredCandidate
     ? acquirers.find((acquirer) => acquirer.backend === preferredCandidate.backend)
     : undefined;
-  let preferredAttempted = false;
+  const preferredAttempted = new Set<TrackAcquirer>();
   const acquirePreferred = async (
     acquirer: TrackAcquirer,
   ): Promise<
@@ -1283,8 +1298,8 @@ async function acquireVariant(
       }
     | undefined
   > => {
-    if (!preferredCandidate || preferredAttempted) return undefined;
-    preferredAttempted = true;
+    if (!preferredCandidate || preferredAttempted.has(acquirer)) return undefined;
+    preferredAttempted.add(acquirer);
     const selected: ScoredYoutubeCandidate = { ...preferredCandidate, score: 1 };
     let source: IndividualDownload | undefined;
     let validating = false;
@@ -1329,7 +1344,7 @@ async function acquireVariant(
   };
   const searches = acquirers.map((acquirer) =>
     acquirer.requiresPriorCapabilityFailure ||
-    (preferredCandidatePlacement === "backend-fallback" && preferredAcquirer === acquirer)
+    (preferredCandidate && acquirer.backend === preferredCandidate.backend)
       ? undefined
       : searchAcquirer(acquirer),
   );
@@ -1339,9 +1354,9 @@ async function acquireVariant(
       continue;
     }
     if (
-      preferredCandidatePlacement === "backend-fallback" &&
-      preferredAcquirer === acquirer &&
-      !preferredAttempted
+      preferredCandidate &&
+      acquirer.backend === preferredCandidate.backend &&
+      !preferredAttempted.has(acquirer)
     ) {
       const acquired = await acquirePreferred(acquirer);
       if (acquired) return acquired;

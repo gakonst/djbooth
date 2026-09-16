@@ -1129,6 +1129,7 @@ async function runSetWorkflowCommand(
         }),
       nativeYtdlp: () =>
         new YtdlpNativeAcquirer({
+          allowReferenceFallback: context.options.referenceYtdlp,
           cacheMode: context.options.cacheMode,
           signal: controller.signal,
         }),

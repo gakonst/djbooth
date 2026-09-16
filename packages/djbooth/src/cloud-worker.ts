@@ -202,11 +202,23 @@ export async function processCloudImport(
     "2",
     "--analysis-threads",
     "2",
+    "--reference-ytdlp",
   ];
   if (options.providerPlaylistFile)
     args.push("--provider-playlist-file", options.providerPlaylistFile);
+  let downloading: ReturnType<typeof importProgress>;
   const onLine = (line: string) => {
-    const update = importProgress(line);
+    let update = importProgress(line);
+    if (update?.phase === "download") downloading = update;
+    // Analysis runs per recording while the rest of the playlist downloads.
+    // Its local 1/1 counter must not replace the playlist's bounded progress.
+    if (
+      update?.phase === "analyze" &&
+      downloading?.current !== undefined &&
+      downloading.total !== undefined &&
+      downloading.current < downloading.total
+    )
+      update = { ...downloading, message: "Downloading and analyzing recordings" };
     if (update)
       emit({
         status: "running",
@@ -224,6 +236,7 @@ export async function processCloudImport(
       if (
         !(error instanceof CloudProcessingError) ||
         !/HTTP 403/.test(error.message) ||
+        options.providerPlaylistFile ||
         !options.resolve
       )
         throw error;

@@ -136,6 +136,20 @@ function tracklistEntry(track: ProviderPlaylistTrack): TracklistEntry {
     ...(track.releaseDate === undefined ? {} : { releaseDate: track.releaseDate }),
     ...(track.isrc === undefined ? {} : { isrc: track.isrc }),
     songLink: track.provider === "spotify" ? track.url : track.permalinkUrl,
+    ...(track.provider === "soundcloud"
+      ? {
+          mediaLinks: [
+            {
+              platform: "soundcloud",
+              sourceId: track.urn,
+              url: track.permalinkUrl,
+              ...(track.durationMs === undefined
+                ? {}
+                : { durationSeconds: Math.max(1, Math.round(track.durationMs / 1000)) }),
+            },
+          ],
+        }
+      : {}),
   };
 }
 

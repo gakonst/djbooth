@@ -595,16 +595,14 @@ export async function runSetToRekordbox(
             options.onProgress?.({
               stage: "acquisition",
               status: "started",
-              message: `${allowSourceSetClips ? `pass ${String(currentPass)}/2 ` : ""}${progress.phase}: ${progress.message}`,
+              message: `${progress.phase}: ${progress.message}${allowSourceSetClips ? ` (pass ${String(currentPass)} of 2)` : ""}`,
             });
           },
           ...(options.stopAfter === "download"
             ? {}
             : { onArtifactVerified: analyzeVerifiedArtifact }),
         });
-      const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [
-        await acquirePass(allowSourceSetClips),
-      ];
+      const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [await acquirePass(true)];
       acquisitionPasses = 1;
       const recoverableOrders = allowSourceSetClips
         ? sourceSetFallbackOrders(passes[0]!.manifest, passes[0]!.failures)
@@ -658,9 +656,16 @@ export async function runSetToRekordbox(
       manifest,
       manifest.entries.map((entry) => entry.order),
     );
-  const unavailable = settleUnavailableAcquisitions(manifest);
+  // Hosted playlists have no set extract fallback. Keep failed recordings
+  // retryable after attempting every row, preserving all successful downloads.
+  const unavailable = allowSourceSetClips ? settleUnavailableAcquisitions(manifest) : 0;
   if (unavailable) await savePipelineState(manifest);
-  assertAcquisitionReady(manifest);
+  try {
+    assertAcquisitionReady(manifest);
+  } catch (error) {
+    await Promise.allSettled(analysisTasks.values());
+    throw error;
+  }
 
   if (options.stopAfter === "download") {
     const caches: Record<string, CacheStats> = {
