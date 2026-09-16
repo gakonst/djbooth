@@ -68,6 +68,7 @@ private actor DJLinkEngine {
                 let bindIp, broadcastIp: String
                 let unicastDiscovery: Bool
                 let diagnostics: Bool
+                let discoveryCachePath: String
                 let tracks: [DJLinkLibrary.TrackRow]
                 let playlists: [DJLinkLibrary.PlaylistRow]
             }
@@ -79,6 +80,7 @@ private actor DJLinkEngine {
             let data = try JSONEncoder().encode(Start(bindIp: interface.ip, broadcastIp: interface.broadcast,
                                                      unicastDiscovery: unicastDiscovery,
                                                      diagnostics: diagnostics,
+                                                     discoveryCachePath: folder.appendingPathComponent("discovery-peers.json").path,
                                                      tracks: ready, playlists: library.playlists))
             let status = try request("start", input: String(decoding: data, as: UTF8.self), as: DJLinkStatus.self)
             directory = folder

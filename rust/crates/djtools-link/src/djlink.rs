@@ -167,6 +167,8 @@ pub struct DjLinkConfig {
     /// Discover local peers with unicast probes and use kernel sockets only.
     /// The mask must be the selected interface's actual IPv4 netmask.
     pub unicast_discovery_netmask: Option<Ipv4Addr>,
+    /// Optional bounded cache of verified peers, used only as discovery hints.
+    pub discovery_cache_path: Option<PathBuf>,
     pub db_server_port: u16,
     pub mount_port: Option<u16>,
     pub announce_interval: Duration,
@@ -232,6 +234,7 @@ impl Default for DjLinkConfig {
             bind_ip: None,
             broadcast_ip: None,
             unicast_discovery_netmask: None,
+            discovery_cache_path: None,
             db_server_port: DEFAULT_DBSERVER_PORT,
             mount_port: Some(DEFAULT_MOUNT_PORT),
             announce_interval: FAST_ANNOUNCE_INTERVAL,
@@ -5307,76 +5310,141 @@ fn spawn_unicast_discovery(
             1,
         );
         let init = build_status_link_init(&state.config.model_name, state.config.player_number);
-        // Keep a bounded, session-local address per real player. If a unicast
-        // deck goes quiet it disappears from the actor after ten seconds; it
-        // must not then wait for another complete /16 sweep to hear from us.
+        let started = Instant::now();
+        let cache_path = state.config.discovery_cache_path.as_deref();
+        let mut cached = crate::discovery::cached_peers(cache_path).await;
+        let mut neighbours = Vec::new();
         let mut known_players = BTreeMap::new();
-        let mut last_recovery = Instant::now();
+        let mut cursor = 0;
+        let mut tick = 0u64;
+        let mut first_response = false;
+        let mut reported_send_error = false;
+        let mut reported_neighbour_error = false;
+        let mut interval = tokio::time::interval(Duration::from_millis(125));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            // At most 128 candidates per second. Continue after permission or
-            // ARP failures so granting Local Network access needs no restart.
-            let mut reported_send_error = false;
-            let mut interval = tokio::time::interval(Duration::from_millis(125));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            for batch in addresses.chunks(16) {
-                // Once a deck replies, prioritize its browsing and audio over
-                // finding additional decks. Avoid continuous ARP pressure on
-                // the phone's USB adapter while NFS is serving a recording.
-                let devices = state.devices_sorted().await;
-                let recovery_targets = unicast_recovery_targets(&mut known_players, &devices);
-                if last_recovery.elapsed() >= Duration::from_secs(2) {
-                    for ip in recovery_targets {
-                        let _ = send_udp_packet(
-                            &state,
-                            &keepalive,
-                            &hello,
-                            SocketAddrV4::new(ip, KEEPALIVE_PORT),
-                            "unicast recovery hello",
-                        )
-                        .await;
-                        let _ = send_udp_packet(
-                            &state,
-                            &status,
-                            &init,
-                            SocketAddrV4::new(ip, STATUS_PORT),
-                            "unicast recovery link-init",
-                        )
-                        .await;
-                    }
-                    last_recovery = Instant::now();
-                }
-                if !devices.is_empty() {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-                interval.tick().await;
-                for ip in batch {
-                    let hello_result = send_udp_packet(
-                        &state,
-                        &keepalive,
-                        &hello,
-                        SocketAddrV4::new(*ip, KEEPALIVE_PORT),
-                        "unicast discovery hello",
-                    )
-                    .await;
-                    if let Err(error) = hello_result
-                        && !reported_send_error
-                    {
-                        reported_send_error = true;
-                        tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
-                    }
-                    let _ = send_udp_packet(
-                        &state,
-                        &status,
-                        &init,
-                        SocketAddrV4::new(*ip, STATUS_PORT),
-                        "unicast discovery link-init",
-                    )
-                    .await;
+            interval.tick().await;
+            let devices = state.devices_sorted().await;
+            if !devices.is_empty() && !first_response {
+                first_response = true;
+                tracing::info!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    peers = devices.len(),
+                    "unicast_discovery_first_response"
+                );
+            }
+            let recovery = unicast_recovery_targets(&mut known_players, &devices);
+            let mut changed = false;
+            for device in &devices {
+                if (1..=6).contains(&device.player_number)
+                    && crate::discovery::usable_peer(state.bind_ip, mask, device.ip_addr)
+                    && !cached.contains(&device.ip_addr)
+                {
+                    cached.insert(0, device.ip_addr);
+                    cached.truncate(crate::discovery::MAX_PEERS);
+                    changed = true;
                 }
             }
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            if changed && let Err(error) = crate::discovery::save_peers(cache_path, &cached).await {
+                tracing::warn!(%error, "unicast_discovery_cache_failed");
+            }
+            // Ask the kernel only every two seconds. Unlike a /16 sweep, the
+            // resolved USB neighbour is normally available as soon as IPv4 is.
+            if tick.is_multiple_of(16) {
+                match crate::discovery::neighbours(state.interface_name.as_deref()) {
+                    Ok(peers) => neighbours = peers,
+                    Err(error) if !reported_neighbour_error => {
+                        reported_neighbour_error = true;
+                        tracing::debug!(%error, "unicast_discovery_neighbours_unavailable");
+                    }
+                    Err(_) => {}
+                }
+            }
+            let mut targets = Vec::new();
+            let priority_due = if started.elapsed() < Duration::from_secs(5) {
+                tick.is_multiple_of(4)
+            } else {
+                tick.is_multiple_of(16)
+            };
+            if priority_due {
+                targets = discovery_priority_targets(
+                    state.bind_ip,
+                    mask,
+                    &cached,
+                    &neighbours,
+                    &recovery,
+                    &devices,
+                );
+                if !targets.is_empty() {
+                    tracing::debug!(
+                        ?targets,
+                        cached = cached.len(),
+                        neighbours = neighbours.len(),
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "unicast_discovery_priority"
+                    );
+                }
+            }
+            // Retain the bounded fallback scan. Once connected, reduce only
+            // fallback traffic, never the priority/recovery timer.
+            if devices.is_empty() || tick.is_multiple_of(16) {
+                let end = (cursor + 16).min(addresses.len());
+                for ip in &addresses[cursor..end] {
+                    if !targets.contains(ip) {
+                        targets.push(*ip);
+                    }
+                }
+                cursor = if end == addresses.len() { 0 } else { end };
+            }
+            for ip in targets {
+                if let Err(error) = send_udp_packet(
+                    &state,
+                    &keepalive,
+                    &hello,
+                    SocketAddrV4::new(ip, KEEPALIVE_PORT),
+                    "unicast discovery hello",
+                )
+                .await
+                    && !reported_send_error
+                {
+                    reported_send_error = true;
+                    tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
+                }
+                let _ = send_udp_packet(
+                    &state,
+                    &status,
+                    &init,
+                    SocketAddrV4::new(ip, STATUS_PORT),
+                    "unicast discovery link-init",
+                )
+                .await;
+            }
+            tick = tick.wrapping_add(1);
         }
     })
+}
+
+fn discovery_priority_targets(
+    local: Ipv4Addr,
+    mask: Ipv4Addr,
+    cached: &[Ipv4Addr],
+    neighbours: &[Ipv4Addr],
+    recovery: &[Ipv4Addr],
+    devices: &[LinkDevice],
+) -> Vec<Ipv4Addr> {
+    let mut targets = Vec::new();
+    for ip in recovery.iter().chain(cached).chain(neighbours) {
+        if crate::discovery::usable_peer(local, mask, *ip)
+            && !targets.contains(ip)
+            && !devices.iter().any(|device| device.ip_addr == *ip)
+        {
+            targets.push(*ip);
+            if targets.len() == crate::discovery::MAX_PEERS {
+                break;
+            }
+        }
+    }
+    targets
 }
 
 fn unicast_recovery_targets(
@@ -10393,6 +10461,57 @@ mod tests {
             // bytes in the stream before Back → playlist → another track.
         }
         handler.abort();
+    }
+
+    #[test]
+    fn cached_and_resolved_peers_are_probed_before_the_subnet_sweep() {
+        let local = Ipv4Addr::new(169, 254, 65, 9);
+        let mask = Ipv4Addr::new(255, 255, 0, 0);
+        let deck = Ipv4Addr::new(169, 254, 6, 175);
+        let second = Ipv4Addr::new(169, 254, 250, 200);
+        let unrelated = Ipv4Addr::new(10, 0, 0, 3);
+        // This observed deck used to be thousands of probes into the sweep.
+        assert!(
+            discovery_addresses(local, mask)
+                .unwrap()
+                .iter()
+                .position(|ip| *ip == deck)
+                .unwrap()
+                > 2000
+        );
+        assert_eq!(
+            discovery_priority_targets(
+                local,
+                mask,
+                &[deck, local, unrelated],
+                &[deck, second],
+                &[],
+                &[]
+            ),
+            [deck, second]
+        );
+        assert_eq!(
+            discovery_priority_targets(local, mask, &[deck], &[], &[second], &[]),
+            [second, deck]
+        );
+        let active = LinkDevice {
+            player_number: 3,
+            ip_addr: deck,
+            mac_addr: String::new(),
+            model: "CDJ-3000".into(),
+            last_seen: Instant::now(),
+        };
+        assert_eq!(
+            discovery_priority_targets(local, mask, &[deck], &[second], &[], &[active]),
+            [second]
+        );
+        let many = (1..100)
+            .map(|host| Ipv4Addr::new(169, 254, 8, host))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            discovery_priority_targets(local, mask, &many, &[], &[], &[]).len(),
+            32
+        );
     }
 
     #[test]

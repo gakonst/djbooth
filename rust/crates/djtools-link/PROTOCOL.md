@@ -177,6 +177,18 @@ Ethernet/IPv4/UDP fallback with IPv4 fragmentation.
 
 ## Network binding
 
+Unicast discovery first probes a bounded cache of previously verified peers and
+resolved IPv4 neighbours on the selected interface. Hints must be usable hosts
+in the attached subnet; they never count as discovered until a valid DJ Link
+reply arrives. Priority probes start immediately, repeat every 500 ms for five
+seconds, then every two seconds. The existing subnet sweep remains the fallback
+(128 candidates/s before discovery, 8/s while connected). Priority recovery is
+independent of the sweep cursor and its reduced rate. The optional cache contains
+at most 32 IPs, survives server/app restart, and is disposable transport state.
+Apple route-table access can be denied; failure leaves cached probes and the
+fallback scan working. `unicast_discovery_priority` and
+`unicast_discovery_first_response` report hints and measured startup latency.
+
 Every DJ Link socket is associated with the interface containing `bind_ip`.
 On macOS, set `IP_BOUND_IF` before bind/send. A 2026-07-26 live trace showed
 directed broadcast `sendto()` returning success while macOS emitted the packet

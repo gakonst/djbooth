@@ -971,6 +971,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
         bind_ip: args.bind_ip,
         broadcast_ip: args.broadcast_ip,
         unicast_discovery_netmask: None,
+        discovery_cache_path: None,
         db_server_port: args.db_port,
         mount_port: Some(DEFAULT_MOUNT_PORT),
         announce_interval: Duration::from_millis(500),

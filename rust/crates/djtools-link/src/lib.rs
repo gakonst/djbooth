@@ -1,6 +1,7 @@
 mod actor;
 mod db;
 pub mod diagnostics;
+mod discovery;
 mod djlink;
 mod error;
 mod ids;

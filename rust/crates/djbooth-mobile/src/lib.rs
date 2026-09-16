@@ -85,6 +85,8 @@ struct StartRequest {
     unicast_discovery: bool,
     #[serde(default)]
     diagnostics: bool,
+    #[serde(default)]
+    discovery_cache_path: Option<PathBuf>,
     tracks: Vec<TrackRecord>,
     playlists: Vec<PlaylistRecord>,
 }
@@ -319,6 +321,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                 )?;
             let unicast_discovery_netmask = input.unicast_discovery.then_some(interface.netmask);
             let diagnostics = input.diagnostics;
+            let discovery_cache_path = input.discovery_cache_path.clone();
             let library = input.library()?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -332,6 +335,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     bind_ip: Some(bind_ip),
                     broadcast_ip: Some(broadcast_ip),
                     unicast_discovery_netmask,
+                    discovery_cache_path,
                     db_server_port: DEFAULT_DBSERVER_PORT,
                     mount_port: Some(DEFAULT_MOUNT_PORT),
                     announce_interval: Duration::from_millis(500),
@@ -500,6 +504,7 @@ mod tests {
             broadcast_ip: Ipv4Addr::BROADCAST,
             unicast_discovery: true,
             diagnostics: false,
+            discovery_cache_path: None,
             tracks: vec![TrackRecord {
                 track_id: 1,
                 mount_path: path.clone(),
