@@ -326,17 +326,55 @@ export async function musicRoute(
   readJSON: (r: Request) => Promise<unknown>,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const sources = await musicSources(request, env, account);
-  if (url.pathname === "/v1/music/sources" && request.method === "GET") return json({ sources });
+  if (url.pathname === "/v1/music/sources" && request.method === "GET")
+    return json({ sources: await musicSources(request, env, account) });
   const match =
     /^\/v1\/music\/(spotify|soundcloud)\/([A-Za-z0-9_-]{1,256})\/(playlists|tracks)(?:\/([^/]+)(?:\/(download|stream))?)?$/.exec(
       url.pathname,
     );
   if (!match) throw new AuthError(404, "Music route not found.");
-  const source = sources.find((v) => v.provider === match[1] && v.connectionID === match[2]);
-  if (!source) throw new AuthError(403, "This music account is not connected or approved.");
   const id = match[4] ? decodeURIComponent(match[4]) : undefined;
   if (id && !/^[A-Za-z0-9:_-]{1,256}$/.test(id)) throw new AuthError(400, "Invalid music ID.");
+  if (
+    match[1] === "soundcloud" &&
+    match[3] === "tracks" &&
+    id &&
+    match[5] === "stream" &&
+    request.method === "GET"
+  ) {
+    if (!account.capabilities.includes("soundcloud"))
+      throw new AuthError(403, "This music account is not connected or approved.");
+    const requested: MusicSource = {
+      id: `soundcloud:${match[2]}`,
+      provider: "soundcloud",
+      connectionID: match[2],
+      accountID: "",
+      label: "",
+    };
+    const resolve = () => soundCloudStream(request, env, requested, id);
+    const cacheKey = JSON.stringify([account.id, account.grantId, requested.connectionID, id]);
+    const force = /(?:^|,)\s*(?:no-cache|no-store)\b/i.test(
+      request.headers.get("cache-control") ?? "",
+    );
+    // Each provider request independently enforces the exact opted-in connection
+    // at the broker. The separate account check can therefore run alongside it,
+    // and must still succeed before returning a URL, including on cache hits.
+    const [sources, stream] = await Promise.all([
+      musicSources(request, env, account),
+      force ? resolve() : soundCloudStreams.get(cacheKey, resolve),
+    ]);
+    if (
+      !sources.some(
+        (source) =>
+          source.provider === "soundcloud" && source.connectionID === requested.connectionID,
+      )
+    )
+      throw new AuthError(403, "This music account is not connected or approved.");
+    return json({ url: stream });
+  }
+  const sources = await musicSources(request, env, account);
+  const source = sources.find((v) => v.provider === match[1] && v.connectionID === match[2]);
+  if (!source) throw new AuthError(403, "This music account is not connected or approved.");
   if (match[3] === "playlists" && !id && request.method === "GET") {
     const path = source.provider === "spotify" ? "/v1/me/playlists" : "/me/playlists";
     const cursor = url.searchParams.get("cursor");
@@ -411,21 +449,6 @@ export async function musicRoute(
       account,
       async () => ({ id: body.id, source: input.url }),
     );
-  }
-  if (
-    source.provider === "soundcloud" &&
-    match[3] === "tracks" &&
-    id &&
-    match[5] === "stream" &&
-    request.method === "GET"
-  ) {
-    const resolve = () => soundCloudStream(request, env, source, id);
-    const cacheKey = JSON.stringify([account.id, account.grantId, source.connectionID, id]);
-    const force = /(?:^|,)\s*(?:no-cache|no-store)\b/i.test(
-      request.headers.get("cache-control") ?? "",
-    );
-    const stream = await (force ? resolve() : soundCloudStreams.get(cacheKey, resolve));
-    return json({ url: stream });
   }
   throw new AuthError(405, "Method not allowed.");
 }

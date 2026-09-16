@@ -30,6 +30,7 @@ import DJBoothKit
     func updateStream(playing: Bool, elapsed: Double, error: String?) {
         guard streamControl != nil else { return }
         self.playing = scrubSession == nil && playing; if scrubSession == nil { self.elapsed = elapsed }; self.error = error
+        PerformanceProbe.playbackState(playing: self.playing, trackID: track?.id)
         updateNowPlaying(); onStateChange?(false)
     }
     var hasPreparedItem: Bool {

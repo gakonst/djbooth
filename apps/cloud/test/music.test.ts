@@ -287,7 +287,7 @@ describe("connected music authorization and provider contracts", () => {
 });
 
 describe("SoundCloud stream startup latency", () => {
-  it("loads track availability and stream metadata concurrently", async () => {
+  it("checks account approval alongside independently authorized track and stream requests", async () => {
     const { env } = fixture({
       "/tracks/123": { id: 123, title: "Full", streamable: true },
       "/tracks/123/streams": {
@@ -301,10 +301,12 @@ describe("SoundCloud stream startup latency", () => {
     });
     const paths: string[] = [];
     env.CONNECT_API_SERVICE!.fetch = (async (r: Request) => {
-      if (!r.url.endsWith("account-info")) {
-        paths.push(((await r.clone().json()) as { path: string }).path);
-        await gate;
-      }
+      paths.push(
+        r.url.endsWith("account-info")
+          ? "account-info"
+          : ((await r.clone().json()) as { path: string }).path,
+      );
+      await gate;
       return original(r);
     }) as NonNullable<Env["CONNECT_API_SERVICE"]>["fetch"];
     const result = musicRoute(
@@ -313,7 +315,9 @@ describe("SoundCloud stream startup latency", () => {
       account,
       async () => ({}),
     );
-    await vi.waitFor(() => expect(paths).toEqual(["/tracks/123", "/tracks/123/streams"]));
+    await vi.waitFor(() =>
+      expect(paths).toEqual(["account-info", "/tracks/123", "/tracks/123/streams"]),
+    );
     release();
     expect((await result).status).toBe(200);
   });
