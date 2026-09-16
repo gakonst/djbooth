@@ -230,6 +230,95 @@ async function snapshot(request: Request, env: Env, source: MusicSource, id: str
   }
   return { playlist: metadata, tracks, fetchedAt: Date.now() / 1000 };
 }
+// Ephemeral signed URLs only. Authentication and exact connector approval are
+// checked by musicRoute on EVERY request, including cache hits. No audio is cached.
+export class SoundCloudStreamCache {
+  private readonly entries = new Map<string, { expiresAt: number; value: Promise<string> }>();
+  constructor(
+    private readonly ttl = 15_000,
+    private readonly capacity = 128,
+  ) {}
+  get(key: string, resolve: () => Promise<string>): Promise<string> {
+    const now = Date.now();
+    for (const [key, entry] of this.entries) if (entry.expiresAt <= now) this.entries.delete(key);
+    const cached = this.entries.get(key);
+    if (cached) return cached.value;
+    while (this.entries.size >= this.capacity)
+      this.entries.delete(this.entries.keys().next().value!);
+    const entry = { expiresAt: now + this.ttl, value: Promise.resolve().then(resolve) };
+    this.entries.set(key, entry);
+    entry.value = entry.value.catch((error: unknown) => {
+      if (this.entries.get(key) === entry) this.entries.delete(key);
+      throw error;
+    });
+    return entry.value;
+  }
+}
+const soundCloudStreams = new SoundCloudStreamCache();
+async function soundCloudStream(
+  request: Request,
+  env: Env,
+  source: MusicSource,
+  id: string,
+): Promise<string> {
+  const [info, streams] = await Promise.all([
+    providerRead(request, env, source, `/tracks/${encodeURIComponent(id)}`),
+    providerRead(request, env, source, `/tracks/${encodeURIComponent(id)}/streams`),
+  ]);
+  if (!track(source, info)?.available)
+    throw new AuthError(403, "SoundCloud does not allow full playback of this track.");
+  const value = [
+    streams.hls_aac_160_url,
+    streams.hls_aac_96_url,
+    streams.hls_mp3_128_url,
+    streams.http_mp3_128_url,
+  ]
+    .map(string)
+    .find(Boolean);
+  if (!value) throw new AuthError(403, "SoundCloud does not provide a full stream for this track.");
+  let stream: URL;
+  try {
+    stream = new URL(value);
+  } catch {
+    throw new AuthError(502, "SoundCloud did not return a playable stream.");
+  }
+  if (
+    stream.origin === "https://api.soundcloud.com" &&
+    !stream.search &&
+    !stream.hash &&
+    /^\/tracks\/(?:soundcloud(?::|%3A)tracks(?::|%3A))?\d+\/streams\/[A-Za-z0-9-]+\/(hls|http)$/i.test(
+      stream.pathname,
+    )
+  ) {
+    const resolved = record(
+      await connect(request, env, "/v1/connectors/soundcloud/stream", {
+        path: stream.pathname,
+        connection_id: source.connectionID,
+      }),
+    );
+    try {
+      stream = new URL(string(resolved.url));
+    } catch {
+      throw new AuthError(502, "SoundCloud did not return a playable stream.");
+    }
+  }
+  if (
+    stream.protocol !== "https:" ||
+    !(
+      stream.hostname.endsWith(".sndcdn.com") ||
+      stream.hostname === "playback.media-streaming.soundcloud.cloud"
+    ) ||
+    stream.username ||
+    stream.password ||
+    stream.port ||
+    stream.hash ||
+    [...stream.searchParams.keys()].some((name) =>
+      /^(oauth_token|access_token|refresh_token|client_secret)$/i.test(name),
+    )
+  )
+    throw new AuthError(502, "SoundCloud did not return a playable stream.");
+  return stream.href;
+}
 export async function musicRoute(
   request: Request,
   env: Env,
@@ -330,67 +419,13 @@ export async function musicRoute(
     match[5] === "stream" &&
     request.method === "GET"
   ) {
-    const info = await providerRead(request, env, source, `/tracks/${encodeURIComponent(id)}`);
-    if (!track(source, info)?.available)
-      throw new AuthError(403, "SoundCloud does not allow full playback of this track.");
-    const streams = await providerRead(
-      request,
-      env,
-      source,
-      `/tracks/${encodeURIComponent(id)}/streams`,
+    const resolve = () => soundCloudStream(request, env, source, id);
+    const cacheKey = JSON.stringify([account.id, account.grantId, source.connectionID, id]);
+    const force = /(?:^|,)\s*(?:no-cache|no-store)\b/i.test(
+      request.headers.get("cache-control") ?? "",
     );
-    const value = [
-      streams.hls_aac_160_url,
-      streams.hls_aac_96_url,
-      streams.hls_mp3_128_url,
-      streams.http_mp3_128_url,
-    ]
-      .map(string)
-      .find(Boolean);
-    if (!value)
-      throw new AuthError(403, "SoundCloud does not provide a full stream for this track.");
-    let stream: URL;
-    try {
-      stream = new URL(value);
-    } catch {
-      throw new AuthError(502, "SoundCloud did not return a playable stream.");
-    }
-    if (
-      stream.origin === "https://api.soundcloud.com" &&
-      !stream.search &&
-      !stream.hash &&
-      /^\/tracks\/(?:soundcloud(?::|%3A)tracks(?::|%3A))?\d+\/streams\/[A-Za-z0-9-]+\/(hls|http)$/i.test(
-        stream.pathname,
-      )
-    ) {
-      const resolved = record(
-        await connect(request, env, "/v1/connectors/soundcloud/stream", {
-          path: stream.pathname,
-          connection_id: source.connectionID,
-        }),
-      );
-      try {
-        stream = new URL(string(resolved.url));
-      } catch {
-        throw new AuthError(502, "SoundCloud did not return a playable stream.");
-      }
-    }
-    if (
-      stream.protocol !== "https:" ||
-      !(
-        stream.hostname.endsWith(".sndcdn.com") ||
-        stream.hostname === "playback.media-streaming.soundcloud.cloud"
-      ) ||
-      stream.username ||
-      stream.password ||
-      stream.port ||
-      stream.hash ||
-      [...stream.searchParams.keys()].some((name) =>
-        /^(oauth_token|access_token|refresh_token|client_secret)$/i.test(name),
-      )
-    )
-      throw new AuthError(502, "SoundCloud did not return a playable stream.");
-    return json({ url: stream.href });
+    const stream = await (force ? resolve() : soundCloudStreams.get(cacheKey, resolve));
+    return json({ url: stream });
   }
   throw new AuthError(405, "Method not allowed.");
 }

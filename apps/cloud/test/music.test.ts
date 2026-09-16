@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { musicRoute, musicSources, pagePath } from "../src/music.js";
+import { musicRoute, musicSources, pagePath, SoundCloudStreamCache } from "../src/music.js";
 import type { Env } from "../src/index.js";
 import type { Account } from "../src/auth.js";
 const submit = vi.hoisted(() => vi.fn(async (_r, _e, _a, read) => Response.json(await read())));
@@ -13,7 +13,7 @@ const account: Account = {
 const request = (path: string, method = "GET") =>
   new Request("https://library.test/v1/music/" + path, {
     method,
-    headers: { authorization: "Bearer nc1.grant.token" },
+    headers: { authorization: "Bearer nc1.grant.token", "cache-control": "no-cache" },
   });
 function fixture(responses: Record<string, unknown>) {
   const calls: string[] = [],
@@ -259,7 +259,10 @@ describe("connected music authorization and provider contracts", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
   it("does not present previews as full playback or return arbitrary streaming hosts", async () => {
-    let { env } = fixture({ "/tracks/123": { id: 123, title: "Preview", access: "preview" } });
+    let { env } = fixture({
+      "/tracks/123": { id: 123, title: "Preview", access: "preview" },
+      "/tracks/123/streams": { preview_mp3_128_url: "https://media.sndcdn.com/preview.mp3" },
+    });
     await expect(
       musicRoute(
         request("soundcloud/soundcloud-a/tracks/123/stream"),
@@ -280,5 +283,96 @@ describe("connected music authorization and provider contracts", () => {
         async () => ({}),
       ),
     ).rejects.toMatchObject({ status: 502 });
+  });
+});
+
+describe("SoundCloud stream startup latency", () => {
+  it("loads track availability and stream metadata concurrently", async () => {
+    const { env } = fixture({
+      "/tracks/123": { id: 123, title: "Full", streamable: true },
+      "/tracks/123/streams": {
+        hls_aac_160_url: "https://playback.media-streaming.soundcloud.cloud/audio.m3u8",
+      },
+    });
+    const original = env.CONNECT_API_SERVICE!.fetch.bind(env.CONNECT_API_SERVICE);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const paths: string[] = [];
+    env.CONNECT_API_SERVICE!.fetch = (async (r: Request) => {
+      if (!r.url.endsWith("account-info")) {
+        paths.push(((await r.clone().json()) as { path: string }).path);
+        await gate;
+      }
+      return original(r);
+    }) as NonNullable<Env["CONNECT_API_SERVICE"]>["fetch"];
+    const result = musicRoute(
+      request("soundcloud/soundcloud-a/tracks/123/stream"),
+      env,
+      account,
+      async () => ({}),
+    );
+    await vi.waitFor(() => expect(paths).toEqual(["/tracks/123", "/tracks/123/streams"]));
+    release();
+    expect((await result).status).toBe(200);
+  });
+  it("shares in-flight resolution, expires quickly, separates grants and retries failures", async () => {
+    let now = 1000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const cache = new SoundCloudStreamCache(15000, 2);
+      let finish!: (value: string) => void;
+      const resolve = vi.fn(
+        () =>
+          new Promise<string>((r) => {
+            finish = r;
+          }),
+      );
+      const first = cache.get("grant-a", resolve);
+      const second = cache.get("grant-a", resolve);
+      await Promise.resolve();
+      expect(resolve).toHaveBeenCalledTimes(1);
+      finish("https://media.sndcdn.com/audio");
+      expect(await first).toBe(await second);
+      expect(await cache.get("grant-a", resolve)).toBe(await first);
+      const other = vi.fn(async () => "other");
+      expect(await cache.get("grant-b", other)).toBe("other");
+      now += 15001;
+      expect(await cache.get("grant-a", other)).toBe("other");
+      expect(other).toHaveBeenCalledTimes(2);
+      await expect(
+        cache.get("failed", async () => {
+          throw new Error("retry");
+        }),
+      ).rejects.toThrow("retry");
+      expect(await cache.get("failed", other)).toBe("other");
+      // Bound memory: inserting a third key evicts the oldest entry.
+      await cache.get("third", other);
+      await cache.get("grant-a", other);
+      expect(other).toHaveBeenCalledTimes(5);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+  it("rechecks approval before serving a cached stream and isolates grants", async () => {
+    const { env, calls } = fixture({
+      "/tracks/456": { id: 456, title: "Full", streamable: true },
+      "/tracks/456/streams": { hls_aac_160_url: "https://media.sndcdn.com/audio.m3u8" },
+    });
+    const r = request("soundcloud/soundcloud-a/tracks/456/stream");
+    r.headers.delete("cache-control");
+    const read = (selected = account) => musicRoute(r, env, selected, async () => ({}));
+    await Promise.all([read(), read()]);
+    expect(calls).toHaveLength(2);
+    await read({ ...account, grantId: "another-grant" });
+    expect(calls).toHaveLength(4);
+    const original = env.CONNECT_API_SERVICE!.fetch.bind(env.CONNECT_API_SERVICE);
+    env.CONNECT_API_SERVICE!.fetch = (async (request: Request) =>
+      request.url.endsWith("account-info")
+        ? Response.json({ connectors: {} })
+        : original(request)) as NonNullable<Env["CONNECT_API_SERVICE"]>["fetch"];
+    await expect(read()).rejects.toMatchObject({ status: 403 });
+    expect(calls).toHaveLength(4);
   });
 });
