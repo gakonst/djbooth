@@ -134,9 +134,11 @@ private struct BoothLaunchConfiguration: Sendable {
     private var musicDownloadIDs: [String: String] = [:]
     func connectedPlaylist(_ id: String) -> MusicPlaylist? { musicCatalog.playlists.first { $0.id == id } }
     func musicIsDownloaded(_ playlist: MusicPlaylist) -> Bool {
-        guard let job = importJobs.first(where: { $0.source == playlist.url && $0.status == "complete" }),
-              let collection = collections.first(where: { $0.id == job.collectionID }), !collection.trackIDs.isEmpty else { return false }
+        guard let collection = musicCatalog.downloadedCollection(for: playlist, library: collections) else { return false }
         return collection.trackIDs.allSatisfy { tracksByID[$0]?.mediaHash != nil }
+    }
+    var connectedDownloadCollectionIDs: Set<String> {
+        Set(musicCatalog.playlists.compactMap { musicCatalog.downloadedCollection(for: $0, library: collections)?.id })
     }
     private var musicRefreshTask: Task<Void, Never>?
     func refreshMusic(force: Bool = false, provider: String? = nil) async {
@@ -258,6 +260,9 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func loadMusicPlaylist(_ item: MusicPlaylist, force: Bool = false) async {
+        // Acquired recordings use the regular library player and analysis. They
+        // do not need a streaming login or a connector request to open offline.
+        if !force, musicIsDownloaded(item) { return }
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicPlaylistLoading.contains(item.id) else { return }
         warmSpotifySession(source)
         if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 {
@@ -285,6 +290,10 @@ private struct BoothLaunchConfiguration: Sendable {
             let job = try await cloud.downloadMusicPlaylist(item, source: source, id: id)
             guard generation == connectionGeneration else { return }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
+            if musicCatalog.rememberDownloads(importJobs) { try store.saveMusicCatalog(musicCatalog) }
+            try reloadCollections()
+            if job.status == "complete" { await synchronize() }
+            guard generation == connectionGeneration else { return }
             showImport = true; importError = nil
         } catch { if generation == connectionGeneration { message = error.localizedDescription } }
     }
@@ -864,6 +873,10 @@ private struct BoothLaunchConfiguration: Sendable {
             guard generation == connectionGeneration else { return }
             let completed = jobs.contains { job in job.status == "complete" && !importJobs.contains { $0.id == job.id && $0.status == "complete" } }
             importJobs = jobs; importRefreshError = nil
+            if musicCatalog.rememberDownloads(jobs) { try store.saveMusicCatalog(musicCatalog) }
+            // Sync may already be running, or these tracks may already be on
+            // disk. Reproject membership as soon as provenance arrives.
+            try reloadCollections()
             if completed { await synchronize() }
         } catch {
             guard generation == connectionGeneration else { return }

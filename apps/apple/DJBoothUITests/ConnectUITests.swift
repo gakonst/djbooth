@@ -179,6 +179,50 @@ import XCTest
         app.buttons["connect.logout"].tap()
     }
 
+    func testDownloadedPlaylistsStayInsideServicesWithAnalysisAfterRelaunch() throws {
+        guard let _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_fixture")!) else { throw XCTSkip("Start mobile fixture") }
+        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=1")!)
+        defer { _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=0")!) }
+        let app = XCUIApplication()
+        app.launchEnvironment["DJBOOTH_CLOUD_URL"] = "http://127.0.0.1:8791"
+        app.launch()
+        if !app.buttons["connect.login"].exists { openSettings(app) }
+        login("Alice", app)
+        XCTAssertTrue(app.buttons["music.source.Spotify"].waitForExistence(timeout: 20))
+        app.buttons["music.source.Spotify"].tap()
+        XCTAssertTrue(app.buttons["music.playlist.fixture-playlist"].waitForExistence(timeout: 20))
+        app.buttons["music.playlist.fixture-playlist"].tap()
+        XCTAssertTrue(app.staticTexts["Alice streaming track"].waitForExistence(timeout: 10))
+        let data = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music_downloaded")!)
+        let runID = try XCTUnwrap((JSONSerialization.jsonObject(with: data) as? [String: String])?["runID"])
+        // A completed import must replace the currently open service playlist,
+        // without navigating to the separate publication receipt.
+        XCTAssertTrue(app.staticTexts["Acquired spotify recording"].waitForExistence(timeout: 40))
+        XCTAssertFalse(app.staticTexts["Alice streaming track"].exists)
+        app.terminate(); app.launch()
+        if app.buttons["playlist.back"].waitForExistence(timeout: 5) { app.buttons["playlist.back"].tap() }
+        if app.navigationBars.buttons["BackButton"].exists { app.navigationBars.buttons["BackButton"].tap() }
+        for (provider, remoteID) in [("Spotify", "fixture-playlist"), ("SoundCloud", "soundcloud:playlists:123")] {
+            XCTAssertTrue(app.buttons["music.source.\(provider)"].waitForExistence(timeout: 20))
+            XCTAssertFalse(app.staticTexts["Published \(provider.lowercased()) copy"].exists)
+            app.buttons["music.source.\(provider)"].tap()
+            XCTAssertTrue(app.buttons["music.playlist.\(remoteID)"].waitForExistence(timeout: 20))
+            XCTAssertTrue(app.staticTexts["1 tracks · Downloaded"].exists)
+            app.buttons["music.playlist.\(remoteID)"].tap()
+            let trackID = "downloaded-\(provider.lowercased())-\(runID):track"
+            let bpm = app.staticTexts["track.bpm.\(trackID)"]
+            XCTAssertTrue(bpm.waitForExistence(timeout: 10))
+            XCTAssertEqual(bpm.label, "128.0")
+            XCTAssertEqual(app.staticTexts["track.key.\(trackID)"].label, "8A")
+            XCTAssertFalse(app.buttons["music.playlist.retry"].exists)
+            capture(app, "\(provider) original playlist with acquired analysis")
+            app.buttons["playlist.back"].tap()
+            app.navigationBars.buttons["BackButton"].tap()
+        }
+        openSettings(app)
+        app.buttons["connect.logout"].tap()
+    }
+
     private func openSettings(_ app: XCUIApplication) {
         for _ in 0..<5 {
             if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }

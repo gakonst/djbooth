@@ -351,6 +351,52 @@ const app = await serve(8791, async (request) => {
     musicFolderFailure = new URL(request.url).searchParams.get("enabled") === "1";
     return new Response("ok");
   }
+  if (path === "/__mobile_music_downloaded") {
+    // Published output fixture: use the real sync/import endpoints on the app
+    // side, without running external acquisition services in a UI test.
+    for (const provider of ["spotify", "soundcloud"]) {
+      const id = `downloaded-${provider}-${musicRunID}`;
+      const source =
+        provider === "spotify"
+          ? "https://open.spotify.com/playlist/fixture-playlist"
+          : "https://soundcloud.com/local-test/sets/alice";
+      const track = {
+        id: `${id}:track`,
+        title: `Acquired ${provider} recording`,
+        artist: "Fixture Artist",
+        analyzed: true,
+        bpm: 128,
+        key: "8A",
+        mediaHash: "a".repeat(64),
+        fileExists: false,
+        artworkAvailable: false,
+        durationSeconds: 120,
+        waveform: { peaks: [0.2, 0.8, 0.4], source: "rekordbox" },
+      };
+      const collection = {
+        id: `${id}:playlist`,
+        name: `Published ${provider} copy`,
+        trackIDs: [track.id],
+      };
+      for (const [kind, payload] of [
+        ["track", track],
+        ["collection", collection],
+      ])
+        await db
+          .prepare(
+            "INSERT INTO sync_changes(account_id,operation_id,kind,entity_id,base_version,payload,deleted) VALUES (?,?,?,?,0,?,0)",
+          )
+          .bind(account("Alice"), `${id}:${kind}`, kind, payload.id, JSON.stringify(payload))
+          .run();
+      await db
+        .prepare(
+          "INSERT INTO import_requests(account_id,id,container_id,source,status,phase,current,total,message,collection_id,created_at,updated_at) VALUES (?,?,?,?,'complete','complete',1,1,'Published',?,?,?) ON CONFLICT(account_id,source) DO UPDATE SET status='complete',phase='complete',collection_id=excluded.collection_id,updated_at=excluded.updated_at",
+        )
+        .bind(account("Alice"), id, id, source, collection.id, Date.now(), Date.now())
+        .run();
+    }
+    return Response.json({ runID: musicRunID });
+  }
   if (path === "/__mobile_fixture") return new Response("djbooth-mobile-fixture");
   if (path === "/v1/auth/config")
     return Response.json({ appId: "djbooth", api: issuerOrigin, dialog: `${issuerOrigin}/dialog` });

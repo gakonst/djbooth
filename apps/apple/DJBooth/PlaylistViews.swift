@@ -48,7 +48,8 @@ struct PlaylistBrowserView: View {
             return model.playlistSortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
         }
         #else
-        model.collections.sorted { first, second in
+        let connectedDownloads = model.connectedDownloadCollectionIDs
+        return model.collections.filter { !connectedDownloads.contains($0.id) }.sorted { first, second in
             let comparison = first.name.localizedStandardCompare(second.name)
             return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
         }
@@ -247,7 +248,7 @@ struct PlaylistBrowserView: View {
             LibraryNavigationButton { model.openCollection(collection) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.name).lineLimit(1)
-                    Text("\(item.trackCount) tracks · \(model.musicIsDownloaded(item) ? "Downloaded" : "Stream")").font(.caption).foregroundStyle(.secondary)
+                    Text("\(model.musicIsDownloaded(item) ? collection.trackIDs.count : item.trackCount) tracks · \(model.musicIsDownloaded(item) ? "Downloaded" : "Stream")").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             }.buttonStyle(.plain).accessibilityIdentifier("music.playlist.\(item.remoteID)")
             if model.musicDownloads.contains(item.id) || model.musicPlaylistLoading.contains(item.id) { ProgressView() }
