@@ -217,7 +217,72 @@ impl StartRequest {
     }
 }
 
+fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
+    use djtools_link::diagnostics;
+    anyhow::ensure!(
+        input.len() <= 1024 * 1024,
+        "Diagnostic payload exceeds 1 MiB"
+    );
+    match operation {
+        "initialize" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Init {
+                root: PathBuf,
+                session: String,
+                app: Value,
+            }
+            let init: Init = serde_json::from_str(input)?;
+            let initialized = diagnostics::initialized();
+            let status = diagnostics::initialize(
+                &init.root,
+                &init.session,
+                json!({
+                    "app":init.app, "rust":env!("DJBOOTH_BUILD_ID"),
+                }),
+            )?;
+            if !initialized {
+                let previous = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    diagnostics::event(
+                        "rust_panic",
+                        json!({"panic":info.to_string(),"backtrace":std::backtrace::Backtrace::force_capture().to_string()}),
+                    );
+                    let _ = diagnostics::flush();
+                    previous(info);
+                }));
+            }
+            Ok(status)
+        }
+        "event" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Event {
+                name: String,
+                fields: Value,
+            }
+            let event: Event = serde_json::from_str(input)?;
+            anyhow::ensure!(event.name.len() <= 80, "Invalid event name");
+            diagnostics::event(&event.name, event.fields);
+            Ok(Value::Null)
+        }
+        "metric" => {
+            diagnostics::metric(serde_json::from_str(input)?)?;
+            Ok(Value::Null)
+        }
+        "status" => Ok(diagnostics::status()),
+        "flush" => {
+            diagnostics::flush()?;
+            Ok(diagnostics::status())
+        }
+        _ => bail!("Unknown diagnostic operation"),
+    }
+}
+
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("diagnostics.") {
+        return diagnostic_request(operation, input);
+    }
     if let Some(operation) = operation.strip_prefix("spotify.") {
         return spotify::request(operation, input);
     }

@@ -5,6 +5,12 @@ import SwiftUI
     @State private var startupError: String?
     @State private var startupTask: Task<BoothModel, Error>
     init() {
+        #if os(iOS)
+        AppDiagnostics.shared.start()
+        #if DEBUG
+        DJLinkHardwareControl.shared.start()
+        #endif
+        #endif
         PerformanceProbe.applicationBegan()
         // Open the local library while SwiftUI creates the first window.
         _startupTask = State(initialValue: BoothModel.startLoading())
@@ -19,7 +25,13 @@ import SwiftUI
             }
             .task {
                 guard model == nil, startupError == nil else { return }
-                do { model = try await startupTask.value } catch { startupError = error.localizedDescription }
+                do { model = try await startupTask.value }
+                catch {
+                    startupError = error.localizedDescription
+                    #if os(iOS)
+                    AppDiagnostics.shared.event("library_start_failed", ["error": error.localizedDescription])
+                    #endif
+                }
             }
             #if DEBUG
             .overlay(alignment: .top) {

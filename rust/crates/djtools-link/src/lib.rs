@@ -1,5 +1,6 @@
 mod actor;
 mod db;
+pub mod diagnostics;
 mod djlink;
 mod error;
 mod ids;

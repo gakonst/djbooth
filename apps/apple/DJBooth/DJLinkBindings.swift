@@ -22,6 +22,14 @@ enum DJLinkBindings {
         #endif
     }
     static func request(_ operation: String, arguments: Data = Data("{}".utf8)) throws -> Data {
+        let record = !operation.hasPrefix("diagnostics.") && operation != "function.stable_text_id"
+        let call = UUID().uuidString
+        let started = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        if record { AppDiagnostics.shared.event("rust_call_started", ["call": call, "operation": operation]) }
+        defer {
+            if record { AppDiagnostics.shared.event("rust_call_finished", ["call": call, "operation": operation, "ok": String(succeeded), "duration_ms": String(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))]) }
+        }
         guard let input = String(data: arguments, encoding: .utf8) else {
             throw DJLinkBindingError(message: "DJ Link arguments must be UTF-8 JSON.")
         }
@@ -33,8 +41,14 @@ enum DJLinkBindings {
               let ok = envelope["ok"] as? Bool else {
             throw DJLinkBindingError(message: "Invalid DJ Link response.")
         }
-        guard ok else { throw DJLinkBindingError(message: envelope["error"] as? String ?? "DJ Link request failed.") }
-        return try JSONSerialization.data(withJSONObject: envelope["value"] ?? NSNull(), options: [.fragmentsAllowed])
+        guard ok else {
+            let error = envelope["error"] as? String ?? "DJ Link request failed."
+            if record { AppDiagnostics.shared.event("rust_call_error", ["call": call, "operation": operation, "error": error]) }
+            throw DJLinkBindingError(message: error)
+        }
+        let result = try JSONSerialization.data(withJSONObject: envelope["value"] ?? NSNull(), options: [.fragmentsAllowed])
+        succeeded = true
+        return result
     }
     static func decode<T: Decodable>(_ operation: String, input: String = "{}", as: T.Type) throws -> T {
         try JSONDecoder().decode(T.self, from: request(operation, arguments: Data(input.utf8)))

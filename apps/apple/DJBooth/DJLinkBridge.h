@@ -6,6 +6,8 @@
 // objects with the original Rust argument names and return the Rust result.
 // Subscriptions return a handle; server.poll_events drains its bounded Rust
 // receiver, reporting lag, and server.unsubscribe releases it. No Swift protocol.
+// diagnostics.initialize/event/metric/status/flush use this same owned-JSON ABI.
+// Rust owns persistent session files and socket capture; Swift supplies iOS events.
 char *djbooth_link_request(const char *operation, const char *input);
 void djbooth_link_free(char *value);
 #include <stddef.h>

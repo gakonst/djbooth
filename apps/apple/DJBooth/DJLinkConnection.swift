@@ -29,12 +29,14 @@ private actor DJLinkEngine {
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
         try DJLinkBindings.decode(operation, input: input, as: type)
     }
-    func interfaces() throws -> [DJLinkInterface] {
+    func interfaces() async throws -> [DJLinkInterface] {
+        await AppDiagnostics.shared.ready()
         if !bindingsVerified { try DJLinkBindings.verifyInventory(); bindingsVerified = true }
         return try request("interfaces", as: [DJLinkInterface].self)
     }
     func status() throws -> DJLinkStatus { try request("status", as: DJLinkStatus.self) }
     func start(interface: DJLinkInterface, unicastDiscovery: Bool, tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) async throws -> (DJLinkStatus, Int) {
+        await AppDiagnostics.shared.ready()
         guard directory == nil else { throw LinkError(message: "Disconnect before reconnecting.") }
         let generation = UUID(); preparation = generation
         // Immutable artifacts are reusable across connections. Stable paths also
@@ -93,6 +95,15 @@ private actor DJLinkEngine {
 }
 
 @MainActor @Observable final class DJLinkConnection {
+    // Explicit development-only unattended hardware run. Keep the phone awake
+    // before IPv4 assignment too, so auto-lock cannot end the discovery test.
+    private var unattendedHardwareTest: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--dj-link-hardware-test")
+        #else
+        false
+        #endif
+    }
     var broadcastEnabled: Bool {
         #if targetEnvironment(simulator)
         return true
@@ -111,6 +122,7 @@ private actor DJLinkEngine {
     private weak var monitoredModel: BoothModel?
     private var lastAutomaticAttempt = Date.distantPast
     private var reportedInterfaces = ""
+    private var reportedAutomaticState = ""
     private var generation = UUID()
     private var updates: Task<Void, Never>?
     private let engine = DJLinkEngine()
@@ -118,6 +130,10 @@ private actor DJLinkEngine {
     init() {
         wiredMonitor.pathUpdateHandler = { [weak self] path in
             let names = Set(path.availableInterfaces.filter { $0.type == .wiredEthernet }.map(\.name))
+            AppDiagnostics.shared.event("cdj_network_path", [
+                "status": String(describing: path.status),
+                "interfaces": path.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ", ")
+            ])
             Task { @MainActor [weak self] in
                 self?.wiredNames = names
                 if let self, let model = self.monitoredModel {
@@ -136,8 +152,13 @@ private actor DJLinkEngine {
     /// fallback covers USB adapters that iOS does not classify as Ethernet.
     /// Independent of USB storage enumeration, sheets, and library navigation.
     func monitor(model: BoothModel) async {
+        AppDiagnostics.shared.event("cdj_monitor_started")
+        if unattendedHardwareTest {
+            UIApplication.shared.isIdleTimerDisabled = true
+            AppDiagnostics.shared.event("cdj_unattended_test_awake")
+        }
         monitoredModel = model
-        defer { monitoredModel = nil }
+        defer { monitoredModel = nil; AppDiagnostics.shared.event("cdj_monitor_stopped") }
         while !Task.isCancelled {
             await autoConnect(model: model)
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -153,7 +174,11 @@ private actor DJLinkEngine {
         // classified as wiredEthernet by NWPathMonitor on a physical iPhone.
         guard let wired = interfaces.first(where: {
             wiredNames.contains($0.name) || ($0.name != "en0" && $0.ip.hasPrefix("169.254."))
-        }) else { return }
+        }) else {
+            reportAutomaticState("waiting_for_wired_interface")
+            return
+        }
+        reportAutomaticState("wired_interface_ready:\(wired.name):\(wired.ip)")
         if status.running {
             guard status.ip != wired.ip else { return }
             await disconnect()
@@ -164,31 +189,40 @@ private actor DJLinkEngine {
         await connect(model: model)
     }
 
+    private func reportAutomaticState(_ state: String) {
+        guard reportedAutomaticState != state else { return }
+        reportedAutomaticState = state
+        AppDiagnostics.shared.event("cdj_automatic_state", ["state": state])
+    }
+
     func refresh() async {
         do {
             interfaces = try await engine.interfaces()
-            #if DEBUG
             let description = interfaces.map { "\($0.name)=\($0.ip)/\($0.netmask)" }.joined(separator: ", ")
             if description != reportedInterfaces {
                 reportedInterfaces = description
+                AppDiagnostics.shared.event("cdj_interfaces", ["interfaces": description])
                 NSLog("[DJLink] available interfaces: %@", description)
             }
-            #endif
             if !interfaces.contains(where: { $0.ip == selectedIP }) {
                 selectedIP = interfaces.count == 1 ? interfaces[0].ip : ""
             }
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            self.error = error.localizedDescription
+            reportAutomaticState("interface_scan_failed:\(error.localizedDescription)")
+        }
     }
     func connect(model: BoothModel) async {
         guard !Task.isCancelled, UIApplication.shared.applicationState != .background,
               !busy, !status.running, let interface = interfaces.first(where: { $0.ip == selectedIP }) else { return }
         let request = UUID(); generation = request
+        AppDiagnostics.shared.event("cdj_connect_started", ["connection": request.uuidString, "interface": interface.name, "ip": interface.ip])
         busy = true; error = nil
         UIApplication.shared.isIdleTimerDisabled = true
         defer {
             if generation == request {
                 busy = false
-                if !status.running { UIApplication.shared.isIdleTimerDisabled = false }
+                if !status.running { UIApplication.shared.isIdleTimerDisabled = unattendedHardwareTest && UIApplication.shared.applicationState != .background }
             }
         }
         do {
@@ -197,6 +231,7 @@ private actor DJLinkEngine {
                                                 annotations: model.annotations, audio: model.audio.directory)
             guard generation == request else { return }
             status = result.0; omittedTracks = result.1
+            AppDiagnostics.shared.event("cdj_serving", ["connection": request.uuidString, "tracks": String(status.trackCount ?? 0), "playlists": String(status.playlistCount ?? 0), "omitted": String(omittedTracks)])
             #if DEBUG
             NSLog("[DJLink] sharing %d tracks at %@; unicast discovery: %@", status.trackCount ?? 0, interface.ip, String(!broadcastEnabled))
             #endif
@@ -231,16 +266,18 @@ private actor DJLinkEngine {
         } catch {
             guard generation == request else { return }
             self.error = error.localizedDescription
+            AppDiagnostics.shared.event("cdj_connect_failed", ["connection": request.uuidString, "error": error.localizedDescription])
             #if DEBUG
             NSLog("[DJLink] connection failed: %@", error.localizedDescription)
             #endif
         }
     }
     func disconnect(message: String? = nil) async {
+        AppDiagnostics.shared.event("cdj_disconnect", ["connection": generation.uuidString, "reason": message ?? "lifecycle_or_interface_change"])
         lastAutomaticAttempt = .distantPast
         generation = UUID(); updates?.cancel(); updates = nil
         busy = true
-        UIApplication.shared.isIdleTimerDisabled = false
+        UIApplication.shared.isIdleTimerDisabled = unattendedHardwareTest && UIApplication.shared.applicationState != .background
         do { try await engine.stop(); status = DJLinkStatus(running: false); error = message }
         catch { self.error = error.localizedDescription }
         busy = false

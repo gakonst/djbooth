@@ -55,6 +55,11 @@ mod proc_type {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=DJBOOTH_BUILD_ID");
+    println!(
+        "cargo:rustc-env=DJBOOTH_BUILD_ID={}",
+        env::var("DJBOOTH_BUILD_ID").unwrap_or_else(|_| "development-unidentified".into())
+    );
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let shared = manifest.join("../djtools-link/src");
     let mut methods = Vec::new();
@@ -69,10 +74,10 @@ fn main() {
                     if block.self_ty.to_token_stream().to_string() == "DjLinkServer" =>
                 {
                     for item in block.items {
-                        if let ImplItem::Fn(method) = item {
-                            if matches!(method.vis, Visibility::Public(_)) {
-                                methods.push(method.sig);
-                            }
+                        if let ImplItem::Fn(method) = item
+                            && matches!(method.vis, Visibility::Public(_))
+                        {
+                            methods.push(method.sig);
                         }
                     }
                 }

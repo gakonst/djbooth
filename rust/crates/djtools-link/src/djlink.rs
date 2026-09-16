@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinHandle as TokioJoinHandle, JoinSet};
@@ -3274,6 +3274,23 @@ impl CdjPositionSnapshot {
     }
 }
 
+async fn send_captured_udp(
+    sock: &UdpSocket,
+    packet: &[u8],
+    target: SocketAddrV4,
+    context: &str,
+) -> std::io::Result<usize> {
+    let result = sock.send_to(packet, target).await;
+    match &result {
+        Ok(n) => crate::diagnostics::udp("tx", sock.local_addr(), target.into(), &packet[..*n]),
+        Err(error) => crate::diagnostics::event(
+            "udp_send_error",
+            serde_json::json!({"context":context,"peer":target.to_string(),"bytes":packet.len(),"error":error.to_string()}),
+        ),
+    }
+    result
+}
+
 async fn send_udp_packet(
     state: &ServerState,
     sock: &UdpSocket,
@@ -3292,7 +3309,7 @@ async fn send_udp_packet(
         }
         // Match the iPhone transport on every platform, including large NFS
         // replies: no BPF, raw sockets, or broadcast fallback on failure.
-        return sock.send_to(packet, target).await;
+        return send_captured_udp(sock, packet, target, context).await;
     }
     #[cfg(target_os = "macos")]
     if is_broadcast && state.interface_name.is_some() {
@@ -3345,7 +3362,7 @@ async fn send_udp_packet(
         }
     }
 
-    match sock.send_to(packet, target).await {
+    match send_captured_udp(sock, packet, target, context).await {
         Ok(sent) => {
             trace!(
                 target: "djtools_link::udp",
@@ -3391,7 +3408,7 @@ async fn send_udp_packet(
                     "{context} unicast to {target} failed: {err}; retrying broadcast {broadcast_target}"
                 ),
             );
-            let sent = match sock.send_to(packet, broadcast_target).await {
+            let sent = match send_captured_udp(sock, packet, broadcast_target, context).await {
                 Ok(sent) => sent,
                 Err(broadcast_err) => {
                     send_raw_udp_packet_to_mac(
@@ -4009,13 +4026,31 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
     // adapter's MAC when the OS exposes it; ignore iOS's Wi-Fi privacy sentinel.
     unsafe {
         if libc::getifaddrs(&mut head) != 0 {
+            crate::diagnostics::event(
+                "interface_scan_failed",
+                serde_json::json!({"error": io::Error::last_os_error().to_string()}),
+            );
             return Vec::new();
         }
         let mut entries = Vec::new();
+        let mut observed = BTreeSet::new();
         let mut cursor = head;
         let mut macs = HashMap::new();
         while let Some(entry) = cursor.as_ref() {
             cursor = entry.ifa_next;
+            let name = CStr::from_ptr(entry.ifa_name).to_string_lossy();
+            let family = entry.ifa_addr.as_ref().map(|address| address.sa_family);
+            let ip = if family == Some(libc::AF_INET as u8) {
+                let address = &*(entry.ifa_addr as *const libc::sockaddr_in);
+                Some(Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes()).to_string())
+            } else {
+                None
+            };
+            observed.insert(format!(
+                "{name}:family={family:?},flags={:#x},ip={ip:?},netmask={}",
+                entry.ifa_flags,
+                !entry.ifa_netmask.is_null()
+            ));
             if entry.ifa_addr.is_null()
                 || (*entry.ifa_addr).sa_family as i32 != libc::AF_LINK
                 || ((*entry.ifa_addr).sa_len as usize) < std::mem::size_of::<libc::sockaddr_dl>()
@@ -4066,6 +4101,19 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
             });
         }
         libc::freeifaddrs(head);
+        // Record only changes, including interfaces rejected above. Otherwise
+        // a missing USB adapter and a filtered adapter look identical on phone.
+        static LAST_SCAN: std::sync::Mutex<BTreeSet<String>> =
+            std::sync::Mutex::new(BTreeSet::new());
+        if let Ok(mut previous) = LAST_SCAN.lock()
+            && *previous != observed
+        {
+            crate::diagnostics::event(
+                "interface_scan_changed",
+                serde_json::json!({"raw": observed, "eligible": entries.iter().map(|entry| format!("{}={},active={}", entry.name, entry.ip, entry.active)).collect::<Vec<_>>() }),
+            );
+            *previous = observed;
+        }
         entries
     }
 }
@@ -5103,6 +5151,7 @@ fn spawn_keepalive_rx(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -5203,8 +5252,9 @@ fn spawn_keepalive_rx(
 }
 
 /// Probe only the attached IPv4 subnet. Large networks are deliberately rejected
-/// rather than silently scanning unrelated address space. Check the local /24
-/// first, then low host addresses across the subnet, then the remaining hosts.
+/// rather than silently scanning unrelated address space. Interleave the local
+/// /24 with low host addresses across the subnet, then check remaining hosts.
+/// USB link-local assignment need not put the phone in the deck's /24.
 fn discovery_addresses(ip: Ipv4Addr, netmask: Ipv4Addr) -> Result<Vec<Ipv4Addr>> {
     let mask = u32::from(netmask);
     let host_bits = (!mask).trailing_ones();
@@ -5215,22 +5265,29 @@ fn discovery_addresses(ip: Ipv4Addr, netmask: Ipv4Addr) -> Result<Vec<Ipv4Addr>>
     let local = u32::from(ip);
     let network = local & mask;
     let broadcast = network | !mask;
-    let mut addresses = (network + 1..broadcast)
-        .filter(|candidate| *candidate != local)
-        .collect::<Vec<_>>();
-    addresses.sort_unstable_by_key(|candidate| {
-        (
-            if candidate & 0xffffff00 == local & 0xffffff00 {
-                0
-            } else if candidate & 0xff <= 8 {
-                1
-            } else {
-                2
-            },
-            *candidate,
-        )
-    });
-    Ok(addresses.into_iter().map(Ipv4Addr::from).collect())
+    let mut nearby = Vec::new();
+    let mut low_hosts = Vec::new();
+    let mut remaining = Vec::new();
+    for candidate in (network + 1..broadcast).filter(|candidate| *candidate != local) {
+        if candidate & 0xffffff00 == local & 0xffffff00 {
+            nearby.push(candidate);
+        } else if candidate & 0xff <= 8 {
+            low_hosts.push(candidate);
+        } else {
+            remaining.push(candidate);
+        }
+    }
+    let mut addresses = Vec::with_capacity((broadcast - network - 2) as usize);
+    for index in 0..nearby.len().max(low_hosts.len()) {
+        if let Some(ip) = nearby.get(index) {
+            addresses.push(Ipv4Addr::from(*ip));
+        }
+        if let Some(ip) = low_hosts.get(index) {
+            addresses.push(Ipv4Addr::from(*ip));
+        }
+    }
+    addresses.extend(remaining.into_iter().map(Ipv4Addr::from));
+    Ok(addresses)
 }
 
 fn spawn_unicast_discovery(
@@ -6375,6 +6432,7 @@ fn spawn_beat_rx(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHand
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -6505,6 +6563,7 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -6793,17 +6852,24 @@ async fn log_unknown_dj_packet(
 
 fn spawn_db_query(state: Arc<ServerState>, listener: TcpListener) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
+        // Dropping the listener task must also close its accepted sockets.
+        let mut clients = JoinSet::new();
         loop {
-            let Ok((stream, addr)) = listener.accept().await else {
-                continue;
-            };
-            let state = state.clone();
-            tokio::spawn(handle_db_query_conn(state, stream, addr));
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((stream, addr)) = accepted else { continue };
+                    clients.spawn(handle_db_query_conn(state.clone(), stream, addr));
+                }
+                _ = clients.join_next(), if !clients.is_empty() => {}
+            }
         }
     })
 }
 
-async fn handle_db_query_conn(state: Arc<ServerState>, mut stream: TcpStream, addr: SocketAddr) {
+async fn handle_db_query_conn(state: Arc<ServerState>, stream: TcpStream, addr: SocketAddr) {
+    let Ok(mut stream) = crate::diagnostics::CapturedTcp::new(stream) else {
+        return;
+    };
     let mut buf = Vec::new();
     let mut tmp = [0u8; 128];
     while buf.len() < 64 {
@@ -6853,26 +6919,31 @@ fn spawn_db_server(
     status_sock: Arc<UdpSocket>,
 ) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
+        let mut clients = JoinSet::new();
         loop {
-            let Ok((stream, addr)) = listener.accept().await else {
-                continue;
-            };
-            tracing::info!(target: "djtools_link::db", %addr, "db_client_connected");
-            let state = state.clone();
-            let status_sock = status_sock.clone();
-            tokio::spawn(handle_db_client(state, stream, addr, Some(status_sock)));
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((stream, addr)) = accepted else { continue };
+                    tracing::info!(target: "djtools_link::db", %addr, "db_client_connected");
+                    clients.spawn(handle_db_client(state.clone(), stream, addr, Some(status_sock.clone())));
+                }
+                _ = clients.join_next(), if !clients.is_empty() => {}
+            }
         }
     })
 }
 
-async fn write_db_response(stream: &mut TcpStream, response: &[u8]) -> io::Result<()> {
+async fn write_db_response(
+    stream: &mut (impl AsyncWrite + Unpin),
+    response: &[u8],
+) -> io::Result<()> {
     stream.write_all(response).await?;
     stream.flush().await
 }
 
 async fn handle_db_client(
     state: Arc<ServerState>,
-    mut stream: TcpStream,
+    stream: TcpStream,
     addr: SocketAddr,
     status_sock: Option<Arc<UdpSocket>>,
 ) {
@@ -6882,6 +6953,10 @@ async fn handle_db_client(
     if let Err(err) = stream.set_nodelay(true) {
         warn!(target: "djtools_link::db", %addr, %err, "db_tcp_nodelay_failed");
     }
+    let Ok(stream) = crate::diagnostics::CapturedTcp::new(stream) else {
+        return;
+    };
+    let mut stream = tokio::io::BufReader::new(stream);
     let mut pending = PendingRenderSession::default();
     if matches!(recv_db_field(&mut stream).await, Ok(DbValue::Int32(_))) {
         let response = encode_db_field(&DbValue::Int32(1));
@@ -7496,6 +7571,17 @@ async fn handle_db_client(
                 )
                 .await;
             }
+            DB_REQ_DELIVERY_INFO => {
+                write_pending_success(
+                    &mut stream,
+                    tx,
+                    msg.msg_type,
+                    &msg.args,
+                    &mut pending,
+                    delivery_info_entries(&state.library, &msg.args),
+                )
+                .await;
+            }
             DB_REQ_MOUNT_INFO => {
                 write_pending_success(
                     &mut stream,
@@ -7584,21 +7670,19 @@ async fn handle_db_client(
                 );
                 send_response!(success_with_count(tx, msg.msg_type, 0));
             }
-            DB_REQ_EXT_3006 => {
-                // Native Rekordbox returns one when this request targets its
-                // LINK source slot (4), and zero for any other source slot.
-                // Returning zero leaves CDJ-3000 browsers on "Waiting" when
-                // navigating back after a track begins playing.
-                let available = u32::from(rmst_slot_from_args(&msg.args) == Some(4));
+            DB_REQ_DJ_ID => {
+                // Rekordbox PSvDBMain::OnUserCmd calls GetDJID and replies with
+                // binary response 0x4d02, never SUCCESS(0x4000). We have no
+                // Rekordbox DJ identity, so use its native no-identity branch:
+                // [request, 0, length=0, omitted binary field]. See fixtures.
                 trace!(
                     target: "djtools_link::db",
                     %addr,
                     tx,
                     args = msg.args.len(),
-                    available,
-                    "db_extension_3006_ack"
+                    "db_dj_id_unavailable"
                 );
-                send_response!(success_with_count(tx, msg.msg_type, available));
+                send_response!(empty_blob_response(tx, msg.msg_type, DB_RES_DJ_ID, false));
             }
             DB_REQ_WAVEFORM_DETAIL => {
                 let track_id = track_id_from_request_at(&state.library, &msg.args, 0);
@@ -7733,15 +7817,27 @@ async fn handle_db_client(
                     blob.as_deref(),
                 ));
             }
-            0x3100 => {
-                send_response!(success_with_count(tx, 0x3100, 0));
+            DB_REQ_MENU_OFFSET => {
+                let key = pending_key_from_args(&msg.args);
+                let entry_id = db_int(msg.args.get(1)).unwrap_or(u32::MAX);
+                let offset = pending.menu_offset(key, entry_id);
+                trace!(
+                    target: "djtools_link::db",
+                    %addr,
+                    tx,
+                    ?key,
+                    entry_id,
+                    offset,
+                    "db_menu_offset"
+                );
+                send_response!(success_with_count(tx, DB_REQ_MENU_OFFSET, offset));
             }
             DB_REQ_RENDER => {
                 let render_started = Instant::now();
                 let window = parse_render_window(&msg.args);
                 let render_key = pending_key_from_args(&msg.args);
                 let prepared_key = pending.key();
-                let pending_len = pending.len();
+                let pending_len = pending.len_for_key(render_key);
                 let entries = pending.entries_for_render(render_key, window);
                 let render_miss = entries.is_none();
                 let end = window.offset.saturating_add(window.count).min(pending_len);
@@ -7819,7 +7915,7 @@ async fn handle_db_client(
 }
 
 async fn write_pending_success(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     tx: u32,
     request_type: u16,
     request_args: &[DbValue],
@@ -7837,15 +7933,18 @@ async fn write_pending_success(
         "db_menu_ready"
     );
     pending.prepare(pending_key_from_args(request_args), entries);
-    let _ = stream
+    if let Err(error) = stream
         .write_all(&success_with_count(tx, request_type, count))
-        .await;
+        .await
+    {
+        warn!(target: "djtools_link::db", tx, %error, "db_menu_response_failed");
+    }
 }
 
 async fn write_pending_browse_success(
     state: &ServerState,
     addr: SocketAddr,
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     tx: u32,
     request_type: u16,
     request_args: &[DbValue],
@@ -8788,6 +8887,50 @@ fn metadata_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntr
         ),
         MenuEntry::plain(0, 0, "", "", META_ORIGINAL_ARTIST),
         MenuEntry::plain(0, 0, "", "", META_REMIXER),
+    ]
+}
+
+fn delivery_info_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntry> {
+    let Some(track) = track_from_request(library, args) else {
+        return Vec::new();
+    };
+    // Rekordbox GetDeliveryInfDB / PSvAppSyncDBIF::getDeliveryInf: 13 rows,
+    // followed by the usual RENDER exchange. This is a separate menu context
+    // (0x09 on the CDJ-3000), not ordinary display metadata or a binary blob.
+    // The snapshot has no KUVO delivery opt-in, ISRC, delivery comment,
+    // composer or lyricist. Return their native unset values, not made-up IDs.
+    let file_type = match track.mount_path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => match ext.to_ascii_lowercase().as_str() {
+            "mp3" => 1,
+            "m4a" | "aac" => 4,
+            "flac" => 5,
+            "wav" => 11,
+            "aif" | "aiff" => 12,
+            _ => 0,
+        },
+        None => 0,
+    };
+    vec![
+        MenuEntry::plain(track.track_id, library.master_db_id, "", "", 0x004f),
+        MenuEntry::plain(track.track_id, track.track_id, &track.title, "", META_TITLE)
+            .with_entry_id3(track.artwork_id),
+        MenuEntry::plain(0, track.artist_id, &track.artist, "", META_ARTIST),
+        MenuEntry::plain(0, track.album_id, &track.album, "", META_ALBUM),
+        MenuEntry::plain(0, track.genre_id, &track.genre, "", META_GENRE),
+        MenuEntry::plain(0, track.track_id, "", "", META_COMMENT),
+        MenuEntry::plain(track.key_id, track.key_id, "", &track.key_label(), META_KEY),
+        MenuEntry::plain(0, track.duration_sec, "", "", META_DURATION),
+        MenuEntry::plain(0, file_type, "", "", 0x0012),
+        MenuEntry::plain(0, track.bpm_hundreds, "", "", META_BPM),
+        MenuEntry::plain(
+            0,
+            stable_text_id(&track.label),
+            &track.label,
+            "",
+            META_LABEL,
+        ),
+        MenuEntry::plain(0, 0, "", "", 0x0036),
+        MenuEntry::plain(0, track.track_id, "", "", 0x0037),
     ]
 }
 
@@ -9782,6 +9925,7 @@ fn spawn_portmap(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let Some(call) = rpc_parse_call(&buf[..len]) else {
                 continue;
             };
@@ -9821,6 +9965,7 @@ fn spawn_mount(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let call = rpc_parse_call(&buf[..len]);
             if let Some(call) = &call {
                 trace!(
@@ -9850,6 +9995,7 @@ fn spawn_nfs(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             handle_nfs_datagram_reply(&state, &sock, &buf[..len], addr).await;
         }
     })
@@ -10077,6 +10223,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_db_listener_closes_accepted_connections_and_releases_status_socket() {
+        let state = Arc::new(test_state());
+        let status = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = spawn_db_server(state, listener, status.clone());
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(&encode_db_field(&DbValue::Int32(DB_MAGIC)))
+            .await
+            .unwrap();
+        assert_eq!(recv_db_field(&mut client).await.unwrap(), DbValue::Int32(1));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut byte = [0];
+        let count = tokio::time::timeout(Duration::from_secs(1), client.read(&mut byte))
+            .await
+            .expect("stopping DJ Link must close existing deck sessions")
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            Arc::strong_count(&status),
+            1,
+            "old deck sessions must release the status port"
+        );
+    }
+
+    #[tokio::test]
     async fn db_handler_browses_back_and_switches_tracks_on_one_connection() {
         async fn receive(client: &mut TcpStream) -> DbMessage {
             tokio::time::timeout(Duration::from_secs(1), recv_db_message(client))
@@ -10146,7 +10320,7 @@ mod tests {
         let browse = 0x0101_0401;
         let metadata = 0x0102_0401;
         for (iteration, track) in [first, first + 1, first].into_iter().enumerate() {
-            let tx = iteration as u32 * 10;
+            let tx = 0x0782 + iteration as u32 * 16;
             let folders = menu(&mut client, tx, DB_REQ_PLAYLIST, &[browse, 0, 0, 1]).await;
             assert_eq!(db_int(folders[0].args.get(1)), Some(playlist));
             let tracks = menu(
@@ -10164,7 +10338,59 @@ mod tests {
                 rows.iter()
                     .any(|row| db_int(row.args.get(1)) == Some(track))
             );
-            // The next iteration is the deck's Back → playlist → another track.
+            // Actual CDJ-3000 post-load request from the failing phone session.
+            // A generic SUCCESS here leaves the deck waiting for 0x4d02.
+            let mut identity = decode_hex(
+                include_str!("../tests/fixtures/remotedb-cdj3000-dj-id-request.hex").trim(),
+            );
+            identity[6..10].copy_from_slice(&(tx + 7).to_be_bytes());
+            client.write_all(&identity).await.unwrap();
+            let mut expected =
+                decode_hex(include_str!("../tests/fixtures/remotedb-dj-id-unavailable.hex").trim());
+            expected[6..10].copy_from_slice(&(tx + 7).to_be_bytes());
+            let mut actual = vec![0; expected.len()];
+            tokio::time::timeout(Duration::from_secs(1), client.read_exact(&mut actual))
+                .await
+                .expect("DJ identity response deadline")
+                .unwrap();
+            assert_eq!(actual, expected);
+            let delivery = menu(
+                &mut client,
+                tx + 8,
+                DB_REQ_DELIVERY_INFO,
+                &[0x0109_0401, track],
+            )
+            .await;
+            assert_eq!(delivery.len(), 13);
+            assert_eq!(db_int(delivery[0].args.first()), Some(track));
+            assert_eq!(db_int(delivery[0].args.get(6)), Some(0x4f));
+            assert_eq!(db_int(delivery[1].args.get(1)), Some(track));
+            // Back can render the existing browse buffer without preparing it
+            // again. Delivery/metadata contexts must not replace that buffer.
+            client
+                .write_all(&encode_db_message(
+                    tx + 10,
+                    DB_REQ_RENDER,
+                    &[
+                        DbValue::Int32(browse),
+                        DbValue::Int32(1),
+                        DbValue::Int32(1),
+                        DbValue::Int32(0),
+                        DbValue::Int32(2),
+                        DbValue::Int32(0),
+                    ],
+                ))
+                .await
+                .unwrap();
+            let header = receive(&mut client).await;
+            assert_eq!(header.msg_type, DB_RES_MENU_HEADER);
+            assert_eq!(header.args, vec![DbValue::Int32(1), DbValue::Int32(1)]);
+            let row = receive(&mut client).await;
+            assert_eq!(row.msg_type, DB_RES_MENU_ITEM);
+            assert_eq!(db_int(row.args.get(1)), Some(first + 1));
+            assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_FOOTER);
+            // The next iteration checks that the response leaves no stray
+            // bytes in the stream before Back → playlist → another track.
         }
         handler.abort();
     }
@@ -10182,13 +10408,19 @@ mod tests {
         assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 0, 0)));
         assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 255, 255)));
         assert!(candidates.iter().all(|ip| ip.octets()[..2] == [169, 254]));
-        assert!(candidates[..255].iter().all(|ip| ip.octets()[2] == 99));
+        assert!(
+            candidates[..510]
+                .iter()
+                .filter(|ip| ip.octets()[2] == 99)
+                .count()
+                == 255
+        );
         assert!(
             candidates
                 .iter()
                 .position(|ip| *ip == Ipv4Addr::new(169, 254, 7, 4))
                 .unwrap()
-                < 512
+                < 192
         );
         assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 0, 0)).is_err());
         assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 255, 0)).is_err());
@@ -10198,6 +10430,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(small, [Ipv4Addr::new(10, 0, 0, 6)]);
+    }
+
+    #[test]
+    fn unicast_discovery_reaches_deck_before_finishing_phones_random_link_local_block() {
+        // Failed phone capture: 192 addresses probed before backgrounding;
+        // the old local-/24-first order never reached the previously seen deck.
+        let deck = Ipv4Addr::new(169, 254, 7, 4);
+        for phone in [
+            Ipv4Addr::new(169, 254, 249, 121),
+            Ipv4Addr::new(169, 254, 7, 63),
+        ] {
+            let candidates = discovery_addresses(phone, Ipv4Addr::new(255, 255, 0, 0)).unwrap();
+            assert!(candidates[..192].contains(&deck));
+            // Nearby candidates continue progressing during cross-block probes.
+            assert!(candidates[..128].contains(&Ipv4Addr::new(169, 254, phone.octets()[2], 62)));
+        }
     }
 
     #[tokio::test]
@@ -10502,7 +10750,43 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
-    fn pending_render_session_uses_only_the_last_menu_prepared_on_its_connection() {
+    fn db_delivery_info_matches_native_row_layout_for_captured_request() {
+        let bytes = decode_hex(
+            include_str!("../tests/fixtures/remotedb-cdj3000-delivery-info-request.hex").trim(),
+        );
+        let request = recv_db_message_from_read(&mut std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(request.msg_type, DB_REQ_DELIVERY_INFO);
+        assert_eq!(request.tx_id, 2421);
+        assert_eq!(
+            request.args,
+            vec![DbValue::Int32(0x0109_0401), DbValue::Int32(777201902)]
+        );
+        let mut state = test_state_with_sample_library(123);
+        let library = Arc::make_mut(&mut state.library);
+        let mut track = library.all_tracks[0].clone();
+        track.track_id = 777201902;
+        track.mount_path = "test.FLAC".into();
+        library.tracks_by_id.insert(track.track_id, track);
+        let rows = delivery_info_entries(library, &request.args);
+        assert_eq!(
+            rows.iter().map(|row| row.entry_type).collect::<Vec<_>>(),
+            [0x4f, 4, 7, 2, 6, 0x23, 0xf, 0xb, 0x12, 0xd, 0xe, 0x36, 0x37]
+        );
+        assert_eq!(rows[0].entry_id1, 777201902);
+        assert_eq!(rows[0].entry_id2, library.master_db_id);
+        assert_eq!(rows[0].entry_id3, 0, "delivery opt-in is unset");
+        assert_eq!(rows[8].entry_id2, 5, "FLAC FileType");
+        assert!(
+            delivery_info_entries(
+                library,
+                &[DbValue::Int32(0x0109_0401), DbValue::Int32(u32::MAX)]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn pending_render_session_replaces_the_last_menu_in_the_same_context() {
         let key = 0x0302_0401;
         let mut session = PendingRenderSession::default();
         let playlist_rows = (1..=19)
@@ -13360,26 +13644,17 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             DB_REQ_TRACKS_FOR_REMIXER_ALBUM,
             DB_REQ_TRACKS_FOR_DATE_ADDED,
             DB_REQ_FOLDER_MENU,
-            DB_REQ_EXT_3006,
+            DB_REQ_DJ_ID,
         ] {
             assert!(!db_request_name(request).starts_with("UNKNOWN"));
         }
     }
 
     #[test]
-    fn db_extension_3006_reports_link_source_available() {
-        let link_args = [DbValue::Int32(0x0109_0401)];
-        let usb_args = [DbValue::Int32(0x0109_0301)];
-
-        assert_eq!(rmst_slot_from_args(&link_args), Some(4));
-        assert_eq!(rmst_slot_from_args(&usb_args), Some(3));
+    fn db_dj_id_without_identity_matches_native_binary_response() {
         assert_eq!(
-            success_with_count(0x451, DB_REQ_EXT_3006, 1),
-            encode_db_message(
-                0x451,
-                DB_RES_SUCCESS,
-                &[DbValue::Int32(0x3006), DbValue::Int32(1)],
-            )
+            empty_blob_response(0x789, DB_REQ_DJ_ID, DB_RES_DJ_ID, false),
+            decode_hex(include_str!("../tests/fixtures/remotedb-dj-id-unavailable.hex").trim())
         );
     }
 

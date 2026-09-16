@@ -129,13 +129,39 @@ mixer status `0x29`.
 - UDP mount port: Mount v1.
 - UDP/2049: NFS v2/v3.
 
-RemoteDB menu rendering is connection-local. A menu request prepares the last
-menu on that TCP connection; `RENDER(0x3000)` slices that menu. The
+RemoteDB menu rendering is connection-local and keyed by `r:m:s:t` context.
+A menu request replaces that context's buffer; `RENDER(0x3000)` slices it.
+Metadata and delivery requests must preserve the browse context used by Back. The
 same-transaction `MENU_HEADER(0x4001)` has arguments `[1, requested_offset]`,
 followed by menu items and a footer. Native Rekordbox transaction `0x1883` in
 git object `123e84e:rb-tracks.pcap` proves offset 2 → header `[1,2]`.
 Cross-connection menu recovery and a constant header offset are not protocol
 features.
+
+Back selection uses `MENU_OFFSET(0x3100, [r:m:s:t, entry_id, 0, 1])`.
+Respond with `SUCCESS(0x4000, [0x3100, zero_based_offset])` by locating
+`entry_id2` in that context's prepared, sorted rows. Do not return the row's
+one-based position or a constant zero: the latter resets Back to the first item.
+Native Rekordbox 6.8.2 `PSvDBMain::OnListBuffCmd` (`0x1016396f0`) calls
+`GetListBufOffset` (`0x1011eaa00`), which compares list column 2 and returns
+the first matching offset, `0xffffffff` for an absent ID, or zero without a
+row set. The September 16 phone trace shows this exchange for tracks, artists,
+and parent playlists before the deck rebuilds and renders the list.
+
+After loading or previewing a track, CDJ-3000 can send `DJ_ID(0x3006)` with
+context `0x01090401`. This is a DJ identity request, not a source-availability
+query. Native `PSvDBMain::OnUserCmd` returns binary message `0x4d02`: a 160-byte
+identity when present, or a zero-length result when absent. DJ Booth uses the
+native absent-identity form. Returning `SUCCESS(0x4000, [0x3006, 1])` was the
+last exchange in the September 15 iPhone session where Back stopped working;
+that response is invalid even though the write completed. Exact request bytes
+and native-code provenance are recorded in `tests/fixtures/README.md`.
+
+The September 16 phone capture then advanced to `DELIVERY_INFO(0x2602)` in
+context `0x01090401`. Native Rekordbox prepares 13 delivery-information rows and
+returns `SUCCESS(0x4000, [0x2602, 13])`, followed by the usual render exchange.
+An unknown track yields zero rows. DJ Booth leaves unavailable delivery-specific
+fields unset. Rejecting this request was the final browse exchange in that capture.
 
 CDJ-3000 keyboard edits emit incremental search request `0x1500` with arguments
 `r:m:s:t, sort, UTF-16 byte size, uppercase UTF-16 string`. Unlike the documented

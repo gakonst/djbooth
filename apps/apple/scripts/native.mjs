@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +18,8 @@ const help = `Native DJ Booth (requires macOS and Xcode 26+):
   pnpm --filter @gakonst/djbooth-apple ios                    Build and open the dedicated iOS simulator
   pnpm --filter @gakonst/djbooth-apple ios --demo             Open an explicit sample library
   pnpm --filter @gakonst/djbooth-apple device --device <id>    Sign, install and launch on your paired iPhone
+  pnpm native:diagnostics --device <id>                    Copy persistent phone diagnostics
+  pnpm native:link --device <id> --operation <name> --arguments <json> Call Rust on the phone (hardware-test mode)
   pnpm --filter @gakonst/djbooth-apple check                  Compile macOS and iOS
   pnpm --filter @gakonst/djbooth-apple test                   Test the local store and sync package
   pnpm --filter @gakonst/djbooth-apple test:ui                Run native UI tests on the dedicated simulator
@@ -31,6 +34,7 @@ Options:
   --console               Stream physical-device app logs until it exits
   --physical              Build for iPhone without installing (build:ios)
   --optimized             Optimize Swift (-O) while retaining Debug features
+  --dj-link-hardware-test Keep the Debug app awake and enable paired-device Rust commands
   --demo                  Explicit DEBUG-only sample library
   --only-testing <test>    Restrict native UI tests to one Xcode test identifier
 Environment:
@@ -55,6 +59,8 @@ const derived = resolve(process.env.DJBOOTH_DERIVED_DATA ?? resolve(root, ".buil
 const configuration = "Debug";
 const optimizationSettings = args.includes("--optimized") ? ["SWIFT_OPTIMIZATION_LEVEL=-O"] : [];
 const appArguments = args.includes("--demo") ? ["--demo"] : [];
+if (args.includes("--diagnostics-stall-probe")) appArguments.push("--diagnostics-stall-probe");
+if (args.includes("--dj-link-hardware-test")) appArguments.push("--dj-link-hardware-test");
 const offlineTrack = value("--offline-track");
 if (offlineTrack) appArguments.push("--keep-offline", offlineTrack);
 const offlineCollection = value("--offline-collection");
@@ -83,7 +89,19 @@ const build = (platform, options = {}) => {
   if (args.includes("--dj-link")) parameters.push("DJBOOTH_LINK_ENTITLEMENTS=DJBooth/DJLink.entitlements", "DJBOOTH_LINK_ENABLED=YES");
   parameters.push(...optimizationSettings, `DJBOOTH_OFFLINE_COLLECTION=${offlineCollection ?? ""}`, "build");
   run("xcodebuild", parameters);
-  return resolve(derived, "Build/Products", platform === "macos" ? configuration : `${configuration}-${physical ? "iphoneos" : "iphonesimulator"}`, "DJBooth.app");
+  const products = resolve(derived, "Build/Products", platform === "macos" ? configuration : `${configuration}-${physical ? "iphoneos" : "iphonesimulator"}`);
+  if (platform === "ios" && existsSync(resolve(products, "DJBooth.app.dSYM"))) {
+    const symbols = resolve(products, "DJBooth.app.dSYM");
+    const uuids = run("xcrun", ["dwarfdump", "--uuid", symbols], { stdio: ["ignore", "pipe", "inherit"] });
+    const uuid = /UUID: ([A-Fa-f0-9-]+)/.exec(uuids)?.[1];
+    if (!uuid) throw new Error("Cannot identify iOS debug symbols");
+    const archive = resolve(root, ".build/diagnostic-symbols", uuid);
+    mkdirSync(archive, { recursive: true });
+    cpSync(symbols, resolve(archive, "DJBooth.app.dSYM"), { recursive: true });
+    cpSync(resolve(products, "DJBooth-build-id.txt"), resolve(archive, "build-id.txt"));
+    writeFileSync(resolve(archive, "uuids.txt"), uuids + "\n");
+  }
+  return resolve(products, "DJBooth.app");
 };
 const simulator = () => {
   const devices = json(["simctl", "list", "devices", "available", "--json"]);
@@ -114,6 +132,36 @@ if (command === "test-kit") {
 } else {
   await import("./project.mjs");
   switch (command) {
+    case "link": {
+      const device = value("--device");
+      const operation = value("--operation");
+      if (!device || !operation) throw new Error("Specify --device and --operation. The app must be open with --dj-link-hardware-test.");
+      const input = JSON.parse(value("--arguments") ?? "{}");
+      const id = randomUUID();
+      const directory = resolve(root, ".build/hardware-control", id);
+      mkdirSync(directory, { recursive: true });
+      const request = resolve(directory, "request.json");
+      const response = resolve(directory, "response.json");
+      const remote = "Library/Application Support/DJBooth/HardwareControl";
+      const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "10"];
+      writeFileSync(request, JSON.stringify({ id, operation, arguments: input, expires_ms: Date.now() + 60_000 }));
+      run("xcrun", ["devicectl", "device", "copy", "to", ...domain, "--source", request, "--destination", `${remote}/request.json`]);
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((done) => setTimeout(done, 500));
+        const copied = spawnSync("xcrun", ["devicectl", "device", "copy", "from", ...domain, "--source", `${remote}/response.json`, "--destination", response], { stdio: "ignore" });
+        if (copied.status !== 0) continue;
+        const result = JSON.parse(readFileSync(response, "utf8"));
+        if (result.id !== id) continue;
+        console.log(JSON.stringify(result, null, 2));
+        if (!result.ok) process.exitCode = 1;
+        break;
+      }
+      if (!existsSync(response) || JSON.parse(readFileSync(response, "utf8")).id !== id) {
+        throw new Error("No response from phone. Check it is open in hardware-test mode. Command outcome is unknown; do not automatically retry mutations.");
+      }
+      break;
+    }
     case "build": build(args[0] === "ios" ? "ios" : "macos", { physical: args.includes("--physical") }); break;
     case "check": build("macos"); build("ios"); break;
     case "run": {
@@ -143,6 +191,17 @@ if (command === "test-kit") {
         const environment = Object.fromEntries(Object.entries(launchEnvironment()).map(([key, item]) => [`SIMCTL_CHILD_${key}`, item]));
         run("xcrun", ["simctl", "launch", "--terminate-running-process", id, "xyz.gakonst.djbooth", ...appArguments], { env: { ...process.env, ...environment } });
       }
+      break;
+    }
+    case "diagnostics": {
+      const device = value("--device");
+      if (!device) throw new Error("Specify the paired iPhone with --device <id>.");
+      const destination = resolve(root, ".build/diagnostics", String(Date.now()));
+      mkdirSync(destination, { recursive: true });
+      run("xcrun", ["devicectl", "device", "copy", "from", "--device", device,
+        "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth",
+        "--source", "Library/Application Support/DJBooth/Diagnostics", "--destination", destination]);
+      console.log(`Phone diagnostics: ${destination}`);
       break;
     }
     case "device": {
