@@ -246,8 +246,16 @@ public struct CloudClient: Sendable {
     public func musicStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
         struct Stream: Decodable, Sendable { let url: URL }
         let stream: Stream = try await musicGet(source.route + "/tracks/" + musicID(track.remoteID) + "/stream")
-        guard stream.url.scheme == "https", stream.url.host?.hasSuffix(".sndcdn.com") == true,
-              stream.url.user == nil, stream.url.password == nil else { throw ClientError.invalidMedia }
+        let host = stream.url.host?.lowercased() ?? ""
+        let query = URLComponents(url: stream.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let credentialFields = ["oauth_token", "access_token", "refresh_token", "client_secret"]
+        guard stream.url.scheme == "https",
+              host.hasSuffix(".sndcdn.com") || host == "playback.media-streaming.soundcloud.cloud",
+              stream.url.user == nil, stream.url.password == nil,
+              stream.url.port == nil || stream.url.port == 443, stream.url.fragment == nil,
+              !query.contains(where: { credentialFields.contains($0.name.lowercased()) }) else {
+            throw ClientError.http(502, "SoundCloud did not return a playable stream. Please retry.")
+        }
         return stream.url
     }
     public func downloadMusicPlaylist(_ playlist: MusicPlaylist, source: MusicSource, id: String) async throws -> CloudImportJob {

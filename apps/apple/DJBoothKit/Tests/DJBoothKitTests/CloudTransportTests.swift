@@ -81,8 +81,24 @@ private final class RequestLog: @unchecked Sendable {
             return (200, Data(#"{"url":"https://media.sndcdn.com/audio.m3u8?Policy=signed"}"#.utf8))
         }
         #expect(try await client.musicStream(track, source: source).host == "media.sndcdn.com")
-        StubProtocol.handler = { _ in (200, Data(#"{"url":"https://evil.example/audio.m3u8"}"#.utf8)) }
-        await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+        for url in [
+            "https://playback.media-streaming.soundcloud.cloud/track/aac_160k/id/playlist.m3u8?Policy=signed",
+            "https://playback.media-streaming.soundcloud.cloud:443/track/aac_96k/id/playlist.m3u8?Policy=signed"
+        ] {
+            StubProtocol.handler = { _ in (200, try JSONEncoder().encode(["url": url])) }
+            #expect(try await client.musicStream(track, source: source).host == "playback.media-streaming.soundcloud.cloud")
+        }
+        for url in [
+            "https://evil.example/audio.m3u8",
+            "https://playback.media-streaming.soundcloud.cloud.evil.example/audio.m3u8",
+            "https://user:secret@playback.media-streaming.soundcloud.cloud/audio.m3u8",
+            "https://playback.media-streaming.soundcloud.cloud:444/audio.m3u8",
+            "https://playback.media-streaming.soundcloud.cloud/audio.m3u8#fragment",
+            "https://playback.media-streaming.soundcloud.cloud/audio.m3u8?access_token=secret"
+        ] {
+            StubProtocol.handler = { _ in (200, try JSONEncoder().encode(["url": url])) }
+            await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+        }
     }
 
     @Test func cloudImportsPreserveRequestIdentityAndDecodeProgress() async throws {
