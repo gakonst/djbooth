@@ -22,7 +22,7 @@ enum DJLinkBindings {
         #endif
     }
     static func request(_ operation: String, arguments: Data = Data("{}".utf8)) throws -> Data {
-        let record = !operation.hasPrefix("diagnostics.") && operation != "function.stable_text_id"
+        let record = !operation.hasPrefix("diagnostics.") && operation != "function.stable_text_id" && operation != "interfaces"
         let call = UUID().uuidString
         let started = ProcessInfo.processInfo.systemUptime
         var succeeded = false

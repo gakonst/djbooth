@@ -3996,6 +3996,7 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
 #[serde(rename_all = "camelCase")]
 pub struct DjLinkInterface {
     pub name: String,
+    pub index: u32,
     pub ip: Ipv4Addr,
     pub broadcast: Ipv4Addr,
     pub netmask: Ipv4Addr,
@@ -4012,6 +4013,7 @@ pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
                 return None;
             }
             Some(DjLinkInterface {
+                index: interface_index(&entry.name),
                 name: entry.name,
                 ip: entry.ip,
                 broadcast: entry.broadcast?,
@@ -4019,6 +4021,21 @@ pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
             })
         })
         .collect()
+}
+
+fn interface_index(name: &str) -> u32 {
+    #[cfg(target_vendor = "apple")]
+    {
+        std::ffi::CString::new(name)
+            .ok()
+            .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) })
+            .unwrap_or(0)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = name;
+        0
+    }
 }
 
 #[cfg(target_os = "ios")]
