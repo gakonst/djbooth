@@ -39,11 +39,11 @@ test("scheduled cloud maintenance resumes old completed imports once, without re
   const db = new DatabaseSync(":memory:");
   db.exec(`CREATE TABLE login_codes(expires_at INTEGER);
     CREATE TABLE import_requests(account_id TEXT, id TEXT, source TEXT, status TEXT, phase TEXT,
-      current INTEGER, total INTEGER, message TEXT, updated_at INTEGER, created_at INTEGER, analysis_version INTEGER);
+      current INTEGER, total INTEGER, message TEXT, updated_at INTEGER, created_at INTEGER, analysis_version INTEGER, analysis_repair INTEGER DEFAULT 0);
     INSERT INTO import_requests VALUES
-      ('account-a','old','https://youtu.be/old','complete','complete',3,3,'done',0,0,0),
-      ('account-b','ready','https://youtu.be/ready','complete','complete',3,3,'done',0,0,1),
-      ('account-a','failed','https://youtu.be/failed','failed','failed',0,3,'failed',0,0,0);`);
+      ('account-a','old','https://youtu.be/old','complete','complete',3,3,'done',0,0,0,0),
+      ('account-b','ready','https://youtu.be/ready','complete','complete',3,3,'done',0,0,1,0),
+      ('account-a','failed','https://youtu.be/failed','failed','failed',0,3,'failed',0,0,0,0);`);
   const launched: string[] = [];
   const env = {
     LIBRARY_DB: {

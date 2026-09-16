@@ -410,6 +410,10 @@ export async function publishCloudLibrary(
       emit("audio", 0, audio.length);
       const uploadTrack = async (track: TrackSummary) => {
         try {
+          if (options.artifactsOnly && (!track.analyzed || !library.getAnalysisPaths))
+            throw new Error(
+              "CDJ analysis is missing from the saved library; resume analysis first",
+            );
           const path = library.getAudioPath(track.id);
           const before = await stat(path);
           const hash = createHash("sha256");
@@ -486,8 +490,10 @@ export async function publishCloudLibrary(
           const value = original ? { ...original } : portableTrack(track);
           const waveform = waveforms.get(track.id);
           if (waveform) value.waveform = waveform;
-          value.mediaHash = digest;
-          value.mediaExtension = extname(path).slice(1).toLowerCase();
+          if (!original) {
+            value.mediaHash = digest;
+            value.mediaExtension = extname(path).slice(1).toLowerCase();
+          }
           if (track.analyzed && library.getAnalysisPaths) {
             const paths = library.getAnalysisPaths(track.id);
             const hashes: string[] = [];
