@@ -18,6 +18,22 @@ struct PlaylistRemovalUndo {
     let connectionGeneration: UUID
 }
 
+enum LibraryBrowseMode: String, CaseIterable {
+    case playlists = "Playlists", artists = "Artists", albums = "Albums", tracks = "All Tracks"
+    var symbol: String {
+        switch self {
+        case .playlists: "music.note.list"
+        case .artists: "person.2"
+        case .albums: "square.stack"
+        case .tracks: "music.note"
+        }
+    }
+    func group(for track: Track) -> String {
+        let value = (self == .artists ? track.artist : track.album)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? (self == .artists ? "Unknown artist" : "Unknown album") : value
+    }
+}
+
 @MainActor @Observable final class BoothModel {
     var tracks: [Track] = [] {
         didSet { tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
@@ -32,6 +48,8 @@ struct PlaylistRemovalUndo {
     var query = "" { didSet { persistPlaybackSession() } }
     var selectedCollection: String? { didSet { persistPlaybackSession() } }
     var filter = "All music" { didSet { persistPlaybackSession() } }
+    var browseMode: LibraryBrowseMode = .playlists
+    var browseGroup: String?
     var showPlaylistBrowser = false { didSet { persistPlaybackSession() } }
     var playlistFolderPath: [String] = [] { didSet { persistPlaybackSession() } }
     var playlistSort = "title" { didSet { persistPlaybackSession() } }
@@ -169,6 +187,7 @@ struct PlaylistRemovalUndo {
             "offlineTrackCount": offlineIDs.count, "downloadCount": downloading.count,
             "pendingSyncChanges": pendingCount, "conflictCount": conflicts.count, "syncing": syncing,
             "syncStatus": syncStatus, "search": query, "filter": filter,
+            "browseMode": browseMode.rawValue, "browseGroup": browseGroup ?? "",
             "screen": showPlaylistBrowser ? "playlists" : "tracks", "playlistFolderPath": playlistFolderPath,
             "selectedPlaylistID": selectedCollection ?? "", "visibleTrackCount": visibleTracks.count,
             "playback": ["trackID": player.track?.id ?? "", "title": player.track?.title ?? "",
@@ -379,6 +398,7 @@ struct PlaylistRemovalUndo {
             candidates = members.compactMap { (selectedCollection?.hasPrefix("usb:") == true || seen.insert($0).inserted) ? tracksByID[$0] : nil }
         } else { candidates = tracks }
         var result = candidates.filter { track in
+            (selectedCollection != nil || showPlaylistBrowser || browseGroup == nil || browseMode.group(for: track) == browseGroup) &&
             (filter != "Favorites" || favorites.contains(track.id)) &&
             (filter != "Unsorted" || !assigned.contains(track.id)) &&
             (filter != "On this device" || offlineIDs.contains(track.id)) &&
@@ -597,15 +617,24 @@ struct PlaylistRemovalUndo {
         update()
         playbackSessionReady = ready; persistPlaybackSession()
     }
+    func browse(_ mode: LibraryBrowseMode, group: String? = nil) {
+        changeNavigation {
+            browseMode = mode; browseGroup = group
+            trackSort = mode == .playlists ? "default" : "title"; trackSortAscending = true
+            selectedCollection = nil; playlistFolderPath = []; query = ""; filter = "All music"
+            showPlaylistBrowser = mode == .playlists
+        }
+    }
     func showLibrary(filter: String = "All music") {
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation { showPlaylistBrowser = false; selectedCollection = nil; self.filter = filter; query = "" }
     }
     func openPlaylistBrowser() {
-        changeNavigation { showPlaylistBrowser = true; selectedCollection = nil; query = "" }
+        changeNavigation { browseMode = .playlists; browseGroup = nil; showPlaylistBrowser = true; selectedCollection = nil; query = "" }
     }
     func openPlaylistFolder(_ path: [String]) {
         changeNavigation {
+            browseMode = .playlists; browseGroup = nil
             playlistFolderPath = path; showPlaylistBrowser = true; selectedCollection = nil; query = ""
         }
     }
@@ -619,6 +648,7 @@ struct PlaylistRemovalUndo {
             return
         }
         changeNavigation {
+            browseMode = .playlists; browseGroup = nil
             preferredCollectionID = current.id; selectedCollection = current.id
             // A pinned playlist may live elsewhere: Back returns to the folder
             // the user was browsing, including an explicitly selected root.
@@ -761,7 +791,8 @@ struct PlaylistRemovalUndo {
                         queueCollection: queueCollection, queueFilter: queueFilter,
                         navigation: PlaylistNavigation(showBrowser: showPlaylistBrowser, folderPath: playlistFolderPath,
                             preferredCollectionID: preferredCollectionID, playlistSort: playlistSort,
-                            playlistSortAscending: playlistSortAscending, trackSort: trackSort, trackSortAscending: trackSortAscending), queueIndex: player.queueIndex)
+                            playlistSortAscending: playlistSortAscending, trackSort: trackSort, trackSortAscending: trackSortAscending,
+                            browseMode: browseMode.rawValue, browseGroup: browseGroup), queueIndex: player.queueIndex)
     }
     func persistPlaybackSession(force: Bool = true) {
         guard playbackSessionReady, force || Date().timeIntervalSince(lastSessionSave) >= 10 else { return }
@@ -797,8 +828,8 @@ struct PlaylistRemovalUndo {
         #if os(iOS)
         // Mobile presents playlists directly. Retired search/filter controls must
         // not leave recordings invisibly filtered out of a restored playlist.
-        filter = "All music"; query = ""; trackSort = "default"; trackSortAscending = true
-        if selectedCollection == nil { showPlaylistBrowser = true }
+        filter = "All music"; query = ""; trackSort = browseMode == .playlists ? "default" : "title"; trackSortAscending = true
+        if selectedCollection == nil { showPlaylistBrowser = browseMode == .playlists }
         #endif
         queueCollection = session.queueCollection; queueFilter = session.queueFilter
         let queue = session.queueIDs.compactMap { tracksByID[$0] }
@@ -811,6 +842,8 @@ struct PlaylistRemovalUndo {
     }
     private func applyNavigation(_ navigation: PlaylistNavigation?) {
         let value = navigation ?? PlaylistNavigation()
+        browseMode = value.browseMode.flatMap(LibraryBrowseMode.init(rawValue:)) ?? .playlists
+        browseGroup = (browseMode == .artists || browseMode == .albums) ? value.browseGroup : nil
         showPlaylistBrowser = value.showBrowser; playlistFolderPath = value.folderPath
         preferredCollectionID = value.preferredCollectionID; playlistSort = value.playlistSort
         playlistSortAscending = value.playlistSortAscending; trackSort = value.trackSort; trackSortAscending = value.trackSortAscending

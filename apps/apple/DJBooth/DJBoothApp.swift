@@ -135,12 +135,6 @@ struct BoothRoot: View {
             MobileSignInView(model: model)
         } else {
             MobileLibraryNavigation(model: model)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        PlaylistRemovalNotice(model: model)
-                        MobileNowPlaying(model: model)
-                    }
-                }
         }
         #endif
     }
@@ -197,7 +191,7 @@ struct BoothRoot: View {
     }
 }
 
-private struct PlaylistRemovalNotice: View {
+struct PlaylistRemovalNotice: View {
     @Bindable var model: BoothModel
     var body: some View {
         if let undo = model.undoablePlaylistRemoval {

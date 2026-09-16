@@ -12,6 +12,8 @@ struct PlaylistBrowserView: View {
     @State private var editing: Collection?
     @State private var showUSBLibrary = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.colorSchemeContrast) private var contrast
     private var animation: Animation? { reduceMotion ? nil : .easeOut(duration: 0.16) }
     private var searching: Bool {
         #if os(macOS)
@@ -124,14 +126,10 @@ struct PlaylistBrowserView: View {
                     }.buttonStyle(.plain).accessibilityIdentifier("usb.open")
                         .accessibilityValue(model.usbConnected ? "Connected" : "Disconnected")
                         .contextMenu { Button("Choose USB folder") { showUSBLibrary = true } }
-                        .listRowInsets(EdgeInsets()).listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+                        .boothLibraryCell()
                 }
-                browserContent(rows)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
-            }.listStyle(.plain).scrollContentBackground(.hidden)
-                .environment(\.defaultMinListRowHeight, 0)
-                .background(BoothStyle.background)
+                browserContent(rows).boothLibraryCell()
+            }.boothLibraryList()
             #else
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(spacing: 0) { browserContent(rows) }
@@ -154,14 +152,14 @@ struct PlaylistBrowserView: View {
                         case .cancelQuickAdd:
                             Button { model.cancelQuickAdd() } label: {
                                 browserNavigationRow(title: "Cancel", detail: "Add to playlist", symbol: "xmark")
-                            }.buttonStyle(.plain).accessibilityIdentifier("playlist.picker.cancel")
+                            }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.picker.cancel")
                         case .back(let title):
                             LibraryNavigationButton {
                                 guard !path.isEmpty else { return }
                                 model.openPlaylistFolder(Array(path.dropLast()))
                             } label: {
                                 browserNavigationRow(title: title, detail: "Up one level", symbol: "arrow.left")
-                            }.buttonStyle(.plain).accessibilityIdentifier("playlist.folder.back")
+                            }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.folder.back")
                         case .pinnedHeader:
                             Text("PINNED").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1)
                                 .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 8)
@@ -170,7 +168,7 @@ struct PlaylistBrowserView: View {
                                 model.openPlaylistFolder(path + [name])
                             } label: {
                                 browserNavigationRow(title: name, detail: "\(count) playlists", symbol: "folder")
-                            }.buttonStyle(.plain).accessibilityIdentifier("playlist.folder.\(name)")
+                            }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.folder.\(name)")
                         case .playlist(let collection):
                             row(collection, trackMap: trackMap)
                         case .empty:
@@ -230,6 +228,9 @@ struct PlaylistBrowserView: View {
                     guard activation.canActivate() else { return }
                     withAnimation(animation) { model.openCollection(collection) }
                 } label: {
+                    #if os(iOS)
+                    mobilePlaylistLabel(collection, duration: duration, lowerBPM: lowerBPM, upperBPM: upperBPM)
+                    #else
                     HStack(spacing: 10) {
                         #if os(macOS)
                         Group {
@@ -267,7 +268,8 @@ struct PlaylistBrowserView: View {
                             }
                         }
                     }.frame(minHeight: 36).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("playlist.row.\(collection.id)")
+                    #endif
+                }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.row.\(collection.id)")
                     .accessibilityValue(collection.isPinned == true ? "Pinned" : "Not pinned")
                     .accessibilityAction(named: Text("Edit playlist")) { editing = collection }
                     .accessibilityAction(named: Text("Keep playlist offline")) { Task { await model.keepCollectionOffline(collection) } }
@@ -292,21 +294,53 @@ struct PlaylistBrowserView: View {
                     .menuStyle(.borderlessButton).accessibilityLabel("Options for playlist \(collection.name)")
                 #endif
             }.padding(.horizontal, 12).padding(.vertical, 6)
-                .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border.opacity(0.55)).frame(height: 0.5) }
+                .overlay(alignment: .bottom) { Rectangle().fill(contrast == .increased ? Color.secondary : BoothStyle.border).frame(height: 0.5) }
         }
+    }
+    private func mobilePlaylistLabel(_ collection: Collection, duration: Double, lowerBPM: Double?, upperBPM: Double?) -> some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
+        return HStack(spacing: 12) {
+            layout {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Text(collection.name).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                        if collection.isPinned == true {
+                            Image(systemName: "pin.fill").font(.caption).foregroundStyle(BoothStyle.accent).accessibilityHidden(true)
+                        }
+                    }
+                    let detail = [collection.mood ?? "", (collection.folderPath ?? []).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · ")
+                    if !detail.isEmpty {
+                        Text(detail).boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
+                            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
+                    Text(durationLabel(duration)).boothFont(12, relativeTo: .caption, design: .monospaced).foregroundStyle(.primary)
+                    if let lower = lowerBPM, let upper = upperBPM {
+                        Text(lower.rounded() == upper.rounded() ? "\(Int(lower.rounded())) BPM" : "\(Int(lower.rounded()))–\(Int(upper.rounded())) BPM")
+                            .boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("playlist.bpm.\(collection.id)")
+                    }
+                }.fixedSize(horizontal: true, vertical: false)
+            }
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
+        }.frame(minHeight: 48).contentShape(Rectangle())
     }
     private func browserNavigationRow(title: String, detail: String, symbol: String) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol).frame(width: 34, height: 34).background(BoothStyle.surface)
+            Image(systemName: symbol).font(.body).foregroundStyle(BoothStyle.accent).frame(width: 32, height: 44).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                 #if os(macOS)
                 Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
                 #endif
             }
             Spacer()
-            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
-        }.padding(.horizontal, 12).padding(.vertical, 10).contentShape(Rectangle())
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
+        }.padding(.horizontal, 12).padding(.vertical, 5).contentShape(Rectangle())
     }
     private func durationLabel(_ seconds: Double) -> String {
         let minutes = Int(max(0, seconds.isFinite ? seconds : 0) / 60)

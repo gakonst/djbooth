@@ -229,7 +229,7 @@ private struct RectangularRowPan: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             let velocity = pan.velocity(in: pan.view)
             guard abs(velocity.x) > abs(velocity.y) * 1.25 else { return false }
-            if let navigation, navigation.viewControllers.count > 1,
+            if let navigation, navigation.viewControllers.count > 1 || navigation.splitViewController?.presentsWithGesture == true,
                pan.location(in: navigation.view).x <= 24 { return false }
             return velocity.x < 0 ? parent.canSwipeLeft : parent.canSwipeRight
         }

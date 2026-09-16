@@ -30,8 +30,11 @@ playhead and seeks on release, preserving the queue and whether playback was pau
 Waveform display gain and its image are prepared off the UI thread and reused by both views; animation pauses when
 playback stops or the app backgrounds, with a static overview for Reduce Motion. There is no
 separate expanded player screen.
-Playlist titles scroll away with their tracks; mobile has no navigation toolbar, filter chips,
-search/sort controls, playlist thumbnails, or trailing row menus. Long press opens row actions.
+The native sidebar opens from the top-left button or a left-edge swipe at the library root.
+It covers two thirds of the screen, including the player, and offers Playlists, Artists, Albums,
+All Tracks, Download, Ask DJ Booth, Connect to CDJ, and Sync & settings. Artist/album selection
+survives relaunch. Inside a folder, playlist, or group, the edge swipe goes back instead.
+Playlist titles scroll away with their tracks. Long press opens row actions.
 Mobile uses native lists with solid rectangular swipe actions and UIKit gesture recognition.
 Folders and playlists are real navigation-controller
 destinations: dragging from the left edge reveals the previous screen, and cancellation keeps the

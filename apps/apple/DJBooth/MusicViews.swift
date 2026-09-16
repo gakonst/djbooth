@@ -118,42 +118,84 @@ struct LibraryView: View {
 }
 
 #if os(iOS)
+struct MobileGroupBrowser: View {
+    @Bindable var model: BoothModel
+    let mode: LibraryBrowseMode
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        let groups = Dictionary(grouping: model.tracks) { mode.group(for: $0) }
+        List {
+            if groups.isEmpty {
+                ContentUnavailableView("No music yet", systemImage: mode.symbol).boothLibraryCell()
+            }
+            ForEach(groups.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, id: \.self) { name in
+                Button { model.browse(mode, group: name) } label: {
+                    row(name, count: groups[name]?.count ?? 0)
+                }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("library.group.\(name)")
+                    .boothLibraryCell()
+            }
+        }.boothLibraryList().accessibilityIdentifier("library.groups")
+    }
+    private func row(_ name: String, count: Int) -> some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
+        return HStack(spacing: 12) {
+            layout {
+                Text(name).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                    .foregroundStyle(.primary).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(count) \(count == 1 ? "track" : "tracks")")
+                    .boothFont(12, relativeTo: .caption, design: .monospaced).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary).accessibilityHidden(true)
+        }.frame(minHeight: 48).padding(.horizontal, 12).padding(.vertical, 6).contentShape(Rectangle())
+            .overlay(alignment: .bottom) { Rectangle().fill(contrast == .increased ? Color.secondary : BoothStyle.border).frame(height: 0.5) }
+    }
+}
+
 struct MobileTrackList: View {
     @Bindable var model: BoothModel
-    let collectionID: String
+    let collectionID: String?
+    var groupMode: LibraryBrowseMode? = nil
+    var groupName: String? = nil
     var body: some View {
         let selected = model.collections.first { $0.id == collectionID }
         let byID = model.tracksByID
-        let tracks = selected?.trackIDs.compactMap { byID[$0] } ?? []
+        let tracks = selected?.trackIDs.compactMap { byID[$0] } ?? model.tracks.filter {
+            groupName == nil || groupMode?.group(for: $0) == groupName
+        }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         List {
-            if let selected {
+            if let title = selected?.name ?? groupName {
                 HStack(alignment: .center, spacing: 10) {
-                    Button { model.backFromCollection() } label: {
+                    Button {
+                        if let groupMode { model.browse(groupMode) }
+                        else { model.backFromCollection() }
+                    } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .medium)).frame(width: 36, height: 44)
+                            .font(.body.weight(.semibold)).frame(width: 44, height: 44)
                             .contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("Back to playlists")
-                        .accessibilityIdentifier("playlist.back")
-                    Text(selected.name).font(.system(size: 22, weight: .bold)).lineLimit(2)
+                    }.buttonStyle(BoothRowButtonStyle())
+                        .accessibilityLabel(groupMode.map { "Back to \($0.rawValue.lowercased())" } ?? "Back to playlists")
+                        .accessibilityIdentifier(groupMode == nil ? "playlist.back" : "library.group.back")
+                    Text(title).font(.title3.weight(.bold)).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("playlist.title")
+                        .accessibilityIdentifier(groupMode == nil ? "playlist.title" : "library.group.title")
                 }.padding(.vertical, 12).padding(.trailing, 8)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-                    .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+                    .boothLibraryCell(horizontalInset: 8)
             }
             if tracks.isEmpty {
-                ContentUnavailableView("No tracks", systemImage: "music.note.list")
-                    .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+                ContentUnavailableView("No tracks", systemImage: "music.note.list").boothLibraryCell()
             } else {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
                     TrackRow(track: track, model: model, collection: selected, queuePosition: position)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-                        .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+                        .boothLibraryCell(horizontalInset: 8)
                 }
             }
-        }.listStyle(.plain).scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, 0)
-            .background(BoothStyle.background).accessibilityIdentifier("library.tracks")
+        }.boothLibraryList().accessibilityIdentifier("library.tracks")
     }
 }
 #endif
