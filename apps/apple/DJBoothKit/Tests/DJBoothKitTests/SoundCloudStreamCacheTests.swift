@@ -41,6 +41,17 @@ struct SoundCloudStreamCacheTests {
         #expect(try await cache.value(for: other, load: { first }, validate: {}) == first)
         #expect(try await cache.value(for: key, load: { first }, validate: {}) == first)
     }
+    @Test func canceledLoaderIsEvictedAndCanceledWaiterKeepsSuccessfulResolution() async throws {
+        let cache = SoundCloudStreamCache(), gate = StreamLoadGate()
+        await #expect(throws: CancellationError.self) {
+            try await cache.value(for: key, load: { throw CancellationError() }, validate: {})
+        }
+        let warm = Task { try await cache.value(for: key, load: { await gate.load() }, validate: {}) }
+        await gate.ready(); warm.cancel(); await gate.finish()
+        await #expect(throws: CancellationError.self) { try await warm.value }
+        let cached = try await cache.value(for: key, load: { Issue.record("Canceled waiter evicted successful URL"); throw CancellationError() }, validate: {})
+        #expect(cached.host == "media.sndcdn.com")
+    }
     @Test func authorizationFailureFencesOtherPendingResolutions() async throws {
         let cache = SoundCloudStreamCache(), gate = StreamLoadGate()
         let warm = Task { try await cache.value(for: key, load: { await gate.load() }, validate: {}) }

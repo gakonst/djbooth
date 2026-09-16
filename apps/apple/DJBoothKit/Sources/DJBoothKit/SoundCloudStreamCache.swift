@@ -33,38 +33,37 @@ actor SoundCloudStreamCache {
         let time = now(), request = generation
         entries = entries.filter { $0.value.expiresAt.map { $0 > time } ?? true }
         if let entry = entries[key] {
-            do {
-                // Includes callers joining an in-flight prewarm: they do not inherit
-                // an earlier caller's authorization decision.
-                try await validate()
-                let value = try await entry.task.value
-                try Task.checkCancellation()
-                guard request == generation else { throw CancellationError() }
-                return value
-            } catch {
-                reject(error, key: key, id: entry.id)
+            // Includes callers joining an in-flight prewarm: they do not inherit
+            // an earlier caller's authorization decision.
+            do { try await validate() }
+            catch {
+                if !Task.isCancelled { reject(error, key: key, id: entry.id) }
                 throw error
             }
+            let value: URL
+            do { value = try await entry.task.value }
+            catch { reject(error, key: key, id: entry.id); throw error }
+            try Task.checkCancellation()
+            guard request == generation else { throw CancellationError() }
+            return value
         }
         if entries.count >= capacity, let oldest = entries.min(by: { $0.value.createdAt < $1.value.createdAt })?.key {
             entries.removeValue(forKey: oldest)?.task.cancel()
         }
         let id = UUID(), task = Task { try await load() }
         entries[key] = Entry(id: id, task: task, createdAt: time)
-        do {
-            let value = try await task.value
-            guard request == generation else { throw CancellationError() }
-            if entries[key]?.id == id { entries[key]?.expiresAt = now() + lifetime }
-            try Task.checkCancellation()
-            return value
-        } catch {
-            reject(error, key: key, id: id)
-            throw error
-        }
+        let value: URL
+        do { value = try await task.value }
+        catch { reject(error, key: key, id: id); throw error }
+        guard request == generation else { throw CancellationError() }
+        if entries[key]?.id == id { entries[key]?.expiresAt = now() + lifetime }
+        // A canceled waiter must not discard a successful shared resolution.
+        try Task.checkCancellation()
+        return value
     }
     private func reject(_ error: Error, key: Key, id: UUID) {
         if case ClientError.http(let status, _) = error, status == 401 || status == 403 {
             clear()
-        } else if !(error is CancellationError), entries[key]?.id == id { entries.removeValue(forKey: key) }
+        } else if entries[key]?.id == id { entries.removeValue(forKey: key) }
     }
 }
