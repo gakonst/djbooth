@@ -56,20 +56,39 @@ private actor DJLinkEngine {
         _ = try prepare(tracks: tracks, collections: collections, annotations: annotations, audio: audio)
     }
     private func prepare(tracks: [Track], collections: [Collection], annotations: [String: TrackAnnotation], audio: URL) throws -> Prepared {
-        // UI waveform hydration does not change the ANLZ-backed CDJ library.
-        let source = tracks.map { track in var row = track; row.waveform = nil; return row }
+        // Only fields consumed by DJLinkLibrary invalidate this projection.
+        // UI waveform hydration, download flags and sync timestamps do not.
+        let source = tracks.map {
+            Track(id: $0.id, title: $0.title, artist: $0.artist, album: $0.album, genre: $0.genre,
+                  key: $0.key, bpm: $0.bpm, durationSeconds: $0.durationSeconds,
+                  mediaHash: $0.mediaHash, mediaExtension: $0.mediaExtension, analysis: $0.analysis)
+        }.sorted { $0.id < $1.id }
+        let collectionSource = collections.map {
+            Collection(id: $0.id, name: $0.name, trackIDs: $0.trackIDs, folderPath: $0.folderPath)
+        }
+        let annotationSource = annotations.filter { !$0.value.note.isEmpty }
+            .mapValues { TrackAnnotation(note: $0.note) }
         // Detect downloads/evictions even when their library metadata is unchanged.
         let availableArtifacts = Set(try FileManager.default.contentsOfDirectory(atPath: audio.path)
             .filter { $0.hasSuffix(".audio") })
-        if let cached, cached.source == source, cached.collections == collections,
+        if let cached, cached.source == source, cached.collections == collectionSource,
            cached.availableArtifacts == availableArtifacts,
-           cached.annotations == annotations, cached.audio == audio,
+           cached.annotations == annotationSource, cached.audio == audio,
            cached.tracks.allSatisfy({ row in
                [row.mountPath, row.analysisDatPath, row.analysisExtPath, row.analysisTwoexPath]
                    .compactMap { $0 }.allSatisfy { FileManager.default.fileExists(atPath: $0) }
            }) {
             AppDiagnostics.shared.event("cdj_library_cache_hit", ["tracks": String(cached.tracks.count)])
             return cached
+        }
+        if let cached {
+            AppDiagnostics.shared.event("cdj_library_cache_miss", [
+                "tracks_changed": String(cached.source != source),
+                "playlists_changed": String(cached.collections != collectionSource),
+                "notes_changed": String(cached.annotations != annotationSource),
+                "artifacts_changed": String(cached.availableArtifacts != availableArtifacts),
+                "audio_directory_changed": String(cached.audio != audio)
+            ])
         }
         let began = ProcessInfo.processInfo.systemUptime
         let library = try DJLinkLibrary.prepare(tracks: tracks, collections: collections, annotations: annotations,
@@ -92,7 +111,7 @@ private actor DJLinkEngine {
             ready[index].analysisTwoexPath = analysis.twoEx
         }
 
-        let prepared = Prepared(source: source, collections: collections, annotations: annotations, audio: audio,
+        let prepared = Prepared(source: source, collections: collectionSource, annotations: annotationSource, audio: audio,
                                 availableArtifacts: availableArtifacts,
                                 tracks: ready, playlists: library.playlists, omitted: library.omittedTracks)
         cached = prepared
