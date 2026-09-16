@@ -173,4 +173,11 @@ access and fetch one real recording each; they do not need an iPhone or write to
 ```sh
 pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/spotify.json
 pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/soundcloud.json
+pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/soundcloud-dancing-shoes.json
 ```
+
+The Dancing Shoes fixture covers recovery from a SoundCloud acquisition whose MP4 headers
+look valid but whose AAC packets fail to decode. Acquisitions and restored audio are fully
+decoded before being accepted, with successful verification cached by file identity. Invalid
+audio falls through to the existing candidate search; warm imports reuse verified recordings
+and analysis. The smoke checks report cold import and warm resume timings.

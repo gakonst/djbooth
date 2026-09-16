@@ -94,6 +94,7 @@ try {
     "never",
   ]);
   assert.equal(expanded.entries.length, 1);
+  const importStarted = performance.now();
   const result = run([
     "import",
     source,
@@ -108,6 +109,7 @@ try {
   assert.equal(result.entries, 1);
   assert.ok(result.playlistId);
   assert.equal(result.analyzed + result.analysisCacheHits, 1);
+  const importMs = Math.round(performance.now() - importStarted);
   const library = run([
     "cloud",
     "publish",
@@ -262,6 +264,7 @@ try {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+  const resumeStarted = performance.now();
   const resume = run([
     "import",
     source,
@@ -281,6 +284,7 @@ try {
   assert.equal(resume.analysisCacheHits, 1);
   console.log(
     "Linux import, Rust analysis, audio + DAT/EXT/2EX/RGB publication, and resume passed",
+    { importMs, resumeMs: Math.round(performance.now() - resumeStarted) },
   );
 } finally {
   await rm(root, { recursive: true, force: true });

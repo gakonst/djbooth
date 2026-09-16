@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,15 +8,49 @@ import { describe, expect, test } from "vitest";
 import {
   audioMetadataWithAcquisitionSource,
   normalizeMatchText,
+  probeAudio,
   readManifest,
   safeFilename,
   scoreYoutubeCandidates,
   sourceSetClipEncoding,
+  verifyAudioFile,
   writeManifestAtomic,
 } from "../src/acquisition.js";
 import { createManifest } from "../src/manifest.js";
 
 describe("acquisition primitives", () => {
+  test.skipIf(spawnSync("ffmpeg", ["-version"]).status !== 0)(
+    "rejects damaged AAC packets even when MP4 headers and duration are intact",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-decode-"));
+      try {
+        const path = join(directory, "audio.m4a");
+        execFileSync("ffmpeg", [
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=1",
+          "-c:a",
+          "aac",
+          path,
+        ]);
+        await expect(verifyAudioFile(path)).resolves.toMatchObject({ probe: { codec: "aac" } });
+        const bytes = await readFile(path);
+        const mdat = bytes.indexOf(Buffer.from("mdat"));
+        expect(mdat).toBeGreaterThan(3);
+        const size = bytes.readUInt32BE(mdat - 4);
+        bytes.fill(0xff, mdat + 4, mdat - 4 + size);
+        await writeFile(path, bytes);
+        await expect(probeAudio(path)).resolves.toMatchObject({ codec: "aac", durationSeconds: 1 });
+        await expect(verifyAudioFile(path)).rejects.toThrow(/ffmpeg failed/);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("transcodes source clips only when the target container requires it", () => {
     expect(sourceSetClipEncoding("opus", ".m4a")).toEqual({
       codec: "aac",

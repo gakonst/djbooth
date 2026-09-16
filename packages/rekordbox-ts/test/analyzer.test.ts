@@ -633,6 +633,8 @@ describe("Rekordbox analyzer wrapper", () => {
     }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(AnalyzeTracksError);
     const batchError = error as AnalyzeTracksError;
+    expect(batchError.message).toContain(batchError.failures[0]!.error.message);
+    expect(batchError.message).toContain("process:");
     expect(batchError.failures).toMatchObject([
       { audioPath: resolve(failed), index: 1, kind: "process" },
     ]);

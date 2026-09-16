@@ -304,6 +304,25 @@ export async function verifyAudioFile(
     }
   }
   if (options.expectedMetadata) verifyAudioTags(path, probe.tags, options.expectedMetadata);
+  // Container headers, duration and a stable hash do not prove the encoded packets are
+  // playable. Reject corrupt acquisitions here so the normal candidate fallback can run,
+  // rather than checkpointing bad audio and retrying analysis forever.
+  await runProcess(process.env.FFMPEG_PATH ?? "ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-xerror",
+    "-err_detect",
+    "explode",
+    "-i",
+    path,
+    "-map",
+    "0:a:0",
+    "-f",
+    "null",
+    "-",
+  ]);
   return { probe, sha256 };
 }
 

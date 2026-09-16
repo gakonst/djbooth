@@ -609,7 +609,7 @@ export class AnalyzeTracksError extends AggregateError {
   constructor(failures: AnalyzeTrackFailure[], partialResult: AnalyzeTracksPartialResult) {
     super(
       failures.map((failure) => failure.error),
-      `Rekordbox analysis failed for ${String(failures.length)} track(s)`,
+      `Rekordbox analysis failed for ${String(failures.length)} track(s): ${failures.map((failure) => `${failure.kind}: ${failure.error.message}`).join("; ")}`,
     );
     this.name = "AnalyzeTracksError";
     this.failures = failures;

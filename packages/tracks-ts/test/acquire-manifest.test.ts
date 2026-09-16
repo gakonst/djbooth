@@ -96,7 +96,7 @@ process.stdout.write(JSON.stringify({
     windows
       ? '@echo off\nsetlocal EnableDelayedExpansion\nset "previous="\nfor %%A in (%*) do (\n  if "!previous!"=="-i" set "input=%%~A"\n  set "previous=%%~A"\n  set "output=%%~A"\n)\ncopy /Y "!input!" "!output!" >nul\n'
       : `#!/usr/bin/env node
-const { copyFileSync, writeFileSync } = require("node:fs");
+const { copyFileSync, readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 let input;
 let comment = "test";
@@ -107,6 +107,13 @@ for (let index = 0; index < args.length; index += 1) {
   }
 }
 const output = args.at(-1);
+if (output === "-") {
+  if (readFileSync(input, "utf8").startsWith("corrupt")) {
+    process.stderr.write("Invalid audio packet");
+    process.exit(1);
+  }
+  process.exit(0);
+}
 copyFileSync(input, output);
 writeFileSync(output + ".comment", comment);
 `,
@@ -750,80 +757,103 @@ describe("acquireManifest", () => {
     expect((await readManifest(manifestPath)).entries[0]!.rekordbox.status).toBe("imported");
   });
 
-  audioToolTest("tries the next viable candidate after a broken first result", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-candidate-fallback-"));
-    const manifestPath = join(directory, "manifest.json");
-    const bin = await installFakeAudioTools(directory);
-    await writeManifestAtomic(manifestPath, oneTrackManifest());
-    const attempted: string[] = [];
-    const acquirer: TrackAcquirer = {
-      backend: "slsk",
-      async availability() {
-        return { available: true };
-      },
-      async search() {
-        return [
-          {
-            id: "a-broken",
-            source: "slsk://peer/a",
-            title: "Artist - Track",
-            artist: "Artist",
-            durationSeconds: 100,
+  audioToolTest.each(["download", "decode"])(
+    "recovers from a broken %s and resumes verified audio",
+    async (failure) => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-candidate-fallback-"));
+      const manifestPath = join(directory, "manifest.json");
+      const bin = await installFakeAudioTools(directory);
+      const manifest = oneTrackManifest();
+      const plan = recordingPlan(directory);
+      if (failure === "decode") {
+        const path = plan.recordings[0]!.variants[0]!.outputPath;
+        await writeFile(path, "corrupt checkpoint");
+        manifest.entries[0]!.acquisition = {
+          status: "downloaded",
+          download: {
+            backend: "slsk",
+            mediaPath: path,
+            files: [path],
+            sha256: createHash("sha256").update("corrupt checkpoint").digest("hex"),
           },
-          {
-            id: "b-good",
-            source: "slsk://peer/b",
-            title: "Artist - Track",
-            artist: "Artist",
-            durationSeconds: 100,
-          },
-        ];
-      },
-      async download(candidate, destination) {
-        attempted.push(candidate.id);
-        await mkdir(destination, { recursive: true });
-        const path = `${destination}.wav`;
-        if (candidate.id === "a-broken") {
-          await writeFile(path, "candidate A bytes");
-          throw new Error("HTTP 403 after completed staging file");
-        }
-        try {
-          await readFile(path);
-        } catch {
-          await writeFile(path, "candidate B bytes");
-        }
-        return { path, source: candidate.source, temporary: true };
-      },
-    };
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-    try {
-      const result = await acquireManifest({
-        manifestPath,
-        plan: recordingPlan(directory),
-        acquirers: [acquirer],
-        requireCompletePlan: true,
-        continueOnError: false,
-      });
-      expect(result.failures).toEqual([]);
-      expect(result.verification?.files).toBe(1);
-      expect(attempted).toEqual(["a-broken", "b-good"]);
-      expect(result.manifest.entries[0]!.acquisition).toMatchObject({
-        status: "downloaded",
-        download: {
-          backend: "slsk",
-          mediaPath: join(directory, "track.flac"),
-          source: "slsk://peer/b",
+        };
+      }
+      await writeManifestAtomic(manifestPath, manifest);
+      const attempted: string[] = [];
+      const acquirer: TrackAcquirer = {
+        backend: "slsk",
+        async availability() {
+          return { available: true };
         },
-      });
-      expect(result.manifest.entries[0]!.warnings).toContain(
-        "spotify-1 Soulseek PCM source was losslessly converted to FLAC",
-      );
-      expect(await readFile(join(directory, "track.flac"), "utf8")).toBe("candidate B bytes");
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
+        async search() {
+          return [
+            {
+              id: "a-broken",
+              source: "slsk://peer/a",
+              title: "Artist - Track",
+              artist: "Artist",
+              durationSeconds: 100,
+            },
+            {
+              id: "b-good",
+              source: "slsk://peer/b",
+              title: "Artist - Track",
+              artist: "Artist",
+              durationSeconds: 100,
+            },
+          ];
+        },
+        async download(candidate, destination) {
+          attempted.push(candidate.id);
+          await mkdir(destination, { recursive: true });
+          const path = `${destination}.wav`;
+          if (candidate.id === "a-broken") {
+            await writeFile(path, "corrupt candidate A bytes");
+            if (failure === "download") throw new Error("HTTP 403 after completed staging file");
+            return { path, source: candidate.source, temporary: true };
+          }
+          try {
+            await readFile(path);
+          } catch {
+            await writeFile(path, "candidate B bytes");
+          }
+          return { path, source: candidate.source, temporary: true };
+        },
+      };
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          continueOnError: false,
+        });
+        expect(result.failures).toEqual([]);
+        expect(result.verification?.files).toBe(1);
+        expect(attempted).toEqual(["a-broken", "b-good"]);
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: {
+            backend: "slsk",
+            mediaPath: join(directory, "track.flac"),
+            source: "slsk://peer/b",
+          },
+        });
+        expect(result.manifest.entries[0]!.warnings).toContain(
+          "spotify-1 Soulseek PCM source was losslessly converted to FLAC",
+        );
+        expect(await readFile(join(directory, "track.flac"), "utf8")).toBe("candidate B bytes");
+        const resumed = await acquireManifest({ manifestPath, plan, acquirers: [acquirer] });
+        expect(resumed.downloaded).toEqual([]);
+        expect(resumed.resumed).toEqual([join(directory, "track.flac")]);
+        expect(attempted).toEqual(["a-broken", "b-good"]);
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
 
   audioToolTest("retains a failed ambiguity error when a later variant succeeds", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-partial-ambiguity-"));

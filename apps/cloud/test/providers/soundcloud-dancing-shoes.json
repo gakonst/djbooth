@@ -1,0 +1,18 @@
+{
+  "provider": "soundcloud",
+  "id": "soundcloud:playlists:2225845415",
+  "title": "Grooves",
+  "url": "https://soundcloud.com/gakonst/sets/grooves",
+  "tracks": [
+    {
+      "provider": "soundcloud",
+      "order": 1,
+      "title": "Dancing Shoes",
+      "artists": ["Tom & Collins, OMRI."],
+      "durationMs": 228676,
+      "isrc": "USZ4V2600020",
+      "urn": "soundcloud:tracks:2246724215",
+      "permalinkUrl": "https://soundcloud.com/tomandcollins/dancing-shoes"
+    }
+  ]
+}

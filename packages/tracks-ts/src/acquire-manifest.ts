@@ -5,7 +5,6 @@ import { extname, isAbsolute, join, resolve } from "node:path";
 import {
   acquirePipelineManifestLock,
   createSourceSetClip,
-  probeAudio,
   retagAudio,
   scoreYoutubeCandidates,
   verifyAudioFile,
@@ -1977,6 +1976,7 @@ async function verifyAudioCached(
   const info = await stat(path);
   return cache.getOrLoad(
     {
+      verificationVersion: 2,
       path: resolve(path),
       size: info.size,
       mtimeMs: info.mtimeMs,
@@ -2591,14 +2591,15 @@ async function validateAcquiredSource(
   target: YoutubeTarget,
 ): Promise<void> {
   try {
-    if (target.durationSeconds === undefined) {
-      await probeAudio(source.path);
-      return;
-    }
-    await verifyAudioFile(source.path, {
-      expectedDurationSeconds: target.durationSeconds,
-      durationToleranceSeconds: Math.max(10, target.durationSeconds * 0.035),
-    });
+    await verifyAudioFile(
+      source.path,
+      target.durationSeconds === undefined
+        ? {}
+        : {
+            expectedDurationSeconds: target.durationSeconds,
+            durationToleranceSeconds: Math.max(10, target.durationSeconds * 0.035),
+          },
+    );
   } catch (error) {
     if (source.temporary !== false) await rm(source.path, { force: true });
     throw error;
