@@ -65,8 +65,9 @@ private struct BoothLaunchConfiguration: Sendable {
         else if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
         else { root = applicationRoot }
         let endpoint = try? Endpoint(cloudURL)
-        accountID = endpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
-        scope = endpoint.flatMap { endpoint in accountID.map { endpoint.accountScope($0) } } ?? "local"
+        let savedAccount = endpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
+        accountID = savedAccount
+        scope = endpoint.flatMap { endpoint in savedAccount.map { endpoint.accountScope($0) } } ?? "local"
     }
 }
 
@@ -1219,6 +1220,8 @@ private struct BoothLaunchConfiguration: Sendable {
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
         player.stop(); selectedCollection = nil
+        playbackWaveformCache.reset(); initialWaveformColumns.removeAll()
+        deferredWaveformRequests.removeAll(); importRefreshError = nil
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         importJobs = []; importError = nil
@@ -1272,6 +1275,8 @@ private struct BoothLaunchConfiguration: Sendable {
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
         player.stop(); selectedCollection = nil
+        playbackWaveformCache.reset(); initialWaveformColumns.removeAll()
+        deferredWaveformRequests.removeAll(); importRefreshError = nil
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []

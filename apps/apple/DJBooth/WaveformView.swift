@@ -10,6 +10,8 @@ import UIKit
     private var loadedRequest: PlaybackWaveformRequest?
     private var generation = UUID()
 
+    func reset() { content = nil; loadedRequest = nil; generation = UUID() }
+
     func load(_ waveform: Waveform?, trackID: String?) async {
         let request = PlaybackWaveformRequest(trackID: trackID, waveform: waveform)
         guard loadedRequest != request else { return }
