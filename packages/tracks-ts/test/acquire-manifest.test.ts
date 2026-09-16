@@ -1869,6 +1869,9 @@ describe("acquireManifest", () => {
         process.env.PATH = previousPath;
       }
     },
+    // This fixture starts real probe/decode/tag subprocesses for 34 artifacts.
+    // Concurrency is asserted above; the test deadline must also allow loaded CI hosts.
+    30_000,
   );
 
   audioToolTest(
