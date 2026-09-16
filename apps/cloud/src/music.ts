@@ -159,8 +159,21 @@ function track(source: MusicSource, item: Wire): MusicTrack | undefined {
   };
 }
 /** Never follow a provider's next link to a new host or endpoint. */
-export function pagePath(value: string, provider: Provider, pathname: string): string {
+export function pagePath(
+  value: string,
+  provider: Provider,
+  pathname: string,
+  accountID?: string,
+): string {
   const url = new URL(value, `https://${providerHost(provider)}`);
+  // Spotify canonicalizes /me/playlists to this exact connected user's endpoint.
+  if (
+    provider === "spotify" &&
+    pathname === "/v1/me/playlists" &&
+    accountID &&
+    url.pathname === `/v1/users/${encodeURIComponent(accountID)}/playlists`
+  )
+    url.pathname = pathname;
   if (
     url.protocol !== "https:" ||
     url.host !== providerHost(provider) ||
@@ -170,11 +183,11 @@ export function pagePath(value: string, provider: Provider, pathname: string): s
     url.hash
   )
     throw new AuthError(502, "Invalid music pagination response.");
-  if (
-    [...url.searchParams.keys()].some(
-      (key) => !["limit", "offset", "cursor", "linked_partitioning"].includes(key),
-    )
-  )
+  const fields =
+    provider === "soundcloud"
+      ? ["limit", "offset", "cursor", "linked_partitioning", "page_size"]
+      : ["limit", "offset"];
+  if ([...url.searchParams.keys()].some((key) => !fields.includes(key)))
     throw new AuthError(502, "Invalid music pagination parameters.");
   return `${url.pathname}${url.search}`;
 }
@@ -243,7 +256,7 @@ export async function musicRoute(
       env,
       source,
       cursor
-        ? pagePath(cursor, source.provider, path)
+        ? pagePath(cursor, source.provider, path, source.accountID)
         : `${path}?limit=50${source.provider === "soundcloud" ? "&linked_partitioning=true" : ""}`,
     );
     const next = string(page.next ?? page.next_href);
@@ -252,7 +265,7 @@ export async function musicRoute(
         const value = playlist(source, v);
         return value ? [value] : [];
       }),
-      next: next ? pagePath(next, source.provider, path) : null,
+      next: next ? pagePath(next, source.provider, path, source.accountID) : null,
     });
   }
   if (match[3] === "playlists" && id && !match[5] && request.method === "GET")

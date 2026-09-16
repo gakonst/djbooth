@@ -95,6 +95,51 @@ describe("connected music authorization and provider contracts", () => {
       ),
     ).toBe("/v1/me/playlists?offset=50&limit=50");
   });
+  it("accepts SoundCloud page_size cursors without admitting credentials or foreign hosts", () => {
+    expect(
+      pagePath(
+        "https://api.soundcloud.com/me/playlists?cursor=opaque%3A123&linked_partitioning=true&page_size=50",
+        "soundcloud",
+        "/me/playlists",
+      ),
+    ).toBe("/me/playlists?cursor=opaque%3A123&linked_partitioning=true&page_size=50");
+    expect(() =>
+      pagePath(
+        "https://api.soundcloud.com/me/playlists?page_size=50&oauth_token=secret",
+        "soundcloud",
+        "/me/playlists",
+      ),
+    ).toThrow();
+    expect(() =>
+      pagePath("https://evil.test/me/playlists?page_size=50", "soundcloud", "/me/playlists"),
+    ).toThrow();
+  });
+  it("normalizes Spotify's exact connected-user playlist alias back to /me", () => {
+    expect(
+      pagePath(
+        "https://api.spotify.com/v1/users/alice/playlists?offset=50&limit=50",
+        "spotify",
+        "/v1/me/playlists",
+        "alice",
+      ),
+    ).toBe("/v1/me/playlists?offset=50&limit=50");
+    expect(() =>
+      pagePath(
+        "https://api.spotify.com/v1/users/bob/playlists?offset=50",
+        "spotify",
+        "/v1/me/playlists",
+        "alice",
+      ),
+    ).toThrow();
+    expect(() =>
+      pagePath(
+        "https://evil.test/v1/users/alice/playlists?offset=50",
+        "spotify",
+        "/v1/me/playlists",
+        "alice",
+      ),
+    ).toThrow();
+  });
   it("keeps playlist order and duplicates, accepts current item and legacy track wrappers", async () => {
     const { env } = fixture({
       "/v1/playlists/p": { id: "p", name: "Playlist", tracks: { total: 2 } },
