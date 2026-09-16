@@ -114,6 +114,10 @@ export const runCloudCommand: CommandRunner = (args, signal, progress, environme
         return;
       }
       try {
+        if (args.includes("--help") || args.includes("--llms-full")) {
+          resolve({ text: output });
+          return;
+        }
         const parsed = JSON.parse(output);
         if (parsed.ok === false) throw new Error("Processing command failed");
         resolve(parsed.data ?? parsed);

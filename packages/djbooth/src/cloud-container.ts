@@ -1,3 +1,4 @@
+import { cloudAgent } from "./cloud-agent.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -67,7 +68,39 @@ export async function runPlaylistContainer(
     })().finally(() => {
       snapshot = undefined;
     }));
-  const server = createServer((request, response) => {
+  let agentReady = false;
+  const agent = cloudAgent({
+    id,
+    source,
+    save,
+    signal: controller.signal,
+    progress: (value) => {
+      progress = value;
+    },
+  });
+  const server = createServer(async (request, response) => {
+    if (process.env.DJBOOTH_AGENT === "1" && request.method === "POST" && request.url === "/exec") {
+      if (!agentReady) {
+        response.writeHead(503).end("Workspace is restoring; retry shortly.");
+        return;
+      }
+      try {
+        let body = "";
+        for await (const chunk of request) {
+          body += chunk;
+          if (body.length > 65536) throw new Error("Request too large");
+        }
+        const result = await agent(JSON.parse(body));
+        response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(result));
+      } catch (error) {
+        response
+          .writeHead(400)
+          .end(
+            JSON.stringify({ error: error instanceof Error ? error.message : "Invalid command" }),
+          );
+      }
+      return;
+    }
     if (request.method !== "GET" || !["/status", "/"].includes(request.url ?? "")) {
       response.writeHead(404).end();
       return;
@@ -123,6 +156,18 @@ export async function runPlaylistContainer(
       providerPlaylistFile = "/tmp/provider-playlist.json";
       await writeFile(providerPlaylistFile, body, { mode: 0o600 });
     } else if (providerInput.status !== 404) throw new Error("Provider playlist input unavailable");
+    if (process.env.DJBOOTH_AGENT === "1") {
+      agentReady = true;
+      progress = {
+        status: "running",
+        phase: "import",
+        current: 0,
+        total: 1,
+        message: "Agent preparing download",
+      };
+      await closed;
+      return;
+    }
     let result: ImportProgress;
     try {
       result = await processCloudImport(

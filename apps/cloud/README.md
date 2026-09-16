@@ -1,11 +1,19 @@
 # Account-scoped library and music agent
 
-Native login signs the exact app tool catalog shared with DJBoothKit. The authenticated
-`POST /v1/agent/tool-host/ticket` endpoint verifies that catalog digest and obtains a
-one-use Nanocodex ticket for the grant's agent. The foreground app attaches directly
-over WebSocket and executes `djbooth_query` against its current account's local model.
-Tool calls read current state on demand, with bounded, paginated results; credentials,
-filesystem paths, audio bytes, and other account stores are never query sources.
+Login signs the exact app tool catalog shared with DJBoothKit: `djbooth_query`
+for the live phone library and `djbooth_exec` for the private cloud CLI. Existing
+read-only grants must reconnect to approve this catalog. `AgentTools`, a Durable
+Object keyed by account + Connect grant + agent, attaches through the public SDK's
+`createTools` transport using a fresh one-use Connect ticket on every connection.
+Every execution revalidates the live grant and checks the download's owner, grant,
+and agent; callers cannot select a different user's container.
+
+The authenticated `POST /v1/agent/tool-host/ticket` returns a short-lived, single-use
+ticket for a same-origin phone bridge. The foreground app executes only
+`djbooth_query` against its current account's local model. The backend hosts both
+tools, so cloud downloads continue when the phone closes. Phone queries remain
+bounded and paginated; credentials, filesystem paths, audio bytes, and other
+account stores are never query sources.
 The integration fixture exercises native WebSocket calls and answers using phone-owned
 data: start `pnpm --filter @gakonst/djbooth-cloud test:mobile-server`, then run
 `DJBOOTH_PHONE_TOOL_FIXTURE=1 pnpm native:test`.
@@ -82,7 +90,18 @@ are separate and are not migrated or modified by these applications.
 
 ## Playlist containers
 
-The native import screen submits a provider link to the authenticated `/v1/imports` API.
+Download submits a provider link to the authenticated `/v1/imports` API, which
+creates an idempotent managed-agent prompt: use the DJBooth CLI to import the source,
+analyze the recordings, and publish them. The signed `djbooth_exec` tool reads the
+image's actual root `AGENTS.md`, exposes workspace paths, starts public CLI commands
+with argument arrays, and polls/cancels their processes. It does not implement an
+alternative downloader or analyzer. Commands checkpoint the normal `master.db`.
+Retry creates a new agent turn and restores the same playlist workspace.
+
+Completion requires the real `cloud publish` result for the expected playlist,
+namespace and private endpoint, with all audio and CDJ analysis uploaded; dry runs
+cannot complete a download. An agent that stops before publication leaves a retryable
+failure. Grant expiry/revocation disables tools and stops active jobs.
 A unique source within an account maps to one Durable Object and one Linux container. Different playlists run
 independently; five may process concurrently and the rest wait. The Durable Object polls the
 container without keeping an iPhone request open, and stops it after publication and backup.
@@ -96,7 +115,8 @@ a consistent encrypted database backup. Restarts restore that database and rerun
 `import`, which verifies and reuses completed work. At most the work since the last successful
 backup needs repeating. No Mac is involved. MLX stems are outside this CPU import workflow.
 
-When a set description has no tracklist, the container sends the importer's research handoff
+Previously submitted imports and analysis-repair jobs retain the deterministic runner.
+For those jobs, when a set description has no tracklist, the container sends the importer's research handoff
 to a private Worker endpoint. Browser Run finds public tracklist pages and Workers AI transcribes
 timestamped rows. Each accepted identity and timestamp must occur together in a source row;
 unknown tracks stay IDs, and community tracklists retain uncertainty warnings. The result returns
@@ -130,8 +150,9 @@ up on every checkpoint, after all referenced artifact transfers have settled.
 infrastructure (Soulseek, recognition services, and provider application credentials).
 User Spotify refresh tokens and SoundCloud access tokens are deliberately rejected in
 this shared environment. The agent accesses private music through its approved
-Nanocodex connectors; container import currently consumes public source links and does
-not export those private connector credentials into containers.
+Nanocodex connectors. Connected playlist metadata is captured as an immutable input
+artifact; private connector credentials are never exported into containers. Agent
+workspaces also omit shared `IMPORT_PROVIDER_ENV` secrets.
 
 For new deployments, apply D1 migrations before serving traffic. Use the rollout order above when upgrading the legacy shared service. `pnpm --filter @gakonst/djbooth-cloud build:container` builds the Linux image;
 `pnpm --filter @gakonst/djbooth-cloud test:container` runs an offline import and real analysis

@@ -126,7 +126,7 @@ import Foundation
 
     public static func socketRequest(_ url: URL, endpoint: Endpoint) throws -> URLRequest {
         let local = ["127.0.0.1", "localhost", "::1"].contains(endpoint.url.host ?? "")
-        let trusted = url.scheme == "wss" && url.host == "nanocodex-connect-api.gakonst.workers.dev" && url.port == nil
+        let trusted = url.scheme == "wss" && url.host == endpoint.url.host && url.port == endpoint.url.port && url.path.hasPrefix("/v1/agent/phone/")
         guard trusted || (local && url.scheme == "ws" && url.host == endpoint.url.host),
               url.user == nil, url.password == nil, url.fragment == nil,
               url.path.hasSuffix("/tool-host") else { throw ClientError.http(502, "Invalid phone tool destination") }

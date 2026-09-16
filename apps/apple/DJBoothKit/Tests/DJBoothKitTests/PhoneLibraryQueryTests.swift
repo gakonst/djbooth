@@ -51,13 +51,13 @@ import Testing
     }
     @Test func toolTicketsCannotRedirectPhoneQueriesToAnotherHost() throws {
         let endpoint = try Endpoint("https://library.example")
-        let good = try PhoneToolHost.socketRequest(URL(string: "wss://nanocodex-connect-api.gakonst.workers.dev/v1/grants/test/agents/test/tool-host?ticket=one-use")!, endpoint: endpoint)
+        let good = try PhoneToolHost.socketRequest(URL(string: "wss://library.example/v1/agent/phone/test/tool-host?ticket=one-use")!, endpoint: endpoint)
         #expect(good.value(forHTTPHeaderField: "Origin") == "https://library.example")
         #expect(good.value(forHTTPHeaderField: "Authorization") == nil)
         for bad in ["wss://evil.example/tool-host", "ws://nanocodex-connect-api.gakonst.workers.dev/tool-host", "wss://user@nanocodex-connect-api.gakonst.workers.dev/tool-host"] {
             #expect(throws: ClientError.self) { try PhoneToolHost.socketRequest(URL(string: bad)!, endpoint: endpoint) }
         }
-        #expect(try PhoneToolHost.catalog().count == 1)
+        #expect(try PhoneToolHost.catalog().count == 2)
         #expect(try PhoneToolHost.catalogDigest().hasPrefix("0x") == true)
     }
 }

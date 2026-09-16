@@ -1,4 +1,4 @@
-import { Client, Dialog, Transport, type ConnectAgent, type Connection } from "nanocodex/connect";
+import { Client, Dialog, Transport, type Connection } from "nanocodex/connect";
 import "./style.css";
 import { phoneTools } from "../src/phone-tools";
 
@@ -48,7 +48,7 @@ async function main() {
     dialog: Dialog.popup({ host: config.dialog }),
     transport: Transport.http(config.api),
   });
-  let agent: ConnectAgent | undefined;
+  let agent = false;
   let active: Connection | undefined;
   let generation = 0;
   let polling: ReturnType<typeof setInterval> | undefined;
@@ -60,7 +60,7 @@ async function main() {
   if (native && !returnTo) {
     el("welcome-title").textContent = "Sign in to DJ Booth";
     el("welcome-detail").textContent =
-      "Continue with your phone number in Nanocodex. Approve your agent to read this phone's DJ Booth library and app state. You can also connect your music services below.";
+      "Continue with your phone number in Nanocodex. Approve your agent to read this phone's library and run DJBooth downloads, analysis, and publishing in your private cloud workspace. You can also connect your music services below.";
   }
   const callback = returnTo ? new URL(returnTo) : new URL("djbooth://connect");
   if (
@@ -116,12 +116,7 @@ async function main() {
       return;
     }
     status("Opening your agent…");
-    const next = await client.agent.create({ connection });
-    if (current !== generation) {
-      await next.session.shutdown();
-      return;
-    }
-    agent = next;
+    agent = true;
     status("Ready. Ask about your music or import a playlist below.");
     await refreshImports();
     if (polling) clearInterval(polling);
@@ -134,7 +129,7 @@ async function main() {
     el<HTMLButtonElement>("connect").disabled = true;
     el<HTMLButtonElement>("manage").disabled = true;
     generation++;
-    agent = undefined;
+    agent = false;
     active = undefined;
     el("conversation").replaceChildren();
     if (polling) clearInterval(polling);
@@ -144,7 +139,7 @@ async function main() {
       // catalog is asynchronous and otherwise loses Safari's user activation.
       client.dialog.showWallet?.();
       const connection = await client.connection.connect({
-        ...(native && !returnTo ? { tools: phoneTools } : {}),
+        tools: phoneTools,
         authorization: "hosted",
         permission: "agent.run",
         capabilities: {
@@ -181,7 +176,7 @@ async function main() {
   };
   el("logout").onclick = async () => {
     generation++;
-    agent = undefined;
+    agent = false;
     active = undefined;
     if (polling) clearInterval(polling);
     sessionStorage.removeItem(key);
@@ -204,7 +199,6 @@ async function main() {
     const current = generation,
       input = el<HTMLTextAreaElement>("message").value.trim();
     if (!input) return;
-    const captured = agent;
     el<HTMLButtonElement>("send").disabled = true;
     el("error").textContent = "";
     appendMessage("You", input);
@@ -216,13 +210,18 @@ async function main() {
       const session = await api<{ account: { grantId: string } }>("/v1/auth/session");
       if (session.account.grantId !== active.grant.id)
         throw new Error("Your account changed in another tab. Sign in again.");
-      const result = await captured.turn
-        .prompt({
-          input: `You are the user's DJ Booth music assistant. Use their approved Spotify and SoundCloud connections to explore saved music and suggest tracks or set ideas. Keep recording identifications honest; include provider links for suggested playlists. User request: ${input}`,
-        })
-        .result();
+      let result = await api<{ id: string; status: string; finalMessage?: string; error?: string }>(
+        "/v1/agent/turns",
+        { id: crypto.randomUUID(), input },
+      );
+      while (result.status === "running" && current === generation) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        result = await api(`/v1/agent/turns/${result.id}`);
+      }
+      if (result.status !== "completed")
+        throw new Error(result.error ?? "Agent stopped before completing the request.");
       if (current === generation) {
-        appendMessage("DJ Booth", result.finalMessage);
+        appendMessage("DJ Booth", result.finalMessage ?? "");
         status("");
       }
     } catch (error) {

@@ -6,6 +6,7 @@
   "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
   "compatibility_date": "2026-08-01",
   "workers_dev": true,
+  "compatibility_flags": ["nodejs_compat"],
   "services": [{ "binding": "CONNECT_API_SERVICE", "service": "nanocodex-connect-api" }],
   "browser": { "binding": "BROWSER" },
   "ai": { "binding": "AI" },
@@ -23,9 +24,15 @@
     },
   ],
   "durable_objects": {
-    "bindings": [{ "name": "PLAYLIST_CONTAINERS", "class_name": "PlaylistContainer" }],
+    "bindings": [
+      { "name": "PLAYLIST_CONTAINERS", "class_name": "PlaylistContainer" },
+      { "name": "AGENT_TOOLS", "class_name": "AgentTools" },
+    ],
   },
-  "migrations": [{ "tag": "playlist-containers-v1", "new_sqlite_classes": ["PlaylistContainer"] }],
+  "migrations": [
+    { "tag": "playlist-containers-v1", "new_sqlite_classes": ["PlaylistContainer"] },
+    { "tag": "agent-tools-v1", "new_sqlite_classes": ["AgentTools"] },
+  ],
   "d1_databases": [
     {
       "binding": "LIBRARY_DB",

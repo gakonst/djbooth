@@ -37,7 +37,7 @@ function canonical(value) {
 const phoneDigest = `0x${createHash("sha256")
   .update(`nanocodex-app-tool-catalog-v1\0${canonical(phoneCatalog)}`)
   .digest("hex")}`;
-let approvedPhoneDigest;
+let approvedPhoneDigest = phoneDigest;
 let capabilities = ["nanocodex.agent", "chatgpt", "spotify", "soundcloud", "agent.output.final"];
 async function connectIssuer(request) {
   assert.equal(request.headers.get("x-nanocodex-app-id"), "djbooth");
@@ -102,21 +102,62 @@ before(async () => {
         modules: true,
         scriptPath: new URL("../dist/index.js", import.meta.url).pathname,
         compatibilityDate: "2026-08-01",
+        compatibilityFlags: ["nodejs_compat"],
         bindings: {
           LEGACY_LIBRARY_OWNER: `nc_${createHash("sha256").update("account-a").digest("hex")}`,
         },
         d1Databases: { LIBRARY_DB: "library" },
         r2Buckets: ["MEDIA"],
-        serviceBindings: { CONNECT_API_SERVICE: connectIssuer },
+        serviceBindings: { CONNECT_API_SERVICE: "broker" },
         durableObjects: {
           PLAYLIST_CONTAINERS: { className: "TestPlaylist", scriptName: "processor" },
+          AGENT_TOOLS: { className: "AgentTools" },
         },
+      },
+      {
+        name: "broker",
+        modules: true,
+        compatibilityDate: "2026-08-01",
+        serviceBindings: { API: connectIssuer },
+        bindings: { EXPECTED_CATALOG: phoneCatalog },
+        durableObjects: { BROKER: { className: "TestBroker" } },
+        script: `import { DurableObject } from "cloudflare:workers"; const sockets = new Map(); const pending = new Map();
+          function canonical(v) { if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']'; if(v && typeof v === 'object') return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}'; return JSON.stringify(v); }
+          export class TestBroker extends DurableObject { async fetch(request) {
+            const env = this.env; const url = new URL(request.url);
+            if (request.headers.get('upgrade') === 'websocket') {
+              const pair = new WebSocketPair(); const ws = pair[1]; ws.accept();
+              sockets.set(url.searchParams.get('ticket'), ws);
+              ws.addEventListener('message', event => {
+                const f = JSON.parse(event.data);
+                if (f.type === 'catalog') {
+                  if (canonical([...f.tools].sort((a,b) => canonical(a).localeCompare(canonical(b)))) !== canonical([...env.EXPECTED_CATALOG].sort((a,b) => canonical(a).localeCompare(canonical(b))))) { ws.close(1008, 'catalog mismatch'); return; }
+                  ws.send(JSON.stringify({type:'ready'}));
+                } else if (f.type === 'ping') ws.send(JSON.stringify({type:'pong',nonce:f.nonce}));
+                else if (f.type === 'drain') ws.send(JSON.stringify({type:'draining'}));
+                else if (f.type === 'result') { pending.get(f.call_id)?.(f); pending.delete(f.call_id); ws.send(JSON.stringify({type:'ack',call_id:f.call_id})); }
+              });
+              return new Response(null, {status:101, webSocket:pair[0]});
+            }
+            if(url.pathname === '/test/call') {
+              const body = await request.json(); const ws = sockets.get(body.ticket);
+              if(!ws) return new Response('no socket', {status:404});
+              const id = crypto.randomUUID();
+              const result = new Promise(resolve => { pending.set(id, resolve); setTimeout(() => { pending.delete(id); resolve({timeout:true}); }, 12000); });
+              ws.send(JSON.stringify({type:'call',session_id:'test-session',model:'test-model',call_id:id,name:body.name,input:body.input,deadline_at:Date.now()+10000,output_byte_budget:16000,output_token_budget:4000}));
+              return Response.json(await result);
+            }
+            return env.API.fetch(request);
+          }};
+          export default { fetch(request, env) { return env.BROKER.getByName('broker').fetch(request); } };`,
       },
       {
         name: "processor",
         modules: true,
         script: `import { DurableObject } from "cloudflare:workers";
       export class TestPlaylist extends DurableObject {
+        async poll() {}
+        async execute(account, grant, agent, id, input) { return { account, grant, agent, id, operation: input.operation }; }
         async enqueue(account, id, source) {
           await this.env.LIBRARY_DB.prepare("INSERT INTO test_launches (account_id, id, source) VALUES (?, ?, ?) ON CONFLICT(account_id, id) DO NOTHING").bind(account, id, source).run();
         }
@@ -165,6 +206,11 @@ before(async () => {
     "utf8",
   );
   await database.exec(cdj.replace(/^--.*$/gm, "").replace(/\n/g, " "));
+  const agents = await readFile(
+    new URL("../migrations/0006_agent_imports.sql", import.meta.url),
+    "utf8",
+  );
+  await database.exec(agents.replace(/^--.*$/gm, "").replace(/\n/g, " "));
   await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
@@ -1006,6 +1052,7 @@ test("production authentication uses the Workers global fetch receiver", async (
     modules: true,
     scriptPath: new URL("../dist/index.js", import.meta.url).pathname,
     compatibilityDate: "2026-08-01",
+    compatibilityFlags: ["nodejs_compat"],
     fetchMock: issuer,
   });
   try {
@@ -1132,12 +1179,13 @@ test("a new grant for the same Nanocodex account reopens the same library and me
 });
 
 test("phone tool tickets require the exact approved catalog and stay bound to the verified agent", async () => {
+  approvedPhoneDigest = undefined;
   assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 403);
   approvedPhoneDigest = `0x${"0".repeat(64)}`;
   assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 403);
   try {
     approvedPhoneDigest = phoneDigest;
-    for (const [token, owner] of [
+    for (const [token, _owner] of [
       [TOKEN, "a"],
       [TOKEN_B, "b"],
     ]) {
@@ -1150,16 +1198,16 @@ test("phone tool tickets require the exact approved catalog and stay bound to th
       assert.equal(response.headers.get("cache-control"), "private, no-store");
       const value = await response.json();
       assert.equal(value.catalogDigest, phoneDigest);
-      assert.equal(
+      assert.match(
         value.url,
-        `wss://nanocodex-connect-api.gakonst.workers.dev/v1/grants/${GRANT}/agents/agent-${owner}/tool-host?ticket=ticket-${owner}`,
+        /^wss:\/\/library\.test\/v1\/agent\/phone\/[a-f0-9]{64}\/tool-host\?ticket=[a-f0-9-]{36}$/,
       );
       assert.deepEqual(Object.keys(value).sort(), ["catalogDigest", "url"]);
     }
     revoked = true;
     assert.equal((await request("/v1/agent/tool-host/ticket", { method: "POST" })).status, 401);
   } finally {
-    approvedPhoneDigest = undefined;
+    approvedPhoneDigest = phoneDigest;
     revoked = false;
   }
 });
@@ -1310,4 +1358,133 @@ test("legacy migration copies chunked media and import backups into the new cont
   });
   assert.equal(media.status, 200);
   assert.deepEqual(Buffer.from(await media.arrayBuffer()), bytes);
+});
+
+test("cloud tools execute only for the job's exact user, agent and live grant, with the phone closed", async () => {
+  const id = randomUUID();
+  const response = await submitImport({ id, source: `https://soundcloud.com/owner/sets/${id}` });
+  assert.equal(response.status, 200);
+  const row = await database
+    .prepare("SELECT agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE id=?")
+    .bind(id)
+    .first();
+  assert.equal(row.agent_grant_id, GRANT);
+  assert.equal(row.agent_id, "agent-a");
+  assert.match(row.agent_turn_id, /^[a-f0-9-]{36}$/);
+  assert.ok(
+    agentRequests.some(
+      (v) => v.body?.input.includes(`Job ID: ${id}`) && v.body.input.includes("AGENTS.md"),
+    ),
+  );
+  const broker = await runtime.getWorker("broker");
+  async function call(ticket, name, input) {
+    const response = await broker.fetch("https://issuer.test/test/call", {
+      method: "POST",
+      body: JSON.stringify({ ticket, name, input }),
+    });
+    assert.equal(response.status, 200);
+    const value = await response.json();
+    assert.equal(value.timeout, undefined, JSON.stringify(value));
+    return value.outcome.output;
+  }
+  const input = { job_id: id, operation: "instructions" };
+  const good = await call("ticket-a", "djbooth_exec", input);
+  assert.equal(good.success, true, JSON.stringify(good));
+  assert.match(good.output, /agent-a/);
+  assert.equal((await call("ticket-b", "djbooth_exec", input)).success, false);
+  await database
+    .prepare("UPDATE import_requests SET agent_grant_id=? WHERE id=?")
+    .bind(GRANT_RELOGIN, id)
+    .run();
+  assert.equal((await call("ticket-a", "djbooth_exec", input)).success, false);
+  await database
+    .prepare("UPDATE import_requests SET agent_grant_id=? WHERE id=?")
+    .bind(GRANT, id)
+    .run();
+  const phone = await call("ticket-a", "djbooth_query", { resource: "state" });
+  assert.equal(phone.success, false);
+  assert.match(phone.output, /Open DJ Booth/);
+  try {
+    revoked = true;
+    assert.equal((await call("ticket-a", "djbooth_exec", input)).success, false);
+  } finally {
+    revoked = false;
+  }
+});
+
+test("cloud execution requires new signed approval; old read-only grants cannot launch downloads", async () => {
+  const prior = approvedPhoneDigest;
+  approvedPhoneDigest = undefined;
+  try {
+    const id = randomUUID();
+    const response = await submitImport({ id, source: `https://youtu.be/${id}` });
+    assert.equal(response.status, 403);
+    assert.equal(
+      await database.prepare("SELECT id FROM import_requests WHERE id=?").bind(id).first(),
+      null,
+    );
+  } finally {
+    approvedPhoneDigest = prior;
+  }
+});
+
+test("phone query bridge consumes its ticket once and forwards live results through the cloud host", async () => {
+  const response = await request("/v1/agent/tool-host/ticket", { method: "POST" });
+  assert.equal(response.status, 200);
+  const { url } = await response.json();
+  const target = new URL(url);
+  target.protocol = "https:";
+  const upgrade = await runtime.dispatchFetch(target, {
+    headers: { upgrade: "websocket", origin: "https://library.test" },
+  });
+  assert.equal(upgrade.status, 101);
+  const ws = upgrade.webSocket;
+  ws.accept();
+  const next = () =>
+    new Promise((resolve) =>
+      ws.addEventListener("message", (event) => resolve(JSON.parse(event.data)), { once: true }),
+    );
+  const ready = next();
+  ws.send(JSON.stringify({ type: "catalog", tools: phoneCatalog }));
+  assert.equal((await ready).type, "ready");
+  assert.equal(
+    (
+      await runtime.dispatchFetch(target, {
+        headers: { upgrade: "websocket", origin: "https://library.test" },
+      })
+    ).status,
+    401,
+  );
+  const incoming = next();
+  const broker = await runtime.getWorker("broker");
+  const answer = broker.fetch("https://issuer.test/test/call", {
+    method: "POST",
+    body: JSON.stringify({
+      ticket: "ticket-a",
+      name: "djbooth_query",
+      input: { resource: "state" },
+    }),
+  });
+  const frame = await incoming;
+  assert.equal(frame.name, "djbooth_query");
+  ws.send(
+    JSON.stringify({
+      type: "result",
+      call_id: frame.call_id,
+      outcome: {
+        status: "completed",
+        output: {
+          output: '{"tracks":42}',
+          success: true,
+          structured_result: null,
+          metadata: null,
+          process_trace: null,
+        },
+      },
+    }),
+  );
+  const result = await (await answer).json();
+  assert.equal(result.outcome.output.success, true);
+  assert.match(result.outcome.output.output, /42/);
+  ws.close();
 });

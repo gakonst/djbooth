@@ -26,6 +26,7 @@ ADD --checksum=sha256:1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72e
 RUN printf '#!/bin/sh\nexec python3 /usr/local/lib/yt-dlp --js-runtimes node "$@"\n' > /usr/local/bin/yt-dlp && chmod 755 /usr/local/bin/yt-dlp
 WORKDIR /app
 COPY --from=engine /runtime /app
+COPY AGENTS.md /app/AGENTS.md
 COPY --from=native /djbooth-rs /usr/local/bin/djbooth-rs
 RUN chmod +x /app/dist/bin.js && ln -s /app/dist/bin.js /usr/local/bin/djbooth
 ENV NODE_ENV=production

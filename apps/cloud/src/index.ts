@@ -1,3 +1,5 @@
+import { type AgentTools } from "./agent-tools.js";
+export { AgentTools } from "./agent-tools.js";
 import { musicRoute } from "./music.js";
 export { ContainerProxy } from "@cloudflare/containers";
 import type { PlaylistContainer } from "./playlist-container.js";
@@ -13,6 +15,7 @@ export interface Env {
   CONNECT_API_SERVICE?: Fetcher;
   LEGACY_LIBRARY_OWNER?: string;
   ASSETS?: Fetcher;
+  AGENT_TOOLS?: DurableObjectNamespace<AgentTools>;
   PLAYLIST_CONTAINERS?: DurableObjectNamespace<PlaylistContainer>;
   IMPORT_PROVIDER_ENV?: string;
   BROWSER?: BrowserRun;
@@ -727,6 +730,11 @@ export default {
         ["GET", "HEAD"].includes(request.method)
       )
         return env.ASSETS.fetch(request);
+      // One-use phone bridge ticket; ownership is encoded in the DO routing ID,
+      // then checked against the live Connect grant inside the DO.
+      const phone = /^\/v1\/agent\/phone\/([a-f0-9]{64})\/tool-host$/.exec(url.pathname);
+      if (phone && env.AGENT_TOOLS)
+        return env.AGENT_TOOLS.get(env.AGENT_TOOLS.idFromString(phone[1])).fetch(request);
       const account = await authenticate(request, env);
       if (url.pathname === "/v1/migrations/legacy")
         return await migrateLegacy(request, env, account);
@@ -765,7 +773,7 @@ export async function accountFetch(
     if (match) return await media(request, env, match[1], account);
     throw new HTTPError(404, "Not found.");
   } catch (error) {
-    if (error instanceof HTTPError)
+    if (error instanceof HTTPError || error instanceof AuthError)
       return json({ error: { message: error.message } }, error.status);
     // Do not reflect database errors, request bodies, or tokens into responses/logs.
     console.error("Library request failed", error instanceof Error ? error.name : "UnknownError");

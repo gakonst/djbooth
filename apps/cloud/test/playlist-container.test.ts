@@ -1,3 +1,4 @@
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 
@@ -239,4 +240,23 @@ test("outbound requests derive ownership from the container, ignoring supplied a
   expect(
     (await handler(new Request("http://djbooth.internal/snapshot/files"), denied, context)).status,
   ).toBe(403);
+});
+
+test("container RPC independently rejects another account, Connect grant or agent", async () => {
+  const { runner, state } = setup();
+  await runner.enqueue("account-a", id, "https://soundcloud.com/owner/sets/playlist");
+  const job = state.get("job") as any;
+  job.agentGrantId = "grant-a";
+  job.agentId = "agent-a";
+  state.set("job", job);
+  for (const [account, grant, agent] of [
+    ["account-b", "grant-a", "agent-a"],
+    ["account-a", "grant-b", "agent-a"],
+    ["account-a", "grant-a", "agent-b"],
+  ]) {
+    await expect(
+      runner.execute(account!, grant!, agent!, id, { operation: "instructions" }),
+    ).rejects.toThrow("ownership");
+  }
+  expect(runner.containerFetch).not.toHaveBeenCalled();
 });

@@ -10,6 +10,10 @@ type Job = {
   startedAt: number;
   failures: number;
   analysisRepair?: boolean;
+  agentGrantId?: string;
+  agentId?: string;
+  agentTurnId?: string;
+  completedAt?: number;
 };
 
 /** Stable Durable Object identity = one playlist = one container, across retries. */
@@ -20,22 +24,38 @@ export class PlaylistContainer extends Container<Env> {
 
   async enqueue(accountId: string, id: string, source: string): Promise<void> {
     await this.polling;
+    const row = await this.env.LIBRARY_DB.prepare(
+      "SELECT analysis_repair, agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE account_id=? AND id=?",
+    )
+      .bind(accountId, id)
+      .first<{
+        analysis_repair: number;
+        agent_grant_id: string | null;
+        agent_id: string | null;
+        agent_turn_id: string | null;
+      }>();
     const previous = await this.ctx.storage.get<Job>("job");
     if (previous) {
       if (previous.accountId !== accountId || previous.id !== id || previous.source !== source)
         throw new Error("Container ownership mismatch");
-      // Repair a lost alarm after eviction or an interrupted submission.
-      if (!this.polling) {
+      if (
+        previous.agentGrantId !== (row?.agent_grant_id ?? undefined) ||
+        previous.agentId !== (row?.agent_id ?? undefined) ||
+        previous.agentTurnId !== (row?.agent_turn_id ?? undefined)
+      ) {
+        // A user-authorized retry is a new agent turn. Stop the old executor;
+        // the same private master.db snapshot provides resumable workflow state.
+        await this.destroy();
         this.deleteSchedules("poll");
-        await this.schedule(1, "poll");
+      } else {
+        // Repair a lost alarm after eviction or an interrupted submission.
+        if (!this.polling && !previous.completedAt) {
+          this.deleteSchedules("poll");
+          await this.schedule(1, "poll");
+        }
+        return;
       }
-      return;
     }
-    const row = await this.env.LIBRARY_DB.prepare(
-      "SELECT analysis_repair FROM import_requests WHERE account_id=? AND id=?",
-    )
-      .bind(accountId, id)
-      .first<{ analysis_repair: number }>();
     await this.ctx.storage.put("job", {
       accountId,
       id,
@@ -43,8 +63,48 @@ export class PlaylistContainer extends Container<Env> {
       startedAt: Date.now(),
       failures: 0,
       analysisRepair: row?.analysis_repair === 1,
+      agentGrantId: row?.agent_grant_id ?? undefined,
+      agentId: row?.agent_id ?? undefined,
+      agentTurnId: row?.agent_turn_id ?? undefined,
     } satisfies Job);
     await this.schedule(1, "poll");
+  }
+
+  /** Internal RPC only; the public Worker never exposes container fetch/exec. */
+  async execute(
+    accountId: string,
+    grantId: string,
+    agentId: string,
+    id: string,
+    input: Record<string, unknown>,
+  ): Promise<unknown> {
+    const job = await this.ctx.storage.get<Job>("job");
+    if (
+      !job ||
+      job.accountId !== accountId ||
+      job.id !== id ||
+      job.agentGrantId !== grantId ||
+      job.agentId !== agentId
+    )
+      throw new Error("Sandbox ownership mismatch");
+    await this.poll();
+    const admitted = await this.env.LIBRARY_DB.prepare(
+      "SELECT status FROM import_requests WHERE account_id=? AND id=? AND agent_grant_id=? AND agent_id=?",
+    )
+      .bind(accountId, id, grantId, agentId)
+      .first<{ status: string }>();
+    if (!admitted || !["running", "complete"].includes(admitted.status))
+      throw new Error("Sandbox is queued. Retry shortly.");
+    const response = await this.containerFetch("http://container/exec", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok)
+      throw new Error(
+        response.status === 503 ? "Sandbox is restoring. Retry shortly." : "Sandbox command failed",
+      );
+    return response.json();
   }
 
   private polling?: Promise<void>;
@@ -56,6 +116,17 @@ export class PlaylistContainer extends Container<Env> {
   private async pollOnce(): Promise<void> {
     const job = await this.ctx.storage.get<Job>("job");
     if (!job) return;
+    if (job.completedAt) {
+      if (Date.now() - job.completedAt < 120_000) {
+        this.deleteSchedules("poll");
+        await this.schedule(15, "poll");
+        return;
+      }
+      await this.destroy();
+      await this.ctx.storage.delete("job");
+      this.deleteSchedules("poll");
+      return;
+    }
     if (!job.accountId) {
       await this.destroy();
       await this.ctx.storage.delete("job");
@@ -116,7 +187,8 @@ export class PlaylistContainer extends Container<Env> {
       await this.startAndWaitForPorts({
         startOptions: {
           envVars: {
-            ...providerEnv,
+            ...(job.agentGrantId ? {} : providerEnv),
+            DJBOOTH_AGENT: job.agentGrantId ? "1" : "0",
             DJBOOTH_IMPORT_ID: job.id,
             DJBOOTH_IMPORT_SOURCE: job.source,
             DJBOOTH_CONTAINER_BINDINGS: "1",
@@ -146,7 +218,10 @@ export class PlaylistContainer extends Container<Env> {
           job.id,
         )
         .run();
-      if (terminal) {
+      if (terminal && job.agentGrantId && progress.status === "complete") {
+        job.completedAt = Date.now();
+        await this.ctx.storage.put("job", job);
+      } else if (terminal) {
         await this.destroy();
         await this.ctx.storage.delete("job");
         this.deleteSchedules("poll");
