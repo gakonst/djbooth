@@ -12,7 +12,10 @@ tracks with a scoped playback queue; the edge gesture inside groups, folders, an
 Choose **Download → Paste → Download** to start a playlist/set import in the cloud. The sheet shows
 submission confirmation, current progress, retry for failed jobs, and an **Open playlist** action when ready.
 An unconnected phone can open cloud settings from the same sheet. The app can close while the import runs.
-On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
+On iOS, **Settings → USB library → Choose USB folder** opens the initial folder picker.
+A USB folder appears in the playlist browser only while its authorized drive is connected.
+Spotify and SoundCloud appear as normal playlist folders; loading, connection errors, and retry
+controls stay inside the affected service folder while cached playlists remain browsable.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
 iOS requires the initial folder permission; it cannot silently open an arbitrary newly connected stick.

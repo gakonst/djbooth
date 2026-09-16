@@ -33,10 +33,17 @@ final class USBLibraryUITests: XCTestCase {
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-muted"]
         app.launchEnvironment["DJBOOTH_TEST_USB_ROOT"] = root.path
         app.launch()
-        XCTAssertTrue(app.buttons["usb.open"].waitForExistence(timeout: 20))
-        app.buttons["usb.open"].tap()
+        XCTAssertTrue(app.buttons["library.drawer.open"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        app.buttons["library.drawer.open"].tap()
+        app.buttons["library.drawer.settings"].tap()
+        XCTAssertTrue(app.buttons["settings.usb.chooseFolder"].waitForExistence(timeout: 5))
+        app.buttons["settings.usb.chooseFolder"].tap()
         XCTAssertTrue(app.buttons["usb.chooseFolder"].waitForExistence(timeout: 5))
         app.buttons["usb.chooseFolder"].tap()
+        if app.buttons["usb.chooseFolder"].waitForNonExistence(timeout: 5), app.buttons["connect.done"].exists {
+            app.buttons["connect.done"].tap()
+        }
         return app
     }
 

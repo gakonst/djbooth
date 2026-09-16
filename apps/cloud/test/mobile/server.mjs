@@ -17,6 +17,7 @@ let musicEnabled = false;
 let musicRunID = "initial";
 let musicDelay = 0;
 let musicFailOnce = false;
+let musicFolderFailure = false;
 const turns = new Map();
 const sockets = new Map();
 const tickets = new Map();
@@ -128,6 +129,8 @@ async function issuer(request) {
       }
       return Response.json({ items: [{ item: track }], next: null });
     }
+    if (body.path.startsWith("/me/playlists") && musicFolderFailure)
+      return new Response(null, { status: 503 });
     if (body.path.startsWith("/me/playlists"))
       return Response.json({
         collection: [
@@ -253,13 +256,31 @@ const runtime = new Miniflare({
       durableObjects: {
         PLAYLIST_CONTAINERS: { className: "FixtureImport", scriptName: "imports" },
       },
+      workflows: {
+        DOWNLOAD_WORKFLOW: {
+          name: "mobile-download",
+          className: "FixtureDownload",
+          scriptName: "imports",
+        },
+      },
     },
     {
       name: "imports",
       modules: true,
       compatibilityDate: "2026-08-01",
       d1Databases: { LIBRARY_DB: "mobile" },
-      script: `import {DurableObject} from 'cloudflare:workers'; export class FixtureImport extends DurableObject { async enqueue(account,id,source) { await this.env.LIBRARY_DB.prepare("UPDATE import_requests SET status='running',phase='resolve',message='Local test import running' WHERE account_id=? AND id=?").bind(account,id).run(); } } export default {fetch(){return new Response('fixture')}};`,
+      script: `import {DurableObject, WorkflowEntrypoint} from 'cloudflare:workers';
+        export class FixtureImport extends DurableObject {}
+        export class FixtureDownload extends WorkflowEntrypoint {
+          async run(event, step) {
+            await step.do('show-download-progress', async () => {
+              await this.env.LIBRARY_DB.prepare("UPDATE import_requests SET status='running',phase='resolve',message='Local test import running' WHERE account_id=? AND id=? AND workflow_id=?")
+                .bind(event.payload.accountId, event.payload.id, event.instanceId).run();
+            });
+            await step.sleep('simulated-download', '1 hour');
+          }
+        }
+        export default {fetch(){return new Response('fixture')}};`,
     },
   ],
 });
@@ -319,6 +340,11 @@ const app = await serve(8791, async (request) => {
     if (musicEnabled) musicRunID = crypto.randomUUID();
     musicDelay = new URL(request.url).searchParams.get("delay") === "1" ? 3000 : 0;
     musicFailOnce = new URL(request.url).searchParams.get("fail") === "1";
+    musicFolderFailure = new URL(request.url).searchParams.get("folderFail") === "1";
+    return new Response("ok");
+  }
+  if (path === "/__mobile_music_folder_failure") {
+    musicFolderFailure = new URL(request.url).searchParams.get("enabled") === "1";
     return new Response("ok");
   }
   if (path === "/__mobile_fixture") return new Response("djbooth-mobile-fixture");

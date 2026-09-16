@@ -27,6 +27,27 @@ private final class RequestLog: @unchecked Sendable {
 }
 
 @Suite(.serialized) struct CloudTransportTests {
+    @Test func musicReadsRetryOneLostConnectionButDoNotRetryDeniedOrCancelledRequests() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session), log = RequestLog()
+        StubProtocol.handler = { request in
+            log.append(request.url!.path)
+            if log.values().count == 1 { throw URLError(.networkConnectionLost) }
+            return (200, Data(#"{"sources":[]}"#.utf8))
+        }
+        #expect(try await client.musicSources().isEmpty)
+        #expect(log.values().count == 2)
+        for code in [URLError.Code.networkConnectionLost, .cancelled] {
+            let failures = RequestLog()
+            StubProtocol.handler = { _ in failures.append("read"); throw URLError(code) }
+            await #expect(throws: URLError.self) { try await client.musicSources() }
+            #expect(failures.values().count == (code == .cancelled ? 1 : 2))
+        }
+        let denied = RequestLog()
+        StubProtocol.handler = { _ in denied.append("read"); return (403, Data()) }
+        await #expect(throws: ClientError.self) { try await client.musicSources() }
+        #expect(denied.values().count == 1)
+    }
     private func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]

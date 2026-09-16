@@ -11,15 +11,20 @@ final class DJBoothUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString]
         app.launch()
-        let openUSB = app.buttons["usb.open"]
-        XCTAssertTrue(openUSB.waitForExistence(timeout: 15))
-        openUSB.tap()
+        XCTAssertTrue(app.buttons["library.drawer.open"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        app.buttons["library.drawer.open"].tap()
+        app.buttons["library.drawer.settings"].tap()
+        let openUSB = app.buttons["settings.usb.chooseFolder"]
+        XCTAssertTrue(openUSB.waitForExistence(timeout: 5)); openUSB.tap()
         let choose = app.buttons["usb.chooseFolder"]
         XCTAssertTrue(choose.waitForExistence(timeout: 5))
         XCTAssertTrue(choose.isHittable)
         capture(app, "USB library folder selection")
         app.buttons["usb.done"].tap()
         XCTAssertTrue(openUSB.waitForExistence(timeout: 5))
+        app.buttons["connect.done"].tap()
+        XCTAssertFalse(app.buttons["usb.open"].exists)
         XCTAssertTrue(app.buttons["playlist.row.demo-c2"].exists)
     }
     #endif

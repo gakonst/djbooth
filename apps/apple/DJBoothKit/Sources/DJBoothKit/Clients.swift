@@ -296,8 +296,16 @@ public struct CloudClient: Sendable {
             var url = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
             url.queryItems = [URLQueryItem(name: "cursor", value: cursor)]; request.url = url.url
         }
-        let (data, response) = try await session.data(for: request)
-        return try await decodeResponse(T.self, from: checked(data, response))
+        for attempt in 0...1 {
+            do {
+                let (data, response) = try await session.data(for: request)
+                return try await decodeResponse(T.self, from: checked(data, response))
+            } catch let error as URLError where attempt == 0 && [.networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        throw URLError(.networkConnectionLost)
     }
     public func imports() async throws -> [CloudImportJob] {
         struct Page: Decodable, Sendable { var jobs: [CloudImportJob] }

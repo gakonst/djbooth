@@ -86,6 +86,8 @@ import XCTest
         login("Alice", app)
         XCTAssertTrue(app.buttons["music.source.Spotify"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["music.source.SoundCloud"].exists)
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        XCTAssertFalse(app.buttons["Retry music accounts"].exists)
         capture(app, "Connected music folders")
         app.buttons["music.source.Spotify"].tap()
         XCTAssertTrue(app.buttons["music.playlist.fixture-playlist"].waitForExistence(timeout: 10))
@@ -108,6 +110,40 @@ import XCTest
         app.buttons["connect.logout"].tap()
         XCTAssertTrue(app.buttons["connect.login"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["music.source.Spotify"].exists)
+    }
+
+    func testMusicConnectionErrorsStayInsideTheirFolder() throws {
+        guard let _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_fixture")!) else { throw XCTSkip("Start mobile fixture") }
+        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=1&folderFail=1")!)
+        defer { _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=0")!) }
+        let app = XCUIApplication()
+        app.launchEnvironment["DJBOOTH_CLOUD_URL"] = "http://127.0.0.1:8791"
+        app.launch()
+        if !app.buttons["connect.login"].exists { openSettings(app) }
+        login("Alice", app)
+        XCTAssertTrue(app.buttons["music.source.SoundCloud"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        XCTAssertFalse(app.buttons["Retry music accounts"].exists)
+        app.buttons["music.source.SoundCloud"].tap()
+        XCTAssertTrue(app.buttons["music.folder.retry"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.staticTexts["No playlists here"].exists)
+        capture(app, "SoundCloud error inside its folder")
+        app.buttons["playlist.folder.back"].tap()
+        XCTAssertTrue(app.buttons["music.source.SoundCloud"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["music.folder.retry"].exists)
+        XCTAssertFalse(app.staticTexts["Couldn’t refresh SoundCloud"].exists)
+        capture(app, "Home contains folders without connection errors or absent USB")
+        app.buttons["music.source.Spotify"].tap()
+        XCTAssertTrue(app.buttons["music.playlist.fixture-playlist"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["music.folder.retry"].exists)
+        app.buttons["playlist.folder.back"].tap()
+        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music_folder_failure?enabled=0")!)
+        app.buttons["music.source.SoundCloud"].tap()
+        if app.buttons["music.folder.retry"].waitForExistence(timeout: 3) { app.buttons["music.folder.retry"].tap() }
+        XCTAssertTrue(app.buttons["music.playlist.soundcloud:playlists:123"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["music.folder.retry"].exists)
+        openSettings(app)
+        app.buttons["connect.logout"].tap()
     }
 
     private func openSettings(_ app: XCUIApplication) {
