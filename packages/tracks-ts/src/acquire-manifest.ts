@@ -1284,6 +1284,7 @@ async function acquireVariant(
   signal?.throwIfAborted();
   const failures: string[] = [];
   let capabilityFallback: AcquirerFallback | undefined;
+  const retryCandidates = new Map<AcquisitionBackend, ScoredYoutubeCandidate[]>();
   const preferredAcquirer = preferredCandidate
     ? acquirers.find((acquirer) => acquirer.backend === preferredCandidate.backend)
     : undefined;
@@ -1371,7 +1372,17 @@ async function acquireVariant(
       if (shouldContinue) capabilityFallback = shouldContinue;
       continue;
     }
-    const { candidates } = search;
+    // Provider search rankings can differ between engines. If a permitted
+    // download fallback found the right recording, retry that exact identity
+    // before considering the next engine's search results.
+    const candidates = [
+      ...(retryCandidates.get(acquirer.backend) ?? []),
+      ...search.candidates,
+    ].filter(
+      (candidate, index, all) =>
+        all.findIndex((other) => other.id === candidate.id && other.source === candidate.source) ===
+        index,
+    );
     const eligible = candidates.filter(
       (candidate) => candidate.score >= minimumScore && !hasWrongDuration(target, candidate),
     );
@@ -1411,6 +1422,9 @@ async function acquireVariant(
           const shouldContinue = acquirer.shouldContinueAfterError?.(error, "download");
           if (shouldContinue === false) throw error;
           if (shouldContinue) capabilityFallback = shouldContinue;
+          const retained = retryCandidates.get(acquirer.backend) ?? [];
+          retained.push(selected);
+          retryCandidates.set(acquirer.backend, retained);
         }
       }
     }

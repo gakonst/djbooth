@@ -125,6 +125,30 @@ export function buildProviderPlaylistManifest(
   return parseManifest(manifest);
 }
 
+/** Repair older checkpoints from the same immutable provider snapshot without resetting work. */
+export function restoreProviderPlaylistMediaLinks(
+  state: SetManifest,
+  snapshot: SetManifest,
+): boolean {
+  if (state.source.input !== snapshot.source.input)
+    throw new Error("Provider playlist snapshot does not match this source");
+  const originals = new Map(snapshot.entries.map((entry) => [entry.order, entry]));
+  let changed = false;
+  for (const entry of state.entries) {
+    const original = originals.get(entry.order);
+    const link = original?.identity.mediaLinks?.find((link) => link.platform === "soundcloud");
+    if (
+      !link ||
+      entry.identity.songLink !== link.url ||
+      entry.identity.mediaLinks?.some((existing) => existing.platform === "soundcloud")
+    )
+      continue;
+    entry.identity.mediaLinks = [...(entry.identity.mediaLinks ?? []), { ...link }];
+    changed = true;
+  }
+  return changed;
+}
+
 function tracklistEntry(track: ProviderPlaylistTrack): TracklistEntry {
   return {
     order: track.order,

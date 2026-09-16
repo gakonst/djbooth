@@ -1211,73 +1211,84 @@ describe("acquireManifest", () => {
     expect(referenceDownloads).toBe(0);
   });
 
-  audioToolTest("unlocks a deferred reference acquirer after a typed capability gap", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-typed-reference-fallback-"));
-    const manifestPath = join(directory, "manifest.json");
-    const bin = await installFakeAudioTools(directory);
-    await writeManifestAtomic(manifestPath, oneTrackManifest());
-    const candidate = {
-      id: "abcdefghijk",
-      source: "https://www.youtube.com/watch?v=abcdefghijk",
-      title: "Artist - Track",
-      artist: "Artist",
-      durationSeconds: 100,
-    };
-    const native: TrackAcquirer = {
-      backend: "ytdlp",
-      availability: () => Promise.resolve({ available: true }),
-      search: () => Promise.resolve([candidate]),
-      download: () =>
-        Promise.reject(new YtdlpError("YOUTUBE_DIRECT_FORMATS_UNAVAILABLE", "no direct M4A")),
-      shouldContinueAfterError: (error) => nativeFallbackFor(error) ?? false,
-    };
-    let referenceSearches = 0;
-    let referenceDownloads = 0;
-    const reference: TrackAcquirer = {
-      backend: "ytdlp",
-      requiresPriorCapabilityFailure: true,
-      availability: () => Promise.resolve({ available: true }),
-      search: () => {
-        referenceSearches += 1;
-        return Promise.resolve([candidate]);
-      },
-      async download(selected, destination) {
-        referenceDownloads += 1;
-        await mkdir(destination, { recursive: true });
-        const path = join(destination, "track.m4a");
-        await writeFile(path, "reference audio");
-        return {
-          path,
-          source: selected.source,
-          engine: "reference",
-          temporary: true,
-        };
-      },
-    };
-    const previousPath = process.env.PATH;
-    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
-    try {
-      const result = await acquireManifest({
-        manifestPath,
-        plan: recordingPlan(directory),
-        acquirers: [native, reference],
-        requireCompletePlan: true,
-        continueOnError: false,
-      });
-
-      expect(referenceSearches).toBe(1);
-      expect(referenceDownloads).toBe(1);
-      expect(result.manifest.entries[0]!.acquisition).toMatchObject({
-        status: "downloaded",
-        download: {
-          engine: "reference",
-          fallback: { from: "native", code: "YOUTUBE_DIRECT_FORMATS_UNAVAILABLE" },
+  audioToolTest.each(["capability", "cdn403"] as const)(
+    "retains the selected recording across %s fallback when reference search misses it",
+    async (reason) => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-typed-reference-fallback-"));
+      const manifestPath = join(directory, "manifest.json");
+      const bin = await installFakeAudioTools(directory);
+      await writeManifestAtomic(manifestPath, oneTrackManifest());
+      const candidate = {
+        id: "abcdefghijk",
+        source: "https://www.youtube.com/watch?v=abcdefghijk",
+        title: "Artist - Track",
+        artist: "Artist",
+        durationSeconds: 100,
+      };
+      const native: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: () => Promise.resolve({ available: true }),
+        search: () => Promise.resolve([candidate]),
+        download: () =>
+          Promise.reject(
+            reason === "capability"
+              ? new YtdlpError("YOUTUBE_DIRECT_FORMATS_UNAVAILABLE", "no direct M4A")
+              : new YtdlpError("HTTP_ERROR", "HTTP 403", { status: 403 }),
+          ),
+        shouldContinueAfterError: (error) =>
+          reason === "cdn403" ? undefined : (nativeFallbackFor(error) ?? false),
+      };
+      let referenceSearches = 0;
+      let referenceDownloads = 0;
+      const reference: TrackAcquirer = {
+        backend: "ytdlp",
+        requiresPriorCapabilityFailure: reason === "capability",
+        availability: () => Promise.resolve({ available: true }),
+        search: () => {
+          referenceSearches += 1;
+          return Promise.resolve([]);
         },
-      });
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
+        async download(selected, destination) {
+          referenceDownloads += 1;
+          expect(selected.id).toBe(candidate.id);
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "track.m4a");
+          await writeFile(path, "reference audio");
+          return {
+            path,
+            source: selected.source,
+            engine: "reference",
+            temporary: true,
+          };
+        },
+      };
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [native, reference],
+          requireCompletePlan: true,
+          continueOnError: false,
+        });
+
+        expect(referenceSearches).toBe(1);
+        expect(referenceDownloads).toBe(1);
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: {
+            engine: "reference",
+            ...(reason === "capability"
+              ? { fallback: { from: "native", code: "YOUTUBE_DIRECT_FORMATS_UNAVAILABLE" } }
+              : {}),
+          },
+        });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
 
   audioToolTest(
     "runs independent recording jobs concurrently with serialized checkpoints",

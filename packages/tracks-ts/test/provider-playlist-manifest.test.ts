@@ -4,6 +4,7 @@ import { parseManifest } from "../src/manifest.js";
 import { buildAcquisitionPlan } from "../src/generic-acquisition-plan.js";
 import {
   buildProviderPlaylistManifest,
+  restoreProviderPlaylistMediaLinks,
   type ProviderPlaylistManifestInput,
   type SoundCloudProviderPlaylistTrack,
   type SpotifyProviderPlaylistTrack,
@@ -193,6 +194,7 @@ describe("buildProviderPlaylistManifest", () => {
       });
     };
     await assertPreferred();
+    const snapshot = structuredClone(manifest);
     manifest.entries[0]!.acquisition = {
       status: "failed",
       error: {
@@ -201,6 +203,11 @@ describe("buildProviderPlaylistManifest", () => {
         retryable: true,
       },
     };
+    delete manifest.entries[0]!.identity.mediaLinks;
+    const failedState = structuredClone(manifest.entries[0]!.acquisition);
+    expect(restoreProviderPlaylistMediaLinks(manifest, snapshot)).toBe(true);
+    expect(manifest.entries[0]!.acquisition).toEqual(failedState);
+    expect(restoreProviderPlaylistMediaLinks(manifest, snapshot)).toBe(false);
     await assertPreferred();
   });
 

@@ -29,6 +29,7 @@ import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
 import {
   buildProviderPlaylistManifest,
+  restoreProviderPlaylistMediaLinks,
   type ProviderPlaylistManifestInput,
 } from "./provider-playlist-manifest.js";
 import { prepareHostedImportSource, type ImportSourceKind } from "./import-source.js";
@@ -1085,7 +1086,7 @@ async function runSetWorkflowCommand(
       initialState = submitted;
       sourceKind = "dj-set";
     }
-    if (!initialState && context.options.providerPlaylistFile) {
+    if (context.options.providerPlaylistFile) {
       const file = context.options.providerPlaylistFile;
       if ((await stat(file)).size > 8 * 1024 * 1024)
         throw new Error("Provider playlist snapshot is too large");
@@ -1093,11 +1094,16 @@ async function runSetWorkflowCommand(
       if (input.url !== context.args.source || !["spotify", "soundcloud"].includes(input.provider))
         throw new Error("Provider playlist snapshot does not match this source");
       const manifest = buildProviderPlaylistManifest(input);
-      manifest.artifacts.root = stateStore.artifactDirectory;
-      manifest.artifacts.downloadDirectory = outputDirectory;
-      delete manifest.artifacts.manifest;
-      await stateStore.save(manifest);
-      initialState = manifest;
+      if (initialState) {
+        if (restoreProviderPlaylistMediaLinks(initialState, manifest))
+          await stateStore.save(initialState);
+      } else {
+        manifest.artifacts.root = stateStore.artifactDirectory;
+        manifest.artifacts.downloadDirectory = outputDirectory;
+        delete manifest.artifacts.manifest;
+        await stateStore.save(manifest);
+        initialState = manifest;
+      }
       sourceKind = input.provider === "spotify" ? "spotify-playlist" : "soundcloud-playlist";
     }
     if (!initialState && !isHostedPlaylistCandidate(context.args.source)) {
