@@ -32,6 +32,10 @@ jobs:
       - name: Set up Rust formatting
         run: rustup component add --toolchain nightly rustfmt
 
+      - name: Set up iOS Rust target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-ios-sim
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev
