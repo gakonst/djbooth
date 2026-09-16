@@ -31,6 +31,7 @@ Options:
   --offline-track <id>     Keep a cloud track on this device after it syncs (Debug builds)
   --offline-collection <id> Keep a cloud collection on this device as its tracks arrive (Debug builds)
   --dj-link               Enable DJ Link signing (requires Apple Multicast Networking approval)
+  --snapshot              Export closed diagnostic files from the open hardware-test app
   --console               Stream physical-device app logs until it exits
   --physical              Build for iPhone without installing (build:ios)
   --optimized             Optimize Swift (-O) while retaining Debug features
@@ -127,6 +128,32 @@ const simulator = () => {
   return device.udid;
 };
 
+async function hardwareRequest(device, operation, input = {}) {
+  const id = randomUUID();
+  const directory = resolve(root, ".build/hardware-control", id);
+  mkdirSync(directory, { recursive: true });
+  const request = resolve(directory, "request.json");
+  const response = resolve(directory, "response.json");
+  const remote = "Library/Application Support/DJBooth/HardwareControl";
+  const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "10"];
+  writeFileSync(request, JSON.stringify({ id, operation, arguments: input, expires_ms: Date.now() + 60_000 }));
+  // The app claims a command by deleting request.json. It can do that before
+  // devicectl's post-copy metadata lookup, which reports error 7000 even
+  // though the command ran. Always check its ID-specific reply; never resend.
+  const upload = spawnSync("xcrun", ["devicectl", "device", "copy", "to", ...domain, "--source", request, "--destination", `${remote}/request.json`], { encoding: "utf8", timeout: 15_000 });
+  if (upload.status !== 0) console.error("Device upload was not confirmed; checking the command acknowledgment without resending.");
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 500));
+    const copied = spawnSync("xcrun", ["devicectl", "device", "copy", "from", ...domain, "--source", `${remote}/response.json`, "--destination", response], { stdio: "ignore", timeout: 15_000 });
+    if (copied.status !== 0) continue;
+    const result = JSON.parse(readFileSync(response, "utf8"));
+    if (result.id !== id) continue;
+    return result;
+  }
+  throw new Error("No response from phone. Check it is open in hardware-test mode. Command outcome is unknown; do not automatically retry mutations.");
+}
+
 if (command === "test-kit") {
   run("swift", ["test", "--package-path", "DJBoothKit"]);
 } else {
@@ -137,33 +164,9 @@ if (command === "test-kit") {
       const operation = value("--operation");
       if (!device || !operation) throw new Error("Specify --device and --operation. The app must be open with --dj-link-hardware-test.");
       const input = JSON.parse(value("--arguments") ?? "{}");
-      const id = randomUUID();
-      const directory = resolve(root, ".build/hardware-control", id);
-      mkdirSync(directory, { recursive: true });
-      const request = resolve(directory, "request.json");
-      const response = resolve(directory, "response.json");
-      const remote = "Library/Application Support/DJBooth/HardwareControl";
-      const domain = ["--device", device, "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "10"];
-      writeFileSync(request, JSON.stringify({ id, operation, arguments: input, expires_ms: Date.now() + 60_000 }));
-      // The app claims a command by deleting request.json. It can do that before
-      // devicectl's post-copy metadata lookup, which reports error 7000 even
-      // though the command ran. Always check its ID-specific reply; never resend.
-      const upload = spawnSync("xcrun", ["devicectl", "device", "copy", "to", ...domain, "--source", request, "--destination", `${remote}/request.json`], { encoding: "utf8" });
-      if (upload.status !== 0) console.error("Device upload was not confirmed; checking the command acknowledgment without resending.");
-      const deadline = Date.now() + 60_000;
-      while (Date.now() < deadline) {
-        await new Promise((done) => setTimeout(done, 500));
-        const copied = spawnSync("xcrun", ["devicectl", "device", "copy", "from", ...domain, "--source", `${remote}/response.json`, "--destination", response], { stdio: "ignore" });
-        if (copied.status !== 0) continue;
-        const result = JSON.parse(readFileSync(response, "utf8"));
-        if (result.id !== id) continue;
-        console.log(JSON.stringify(result, null, 2));
-        if (!result.ok) process.exitCode = 1;
-        break;
-      }
-      if (!existsSync(response) || JSON.parse(readFileSync(response, "utf8")).id !== id) {
-        throw new Error("No response from phone. Check it is open in hardware-test mode. Command outcome is unknown; do not automatically retry mutations.");
-      }
+      const result = await hardwareRequest(device, operation, input);
+      console.log(JSON.stringify(result, null, 2));
+      if (!result.ok) process.exitCode = 1;
       break;
     }
     case "build": build(args[0] === "ios" ? "ios" : "macos", { physical: args.includes("--physical") }); break;
@@ -202,9 +205,18 @@ if (command === "test-kit") {
       if (!device) throw new Error("Specify the paired iPhone with --device <id>.");
       const destination = resolve(root, ".build/diagnostics", String(Date.now()));
       mkdirSync(destination, { recursive: true });
+      let source = "Library/Application Support/DJBooth/Diagnostics";
+      if (args.includes("--snapshot")) {
+        const result = await hardwareRequest(device, "diagnostics.snapshot");
+        if (!result.ok) throw new Error(result.error ?? "Phone snapshot failed");
+        const marker = "/Library/Application Support/";
+        const path = result.value?.directory;
+        if (typeof path !== "string" || !path.includes(marker)) throw new Error("Phone returned an invalid snapshot path");
+        source = "Library/Application Support/" + path.split(marker)[1];
+      }
       run("xcrun", ["devicectl", "device", "copy", "from", "--device", device,
-        "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth",
-        "--source", "Library/Application Support/DJBooth/Diagnostics", "--destination", destination]);
+        "--domain-type", "appDataContainer", "--domain-identifier", "xyz.gakonst.djbooth", "--timeout", "30",
+        "--source", source, "--destination", destination], { timeout: 45_000 });
       console.log(`Phone diagnostics: ${destination}`);
       break;
     }

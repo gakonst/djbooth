@@ -164,6 +164,44 @@ Local evidence (2026-09-16):
   `transport.1.jsonl` SHA-256 `14d62f1ded12d4d5d717e446b72f857d15332b517c3db39693149c31725ea7ea`,
   `transport.jsonl` SHA-256 `ea1f6751f922ce09ef1475393c92a87177d06480bee99b0b05b1848d9f900c8a`.
 
+### Stagehand isolation tests and next capture
+
+Two additional 2026-09-16 phone tests disabled Rekordbox announcements and
+link-init entirely. Directed Stagehand registration/heartbeats to both CDJs
+and the A9 received 243 extended 1116-byte CDJ status frames over 30.9 seconds,
+but the A9 supplied only 104 on-air frames and 16 ordinary keepalives. The
+broadcast-only SDK compatibility variant received 321 extended CDJ statuses,
+125 A9 on-air frames and 19 ordinary keepalives over 37.3 seconds. Neither
+capture contained A9 paired keepalives, control frames or VU frames. These
+results do not establish that the A9 received the outgoing registration.
+The experiment changes are not production behavior. An A9 restart to test
+retained peer identity was requested but had not been confirmed.
+
+Diagnostics now persist a five-second network context (interface, addresses,
+Stagehand identity, devices, bounded resolved-neighbour hints or their access
+error), cumulative packet counts, first-seen packet patterns, and structured
+Stagehand join/retry events. Counters do not split streams when hardware changes
+its UDP source port. Pattern overflow, recorder queue drops and write failures
+are explicit. A 100-byte A9 presence packet is labeled a *paired keepalive
+candidate*, not proof that it names our current identity. Socket TX counts mean
+kernel acceptance, not Ethernet delivery.
+
+`diagnostics.snapshot` creates closed copies on the Rust writer thread, with a
+manifest, traffic summary and the retained JSONL segments. Two exports are
+retained separately from live-session rotation. The native diagnostics tool's
+`--snapshot` option requests this export from the open hardware-test app before
+copying it, avoiding races with live file appends/rotation. The generated
+`server.network_diagnostics` and `server.resolved_neighbours` bindings expose
+the same Rust network inspection on the phone; Swift adds no packet decoder.
+
+Verified on the iPhone with normal track sharing restored: both CDJs and the
+A9 appeared in network diagnostics, including resolved-neighbour hints for
+all three. The closed export downloaded successfully with zero queue drops,
+write failures or untracked patterns. Its 13 send errors were discovery probes
+to stale `169.254.6.175`, not the A9. A9 presence/on-air traffic was captured;
+control/VU traffic remained absent. Startup verified 57 generated server
+methods and 11 functions against the Rust inventory.
+
 ## alphatheta-connect audit, 2026-09-16
 
 Compared the pinned v0.26.1 sources, recent fixes and wire tests against our Rust

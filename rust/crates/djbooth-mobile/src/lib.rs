@@ -278,6 +278,7 @@ fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
             Ok(Value::Null)
         }
         "status" => Ok(diagnostics::status()),
+        "snapshot" => diagnostics::snapshot(),
         "flush" => {
             diagnostics::flush()?;
             Ok(diagnostics::status())

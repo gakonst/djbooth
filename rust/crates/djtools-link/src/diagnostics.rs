@@ -19,6 +19,8 @@ use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::TcpStream,
 };
+mod summary;
+use summary::TrafficSummary;
 
 const MIB: u64 = 1024 * 1024;
 const SEGMENTS: usize = 4;
@@ -57,6 +59,7 @@ enum Message {
         reply: mpsc::Sender<Result<(), String>>,
     },
     Flush(mpsc::Sender<()>),
+    Snapshot(mpsc::Sender<Result<Value, String>>),
 }
 fn timestamp() -> u128 {
     SystemTime::now()
@@ -170,6 +173,7 @@ pub fn initialize(root: &Path, session: &str, metadata: Value) -> anyhow::Result
     let (sender, receiver) = mpsc::sync_channel(256);
     let dropped = Arc::new(AtomicU64::new(0));
     let failures = Arc::new(AtomicU64::new(0));
+    let writer_directory = directory.clone();
     let recorder = Recorder {
         sender,
         dropped: dropped.clone(),
@@ -179,13 +183,23 @@ pub fn initialize(root: &Path, session: &str, metadata: Value) -> anyhow::Result
     };
     std::thread::Builder::new().name("djlink-diagnostics".into()).spawn(move || {
         let mut last_counts = (0, 0);
+        let mut summary = TrafficSummary::default();
+        let mut last_summary = Instant::now();
         loop {
             let result = match receiver.recv_timeout(Duration::from_secs(1)) {
                 Ok(Message::Record { lane, at, elapsed_us, value }) => {
+                    summary.event(&value);
                     let file = if lane == "metrics" { &mut metrics } else { &mut timeline };
                     file.row(&json!({"time_ms":at,"elapsed_us":elapsed_us,"data":value}))
                 },
                 Ok(Message::Bytes { at, elapsed_us, transport: protocol, direction, local, peer, connection, bytes }) => {
+                    if protocol == "udp" {
+                        if let Some(first) = summary.observe(at, direction, local, peer, &bytes) {
+                            if timeline.row(&json!({"time_ms":at,"elapsed_us":elapsed_us,"data":{"event":"djlink_packet_first_seen","fields":first}})).is_err() {
+                                failures.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
                     use std::fmt::Write;
                     let mut hex = String::with_capacity(bytes.len()*2);
                     for b in &bytes { let _ = write!(hex,"{b:02x}"); }
@@ -200,10 +214,21 @@ pub fn initialize(root: &Path, session: &str, metadata: Value) -> anyhow::Result
                     for file in [&timeline, &transport, &metrics] { if file.file.sync_data().is_err() { failures.fetch_add(1, Ordering::Relaxed); } }
                     let _ = reply.send(()); Ok(())
                 },
+                Ok(Message::Snapshot(reply)) => {
+                    let result = export_snapshot(&writer_directory, [&timeline, &transport, &metrics], summary.value(), dropped.load(Ordering::Relaxed), failures.load(Ordering::Relaxed));
+                    let _ = reply.send(result.as_ref().map(Clone::clone).map_err(ToString::to_string));
+                    result.map(|_| ())
+                },
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             if result.is_err() { failures.fetch_add(1, Ordering::Relaxed); }
+            if last_summary.elapsed() >= Duration::from_secs(5) {
+                if metrics.row(&json!({"time_ms":timestamp(),"data":{"event":"djlink_traffic_summary","fields":summary.value()}})).is_err() {
+                    failures.fetch_add(1, Ordering::Relaxed);
+                }
+                last_summary = Instant::now();
+            }
             let counts = (dropped.load(Ordering::Relaxed), failures.load(Ordering::Relaxed));
             if counts != last_counts {
                 let _ = timeline.row(&json!({"time_ms":timestamp(),"data":{"event":"diagnostics_loss","queue_drops":counts.0,"write_failures":counts.1}}));
@@ -279,6 +304,84 @@ pub fn flush() -> anyhow::Result<()> {
         rx.recv_timeout(Duration::from_secs(2))?;
     }
     Ok(())
+}
+
+/// Produce closed, immutable files on the writer thread. Copying live JSONL
+/// files through CoreDevice can fail while the app is appending/rotating them.
+pub fn snapshot() -> anyhow::Result<Value> {
+    let recorder = ACTIVE
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("Diagnostics not initialized"))?;
+    let (tx, rx) = mpsc::channel();
+    recorder
+        .sender
+        .try_send(Message::Snapshot(tx))
+        .map_err(|_| anyhow::anyhow!("Diagnostics queue full or writer stopped"))?;
+    rx.recv_timeout(Duration::from_secs(15))?
+        .map_err(anyhow::Error::msg)
+}
+
+fn export_snapshot(
+    directory: &Path,
+    files: [&RollingFile; 3],
+    summary: Value,
+    drops: u64,
+    failures: u64,
+) -> io::Result<Value> {
+    let root = directory
+        .parent()
+        .ok_or_else(|| io::Error::other("Missing diagnostics root"))?
+        .join("exports");
+    fs::create_dir_all(&root)?;
+    let name = format!(
+        "snapshot-{:020}-{:020}",
+        timestamp(),
+        CONNECTION.fetch_add(1, Ordering::Relaxed)
+    );
+    let temporary = root.join(format!(".{name}.tmp"));
+    let destination = root.join(&name);
+    fs::create_dir(&temporary)?;
+    let result = (|| {
+        fs::copy(
+            directory.join("manifest.json"),
+            temporary.join("manifest.json"),
+        )?;
+        for file in files {
+            file.file.sync_data()?;
+            for index in 0..SEGMENTS {
+                let source = file.path(index);
+                match fs::copy(&source, temporary.join(source.file_name().unwrap())) {
+                    Ok(_) => (),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        let metadata = json!({"directory":destination,"source_session":directory,"captured_ms":timestamp(),"queue_drops":drops,"write_failures":failures,"traffic":summary});
+        fs::write(
+            temporary.join("summary.json"),
+            serde_json::to_vec_pretty(&metadata)?,
+        )?;
+        fs::rename(&temporary, &destination)?;
+        // Keep two completed exports independently of active-session rotation.
+        let mut exports = fs::read_dir(&root)?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_ok_and(|kind| kind.is_dir())
+                    && entry.file_name().to_string_lossy().starts_with("snapshot-")
+            })
+            .collect::<Vec<_>>();
+        exports.sort_by_key(|entry| entry.file_name());
+        let remove = exports.len().saturating_sub(2);
+        for entry in exports.into_iter().take(remove) {
+            fs::remove_dir_all(entry.path())?;
+        }
+        Ok(metadata)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temporary);
+    }
+    result
 }
 #[derive(Clone)]
 struct TimelineWriter;
@@ -420,6 +523,55 @@ impl AsyncWrite for CapturedTcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exports_are_closed_consistent_and_bounded_while_capture_continues() {
+        let root = tempfile::tempdir().unwrap();
+        let session = root.path().join("session-test");
+        fs::create_dir(&session).unwrap();
+        fs::write(session.join("manifest.json"), b"{\"schema\":1}").unwrap();
+        let mut timeline = RollingFile::new(&session, "timeline", 1000).unwrap();
+        let mut transport = RollingFile::new(&session, "transport", 1000).unwrap();
+        let metrics = RollingFile::new(&session, "metrics", 1000).unwrap();
+        timeline.row(&json!({"event":"before"})).unwrap();
+        transport.row(&json!({"packet":1})).unwrap();
+        let export = export_snapshot(
+            &session,
+            [&timeline, &transport, &metrics],
+            json!({"packets":1}),
+            2,
+            3,
+        )
+        .unwrap();
+        let first = PathBuf::from(export["directory"].as_str().unwrap());
+        timeline.row(&json!({"event":"after"})).unwrap();
+        transport.row(&json!({"packet":2})).unwrap();
+        assert_eq!(
+            fs::read_to_string(first.join("transport.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        assert!(
+            !fs::read_to_string(first.join("timeline.jsonl"))
+                .unwrap()
+                .contains("after")
+        );
+        let saved: Value =
+            serde_json::from_slice(&fs::read(first.join("summary.json")).unwrap()).unwrap();
+        assert_eq!(saved["queue_drops"], 2);
+        assert_eq!(saved["write_failures"], 3);
+        assert_eq!(saved["traffic"]["packets"], 1);
+        for _ in 0..2 {
+            export_snapshot(&session, [&timeline, &transport, &metrics], json!({}), 0, 0).unwrap();
+        }
+        assert!(!first.exists());
+        assert_eq!(
+            fs::read_dir(root.path().join("exports")).unwrap().count(),
+            2
+        );
+        assert!(session.join("transport.jsonl").exists());
+    }
     #[test]
     fn rotation_retains_recent_complete_rows_and_bounds_disk() {
         let dir = tempfile::tempdir().unwrap();

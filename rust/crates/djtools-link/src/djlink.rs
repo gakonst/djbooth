@@ -1053,6 +1053,23 @@ impl DjLinkServer {
         self.state.mixer_telemetry_tx.subscribe()
     }
 
+    /// Kernel-resolved IPv4 neighbours on this session's network interface.
+    /// Discovery announcements alone do not establish a working return route.
+    /// Preserve route-table permission failures instead of reporting an empty LAN.
+    pub fn resolved_neighbours(&self) -> Result<Vec<Ipv4Addr>> {
+        crate::discovery::neighbours(self.state.interface_name.as_deref())
+            .context("failed to read DJ Link interface neighbours")
+    }
+
+    pub async fn network_diagnostics(&self) -> serde_json::Value {
+        let devices = if self.tasks.is_empty() {
+            Vec::new()
+        } else {
+            self.state.devices_sorted().await
+        };
+        self.state.network_diagnostics(devices)
+    }
+
     pub fn subscribe_vu_telemetry(&self) -> broadcast::Receiver<DjLinkVuTelemetryEvent> {
         self.state.vu_telemetry_tx.subscribe()
     }
@@ -1277,6 +1294,22 @@ impl DjLinkServer {
             .push(spawn_portmap(self.state.clone(), portmap_sock, mount_port));
         self.tasks.push(spawn_mount(self.state.clone(), mount_sock));
         self.tasks.push(spawn_nfs(self.state.clone(), nfs_sock));
+
+        if crate::diagnostics::initialized() {
+            let state = self.state.clone();
+            self.tasks.push(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    let devices = state.devices_sorted().await;
+                    crate::diagnostics::event(
+                        "djlink_network_context",
+                        state.network_diagnostics(devices),
+                    );
+                }
+            }));
+        }
 
         send_startup_link_init(&self.state, &status_sock).await;
         if !self.state.config.stagehand_monitor {
@@ -2675,6 +2708,31 @@ enum LoadProgressRecordResult {
 }
 
 impl ServerState {
+    fn network_diagnostics(&self, devices: Vec<LinkDevice>) -> serde_json::Value {
+        let neighbours = match crate::discovery::neighbours(self.interface_name.as_deref()) {
+            Ok(peers) => serde_json::json!({"resolved":peers}),
+            Err(error) => {
+                serde_json::json!({"error":error.to_string(),"os_error":error.raw_os_error()})
+            }
+        };
+        let protocol_mac = self.config.stagehand_protocol_nonce.and_then(|nonce| {
+            parse_mac(&self.mac_addr)
+                .ok()
+                .map(|mac| format_mac(stagehand::protocol_mac(mac, nonce)))
+        });
+        serde_json::json!({
+            "time_ms":epoch_millis(),"interface":self.interface_name,
+            "bind_ip":self.bind_ip,"broadcast_ip":self.broadcast_ip,"interface_mac":self.mac_addr,
+            "transport":if self.config.unicast_discovery_netmask.is_some() {"kernel_unicast"} else if self.stagehand_ip.is_some_and(|ip| ip != self.bind_ip) {"isolated_raw_stagehand"} else {"kernel_broadcast"},
+            "stagehand_enabled":self.config.stagehand_monitor,"stagehand_ip":self.stagehand_ip,
+            "stagehand_protocol_mac":protocol_mac,
+            "stagehand_runtime_number":self.config.stagehand_protocol_nonce.map(|nonce| 141 + (nonce.rotate_right(17) % 71) as u8),
+            "last_a9_control_or_vu_ms":self.stagehand_last_a9_ms.load(Ordering::Relaxed),
+            "rejoin_requested_ms":self.stagehand_rejoin_requested_ms.load(Ordering::Relaxed),
+            "neighbours":neighbours,"devices":devices,
+        })
+    }
+
     fn clear_actor(&self) {
         let _ = self.actor_tx.try_send(ServerMsg::Shutdown);
     }
@@ -3435,7 +3493,7 @@ async fn send_captured_udp(
         Ok(n) => crate::diagnostics::udp("tx", sock.local_addr(), target.into(), &packet[..*n]),
         Err(error) => crate::diagnostics::event(
             "udp_send_error",
-            serde_json::json!({"context":context,"peer":target.to_string(),"bytes":packet.len(),"error":error.to_string()}),
+            serde_json::json!({"context":context,"local":sock.local_addr().ok().map(|address| address.to_string()),"peer":target.to_string(),"bytes":packet.len(),"kind":packet.get(10),"error":error.to_string(),"os_error":error.raw_os_error()}),
         ),
     }
     result
@@ -5834,6 +5892,13 @@ async fn run_stagehand_announce(
     let mac = stagehand::protocol_mac(link_mac, launch_nonce);
     let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
 
+    crate::diagnostics::event(
+        "stagehand_join_started",
+        serde_json::json!({
+            "target":target.to_string(),"source_ip":stagehand_ip,"protocol_mac":format_mac(mac),"runtime_number":runtime_number,
+        }),
+    );
+
     send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
 
     tracing::info!(
@@ -5842,7 +5907,7 @@ async fn run_stagehand_announce(
         ip = %stagehand_ip,
         link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
         protocol_mac = %format_mac(mac),
-        "stagehand_joined"
+        "stagehand_join_sequence_finished"
     );
     let mut interval = tokio::time::interval(Duration::from_millis(250));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -5864,6 +5929,10 @@ async fn run_stagehand_announce(
             REJOIN_AFTER_MS,
         ) {
             if reason == "peer-request" {
+                crate::diagnostics::event(
+                    "stagehand_rejoin",
+                    serde_json::json!({"target":target.to_string(),"reason":reason}),
+                );
                 tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
                 send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
                 last_join_ms = epoch_millis();
@@ -5873,6 +5942,10 @@ async fn run_stagehand_announce(
                 continue;
             }
             if quiet_since_ms.is_none() {
+                crate::diagnostics::event(
+                    "stagehand_rejoin_quiet",
+                    serde_json::json!({"target":target.to_string(),"quiet_ms":QUIET_BEFORE_REJOIN_MS,"last_a9_ms":last_a9_ms}),
+                );
                 tracing::info!(
                     target: "djtools_link::stagehand",
                     quiet_ms = QUIET_BEFORE_REJOIN_MS,
@@ -5883,6 +5956,10 @@ async fn run_stagehand_announce(
         }
         if let Some(quiet_started_ms) = quiet_since_ms {
             if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
+                crate::diagnostics::event(
+                    "stagehand_rejoin",
+                    serde_json::json!({"target":target.to_string(),"reason":"peer-silent"}),
+                );
                 tracing::info!(
                     target: "djtools_link::stagehand",
                     reason = "peer-silent",
