@@ -119,6 +119,8 @@ struct ImportSheet: View {
     @Bindable var model: BoothModel
     @Environment(\.dismiss) private var dismiss
     @State private var source = ""
+    @State private var submitted = false
+    @FocusState private var sourceFocused: Bool
     @State private var showCloudSettings = false
     @State private var runtime = DesktopRuntime()
     var body: some View {
@@ -127,20 +129,36 @@ struct ImportSheet: View {
                 Section {
                     Text("Found something good?").font(.title2.bold())
                     Text("Paste a playlist or set link. Cloudflare downloads and analyzes the tracks, then adds them to your cloud library. You can close the app while it runs.").font(.subheadline).foregroundStyle(.secondary)
-                    TextField("Paste a playlist or set link", text: $source).autocorrectionDisabled().accessibilityIdentifier("import.source")
+                    TextField("Paste a playlist or set link", text: $source).autocorrectionDisabled()
+                        .focused($sourceFocused).accessibilityIdentifier("import.source")
+                        #if os(iOS)
+                        .keyboardType(.URL).textInputAutocapitalization(.never)
+                        #endif
+                    PasteButton(payloadType: String.self) { values in
+                        if let value = values.first { source = value.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    }.accessibilityIdentifier("import.paste")
                 }
                 Section {
                     if model.canImportToCloud {
-                        Button("Import to cloud library") { Task { await model.submitImport(source) } }
+                        Button("Download") {
+                            sourceFocused = false
+                            Task {
+                                if await model.submitImport(source) { source = ""; submitted = true }
+                            }
+                        }
                             .buttonStyle(.borderedProminent)
                             .disabled(source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.submittingImport)
                             .accessibilityIdentifier("import.submit")
                         if model.submittingImport { ProgressView("Sending request…") }
                     } else {
                         Text("Connect your cloud library to import music.").foregroundStyle(.secondary)
-                        Button("Cloud settings") { showCloudSettings = true }
+                        Button("Cloud settings") { showCloudSettings = true }.accessibilityIdentifier("import.settings")
                     }
-                    if let error = model.importError { Text(error).font(.caption).foregroundStyle(.red) }
+                    if submitted {
+                        Label("Import started. You can close the app while it runs.", systemImage: "checkmark.circle")
+                            .accessibilityIdentifier("import.started")
+                    }
+                    if let error = model.importError ?? model.importRefreshError { Text(error).font(.caption).foregroundStyle(.red) }
                 }
                 if !model.importJobs.isEmpty {
                     Section("Imports") {
@@ -174,7 +192,7 @@ struct ImportSheet: View {
                     if let error = runtime.error { Text(error).font(.caption).foregroundStyle(.red) }
                 }
                 #endif
-            }.formStyle(.grouped).navigationTitle("Bring music in").toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("import.done") }
+            }.formStyle(.grouped).navigationTitle("Download").toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("import.done") }
                 .sheet(isPresented: $showCloudSettings) { ConnectionSettings(model: model) }
                 .onAppear { source = model.pendingImportSource }
                 .task {

@@ -6,7 +6,7 @@ import UIKit
 final class LibraryDrawerUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    func testDrawerBrowsingAndDownload() throws {
+    func testDrawerBrowsingAndPasteLinkDownload() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString]
         app.launch()
@@ -94,6 +94,17 @@ final class LibraryDrawerUITests: XCTestCase {
         app.buttons["library.drawer.download"].tap()
         let source = app.textFields["import.source"]
         XCTAssertTrue(source.waitForExistence(timeout: 5))
+        let link = "https://www.youtube.com/watch?v=0qX8Q8LSjdM"
+        UIPasteboard.general.string = link
+        let paste = app.buttons["import.paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 5))
+        paste.tap()
+        let allowPaste = app.buttons["Allow Paste"]
+        if allowPaste.waitForExistence(timeout: 2) { allowPaste.tap() }
+        expectation(for: NSPredicate(format: "value == %@", link), evaluatedWith: source)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["import.settings"].exists, "An unconnected phone can connect from Download")
+        capture(app, "Pasted Rafael link")
         app.buttons["import.done"].tap()
         app.buttons["Show Sidebar"].tap()
         app.buttons["library.drawer.playlists"].tap()

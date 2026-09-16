@@ -34,6 +34,42 @@ enum LibraryBrowseMode: String, CaseIterable {
     }
 }
 
+private struct BoothLaunchConfiguration: Sendable {
+    let demo: Bool
+    let uiTestID: UUID?
+    let cloudURL: String
+    let root: URL
+    let scope: String
+    let accountID: String?
+    var inMemory: Bool { demo && uiTestID == nil }
+    var directory: URL? { inMemory ? nil : root.appendingPathComponent(scope) }
+    var audioDirectory: URL { (scope == "local" ? root : root.appendingPathComponent(scope)).appendingPathComponent("Audio") }
+    init() throws {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "--ui-test-library") {
+            guard arguments.indices.contains(index + 1), let id = UUID(uuidString: arguments[index + 1]) else {
+                throw ClientError.http(400, "UI test library requires a UUID")
+            }
+            uiTestID = id
+        } else { uiTestID = nil }
+        demo = arguments.contains("--demo") || uiTestID != nil
+        #else
+        uiTestID = nil; demo = false
+        #endif
+        cloudURL = demo ? "" : (ProcessInfo.processInfo.environment["DJBOOTH_CLOUD_URL"]
+            ?? UserDefaults.standard.string(forKey: "cloudURL") ?? "")
+        let applicationRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DJBooth", isDirectory: true)
+        if let uiTestID { root = applicationRoot.appendingPathComponent("UITests").appendingPathComponent(uiTestID.uuidString) }
+        else if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
+        else { root = applicationRoot }
+        let endpoint = try? Endpoint(cloudURL)
+        accountID = endpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
+        scope = endpoint.flatMap { endpoint in accountID.map { endpoint.accountScope($0) } } ?? "local"
+    }
+}
+
 @MainActor @Observable final class BoothModel {
     var tracks: [Track] = [] {
         didSet { tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
@@ -45,11 +81,11 @@ enum LibraryBrowseMode: String, CaseIterable {
     var offlineIDs: Set<String> = []
     var conflicts: [SyncConflict] = []
     var pendingCount = 0
+    var browseMode: LibraryBrowseMode = .playlists
+    var browseGroup: String?
     var query = "" { didSet { persistPlaybackSession() } }
     var selectedCollection: String? { didSet { persistPlaybackSession() } }
     var filter = "All music" { didSet { persistPlaybackSession() } }
-    var browseMode: LibraryBrowseMode = .playlists
-    var browseGroup: String?
     var showPlaylistBrowser = false { didSet { persistPlaybackSession() } }
     var playlistFolderPath: [String] = [] { didSet { persistPlaybackSession() } }
     var playlistSort = "title" { didSet { persistPlaybackSession() } }
@@ -78,10 +114,15 @@ enum LibraryBrowseMode: String, CaseIterable {
     var downloading: Set<String> = []
     var workstationConnected = false
     var workstationTracks: [String: Track] = [:]
+    #if os(iOS)
+    var djLink = DJLinkConnection()
+    var showDJLink = false
+    #endif
     var showSettings = false
     var showImport = false
     var importJobs: [CloudImportJob] = []
     var importError: String?
+    var importRefreshError: String?
     var submittingImport = false
     private var refreshingImports = false
     var canImportToCloud: Bool { cloud != nil && !demo }
@@ -199,14 +240,18 @@ enum LibraryBrowseMode: String, CaseIterable {
         return library
     }
     var cloudAccountID: String?
+    let playbackWaveformCache = PlaybackWaveformCache()
+    private(set) var initialWaveformColumns: [String: AnalysisWaveformColumns] = [:]
     var cloudURL: String
     var workstationURL: String
     let demo: Bool
     private(set) var store: LibraryStore
     private(set) var audio: AudioFiles
     private let syncEngine = SyncEngine()
-    private let snapshotDecoder = LibrarySnapshotDecoder()
+    private let snapshotDecoder: LibrarySnapshotDecoder
     private var reloadRequest = UUID()
+    private var deferredWaveforms = true
+    private var deferredWaveformRequests: Set<String> = []
     private var bootstrap: Bootstrap?
     private var bootstrapEndpoint: String?
     private var cloud: CloudClient?
@@ -220,10 +265,6 @@ enum LibraryBrowseMode: String, CaseIterable {
     private var lastSessionSave = Date.distantPast
     private var queueCollection: String?
     private var queueFilter = "All music"
-    #if os(iOS)
-    var djLink = DJLinkConnection()
-    var showDJLink = false
-    #endif
     var cdjDownloadStatus: String?
     private var cdjDownloads: Task<Void, Never>?
     private var audioDownloads: [String: Task<(URL, String), Error>] = [:]
@@ -241,18 +282,32 @@ enum LibraryBrowseMode: String, CaseIterable {
         return WorkstationClient(endpoint: endpoint, session: PerformanceProbe.serverUnavailableSession)
     }
 
-    init() async throws {
+    /// Start disk work synchronously from App.init, before SwiftUI owns the main thread.
+    static func startLoading() -> Task<BoothModel, Error> {
+        do {
+            let configuration = try BoothLaunchConfiguration()
+            let decoder = LibrarySnapshotDecoder()
+            let preparation = Task.detached(priority: .userInitiated) {
+                let prepared = try LibraryStore.prepare(directory: configuration.directory, inMemory: configuration.inMemory)
+                let snapshot = try await decoder.decode(prepared.payloads, audioDirectory: configuration.audioDirectory, metadataOnly: true)
+                return (prepared, snapshot)
+            }
+            return Task {
+                let (prepared, snapshot) = try await withTaskCancellationHandler { try await preparation.value } onCancel: { preparation.cancel() }
+                try Task.checkCancellation()
+                PerformanceProbe.event("model_init_begin")
+                return try await BoothModel(configuration: configuration, prepared: prepared, snapshot: snapshot, decoder: decoder)
+            }
+        } catch { return Task { throw error } }
+    }
+    private init(configuration: BoothLaunchConfiguration, prepared: LibraryStore.Prepared, snapshot: LibrarySnapshot, decoder: LibrarySnapshotDecoder) async throws {
         PerformanceProbe.libraryBegan()
+        demo = configuration.demo; root = configuration.root; cloudURL = configuration.cloudURL
+        snapshotDecoder = decoder
+        let uiTestID = configuration.uiTestID, scope = configuration.scope
+        workstationURL = demo ? "http://127.0.0.1:4179" : (UserDefaults.standard.string(forKey: "workstationURL") ?? "http://127.0.0.1:4179")
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
-        var uiTestID: UUID?
-        if let index = arguments.firstIndex(of: "--ui-test-library") {
-            guard arguments.indices.contains(index + 1), let id = UUID(uuidString: arguments[index + 1]) else {
-                throw ClientError.http(400, "UI test library requires a UUID")
-            }
-            uiTestID = id
-        }
-        demo = arguments.contains("--demo") || uiTestID != nil
         if let index = arguments.firstIndex(of: "--keep-offline"), arguments.indices.contains(index + 1),
            !arguments[index + 1].isEmpty, !arguments[index + 1].hasPrefix("--") {
             pendingOfflineTrackID = arguments[index + 1]
@@ -266,26 +321,12 @@ enum LibraryBrowseMode: String, CaseIterable {
            !id.isEmpty, !id.hasPrefix("$(") {
             offlineCollectionID = id
         }
-        #else
-        let uiTestID: UUID? = nil
-        demo = false
         #endif
-        let initialCloudURL = demo ? "" : (ProcessInfo.processInfo.environment["DJBOOTH_CLOUD_URL"]
-            ?? UserDefaults.standard.string(forKey: "cloudURL") ?? "")
-        cloudURL = initialCloudURL
-        workstationURL = demo ? "http://127.0.0.1:4179" : (UserDefaults.standard.string(forKey: "workstationURL") ?? "http://127.0.0.1:4179")
-        let applicationRoot = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("DJBooth", isDirectory: true)
-        if let uiTestID { root = applicationRoot.appendingPathComponent("UITests").appendingPathComponent(uiTestID.uuidString) }
-        else if demo { root = FileManager.default.temporaryDirectory.appendingPathComponent("DJBoothPreview") }
-        else { root = applicationRoot }
         // Connection changes never mix cursors, outboxes, or libraries from different servers.
-        let initialEndpoint = try? Endpoint(initialCloudURL)
-        let savedAccount = initialEndpoint.flatMap { UserDefaults.standard.string(forKey: "cloudAccount:" + $0.scope) }
-        cloudAccountID = savedAccount
-        let scope = initialEndpoint.flatMap { endpoint in savedAccount.map { endpoint.accountScope($0) } } ?? "local"
-        store = try await LibraryStore.open(directory: demo && uiTestID == nil ? nil : root.appendingPathComponent(scope), inMemory: demo && uiTestID == nil)
-        audio = try AudioFiles(directory: (scope == "local" ? root.appendingPathComponent("Audio") : root.appendingPathComponent(scope).appendingPathComponent("Audio")), session: PerformanceProbe.serverUnavailableSession)
+        cloudAccountID = configuration.accountID
+        store = try LibraryStore(prepared: prepared)
+        PerformanceProbe.event("library_store_ready")
+        audio = try AudioFiles(directory: configuration.audioDirectory, session: PerformanceProbe.serverUnavailableSession)
         playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
         #if DEBUG
         if !demo {
@@ -307,7 +348,7 @@ enum LibraryBrowseMode: String, CaseIterable {
         #endif
         if !demo, !cloudURL.isEmpty, let endpoint = try? Endpoint(cloudURL) {
             do {
-                if savedAccount != nil, let token = try Keychain.read(scope) {
+                if configuration.accountID != nil, let token = try Keychain.read(scope) {
                     cloud = CloudClient(endpoint: endpoint, token: token, session: PerformanceProbe.serverUnavailableSession)
                 }
             } catch {
@@ -315,6 +356,7 @@ enum LibraryBrowseMode: String, CaseIterable {
                 message = "Your local library is available. Cloud sync could not access its saved credentials: \(error.localizedDescription)"
             }
         }
+        PerformanceProbe.event("library_credentials_ready")
         if demo, try store.values(.track, as: Track.self).isEmpty {
             try store.ingest(DemoLibrary.tracks)
             for collection in DemoLibrary.collections { try store.save(collection, kind: .collection, id: collection.id) }
@@ -328,7 +370,12 @@ enum LibraryBrowseMode: String, CaseIterable {
             #endif
         }
         usbDevice = try store.usbDevice()
-        try await reload()
+        if snapshot.revision == store.revision {
+            try applyLibrarySnapshot(snapshot, metadataOnly: true)
+        } else {
+            // A new demo library may have been seeded after preparation.
+            try await reload(metadataOnly: true)
+        }
         player.onStateChange = { [weak self] force in self?.persistPlaybackSession(force: force) }
         player.onResumeRequested = { [weak self] in Task { await self?.togglePlayback() } }
         player.onPauseRequested = { [weak self] in self?.playbackRequest = UUID() }
@@ -344,40 +391,90 @@ enum LibraryBrowseMode: String, CaseIterable {
         if !demo, let token = ProcessInfo.processInfo.environment["DJBOOTH_SYNC_TOKEN"], !token.isEmpty {
             // Development bootstrap still goes through issuer verification and
             // account-scoped storage, exactly like the interactive login.
-            do { try await configureCloud(url: initialCloudURL, token: token) }
+            do { try await configureCloud(url: cloudURL, token: token) }
             catch { message = error.localizedDescription }
         }
         #endif
-        PerformanceProbe.libraryReady(trackCount: tracks.count)
+        PerformanceProbe.event("library_session_restored")
         #if DEBUG
         if demo, arguments.contains("--ui-test-player"), let track = tracks.first(where: { $0.id == "demo-5" }) {
             player.prepare(track, url: nil, queue: tracks)
         }
         #endif
+        try await prepareInitialWaveforms()
+        PerformanceProbe.libraryReady(trackCount: tracks.count)
     }
-    func reload() async throws {
+    private func prepareInitialWaveforms() async throws {
+        // A screen-height upper bound covers the first viewport at every text size.
+        // Playlist/artist/album indexes have no track waveforms to prepare.
+        #if os(iOS)
+        let rowLimit = Int(ceil(UIScreen.main.bounds.height / 58))
+        let showsTracks = !showPlaylistBrowser && (selectedCollection != nil || browseMode == .tracks || browseGroup != nil)
+        #else
+        let rowLimit = 24
+        let showsTracks = !showPlaylistBrowser
+        #endif
+        let rows = showsTracks ? Array(visibleTracks.prefix(rowLimit)) : []
+        var needed = Set(rows.map(\.id))
+        if let id = player.track?.id { needed.insert(id) }
+        try await reload(metadataOnly: true, waveformTrackIDs: needed)
+        let rowTracks = rows.compactMap { tracksByID[$0.id] }
+        let columns = Task.detached(priority: .userInitiated) {
+            Dictionary(rowTracks.compactMap { track -> (String, AnalysisWaveformColumns)? in
+                guard let waveform = track.waveform,
+                      let columns = AnalysisWaveformColumns.make(AnalysisWaveformRequest(waveform: waveform, count: min(32, waveform.peaks.count))) else { return nil }
+                return (track.id, columns)
+            }, uniquingKeysWith: { first, _ in first })
+        }
+        await playbackWaveformCache.load(player.track?.waveform, trackID: player.track?.id)
+        initialWaveformColumns = await columns.value
+        PerformanceProbe.event("first_render_waveforms_ready", count: needed.count,
+                               fields: ["rowWaveforms": Double(initialWaveformColumns.count)])
+    }
+    func finishLoadingLibrary() async {
+        guard deferredWaveforms else { return }
+        do { try await reload() }
+        catch is CancellationError { }
+        catch { message = error.localizedDescription }
+    }
+    func reload(metadataOnly: Bool = false, waveformTrackIDs: Set<String> = []) async throws {
         let request = UUID(); reloadRequest = request
         let source = store
         while true {
             // SwiftData objects never leave their owning actor. The handoff is
             // immutable strings; waveform JSON and filesystem work runs elsewhere.
             let payloads = try source.payloadSnapshot()
-            let snapshot = try await snapshotDecoder.decode(payloads, audioDirectory: audio.directory)
+            PerformanceProbe.event("library_payloads_ready")
+            let snapshot = try await snapshotDecoder.decode(payloads, audioDirectory: audio.directory, metadataOnly: metadataOnly, waveformTrackIDs: waveformTrackIDs)
+            PerformanceProbe.event("library_decode_ready")
             try Task.checkCancellation()
             guard request == reloadRequest, source === store else { return }
             guard snapshot.revision == source.revision else { continue }
-            let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) }
-            let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) }
-            if tracks != availableTracks { tracks = availableTracks }
-            if collections != availableCollections { collections = availableCollections }
-            if favorites != snapshot.favorites { favorites = snapshot.favorites }
-            if annotations != snapshot.annotations { annotations = snapshot.annotations }
-            let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }
-            if offlineIDs != availableOffline { offlineIDs = availableOffline }
-            prunePlaylistRemovalHistory()
-            try reloadSyncState()
-            if playbackSessionReady { reconcilePlaybackSession() }
+            try applyLibrarySnapshot(snapshot, metadataOnly: metadataOnly)
             return
+        }
+    }
+    private func applyLibrarySnapshot(_ snapshot: LibrarySnapshot, metadataOnly: Bool) throws {
+        let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) }
+        let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) }
+        if tracks != availableTracks { tracks = availableTracks }
+        if collections != availableCollections { collections = availableCollections }
+        if favorites != snapshot.favorites { favorites = snapshot.favorites }
+        if annotations != snapshot.annotations { annotations = snapshot.annotations }
+        let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }
+        if offlineIDs != availableOffline { offlineIDs = availableOffline }
+        prunePlaylistRemovalHistory()
+        try reloadSyncState()
+        if playbackSessionReady { reconcilePlaybackSession() }
+        if !metadataOnly, deferredWaveforms {
+            deferredWaveforms = false
+            PerformanceProbe.event("library_analysis_ready")
+            let requests = deferredWaveformRequests; deferredWaveformRequests.removeAll()
+            for id in requests {
+                if let track = tracksByID[id], track.waveform == nil {
+                    Task { await loadWaveform(track) }
+                }
+            }
         }
     }
     private func reloadSyncState() throws {
@@ -545,15 +642,16 @@ enum LibraryBrowseMode: String, CaseIterable {
             let jobs = try await cloud.imports()
             guard generation == connectionGeneration else { return }
             let completed = jobs.contains { job in job.status == "complete" && !importJobs.contains { $0.id == job.id && $0.status == "complete" } }
-            importJobs = jobs; importError = nil
+            importJobs = jobs; importRefreshError = nil
             if completed { await synchronize() }
         } catch {
             guard generation == connectionGeneration else { return }
-            importError = error.localizedDescription
+            importRefreshError = error.localizedDescription
         }
     }
-    func submitImport(_ source: String) async {
-        guard let cloud, !demo, !submittingImport else { return }
+    @discardableResult
+    func submitImport(_ source: String) async -> Bool {
+        guard let cloud, !demo, !submittingImport else { return false }
         submittingImport = true; defer { submittingImport = false }
         let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = pendingImportKey
@@ -565,12 +663,14 @@ enum LibraryBrowseMode: String, CaseIterable {
         do {
             let job = try await cloud.submitImport(id: id, source: source)
             UserDefaults.standard.removeObject(forKey: key)
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return false }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
             importError = nil
+            return true
         } catch {
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return false }
             importError = error.localizedDescription
+            return false
         }
     }
     func retryImport(_ job: CloudImportJob) async {
@@ -849,7 +949,7 @@ enum LibraryBrowseMode: String, CaseIterable {
         playlistSortAscending = value.playlistSortAscending; trackSort = value.trackSort; trackSortAscending = value.trackSortAscending
     }
     func togglePlayback() async {
-        if player.playing { player.pause(); return }
+        if player.transportPlaying { player.pause(); return }
         if player.hasPreparedItem { player.resume(); return }
         guard let track = player.track ?? visibleTracks.first ?? tracks.first else { return }
         await preparePlayback(track, queue: player.queue.isEmpty ? visibleTracks : player.queue,
@@ -1037,7 +1137,7 @@ enum LibraryBrowseMode: String, CaseIterable {
         defer { if generation == connectionGeneration { audioDownloads.removeValue(forKey: track.id); downloading.remove(track.id) } }
         let result = try await download.value
         guard generation == connectionGeneration else { throw CancellationError() }
-        if var updated = tracks.first(where: { $0.id == track.id }), updated.mediaHash != result.1 {
+        if var updated = try store.track(id: track.id), updated.mediaHash != result.1 {
             guard updated.mediaHash == nil else { throw ClientError.http(409, "This recording changed while downloading; retry") }
             updated.mediaHash = result.1
             try store.save(updated, kind: .track, id: track.id)
@@ -1061,6 +1161,7 @@ enum LibraryBrowseMode: String, CaseIterable {
         if player.track?.id == track.id { player.track = track }
     }
     func loadWaveform(_ track: Track) async {
+        guard !deferredWaveforms else { deferredWaveformRequests.insert(track.id); return }
         if track.id.hasPrefix("usb:") {
             guard track.waveform == nil, !loadingUSBWaveforms.contains(track.id), !unavailableUSBWaveforms.contains(track.id), let access = usbDevice,
                   let location = try? store.usbFile(track.id) else { return }

@@ -33,8 +33,10 @@ Rekordbox compatibility at the Pioneer DJ/AlphaTheta hardware boundary.
 
 - **Agent** — Give Codex or Claude a playlist, set URL, or outcome; it finds recordings, reuses what
   you own, analyzes tracks, separates stems, builds playlists, and prepares playback end to end.
-- **Workbench** — Browse and manage the same library manually in a local web or native Tauri app,
-  with playlists, waveforms, live stems, two decks, EQ, cues, and transition auditioning.
+- **Native apps** — [SwiftUI for macOS and iPhone](apps/apple/README.md), with a local library,
+  offline audio, collections, native playback and private Cloudflare sync.
+- **Workbench** — The local web workstation retains playlists, waveforms, live stems, two decks,
+  EQ, cues, and transition auditioning while its surfaces migrate to native.
 
 Every layer is also a focused command:
 

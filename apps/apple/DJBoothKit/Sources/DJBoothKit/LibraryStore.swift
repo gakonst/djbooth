@@ -70,6 +70,22 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     public convenience init(directory: URL? = nil, inMemory: Bool = false) throws {
         try self.init(container: Self.makeContainer(directory: directory, inMemory: inMemory))
     }
+    /// Immutable startup data and a container whose writable context is created by its new owner.
+    public struct Prepared: Sendable {
+        fileprivate let container: ModelContainer
+        public let payloads: LibraryPayloadSnapshot
+    }
+    public nonisolated static func prepare(directory: URL? = nil, inMemory: Bool = false) throws -> Prepared {
+        try Task.checkCancellation()
+        let container = try makeContainer(directory: directory, inMemory: inMemory)
+        let payloads = try readPayloadSnapshot(context: ModelContext(container), revision: 0)
+        try Task.checkCancellation()
+        return Prepared(container: container, payloads: payloads)
+    }
+    public convenience init(prepared: Prepared) throws {
+        try self.init(container: prepared.container)
+        cachedPayloadSnapshot = prepared.payloads
+    }
     /// SQLite opening and migration run off the UI actor; the writable context stays owned here.
     public static func open(directory: URL? = nil, inMemory: Bool = false) async throws -> LibraryStore {
         let job = Task.detached(priority: .userInitiated) {
@@ -132,8 +148,18 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
                 return try JSONDecoder().decode(T.self, from: payload)
             }
     }
+    /// Read the complete authoritative row when editing a track from a lightweight view.
+    public func track(id: String) throws -> Track? {
+        guard let row = try entity(.track, id), !row.tombstone, let payload = row.payload else { return nil }
+        return try JSONDecoder().decode(Track.self, from: Data(payload.utf8))
+    }
     public func payloadSnapshot() throws -> LibraryPayloadSnapshot {
         if let cachedPayloadSnapshot, cachedPayloadSnapshot.revision == revision { return cachedPayloadSnapshot }
+        let result = try Self.readPayloadSnapshot(context: context, revision: revision)
+        cachedPayloadSnapshot = result
+        return result
+    }
+    private nonisolated static func readPayloadSnapshot(context: ModelContext, revision: Int) throws -> LibraryPayloadSnapshot {
         var result = LibraryPayloadSnapshot(revision: revision)
         for row in try context.fetch(FetchDescriptor<StoredEntity>(predicate: #Predicate { !$0.tombstone })) {
             guard let payload = row.payload else { continue }
@@ -145,7 +171,6 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
             case nil: break
             }
         }
-        cachedPayloadSnapshot = result
         return result
     }
     public func favoriteIDs() throws -> Set<String> {

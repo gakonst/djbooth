@@ -73,6 +73,19 @@ struct BoothRowButtonStyle: ButtonStyle {
     }
 }
 
+/// Glass belongs to the primary transport control, never to the music/waveform layer.
+struct BoothTransportStyle: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func body(content: Content) -> some View {
+        if #available(iOS 26, macOS 26, *), !reduceTransparency, contrast != .increased {
+            content.buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white)
+        } else {
+            content.buttonStyle(.borderedProminent).buttonBorderShape(.circle).tint(.white)
+        }
+    }
+}
+
 struct BoothGlass: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {

@@ -5,6 +5,13 @@ workstation palette and dense library layout. Apple system glass is used for con
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
 On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in and connection approval. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. **Ask DJ Booth** in the library opens the connected agent. Its read-only phone tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts, and imports, including unsynced edits. The phone must remain in the foreground; backgrounding, signing out, or switching accounts detaches its tools. Existing logins must reconnect once to approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same approval flow. Signing out returns to the welcome screen; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
+At the library root, swipe inward from the left edge to open the native side drawer over the current view.
+UIKit owns the sidebar gesture, presentation, and dismissal; the current library remains behind it.
+Choose **Playlists**, **Artists**, **Albums**, or **All Tracks**. Artist and album groups open their
+tracks with a scoped playback queue; the edge gesture inside groups, folders, and playlists goes back.
+Choose **Download → Paste → Download** to start a playlist/set import in the cloud. The sheet shows
+submission confirmation, current progress, retry for failed jobs, and an **Open playlist** action when ready.
+An unconnected phone can open cloud settings from the same sheet. The app can close while the import runs.
 On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
@@ -22,11 +29,28 @@ and sync outbox; security bookmarks and USB file locations remain device-local. 
 not write edits back to the USB database or export libraries to the stick yet.
 OneLibrary-only (`exportLibrary.db`) sticks are explicitly reported as unsupported; a classic
 Device Library export is required. Databases larger than 256 MB are currently unsupported.
+Assigned track colors appear beside the key badge; uncolored rows have no marker. Edit colors from the bottom player.
+The bottom color square toggles a flat palette in the comment row immediately, with no popover or transition.
+Choosing a color (or None) saves it and returns to the comment; tapping the square again closes the palette.
+The mobile layout follows Apple's [typography](https://developer.apple.com/design/human-interface-guidelines/typography),
+[accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility), and
+[materials](https://developer.apple.com/design/human-interface-guidelines/materials) guidance while retaining the compact DJ palette.
+System text scales with Dynamic Type, large-text rows stack their metadata, and primary touch targets are at least 44 points.
+The player uses a native seek slider and a prominent system play button with opaque fallbacks for accessibility settings.
+The slider and focused waveform share a live scrub position. During a drag, audio pauses and the player
+prepares the latest position with one asynchronous seek at a time, following Apple's
+[AVPlayer scrubbing guidance](https://developer.apple.com/library/archive/qa/qa1820/_index.html).
+Release resumes the prior playback intent without repeating a completed seek; paused tracks remain paused.
+Cancellation restores the original position, and switching tracks invalidates the old gesture.
+Current-track symbols, selection marks, accessibility values, and optional lettered color swatches supplement color cues.
+Long current-track titles scroll only when they overflow, using native Core Animation with pauses to read each end.
+The animation pauses with playback or the app, resets for a new track, and becomes static with Reduce Motion;
+VoiceOver always receives one full title. Short titles stay still.
 The footer keeps a horizontally scrollable queue above the title, a moving eight-bar waveform,
 and a one-sided full-duration waveform behind the track details. The focused view follows real Rekordbox
 beat and downbeat positions, including tempo changes; tracks without a usable grid show an overview.
-Drag the focused waveform left to seek forward or right to rewind. It previews under the fixed
-playhead and seeks on release, preserving the queue and whether playback was paused.
+Drag the focused waveform left to seek forward or right to rewind. It follows the finger under the fixed
+playhead, and dragging the timeline moves the same waveform immediately. Both preserve the queue.
 Waveform display gain and its image are prepared off the UI thread and reused by both views; animation pauses when
 playback stops or the app backgrounds, with a static overview for Reduce Motion. There is no
 separate expanded player screen.
@@ -71,6 +95,25 @@ Database opening, waveform decoding and display preparation, and audio-session a
 from the main actor. SwiftData's writable context and native player/UI controls keep their actor ownership.
 Waveform RGB values use compact byte storage with the same cloud JSON; unchanged snapshots and
 small row waveform summaries are reused instead of rebuilding the library on playback updates.
+Cold launch starts opening the saved library while the first window is being created. It prepares
+the restored page's first screenful of track waveforms and the last-played track's waveform before
+showing the library, including the player's raster and compact row drawing data. Playlist, artist,
+and album indexes need only the player's waveform. Offscreen waveforms load afterward and reuse
+the already-decoded tracks without replacing the playing item or resetting its position.
+
+To measure five process launches against a simulator's existing library and saved player, run:
+
+```sh
+TEST_RUNNER_DJBOOTH_STARTUP_RUN=$(uuidgen) pnpm native:test:ui --optimized --simulator <uuid> \
+  --only-testing DJBoothUITests-iOS/DJBoothUITests/testCachedStartupPerformance
+```
+
+The test disables cloud/workstation sync, preserves the cached library, and verifies restoration of
+the last track paused with its waveform available. Debug-only phase timings are written to the app container's
+`tmp/DJBoothPerformance/<run UUID>.jsonl`; compare `app_begin` to `library_rendered` per process.
+This interval starts in `App.init`, excluding OS work before the app enters Swift.
+`first_render_waveforms_ready` must precede `library_rendered`; background completion is recorded
+separately as `library_analysis_ready`.
 
 The Mac uses the existing loopback API for library reads and guarded mutations. Acquisition and
 account authorization run through the public djbooth CLI. Debug development builds locate the

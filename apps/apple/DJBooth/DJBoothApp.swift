@@ -3,7 +3,12 @@ import SwiftUI
 @main struct DJBoothApp: App {
     @State private var model: BoothModel?
     @State private var startupError: String?
-    init() { PerformanceProbe.applicationBegan() }
+    @State private var startupTask: Task<BoothModel, Error>
+    init() {
+        PerformanceProbe.applicationBegan()
+        // Open the local library while SwiftUI creates the first window.
+        _startupTask = State(initialValue: BoothModel.startLoading())
+    }
     var body: some Scene {
         WindowGroup {
             Group {
@@ -14,7 +19,7 @@ import SwiftUI
             }
             .task {
                 guard model == nil, startupError == nil else { return }
-                do { model = try await BoothModel() } catch { startupError = error.localizedDescription }
+                do { model = try await startupTask.value } catch { startupError = error.localizedDescription }
             }
             #if DEBUG
             .overlay(alignment: .top) {
@@ -83,7 +88,9 @@ struct BoothRoot: View {
             } message: { Text(model.message ?? model.player.error ?? "") }
             .task {
                 model.player.onAdvance = { track in Task { await model.play(track, preservingQueue: true) } }
+                async let analysis: Void = model.finishLoadingLibrary()
                 if !PerformanceProbe.offline { await model.startup() }
+                await analysis
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
@@ -197,16 +204,16 @@ struct PlaylistRemovalNotice: View {
         if let undo = model.undoablePlaylistRemoval {
             HStack(spacing: 8) {
                 Text("Removed “\(undo.trackTitle)”")
-                    .font(.system(size: 12)).lineLimit(1)
+                    .boothFont(12, relativeTo: .caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Removed \(undo.trackTitle) from \(undo.collectionName)")
                 Button { model.undoPlaylistRemoval() } label: {
-                    Text("Undo").font(.system(size: 13, weight: .semibold))
+                    Text("Undo").boothFont(13, relativeTo: .subheadline, weight: .semibold)
                         .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.foregroundStyle(BoothStyle.accent)
                     .accessibilityIdentifier("playlist.removal.undo")
                 Button { model.dismissPlaylistRemovalUndo() } label: {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "xmark").boothFont(12, relativeTo: .caption, weight: .medium)
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }.foregroundStyle(.secondary).accessibilityLabel("Dismiss removal notice")
                     .accessibilityIdentifier("playlist.removal.dismiss")

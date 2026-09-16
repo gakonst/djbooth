@@ -21,7 +21,7 @@ public struct LibrarySnapshot: Sendable {
 
 /// Decoding waveforms, sorting and filesystem checks never execute on MainActor.
 public actor LibrarySnapshotDecoder {
-    private var tracks: [String: (payload: String, value: Track)] = [:]
+    private var tracks: [String: (payload: String, value: Track, complete: Bool)] = [:]
     private var collections: [String: (payload: String, value: Collection)] = [:]
     private var previousSource: LibraryPayloadSnapshot?
     private var sortedTracks: [Track] = []
@@ -33,20 +33,26 @@ public actor LibrarySnapshotDecoder {
     private(set) var trackSortCount = 0
     public init() {}
 
-    public func decode(_ source: LibraryPayloadSnapshot, audioDirectory: URL) throws -> LibrarySnapshot {
+    public func decode(_ source: LibraryPayloadSnapshot, audioDirectory: URL, metadataOnly: Bool = false, waveformTrackIDs: Set<String> = []) throws -> LibrarySnapshot {
         try Task.checkCancellation()
         let decoder = JSONDecoder()
+        let requested = metadataOnly ? waveformTrackIDs : Set(source.tracks.keys)
+        let needsAnalysis = requested.contains { tracks[$0]?.complete != true && source.tracks[$0] != nil }
         var currentTracks = tracks, currentCollections = collections
         var currentSortedTracks = sortedTracks, currentSortedCollections = sortedCollections
         var currentFavorites = favorites, currentAnnotations = annotations
         var currentAudioCandidates = audioCandidates
-        if previousSource?.tracks != source.tracks {
+        if needsAnalysis || previousSource?.tracks != source.tracks {
             currentTracks = [:]; currentTracks.reserveCapacity(source.tracks.count)
             for (id, payload) in source.tracks {
                 try Task.checkCancellation()
-                if let cached = tracks[id], cached.payload == payload { currentTracks[id] = cached }
+                let complete = requested.contains(id)
+                if let cached = tracks[id], cached.payload == payload, cached.complete || !complete { currentTracks[id] = cached }
                 else {
-                    currentTracks[id] = (payload, try decoder.decode(Track.self, from: Data(payload.utf8)))
+                    decoder.userInfo[.libraryMetadataOnly] = !complete
+                    var track = try decoder.decode(Track.self, from: Data(payload.utf8))
+                    if !complete { track.waveform = nil }
+                    currentTracks[id] = (payload, track, complete)
                     trackDecodeCount += 1
                 }
             }

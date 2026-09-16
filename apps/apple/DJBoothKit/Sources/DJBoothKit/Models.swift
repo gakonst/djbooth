@@ -1,5 +1,9 @@
 import Foundation
 
+extension CodingUserInfoKey {
+    static let libraryMetadataOnly = CodingUserInfoKey(rawValue: "djbooth.library.metadataOnly")!
+}
+
 public struct Track: Codable, Identifiable, Sendable, Equatable {
     public var id: String
     public var title: String
@@ -56,6 +60,12 @@ public struct Waveform: Codable, Sendable, Equatable {
     }
     private enum CodingKeys: String, CodingKey { case peaks, colors, source, durationSeconds, beatGrid }
     public init(from decoder: Decoder) throws {
+        if decoder.userInfo[.libraryMetadataOnly] as? Bool == true {
+            // The startup snapshot discards this placeholder. The original
+            // analysis stays in the database and is decoded after first display.
+            peaks = []; colors = nil; source = ""; durationSeconds = nil; beatGrid = nil
+            return
+        }
         let values = try decoder.container(keyedBy: CodingKeys.self)
         peaks = try values.decode([Double].self, forKey: .peaks)
         colors = try values.decodeIfPresent(WaveformColors.self, forKey: .colors)
