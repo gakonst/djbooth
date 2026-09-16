@@ -163,6 +163,7 @@ struct MobileGroupBrowser: View {
 
 struct MobileTrackList: View {
     @Bindable var model: BoothModel
+    @State private var visibleTrackIDs = Set<String>()
     let collectionID: String?
     var groupMode: LibraryBrowseMode? = nil
     var groupName: String? = nil
@@ -203,9 +204,18 @@ struct MobileTrackList: View {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
                     TrackRow(track: track, model: model, collection: selected, queuePosition: position)
                         .boothLibraryCell(horizontalInset: 8)
+                        .onAppear { visibleTrackIDs.insert(track.id) }
+                        .onDisappear { visibleTrackIDs.remove(track.id) }
+                        .onChange(of: track.id) { old, new in
+                            if visibleTrackIDs.remove(old) != nil { visibleTrackIDs.insert(new) }
+                        }
                 }
             }
         }.boothLibraryList().accessibilityIdentifier("library.tracks")
+            .task(id: tracks.filter { visibleTrackIDs.contains($0.id) }.map(\.id)) {
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                await model.warmVisibleMusicStreams(tracks.filter { visibleTrackIDs.contains($0.id) }.map(\.id))
+            }
             .task(id: collectionID) {
                 if let collectionID, let item = model.connectedPlaylist(collectionID) { await model.loadMusicPlaylist(item) }
             }

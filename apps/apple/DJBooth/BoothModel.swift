@@ -191,6 +191,26 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     private var soundCloudPrewarm: Task<Void, Never>?
+    func warmVisibleMusicStreams(_ trackIDs: [String]) async {
+        guard let cloud else { return }
+        let snapshots = musicCatalog.snapshots.values.flatMap(\.tracks)
+        var seen = Set<String>()
+        let candidates = trackIDs.filter { seen.insert($0).inserted }.prefix(8).compactMap { id -> (MusicTrack, MusicSource)? in
+            guard let track = snapshots.first(where: { $0.id == id && $0.available }),
+                  let source = musicCatalog.sources.first(where: { $0.provider == "soundcloud" && id.hasPrefix("connected:" + $0.id + ":track:") }) else { return nil }
+            return (track, source)
+        }
+        // Resolve only visible metadata, in pairs. Scrolling cancels the remaining
+        // batches; the per-client cache shares any already-running resolution.
+        for offset in stride(from: 0, to: candidates.count, by: 2) {
+            guard !Task.isCancelled else { return }
+            await withTaskGroup(of: Void.self) { group in
+                for (track, source) in candidates[offset..<min(offset + 2, candidates.count)] {
+                    group.addTask { _ = try? await cloud.musicStream(track, source: source) }
+                }
+            }
+        }
+    }
     private func warmSoundCloudStreams(_ tracks: [MusicTrack], source: MusicSource) {
         guard source.provider == "soundcloud", let cloud else { return }
         soundCloudPrewarm?.cancel()
@@ -1184,9 +1204,25 @@ private struct BoothLaunchConfiguration: Sendable {
                     let url = try await cloud.musicStream(item, source: source)
                     guard request == playbackRequest, generation == connectionGeneration else { return }
                     PerformanceProbe.event("soundcloud_resolve_ready", trackID: track.id)
-                    player.attach(url: url, autoplay: true, fastStreamStart: true)
-                    let nextIDs = Set(queue.dropFirst(player.queueIndex + 1).prefix(2).map(\.id))
-                    let next = musicCatalog.snapshots.values.flatMap(\.tracks).filter { nextIDs.contains($0.id) }
+                    player.attach(url: url, autoplay: true, fastStreamStart: true, onStreamAuthorizationFailure: { [weak self] in
+                        Task { @MainActor [weak self] in
+                            guard let self, request == self.playbackRequest, generation == self.connectionGeneration else { return }
+                            do {
+                                let fresh = try await cloud.musicStream(item, source: source, forceRefresh: true)
+                                guard request == self.playbackRequest, generation == self.connectionGeneration,
+                                      self.player.track?.id == track.id else { return }
+                                // One retry only; the new item has no retry callback.
+                                self.player.attach(url: fresh, autoplay: self.player.playbackRequested, fastStreamStart: true)
+                            } catch {
+                                guard request == self.playbackRequest, generation == self.connectionGeneration else { return }
+                                self.player.failStreamPreparation(error.localizedDescription)
+                            }
+                        }
+                    })
+                    var seen = Set<String>()
+                    let nextIDs = queue.dropFirst(player.queueIndex + 1).map(\.id).filter { seen.insert($0).inserted }.prefix(2)
+                    let snapshots = musicCatalog.snapshots.values.flatMap(\.tracks)
+                    let next = nextIDs.compactMap { id in snapshots.first { $0.id == id } }
                     warmSoundCloudStreams(next, source: source)
                 } else {
                     try await prepareSpotifyPlayback(item, source: source, request: request, generation: generation)
