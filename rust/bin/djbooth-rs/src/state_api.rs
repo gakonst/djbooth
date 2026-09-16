@@ -948,11 +948,15 @@ mod tests {
             bpm_hundreds: Some(12_800),
             effective_bpm_hundreds: Some(12_864),
             pitch_centi_percent: 50,
+            master_tempo: Some(true),
+            key_shift_cents: Some(200),
+            effective_key: Some("D".to_owned()),
             beat_in_bar: 3,
             beat_number: Some(193),
             track_progress_milli: Some(300),
             track_length_sec: Some(300),
             playhead_ms: Some(90_000),
+            playhead_source: Some("precise"),
         };
         let deck = deck_state(
             3,

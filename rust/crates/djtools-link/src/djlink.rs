@@ -429,11 +429,15 @@ pub struct DjLinkDeckState {
     pub bpm_hundreds: Option<u16>,
     pub effective_bpm_hundreds: Option<u32>,
     pub pitch_centi_percent: i32,
+    pub master_tempo: Option<bool>,
+    pub key_shift_cents: Option<i64>,
+    pub effective_key: Option<String>,
     pub beat_in_bar: u8,
     pub beat_number: Option<u32>,
     pub track_progress_milli: Option<u16>,
     pub track_length_sec: Option<u32>,
     pub playhead_ms: Option<u32>,
+    pub playhead_source: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -608,6 +612,7 @@ impl DjLinkServer {
             stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path,
             cue_overrides_ms: RwLock::new(HashMap::new()),
+            timing_loaded: tokio::sync::Mutex::new(HashSet::new()),
             master_bpm_hundreds: AtomicU16::new(initial_bpm),
         });
         Ok(Self {
@@ -679,15 +684,24 @@ impl DjLinkServer {
 
     pub async fn library_waveform(&self, track_id: u32) -> Option<DjLinkWaveform> {
         let track = self.state.library.tracks_by_id.get(&track_id)?;
-        let (peaks, colors) = if let Some(tag) = read_anlz_tag(track, "PWV4", None).await {
-            waveform_from_pwv4_tag(&tag).unwrap_or_default()
-        } else if let Some(tag) = read_anlz_tag(track, "PWAV", None).await {
-            waveform_from_pwav_tag(&tag).unwrap_or_default()
-        } else if let Some(tag) = read_anlz_tag(track, "PWV5", None).await {
-            waveform_from_pwv5_tag(&tag).unwrap_or_default()
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        // A scrolling beat-grid view needs full RGB detail. PWV4/PWAV are
+        // whole-track previews and look blocky when expanded to eight bars.
+        let mut waveform = None;
+        for name in ["PWV5", "PWV4", "PWAV"] {
+            let Some(tag) = read_anlz_tag(track, name, None).await else {
+                continue;
+            };
+            let decoded = match name {
+                "PWV5" => waveform_from_pwv5_tag(&tag),
+                "PWV4" => waveform_from_pwv4_tag(&tag),
+                _ => waveform_from_pwav_tag(&tag),
+            };
+            if decoded.as_ref().is_some_and(|(peaks, _)| !peaks.is_empty()) {
+                waveform = decoded;
+                break;
+            }
+        }
+        let (peaks, colors) = waveform.unwrap_or_default();
         let beat_grid = match read_anlz_tag(track, "PQTZ", None).await {
             Some(tag) => waveform_beats_from_pqtz_tag(&tag).unwrap_or_default(),
             None => Vec::new(),
@@ -1055,8 +1069,18 @@ impl DjLinkServer {
         )
         .context("failed to bind UDP/50002 status")?;
 
+        // Discovery can use directed packets while decks still broadcast beats
+        // and precise positions. An address-specific bind drops those packets.
+        // Darwin's IP_BOUND_IF keeps this listener on the chosen DJ Link cable;
+        // receiving does not enable broadcast sends on the unicast transport.
+        let beat_receive_ip =
+            if cfg!(target_vendor = "apple") && self.state.interface_name.is_some() {
+                Ipv4Addr::UNSPECIFIED
+            } else {
+                receive_ip
+            };
         let (beat_tx_sock, beat_rx_sock) = match bind_udp(
-            SocketAddrV4::new(receive_ip, BEAT_PORT),
+            SocketAddrV4::new(beat_receive_ip, BEAT_PORT),
             self.state.interface_name.as_deref(),
             !unicast,
         ) {
@@ -2613,6 +2637,7 @@ struct ServerState {
     stagehand_rejoin_requested_ms: AtomicU64,
     log_path: Option<PathBuf>,
     cue_overrides_ms: RwLock<HashMap<u32, u32>>,
+    timing_loaded: tokio::sync::Mutex<HashSet<u32>>,
     master_bpm_hundreds: AtomicU16,
 }
 
@@ -2836,9 +2861,36 @@ impl ServerState {
     }
 
     async fn record_status(&self, status: CdjStatusSnapshot) -> bool {
-        self.actor_reply(|reply| ServerMsg::RecordStatus { status, reply })
-            .await
-            .unwrap_or(false)
+        let seen_at = Instant::now();
+        // Read immutable prepared analysis once per loaded track, never analyze
+        // audio or scan the library when a deck connects.
+        if let Some(track) = self.library.tracks_by_id.get(&status.track_id) {
+            let mut loaded = self.timing_loaded.lock().await;
+            if loaded.insert(status.track_id) {
+                if let Some(tag) = read_anlz_tag(track, "PQTZ", None).await {
+                    if let Some(stats) = pqtz_grid_stats(&tag) {
+                        let beats_ms = (0..stats.count)
+                            .map(|i| be_u32(&tag[28 + i * 8..32 + i * 8]))
+                            .collect();
+                        self.actor_send(ServerMsg::RegisterTrackTiming {
+                            track_id: status.track_id,
+                            timing: crate::playhead::TrackTiming {
+                                duration_ms: track.duration_sec.saturating_mul(1000),
+                                beats_ms,
+                            },
+                        })
+                        .await;
+                    }
+                }
+            }
+        }
+        self.actor_reply(|reply| ServerMsg::RecordStatus {
+            status,
+            seen_at,
+            reply,
+        })
+        .await
+        .unwrap_or(false)
     }
 
     async fn record_beat(&self, beat: CdjBeatSnapshot, seen_at: Instant) -> bool {
@@ -3023,6 +3075,13 @@ impl CdjStatusSnapshot {
         self.track_id
     }
 
+    pub(crate) fn same_track_as(&self, other: &Self) -> bool {
+        self.source_player == other.source_player
+            && self.source_slot == other.source_slot
+            && self.track_type == other.track_type
+            && self.track_id == other.track_id
+    }
+
     pub(crate) fn matches_track_from_source(
         &self,
         source_player: u8,
@@ -3032,6 +3091,25 @@ impl CdjStatusSnapshot {
         self.source_player == source_player
             && self.track_id == track_id
             && self.track_type == track_type
+    }
+
+    pub(crate) fn timing_input(&self) -> (Option<u32>, f64, bool, bool) {
+        let rate = if !self.is_playing() {
+            0.0
+        } else {
+            let direction = match self.play_state_3 {
+                0x09 | 0x0d => 1.0,
+                0x01 => -1.0,
+                _ => 0.0,
+            };
+            direction * f64::from(self.pitch_1) / 1_048_576.0
+        };
+        (
+            self.beat_number,
+            rate,
+            self.play_state_1 == 0x11,
+            self.play_state_1 == 0x06,
+        )
     }
 
     pub(crate) fn is_playing(&self) -> bool {
@@ -3080,6 +3158,13 @@ impl CdjStatusSnapshot {
             bpm_hundreds: (bpm_hundreds != u16::MAX).then_some(bpm_hundreds),
             effective_bpm_hundreds: effective_bpm_hundreds(bpm_hundreds, pitch),
             pitch_centi_percent: (pitch_percent(pitch) * 100.0).round() as i32,
+            master_tempo: self.master_tempo.and_then(|value| match value {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            }),
+            key_shift_cents: self.key_shift_cents,
+            effective_key: self.effective_key(),
             beat_in_bar: beat
                 .map(|beat| beat.beat_in_bar)
                 .unwrap_or(self.beat_in_bar),
@@ -3093,7 +3178,42 @@ impl CdjStatusSnapshot {
             }),
             track_length_sec: position.map(|position| position.track_length_sec),
             playhead_ms: position.map(|position| position.playhead_ms),
+            playhead_source: position.map(|_| "precise"),
         }
+    }
+
+    fn effective_key(&self) -> Option<String> {
+        // CDJ-3000 status key already includes the tempo slider / Master Tempo
+        // effect, but excludes Key Shift. Do not apply the pitch ratio again.
+        // https://djl-analysis.deepsymmetry.org/djl-analysis/vcdj.html#key-values
+        if self.track_id == 0 {
+            return None;
+        }
+        let [note, mode, accidental] = self.key?;
+        let cents = self.key_shift_cents?;
+        if note >= 12
+            || mode > 1
+            || !matches!(accidental, 0 | 1 | 0xff | 0x64)
+            || !(-1200..=1200).contains(&cents)
+            || cents % 100 != 0
+        {
+            return None;
+        }
+        const MAJOR: [&str; 12] = [
+            "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+        ];
+        const MINOR: [&str; 12] = [
+            "Am", "Bbm", "Bm", "Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "Abm",
+        ];
+        let shifted = (i64::from(note) + cents / 100).rem_euclid(12) as usize;
+        Some(
+            if mode == 0 {
+                MINOR[shifted]
+            } else {
+                MAJOR[shifted]
+            }
+            .to_owned(),
+        )
     }
 
     pub(crate) fn log_worthy_change_from(&self, previous: &Self) -> bool {
@@ -12153,6 +12273,152 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[tokio::test]
+    async fn library_waveform_prefers_rgb_detail_and_falls_back_if_detail_is_invalid() {
+        let temp = tempfile::tempdir().unwrap();
+        let ext = temp.path().join("ANLZ0000.EXT");
+        fn tag(name: &[u8; 4], stride: u32, count: u32, data: &[u8]) -> Vec<u8> {
+            let mut tag = Vec::from(*name);
+            tag.extend_from_slice(&24u32.to_be_bytes());
+            tag.extend_from_slice(&(24u32 + data.len() as u32).to_be_bytes());
+            tag.extend_from_slice(&stride.to_be_bytes());
+            tag.extend_from_slice(&count.to_be_bytes());
+            tag.extend_from_slice(&0u32.to_be_bytes());
+            tag.extend_from_slice(data);
+            tag
+        }
+        let preview = tag(b"PWV4", 6, 1, &[0, 127, 0, 127, 0, 0]);
+        let detail = tag(b"PWV5", 2, 3, &[0xe0, 0x7c, 0x1c, 0x40, 0x03, 0x88]);
+        write_test_anlz_sections(&ext, &[preview.clone(), detail]);
+        let mut track = sample_track_record();
+        track.analysis_dat_path = Some(ext.with_extension("DAT"));
+        track.analysis_ext_path = Some(ext.clone());
+        track.analysis_twoex_path = None;
+        let id = track.track_id;
+        let server = DjLinkServer::new(
+            DjLinkConfig::default(),
+            LibrarySnapshot {
+                master_db_id: 1,
+                tracks_by_id: [(id, track.clone())].into(),
+                all_tracks: vec![track],
+                playlists: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        let waveform = server.library_waveform(id).await.unwrap();
+        assert_eq!(waveform.peaks.len(), 3, "detail must win over the overview");
+        assert_eq!(waveform.peaks[0], 1.0);
+        assert_eq!(waveform.colors, vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]]);
+        write_test_anlz_sections(&ext, &[preview, tag(b"PWV5", 2, 999, &[0])]);
+        let waveform = server.library_waveform(id).await.unwrap();
+        assert_eq!(
+            waveform.peaks.len(),
+            1,
+            "a broken detail tag must not hide the valid preview"
+        );
+        assert_eq!(waveform.colors, vec![[127, 0, 0]]);
+    }
+
+    #[tokio::test]
+    async fn monitor_snapshot_uses_prepared_grid_and_prioritizes_precise_position() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ANLZ0000.DAT");
+        let tag = test_pqtz_tag(&[(1, 12000, 100), (2, 12000, 600), (3, 12000, 1100)]);
+        write_test_anlz_tag(&path, b"PQTZ", &tag[12..]);
+        let mut state = test_state_with_sample_library(1);
+        let id = state.library.all_tracks[0].track_id;
+        let track = Arc::make_mut(&mut state.library)
+            .tracks_by_id
+            .get_mut(&id)
+            .unwrap();
+        track.analysis_dat_path = Some(path);
+        track.duration_sec = 5;
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, id, 0x05);
+        status.play_state_2 = 0x7e;
+        status.beat_number = Some(2);
+        state.record_status(status.clone()).await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(600));
+        assert_eq!(deck.playhead_source, Some("beat_grid"));
+        assert_eq!(deck.track_length_sec, Some(5));
+        state
+            .record_position(CdjPositionSnapshot {
+                player: 3,
+                len_rest: 0x18,
+                track_length_sec: 5,
+                playhead_ms: 875,
+                pitch_centi_percent: 0,
+                effective_bpm_tenths: 1200,
+            })
+            .await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(875));
+        assert_eq!(deck.playhead_source, Some("precise"));
+        // Two sources can use the same numeric track ID. Never carry their
+        // position/beat packets across a source change.
+        status.source_player = 2;
+        status.beat_number = Some(3);
+        state.record_status(status).await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(1100));
+        assert_eq!(deck.playhead_source, Some("beat_grid"));
+        state.record_status(test_cdj_status(2, id + 1, 0x03)).await;
+        assert_eq!(
+            state.monitor_snapshot(3).await.deck.unwrap().playhead_ms,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_snapshot_does_not_let_old_beats_override_new_deck_tempo() {
+        let state = test_state();
+        state
+            .record_status(test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03))
+            .await;
+        state
+            .record_beat(
+                CdjBeatSnapshot {
+                    player: 3,
+                    len_rest: 0x003c,
+                    next_beat_ms: 500,
+                    second_beat_ms: 1000,
+                    next_bar_ms: 2000,
+                    fourth_beat_ms: 2000,
+                    second_bar_ms: 4000,
+                    eighth_beat_ms: 4000,
+                    pitch: 0x100000,
+                    bpm_hundreds: 12000,
+                    beat_in_bar: 1,
+                },
+                Instant::now(),
+            )
+            .await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_bpm_hundreds,
+            Some(12000)
+        );
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x05);
+        status.play_state_2 = 0x7e;
+        status.bpm_hundreds = 12800;
+        status.pitch_1 = 0x110000;
+        state.record_status(status).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_bpm_hundreds,
+            Some(13600)
+        );
+    }
+
+    #[tokio::test]
     async fn monitor_snapshot_returns_latest_deck_telemetry_summaries() {
         let state = test_state();
         assert!(
@@ -12272,6 +12538,51 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
                 .contains("playhead=123456ms")
         );
         assert!(player_status_snapshot(&state, 3).await.is_some());
+    }
+
+    #[test]
+    fn deck_key_follows_signed_shift_without_applying_tempo_twice() {
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        assert_eq!(status.deck_state(None, None).effective_key, None);
+        status.key = Some([0, 1, 0]); // C major, before Key Shift.
+        status.key_shift_cents = Some(200);
+        status.master_tempo = Some(0);
+        status.pitch_1 = 0x0012_0000;
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("D")
+        );
+        assert_eq!(status.deck_state(None, None).master_tempo, Some(false));
+        status.key_shift_cents = Some(-100);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("B")
+        );
+        status.key = Some([0, 0, 0]); // A minor uses a different index origin.
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Abm")
+        );
+        status.key_shift_cents = Some(1200);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Am")
+        );
+        status.key = Some([1, 0, 0x64]); // Tempo slider already changed the key.
+        status.key_shift_cents = Some(100);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Bm")
+        );
+        for cents in [i64::MIN, i64::MAX, 50, 1300] {
+            status.key_shift_cents = Some(cents);
+            assert_eq!(status.deck_state(None, None).effective_key, None);
+        }
+        status.key_shift_cents = None;
+        assert_eq!(status.deck_state(None, None).effective_key, None);
+        status.key_shift_cents = Some(0);
+        status.key = Some([255, 0, 0]);
+        assert_eq!(status.deck_state(None, None).effective_key, None);
     }
 
     #[test]
@@ -14987,6 +15298,7 @@ notes: []
             stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path: None,
             cue_overrides_ms: RwLock::new(HashMap::new()),
+            timing_loaded: tokio::sync::Mutex::new(HashSet::new()),
             master_bpm_hundreds: AtomicU16::new(0),
         }
     }

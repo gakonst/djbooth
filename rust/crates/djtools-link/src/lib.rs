@@ -9,6 +9,7 @@ mod library;
 mod load;
 mod network;
 mod nfs;
+mod playhead;
 mod protocol;
 mod remote_db_audit;
 mod search;

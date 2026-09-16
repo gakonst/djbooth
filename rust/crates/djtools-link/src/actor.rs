@@ -16,6 +16,7 @@ use crate::load::{
     context_is_visual_load_data, context_suppresses_load_confirm,
 };
 use crate::nfs::NfsState;
+use crate::playhead::{BeatPlayhead, TrackTiming};
 
 pub(crate) const SERVER_ACTOR_QUEUE_CAPACITY: usize = 256;
 const BROWSE_CONTEXT_HISTORY_MAX: usize = 16;
@@ -85,8 +86,13 @@ pub(crate) enum ServerMsg {
         after: Instant,
         reply: oneshot::Sender<bool>,
     },
+    RegisterTrackTiming {
+        track_id: u32,
+        timing: TrackTiming,
+    },
     RecordStatus {
         status: CdjStatusSnapshot,
+        seen_at: Instant,
         reply: oneshot::Sender<bool>,
     },
     RecordBeat {
@@ -249,6 +255,9 @@ pub(crate) struct ServerActor {
     last_beat_by_player: HashMap<u8, CdjBeatSnapshot>,
     last_beat_seen_by_player: HashMap<u8, Instant>,
     last_position_by_player: HashMap<u8, CdjPositionSnapshot>,
+    last_position_seen_by_player: HashMap<u8, Instant>,
+    track_timings: HashMap<u32, TrackTiming>,
+    beat_playheads: HashMap<u8, BeatPlayhead>,
     db_query_counts: HashMap<Ipv4Addr, u32>,
     artwork_cache: HashMap<u32, Option<Vec<u8>>>,
     waveform_preview_cache: HashMap<u32, Vec<u8>>,
@@ -378,8 +387,14 @@ impl ServerActor {
             ServerMsg::WaitLoadAckAfter { ip, after, reply } => {
                 self.wait_load_ack_after(ip, after, reply);
             }
-            ServerMsg::RecordStatus { status, reply } => {
-                let seen_at = Instant::now();
+            ServerMsg::RegisterTrackTiming { track_id, timing } => {
+                self.track_timings.insert(track_id, timing);
+            }
+            ServerMsg::RecordStatus {
+                status,
+                seen_at,
+                reply,
+            } => {
                 let should_log = self.record_status(status.clone(), seen_at);
                 self.notify_status_waiters(&status, seen_at);
                 self.emit_telemetry(DjLinkTelemetryKind::Status, status.player());
@@ -699,6 +714,8 @@ impl ServerActor {
         self.last_beat_by_player.remove(&player);
         self.last_beat_seen_by_player.remove(&player);
         self.last_position_by_player.remove(&player);
+        self.last_position_seen_by_player.remove(&player);
+        self.beat_playheads.remove(&player);
         self.load_progress_by_player
             .retain(|(target_player, _), _| *target_player != player);
 
@@ -807,9 +824,33 @@ impl ServerActor {
         let track_changed = self
             .last_status_by_player
             .get(&player)
-            .is_some_and(|previous| previous.track_id() != status.track_id());
+            .is_some_and(|previous| !previous.same_track_as(&status));
         if track_changed {
+            self.beat_playheads.remove(&player);
+            self.last_position_seen_by_player.remove(&player);
             self.last_position_by_player.remove(&player);
+            self.last_beat_by_player.remove(&player);
+            self.last_beat_seen_by_player.remove(&player);
+        }
+        let clock = self
+            .track_timings
+            .get(&status.track_id())
+            .and_then(|timing| {
+                let (beat, rate, ended, reset) = status.timing_input();
+                BeatPlayhead::update(
+                    self.beat_playheads.get(&player),
+                    timing,
+                    beat,
+                    rate,
+                    ended,
+                    reset,
+                    seen_at,
+                )
+            });
+        if let Some(clock) = clock {
+            self.beat_playheads.insert(player, clock);
+        } else {
+            self.beat_playheads.remove(&player);
         }
         self.last_status_seen_by_player.insert(player, seen_at);
         self.last_status_by_player
@@ -861,6 +902,8 @@ impl ServerActor {
     }
 
     fn record_position(&mut self, position: CdjPositionSnapshot) -> bool {
+        self.last_position_seen_by_player
+            .insert(position.player(), Instant::now());
         let should_log = self
             .last_position_by_player
             .get(&position.player())
@@ -873,12 +916,41 @@ impl ServerActor {
     fn monitor_snapshot(&self, player: u8) -> DjLinkMonitorSnapshot {
         let status = self.last_status_by_player.get(&player);
         let beat = self.last_beat_by_player.get(&player);
-        let position = self.last_position_by_player.get(&player);
+        let now = Instant::now();
+        let position = self.last_position_by_player.get(&player).filter(|_| {
+            self.last_position_seen_by_player
+                .get(&player)
+                .is_some_and(|seen| now.saturating_duration_since(*seen) < Duration::from_secs(1))
+        });
+        // A stopped deck sends no beat packets. Its old beat must not override
+        // newer status packets when the DJ changes pitch or loads another track.
+        let current_beat = beat.filter(|_| {
+            self.last_beat_seen_by_player.get(&player)
+                >= self.last_status_seen_by_player.get(&player)
+        });
         DjLinkMonitorSnapshot {
             status: status.map(CdjStatusSnapshot::summary),
             beat: beat.map(CdjBeatSnapshot::summary),
             position: position.map(CdjPositionSnapshot::summary),
-            deck: status.map(|status| status.deck_state(position, beat)),
+            deck: status.map(|status| {
+                let mut deck = status.deck_state(position, current_beat);
+                if position.is_none() {
+                    if let (Some(clock), Some(timing)) = (
+                        self.beat_playheads.get(&player),
+                        self.track_timings.get(&status.track_id()),
+                    ) {
+                        let playhead = clock.position(now);
+                        deck.playhead_ms = Some(playhead);
+                        deck.playhead_source = Some("beat_grid");
+                        deck.track_length_sec = Some(timing.duration_ms / 1000);
+                        deck.track_progress_milli = (timing.duration_ms > 0).then(|| {
+                            ((u64::from(playhead) * 1000) / u64::from(timing.duration_ms)).min(1000)
+                                as u16
+                        });
+                    }
+                }
+                deck
+            }),
         }
     }
 
