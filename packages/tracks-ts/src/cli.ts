@@ -1314,6 +1314,7 @@ export const resolveCli = Cli.create("resolve", {
     "Resolve a set from timestamped publisher metadata or return a browser-research prompt to the calling agent, without downloading the remote set.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud URL or local audio file") }),
   options: identifyOptions.extend({
+    providerPlaylistFile: z.string().optional().describe("Connected-provider playlist snapshot"),
     outputDirectory: z
       .string()
       .optional()
@@ -1368,6 +1369,34 @@ export const resolveCli = Cli.create("resolve", {
       if (!context.options.refresh) {
         const existing = await stateStore.load();
         if (existing) return existing;
+      }
+      let hostedManifest;
+      if (context.options.providerPlaylistFile) {
+        const file = context.options.providerPlaylistFile;
+        if ((await stat(file)).size > 8 * 1024 * 1024)
+          throw new Error("Provider playlist snapshot is too large");
+        const input = JSON.parse(await readFile(file, "utf8")) as ProviderPlaylistManifestInput;
+        if (
+          input.url !== context.args.source ||
+          !["spotify", "soundcloud"].includes(input.provider)
+        )
+          throw new Error("Provider playlist snapshot does not match this source");
+        hostedManifest = buildProviderPlaylistManifest(input);
+      } else if (isHostedPlaylistCandidate(context.args.source)) {
+        const spotify = await workflowSpotifyClient(context.options.cacheMode);
+        hostedManifest = (
+          await prepareHostedImportSource(context.args.source, {
+            ...(spotify ? { spotify } : {}),
+            createSoundcloud: () => createSoundCloudUserClient(),
+          })
+        )?.manifest;
+      }
+      if (hostedManifest) {
+        hostedManifest.artifacts.root = stateStore.artifactDirectory;
+        hostedManifest.artifacts.downloadDirectory = resolve(outputDirectory);
+        delete hostedManifest.artifacts.manifest;
+        await stateStore.save(hostedManifest);
+        return hostedManifest;
       }
       const manifest = createManifest(
         await identify(context.args.source, {

@@ -215,6 +215,11 @@ before(async () => {
     await readFile(new URL("../migrations/0007_import_progress.sql", import.meta.url), "utf8"),
   );
   await database.exec(
+    (await readFile(new URL("../migrations/0008_download_workflows.sql", import.meta.url), "utf8"))
+      .replace(/^--.*$/gm, "")
+      .replace(/\n/g, " "),
+  );
+  await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
 });

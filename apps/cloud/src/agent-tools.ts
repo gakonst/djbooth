@@ -73,7 +73,7 @@ export class AgentTools extends DurableObject<Env> {
     // Recover jobs stopped by the old turn-boundary behavior when their approved
     // owner reconnects. Real acquisition/auth failures are deliberately excluded.
     await this.env.LIBRARY_DB.prepare(
-      "UPDATE import_requests SET status='queued', phase='restore', message='Continuing download', updated_at=? WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'",
+      "UPDATE import_requests SET status='queued', phase='restore', message='Continuing download', updated_at=? WHERE workflow_id IS NULL AND account_id=? AND agent_grant_id=? AND agent_id=? AND status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'",
     )
       .bind(Date.now(), owner.account.id, owner.account.grantId, owner.account.agentId)
       .run();
@@ -111,7 +111,7 @@ export class AgentTools extends DurableObject<Env> {
           if (typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id))
             throw new Error("Invalid download job ID");
           const row = await this.env.LIBRARY_DB.prepare(
-            "SELECT source, status, collection_id, current, total FROM import_requests WHERE account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running','complete')",
+            "SELECT source, status, collection_id, current, total FROM import_requests WHERE workflow_id IS NULL AND account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running','complete')",
           )
             .bind(live.account.id, id, live.account.grantId, live.account.agentId)
             .first<{
@@ -188,7 +188,7 @@ export class AgentTools extends DurableObject<Env> {
       const owner = await this.verified();
       await this.recoverDownloads(owner);
       const jobs = await this.env.LIBRARY_DB.prepare(
-        "SELECT id, source, agent_turn_id FROM import_requests WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running')",
+        "SELECT id, source, agent_turn_id FROM import_requests WHERE workflow_id IS NULL AND account_id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running')",
       )
         .bind(owner.account.id, owner.account.grantId, owner.account.agentId)
         .all<{ id: string; source: string; agent_turn_id: string | null }>();
@@ -237,7 +237,7 @@ export class AgentTools extends DurableObject<Env> {
             // Claim one continuation durably before sending it. If delivery is
             // interrupted, the next alarm resubmits this same idempotent turn ID.
             const claimed = await this.env.LIBRARY_DB.prepare(
-              "UPDATE import_requests SET agent_turn_id=?, updated_at=? WHERE account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND agent_turn_id=? AND status IN ('queued','running') RETURNING id",
+              "UPDATE import_requests SET agent_turn_id=?, updated_at=? WHERE workflow_id IS NULL AND account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND agent_turn_id=? AND status IN ('queued','running') RETURNING id",
             )
               .bind(
                 crypto.randomUUID(),
@@ -272,7 +272,7 @@ export class AgentTools extends DurableObject<Env> {
       const owner = await this.ctx.storage.get<Owner>("owner");
       if (owner)
         await this.env.LIBRARY_DB.prepare(
-          "UPDATE import_requests SET status='failed', message='Nanocodex authorization expired or was revoked. Reconnect, then retry.', updated_at=? WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'))",
+          "UPDATE import_requests SET status='failed', message='Nanocodex authorization expired or was revoked. Reconnect, then retry.', updated_at=? WHERE workflow_id IS NULL AND account_id=? AND agent_grant_id=? AND agent_id=? AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'))",
         )
           .bind(Date.now(), owner.account.id, owner.account.grantId, owner.account.agentId)
           .run();

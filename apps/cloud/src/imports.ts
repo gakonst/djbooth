@@ -1,3 +1,4 @@
+import { ensureDownloadWorkflow } from "./download-workflow.js";
 import { ensureAgentTools } from "./agent-tools.js";
 import { agentRoute } from "./agent.js";
 import { AuthError, type Account } from "./auth.js";
@@ -78,7 +79,7 @@ export async function imports(
     return error("Invalid import request");
   const body = value as Record<string, unknown>;
   const now = Date.now();
-  await ensureAgentTools(request, env, account);
+  if (!env.DOWNLOAD_WORKFLOW) await ensureAgentTools(request, env, account);
   if (path === "/v1/imports") {
     const source = sourceURL(body.source);
     if (typeof body.id !== "string" || !uuid.test(body.id) || !source)
@@ -88,7 +89,7 @@ export async function imports(
     if (!env.PLAYLIST_CONTAINERS) return error("Playlist containers are not configured", 503);
     // Repeating an ID is idempotent, including after an uncertain network response.
     await env.LIBRARY_DB.prepare(
-      `INSERT INTO import_requests (account_id, id, container_id, source, created_at, updated_at, agent_grant_id, agent_id, agent_turn_id) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM import_requests WHERE account_id=? AND status IN ('queued','running')) < 100 ON CONFLICT DO NOTHING`,
+      `INSERT INTO import_requests (account_id, id, container_id, source, created_at, updated_at, agent_grant_id, agent_id, agent_turn_id, workflow_id) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM import_requests WHERE account_id=? AND status IN ('queued','running')) < 100 ON CONFLICT DO NOTHING`,
     )
       .bind(
         account.id,
@@ -98,8 +99,9 @@ export async function imports(
         now,
         now,
         account.grantId,
-        account.agentId,
-        crypto.randomUUID(),
+        account.agentId ?? null,
+        env.DOWNLOAD_WORKFLOW ? null : crypto.randomUUID(),
+        env.DOWNLOAD_WORKFLOW ? crypto.randomUUID() : null,
         account.id,
       )
       .run();
@@ -111,12 +113,7 @@ export async function imports(
     if (!row) return error("Import inbox is full; wait for pending imports", 429);
     if (row.source !== source) return error("Request ID already belongs to a different link", 409);
     if (row.status === "queued" || row.status === "running") {
-      await env.PLAYLIST_CONTAINERS.getByName(`${account.id}:${row.id}`).enqueue(
-        account.id,
-        String(row.id),
-        source,
-      );
-      await promptDownload(request, env, account, String(row.id), source);
+      await startDownload(request, env, account, String(row.id), source);
     }
     return json(present(row));
   }
@@ -125,9 +122,17 @@ export async function imports(
   if (!env.PLAYLIST_CONTAINERS) return error("Playlist containers are not configured", 503);
   const id = match[1];
   await env.LIBRARY_DB.prepare(
-    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Agent preparing download', agent_grant_id=?, agent_id=?, agent_turn_id=?, updated_at=? WHERE account_id=? AND id=? AND status='failed'",
+    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Preparing download', agent_grant_id=?, agent_id=?, agent_turn_id=?, workflow_id=?, updated_at=? WHERE account_id=? AND id=? AND status='failed'",
   )
-    .bind(account.grantId, account.agentId, crypto.randomUUID(), now, account.id, id)
+    .bind(
+      account.grantId,
+      account.agentId ?? null,
+      env.DOWNLOAD_WORKFLOW ? null : crypto.randomUUID(),
+      env.DOWNLOAD_WORKFLOW ? crypto.randomUUID() : null,
+      now,
+      account.id,
+      id,
+    )
     .run();
   const row = await env.LIBRARY_DB.prepare(
     `SELECT ${columns} FROM import_requests WHERE account_id=? AND id=?`,
@@ -136,14 +141,29 @@ export async function imports(
     .first();
   if (!row) return error("Import not found", 404);
   if (row.status === "queued" || row.status === "running") {
-    await env.PLAYLIST_CONTAINERS.getByName(`${account.id}:${id}`).enqueue(
-      account.id,
-      id,
-      String(row.source),
-    );
-    await promptDownload(request, env, account, id, String(row.source));
+    await startDownload(request, env, account, id, String(row.source));
   }
   return json(present(row));
+}
+
+async function startDownload(
+  request: Request,
+  env: Env,
+  account: Account,
+  id: string,
+  source: string,
+) {
+  const row = await env.LIBRARY_DB.prepare(
+    "SELECT workflow_id FROM import_requests WHERE account_id=? AND id=?",
+  )
+    .bind(account.id, id)
+    .first<{ workflow_id: string | null }>();
+  if (row?.workflow_id) {
+    await ensureDownloadWorkflow(env, { accountId: account.id, id, source }, row.workflow_id);
+    return;
+  }
+  await env.PLAYLIST_CONTAINERS!.getByName(`${account.id}:${id}`).enqueue(account.id, id, source);
+  await promptDownload(request, env, account, id, source);
 }
 
 export async function promptDownload(
@@ -154,7 +174,7 @@ export async function promptDownload(
   source: string,
 ): Promise<void> {
   const row = await env.LIBRARY_DB.prepare(
-    "SELECT agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE account_id=? AND id=?",
+    "SELECT agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE workflow_id IS NULL AND account_id=? AND id=?",
   )
     .bind(account.id, id)
     .first<{

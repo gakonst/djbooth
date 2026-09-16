@@ -1,4 +1,5 @@
-vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
+vi.mock("cloudflare:workflows", () => ({ NonRetryableError: Error }));
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {}, WorkflowEntrypoint: class {} }));
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 
@@ -294,4 +295,75 @@ test("container RPC independently rejects another account, Connect grant or agen
     ).rejects.toThrow("ownership");
   }
   expect(runner.containerFetch).not.toHaveBeenCalled();
+});
+
+test("workflow ownership fences agent execution and changed attempts restore the same private workspace", async () => {
+  const owner = { workflow_id: "workflow-a", agent_grant_id: "grant", agent_id: "agent" };
+  const { runner, state } = setup(true, false, owner);
+  await runner.enqueue("account-a", id, "https://youtu.be/existing");
+  await expect(
+    runner.execute("account-a", "grant", "agent", id, { operation: "start" }),
+  ).rejects.toThrow("ownership");
+  await expect(runner.workflowExecute("account-b", id, "workflow-a", {})).rejects.toThrow(
+    "ownership",
+  );
+  await expect(runner.workflowExecute("account-a", id, "workflow-b", {})).rejects.toThrow(
+    "ownership",
+  );
+  await runner.poll();
+  const startup = vi.mocked(runner.startAndWaitForPorts).mock.calls[0]![0] as any;
+  expect(startup.startOptions.envVars.DJBOOTH_WORKFLOW).toBe("1");
+  expect(startup.startOptions.envVars.DJBOOTH_AGENT).toBe("0");
+  owner.workflow_id = "workflow-b";
+  await runner.enqueue("account-a", id, "https://youtu.be/existing");
+  expect(runner.destroy).toHaveBeenCalledOnce();
+  expect((state.get("job") as any).workflowId).toBe("workflow-b");
+});
+
+test("deployment adopts interrupted agent jobs once and preserves genuine source failures", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const db = new DatabaseSync(":memory:");
+  for (const file of readdirSync(new URL("../migrations/", import.meta.url)).sort())
+    if (file.endsWith(".sql"))
+      db.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+  db.prepare(
+    "INSERT INTO import_requests(account_id,id,container_id,source,status,message,created_at,updated_at) VALUES ('owner','interrupted','saved-container','https://soundcloud.com/artist/sets/list','failed','Your agent stopped before publishing all tracks. Retry to resume saved work.',0,0)",
+  ).run();
+  db.prepare(
+    "INSERT INTO import_requests(account_id,id,container_id,source,status,message,created_at,updated_at) VALUES ('owner','unresolved','other-container','https://youtu.be/no-tracklist','failed','No verified tracklist was found',0,0)",
+  ).run();
+  const created: string[] = [];
+  const env: any = {
+    LIBRARY_DB: {
+      prepare(sql: string) {
+        const statement = db.prepare(sql);
+        return {
+          all: async () => ({ results: statement.all() }),
+          bind: (...args: any[]) => ({
+            run: async () => statement.run(...args),
+            first: async () => statement.get(...args),
+          }),
+        };
+      },
+    },
+    DOWNLOAD_WORKFLOW: {
+      create: async ({ id }: any) => {
+        created.push(id);
+      },
+    },
+    PLAYLIST_CONTAINERS: { getByName: () => ({ enqueue: async () => {} }) },
+  };
+  try {
+    await library.default.scheduled({} as any, env);
+    const first: any = db.prepare("SELECT * FROM import_requests WHERE id='interrupted'").get();
+    expect(first).toMatchObject({ status: "queued", container_id: "saved-container" });
+    expect(first.workflow_id).toMatch(/^[a-f0-9]{32}$/);
+    await library.default.scheduled({} as any, env);
+    expect(created).toEqual([first.workflow_id, first.workflow_id]);
+    expect(
+      db.prepare("SELECT status,workflow_id FROM import_requests WHERE id='unresolved'").get(),
+    ).toMatchObject({ status: "failed", workflow_id: null });
+  } finally {
+    db.close();
+  }
 });

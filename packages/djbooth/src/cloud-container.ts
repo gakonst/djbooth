@@ -1,3 +1,4 @@
+import { cloudWorkflow } from "./cloud-workflow.js";
 import { cloudAgent } from "./cloud-agent.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -7,7 +8,12 @@ import { join } from "node:path";
 import { FileSessionStore } from "@gakonst/spots";
 import { MasterDatabase } from "@gakonst/rekordbox";
 import { CloudSnapshots } from "./cloud-snapshots.js";
-import { CloudProcessingError, processCloudImport, type ImportProgress } from "./cloud-worker.js";
+import {
+  CloudProcessingError,
+  processCloudImport,
+  type ImportProgress,
+  type CloudImportOptions,
+} from "./cloud-worker.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -68,18 +74,59 @@ export async function runPlaylistContainer(
     })().finally(() => {
       snapshot = undefined;
     }));
+  const checkpoint = async () => {
+    await snapshot?.catch(() => undefined);
+    await save();
+  };
+  const paths: CloudImportOptions = {
+    dbPath,
+    endpoint,
+    token,
+    namespace: `cloud:${id}`,
+    outputDirectory: join(root, "audio"),
+    artifactsOnly: process.env.DJBOOTH_ANALYSIS_REPAIR === "1",
+    checkpoint,
+    resolve: async (request: unknown, signal: AbortSignal) => {
+      const response = await fetch(`${endpoint}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(request),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(600_000)]),
+      });
+      if (!response.ok)
+        throw new CloudProcessingError(
+          response.status === 422
+            ? "No verified tracklist was found for this set."
+            : "Cloud tracklist research is temporarily unavailable.",
+        );
+      return response.json();
+    },
+  };
+  const workflow = cloudWorkflow({
+    source,
+    paths,
+    save: checkpoint,
+    signal: controller.signal,
+    progress: (value) => {
+      progress = value;
+    },
+  });
   let agentReady = false;
   const agent = cloudAgent({
     id,
     source,
-    save,
+    save: checkpoint,
     signal: controller.signal,
     progress: (value) => {
       progress = value;
     },
   });
   const server = createServer(async (request, response) => {
-    if (process.env.DJBOOTH_AGENT === "1" && request.method === "POST" && request.url === "/exec") {
+    if (
+      request.method === "POST" &&
+      ((process.env.DJBOOTH_AGENT === "1" && request.url === "/exec") ||
+        (process.env.DJBOOTH_WORKFLOW === "1" && request.url === "/workflow"))
+    ) {
       if (!agentReady) {
         response.writeHead(503).end("Workspace is restoring; retry shortly.");
         return;
@@ -90,7 +137,7 @@ export async function runPlaylistContainer(
           body += chunk;
           if (body.length > 65536) throw new Error("Request too large");
         }
-        const result = await agent(JSON.parse(body));
+        const result = await (request.url === "/workflow" ? workflow : agent)(JSON.parse(body));
         response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(result));
       } catch (error) {
         response
@@ -156,14 +203,15 @@ export async function runPlaylistContainer(
       providerPlaylistFile = "/tmp/provider-playlist.json";
       await writeFile(providerPlaylistFile, body, { mode: 0o600 });
     } else if (providerInput.status !== 404) throw new Error("Provider playlist input unavailable");
-    if (process.env.DJBOOTH_AGENT === "1") {
+    if (providerPlaylistFile) paths.providerPlaylistFile = providerPlaylistFile;
+    if (process.env.DJBOOTH_AGENT === "1" || process.env.DJBOOTH_WORKFLOW === "1") {
       agentReady = true;
       progress = {
         status: "running",
         phase: "import",
         current: 0,
         total: 1,
-        message: "Agent preparing download",
+        message: "Preparing download",
       };
       await closed;
       return;

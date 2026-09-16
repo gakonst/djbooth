@@ -14,6 +14,8 @@ type Job = {
   agentId?: string;
   agentTurnId?: string;
   completedAt?: number;
+  workflowId?: string;
+  admittedAt?: number;
 };
 
 /** Stable Durable Object identity = one playlist = one container, across retries. */
@@ -25,10 +27,11 @@ export class PlaylistContainer extends Container<Env> {
   async enqueue(accountId: string, id: string, source: string): Promise<void> {
     await this.polling;
     const row = await this.env.LIBRARY_DB.prepare(
-      "SELECT analysis_repair, agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE account_id=? AND id=?",
+      "SELECT workflow_id, analysis_repair, agent_grant_id, agent_id, agent_turn_id FROM import_requests WHERE account_id=? AND id=?",
     )
       .bind(accountId, id)
       .first<{
+        workflow_id: string | null;
         analysis_repair: number;
         agent_grant_id: string | null;
         agent_id: string | null;
@@ -39,6 +42,7 @@ export class PlaylistContainer extends Container<Env> {
       if (previous.accountId !== accountId || previous.id !== id || previous.source !== source)
         throw new Error("Container ownership mismatch");
       if (
+        previous.workflowId !== (row?.workflow_id ?? undefined) ||
         previous.agentGrantId !== (row?.agent_grant_id ?? undefined) ||
         previous.agentId !== (row?.agent_id ?? undefined)
       ) {
@@ -68,6 +72,7 @@ export class PlaylistContainer extends Container<Env> {
       startedAt: Date.now(),
       failures: 0,
       analysisRepair: row?.analysis_repair === 1,
+      workflowId: row?.workflow_id ?? undefined,
       agentGrantId: row?.agent_grant_id ?? undefined,
       agentId: row?.agent_id ?? undefined,
       agentTurnId: row?.agent_turn_id ?? undefined,
@@ -88,6 +93,7 @@ export class PlaylistContainer extends Container<Env> {
       !job ||
       job.accountId !== accountId ||
       job.id !== id ||
+      job.workflowId ||
       job.agentGrantId !== grantId ||
       job.agentId !== agentId
     )
@@ -109,6 +115,34 @@ export class PlaylistContainer extends Container<Env> {
       throw new Error(
         response.status === 503 ? "Sandbox is restoring. Retry shortly." : "Sandbox command failed",
       );
+    return response.json();
+  }
+
+  /** Only the bound workflow can call this RPC; it is never routed from public HTTP. */
+  async workflowExecute(
+    accountId: string,
+    id: string,
+    workflowId: string,
+    input: Record<string, unknown>,
+  ): Promise<unknown> {
+    const job = await this.ctx.storage.get<Job>("job");
+    if (!job || job.accountId !== accountId || job.id !== id || job.workflowId !== workflowId)
+      throw new Error("Workflow ownership mismatch");
+    await this.poll();
+    const row = await this.env.LIBRARY_DB.prepare(
+      "SELECT status FROM import_requests WHERE account_id=? AND id=? AND workflow_id=?",
+    )
+      .bind(accountId, id, workflowId)
+      .first<{ status: string }>();
+    if (!row || !["running", "complete"].includes(row.status))
+      throw new Error("Workspace is queued or unavailable");
+    if (input.operation === "ready") return { status: "ready" };
+    const response = await this.containerFetch("http://container/workflow", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw new Error("Workspace is restoring; retry shortly");
     return response.json();
   }
 
@@ -138,7 +172,10 @@ export class PlaylistContainer extends Container<Env> {
       this.deleteSchedules("poll");
       return;
     }
-    if (Date.now() - job.startedAt > 6 * 60 * 60 * 1000) {
+    if (
+      Date.now() - (job.workflowId ? (job.admittedAt ?? Date.now()) : job.startedAt) >
+      6 * 60 * 60 * 1000
+    ) {
       await this.finish(
         job,
         "Cloud processing reached its six-hour limit. Retry to resume saved work.",
@@ -149,22 +186,30 @@ export class PlaylistContainer extends Container<Env> {
     this.deleteSchedules("poll");
     await this.schedule(15, "poll");
     const admitted = await this.env.LIBRARY_DB.prepare(
-      "UPDATE import_requests SET status='running', phase=CASE WHEN status='queued' THEN 'restore' ELSE phase END WHERE account_id=? AND id=? AND (status='running' OR (status='queued' AND (SELECT count(*) FROM import_requests WHERE status='running') < 5)) RETURNING id",
+      "UPDATE import_requests SET status='running', phase=CASE WHEN status='queued' THEN 'restore' ELSE phase END WHERE account_id=? AND id=? AND workflow_id IS ? AND (status='running' OR (status='queued' AND (SELECT count(*) FROM import_requests WHERE status='running') < 5)) RETURNING id",
     )
-      .bind(job.accountId, job.id)
+      .bind(job.accountId, job.id, job.workflowId ?? null)
       .first();
     if (!admitted) {
       const row = await this.env.LIBRARY_DB.prepare(
-        "SELECT status FROM import_requests WHERE account_id=? AND id=?",
+        "SELECT status, workflow_id FROM import_requests WHERE account_id=? AND id=?",
       )
         .bind(job.accountId, job.id)
         .first();
-      if (row?.status === "complete" || row?.status === "failed") {
+      if (
+        row?.status === "complete" ||
+        row?.status === "failed" ||
+        (row?.workflow_id ?? undefined) !== job.workflowId
+      ) {
         await this.destroy();
         await this.ctx.storage.delete("job");
         this.deleteSchedules("poll");
       }
       return;
+    }
+    if (job.workflowId && !job.admittedAt) {
+      job.admittedAt = Date.now();
+      await this.ctx.storage.put("job", job);
     }
     try {
       const providerEnv: Record<string, string> = this.env.IMPORT_PROVIDER_ENV
@@ -192,8 +237,9 @@ export class PlaylistContainer extends Container<Env> {
       await this.startAndWaitForPorts({
         startOptions: {
           envVars: {
-            ...(job.agentGrantId ? {} : providerEnv),
-            DJBOOTH_AGENT: job.agentGrantId ? "1" : "0",
+            ...(job.agentGrantId && !job.workflowId ? {} : providerEnv),
+            DJBOOTH_AGENT: job.agentGrantId && !job.workflowId ? "1" : "0",
+            DJBOOTH_WORKFLOW: job.workflowId ? "1" : "0",
             DJBOOTH_IMPORT_ID: job.id,
             DJBOOTH_IMPORT_SOURCE: job.source,
             DJBOOTH_CONTAINER_BINDINGS: "1",
@@ -206,7 +252,7 @@ export class PlaylistContainer extends Container<Env> {
       if (!response.ok) throw new Error("Container status unavailable");
       const progress = await response.json<Record<string, unknown>>();
       if (!validProgress(progress)) throw new Error("Invalid container status");
-      if (job.agentGrantId && progress.status === "failed") {
+      if ((job.agentGrantId || job.workflowId) && progress.status === "failed") {
         // An agent-mode terminal status here means workspace initialization
         // failed; command failures are receipts owned by the running agent.
         // Restart from the existing snapshot and keep the download active.
@@ -219,7 +265,7 @@ export class PlaylistContainer extends Container<Env> {
       }
       const terminal = progress.status === "complete" || progress.status === "failed";
       await this.env.LIBRARY_DB.prepare(
-        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, stage_progress=json_patch(COALESCE(stage_progress,'{}'),COALESCE(?,'{}')), collection_id=COALESCE(?,collection_id), analysis_version=CASE WHEN ?=1 THEN 1 ELSE analysis_version END, updated_at=? WHERE account_id=? AND id=? AND status IN ('queued','running')",
+        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, stage_progress=json_patch(COALESCE(stage_progress,'{}'),COALESCE(?,'{}')), collection_id=COALESCE(?,collection_id), analysis_version=CASE WHEN ?=1 THEN 1 ELSE analysis_version END, updated_at=? WHERE account_id=? AND id=? AND workflow_id IS ? AND status IN ('queued','running')",
       )
         .bind(
           progress.status,
@@ -233,9 +279,10 @@ export class PlaylistContainer extends Container<Env> {
           Date.now(),
           job.accountId,
           job.id,
+          job.workflowId ?? null,
         )
         .run();
-      if (terminal && job.agentGrantId && progress.status === "complete") {
+      if (terminal && (job.agentGrantId || job.workflowId) && progress.status === "complete") {
         job.completedAt = Date.now();
         await this.ctx.storage.put("job", job);
       } else if (terminal) {
@@ -255,9 +302,9 @@ export class PlaylistContainer extends Container<Env> {
 
   private async finish(job: Job, message: string): Promise<void> {
     await this.env.LIBRARY_DB.prepare(
-      "UPDATE import_requests SET status='failed', message=?, updated_at=? WHERE account_id=? AND id=?",
+      "UPDATE import_requests SET status='failed', message=?, updated_at=? WHERE account_id=? AND id=? AND workflow_id IS ?",
     )
-      .bind(message, Date.now(), job.accountId, job.id)
+      .bind(message, Date.now(), job.accountId, job.id, job.workflowId ?? null)
       .run();
     await this.destroy();
     await this.ctx.storage.delete("job");

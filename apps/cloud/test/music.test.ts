@@ -1,4 +1,5 @@
-vi.mock("cloudflare:workers", () => ({ DurableObject: class {} }));
+vi.mock("cloudflare:workflows", () => ({ NonRetryableError: Error }));
+vi.mock("cloudflare:workers", () => ({ DurableObject: class {}, WorkflowEntrypoint: class {} }));
 import { describe, expect, it, vi } from "vitest";
 import { musicRoute, musicSources, pagePath, SoundCloudStreamCache } from "../src/music.js";
 import type { Env } from "../src/index.js";

@@ -6,7 +6,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { cloudAgent } from "/app/dist/cloud-agent.js";
+import { cloudWorkflow } from "/app/dist/cloud-workflow.js";
 import { MasterDatabase } from "@gakonst/rekordbox";
 import { createManifest, RekordboxPipelineStore } from "@gakonst/tracks";
 
@@ -82,6 +82,18 @@ try {
     assert.notEqual(result.ok, false, JSON.stringify(result));
     return result.data ?? result;
   };
+  const expanded = run([
+    "resolve",
+    source,
+    "--db-path",
+    path,
+    "--output-directory",
+    root,
+    ...(providerFile ? ["--provider-playlist-file", providerFile] : []),
+    "--progress",
+    "never",
+  ]);
+  assert.equal(expanded.entries.length, 1);
   const result = run([
     "import",
     source,
@@ -183,58 +195,46 @@ try {
         );
       });
     const progress = [];
-    const agent = cloudAgent({
-      id: "11111111-1111-1111-1111-111111111111",
-      source,
-      endpoint: `http://127.0.0.1:${server.address().port}`,
-      signal: new AbortController().signal,
-      save: async () => {},
-      progress: (value) => progress.push(value),
-    });
-    const instructions = await agent({ operation: "instructions" });
-    assert.match(instructions.instructions, /master.db/);
-    const cli = async (process_id, args) => {
-      await agent({ operation: "start", process_id, args });
-      // Simulate a fresh agent turn: discover the live process from instructions,
-      // then keep polling it instead of restarting the CLI.
-      const resumed = await agent({ operation: "instructions" });
-      assert.equal(resumed.activeProcess.process_id, process_id);
-      let value;
-      do {
-        value = await agent({ operation: "poll", process_id: resumed.activeProcess.process_id });
-      } while (value.status === "running");
-      assert.equal(value.status, "completed", JSON.stringify(value));
-      return value.result;
+    const createWorkflow = () =>
+      cloudWorkflow({
+        source,
+        paths: {
+          dbPath: path,
+          outputDirectory: root,
+          namespace: "cloud:11111111-1111-1111-1111-111111111111",
+          endpoint: `http://127.0.0.1:${server.address().port}`,
+          token: "container-binding",
+          ...(providerFile ? { providerPlaylistFile: providerFile } : {}),
+        },
+        signal: new AbortController().signal,
+        save: async () => {},
+        progress: (value) => progress.push(value),
+      });
+    const stage = async (executor, name, imported) => {
+      let receipt = await executor({
+        operation: "start",
+        stage: name,
+        process_id: `${name}-1`,
+        imported,
+      });
+      while (receipt.status === "running")
+        receipt = await executor({ operation: "poll", process_id: receipt.process_id });
+      assert.equal(receipt.status, "completed", JSON.stringify(receipt));
+      return receipt.result;
     };
-    const imported = await cli("agent-import", [
-      "import",
-      source,
-      ...sourceArgs,
-      "--db-path",
-      path,
-      "--output-directory",
-      root,
-    ]);
+    const workflow = createWorkflow();
+    assert.equal((await stage(workflow, "resolve")).entries, 1);
+    const imported = await stage(workflow, "import");
     assert.equal(imported.playlistId, result.playlistId);
-    if (provider) await cli("agent-enrich", ["enrich", "--db-path", path]);
+    if (provider) await stage(workflow, "enrich");
     assert.equal(
       progress.some((value) => value.status === "complete"),
       false,
     );
-    const output = await cli("agent-publish", [
-      "cloud",
-      "publish",
-      "--endpoint",
-      `http://127.0.0.1:${server.address().port}`,
-      "--db-path",
-      path,
-      "--playlist",
-      result.playlistId,
-      "--namespace",
-      "cloud:11111111-1111-1111-1111-111111111111",
-    ]);
+    // Restart transport between stages, retaining only the saved CLI result/database.
+    const output = await stage(createWorkflow(), "publish", imported);
+    assert.equal(output.status, "complete");
     assert.equal(progress.at(-1).status, "complete");
-    assert.equal((output.data ?? output).cdjReady, 1);
     const published = JSON.parse(changes.findLast((change) => change.kind === "track").payload);
     assert.equal(published.analysis.mediaHash, published.mediaHash);
     for (const key of ["dat", "ext", "twoEx"]) {

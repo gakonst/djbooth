@@ -10,6 +10,13 @@
   "services": [{ "binding": "CONNECT_API_SERVICE", "service": "nanocodex-connect-api" }],
   "browser": { "binding": "BROWSER" },
   "ai": { "binding": "AI" },
+  "workflows": [
+    {
+      "name": "djbooth-download",
+      "binding": "DOWNLOAD_WORKFLOW",
+      "class_name": "DownloadWorkflow",
+    },
+  ],
   "triggers": { "crons": ["* * * * *"] },
   "preview_urls": false,
   "observability": { "enabled": true },

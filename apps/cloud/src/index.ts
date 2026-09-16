@@ -1,3 +1,5 @@
+import { ensureDownloadWorkflow, type DownloadParams } from "./download-workflow.js";
+export { DownloadWorkflow } from "./download-workflow.js";
 import { type AgentTools } from "./agent-tools.js";
 export { AgentTools } from "./agent-tools.js";
 import { musicRoute } from "./music.js";
@@ -10,6 +12,7 @@ import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
 
 export interface Env {
+  DOWNLOAD_WORKFLOW?: Workflow<DownloadParams>;
   LIBRARY_DB: D1Database;
   MEDIA: R2Bucket;
   CONNECT_API_SERVICE?: Fetcher;
@@ -703,9 +706,35 @@ export default {
       .bind(Date.now())
       .run();
     if (!env.PLAYLIST_CONTAINERS) return;
+    if (env.DOWNLOAD_WORKFLOW) {
+      // Adopt saved agent work only after the workflow runtime has been deployed.
+      await env.LIBRARY_DB.prepare(
+        "UPDATE import_requests SET workflow_id=lower(hex(randomblob(16))), status='queued', message='Continuing download', updated_at=? WHERE workflow_id IS NULL AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'))",
+      )
+        .bind(Date.now())
+        .run();
+      const jobs = await env.LIBRARY_DB.prepare(
+        "SELECT account_id, id, source, workflow_id FROM import_requests WHERE workflow_id IS NOT NULL AND status IN ('queued','running') ORDER BY created_at LIMIT 100",
+      ).all<{ account_id: string; id: string; source: string; workflow_id: string }>();
+      const submissions = await Promise.allSettled(
+        jobs.results.map((job) =>
+          ensureDownloadWorkflow(
+            env,
+            { accountId: job.account_id, id: job.id, source: job.source },
+            job.workflow_id,
+          ),
+        ),
+      );
+      for (const result of submissions)
+        if (result.status === "rejected")
+          console.error(
+            "Download workflow submission will retry",
+            result.reason instanceof Error ? result.reason.name : "UnknownError",
+          );
+    }
     if (env.AGENT_TOOLS) {
       const owners = await env.LIBRARY_DB.prepare(
-        "SELECT DISTINCT account_id, agent_grant_id, agent_id FROM import_requests WHERE agent_grant_id IS NOT NULL AND agent_id IS NOT NULL AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.')) LIMIT 100",
+        "SELECT DISTINCT account_id, agent_grant_id, agent_id FROM import_requests WHERE workflow_id IS NULL AND agent_grant_id IS NOT NULL AND agent_id IS NOT NULL AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.')) LIMIT 100",
       ).all<{ account_id: string; agent_grant_id: string; agent_id: string }>();
       for (const owner of owners.results)
         await env.AGENT_TOOLS.getByName(

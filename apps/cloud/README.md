@@ -11,7 +11,7 @@ and agent; callers cannot select a different user's container.
 The authenticated `POST /v1/agent/tool-host/ticket` returns a short-lived, single-use
 ticket for a same-origin phone bridge. The foreground app executes only
 `djbooth_query` against its current account's local model. The backend hosts both
-tools, so cloud downloads continue when the phone closes. Phone queries remain
+tools. Downloads run independently in Workflows and continue when the phone closes. Phone queries remain
 bounded and paginated; credentials, filesystem paths, audio bytes, and other
 account stores are never query sources.
 The integration fixture exercises native WebSocket calls and answers using phone-owned
@@ -90,23 +90,29 @@ are separate and are not migrated or modified by these applications.
 
 ## Playlist containers
 
-Download submits a provider link to the authenticated `/v1/imports` API, which
-creates an idempotent managed-agent prompt: use the DJBooth CLI to import the source,
-analyze the recordings, and publish them. The signed `djbooth_exec` tool reads the
-image's actual root `AGENTS.md`, exposes workspace paths, starts public CLI commands
-with argument arrays, and polls/cancels their processes. It does not implement an
-alternative downloader or analyzer. Commands checkpoint the normal `master.db`.
-Retry creates a new agent turn and restores the same playlist workspace.
+Download submits a provider link to the authenticated `/v1/imports` API. The
+`DOWNLOAD_WORKFLOW` binding starts an idempotent Cloudflare Workflow; no managed-agent
+turn or phone tool catalog is required. Its durable steps prepare the account's
+workspace, resolve the ordered source, run the existing import pipeline, enrich the
+library, and verify publication. The import pipeline resolves recording metadata,
+downloads through the existing acquisition providers, and starts analysis as each
+recording arrives. Per-recording checkpoints remain in `master.db`; Workflows stores
+only orchestration receipts, not a second track database.
+
+Private container RPC accepts fixed stages and process IDs, never caller-supplied
+commands. Each call checks the account, job, and workflow generation. A retried step
+attaches to a running CLI process or resumes from the saved database after a restart.
+A fresh artifact/database snapshot must finish before a stage acknowledges completion.
+Workflow-owned containers reject managed-agent execution, preventing two writers.
 
 Completion requires the real `cloud publish` result for the expected playlist,
-namespace and private endpoint, with all audio and CDJ analysis uploaded; dry runs
-cannot complete a download. An agent that stops before publication leaves a retryable
-failure. Grant expiry/revocation disables tools and stops active jobs.
-A unique source within an account maps to one Durable Object and one Linux container. Different playlists run
-independently; five may process concurrently and the rest wait. The Durable Object polls the
-container without keeping an iPhone request open, and stops it after publication and backup.
-A minute cron repairs interrupted delivery; startup failures and six-hour jobs become retryable
-failures rather than running indefinitely.
+namespace and private endpoint, with all audio and CDJ analysis uploaded. Repeated
+recordings preserve playlist positions while sharing one uploaded audio artifact.
+Five playlists may process concurrently; queued workflows wait for capacity without
+consuming their six-hour execution budget. Transient failures retry automatically.
+Exhausted retries preserve saved work; an explicit retry gets a new workflow generation
+and restores the same private workspace. The minute cron repairs interrupted submission
+and adopts jobs stopped at the old agent-turn boundary.
 
 `Dockerfile.playlist` packages the public `djbooth cloud container` entrypoint, Node, the Rust
 CPU analyzer and FFmpeg. Each playlist owns an isolated `master.db` in `/data`. SQLite
@@ -115,12 +121,11 @@ a consistent encrypted database backup. Restarts restore that database and rerun
 `import`, which verifies and reuses completed work. At most the work since the last successful
 backup needs repeating. No Mac is involved. MLX stems are outside this CPU import workflow.
 
-Previously submitted imports and analysis-repair jobs retain the deterministic runner.
-For those jobs, when a set description has no tracklist, the container sends the importer's research handoff
+When a set description has no tracklist, the container sends the CLI's research handoff
 to a private Worker endpoint. Browser Run finds public tracklist pages and Workers AI transcribes
 timestamped rows. Each accepted identity and timestamp must occur together in a source row;
 unknown tracks stay IDs, and community tracklists retain uncertainty warnings. The result returns
-through `import --agent-result-json`, which saves it in the same `master.db` before acquisition.
+through the CLI's `--agent-result-json` option, which saves it in the same `master.db` before acquisition.
 The `BROWSER` and `AI` bindings require no additional API keys.
 
 If a media provider returns HTTP 403, the cloud importer checks the matched tracklist evidence
@@ -161,7 +166,7 @@ paid containers. `pnpm --filter @gakonst/djbooth-cloud run deploy` builds and ro
 the Worker and its container image. Container updates target 100% in one rollout step; a successful
 deploy starts replacement, so verify the active application image before testing. The iPhone uses its Nanocodex account login; playlist processing needs no workstation connection.
 
-Live provider checks use the same image and public CLI, then exercise the agent executor,
+Live provider checks use the same image and public CLI, then exercise the workflow executor,
 audio and analysis publication to a local HTTP fixture, and a warm resume. They require network
 access and fetch one real recording each; they do not need an iPhone or write to a user's library:
 

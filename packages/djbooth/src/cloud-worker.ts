@@ -190,23 +190,36 @@ export function importProgressTracker() {
   };
 }
 
+export type CloudImportOptions = {
+  dbPath: string;
+  endpoint: string;
+  token: string;
+  namespace: string;
+  outputDirectory: string;
+  artifactsOnly?: boolean;
+  providerPlaylistFile?: string;
+  checkpoint?: () => Promise<void>;
+  resolve?: (request: unknown, signal: AbortSignal) => Promise<unknown>;
+};
+
 export async function processCloudImport(
   source: string,
-  options: {
-    dbPath: string;
-    endpoint: string;
-    token: string;
-    namespace: string;
-    outputDirectory: string;
-    artifactsOnly?: boolean;
-    providerPlaylistFile?: string;
-    checkpoint?: () => Promise<void>;
-    resolve?: (request: unknown, signal: AbortSignal) => Promise<unknown>;
-  },
+  options: CloudImportOptions,
   signal: AbortSignal,
   progress: (value: ImportProgress) => void,
   run: CommandRunner = runCloudCommand,
 ): Promise<ImportProgress> {
+  const imported = await prepareCloudImport(source, options, signal, progress, run);
+  return publishCloudImport(imported, options, signal, progress, run);
+}
+
+export async function prepareCloudImport(
+  source: string,
+  options: CloudImportOptions,
+  signal: AbortSignal,
+  progress: (value: ImportProgress) => void,
+  run: CommandRunner = runCloudCommand,
+): Promise<z.infer<typeof importResult>> {
   const emit = (value: ImportProgress) => {
     try {
       progress(value);
@@ -344,6 +357,18 @@ export async function processCloudImport(
     });
     await options.checkpoint();
   }
+  return result;
+}
+
+export async function publishCloudImport(
+  imported: unknown,
+  options: CloudImportOptions,
+  signal: AbortSignal,
+  progress: (value: ImportProgress) => void,
+  run: CommandRunner = runCloudCommand,
+): Promise<ImportProgress> {
+  const result = importResult.parse(imported);
+  const emit = progress;
   const collectionID = `${options.namespace}:playlist:${result.playlistId}`;
   emit({
     status: "running",

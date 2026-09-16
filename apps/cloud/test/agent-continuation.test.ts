@@ -1,8 +1,10 @@
+vi.mock("cloudflare:workflows", () => ({ NonRetryableError: Error }));
 import { afterEach, expect, test, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 
 vi.mock("cloudflare:workers", () => ({
+  WorkflowEntrypoint: class {},
   DurableObject: class {
     constructor(
       public ctx: any,

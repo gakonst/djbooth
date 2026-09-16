@@ -190,7 +190,7 @@ export function cloudAgent(options: {
             !value.failures.length &&
             Array.isArray(value.conflicts) &&
             !value.conflicts.length &&
-            value.tracks === imported.entries &&
+            Number(value.tracks) > 0 &&
             value.availableAudio === value.tracks &&
             value.cdjReady === value.tracks &&
             playlist?.tracks === imported.entries
