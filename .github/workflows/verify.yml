@@ -34,7 +34,7 @@ jobs:
 
       - name: Set up iOS Rust target
         if: runner.os == 'macOS'
-        run: rustup target add aarch64-apple-ios-sim x86_64-apple-ios
+        run: rustup target add aarch64-apple-ios-sim
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -45,7 +45,7 @@ jobs:
 
       - name: Build iOS app
         if: runner.os == 'macOS'
-        run: xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -destination 'generic/platform=iOS Simulator' -configuration Debug CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -destination 'generic/platform=iOS Simulator' -configuration Debug ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build
 
       - name: Validate workspace
         run: pnpm validate
