@@ -124,7 +124,11 @@ export function cloudWorkflow(options: {
             total: manifest.entries.length,
           };
         } else if (stage === "import") {
-          const imported = await prepareCloudImport(options.source, paths, signal, emit, run);
+          // The workflow saves every stage below. The legacy combined import/publish
+          // helper also checkpoints; disable that duplicate snapshot here.
+          const importPaths = { ...paths };
+          delete importPaths.checkpoint;
+          const imported = await prepareCloudImport(options.source, importPaths, signal, emit, run);
           result = imported;
           for (const phase of ["resolve", "download", "analyze"])
             stages[phase] = {
@@ -144,6 +148,13 @@ export function cloudWorkflow(options: {
           stages.publish = { status: "complete", current: published.total, total: published.total };
         }
         // This must be a fresh snapshot AFTER the command, not an overlapping periodic backup.
+        emit({
+          status: "running",
+          phase: "backup",
+          current: 0,
+          total: 1,
+          message: "Saving progress",
+        });
         await options.save();
         process.receipt = { status: "completed", process_id: id, result };
         if (completed) options.progress({ ...completed, stages: structuredClone(stages) });

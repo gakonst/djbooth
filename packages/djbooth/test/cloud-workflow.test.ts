@@ -101,6 +101,38 @@ test("snapshot failure does not acknowledge a completed workflow step", async ()
   expect(result).toMatchObject({ status: "failed", error: "R2 unavailable" });
 });
 
+test("import saves once and acknowledges only after the fresh workflow checkpoint", async () => {
+  const { run } = setup();
+  const legacyCheckpoint = vi.fn(async () => {});
+  let release!: () => void;
+  const save = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const progress = vi.fn();
+  const exec = cloudWorkflow({
+    source: "https://soundcloud.com/artist/sets/list",
+    paths: { ...paths, checkpoint: legacyCheckpoint },
+    signal: new AbortController().signal,
+    save,
+    progress,
+    run,
+  });
+  const pending = await exec({ operation: "start", stage: "import", process_id: "import-1" });
+  await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(legacyCheckpoint).not.toHaveBeenCalled();
+  expect(pending.status).toBe("running");
+  expect(progress.mock.calls.at(-1)?.[0]).toMatchObject({
+    phase: "backup",
+    stages: { analyze: { status: "complete", current: 2, total: 2 } },
+  });
+  release();
+  expect((await exec({ operation: "poll", process_id: "import-1" })).status).toBe("completed");
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
 test("unverified tracklist research cannot advance the pipeline", async () => {
   const { create, run } = setup();
   run.mockResolvedValueOnce({ action: "agent-resolution-required" } as any);
