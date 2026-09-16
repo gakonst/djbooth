@@ -87,6 +87,8 @@ struct StartRequest {
     broadcast_ip: Ipv4Addr,
     unicast_discovery: bool,
     #[serde(default)]
+    stagehand_monitor: bool,
+    #[serde(default)]
     diagnostics: bool,
     #[serde(default)]
     discovery_cache_path: Option<PathBuf>,
@@ -330,6 +332,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                 )?;
             let unicast_discovery_netmask = input.unicast_discovery.then_some(interface.netmask);
             let diagnostics = input.diagnostics;
+            let stagehand_monitor = input.stagehand_monitor;
             let discovery_cache_path = input.discovery_cache_path.clone();
             let library = input.library()?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -357,10 +360,10 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     wire_capture_path: None,
                     serve_extended_anlz_tags: true,
                     emit_beat_clock: false,
-                    stagehand_monitor: false,
+                    stagehand_monitor,
                     stagehand_target_ip: None,
                     stagehand_target_mac: None,
-                    stagehand_session_ip: None,
+                    stagehand_session_ip: stagehand_monitor.then_some(bind_ip),
                     stagehand_session_nonce: None,
                     stagehand_protocol_nonce: None,
                     tcp_track_file_side_channel: false,
@@ -512,6 +515,7 @@ mod tests {
             bind_ip: Ipv4Addr::LOCALHOST,
             broadcast_ip: Ipv4Addr::BROADCAST,
             unicast_discovery: true,
+            stagehand_monitor: false,
             diagnostics: false,
             discovery_cache_path: None,
             tracks: vec![TrackRecord {

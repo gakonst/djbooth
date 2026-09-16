@@ -203,6 +203,7 @@ private actor DJLinkEngine {
         struct Start: Encodable {
             let bindIp, broadcastIp: String
             let unicastDiscovery: Bool
+            let stagehandMonitor: Bool
             let diagnostics: Bool
             let discoveryCachePath: String
             let tracks: [DJLinkLibrary.TrackRow]
@@ -215,6 +216,7 @@ private actor DJLinkEngine {
         #endif
         let data = try JSONEncoder().encode(Start(bindIp: interface.ip, broadcastIp: interface.broadcast,
                                                  unicastDiscovery: unicastDiscovery,
+                                                 stagehandMonitor: !unicastDiscovery,
                                                  diagnostics: diagnostics,
                                                  discoveryCachePath: folder.appendingPathComponent("discovery-peers.json").path,
                                                  tracks: library.tracks, playlists: library.playlists))

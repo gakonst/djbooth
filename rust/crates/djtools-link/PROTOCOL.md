@@ -95,6 +95,32 @@ describes 584-byte `0x58` frames as the likely VU stream, but the local A9 did
 not emit them during active CH1 playback. Their body remains experimental and
 must not be treated as a confirmed Ethernet meter source.
 
+### iPhone transport verification
+
+The phone must call this same Rust Stagehand session and consume
+`subscribe_mixer_telemetry`; Swift does not implement its handshake or decoder.
+The desktop's isolated BPF identity is not available on iOS. The mobile binding
+can select the existing kernel UDP transport using its assigned interface IP.
+
+The 2026-09-16 iPhone 17 Pro test, connected through a CDJ-3000's rear USB port,
+received A9 announcements and on-air packets but no `0x39` control stream.
+Directed Stagehand announcements, the original subnet broadcast handshake, and
+a Stagehand-only limited-broadcast probe all returned zero mixer events. The
+broadcast sends succeeded at the socket API; this does not prove transmission
+on the mixer-facing Ethernet network. Do not call this path hardware-verified
+or replace missing control values with defaults.
+
+That development profile lacked the Multicast Networking entitlement. Apple
+still listed the request as Submitted, and Xcode refused an entitled build.
+A separately copied app, manually development-signed with the entitlement,
+passed local `codesign --verify --deep --strict` but the physical phone rejected
+installation with `ApplicationVerificationFailed` / `0xe8008015` (no valid
+provisioning profile). Sideloading did not bypass profile authorization.
+[Apple requires that entitlement for iOS UDP broadcast/multicast](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+Approval is a prerequisite for testing the supported broadcast path, not proof
+that it will resolve every transport or shared-identity issue. Unicast CDJ
+library sharing remains independent of Stagehand monitoring.
+
 ## UDP/50002 update/status
 
 - `0x05`: media/link query
