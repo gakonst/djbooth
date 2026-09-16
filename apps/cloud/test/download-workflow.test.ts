@@ -114,7 +114,7 @@ test("workflow retries the interrupted stage and carries import evidence into pu
         stages.push(input.stage);
         if (input.stage === "import" && fail) {
           fail = false;
-          return { status: "unknown", process_id: input.process_id };
+          throw new Error("Connection closed: Durable Object restarted");
         }
         if (input.stage === "publish") {
           expect(input.imported).toEqual(imported);
@@ -148,6 +148,8 @@ test("workflow retries the interrupted stage and carries import evidence into pu
     };
     expect(await workflow.run(event, step)).toEqual({ collectionID });
     expect(stages).toEqual(["resolve", "import", "import", "enrich", "publish"]);
+    // An RPC stub stays broken after eviction; every retry needs a fresh stub.
+    expect(env.PLAYLIST_CONTAINERS.getByName).toHaveBeenCalledTimes(7);
   } finally {
     db.close();
   }

@@ -21,7 +21,7 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
   async run(event: WorkflowEvent<DownloadParams>, step: WorkflowStep) {
     const { accountId, id, source } = event.payload;
     const workflowId = event.instanceId;
-    const container = this.env.PLAYLIST_CONTAINERS!.getByName(`${accountId}:${id}`);
+    const workspace = () => this.env.PLAYLIST_CONTAINERS!.getByName(`${accountId}:${id}`);
     const stage = (name: string, imported?: Receipt["result"]) =>
       step.do(
         name,
@@ -30,6 +30,7 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
           timeout: "10 minutes",
         },
         async (context) => {
+          const container = workspace();
           const row = await this.env.LIBRARY_DB.prepare(
             "SELECT status, workflow_id, collection_id, analysis_version FROM import_requests WHERE account_id=? AND id=?",
           )
@@ -83,6 +84,7 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
           timeout: "2 minutes",
         },
         async () => {
+          const container = workspace();
           const row = await this.env.LIBRARY_DB.prepare(
             "SELECT status, workflow_id FROM import_requests WHERE account_id=? AND id=?",
           )
@@ -99,7 +101,7 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
       await stage("enrich");
       const published = await stage("publish", imported);
       await step.do("confirm-publication", async () => {
-        await container.poll();
+        await workspace().poll();
         const row = await this.env.LIBRARY_DB.prepare(
           "SELECT status, collection_id FROM import_requests WHERE account_id=? AND id=? AND workflow_id=?",
         )
