@@ -1050,11 +1050,16 @@ impl DjLinkServer {
         }
 
         let unicast = self.state.config.unicast_discovery_netmask.is_some();
-        let receive_ip = if unicast {
-            self.state.bind_ip
-        } else {
-            Ipv4Addr::UNSPECIFIED
-        };
+        // IP_BOUND_IF confines Apple wildcard listeners to the selected cable.
+        // Directed discovery changes how we send, not which peer announcements
+        // we should receive. Binding our individual IP loses every broadcast
+        // keepalive, leaving additional decks dependent on the fallback scan.
+        let receive_ip =
+            if !unicast || (cfg!(target_vendor = "apple") && self.state.interface_name.is_some()) {
+                Ipv4Addr::UNSPECIFIED
+            } else {
+                self.state.bind_ip
+            };
         let keepalive_sock = bind_udp(
             SocketAddrV4::new(receive_ip, KEEPALIVE_PORT),
             self.state.interface_name.as_deref(),
