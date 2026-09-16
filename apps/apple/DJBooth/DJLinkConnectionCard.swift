@@ -4,8 +4,6 @@ import DJBoothKit
 
 struct DJLinkConnectionCard: View {
     @Bindable var model: BoothModel
-    @State private var showingMixer = true
-    @State private var showingRecording = false
     private var link: DJLinkConnection { model.djLink }
     private var network: Bool { link.cableDetected || link.busy || link.status.running }
     var body: some View {
@@ -28,16 +26,43 @@ struct DJLinkConnectionCard: View {
                 }.buttonStyle(.plain)
                     .accessibilityIdentifier("djlink.connection.card")
                     .accessibilityLabel("\(title). \(detail)")
-                if !link.detectedDecks.isEmpty {
-                    mixerHeader
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        mixerRows
-                    }
-                }
             }.background(BoothStyle.raised, in: RoundedRectangle(cornerRadius: 12))
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(BoothStyle.background)
         }
+    }
+    private var title: String {
+        if !network { return model.usbReading ? "Reading USB library…" : "USB library connected" }
+        if link.error != nil { return "CDJ connection needs attention" }
+        let count = link.status.devices?.filter { (1...6).contains($0.player) }.count ?? 0
+        if count > 0 { return count == 1 ? "CDJ connected" : "\(count) decks connected" }
+        return link.status.running ? "Finding decks…" : "Cable detected"
+    }
+    private var detail: String {
+        if !network { return model.usbDevice?.name ?? "Your USB music is available" }
+        if let error = link.error { return error }
+        if let devices = link.status.devices, !devices.isEmpty {
+            return devices.map { "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
+        }
+        return link.status.running ? "Connecting automatically" : "Starting your CDJ connection…"
+    }
+}
+
+/// Connected equipment extends the existing player footer with more instances
+/// of MobileNowPlaying. Swift only presents Rust's decoded telemetry.
+struct DJLinkPlayerDock: View {
+    @Bindable var model: BoothModel
+    let maximumHeight: CGFloat
+    @State private var showingMixer = true
+    @State private var showingRecording = false
+    private var link: DJLinkConnection { model.djLink }
+    var body: some View {
+        VStack(spacing: 0) {
+            mixerHeader
+            mixerRows
+        }.background(BoothStyle.surface)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("nowPlaying.dock")
     }
     private var mixerHeader: some View {
         HStack {
@@ -63,28 +88,41 @@ struct DJLinkConnectionCard: View {
                     }
                 }
             }
-            Text("Tap CH to match your wiring").foregroundStyle(.secondary)
+            Button {
+                link.showingPhonePlayer.toggle()
+            } label: {
+                Label("iPhone", systemImage: "iphone")
+                    .foregroundStyle(link.showingPhonePlayer ? BoothStyle.accent : .secondary)
+            }.accessibilityIdentifier("nowPlaying.phone.toggle")
         }.boothFont(10, relativeTo: .caption2).buttonStyle(.plain)
             .padding(.horizontal, 14)
     }
     private var mixerRows: some View {
-        let now = ProcessInfo.processInfo.systemUptime
-        let mixer = link.selectedMixer
-        let crossfader = link.mixerPercent("crossfader.position", networkValue: mixer.flatMap { $0.isFresh(at: now) ? $0.event.mixer.crossfader : nil })
-        return VStack(spacing: 4) {
+        VStack(spacing: 4) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
+                    if link.showingPhonePlayer { MobileNowPlaying(model: model) }
                     ForEach(link.detectedDecks) { device in
                         VStack(spacing: 0) {
-                            DJLinkDeckPlayerRow(model: model, device: device,
-                                deck: link.decks.first { $0.id == device.player })
-                            if showingMixer { mixerRow(device, mixer: mixer, now: now) }
+                            MobileNowPlaying(model: model, deckPlayer: device.player)
+                            if showingMixer {
+                                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                                    mixerRow(device, mixer: link.selectedMixer, now: ProcessInfo.processInfo.systemUptime)
+                                }
+                            }
                         }
                     }
                 }
-            }.frame(height: CGFloat(min(link.detectedDecks.count, 2)) * (showingMixer ? 150 : 84))
-                .accessibilityIdentifier("djlink.mixer.rows")
-            if showingMixer {
+            }.frame(height: max(100, maximumHeight - 68))
+                .accessibilityIdentifier("nowPlaying.players")
+            if showingMixer { crossfaderRow }
+        }
+    }
+    private var crossfaderRow: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let now = ProcessInfo.processInfo.systemUptime
+            let mixer = link.selectedMixer
+            let crossfader = link.mixerPercent("crossfader.position", networkValue: mixer.flatMap { $0.isFresh(at: now) ? $0.event.mixer.crossfader : nil })
             HStack(spacing: 8) {
                 Text(!link.midiMixers.isEmpty ? "DJM-A9 · USB MIDI" : mixer == nil ? "Waiting for mixer data" : (mixer?.isFresh(at: now) == true ? "DJM-A9" : "Mixer signal lost"))
                     .foregroundStyle(.secondary)
@@ -100,7 +138,6 @@ struct DJLinkConnectionCard: View {
                     .accessibilityLabel("Crossfader")
                     .accessibilityValue(crossfader.map { "\(Int($0.rounded())) percent from left" } ?? "Unavailable")
             }.boothFont(10, relativeTo: .caption2).padding(.horizontal, 14).padding(.bottom, 10)
-            }
         }
     }
     private func mixerRow(_ device: DJLinkStatus.Device, mixer: DJLinkMixerObservation?, now: TimeInterval) -> some View {
@@ -165,63 +202,6 @@ struct DJLinkConnectionCard: View {
             .accessibilityLabel("Deck \(player) \(label)")
             .accessibilityValue(value.map { "\(Int($0.rounded())) percent" } ?? "Unavailable")
             .accessibilityIdentifier("djlink.mixer.\(player).\(label.lowercased())")
-    }
-    private var title: String {
-        if !network { return model.usbReading ? "Reading USB library…" : "USB library connected" }
-        if link.error != nil { return "CDJ connection needs attention" }
-        let count = link.status.devices?.filter { (1...6).contains($0.player) }.count ?? 0
-        if count > 0 { return count == 1 ? "CDJ connected" : "\(count) decks connected" }
-        return link.status.running ? "Finding decks…" : "Cable detected"
-    }
-    private var detail: String {
-        if !network { return model.usbDevice?.name ?? "Your USB music is available" }
-        if let error = link.error { return error }
-        if let devices = link.status.devices, !devices.isEmpty {
-            return devices.map { "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
-        }
-        return link.status.running ? "Connecting automatically" : "Starting your CDJ connection…"
-    }
-}
-
-/// One normal waveform renderer and cache per deck; no protocol or clock reducer.
-private struct DJLinkDeckPlayerRow: View {
-    @Bindable var model: BoothModel
-    let device: DJLinkStatus.Device
-    let deck: DJLinkDeck?
-    @State private var cache = PlaybackWaveformCache()
-    private var track: Track? { deck?.presentationTrack(in: model.tracksByID) }
-    private var display: PlaybackDisplay { PlaybackDisplay(track: track, deck: deck?.state) }
-    var body: some View {
-        VStack(spacing: 3) {
-            Button {
-                model.djLink.selectedPlayer = device.player
-                model.djLink.showingPhonePlayer = false
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Deck \(device.player)").fontWeight(.semibold)
-                    Text(track?.title ?? (deck == nil ? "Waiting for status" : "No track loaded")).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Text(deck?.state.effective_bpm_hundreds.map { String(format: "%.1f BPM", Double($0) / 100) } ?? "— BPM")
-                    Text(display.key ?? "—").accessibilityHint(display.keyHint)
-                }
-            }.buttonStyle(.plain).accessibilityIdentifier("djlink.deck.select.\(device.player)")
-            if let deck {
-                PlaybackWaveform(player: model.player, display: display, cache: cache,
-                                 accessibilityID: "djlink.deck.waveform.\(device.player)")
-                    .frame(height: 40)
-                HStack {
-                    Text(deck.state.tempo_master ? "MASTER · \(deck.state.play_state.capitalized)" : deck.state.play_state.capitalized)
-                    Spacer()
-                    Text(display.deckPosition.map { (deck.state.playhead_source == "beat_grid" ? "≈" : "") + timeLabel($0) } ?? "—:—")
-                        .accessibilityIdentifier("djlink.deck.elapsed.\(device.player)")
-                    Text("/ " + (display.deckDuration.map(timeLabel) ?? "—:—"))
-                }.foregroundStyle(.secondary)
-            } else {
-                Text("Waiting for deck telemetry").foregroundStyle(.secondary).frame(height: 56)
-            }
-        }.boothFont(10, relativeTo: .caption2).monospacedDigit()
-            .padding(.horizontal, 12).frame(height: 84)
-            .background { PlaybackWaveformLoader(track: track, cache: cache) }
     }
 }
 

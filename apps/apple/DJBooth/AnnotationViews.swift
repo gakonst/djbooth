@@ -112,13 +112,14 @@ struct TrackAnnotationEditor: View {
 struct PlaybackDisplay {
     let track: Track?
     let deck: DJLinkDeckState?
-    var isDeck: Bool { deck != nil }
+    var deckPlayer: Int? = nil
+    var isDeck: Bool { deck != nil || deckPlayer != nil }
     var key: String? { deck?.effective_key ?? track?.key }
     var keyHint: String {
         isDeck && deck?.effective_key == nil && key != nil
             ? "Analyzed track key; live deck key shift is not available yet" : ""
     }
-    var identity: String { "\(deck?.player ?? 0):\(deck?.track_id.map(String.init) ?? track?.id ?? "")" }
+    var identity: String { "\(deck?.player ?? deckPlayer ?? 0):\(deck?.track_id.map(String.init) ?? track?.id ?? "")" }
     var deckDuration: Double? { deck?.track_length_sec.map(Double.init) ?? track?.durationSeconds }
     var deckPosition: Double? {
         if let value = deck?.playhead_ms { return Double(value) / 1000 }
@@ -132,17 +133,23 @@ struct PlaybackDisplay {
 /// Current recording, its queue, and inline annotations stay anchored while browsing.
 struct MobileNowPlaying: View {
     @Bindable var model: BoothModel
+    var deckPlayer: Int? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var noteFocused: Bool
-    private var waveformCache: PlaybackWaveformCache { model.playbackWaveformCache }
+    @State private var deckWaveformCache = PlaybackWaveformCache()
+    private var waveformCache: PlaybackWaveformCache { deckPlayer == nil ? model.playbackWaveformCache : deckWaveformCache }
     @State private var swipeOffset: CGFloat = 0
     @State private var horizontalSwipe: Bool?
     @State private var colorPaletteOpen = false
     private var display: PlaybackDisplay {
         #if os(iOS)
+        if let deckPlayer {
+            let deck = model.djLink.decks.first { $0.id == deckPlayer }
+            return PlaybackDisplay(track: deck?.presentationTrack(in: model.tracksByID), deck: deck?.state, deckPlayer: deckPlayer)
+        }
         if !model.djLink.showingPhonePlayer, model.djLink.status.running, let deck = model.djLink.selectedDeck {
             let track = deck.presentationTrack(in: model.tracksByID)
             return PlaybackDisplay(track: track, deck: deck.state)
@@ -150,7 +157,7 @@ struct MobileNowPlaying: View {
         #endif
         return PlaybackDisplay(track: model.player.track, deck: nil)
     }
-    private var playing: Bool { display.deck?.playing ?? model.player.transportPlaying }
+    private var playing: Bool { display.isDeck ? display.deck?.playing ?? false : model.player.transportPlaying }
     var body: some View {
         let track = display.track
         VStack(spacing: 0) {
@@ -240,12 +247,24 @@ struct MobileNowPlaying: View {
         }.background(BoothStyle.surface)
             .background { PlaybackWaveformLoader(track: track, cache: waveformCache) }
             .overlay(alignment: .top) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
-            .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.bottom")
+            .accessibilityElement(children: .contain).accessibilityIdentifier(deckPlayer.map { "nowPlaying.deck.\($0)" } ?? "nowPlaying.bottom")
             .onChange(of: display.identity) { _, _ in noteFocused = false; colorPaletteOpen = false; swipeOffset = 0; horizontalSwipe = nil }
     }
     @ViewBuilder private var sourceSelector: some View {
         #if os(iOS)
-        if model.djLink.status.running, !model.djLink.decks.isEmpty {
+        if let deckPlayer {
+            HStack {
+                Button {
+                    model.djLink.selectedPlayer = deckPlayer
+                } label: {
+                    Label("Player \(deckPlayer)", systemImage: "opticaldisc")
+                        .boothFont(12, relativeTo: .caption, weight: .semibold).frame(minHeight: 36)
+                }.accessibilityIdentifier("djlink.deck.select.\(deckPlayer)")
+                Spacer()
+                Text(display.deck.map { $0.tempo_master ? "MASTER" : $0.play_state.capitalized } ?? "Waiting for deck status")
+                    .boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
+            }
+        } else if model.djLink.status.running, !model.djLink.decks.isEmpty {
             HStack {
                 Menu {
                     Button("Follow playing deck") {

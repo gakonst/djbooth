@@ -153,10 +153,15 @@ private final class LibrarySplitController: UISplitViewController {
 
 private struct LibraryPlayerFooter: View {
     let model: BoothModel
+    var maximumPlayerHeight: CGFloat = 420
     var body: some View {
         VStack(spacing: 0) {
             PlaylistRemovalNotice(model: model)
-            MobileNowPlaying(model: model)
+            if model.djLink.status.running, !model.djLink.detectedDecks.isEmpty {
+                DJLinkPlayerDock(model: model, maximumHeight: maximumPlayerHeight)
+            } else {
+                MobileNowPlaying(model: model)
+            }
         }.background(BoothStyle.background).tint(BoothStyle.accent).preferredColorScheme(.dark)
     }
 }
@@ -166,6 +171,7 @@ private struct LibraryPlayerFooter: View {
 private final class LibraryNavigationController: UINavigationController {
     private let footer: UIHostingController<LibraryPlayerFooter>
     private var footerBottom: NSLayoutConstraint?
+    private var playerHeight: CGFloat = 420
 
     init(model: BoothModel) {
         footer = UIHostingController(rootView: LibraryPlayerFooter(model: model))
@@ -197,6 +203,12 @@ private final class LibraryNavigationController: UINavigationController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        let availableHeight = view.keyboardLayoutGuide.layoutFrame.minY - view.safeAreaInsets.top
+        let maximumPlayerHeight = max(180, min(540, availableHeight * 0.6))
+        if abs(playerHeight - maximumPlayerHeight) > 1 {
+            playerHeight = maximumPlayerHeight
+            footer.rootView.maximumPlayerHeight = maximumPlayerHeight
+        }
         let bottom = max(0, view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom)
         if footerBottom?.constant != -bottom { footerBottom?.constant = -bottom }
         let height = max(0, view.bounds.maxY - footer.view.frame.minY - bottom)
