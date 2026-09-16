@@ -14,6 +14,7 @@ import DJBoothKit
     var playbackRequested: Bool { wantsToPlay }
     var transportPlaying: Bool { scrubSession == nil ? playing : wantsToPlay }
     var queueIndex = 0
+    private var cloudPlayback: CloudPlayback?
     private var usbPlaybackAccess: USBPlaybackAccess?
     private(set) var timing = PlaybackTiming()
     private(set) var mediaClock = PlaybackMediaClock()
@@ -22,7 +23,17 @@ import DJBoothKit
     var onResumeRequested: (() -> Void)?
     var onPauseRequested: (() -> Void)?
     var onStateChange: ((Bool) -> Void)?
+    private var streamControl: ((String, Double) -> Void)?
+    func attachStream(control: @escaping (String, Double) -> Void) {
+        streamControl = control; preparingItem = false; pendingSeek = nil; wantsToPlay = true; updateNowPlaying()
+    }
+    func updateStream(playing: Bool, elapsed: Double, error: String?) {
+        guard streamControl != nil else { return }
+        self.playing = scrubSession == nil && playing; if scrubSession == nil { self.elapsed = elapsed }; self.error = error
+        updateNowPlaying(); onStateChange?(false)
+    }
     var hasPreparedItem: Bool {
+        if streamControl != nil { return true }
         if preparingItem { return true }
         guard let item = player.currentItem else { return false }
         return item.status != .failed
@@ -73,7 +84,7 @@ import DJBoothKit
         }
         statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, self.streamControl == nil else { return }
                 self.captureCurrentTime()
                 self.playing = self.player.timeControlStatus == .playing
                 PerformanceProbe.playbackState(playing: self.playing, trackID: self.track?.id)
@@ -102,10 +113,11 @@ import DJBoothKit
     func prepare(_ track: Track, url: URL?, queue: [Track], elapsed: Double = 0, autoplay: Bool = false, queueIndex: Int? = nil) {
         PerformanceProbe.event("player_prepare", trackID: track.id)
         seekRevision &+= 1
+        streamControl?("stop", 0); streamControl = nil
         cancelStartingPlayback()
         let generation = UUID(); playbackGeneration = generation
         wantsToPlay = autoplay
-        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
+        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil; pendingSeek = nil; inFlightSeek = nil
         scrubSession = nil; scrubPosition = nil
@@ -116,6 +128,12 @@ import DJBoothKit
         preparingItem = false
         if let url { attach(url: url, autoplay: autoplay) }
         updateNowPlaying(); onStateChange?(true)
+    }
+    func attachCloud(client: CloudClient, hash: String, mediaExtension: String?) {
+        let playback = CloudPlayback(client: client, hash: hash, mediaExtension: mediaExtension)
+        cloudPlayback = playback; wantsToPlay = true; preparingItem = true
+        pendingSeek = elapsed > 0 ? elapsed : nil
+        installItem(asset: playback.asset, generation: playbackGeneration)
     }
     func attachUSB(_ access: USBPlaybackAccess, autoplay: Bool) {
         usbPlaybackAccess = access
@@ -230,6 +248,7 @@ import DJBoothKit
         }
     }
     private func startPlayback() {
+        if let streamControl { if wantsToPlay && scrubSession == nil { streamControl("play", elapsed) }; return }
         guard wantsToPlay, scrubSession == nil else { return }
         #if os(iOS)
         guard audioStartTask == nil else { return }
@@ -262,6 +281,7 @@ import DJBoothKit
     }
     func toggle() { transportPlaying ? pause() : resume() }
     func resume() {
+        if let streamControl { wantsToPlay = true; streamControl("play", elapsed); return }
         PerformanceProbe.playRequested(trackID: track?.id)
         guard hasPreparedItem else { onResumeRequested?(); return }
         wantsToPlay = true
@@ -270,6 +290,7 @@ import DJBoothKit
     }
     func pause() {
         PerformanceProbe.event("player_pause", trackID: track?.id)
+        streamControl?("pause", elapsed)
         cancelStartingPlayback()
         wantsToPlay = false; player.pause(); playing = false
         captureCurrentTime()
@@ -288,6 +309,7 @@ import DJBoothKit
         guard track != nil, duration.isFinite, duration > 0, scrubSession == nil else { return nil }
         let id = UUID(), origin = mediaClock.position()
         scrubSession = (id, origin); scrubPosition = origin; elapsed = origin
+        streamControl?("pause", elapsed)
         cancelStartingPlayback()
         player.pause(); playing = false
         refreshTiming()
@@ -315,22 +337,25 @@ import DJBoothKit
         guard let session = scrubSession, session.id == id else { return }
         scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
         requestSeek(session.origin)
+        if streamControl != nil { startPlayback() }
         updateNowPlaying(); onStateChange?(true)
     }
     private func requestSeek(_ seconds: Double) {
         let position = max(0, duration > 0 ? min(seconds, duration) : seconds)
         elapsed = position
+        if let streamControl { streamControl("seek", position); updateNowPlaying(); return }
         if pendingSeek != nil || hasPreparedItem {
             pendingSeek = position
             if player.currentItem?.status == .readyToPlay { finishPreparing(generation: playbackGeneration) }
         }
     }
     func stop() {
+        streamControl?("stop", 0); streamControl = nil
         cancelStartingPlayback()
         playbackGeneration = UUID(); wantsToPlay = false; pendingSeek = nil
         inFlightSeek = nil; scrubSession = nil; scrubPosition = nil
         seekRevision &+= 1
-        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
+        player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil
         preparingItem = false
@@ -373,7 +398,7 @@ import DJBoothKit
 #if os(iOS)
 /// Audio-session calls may wait on the media server. Serialize them away from UI
 /// updates; AVPlayer itself and its observation remain owned by MainActor.
-private actor PlaybackAudioSession {
+actor PlaybackAudioSession {
     static let shared = PlaybackAudioSession()
     func activate() throws {
         try Task.checkCancellation()

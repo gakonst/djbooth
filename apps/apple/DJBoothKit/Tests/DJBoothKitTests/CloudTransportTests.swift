@@ -69,6 +69,22 @@ private final class RequestLog: @unchecked Sendable {
         await #expect(throws: ClientError.self) { try await client.account() }
     }
 
+    @Test func soundCloudURNIsEncodedOnceAndStreamCarriesAccountGrant() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session)
+        let source = MusicSource(id: "soundcloud:a", provider: "soundcloud", connectionID: "a", accountID: "123", label: "SC")
+        let track = MusicTrack(id: "t", remoteID: "soundcloud:tracks:123", title: "Track", artists: [], durationSeconds: 1, url: "https://soundcloud.com/a/t", available: true)
+        StubProtocol.handler = { request in
+            #expect(request.url?.path == "/v1/music/soundcloud/a/tracks/soundcloud:tracks:123/stream")
+            #expect(request.url?.absoluteString.contains("%25") == false)
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private-test-token")
+            return (200, Data(#"{"url":"https://media.sndcdn.com/audio.m3u8?Policy=signed"}"#.utf8))
+        }
+        #expect(try await client.musicStream(track, source: source).host == "media.sndcdn.com")
+        StubProtocol.handler = { _ in (200, Data(#"{"url":"https://evil.example/audio.m3u8"}"#.utf8)) }
+        await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+    }
+
     @Test func cloudImportsPreserveRequestIdentityAndDecodeProgress() async throws {
         let session = session(); defer { session.invalidateAndCancel() }
         let client = try client(session)

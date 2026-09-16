@@ -1,5 +1,7 @@
 //! In-process C ABI for the Apple app. Requests are ephemeral projections of its
 //! library, not another durable workflow database. All calls run off MainActor.
+mod spotify;
+
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{CStr, CString, c_char};
 use std::net::Ipv4Addr;
@@ -180,6 +182,9 @@ impl StartRequest {
 }
 
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("spotify.") {
+        return spotify::request(operation, input);
+    }
     if operation == "relocateAnalysis" {
         return relocate_analysis(serde_json::from_str(input)?);
     }

@@ -75,6 +75,34 @@ import XCTest
         XCTAssertFalse(app.buttons["connect.agent"].exists)
         capture(app, "Signed out after relaunch")
     }
+    func testConnectedMusicFoldersBrowseAndDownload() throws {
+        guard let _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_fixture")!) else { throw XCTSkip("Start mobile fixture") }
+        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=1")!)
+        defer { _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=0")!) }
+        let app = XCUIApplication()
+        app.launchEnvironment["DJBOOTH_CLOUD_URL"] = "http://127.0.0.1:8791"
+        app.launch()
+        if !app.buttons["connect.login"].exists { openSettings(app) }
+        login("Alice", app)
+        XCTAssertTrue(app.buttons["music.source.Spotify"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["music.source.SoundCloud"].exists)
+        capture(app, "Connected music folders")
+        app.buttons["music.source.Spotify"].tap()
+        XCTAssertTrue(app.buttons["music.playlist.fixture-playlist"].waitForExistence(timeout: 10))
+        app.buttons["music.playlist.fixture-playlist"].tap()
+        XCTAssertTrue(app.staticTexts["Alice streaming track"].waitForExistence(timeout: 10))
+        capture(app, "Spotify metadata without acquisition or analysis")
+        app.buttons["playlist.back"].tap()
+        app.buttons["music.download.fixture-playlist"].tap()
+        XCTAssertTrue(app.staticTexts["Local test import running"].waitForExistence(timeout: 10))
+        capture(app, "Connected playlist in standard download pipeline")
+        app.buttons["import.done"].tap()
+        openSettings(app)
+        app.buttons["connect.logout"].tap()
+        XCTAssertTrue(app.buttons["connect.login"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["music.source.Spotify"].exists)
+    }
+
     private func openSettings(_ app: XCUIApplication) {
         let menu = app.buttons["library.drawer.open"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20)); menu.tap()

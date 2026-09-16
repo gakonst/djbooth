@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { FileSessionStore } from "@gakonst/spots";
@@ -113,12 +113,23 @@ export async function runPlaylistContainer(
         snapshotFailed = true;
       });
     }, 60_000);
+    let providerPlaylistFile: string | undefined;
+    const providerInput = await fetch(`${endpoint}/provider-playlist`, {
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+    });
+    if (providerInput.ok) {
+      const body = await providerInput.text();
+      if (body.length > 8 * 1024 * 1024) throw new Error("Provider playlist input is too large");
+      providerPlaylistFile = "/tmp/provider-playlist.json";
+      await writeFile(providerPlaylistFile, body, { mode: 0o600 });
+    } else if (providerInput.status !== 404) throw new Error("Provider playlist input unavailable");
     let result: ImportProgress;
     try {
       result = await processCloudImport(
         source,
         {
           dbPath,
+          ...(providerPlaylistFile ? { providerPlaylistFile } : {}),
           endpoint,
           token,
           namespace: `cloud:${id}`,

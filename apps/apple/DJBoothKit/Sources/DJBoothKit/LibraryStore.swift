@@ -406,6 +406,12 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
         }
         try persistContext()
     }
+    public func musicCatalog() throws -> MusicCatalog {
+        try localUSBValue("connected-music", id: "catalog", as: MusicCatalog.self) ?? MusicCatalog()
+    }
+    public func saveMusicCatalog(_ value: MusicCatalog) throws {
+        try saveLocalUSB(value, kind: "connected-music", id: "catalog")
+    }
     public func usbDevice() throws -> USBDeviceAccess? {
         try localUSBValue("usb-access", id: "active", as: USBDeviceAccess.self)
     }

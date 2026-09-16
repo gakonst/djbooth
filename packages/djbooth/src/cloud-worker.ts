@@ -169,6 +169,7 @@ export async function processCloudImport(
     namespace: string;
     outputDirectory: string;
     artifactsOnly?: boolean;
+    providerPlaylistFile?: string;
     checkpoint?: () => Promise<void>;
     resolve?: (request: unknown, signal: AbortSignal) => Promise<unknown>;
   },
@@ -202,6 +203,8 @@ export async function processCloudImport(
     "--analysis-threads",
     "2",
   ];
+  if (options.providerPlaylistFile)
+    args.push("--provider-playlist-file", options.providerPlaylistFile);
   const onLine = (line: string) => {
     const update = importProgress(line);
     if (update)

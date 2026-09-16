@@ -215,6 +215,60 @@ public struct CloudClient: Sendable {
         }
         return try await decodeResponse(SyncChange.self, from: checked(data, response))
     }
+    public func mediaChunk(hash: String, offset: Int64? = nil, length: Int = 512 * 1024) async throws -> (Data, Int64, String?) {
+        guard hash.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+              (1...512 * 1024).contains(length), offset == nil || offset! >= 0 else { throw ClientError.invalidMedia }
+        var request = request("v1/media/" + hash, method: offset == nil ? "HEAD" : "GET")
+        if let offset { request.setValue("bytes=\(offset)-\(offset + Int64(length) - 1)", forHTTPHeaderField: "Range") }
+        let (data, response) = try await session.data(for: request)
+        _ = try checked(data, response)
+        guard let http = response as? HTTPURLResponse, data.count <= length else { throw ClientError.invalidMedia }
+        let total: Int64?
+        if let offset {
+            guard http.statusCode == 206, let range = http.value(forHTTPHeaderField: "Content-Range"),
+                  range.hasPrefix("bytes \(offset)-") else { throw ClientError.invalidMedia }
+            total = range.split(separator: "/").last.flatMap { Int64($0) }
+        } else { total = http.value(forHTTPHeaderField: "Content-Length").flatMap(Int64.init) }
+        guard let total, total > 0 else { throw ClientError.invalidMedia }
+        return (data, total, http.value(forHTTPHeaderField: "Content-Type"))
+    }
+    public func musicSources() async throws -> [MusicSource] {
+        struct Page: Decodable, Sendable { let sources: [MusicSource] }
+        let page: Page = try await musicGet("v1/music/sources")
+        return page.sources
+    }
+    public func musicPlaylists(_ source: MusicSource, cursor: String? = nil) async throws -> MusicPlaylistPage {
+        try await musicGet(source.route + "/playlists", cursor: cursor)
+    }
+    public func musicPlaylist(_ playlist: MusicPlaylist, source: MusicSource) async throws -> MusicPlaylistSnapshot {
+        try await musicGet(source.route + "/playlists/" + musicID(playlist.remoteID))
+    }
+    public func musicStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
+        struct Stream: Decodable, Sendable { let url: URL }
+        let stream: Stream = try await musicGet(source.route + "/tracks/" + musicID(track.remoteID) + "/stream")
+        guard stream.url.scheme == "https", stream.url.host?.hasSuffix(".sndcdn.com") == true,
+              stream.url.user == nil, stream.url.password == nil else { throw ClientError.invalidMedia }
+        return stream.url
+    }
+    public func downloadMusicPlaylist(_ playlist: MusicPlaylist, source: MusicSource, id: String) async throws -> CloudImportJob {
+        try await importRequest(source.route + "/playlists/" + musicID(playlist.remoteID) + "/download", body: ["id": id])
+    }
+    private func musicID(_ id: String) throws -> String {
+        guard id.range(of: "^[A-Za-z0-9:_-]+$", options: .regularExpression) != nil else {
+            throw ClientError.http(400, "Invalid music identifier")
+        }
+        // URL.appendingPathComponent performs encoding; pre-encoding would encode '%' twice.
+        return id
+    }
+    private func musicGet<T: Decodable & Sendable>(_ path: String, cursor: String? = nil) async throws -> T {
+        var request = request(path)
+        if let cursor {
+            var url = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
+            url.queryItems = [URLQueryItem(name: "cursor", value: cursor)]; request.url = url.url
+        }
+        let (data, response) = try await session.data(for: request)
+        return try await decodeResponse(T.self, from: checked(data, response))
+    }
     public func imports() async throws -> [CloudImportJob] {
         struct Page: Decodable, Sendable { var jobs: [CloudImportJob] }
         let (data, response) = try await session.data(for: request("v1/imports"))

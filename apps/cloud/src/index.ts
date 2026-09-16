@@ -1,3 +1,4 @@
+import { musicRoute } from "./music.js";
 export { ContainerProxy } from "@cloudflare/containers";
 import type { PlaylistContainer } from "./playlist-container.js";
 export { PlaylistContainer } from "./playlist-container.js";
@@ -729,6 +730,8 @@ export default {
       const account = await authenticate(request, env);
       if (url.pathname === "/v1/migrations/legacy")
         return await migrateLegacy(request, env, account);
+      if (url.pathname.startsWith("/v1/music/"))
+        return await musicRoute(request, env, account, readJSON);
       if (url.pathname.startsWith("/v1/agent/"))
         return await agentRoute(request, env, account, readJSON);
       return await accountFetch(request, env, account);

@@ -13,6 +13,7 @@ const issuerOrigin = "http://127.0.0.1:8792";
 const grant = (who) => `0x${(who === "Alice" ? "1" : "2").repeat(64)}`;
 const token = (who) => (who === "Alice" ? "a" : "b").repeat(43);
 const account = (who) => `nc_${createHash("sha256").update(who).digest("hex")}`;
+let musicEnabled = false;
 const turns = new Map();
 const sockets = new Map();
 const tickets = new Map();
@@ -82,6 +83,47 @@ async function issuer(request) {
       : request.headers.get("authorization") === `Bearer ${token("Bob")}`
         ? "Bob"
         : undefined;
+  if (who && path === "/v1/agent/account-info")
+    return Response.json({
+      connectors: musicEnabled
+        ? {
+            spotify: { connections: [{ id: "spotify-" + who, account_id: who, label: who }] },
+            soundcloud: { connections: [{ id: "soundcloud-" + who, account_id: who, label: who }] },
+          }
+        : {},
+    });
+  if (who && musicEnabled && path.match(/^\/v1\/connectors\/(spotify|soundcloud)\/request$/)) {
+    const body = await request.json();
+    const spotify = path.includes("spotify");
+    if (body.connection_id !== `${spotify ? "spotify" : "soundcloud"}-${who}`)
+      return new Response(null, { status: 403 });
+    const track = {
+      id: "fixture-song",
+      type: "track",
+      name: who + " streaming track",
+      artists: [{ name: "Fixture Artist" }],
+      duration_ms: 120000,
+    };
+    const playlist = { id: "fixture-playlist", name: who + " Spotify set", tracks: { total: 1 } };
+    if (body.path.startsWith("/v1/me/playlists"))
+      return Response.json({ items: [playlist], next: null });
+    if (body.path === "/v1/playlists/fixture-playlist") return Response.json(playlist);
+    if (body.path.startsWith("/v1/playlists/fixture-playlist/items"))
+      return Response.json({ items: [{ item: track }], next: null });
+    if (body.path.startsWith("/me/playlists"))
+      return Response.json({
+        collection: [
+          {
+            urn: "soundcloud:playlists:123",
+            title: who + " SoundCloud set",
+            track_count: 1,
+            permalink_url: "https://soundcloud.com/local-test/sets/" + who.toLowerCase(),
+          },
+        ],
+        next_href: null,
+      });
+    return new Response(null, { status: 404 });
+  }
   if (!who || !path.startsWith(`/v1/grants/${grant(who)}`))
     return new Response(null, { status: 401 });
   if (path === `/v1/grants/${grant(who)}`) return Response.json(wire(who));
@@ -254,6 +296,10 @@ async function serve(port, handler) {
 }
 const app = await serve(8791, async (request) => {
   const path = new URL(request.url).pathname;
+  if (path === "/__mobile_music") {
+    musicEnabled = new URL(request.url).searchParams.get("enabled") === "1";
+    return new Response("ok");
+  }
   if (path === "/__mobile_fixture") return new Response("djbooth-mobile-fixture");
   if (path === "/v1/auth/config")
     return Response.json({ appId: "djbooth", api: issuerOrigin, dialog: `${issuerOrigin}/dialog` });

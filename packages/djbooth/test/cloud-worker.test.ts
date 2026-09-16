@@ -61,12 +61,15 @@ describe("playlist container pipeline", () => {
     const progress = vi.fn();
     const result = await processCloudImport(
       "https://soundcloud.com/artist/sets/list",
-      options,
+      { ...options, providerPlaylistFile: "/tmp/provider-playlist.json" },
       new AbortController().signal,
       progress,
       run,
     );
     expect(run.mock.calls[0]![0]).toContain("import");
+    const inputIndex = run.mock.calls[0]![0].indexOf("--provider-playlist-file");
+    expect(inputIndex).toBeGreaterThan(0);
+    expect(run.mock.calls[0]![0][inputIndex + 1]).toBe("/tmp/provider-playlist.json");
     expect(run.mock.calls[0]![0]).not.toContain("--whole-set");
     expect(run.mock.calls[1]![0]).toEqual([
       "cloud",

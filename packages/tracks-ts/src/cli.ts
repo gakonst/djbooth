@@ -27,6 +27,10 @@ import { parseAgentTracklist, type AgentResolutionRequest } from "./agent-resolu
 import { cacheDigest, type CacheMode } from "./cache.js";
 import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
+import {
+  buildProviderPlaylistManifest,
+  type ProviderPlaylistManifestInput,
+} from "./provider-playlist-manifest.js";
 import { prepareHostedImportSource, type ImportSourceKind } from "./import-source.js";
 import { CachedSpotifyClient } from "./integrations/spotify-cache.js";
 import { RekordboxPipelineStore } from "./pipeline-state.js";
@@ -781,6 +785,12 @@ const setWorkflowArgs = z.object({
     .describe("Spotify/SoundCloud playlist, YouTube/SoundCloud DJ set, or local set"),
 });
 const setWorkflowOptions = z.object({
+  providerPlaylistFile: z
+    .string()
+    .optional()
+    .describe(
+      "Authorized provider playlist metadata snapshot; imported into master.db before acquisition",
+    ),
   wholeSet: z
     .boolean()
     .default(false)
@@ -1074,6 +1084,21 @@ async function runSetWorkflowCommand(
       await stateStore.save(submitted);
       initialState = submitted;
       sourceKind = "dj-set";
+    }
+    if (!initialState && context.options.providerPlaylistFile) {
+      const file = context.options.providerPlaylistFile;
+      if ((await stat(file)).size > 8 * 1024 * 1024)
+        throw new Error("Provider playlist snapshot is too large");
+      const input = JSON.parse(await readFile(file, "utf8")) as ProviderPlaylistManifestInput;
+      if (input.url !== context.args.source || !["spotify", "soundcloud"].includes(input.provider))
+        throw new Error("Provider playlist snapshot does not match this source");
+      const manifest = buildProviderPlaylistManifest(input);
+      manifest.artifacts.root = stateStore.artifactDirectory;
+      manifest.artifacts.downloadDirectory = outputDirectory;
+      delete manifest.artifacts.manifest;
+      await stateStore.save(manifest);
+      initialState = manifest;
+      sourceKind = input.provider === "spotify" ? "spotify-playlist" : "soundcloud-playlist";
     }
     if (!initialState && !isHostedPlaylistCandidate(context.args.source)) {
       const resolved = createManifest(
