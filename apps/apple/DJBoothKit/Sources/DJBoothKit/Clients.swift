@@ -249,20 +249,24 @@ public struct CloudClient: Sendable {
     public func musicPlaylist(_ playlist: MusicPlaylist, source: MusicSource) async throws -> MusicPlaylistSnapshot {
         try await musicGet(source.route + "/playlists/" + musicID(playlist.remoteID))
     }
-    public func musicStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
+    public func invalidateMusicStream(_ track: MusicTrack, source: MusicSource) async {
+        await soundCloudStreams.invalidate(.init(sourceID: source.id, accountID: source.accountID, trackID: track.remoteID))
+    }
+    public func musicStream(_ track: MusicTrack, source: MusicSource, forceRefresh: Bool = false) async throws -> URL {
         guard source.provider == "soundcloud" else { throw ClientError.http(400, "This connection does not provide SoundCloud streams") }
         let key = SoundCloudStreamCache.Key(sourceID: source.id, accountID: source.accountID, trackID: track.remoteID)
+        if forceRefresh { await soundCloudStreams.invalidate(key) }
         return try await soundCloudStreams.value(for: key, load: {
-            try await resolveSoundCloudStream(track, source: source)
+            try await resolveSoundCloudStream(track, source: source, forceRefresh: forceRefresh)
         }, validate: {
             guard try await musicSources().contains(where: { $0.id == source.id && $0.accountID == source.accountID }) else {
                 throw ClientError.http(403, "This SoundCloud connection is no longer approved")
             }
         })
     }
-    private func resolveSoundCloudStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
+    private func resolveSoundCloudStream(_ track: MusicTrack, source: MusicSource, forceRefresh: Bool) async throws -> URL {
         struct Stream: Decodable, Sendable { let url: URL }
-        let stream: Stream = try await musicGet(source.route + "/tracks/" + musicID(track.remoteID) + "/stream")
+        let stream: Stream = try await musicGet(source.route + "/tracks/" + musicID(track.remoteID) + "/stream", forceRefresh: forceRefresh)
         let host = stream.url.host?.lowercased() ?? ""
         let query = URLComponents(url: stream.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let credentialFields = ["oauth_token", "access_token", "refresh_token", "client_secret"]
@@ -285,8 +289,9 @@ public struct CloudClient: Sendable {
         // URL.appendingPathComponent performs encoding; pre-encoding would encode '%' twice.
         return id
     }
-    private func musicGet<T: Decodable & Sendable>(_ path: String, cursor: String? = nil) async throws -> T {
+    private func musicGet<T: Decodable & Sendable>(_ path: String, cursor: String? = nil, forceRefresh: Bool = false) async throws -> T {
         var request = request(path)
+        if forceRefresh { request.setValue("no-cache", forHTTPHeaderField: "Cache-Control"); request.cachePolicy = .reloadIgnoringLocalCacheData }
         if let cursor {
             var url = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
             url.queryItems = [URLQueryItem(name: "cursor", value: cursor)]; request.url = url.url

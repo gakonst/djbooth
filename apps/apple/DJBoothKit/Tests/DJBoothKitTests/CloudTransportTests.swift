@@ -128,6 +128,22 @@ private final class RequestLog: @unchecked Sendable {
         await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
     }
 
+    @Test func soundCloudForcedRefreshBypassesNativeAndServerURLCaches() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session), log = RequestLog()
+        let source = MusicSource(id: "soundcloud:a", provider: "soundcloud", connectionID: "a", accountID: "123", label: "SC")
+        let track = MusicTrack(id: "t", remoteID: "123", title: "Track", artists: [], durationSeconds: 1, url: "https://soundcloud.com/a/t", available: true)
+        StubProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/stream"))
+            let bypass = request.value(forHTTPHeaderField: "Cache-Control") == "no-cache"
+            log.append(bypass ? "fresh" : "initial")
+            return (200, try JSONEncoder().encode(["url": "https://media.sndcdn.com/" + (bypass ? "fresh" : "initial")]))
+        }
+        _ = try await client.musicStream(track, source: source)
+        #expect(try await client.musicStream(track, source: source, forceRefresh: true).lastPathComponent == "fresh")
+        #expect(log.values() == ["initial", "fresh"])
+    }
+
     @Test func soundCloudClientsNeverShareCachedURLsAndFailedLoadsRetry() async throws {
         let session = session(); defer { session.invalidateAndCancel() }
         let first = try client(session), second = try client(session), log = RequestLog()

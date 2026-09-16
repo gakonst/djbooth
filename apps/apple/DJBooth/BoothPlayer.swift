@@ -57,6 +57,8 @@ import DJBoothKit
     private var ended: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var itemObservation: NSKeyValueObservation?
+    private var itemGeneration = UUID()
+    private var streamAuthorizationFailure: (() -> Void)?
     private var bufferObservation: NSKeyValueObservation?
     private var fastStreamStartup = false
     private var playbackGeneration = UUID()
@@ -124,6 +126,7 @@ import DJBoothKit
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil; bufferObservation = nil; fastStreamStartup = false
+        itemGeneration = UUID(); streamAuthorizationFailure = nil
         pendingSeek = nil; inFlightSeek = nil
         scrubSession = nil; scrubPosition = nil
         self.queueIndex = queueIndex.flatMap { queue.indices.contains($0) && queue[$0].id == track.id ? $0 : nil } ?? queue.firstIndex { $0.id == track.id } ?? 0
@@ -146,10 +149,12 @@ import DJBoothKit
     }
     /// Resolve audio for an already-selected recording without resetting its
     /// player state, queue, or any seek made while the file was being located.
-    func attach(url: URL, autoplay: Bool, fastStreamStart: Bool = false) {
+    func attach(url: URL, autoplay: Bool, fastStreamStart: Bool = false, onStreamAuthorizationFailure: (() -> Void)? = nil) {
         guard let track else { return }
         let generation = playbackGeneration
         fastStreamStartup = fastStreamStart
+        let attachment = UUID(); itemGeneration = attachment
+        streamAuthorizationFailure = fastStreamStart ? onStreamAuthorizationFailure : nil
         wantsToPlay = autoplay
         preparingItem = true
         // New items already start at zero. An exact seek forces an unnecessary
@@ -157,7 +162,7 @@ import DJBoothKit
         pendingSeek = self.elapsed > 0 ? self.elapsed : nil
         Task { [weak self] in
             let mime = await AudioFiles.detectPlaybackMIMEType(url: url, mediaExtension: track.mediaExtension)
-            guard let self, self.playbackGeneration == generation else { return }
+            guard let self, self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
             PerformanceProbe.event("player_mime_ready", trackID: track.id)
             let asset = AudioFiles.playbackAsset(url: url, mimeType: mime)
             #if DEBUG
@@ -165,10 +170,10 @@ import DJBoothKit
                 PerformanceProbe.event("player_asset_load_begin", trackID: track.id)
                 do {
                     let (playable, _) = try await asset.load(.isPlayable, .duration)
-                    guard self.playbackGeneration == generation else { return }
+                    guard self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
                     PerformanceProbe.event(playable ? "player_asset_load_ready" : "player_asset_unplayable", trackID: track.id)
                 } catch {
-                    guard self.playbackGeneration == generation else { return }
+                    guard self.playbackGeneration == generation, self.itemGeneration == attachment else { return }
                     PerformanceProbe.event("player_asset_load_failed", trackID: track.id)
                     self.preparingItem = false; self.wantsToPlay = false
                     self.error = error.localizedDescription
@@ -179,7 +184,21 @@ import DJBoothKit
             self.installItem(asset: asset, generation: generation)
         }
     }
+    func failStreamPreparation(_ message: String) {
+        cancelStartingPlayback()
+        itemGeneration = UUID(); streamAuthorizationFailure = nil
+        itemObservation = nil; bufferObservation = nil; fastStreamStartup = false
+        if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
+        preparingItem = false; pendingSeek = nil; inFlightSeek = nil
+        scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
+        wantsToPlay = false; playing = false
+        player.pause(); player.replaceCurrentItem(with: nil)
+        error = message; updateNowPlaying(); onStateChange?(false)
+    }
     private func installItem(asset: AVURLAsset, generation: UUID) {
+        itemObservation = nil; bufferObservation = nil
+        if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
+        let itemID = UUID(); itemGeneration = itemID
         let item = AVPlayerItem(asset: asset)
         if fastStreamStartup {
             // Start a chosen remote track when its first segment arrives. Keep
@@ -188,7 +207,7 @@ import DJBoothKit
             bufferObservation = item.observe(\.isPlaybackBufferEmpty, options: [.initial, .new]) { [weak self] item, _ in
                 let buffered = !item.isPlaybackBufferEmpty
                 Task { @MainActor in
-                    guard let self, buffered, self.playbackGeneration == generation,
+                    guard let self, buffered, self.playbackGeneration == generation, self.itemGeneration == itemID,
                           self.fastStreamStartup, self.player.currentItem?.status == .readyToPlay,
                           self.wantsToPlay, self.pendingSeek == nil, self.scrubSession == nil else { return }
                     self.startPlayback()
@@ -198,10 +217,18 @@ import DJBoothKit
         itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             let failed = item.status == .failed
             let ready = item.status == .readyToPlay
+            let httpStatus = item.errorLog()?.events.last?.errorStatusCode
+            let authorizationFailed = httpStatus == 401 || httpStatus == 403
             let message = item.error?.localizedDescription ?? "This recording could not be played."
             Task { @MainActor in
-                guard let self, self.playbackGeneration == generation else { return }
+                guard let self, self.playbackGeneration == generation, self.itemGeneration == itemID else { return }
                 if failed {
+                    if authorizationFailed, self.wantsToPlay, let retry = self.streamAuthorizationFailure {
+                        self.streamAuthorizationFailure = nil
+                        self.itemGeneration = UUID() // Ignore any other callbacks queued by this failed item.
+                        self.playing = false; self.preparingItem = true; self.error = nil
+                        self.updateNowPlaying(); retry(); return
+                    }
                     self.error = message; self.wantsToPlay = false; self.playing = false
                     self.pendingSeek = nil; self.inFlightSeek = nil
                     self.scrubSession = nil; self.scrubPosition = nil; self.seekRevision &+= 1
@@ -215,7 +242,7 @@ import DJBoothKit
         }
         ended = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.playbackGeneration == generation, self.scrubSession == nil,
+                guard let self, self.playbackGeneration == generation, self.itemGeneration == itemID, self.scrubSession == nil,
                       self.pendingSeek == nil, self.wantsToPlay else { return }
                 let end = self.player.currentItem?.duration.seconds ?? self.duration
                 guard end.isFinite, end > 0, self.player.currentTime().seconds >= end - 0.1 else { return }
@@ -384,6 +411,7 @@ import DJBoothKit
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil; bufferObservation = nil; fastStreamStartup = false
+        itemGeneration = UUID(); streamAuthorizationFailure = nil
         preparingItem = false
         track = nil; queue = []; playing = false; elapsed = 0; duration = 0; error = nil
         timing = PlaybackTiming()
