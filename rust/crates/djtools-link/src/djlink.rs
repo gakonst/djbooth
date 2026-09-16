@@ -545,8 +545,9 @@ impl DjLinkServer {
             .unwrap_or_else(|| default_broadcast_ip(bind_ip));
         if let Some(mask) = config.unicast_discovery_netmask {
             anyhow::ensure!(
-                !config.stagehand_monitor,
-                "Unicast discovery cannot run Stagehand"
+                !config.stagehand_monitor
+                    || config.stagehand_session_ip.is_none_or(|ip| ip == bind_ip),
+                "Unicast Stagehand must use the bound interface address"
             );
             discovery_addresses(bind_ip, mask)?;
         }
@@ -560,24 +561,36 @@ impl DjLinkServer {
         };
         let mac_addr = default_mac(bind_ip);
         // The real Stagehand app is a separate network host. Keep that identity
-        // distinct from the Rekordbox source so peers never see two protocol
-        // personas claiming the same IP address.
+        // distinct from the Rekordbox source on broadcast networks. Kernel-only
+        // unicast uses the real address and separates personas by recipient:
+        // mixers see Stagehand; decks see the Rekordbox library source.
+        // Kernel-only sessions must reuse their protocol identity at the same
+        // real IP. Players can retain the first claim across app restarts.
+        let kernel_identity = (config.unicast_discovery_netmask.is_some()
+            || config.stagehand_session_ip == Some(bind_ip))
+        .then_some(u64::from(u32::from(bind_ip)));
         let stagehand_session_nonce = config.stagehand_monitor.then(|| {
             config
                 .stagehand_session_nonce
+                .or(kernel_identity)
                 .unwrap_or_else(stagehand_launch_nonce)
         });
         let stagehand_protocol_nonce = config.stagehand_monitor.then(|| {
             config
                 .stagehand_protocol_nonce
+                .or(kernel_identity.map(|identity| identity ^ 0x7374_6167_6568_616e))
                 .unwrap_or_else(stagehand_launch_nonce)
         });
         config.stagehand_session_nonce = stagehand_session_nonce;
         config.stagehand_protocol_nonce = stagehand_protocol_nonce;
         let stagehand_ip = config.stagehand_monitor.then(|| {
-            config
-                .stagehand_session_ip
-                .unwrap_or_else(|| isolated_stagehand_ip(bind_ip, stagehand_session_nonce.unwrap()))
+            config.stagehand_session_ip.unwrap_or_else(|| {
+                if config.unicast_discovery_netmask.is_some() {
+                    bind_ip
+                } else {
+                    isolated_stagehand_ip(bind_ip, stagehand_session_nonce.unwrap())
+                }
+            })
         });
         config.stagehand_session_ip = stagehand_ip;
         let stagehand_link_mac = stagehand_session_nonce.map(|nonce| {
@@ -1227,10 +1240,19 @@ impl DjLinkServer {
                 self.tasks
                     .push(spawn_stagehand_raw_rx(self.state.clone(), raw_rx));
             }
-            self.tasks.push(spawn_stagehand_announce(
-                self.state.clone(),
-                keepalive_sock.clone(),
-            ));
+            self.tasks.push(if unicast {
+                spawn_unicast_stagehand(
+                    self.state.clone(),
+                    keepalive_sock.clone(),
+                    status_sock.clone(),
+                )
+            } else {
+                spawn_stagehand_announce(
+                    self.state.clone(),
+                    keepalive_sock.clone(),
+                    status_sock.clone(),
+                )
+            });
         }
         self.tasks
             .push(spawn_link_init(self.state.clone(), status_sock.clone()));
@@ -4854,6 +4876,8 @@ fn parse_cdj_position(packet: &[u8]) -> Option<CdjPositionSnapshot> {
     if packet.len() < 0x3c
         || &packet[..10] != DJLINK_MAGIC
         || packet[10] != BEAT_TYPE_PRECISE_POSITION
+        // Stagehand reuses 0x0b for a different multiplexed telemetry layout.
+        || stagehand::peer_marker(packet).is_some()
     {
         return None;
     }
@@ -5311,6 +5335,10 @@ fn spawn_keepalive_rx(
                     || keepalive_header
                         .as_ref()
                         .is_some_and(|header| header.model.eq_ignore_ascii_case("DJM-A9")));
+            if is_stagehand_target && let Some(mut device) = parse_keepalive_device(packet) {
+                device.ip_addr = src_ip;
+                state.record_device(device).await;
+            }
             // A9 Stagehand endpoints are sensitive to the normal virtual-CDJ
             // collision protocol. They must see only the abbreviated Stagehand
             // handshake, never our Rekordbox source's compatibility replies.
@@ -5539,12 +5567,33 @@ fn spawn_unicast_discovery(
                 cursor = if end == addresses.len() { 0 } else { end };
             }
             for ip in targets {
+                if state.config.stagehand_monitor
+                    && devices
+                        .iter()
+                        .any(|device| device.ip_addr == ip && is_stagehand_mixer(device))
+                {
+                    continue;
+                }
+                // A neighbour/cache hint is not yet a CDJ. Advertising our
+                // Rekordbox identity here can bind an A9 to the wrong persona
+                // before its first announcement arrives. Probe with link-init;
+                // spawn_announce sends keepalives only after identification.
+                if !state.config.stagehand_monitor {
+                    let _ = send_udp_packet(
+                        &state,
+                        &keepalive,
+                        &hello,
+                        SocketAddrV4::new(ip, KEEPALIVE_PORT),
+                        "unicast discovery hello",
+                    )
+                    .await;
+                }
                 if let Err(error) = send_udp_packet(
                     &state,
-                    &keepalive,
-                    &hello,
-                    SocketAddrV4::new(ip, KEEPALIVE_PORT),
-                    "unicast discovery hello",
+                    &status,
+                    &init,
+                    SocketAddrV4::new(ip, STATUS_PORT),
+                    "unicast discovery link-init",
                 )
                 .await
                     && !reported_send_error
@@ -5552,14 +5601,6 @@ fn spawn_unicast_discovery(
                     reported_send_error = true;
                     tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
                 }
-                let _ = send_udp_packet(
-                    &state,
-                    &status,
-                    &init,
-                    SocketAddrV4::new(ip, STATUS_PORT),
-                    "unicast discovery link-init",
-                )
-                .await;
             }
             tick = tick.wrapping_add(1);
         }
@@ -5623,6 +5664,7 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
                     .devices_sorted()
                     .await
                     .into_iter()
+                    .filter(|device| !state.config.stagehand_monitor || !is_stagehand_mixer(device))
                     .map(|device| SocketAddrV4::new(device.ip_addr, KEEPALIVE_PORT))
                     .collect()
             } else if state.config.stagehand_monitor {
@@ -5647,95 +5689,226 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
     })
 }
 
-fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
-    tokio::spawn(async move {
-        const MODEL: &str = "Stagehand";
-        const REJOIN_AFTER_MS: u64 = 10_000;
-        const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
-        let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
-        let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
-        let link_mac = match parse_mac(&state.mac_addr) {
-            Ok(mac) => mac,
-            Err(err) => {
-                warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
-                return;
-            }
+fn is_stagehand_mixer(device: &LinkDevice) -> bool {
+    device.model.eq_ignore_ascii_case("DJM-A9")
+}
+
+fn stagehand_heartbeat_for_device(state: &ServerState, device: &LinkDevice) -> Option<Vec<u8>> {
+    if device.ip_addr == state.bind_ip || Some(device.ip_addr) == state.stagehand_ip {
+        return None;
+    }
+    if is_stagehand_mixer(device) {
+        return Some(stagehand::build_mixer_heartbeat());
+    }
+    // A kernel-only mobile session shares its IP with the Rekordbox source.
+    // Keep the CDJs on that persona; only the mixer gets the Stagehand session.
+    if state.stagehand_ip.is_some_and(|ip| ip != state.bind_ip)
+        && (1..=6).contains(&device.player_number)
+        && device.model.eq_ignore_ascii_case("CDJ-3000")
+    {
+        return Some(stagehand::build_player_heartbeat());
+    }
+    None
+}
+
+async fn send_stagehand_heartbeats(state: &ServerState, sock: &UdpSocket, target: Ipv4Addr) {
+    for device in state.devices_sorted().await {
+        if state.config.unicast_discovery_netmask.is_some() && device.ip_addr != target {
+            continue;
+        }
+        let Some(packet) = stagehand_heartbeat_for_device(state, &device) else {
+            continue;
         };
-        // AlphaTheta Connect generates both values once per Stagehand app
-        // launch. The supervising process may restart this native worker, so
-        // keep using the parent-owned launch identity across worker lifetimes.
-        let launch_nonce = state
-            .config
-            .stagehand_protocol_nonce
-            .unwrap_or_else(stagehand_launch_nonce);
-        let mac = stagehand::protocol_mac(link_mac, launch_nonce);
-        let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
+        let result = if let Some(ip) = state.stagehand_ip.filter(|ip| *ip != state.bind_ip) {
+            match parse_mac(&device.mac_addr) {
+                Ok(mac) => {
+                    state
+                        .raw_udp
+                        .send(RawUdpDatagram {
+                            src_mac: state.stagehand_link_mac.expect("isolated Stagehand MAC"),
+                            dst_mac: mac,
+                            src_ip: ip,
+                            src_port: STATUS_PORT,
+                            dst_ip: device.ip_addr,
+                            dst_port: STATUS_PORT,
+                            payload: packet,
+                        })
+                        .await
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            send_udp_packet(
+                state,
+                sock,
+                &packet,
+                SocketAddrV4::new(device.ip_addr, STATUS_PORT),
+                "stagehand heartbeat",
+            )
+            .await
+            .map(|_| ())
+        };
+        if let Err(error) = result {
+            debug!(target: "djtools_link::stagehand", ip = %device.ip_addr, %error, "stagehand_heartbeat_failed");
+        }
+    }
+}
 
-        send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-
-        tracing::info!(
-            target: "djtools_link::stagehand",
-            runtime_number,
-            ip = %stagehand_ip,
-            link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
-            protocol_mac = %format_mac(mac),
-            "stagehand_joined"
-        );
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
-        let mut last_join_ms = epoch_millis();
-        let mut quiet_since_ms = None;
+// Each mixer gets the existing Rust Stagehand session over ordinary UDP. No
+// alias, raw socket or broadcast is needed; no deck sees this second persona.
+fn spawn_unicast_stagehand(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+) -> TokioJoinHandle<()> {
+    tokio::spawn(async move {
+        let mut sessions = tokio::task::JoinSet::new();
+        let mut joined = BTreeMap::<Ipv4Addr, tokio::task::AbortHandle>::new();
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
-            let now_ms = epoch_millis();
-            let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
-            if let Some(reason) = stagehand_rejoin_reason(
-                now_ms,
-                last_a9_ms,
-                last_join_ms,
-                requested_rejoin_ms,
-                handled_rejoin_ms,
-                REJOIN_AFTER_MS,
-            ) {
-                if reason == "peer-request" {
-                    tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
-                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-                    last_join_ms = epoch_millis();
-                    handled_rejoin_ms = requested_rejoin_ms;
-                    quiet_since_ms = None;
-                    continue;
+            let peers = state
+                .devices_sorted()
+                .await
+                .into_iter()
+                .filter(is_stagehand_mixer)
+                .map(|device| device.ip_addr)
+                .collect::<BTreeSet<_>>();
+            joined.retain(|ip, task| {
+                if peers.contains(ip) && !task.is_finished() {
+                    true
+                } else {
+                    task.abort();
+                    false
                 }
-                if quiet_since_ms.is_none() {
-                    tracing::info!(
-                        target: "djtools_link::stagehand",
-                        quiet_ms = QUIET_BEFORE_REJOIN_MS,
-                        "stagehand_rejoin_quiet"
-                    );
-                    quiet_since_ms = Some(now_ms);
-                }
-            }
-            if let Some(quiet_started_ms) = quiet_since_ms {
-                if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
-                    tracing::info!(
-                        target: "djtools_link::stagehand",
-                        reason = "peer-silent",
-                        "stagehand_rejoining"
-                    );
-                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-                    last_join_ms = epoch_millis();
-                    quiet_since_ms = None;
-                }
-                continue;
-            }
-            let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
-            if let Err(err) =
-                send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
-            {
-                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
+            });
+            while sessions.try_join_next().is_some() {}
+            for ip in peers {
+                joined.entry(ip).or_insert_with(|| {
+                    sessions.spawn(run_stagehand_announce(
+                        state.clone(),
+                        sock.clone(),
+                        status_sock.clone(),
+                        SocketAddrV4::new(ip, KEEPALIVE_PORT),
+                    ))
+                });
             }
         }
     })
+}
+
+fn spawn_stagehand_announce(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+) -> TokioJoinHandle<()> {
+    let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
+    tokio::spawn(run_stagehand_announce(state, sock, status_sock, target))
+}
+
+async fn run_stagehand_announce(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+    target: SocketAddrV4,
+) {
+    const MODEL: &str = "Stagehand";
+    const REJOIN_AFTER_MS: u64 = 10_000;
+    const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
+    let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
+    let link_mac = match parse_mac(&state.mac_addr) {
+        Ok(mac) => mac,
+        Err(err) => {
+            warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
+            return;
+        }
+    };
+    // AlphaTheta Connect generates both values once per Stagehand app
+    // launch. The supervising process may restart this native worker, so
+    // keep using the parent-owned launch identity across worker lifetimes.
+    let launch_nonce = state
+        .config
+        .stagehand_protocol_nonce
+        .unwrap_or_else(stagehand_launch_nonce);
+    let mac = stagehand::protocol_mac(link_mac, launch_nonce);
+    let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
+
+    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+
+    tracing::info!(
+        target: "djtools_link::stagehand",
+        runtime_number,
+        ip = %stagehand_ip,
+        link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
+        protocol_mac = %format_mac(mac),
+        "stagehand_joined"
+    );
+    let mut interval = tokio::time::interval(Duration::from_millis(250));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut next_keepalive = tokio::time::Instant::now();
+    let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+    let mut last_join_ms = epoch_millis();
+    let mut quiet_since_ms = None;
+    loop {
+        interval.tick().await;
+        let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+        let now_ms = epoch_millis();
+        let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
+        if let Some(reason) = stagehand_rejoin_reason(
+            now_ms,
+            last_a9_ms,
+            last_join_ms,
+            requested_rejoin_ms,
+            handled_rejoin_ms,
+            REJOIN_AFTER_MS,
+        ) {
+            if reason == "peer-request" {
+                tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
+                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                last_join_ms = epoch_millis();
+                handled_rejoin_ms = requested_rejoin_ms;
+                quiet_since_ms = None;
+                next_keepalive = tokio::time::Instant::now();
+                continue;
+            }
+            if quiet_since_ms.is_none() {
+                tracing::info!(
+                    target: "djtools_link::stagehand",
+                    quiet_ms = QUIET_BEFORE_REJOIN_MS,
+                    "stagehand_rejoin_quiet"
+                );
+                quiet_since_ms = Some(now_ms);
+            }
+        }
+        if let Some(quiet_started_ms) = quiet_since_ms {
+            if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
+                tracing::info!(
+                    target: "djtools_link::stagehand",
+                    reason = "peer-silent",
+                    "stagehand_rejoining"
+                );
+                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                last_join_ms = epoch_millis();
+                quiet_since_ms = None;
+                next_keepalive = tokio::time::Instant::now();
+            }
+            continue;
+        }
+        // Pause both status heartbeats and presence during peer expiry. Sending
+        // either from a separate task would keep the stale session alive.
+        send_stagehand_heartbeats(&state, &status_sock, *target.ip()).await;
+        if tokio::time::Instant::now() < next_keepalive {
+            continue;
+        }
+        next_keepalive = tokio::time::Instant::now() + Duration::from_secs(2);
+        let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
+        if let Err(err) =
+            send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
+        {
+            debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
+        }
+    }
 }
 
 fn stagehand_rejoin_reason(
@@ -5884,8 +6057,8 @@ async fn send_stagehand_packet(
         );
         return Ok(packet.len());
     }
-    // The real Stagehand client sends one subnet broadcast per frame. Some
-    // mixers stop responding when the same identity arrives again by unicast.
+    // Use the selected transport once per frame. Do not duplicate broadcast
+    // presence by unicast; mobile's directed-only session selects its peer here.
     send_udp_packet(state, sock, packet, broadcast_target, context).await
 }
 
@@ -9844,7 +10017,10 @@ fn cue_points_ext_from_pco2_tag(tag: &[u8]) -> Option<CuePointsExt> {
     let mut entries = Vec::new();
     let mut offset = header_len;
     let mut count = 0usize;
-    while offset + 16 <= tag_len && count < declared_count {
+    for _ in 0..declared_count {
+        if offset + 16 > tag_len {
+            return None;
+        }
         if tag.get(offset..offset + 4)? != b"PCP2" {
             return None;
         }
@@ -9902,7 +10078,10 @@ fn nexus_cue_entries_from_pcob_tag(tag: &[u8]) -> Option<(u32, Vec<u8>, u32)> {
     let mut entries = Vec::new();
     let mut offset = 24usize;
     let mut count = 0usize;
-    while offset + 40 <= tag_len && count < declared_count {
+    for _ in 0..declared_count {
+        if offset + 40 > tag_len {
+            return None;
+        }
         if tag.get(offset..offset + 4)? != b"PCPT" {
             return None;
         }
@@ -10338,6 +10517,15 @@ async fn send_load_settings_packet(
 }
 
 async fn send_link_init_once(state: &ServerState, sock: &UdpSocket, ip: Ipv4Addr, context: &str) {
+    if state.config.stagehand_monitor
+        && state
+            .device_for_ip(ip)
+            .await
+            .as_ref()
+            .is_some_and(is_stagehand_mixer)
+    {
+        return;
+    }
     if !state.should_send_link_init(ip).await {
         return;
     }
@@ -10376,6 +10564,7 @@ async fn send_regular_djlink_packet(
             .devices_sorted()
             .await
             .into_iter()
+            .filter(|device| !state.config.stagehand_monitor || !is_stagehand_mixer(device))
             .map(|device| SocketAddrV4::new(device.ip_addr, port))
             .collect()
     } else if state.config.stagehand_monitor {
@@ -10402,6 +10591,155 @@ async fn send_regular_djlink_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn kernel_stagehand_identity_survives_server_recreation() {
+        let config = || DjLinkConfig {
+            bind_ip: Some(Ipv4Addr::LOCALHOST),
+            broadcast_ip: Some(Ipv4Addr::new(127, 0, 0, 255)),
+            unicast_discovery_netmask: Some(Ipv4Addr::new(255, 255, 255, 0)),
+            stagehand_monitor: true,
+            ..Default::default()
+        };
+        let library = (*test_state().library).clone();
+        let first = DjLinkServer::new(config(), library.clone()).await.unwrap();
+        let second = DjLinkServer::new(config(), library).await.unwrap();
+        assert_eq!(first.stagehand_session_ip(), Some(Ipv4Addr::LOCALHOST));
+        assert_eq!(
+            first.stagehand_session_nonce(),
+            second.stagehand_session_nonce()
+        );
+        assert_eq!(
+            first.stagehand_protocol_nonce(),
+            second.stagehand_protocol_nonce()
+        );
+        assert_ne!(
+            first.stagehand_session_nonce(),
+            first.stagehand_protocol_nonce()
+        );
+    }
+
+    #[test]
+    fn stagehand_heartbeats_do_not_replace_the_mobile_library_persona() {
+        let mut state = test_state();
+        state.stagehand_ip = Some(state.bind_ip);
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        let mut device = LinkDevice {
+            player_number: 33,
+            ip_addr: Ipv4Addr::new(169, 254, 69, 43),
+            mac_addr: String::new(),
+            model: "DJM-A9".into(),
+            last_seen: Instant::now(),
+        };
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_mixer_heartbeat())
+        );
+        device.player_number = 1;
+        device.model = "CDJ-3000".into();
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        state.config.unicast_discovery_netmask = None;
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        state.stagehand_ip = Some(Ipv4Addr::new(169, 254, 85, 94));
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
+        device.model = "rekordbox".into();
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        device.model = "DJM-A9".into();
+        device.ip_addr = state.bind_ip;
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+    }
+
+    #[tokio::test]
+    async fn unicast_stagehand_uses_the_shared_handshake_on_kernel_udp() {
+        let mut state = test_state();
+        state.broadcast_ip = Ipv4Addr::BROADCAST;
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        state.config.stagehand_monitor = true;
+        state.config.stagehand_protocol_nonce = Some(42);
+        state.stagehand_ip = Some(state.bind_ip);
+        let state = Arc::new(state);
+        let sender = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(target) = receiver.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let mac = stagehand::protocol_mac(parse_mac(&state.mac_addr).unwrap(), 42);
+        let task = tokio::spawn(run_stagehand_announce(
+            state.clone(),
+            sender.clone(),
+            sender.clone(),
+            target,
+        ));
+        let mut expected = vec![stagehand::build_announcement("Stagehand"); 3];
+        expected.extend(
+            (1..=3).map(|iteration| {
+                stagehand::build_claim("Stagehand", state.bind_ip, mac, iteration)
+            }),
+        );
+        expected.push(stagehand::build_keepalive(
+            "Stagehand",
+            141 + (42u64.rotate_right(17) % 71) as u8,
+            state.bind_ip,
+            mac,
+            1,
+        ));
+        for packet in expected {
+            let mut bytes = [0; 1024];
+            let (length, source) =
+                tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                &bytes[..length],
+                packet,
+                "mobile must use the desktop wire contract"
+            );
+            assert_eq!(source, sender.local_addr().unwrap());
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn unicast_mixer_never_receives_the_rekordbox_persona() {
+        let mut state = test_state();
+        state.broadcast_ip = Ipv4Addr::BROADCAST;
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        state.config.stagehand_monitor = true;
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let mut peer = LinkDevice {
+            player_number: 33,
+            ip_addr: Ipv4Addr::LOCALHOST,
+            mac_addr: String::new(),
+            model: "DJM-A9".into(),
+            last_seen: Instant::now(),
+        };
+        state.record_device(peer.clone()).await;
+        let packet = build_status_link_init("rekordbox", REKORDBOX_PLAYER_NUMBER);
+        send_regular_djlink_packet(&state, &sender, &packet, port, "test").await;
+        let mut bytes = [0; 1024];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), receiver.recv_from(&mut bytes))
+                .await
+                .is_err()
+        );
+        peer.player_number = 1;
+        peer.model = "CDJ-3000".into();
+        state.record_device(peer).await;
+        send_regular_djlink_packet(&state, &sender, &packet, port, "test").await;
+        let (length, _) =
+            tokio::time::timeout(Duration::from_secs(1), receiver.recv_from(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(&bytes[..length], packet);
+    }
 
     #[test]
     fn unicast_recovery_retries_lost_decks_without_inventing_devices() {
@@ -11782,6 +12120,38 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
+    fn cue_conversion_counts_skipped_entries_and_rejects_truncation() {
+        let mut extended = Vec::from(&b"PCO2"[..]);
+        let skipped = test_pcp2_entry(0, 0, 0, 0, 0);
+        let valid = test_pcp2_entry(1, 1, 1_000, 0, 0);
+        extended.extend_from_slice(&20u32.to_be_bytes());
+        extended.extend_from_slice(&((20 + skipped.len() + valid.len()) as u32).to_be_bytes());
+        extended.extend_from_slice(&0u32.to_be_bytes());
+        extended.extend_from_slice(&1u16.to_be_bytes());
+        extended.extend_from_slice(&0u16.to_be_bytes());
+        extended.extend_from_slice(&skipped);
+        extended.extend_from_slice(&valid);
+        // The valid trailing entry is outside the declared array. Skipping the
+        // first entry must not pull it into the response.
+        let converted = cue_points_ext_from_pco2_tag(&extended).unwrap();
+        assert_eq!(converted.entry_count, 0);
+        assert!(converted.entries.is_empty());
+        extended[16..18].copy_from_slice(&3u16.to_be_bytes());
+        assert!(cue_points_ext_from_pco2_tag(&extended).is_none());
+
+        let mut nexus = test_pcob_tag(
+            1,
+            &[test_pcpt_entry(0, 0, 0, 0), test_pcpt_entry(1, 1, 1_000, 0)],
+        );
+        nexus[18..20].copy_from_slice(&1u16.to_be_bytes());
+        let (_, entries, count) = nexus_cue_entries_from_pcob_tag(&nexus).unwrap();
+        assert_eq!(count, 0);
+        assert!(entries.is_empty());
+        nexus[18..20].copy_from_slice(&3u16.to_be_bytes());
+        assert!(nexus_cue_entries_from_pcob_tag(&nexus).is_none());
+    }
+
+    #[test]
     fn db_cue_points_response_uses_native_nexus_two_blob_shape() {
         let first = vec![0x11; 36];
         let second = vec![0x22; 72];
@@ -12235,7 +12605,8 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         packet[0x8b] = 0x7a;
         packet[0x8c..0x90].copy_from_slice(&0x0010_8000u32.to_be_bytes());
         packet[0x92..0x94].copy_from_slice(&12_200u16.to_be_bytes());
-        packet[0x98..0x9c].copy_from_slice(&0x0010_8000u32.to_be_bytes());
+        // A synced deck can have a different local slider and effective pitch.
+        packet[0x98..0x9c].copy_from_slice(&0x000f_0000u32.to_be_bytes());
         packet[0x9d] = 0x09;
         packet[0x9e] = 1;
         packet[0x9f] = 0xff;
@@ -12269,6 +12640,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(status.buffer_forward, Some(0x44));
         assert_eq!(status.buffer_back, Some(0x11));
         assert_eq!(pitch_percent(status.pitch_1), 3.125);
+        assert_eq!(pitch_percent(status.pitch_2), -6.25);
         assert_eq!(
             effective_bpm_hundreds(status.bpm_hundreds, status.pitch_1),
             Some(12_581)
@@ -13078,6 +13450,11 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(position.effective_bpm_tenths, 1_202);
         assert!(position.summary().contains("pitch=3.26%"));
         assert!(position.summary().contains("effective_bpm=120.2"));
+
+        // Stagehand multiplex telemetry reuses type 0x0b but has another body.
+        packet.resize(68, 0);
+        packet[0x1e] = 0x3a;
+        assert!(parse_cdj_position(&packet).is_none());
     }
 
     #[test]
@@ -15222,6 +15599,7 @@ notes: []
         let mut packet = vec![0u8; 266];
         packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
         packet[0x0a] = 0x39;
+        packet[0x0b..0x11].copy_from_slice(b"DJM-A9");
         packet[0x1e] = 0x3a;
         for index in 0..4 {
             let offset = 36 + index * 24;
@@ -15251,6 +15629,7 @@ notes: []
         let mut packet = vec![0u8; 584];
         packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
         packet[0x0a] = 0x58;
+        packet[0x0b..0x11].copy_from_slice(b"DJM-A9");
         packet[0x1e] = 0x3a;
         for channel in 1u8..=4 {
             let offset = 44 + usize::from(channel - 1) * 60;

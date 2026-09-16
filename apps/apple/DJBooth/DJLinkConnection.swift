@@ -216,7 +216,7 @@ private actor DJLinkEngine {
         #endif
         let data = try JSONEncoder().encode(Start(bindIp: interface.ip, broadcastIp: interface.broadcast,
                                                  unicastDiscovery: unicastDiscovery,
-                                                 stagehandMonitor: !unicastDiscovery,
+                                                 stagehandMonitor: true,
                                                  diagnostics: diagnostics,
                                                  discoveryCachePath: folder.appendingPathComponent("discovery-peers.json").path,
                                                  tracks: library.tracks, playlists: library.playlists))

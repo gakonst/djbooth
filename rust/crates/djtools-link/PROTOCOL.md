@@ -8,7 +8,7 @@ cross-checks.
 
 1. Local CDJ-3000 pcaps and Rekordbox traces.
 2. Deep Symmetry packet analysis and Beat Link source.
-3. `prolink-connect` source.
+3. `alphatheta-connect` / `prolink-connect` source and their attributed fixtures.
 4. Hypotheses, explicitly marked and excluded from safe defaults.
 
 Pinned upstream revisions:
@@ -18,7 +18,7 @@ Pinned upstream revisions:
 - Deep Symmetry Dysentery:
   `f62a24ba947f9db4c1553bb2dc3ba76de1fecbb4`
 - alphatheta-connect:
-  `ba142bfd762bd5249c158121a8cb92b242e76172`
+  `cee99ae61572eef513e52a90961cfdc48944eb8a` (v0.26.1)
 - prolink-connect:
   `4eda63b94454635a88469de297d7a514520b965a`
 
@@ -89,6 +89,14 @@ before the full claim sequence is replayed, matching the fresh-launch behavior
 the A9 accepts. This is lifecycle state in parent memory, not library or
 workflow state.
 
+Status-port heartbeats are separate from those presence packets. The pinned
+alphatheta-connect revision adds captured Stagehand `0x3a` mixer and `0x68`
+player payloads sent from UDP/50002 to UDP/50002 every 250 ms. Our shared Rust
+session now sends these after claiming its identity, and pauses both presence
+and heartbeats during the ten-second peer-expiry interval. Byte tests compare
+against the upstream capture fixtures. This is upstream capture evidence;
+the new phone path still needs a local A9 control-stream observation.
+
 A live DJM-A9 capture verified 266-byte `0x39` control frames and the decoded
 trim, EQ, Color FX, fader, assignment, and crossfader fields. Deep Symmetry
 describes 584-byte `0x58` frames as the likely VU stream, but the local A9 did
@@ -102,13 +110,30 @@ The phone must call this same Rust Stagehand session and consume
 The desktop's isolated BPF identity is not available on iOS. The mobile binding
 can select the existing kernel UDP transport using its assigned interface IP.
 
-The 2026-09-16 iPhone 17 Pro test, connected through a CDJ-3000's rear USB port,
+The initial 2026-09-16 iPhone 17 Pro test, connected through a CDJ-3000's rear USB port,
 received A9 announcements and on-air packets but no `0x39` control stream.
 Directed Stagehand announcements, the original subnet broadcast handshake, and
 a Stagehand-only limited-broadcast probe all returned zero mixer events. The
 broadcast sends succeeded at the socket API; this does not prove transmission
 on the mixer-facing Ethernet network. Do not call this path hardware-verified
 or replace missing control values with defaults.
+
+Those probes preceded the status-port heartbeat addition. The new phone-only
+candidate uses directed Stagehand claims and heartbeats to discovered A9s,
+with the assigned interface IP and a deterministic protocol identity at that
+IP. CDJs continue to receive the Rekordbox library identity; no player heartbeat
+is sent from the shared phone address. Unknown-peer probes use link-init before
+choosing an identity. This route uses ordinary unicast UDP, needs no Mac relay
+or mixer USB connection, and Swift only enables the existing Rust session.
+After unlocking, the unicast build discovered both CDJs in 0.52 seconds and
+the A9 in 1.31 seconds after sharing started. A 69-second app transport capture
+records 122 outgoing `0x3a` heartbeats from `169.254.150.65:50002` to
+`169.254.69.43:50002`, with a median 250 ms interval outside rejoin pauses.
+The A9 sent 35 ordinary keepalives and 231 on-air packets, but no paired
+keepalive, `0x39`, or `0x58`. A separate mixer subscription also returned zero
+events. The heartbeat addition alone did not fix A9 monitoring through this
+CDJ USB connection. Socket-level TX evidence does not establish delivery on
+the mixer-facing Ethernet segment.
 
 That development profile lacked the Multicast Networking entitlement. Apple
 still listed the request as Submitted, and Xcode refused an entitled build.
@@ -120,6 +145,58 @@ provisioning profile). Sideloading did not bypass profile authorization.
 Approval is a prerequisite for testing the supported broadcast path, not proof
 that it will resolve every transport or shared-identity issue. Unicast CDJ
 library sharing remains independent of Stagehand monitoring.
+
+A second phone-only experiment tested the SDK compatibility exception in
+[Apple XNU's multicast check](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/net/necp.c#L7727).
+A separate development-signed copy reported SDK 13.7 in its Mach-O build
+commands and enabled the broadcast path, without adding an entitlement. It
+installed and ran on iOS 26.6.1. Over 138 seconds, the app capture records 263
+A9 heartbeats and seven broadcast claim sequences, but still no paired
+keepalive or mixer telemetry. This does not establish that the compatibility
+exception took effect on that OS or that broadcasts reached the A9. The
+normal SDK build was restored; no SDK rewriting is part of repository tooling.
+
+Local evidence (2026-09-16):
+
+- `session-1789593242795-509DE8A0-49B0-4B2F-ADB1-738EA0ECB4D9`,
+  `transport.jsonl` SHA-256 `c86778ff253f9b01f61feeb75f4a84e1f0ab01eef5786d552d3f6497f9c5e7fd`.
+- `session-1789593326302-36064FE1-0B08-464B-8C1A-2FBFA964C72C`,
+  `transport.1.jsonl` SHA-256 `14d62f1ded12d4d5d717e446b72f857d15332b517c3db39693149c31725ea7ea`,
+  `transport.jsonl` SHA-256 `ea1f6751f922ce09ef1475393c92a87177d06480bee99b0b05b1848d9f900c8a`.
+
+## alphatheta-connect audit, 2026-09-16
+
+Compared the pinned v0.26.1 sources, recent fixes and wire tests against our Rust
+implementation. The relevant differences are below; upstream implementation
+claims are not substitutes for a local deck capture.
+
+| Area | Finding and disposition |
+| --- | --- |
+| Stagehand heartbeats | Missing here. Added shared Rust mixer/player builders and 250 ms status-port sends using the upstream capture bytes. Phone targets only the A9 to preserve its CDJ library identity. |
+| Reconnect identity | Desktop already retains supervisor-owned nonces. Kernel UDP sessions now derive default nonces from their assigned IP instead of changing identity on every restart. Explicit caller nonces still win. |
+| Mixer model isolation | Upstream warns that A9 layouts are not valid on XDJ-AZ. Our exact-length/opcode checks now also require the `DJM-A9` model before decoding controls or experimental VU. |
+| Position packet isolation | Stagehand multiplex packets reuse `0x0b`. Our position decoder now excludes the Stagehand peer marker; regression coverage prevents a telemetry frame from moving the playhead. |
+| Cue list bounds | Both Rust cue converters skipped invalid types but counted only emitted entries against the declared input count. They now count consumed entries separately and reject truncated declared arrays. Regression tests cover skipped entries followed by out-of-array data. |
+| Hot cue button / phrase parsing | Our ANLZ-to-wire conversion already reads the hot cue ID separately from cue/loop type. PSSI already has a typed parser and obfuscation coverage. Do not copy the historical upstream field-name bugs. |
+| Effective pitch | Our deck BPM uses pitch at `0x8c`; upstream recently corrected its swapped effective/local pitch values. Preserve our current mapping. BPM-sync and local slider pitch are useful additional public telemetry fields, but are not added by this patch. |
+| Precise position values | Upstream divides pitch by 6400 and reads BPM at `0x30`; our decimal-100 scaling and `0x38` BPM follow the existing wire contract. Deep Symmetry explicitly gives 326 → 3.26%. Do not port upstream's arithmetic. |
+| Six-channel on-air | Upstream offsets/length checks differ: it requires 54 bytes for the six-channel branch, while our 53-byte A9 packets are accepted. Keep the capture-backed Rust layout pending contrary evidence. |
+| Cue comments, RGB, quantized loops | Upstream exposes these ANLZ fields. Our raw ANLZ serving retains them, but the synthesized extended RemoteDB cue response currently emits only the fixed entry fields. Variable-length conversion and time units need a native cue fixture before expanding it. |
+| Other-device / streaming metadata | Upstream has a RemoteDB metadata client and streaming waveform fallback. Our phone booth primarily hydrates metadata from its own served library. Extending this needs source player + slot + type + track ID identity, since IDs can collide across libraries; copying a track-ID-only lookup is unsafe. |
+| Remote controls / preferences | Upstream has typed pause, seek, skip and preference helpers. Rust has the captured transport builder and verified playback flow, but not equivalent typed end-to-end coverage for every operation. Add commands with target-status confirmation and shared bindings; do not enable arbitrary preference writes on discovery. |
+| Three-band / RGB waveforms | Rust already serves PWV4/5/6/7 and uses detailed RGB with fallback for the local player. No replacement parser is needed for this task. |
+| VU and all-in-one devices | Upstream advertises broader support, including passive pcap monitoring. Our A9 VU body remains experimental, and iOS cannot adopt the desktop BPF receiver unchanged. Neither claim establishes phone support. |
+
+Audit sources:
+
+- [Heartbeat implementation and capture provenance](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/src/virtualcdj/heartbeat.ts)
+- [Heartbeat byte fixtures](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/src/virtualcdj/heartbeat.test.ts)
+- [Stable identity rationale](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/src/virtualcdj/stagehand.ts)
+- [Recent upstream changes](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/CHANGELOG.md)
+- [Upstream status and mixer decoders](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/src/status/utils.ts)
+- [Upstream ANLZ conversion](https://github.com/chrisle/alphatheta-connect/blob/cee99ae61572eef513e52a90961cfdc48944eb8a/src/localdb/rekordbox/anlz-parsers.ts)
+- [Deep Symmetry position units](https://djl-analysis.deepsymmetry.org/djl-analysis/beats.html)
+- [Deep Symmetry extended RemoteDB cues](https://djl-analysis.deepsymmetry.org/djl-analysis/track_metadata.html#_requesting_nxs2_cue_points_and_loops)
 
 ## UDP/50002 update/status
 
