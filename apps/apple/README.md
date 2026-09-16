@@ -14,8 +14,9 @@ submission confirmation, current progress, retry for failed jobs, and an **Open 
 An unconnected phone can open cloud settings from the same sheet. The app can close while the import runs.
 On iOS, **Settings → USB library → Choose USB folder** opens the initial folder picker.
 A USB folder appears in the playlist browser only while its authorized drive is connected.
-Spotify and SoundCloud appear as normal playlist folders; loading, connection errors, and retry
-controls stay inside the affected service folder while cached playlists remain browsable.
+Spotify and SoundCloud use the normal folder navigation bar and native Back gesture. A centered
+system spinner appears only while an empty folder or playlist first loads; cached contents stay
+in place during refresh. Pull to refresh. Connection errors and retry stay inside the affected folder.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
 iOS requires the initial folder permission; it cannot silently open an arbitrary newly connected stick.

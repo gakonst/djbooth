@@ -19,6 +19,7 @@ struct PlaylistBrowserView: View {
     @State private var pendingDelete: Collection?
     @State private var editing: Collection?
     @State private var showUSBLibrary = false
+    @State private var refreshError: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorSchemeContrast) private var contrast
@@ -84,7 +85,11 @@ struct PlaylistBrowserView: View {
         #if os(iOS)
         if model.pendingQuickAddTrackID != nil { rows.append(.cancelQuickAdd) }
         #endif
+        #if os(iOS)
+        if folderPath == nil, !searching, let folder = path.last { rows.append(.back(folder)) }
+        #else
         if !searching, let folder = path.last { rows.append(.back(folder)) }
+        #endif
         if !pinnedPlaylists.isEmpty {
             #if os(macOS)
             rows.append(.pinnedHeader)
@@ -99,6 +104,7 @@ struct PlaylistBrowserView: View {
     var body: some View {
         let sorted = self.sorted
         let rows = browserRows(from: sorted)
+        let empty = rows.contains { if case .empty = $0 { return true }; return false }
         VStack(spacing: 0) {
             #if os(macOS)
             VStack(spacing: 10) {
@@ -127,6 +133,7 @@ struct PlaylistBrowserView: View {
             }.padding(12)
             #endif
             #if os(iOS)
+            ZStack {
             List {
                 if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected, let device = model.usbDevice {
                     Button {
@@ -147,7 +154,9 @@ struct PlaylistBrowserView: View {
                     }
                 }
                 browserContent(rows).boothLibraryCell()
-            }.boothLibraryList()
+            }.boothLibraryList().accessibilityIdentifier("playlist.browser")
+            if empty { musicFolderStatus }
+            }
             #else
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(spacing: 0) { browserContent(rows) }
@@ -155,9 +164,19 @@ struct PlaylistBrowserView: View {
             }
             #endif
         }
+        #if os(macOS)
         .accessibilityIdentifier("playlist.browser")
+        #endif
         .task(id: path.first) { await model.refreshMusic(provider: musicProvider) }
-        .refreshable { await model.refreshMusic(force: true, provider: musicProvider) }
+        .refreshable {
+            await model.refreshMusic(force: true, provider: musicProvider)
+            if let provider = musicProvider, !empty {
+                refreshError = model.musicFolderError(provider)
+            }
+        }
+        .alert("Couldn’t refresh playlists", isPresented: Binding(get: { refreshError != nil }, set: { if !$0 { refreshError = nil } })) {
+            Button("OK", role: .cancel) { refreshError = nil }
+        } message: { Text(refreshError ?? "") }
         .sheet(item: $editing) { PlaylistEditSheet(collection: $0, model: model) }
         .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
         .alert("Delete playlist?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { collection in
@@ -180,9 +199,6 @@ struct PlaylistBrowserView: View {
                             } label: {
                                 browserNavigationRow(title: title, detail: "Up one level", symbol: "arrow.left")
                             }.buttonStyle(BoothRowButtonStyle()).accessibilityIdentifier("playlist.folder.back")
-                            #if os(iOS)
-                            musicFolderStatus
-                            #endif
                         case .pinnedHeader:
                             Text("PINNED").font(.system(size: 9, weight: .semibold, design: .monospaced)).tracking(1)
                                 .foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 8)
@@ -214,14 +230,18 @@ struct PlaylistBrowserView: View {
     @ViewBuilder private var musicFolderStatus: some View {
         if let provider = musicProvider {
             if model.musicLoading {
-                ProgressView("Loading playlists…").padding(12).accessibilityIdentifier("music.folder.loading")
+                ProgressView().accessibilityElement(children: .ignore).accessibilityLabel("Loading playlists")
+                    .accessibilityIdentifier("music.folder.loading")
             } else if let error = model.musicFolderError(provider) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Couldn’t refresh \(provider)").font(.headline).accessibilityIdentifier("music.folder.error")
-                    Text(error).font(.caption).foregroundStyle(.secondary)
+                ContentUnavailableView {
+                    Label("Couldn’t load playlists", systemImage: "wifi.exclamationmark")
+                        .accessibilityIdentifier("music.folder.error")
+                } description: {
+                    Text(error)
+                } actions: {
                     Button("Retry") { Task { await model.refreshMusic(force: true, provider: provider) } }
-                        .buttonStyle(.plain).foregroundStyle(BoothStyle.accent).accessibilityIdentifier("music.folder.retry")
-                }.padding(12)
+                        .accessibilityIdentifier("music.folder.retry")
+                }
             }
         }
     }
@@ -242,7 +262,7 @@ struct PlaylistBrowserView: View {
                     .disabled(model.musicDownloads.contains(item.id)).accessibilityLabel("Download playlist")
                     .accessibilityIdentifier("music.download.\(item.remoteID)")
             }
-        }.contextMenu {
+        }.padding(.horizontal, 12).contextMenu {
             Button("Refresh playlist") { Task { await model.loadMusicPlaylist(item, force: true) } }
             if let url = URL(string: item.url) { Link("Open original playlist", destination: url) }
             if let source = model.musicCatalog.sources.first(where: { $0.id == item.sourceID }), source.provider == "spotify" {

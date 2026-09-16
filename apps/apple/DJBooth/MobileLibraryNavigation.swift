@@ -121,6 +121,7 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         case .collection: break
         }
         navigationItem.largeTitleDisplayMode = .never
+        navigationItem.backButtonDisplayMode = .minimal
         let hasDrawer: Bool
         switch destination {
         case .folder(let path): hasDrawer = path.isEmpty
@@ -308,7 +309,7 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
                 let hidden: Bool
                 switch page.destination {
                 case .browse: hidden = false
-                case .folder(let path): hidden = !path.isEmpty || model.pendingQuickAddTrackID != nil
+                case .folder(let path): hidden = path.isEmpty && model.pendingQuickAddTrackID != nil
                 case .collection, .group: hidden = true
                 }
                 navigationController.setNavigationBarHidden(hidden, animated: animated)

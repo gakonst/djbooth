@@ -89,7 +89,7 @@ final class USBLibraryUITests: XCTestCase {
         if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }
         for _ in 0..<5 {
             if app.buttons["usb.open"].exists { return }
-            if app.buttons["playlist.folder.back"].waitForExistence(timeout: 3) { app.buttons["playlist.folder.back"].tap() }
+            if app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 3) { app.navigationBars.buttons["BackButton"].tap() }
         }
         XCTFail("Could not return to playlist root")
     }
