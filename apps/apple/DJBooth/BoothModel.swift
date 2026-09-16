@@ -123,7 +123,9 @@ private struct BoothLaunchConfiguration: Sendable {
             musicCatalog.snapshots = musicCatalog.snapshots.filter { ids.contains($0.value.playlist.sourceID) }
             try store.saveMusicCatalog(musicCatalog); try await reload()
             // One provider page at a time; the broker coordinates quota across all agents/apps.
+            var failures: [String] = []
             for source in sources {
+                do {
                 var items: [MusicPlaylist] = [], cursor: String?, seen = Set<String>()
                 repeat {
                     let page = try await cloud.musicPlaylists(source, cursor: cursor)
@@ -137,9 +139,13 @@ private struct BoothLaunchConfiguration: Sendable {
                 let retained = Set(musicCatalog.playlists.map(\.id))
                 musicCatalog.snapshots = musicCatalog.snapshots.filter { retained.contains($0.key) }
                 try store.saveMusicCatalog(musicCatalog); try await reload()
+                } catch {
+                    guard generation == connectionGeneration else { return }
+                    failures.append(source.providerName + ": " + error.localizedDescription)
+                }
             }
             musicCatalog.fetchedAt = Date().timeIntervalSince1970
-            try store.saveMusicCatalog(musicCatalog); musicError = nil
+            try store.saveMusicCatalog(musicCatalog); musicError = failures.isEmpty ? nil : failures.joined(separator: "\n")
         } catch {
             if generation == connectionGeneration {
                 if case ClientError.http(let status, _) = error, status == 401 || status == 403 {
