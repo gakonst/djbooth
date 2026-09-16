@@ -86,7 +86,7 @@ private final class RequestLog: @unchecked Sendable {
             "https://playback.media-streaming.soundcloud.cloud:443/track/aac_96k/id/playlist.m3u8?Policy=signed"
         ] {
             StubProtocol.handler = { _ in (200, try JSONEncoder().encode(["url": url])) }
-            #expect(try await client.musicStream(track, source: source).host == "playback.media-streaming.soundcloud.cloud")
+            #expect(try await self.client(session).musicStream(track, source: source).host == "playback.media-streaming.soundcloud.cloud")
         }
         for url in [
             "https://evil.example/audio.m3u8",
@@ -97,8 +97,61 @@ private final class RequestLog: @unchecked Sendable {
             "https://playback.media-streaming.soundcloud.cloud/audio.m3u8?access_token=secret"
         ] {
             StubProtocol.handler = { _ in (200, try JSONEncoder().encode(["url": url])) }
-            await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+            await #expect(throws: ClientError.self) { try await self.client(session).musicStream(track, source: source) }
         }
+    }
+
+    @Test func soundCloudCachedURLRechecksApprovalAndEvictsRevokedGrant() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session), log = RequestLog()
+        let source = MusicSource(id: "soundcloud:a", provider: "soundcloud", connectionID: "a", accountID: "123", label: "SC")
+        let track = MusicTrack(id: "t", remoteID: "123", title: "Track", artists: [], durationSeconds: 1, url: "https://soundcloud.com/a/t", available: true)
+        let approved = try JSONEncoder().encode(["sources": [source]])
+        StubProtocol.handler = { request in
+            let path = request.url!.path; log.append(path)
+            return (200, path.hasSuffix("/sources") ? approved : Data(#"{"url":"https://media.sndcdn.com/audio.m3u8"}"#.utf8))
+        }
+        _ = try await client.musicStream(track, source: source) // playlist prewarm
+        _ = try await client.musicStream(track, source: source) // actual play
+        #expect(log.values().filter { $0.hasSuffix("/stream") }.count == 1)
+        #expect(log.values().filter { $0.hasSuffix("/sources") }.count == 1)
+        StubProtocol.handler = { _ in (200, Data(#"{"sources":[]}"#.utf8)) }
+        await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+        StubProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/stream")) // revoked cache was discarded
+            return (200, Data(#"{"url":"https://media.sndcdn.com/fresh.m3u8"}"#.utf8))
+        }
+        #expect(try await client.musicStream(track, source: source).lastPathComponent == "fresh.m3u8")
+        var replaced = source; replaced.accountID = "different-account"
+        let wrongAccount = try JSONEncoder().encode(["sources": [replaced]])
+        StubProtocol.handler = { _ in (200, wrongAccount) }
+        await #expect(throws: ClientError.self) { try await client.musicStream(track, source: source) }
+    }
+
+    @Test func soundCloudClientsNeverShareCachedURLsAndFailedLoadsRetry() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let first = try client(session), second = try client(session), log = RequestLog()
+        let other = CloudClient(endpoint: try Endpoint("https://other.example"), token: "another-token", session: session)
+        let source = MusicSource(id: "soundcloud:a", provider: "soundcloud", connectionID: "a", accountID: "123", label: "SC")
+        let track = MusicTrack(id: "t", remoteID: "123", title: "Track", artists: [], durationSeconds: 1, url: "https://soundcloud.com/a/t", available: true)
+        StubProtocol.handler = { _ in (502, Data()) }
+        await #expect(throws: ClientError.self) { try await first.musicStream(track, source: source) }
+        StubProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/stream"))
+            log.append(request.url!.host! + " " + request.value(forHTTPHeaderField: "Authorization")!)
+            return (200, Data(#"{"url":"https://media.sndcdn.com/audio.m3u8"}"#.utf8))
+        }
+        for client in [first, second, other] { _ = try await client.musicStream(track, source: source) }
+        #expect(log.values().count == 3)
+        #expect(log.values().last == "other.example Bearer another-token")
+        // A standalone authorization failure also invalidates previously warmed URLs.
+        StubProtocol.handler = { _ in (401, Data()) }
+        await #expect(throws: ClientError.self) { try await first.musicSources() }
+        StubProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/stream"))
+            return (200, Data(#"{"url":"https://media.sndcdn.com/refreshed.m3u8"}"#.utf8))
+        }
+        #expect(try await first.musicStream(track, source: source).lastPathComponent == "refreshed.m3u8")
     }
 
     @Test func cloudImportsPreserveRequestIdentityAndDecodeProgress() async throws {

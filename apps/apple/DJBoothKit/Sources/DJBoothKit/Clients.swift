@@ -186,6 +186,7 @@ public struct CloudClient: Sendable {
     public let endpoint: Endpoint
     private let token: String
     private let session: URLSession
+    private let soundCloudStreams = SoundCloudStreamCache()
     public init(endpoint: Endpoint, token: String, session: URLSession? = nil) {
         self.endpoint = endpoint; self.token = token; self.session = session ?? Transport.session
     }
@@ -234,8 +235,13 @@ public struct CloudClient: Sendable {
     }
     public func musicSources() async throws -> [MusicSource] {
         struct Page: Decodable, Sendable { let sources: [MusicSource] }
-        let page: Page = try await musicGet("v1/music/sources")
-        return page.sources
+        do {
+            let page: Page = try await musicGet("v1/music/sources")
+            return page.sources
+        } catch {
+            if case ClientError.http(let status, _) = error, status == 401 || status == 403 { await soundCloudStreams.clear() }
+            throw error
+        }
     }
     public func musicPlaylists(_ source: MusicSource, cursor: String? = nil) async throws -> MusicPlaylistPage {
         try await musicGet(source.route + "/playlists", cursor: cursor)
@@ -244,6 +250,17 @@ public struct CloudClient: Sendable {
         try await musicGet(source.route + "/playlists/" + musicID(playlist.remoteID))
     }
     public func musicStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
+        guard source.provider == "soundcloud" else { throw ClientError.http(400, "This connection does not provide SoundCloud streams") }
+        let key = SoundCloudStreamCache.Key(sourceID: source.id, accountID: source.accountID, trackID: track.remoteID)
+        return try await soundCloudStreams.value(for: key, load: {
+            try await resolveSoundCloudStream(track, source: source)
+        }, validate: {
+            guard try await musicSources().contains(where: { $0.id == source.id && $0.accountID == source.accountID }) else {
+                throw ClientError.http(403, "This SoundCloud connection is no longer approved")
+            }
+        })
+    }
+    private func resolveSoundCloudStream(_ track: MusicTrack, source: MusicSource) async throws -> URL {
         struct Stream: Decodable, Sendable { let url: URL }
         let stream: Stream = try await musicGet(source.route + "/tracks/" + musicID(track.remoteID) + "/stream")
         let host = stream.url.host?.lowercased() ?? ""
