@@ -251,6 +251,7 @@ pub(crate) struct ServerActor {
     browse_context_by_player: HashMap<u8, VecDeque<BrowseContextSnapshot>>,
     last_status_by_player: HashMap<u8, CdjStatusSnapshot>,
     last_status_seen_by_player: HashMap<u8, Instant>,
+    last_key_status_by_player: HashMap<u8, (CdjStatusSnapshot, Instant)>,
     load_progress_by_player: HashMap<(u8, u32), LoadProgressSnapshot>,
     last_beat_by_player: HashMap<u8, CdjBeatSnapshot>,
     last_beat_seen_by_player: HashMap<u8, Instant>,
@@ -711,6 +712,7 @@ impl ServerActor {
         self.browse_context_by_player.remove(&player);
         self.last_status_by_player.remove(&player);
         self.last_status_seen_by_player.remove(&player);
+        self.last_key_status_by_player.remove(&player);
         self.last_beat_by_player.remove(&player);
         self.last_beat_seen_by_player.remove(&player);
         self.last_position_by_player.remove(&player);
@@ -826,11 +828,16 @@ impl ServerActor {
             .get(&player)
             .is_some_and(|previous| !previous.same_track_as(&status));
         if track_changed {
+            self.last_key_status_by_player.remove(&player);
             self.beat_playheads.remove(&player);
             self.last_position_seen_by_player.remove(&player);
             self.last_position_by_player.remove(&player);
             self.last_beat_by_player.remove(&player);
             self.last_beat_seen_by_player.remove(&player);
+        }
+        if status.has_key_telemetry() {
+            self.last_key_status_by_player
+                .insert(player, (status.clone(), seen_at));
         }
         let clock = self
             .track_timings
@@ -934,6 +941,11 @@ impl ServerActor {
             position: position.map(CdjPositionSnapshot::summary),
             deck: status.map(|status| {
                 let mut deck = status.deck_state(position, current_beat);
+                if let Some((key_status, seen)) = self.last_key_status_by_player.get(&player)
+                    && now.saturating_duration_since(*seen) < Duration::from_secs(1)
+                {
+                    status.apply_key_telemetry(key_status, &mut deck);
+                }
                 if position.is_none() {
                     if let (Some(clock), Some(timing)) = (
                         self.beat_playheads.get(&player),

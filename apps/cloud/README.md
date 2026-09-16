@@ -181,3 +181,39 @@ look valid but whose AAC packets fail to decode. Acquisitions and restored audio
 decoded before being accepted, with successful verification cached by file identity. Invalid
 audio falls through to the existing candidate search; warm imports reuse verified recordings
 and analysis. The smoke checks report cold import and warm resume timings.
+
+## Recorded sets and SoundCloud
+
+The iPhone recorder writes a Rust event timeline and optional USB mixer audio. Rust
+rebuilds the complete playback tracklist; AVFoundation exports stereo audio to WAV.
+The publish action uses the existing account-scoped, checksum-verified media chunks,
+then `POST /v1/music/soundcloud/:connectionID/recordings` with `audioHash`, `title`,
+`description`, and a stable `uploadID`. The Worker streams WAV plus the complete
+tracklist as multipart; it never base64-encodes a whole set. Uploads are private.
+Descriptions over SoundCloud's 4,000-character limit are rejected intact, not truncated.
+A public full-tracklist link for longer sets is still needed.
+
+**Publishing is disabled by default.** The existing Nanocodex JSON connector cannot
+stream a multi-hour recording. An additional authenticated broker service is required
+before adding a `SOUNDCLOUD_UPLOAD_SERVICE` service binding. No such service is deployed
+or configured by this change. GET on the recording route reports this dependency
+before the phone exports or uploads large audio. Existing exports remain available.
+
+Required broker contract:
+
+- `POST https://soundcloud-upload.internal/v1/connections/:connectionID/tracks`.
+- Authenticate the original grant bearer, enforce its approved SoundCloud connection
+  and app origin, and inject the provider token privately through the existing broker.
+- Accept streamed multipart and forward only to `https://api.soundcloud.com/tracks`;
+  preserve the title, complete description, WAV bytes and private visibility.
+- Durably deduplicate `Idempotency-Key`, scoped to the grant owner and connection;
+  verify `X-DJBooth-Audio-SHA256` and metadata match on retries. Return the same track
+  receipt on retry. Persist ambiguous outcomes for reconciliation instead of creating
+  a second track after a timeout. SoundCloud's API itself is not assumed idempotent.
+- Return the provider's track ID/URN, `permalink_url`, and processing state. Successful
+  creation means queued for encoding, not that playback has finished processing.
+
+The current neighboring Nanocodex `grantBrowserEgress`/`grantConnectorRequest` path
+accepts bounded JSON/base64 request envelopes. Add an equivalent authenticated
+stream-body entrypoint and durable publication coordination there; do not export OAuth
+credentials into DJBooth or enlarge the JSON body limit to fit recordings.

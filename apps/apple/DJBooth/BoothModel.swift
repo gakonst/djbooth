@@ -72,6 +72,21 @@ private struct BoothLaunchConfiguration: Sendable {
 }
 
 @MainActor @Observable final class BoothModel {
+    func recordingUploadAvailability(_ source: MusicSource) async throws -> RecordingUploadAvailability {
+        guard let cloud else { throw ClientError.http(401, "Sign in before uploading a recording") }
+        return try await cloud.recordingUploadAvailability(source)
+    }
+    func uploadRecording(file: URL, source: MusicSource, title: String, description: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> RecordingUploadResult {
+        guard let cloud, musicCatalog.sources.contains(source) else { throw ClientError.http(403, "Connect this SoundCloud account first") }
+        let key = "recording-upload:" + cloudStorageScope + ":" + source.connectionID + ":" + file.deletingLastPathComponent().lastPathComponent
+        if let data = UserDefaults.standard.data(forKey: key + ":result"),
+           let result = try? JSONDecoder().decode(RecordingUploadResult.self, from: data) { return result }
+        let uploadID = UserDefaults.standard.string(forKey: key) ?? UUID().uuidString
+        UserDefaults.standard.set(uploadID, forKey: key)
+        let result = try await cloud.uploadRecording(file: file, source: source, title: title, description: description, uploadID: uploadID, progress: progress)
+        UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: key + ":result")
+        return result
+    }
     let spotifyStreaming = SpotifyStreaming()
     var spotifySignIn: MusicSource?
     private var pendingSpotifyTrackID: String?

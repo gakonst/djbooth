@@ -1,5 +1,15 @@
 import Foundation
 
+public struct RecordingUploadAvailability: Decodable, Sendable {
+    public let available: Bool
+    public let reason: String?
+}
+public struct RecordingUploadResult: Codable, Sendable {
+    public let url: URL
+    public let id: String
+    public let state: String
+}
+
 public struct MusicSource: Codable, Identifiable, Sendable, Equatable {
     public var id, provider, connectionID, accountID, label: String
     public var providerName: String { provider == "spotify" ? "Spotify" : "SoundCloud" }

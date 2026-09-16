@@ -113,6 +113,11 @@ struct PlaybackDisplay {
     let track: Track?
     let deck: DJLinkDeckState?
     var isDeck: Bool { deck != nil }
+    var key: String? { deck?.effective_key ?? track?.key }
+    var keyHint: String {
+        isDeck && deck?.effective_key == nil && key != nil
+            ? "Analyzed track key; live deck key shift is not available yet" : ""
+    }
     var identity: String { "\(deck?.player ?? 0):\(deck?.track_id.map(String.init) ?? track?.id ?? "")" }
     var deckDuration: Double? { deck?.track_length_sec.map(Double.init) ?? track?.durationSeconds }
     var deckPosition: Double? {
@@ -310,14 +315,14 @@ struct MobileNowPlaying: View {
         Text("\(bpm.map { String(format: "%.1f", $0) } ?? "—") BPM")
             .boothFont(12, relativeTo: .caption, weight: .semibold, design: .monospaced)
             .fixedSize(horizontal: true, vertical: false)
-        Text((display.isDeck ? display.deck?.effective_key : track?.key) ?? "—")
+        Text(display.key ?? "—")
             .boothFont(11, relativeTo: .caption2, weight: .semibold, design: .monospaced)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8).padding(.vertical, 2)
             .background(.white.opacity(0.08)).overlay(Rectangle().stroke(.white.opacity(0.55), lineWidth: 0.5))
             .accessibilityLabel("Key").accessibilityIdentifier("nowPlaying.key")
-            .accessibilityValue((display.isDeck ? display.deck?.effective_key : track?.key) ?? "Unavailable")
-            .accessibilityHint(display.isDeck && display.deck?.effective_key == nil ? "The deck has not reported its current key" : "")
+            .accessibilityValue(display.key ?? "Unavailable")
+            .accessibilityHint(display.keyHint)
     }
     private func swipeSurface<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content().offset(x: reduceMotion ? 0 : swipeOffset)

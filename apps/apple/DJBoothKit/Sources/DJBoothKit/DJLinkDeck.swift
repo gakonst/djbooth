@@ -4,6 +4,7 @@ import Foundation
 public struct DJLinkDeckState: Decodable, Equatable, Sendable, Identifiable {
     public let player: Int
     public let active: Bool
+    public let on_air: Bool?
     public let source_player, source_slot, track_type: Int
     public let track_id: UInt32?
     public let playing: Bool

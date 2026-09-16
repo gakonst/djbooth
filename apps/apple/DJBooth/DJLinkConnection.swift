@@ -25,6 +25,7 @@ struct DJLinkDeck: Identifiable, Equatable, Sendable {
     let model: String
     let libraryTrackID: String?
     var waveform: Waveform? = nil
+    var libraryKey: String? = nil
     var id: Int { state.player }
     func presentationTrack(in tracks: [String: Track]) -> Track? {
         guard let trackID = state.track_id else { return nil }
@@ -33,6 +34,7 @@ struct DJLinkDeck: Identifiable, Equatable, Sendable {
         // Deck displays use only the ANLZ waveform decoded by shared Rust.
         // Never inherit the cloud track's overview, including while loading.
         track.waveform = waveform.flatMap { $0.peaks.isEmpty ? nil : $0 }
+        track.key = libraryKey ?? track.key
         return track
     }
 }
@@ -43,7 +45,7 @@ private actor DJLinkEngine {
     private var bindingsVerified = false
     private var directory: URL?
     private var preparation = UUID()
-    private var presentationByDeck: [Int: (track: UInt32?, canonical: String?, waveform: Waveform?)] = [:]
+    private var presentationByDeck: [Int: (track: UInt32?, canonical: String?, waveform: Waveform?, key: String?)] = [:]
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
         try DJLinkBindings.decode(operation, input: input, as: type)
     }
@@ -85,7 +87,7 @@ private actor DJLinkEngine {
         let status = try request("status", as: DJLinkStatus.self)
         guard status.running else { return (status, [], [:]) }
         struct Snapshot: Decodable { let deck: DJLinkDeckState? }
-        struct Metadata: Decodable { let track_id: UInt32 }
+        struct Metadata: Decodable { let track_id: UInt32; let key: String? }
         var decks: [DJLinkDeck] = []
         for device in status.devices ?? [] where (1...6).contains(device.player) {
             let snapshot = try request("server.monitor_snapshot", input: "{\"player\":\(device.player)}", as: Snapshot.self)
@@ -94,16 +96,19 @@ private actor DJLinkEngine {
             // Resolve identity through the same Rust library lookup as the web booth.
             var canonical: String?
             var waveform: Waveform?
+            var key: String?
             if let known = presentationByDeck[state.player], known.track == state.track_id {
                 canonical = known.canonical
                 waveform = known.waveform
+                key = known.key
             } else if let id = state.track_id {
                 let metadata = try request("server.library_track_metadata", input: "{\"track_id\":\(id)}", as: Metadata?.self)
                 canonical = metadata.flatMap { metadata in cached?.tracks.first { $0.trackId == metadata.track_id }?.canonicalName }
+                key = metadata?.key.flatMap { $0.isEmpty ? nil : $0 }
                 waveform = try request("server.library_waveform", input: "{\"track_id\":\(id)}", as: DJLinkWaveform?.self)?.waveform
             }
-            presentationByDeck[state.player] = (state.track_id, canonical, waveform)
-            decks.append(DJLinkDeck(state: state, model: device.model, libraryTrackID: canonical, waveform: waveform))
+            presentationByDeck[state.player] = (state.track_id, canonical, waveform, key)
+            decks.append(DJLinkDeck(state: state, model: device.model, libraryTrackID: canonical, waveform: waveform, libraryKey: key))
         }
         do {
             return (status, decks, try mixerStatus())

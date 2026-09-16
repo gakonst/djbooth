@@ -202,7 +202,7 @@ private struct DJLinkDeckPlayerRow: View {
                     Text(track?.title ?? (deck == nil ? "Waiting for status" : "No track loaded")).lineLimit(1)
                     Spacer(minLength: 0)
                     Text(deck?.state.effective_bpm_hundreds.map { String(format: "%.1f BPM", Double($0) / 100) } ?? "— BPM")
-                    Text(deck?.state.effective_key ?? "—")
+                    Text(display.key ?? "—").accessibilityHint(display.keyHint)
                 }
             }.buttonStyle(.plain).accessibilityIdentifier("djlink.deck.select.\(device.player)")
             if let deck {

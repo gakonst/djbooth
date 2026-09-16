@@ -18,6 +18,19 @@ pub(crate) fn stop() -> Result<Value> {
     result
 }
 pub(crate) fn request(operation: &str, input: &str) -> Result<Value> {
+    if operation == "prepare" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Args {
+            directory: PathBuf,
+        }
+        let args: Args = serde_json::from_str(input)?;
+        let slot = RECORDING
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Recording lock"))?;
+        anyhow::ensure!(slot.is_none(), "Stop recording before preparing a set");
+        return djtools_link::recording::export::prepare(&args.directory);
+    }
     if operation == "stop" {
         return stop();
     }

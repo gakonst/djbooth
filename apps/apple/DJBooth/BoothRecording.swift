@@ -307,6 +307,13 @@ actor BoothMIDIInput {
         isRecording = false; capturingAudio = false; busy = false; inputUID = nil
         AppDiagnostics.shared.event("booth_recording_stopped", ["reason": reason ?? "user", "error": error ?? ""])
         link?.recordingChanged(false)
+        if let directory = progress?.directory {
+            do {
+                _ = try await Task.detached {
+                    try DJLinkBindings.request("recording.prepare", arguments: JSONSerialization.data(withJSONObject: ["directory": directory]))
+                }.value
+            } catch { AppDiagnostics.shared.event("recording_tracklist_failed", ["error": error.localizedDescription]) }
+        }
         refreshRecordings()
     }
     private func observeAudio() {
@@ -321,6 +328,106 @@ actor BoothMIDIInput {
                     }
                 }
             })
+        }
+    }
+}
+
+/// Apple file/codec adapter; track identity and timing come exclusively from Rust.
+private enum RecordedSetExport {
+    static func prepare(_ directory: URL) throws -> URL? {
+        _ = try DJLinkBindings.request("recording.prepare", arguments: JSONSerialization.data(withJSONObject: ["directory": directory.path]))
+        let source = directory.appendingPathComponent("master.caf")
+        guard FileManager.default.fileExists(atPath: source.path) else { return nil }
+        let destination = directory.appendingPathComponent("master.wav")
+        if FileManager.default.fileExists(atPath: destination.path) { return destination }
+        let input = try AVAudioFile(forReading: source)
+        guard input.length > 0 else { throw RecordingFailure(message: "The recording contains no mixer audio.") }
+        guard input.processingFormat.channelCount == 2 else {
+            throw RecordingFailure(message: "This recording contains multiple USB channels. Publishing needs a verified stereo mix pair; the raw channels are preserved.")
+        }
+        guard input.length < 650_000_000 else { throw RecordingFailure(message: "This recording exceeds the WAV export size limit.") }
+        let temporary = directory.appendingPathComponent("exporting.wav")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        do {
+            let output = try AVAudioFile(forWriting: temporary, settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: input.processingFormat.sampleRate,
+                AVNumberOfChannelsKey: 2, AVLinearPCMBitDepthKey: 24,
+                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
+            ], commonFormat: input.processingFormat.commonFormat, interleaved: input.processingFormat.isInterleaved)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 32768) else {
+                throw RecordingFailure(message: "Could not allocate the audio export buffer.")
+            }
+            while input.framePosition < input.length {
+                try input.read(into: buffer)
+                guard buffer.frameLength > 0 else { throw RecordingFailure(message: "The audio recording ended unexpectedly.") }
+                try output.write(from: buffer)
+            }
+        } // Finalize the WAV header before making it available to the uploader.
+        try FileManager.default.moveItem(at: temporary, to: destination)
+        return destination
+    }
+}
+
+private struct RecordedSetRow: View {
+    let directory: URL
+    let model: BoothModel
+    @State private var preparing = false
+    @State private var prepared = false
+    @State private var failure: String?
+    @State private var uploaded: URL?
+    @State private var uploadPhase: String?
+    private var files: [URL] {
+        [FileManager.default.fileExists(atPath: directory.appendingPathComponent("master.wav").path) ? "master.wav" : "master.caf", "tracklist.txt", "tracklist.json", "events.jsonl"]
+            .map { directory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(directory.lastPathComponent).font(.caption)
+            Button(preparing ? "Preparing set…" : "Prepare audio + full tracklist") {
+                preparing = true; failure = nil
+                Task {
+                    do { _ = try await Task.detached { try RecordedSetExport.prepare(directory) }.value; prepared = true }
+                    catch { failure = error.localizedDescription }
+                    preparing = false
+                }
+            }.disabled(preparing)
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent("master.caf").path) {
+                Menu("Upload privately to SoundCloud") {
+                    ForEach(model.musicCatalog.sources.filter { $0.provider == "soundcloud" }) { source in
+                        Button(source.label) { publish(source) }
+                    }
+                    if !model.musicCatalog.sources.contains(where: { $0.provider == "soundcloud" }) {
+                        Text("Connect SoundCloud in Settings first")
+                    }
+                }.disabled(preparing)
+            }
+            if let uploadPhase { ProgressView(uploadPhase).font(.caption) }
+            if let uploaded { Link("Open recording on SoundCloud", destination: uploaded) }
+            if prepared { Text("Tracklist includes playback from every deck; headphone previews may also appear.").font(.caption).foregroundStyle(.secondary) }
+            ShareLink(items: files) { Label("Export set", systemImage: "square.and.arrow.up") }
+            if let failure { Text(failure).font(.caption).foregroundStyle(.red) }
+        }
+    }
+    private func publish(_ source: MusicSource) {
+        preparing = true; failure = nil
+        Task {
+            defer { preparing = false; uploadPhase = nil }
+            do {
+                uploadPhase = "Checking SoundCloud connection…"
+                let capability = try await model.recordingUploadAvailability(source)
+                guard capability.available else { throw RecordingFailure(message: capability.reason ?? "SoundCloud recording uploads are unavailable.") }
+                uploadPhase = "Preparing audio and tracklist…"
+                guard let audio = try await Task.detached(operation: { try RecordedSetExport.prepare(directory) }).value else {
+                    throw RecordingFailure(message: "This recording has a deck timeline only. Connect USB mixer audio to record a mix for SoundCloud.")
+                }
+                let description = try String(contentsOf: directory.appendingPathComponent("tracklist.txt"), encoding: .utf8)
+                prepared = true
+                let result = try await model.uploadRecording(file: audio, source: source,
+                    title: "DJ set " + directory.lastPathComponent, description: description) { phase in
+                        Task { @MainActor in uploadPhase = phase }
+                    }
+                uploaded = result.url
+            } catch { failure = error.localizedDescription }
         }
     }
 }
@@ -351,13 +458,8 @@ struct BoothRecordingView: View {
             }
             Section("Saved recordings") {
                 ForEach(recorder.recordings, id: \.self) { directory in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(directory.lastPathComponent).font(.caption)
-                        if !(recorder.isRecording && recorder.progress?.directory == directory.path) {
-                            ShareLink(items: ["master.caf", "events.jsonl"].map { directory.appendingPathComponent($0) }.filter { FileManager.default.fileExists(atPath: $0.path) }) {
-                                Label(FileManager.default.fileExists(atPath: directory.appendingPathComponent("master.caf").path) ? "Export audio and timeline" : "Export timeline", systemImage: "square.and.arrow.up")
-                            }
-                        }
+                    if !(recorder.isRecording && recorder.progress?.directory == directory.path) {
+                        RecordedSetRow(directory: directory, model: model)
                     }
                 }
                 if recorder.recordings.isEmpty { Text("Your sets will appear here.").foregroundStyle(.secondary) }

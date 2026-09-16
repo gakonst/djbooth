@@ -105,6 +105,7 @@ pub struct DeckState {
     pub model: Option<String>,
     pub ip: Option<String>,
     pub active: bool,
+    pub on_air: Option<bool>,
     pub source_player: Option<u8>,
     pub source_slot: Option<u8>,
     pub track_type: Option<u8>,
@@ -531,6 +532,7 @@ fn disconnected_deck(player: u8) -> DeckState {
         model: None,
         ip: None,
         active: false,
+        on_air: None,
         source_player: None,
         source_slot: None,
         track_type: None,
@@ -581,6 +583,7 @@ fn apply_telemetry(deck: &mut DeckState, telemetry: &DjLinkDeckState) {
     deck.key_shift_cents = telemetry.key_shift_cents;
     deck.effective_key = telemetry.effective_key.clone();
     deck.active = telemetry.active;
+    deck.on_air = Some(telemetry.on_air);
     deck.source_player = Some(telemetry.source_player);
     deck.source_slot = Some(telemetry.source_slot);
     deck.track_type = Some(telemetry.track_type);
@@ -743,6 +746,7 @@ mod tests {
         let telemetry = DjLinkDeckState {
             player: 3,
             active: true,
+            on_air: true,
             source_player: 17,
             source_slot: 3,
             track_type: 1,
@@ -775,6 +779,7 @@ mod tests {
         assert_eq!(deck.playhead_source, Some("precise"));
         assert!(deck.connected);
         assert!(deck.playing);
+        assert_eq!(deck.on_air, Some(true));
         assert_eq!(deck.track_id, Some(42));
         assert_eq!(deck.effective_bpm, Some(128.64));
         assert_eq!(deck.beat_number, Some(193));

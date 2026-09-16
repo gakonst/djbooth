@@ -1,4 +1,5 @@
 //! Durable performance capture. Protocol reduction stays shared with the web booth.
+pub mod export;
 use crate::{
     DjLinkServer,
     booth::StatePublisher,

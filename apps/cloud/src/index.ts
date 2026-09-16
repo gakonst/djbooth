@@ -12,6 +12,8 @@ import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
 
 export interface Env {
+  /** Optional authenticated, streaming, idempotent SoundCloud upload broker. */
+  SOUNDCLOUD_UPLOAD_SERVICE?: Fetcher;
   DOWNLOAD_WORKFLOW?: Workflow<DownloadParams>;
   LIBRARY_DB: D1Database;
   MEDIA: R2Bucket;
@@ -777,7 +779,9 @@ export default {
       if (url.pathname === "/v1/migrations/legacy")
         return await migrateLegacy(request, env, account);
       if (url.pathname.startsWith("/v1/music/"))
-        return await musicRoute(request, env, account, readJSON);
+        return await musicRoute(request, env, account, readJSON, (hash) =>
+          media(new Request(request.url), env, hash, account),
+        );
       if (url.pathname.startsWith("/v1/agent/"))
         return await agentRoute(request, env, account, readJSON);
       return await accountFetch(request, env, account);

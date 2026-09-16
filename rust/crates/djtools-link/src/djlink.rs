@@ -285,6 +285,7 @@ pub struct DjLinkWaveform {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkTrackMetadata {
     pub track_id: u32,
+    pub key: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -418,6 +419,7 @@ pub struct DjLinkMonitorSnapshot {
 pub struct DjLinkDeckState {
     pub player: u8,
     pub active: bool,
+    pub on_air: bool,
     pub source_player: u8,
     pub source_slot: u8,
     pub track_type: u8,
@@ -562,8 +564,8 @@ impl DjLinkServer {
         let mac_addr = default_mac(bind_ip);
         // The real Stagehand app is a separate network host. Keep that identity
         // distinct from the Rekordbox source on broadcast networks. Kernel-only
-        // unicast uses the real address and separates personas by recipient:
-        // mixers see Stagehand; decks see the Rekordbox library source.
+        // unicast uses the real address with distinct protocol identities for
+        // Rekordbox sharing and Stagehand monitoring.
         // Kernel-only sessions must reuse their protocol identity at the same
         // real IP. Players can retain the first claim across app restarts.
         let kernel_identity = (config.unicast_discovery_netmask.is_some()
@@ -687,6 +689,7 @@ impl DjLinkServer {
         let track = self.state.library.tracks_by_id.get(&track_id)?;
         Some(DjLinkTrackMetadata {
             track_id,
+            key: track.key_label(),
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
@@ -3232,6 +3235,7 @@ impl CdjStatusSnapshot {
         DjLinkDeckState {
             player: self.player,
             active: self.active != 0,
+            on_air: self.flags & 0x08 != 0,
             source_player: self.source_player,
             source_slot: self.source_slot,
             track_type: self.track_type,
@@ -3264,6 +3268,28 @@ impl CdjStatusSnapshot {
             track_length_sec: position.map(|position| position.track_length_sec),
             playhead_ms: position.map(|position| position.playhead_ms),
             playhead_source: position.map(|_| "precise"),
+        }
+    }
+
+    pub(crate) fn has_key_telemetry(&self) -> bool {
+        self.key.is_some() && self.key_shift_cents.is_some()
+    }
+
+    pub(crate) fn apply_key_telemetry(&self, detailed: &Self, deck: &mut DjLinkDeckState) {
+        // CDJs interleave short Rekordbox status with extended monitoring status.
+        // Absence in a short packet is not a key-shift reset. Never carry the
+        // extension across tracks or reuse a pitch-dependent key after pitch moves.
+        if self.has_key_telemetry() || !self.same_track_as(detailed) {
+            return;
+        }
+        deck.master_tempo = detailed.master_tempo.and_then(|value| match value {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        });
+        deck.key_shift_cents = detailed.key_shift_cents;
+        if self.pitch_1 == detailed.pitch_1 || deck.master_tempo == Some(true) {
+            deck.effective_key = detailed.effective_key();
         }
     }
 
@@ -5758,12 +5784,8 @@ fn stagehand_heartbeat_for_device(state: &ServerState, device: &LinkDevice) -> O
     if is_stagehand_mixer(device) {
         return Some(stagehand::build_mixer_heartbeat());
     }
-    // A kernel-only mobile session shares its IP with the Rekordbox source.
-    // Keep the CDJs on that persona; only the mixer gets the Stagehand session.
-    if state.stagehand_ip.is_some_and(|ip| ip != state.bind_ip)
-        && (1..=6).contains(&device.player_number)
-        && device.model.eq_ignore_ascii_case("CDJ-3000")
-    {
+    // Request detailed player telemetry alongside the library source.
+    if (1..=6).contains(&device.player_number) && device.model.eq_ignore_ascii_case("CDJ-3000") {
         return Some(stagehand::build_player_heartbeat());
     }
     None
@@ -5812,8 +5834,9 @@ async fn send_stagehand_heartbeats(state: &ServerState, sock: &UdpSocket, target
     }
 }
 
-// Each mixer gets the existing Rust Stagehand session over ordinary UDP. No
-// alias, raw socket or broadcast is needed; no deck sees this second persona.
+// Each supported device gets the shared Rust monitoring session over UDP.
+// CDJs need the join sequence as well as heartbeats to report key shift; the
+// regular Rekordbox announcement and source services continue alongside it.
 fn spawn_unicast_stagehand(
     state: Arc<ServerState>,
     sock: Arc<UdpSocket>,
@@ -5830,7 +5853,11 @@ fn spawn_unicast_stagehand(
                 .devices_sorted()
                 .await
                 .into_iter()
-                .filter(is_stagehand_mixer)
+                .filter(|device| {
+                    is_stagehand_mixer(device)
+                        || ((1..=6).contains(&device.player_number)
+                            && device.model.eq_ignore_ascii_case("CDJ-3000"))
+                })
                 .map(|device| device.ip_addr)
                 .collect::<BTreeSet<_>>();
             joined.retain(|ip, task| {
@@ -5874,6 +5901,10 @@ async fn run_stagehand_announce(
     const MODEL: &str = "Stagehand";
     const REJOIN_AFTER_MS: u64 = 10_000;
     const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
+    let mixer_target = state
+        .device_for_ip(*target.ip())
+        .await
+        .is_none_or(|device| is_stagehand_mixer(&device));
     let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
     let link_mac = match parse_mac(&state.mac_addr) {
         Ok(mac) => mac,
@@ -5920,14 +5951,16 @@ async fn run_stagehand_announce(
         let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
         let now_ms = epoch_millis();
         let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
-        if let Some(reason) = stagehand_rejoin_reason(
-            now_ms,
-            last_a9_ms,
-            last_join_ms,
-            requested_rejoin_ms,
-            handled_rejoin_ms,
-            REJOIN_AFTER_MS,
-        ) {
+        if mixer_target
+            && let Some(reason) = stagehand_rejoin_reason(
+                now_ms,
+                last_a9_ms,
+                last_join_ms,
+                requested_rejoin_ms,
+                handled_rejoin_ms,
+                REJOIN_AFTER_MS,
+            )
+        {
             if reason == "peer-request" {
                 crate::diagnostics::event(
                     "stagehand_rejoin",
@@ -10697,7 +10730,7 @@ mod tests {
     }
 
     #[test]
-    fn stagehand_heartbeats_do_not_replace_the_mobile_library_persona() {
+    fn stagehand_heartbeats_include_mobile_decks_but_exclude_other_sources() {
         let mut state = test_state();
         state.stagehand_ip = Some(state.bind_ip);
         state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
@@ -10714,9 +10747,15 @@ mod tests {
         );
         device.player_number = 1;
         device.model = "CDJ-3000".into();
-        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
         state.config.unicast_discovery_netmask = None;
-        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
         state.stagehand_ip = Some(Ipv4Addr::new(169, 254, 85, 94));
         assert_eq!(
             stagehand_heartbeat_for_device(&state, &device),
@@ -13037,6 +13076,86 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         status.key_shift_cents = Some(0);
         status.key = Some([255, 0, 0]);
         assert_eq!(status.deck_state(None, None).effective_key, None);
+    }
+
+    #[test]
+    fn deck_on_air_is_independent_of_playback_activity() {
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        status.active = 1;
+        status.flags &= !0x08;
+        assert!(!status.deck_state(None, None).on_air);
+        status.active = 0;
+        status.flags |= 0x08;
+        assert!(status.deck_state(None, None).on_air);
+    }
+
+    #[tokio::test]
+    async fn monitor_key_survives_short_status_but_not_source_changes_or_expiry() {
+        let state = test_state();
+        let short = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        let mut detailed = short.clone();
+        detailed.key = Some([0, 1, 0]);
+        detailed.key_shift_cents = Some(200);
+        detailed.master_tempo = Some(1);
+        state.record_status(detailed.clone()).await;
+        state.record_status(short.clone()).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_key
+                .as_deref(),
+            Some("D")
+        );
+        detailed.key_shift_cents = Some(-100);
+        state.record_status(detailed.clone()).await;
+        state.record_status(short.clone()).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_key
+                .as_deref(),
+            Some("B")
+        );
+
+        let mut other_source = short.clone();
+        other_source.source_player = 2;
+        state.record_status(other_source).await;
+        assert_eq!(
+            state.monitor_snapshot(3).await.deck.unwrap().effective_key,
+            None
+        );
+
+        let _: Option<bool> = state
+            .actor_reply(|reply| ServerMsg::RecordStatus {
+                status: detailed,
+                seen_at: Instant::now() - Duration::from_secs(2),
+                reply,
+            })
+            .await;
+        state.record_status(short).await;
+        let expired = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(expired.effective_key, None);
+        assert_eq!(expired.key_shift_cents, None);
+    }
+
+    #[test]
+    fn short_status_does_not_reuse_a_key_from_a_different_pitch() {
+        let mut short = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        let mut detailed = short.clone();
+        detailed.key = Some([0, 1, 0]);
+        detailed.key_shift_cents = Some(100);
+        detailed.master_tempo = Some(0);
+        short.pitch_1 += 100_000;
+        let mut deck = short.deck_state(None, None);
+        short.apply_key_telemetry(&detailed, &mut deck);
+        assert_eq!(deck.effective_key, None);
+        assert_eq!(deck.key_shift_cents, Some(100));
     }
 
     #[test]

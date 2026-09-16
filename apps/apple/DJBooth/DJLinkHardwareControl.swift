@@ -64,7 +64,7 @@ final class DJLinkHardwareControl: @unchecked Sendable {
                 throw DJLinkBindingError(message: "Hardware command expired before execution")
             }
             guard operation.hasPrefix("server.") || operation.hasPrefix("function.") ||
-                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush", "diagnostics.snapshot", "recording.status", "midi.snapshot", "audio.inputs"].contains(operation) else {
+                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush", "diagnostics.snapshot", "recording.status", "recording.prepare", "midi.snapshot", "audio.inputs"].contains(operation) else {
                 throw DJLinkBindingError(message: "Operation is not a DJ Link hardware control")
             }
             let args = try JSONSerialization.data(withJSONObject: input["arguments"] ?? [:], options: [.fragmentsAllowed])
