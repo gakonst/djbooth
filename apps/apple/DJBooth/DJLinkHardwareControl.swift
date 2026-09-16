@@ -1,6 +1,7 @@
 #if os(iOS) && DEBUG
 import Foundation
 import AVFoundation
+import CoreMIDI
 import UIKit
 
 /// Paired-device development transport only. All operations go through the
@@ -10,6 +11,7 @@ final class DJLinkHardwareControl: @unchecked Sendable {
     private let queue = DispatchQueue(label: "xyz.gakonst.djbooth.hardware-control", qos: .utility)
     private var timer: DispatchSourceTimer?
     private var recordingCommandPending = false
+    private var midiClient: MIDIClientRef = 0
     @MainActor weak var model: BoothModel?
 
     @MainActor func start() {
@@ -62,7 +64,7 @@ final class DJLinkHardwareControl: @unchecked Sendable {
                 throw DJLinkBindingError(message: "Hardware command expired before execution")
             }
             guard operation.hasPrefix("server.") || operation.hasPrefix("function.") ||
-                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush", "recording.status", "audio.inputs"].contains(operation) else {
+                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush", "recording.status", "midi.snapshot", "audio.inputs"].contains(operation) else {
                 throw DJLinkBindingError(message: "Operation is not a DJ Link hardware control")
             }
             let args = try JSONSerialization.data(withJSONObject: input["arguments"] ?? [:], options: [.fragmentsAllowed])
@@ -74,9 +76,22 @@ final class DJLinkHardwareControl: @unchecked Sendable {
                     ["name": input.portName, "uid": input.uid, "type": input.portType.rawValue,
                      "channels": input.channels?.count ?? 0]
                 }
+                // CoreMIDI discourages disposing the app's last client: doing
+                // so can make subsequent client creation fail until relaunch.
+                let midiResult = midiClient == 0 ? MIDIClientCreateWithBlock("DJ Booth diagnostics" as CFString, &midiClient) { _ in } : noErr
+                func endpoint(_ source: MIDIEndpointRef) -> [String: Any] {
+                    var name: Unmanaged<CFString>?
+                    var uniqueID: Int32 = 0
+                    MIDIObjectGetStringProperty(source, kMIDIPropertyDisplayName, &name)
+                    MIDIObjectGetIntegerProperty(source, kMIDIPropertyUniqueID, &uniqueID)
+                    return ["name": name?.takeRetainedValue() as String? ?? "MIDI", "id": uniqueID]
+                }
                 result = try JSONSerialization.data(withJSONObject: ["available": (session.availableInputs ?? []).map(port),
                     "current": session.currentRoute.inputs.map(port), "outputs": session.currentRoute.outputs.map(port), "sampleRate": session.sampleRate,
-                    "category": session.category.rawValue, "permission": AVAudioApplication.shared.recordPermission.rawValue])
+                    "category": session.category.rawValue, "permission": AVAudioApplication.shared.recordPermission.rawValue,
+                    "midiStatus": midiResult,
+                    "midiSources": (0..<MIDIGetNumberOfSources()).map { endpoint(MIDIGetSource($0)) },
+                    "midiDestinations": (0..<MIDIGetNumberOfDestinations()).map { endpoint(MIDIGetDestination($0)) }])
             } else { result = try DJLinkBindings.request(operation, arguments: args) }
             response["value"] = try JSONSerialization.jsonObject(with: result, options: [.fragmentsAllowed])
             response["ok"] = true

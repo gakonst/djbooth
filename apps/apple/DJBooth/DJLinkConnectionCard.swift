@@ -72,7 +72,7 @@ struct DJLinkConnectionCard: View {
     private var mixerRows: some View {
         let now = ProcessInfo.processInfo.systemUptime
         let mixer = link.selectedMixer
-        let crossfader = mixer.flatMap { $0.isFresh(at: now) ? $0.event.mixer.crossfader : nil }
+        let crossfader = link.mixerPercent("crossfader.position", networkValue: mixer.flatMap { $0.isFresh(at: now) ? $0.event.mixer.crossfader : nil })
         return VStack(spacing: 4) {
             ScrollView(.vertical) {
                 VStack(spacing: 0) {
@@ -83,7 +83,7 @@ struct DJLinkConnectionCard: View {
             }.frame(height: CGFloat(min(link.detectedDecks.count, 4)) * 66)
                 .accessibilityIdentifier("djlink.mixer.rows")
             HStack(spacing: 8) {
-                Text(mixer == nil ? "Waiting for mixer data" : (mixer?.isFresh(at: now) == true ? "DJM-A9" : "Mixer signal lost"))
+                Text(!link.midiMixers.isEmpty ? "DJM-A9 · USB MIDI" : mixer == nil ? "Waiting for mixer data" : (mixer?.isFresh(at: now) == true ? "DJM-A9" : "Mixer signal lost"))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("Crossfader")
@@ -91,17 +91,21 @@ struct DJLinkConnectionCard: View {
                     Capsule().fill(.white.opacity(0.12)).frame(height: 3).frame(maxHeight: .infinity)
                     if let crossfader {
                         Capsule().fill(BoothStyle.accent).frame(width: 3, height: 12)
-                            .offset(x: (geometry.size.width - 3) * Double(crossfader) / 255)
+                            .offset(x: (geometry.size.width - 3) * crossfader / 100)
                     }
                 }.frame(width: 48, height: 12)
                     .accessibilityLabel("Crossfader")
-                    .accessibilityValue(crossfader.map { "\(Int((Double($0) / 255 * 100).rounded())) percent from left" } ?? "Unavailable")
+                    .accessibilityValue(crossfader.map { "\(Int($0.rounded())) percent from left" } ?? "Unavailable")
             }.boothFont(10, relativeTo: .caption2).padding(.horizontal, 14).padding(.bottom, 10)
         }
     }
     private func mixerRow(_ device: DJLinkStatus.Device, mixer: DJLinkMixerObservation?, now: TimeInterval) -> some View {
         let channelNumber = link.mixerChannel(for: device.player)
         let channel = mixer?.channel(channelNumber, at: now)
+        func value(_ control: String, _ networkValue: UInt8?) -> Double? {
+            guard let channelNumber else { return nil }
+            return link.mixerPercent("channel.\(channelNumber).\(control)", networkValue: networkValue)
+        }
         let selected = !link.showingPhonePlayer && link.selectedDeck?.id == device.player
         return HStack(spacing: 5) {
             VStack(alignment: .leading, spacing: 0) {
@@ -122,17 +126,17 @@ struct DJLinkConnectionCard: View {
                 }.accessibilityLabel("Mixer channel for deck \(device.player)")
                     .accessibilityIdentifier("djlink.channel.\(device.player)")
             }.boothFont(10, relativeTo: .caption2).frame(width: 57, alignment: .leading)
-            mixerControl("Trim", value: channel?.trim, player: device.player)
-            mixerControl("High", value: channel?.eq_high, player: device.player)
-            mixerControl("Mid", value: channel?.eq_mid, player: device.player)
-            mixerControl("Low", value: channel?.eq_low, player: device.player)
-            mixerControl("Color", value: channel?.color, player: device.player)
-            mixerControl("Fader", value: channel?.fader, player: device.player, fader: true)
+            mixerControl("Trim", value: value("trim", channel?.trim), player: device.player)
+            mixerControl("High", value: value("eq.high", channel?.eq_high), player: device.player)
+            mixerControl("Mid", value: value("eq.mid", channel?.eq_mid), player: device.player)
+            mixerControl("Low", value: value("eq.low", channel?.eq_low), player: device.player)
+            mixerControl("Color", value: value("color", channel?.color), player: device.player)
+            mixerControl("Fader", value: value("fader", channel?.fader), player: device.player, fader: true)
         }.buttonStyle(.plain).padding(.horizontal, 10).frame(height: 66)
             .background(selected ? Color.white.opacity(0.035) : .clear)
             .accessibilityElement(children: .contain).accessibilityIdentifier("djlink.mixer.row.\(device.player)")
     }
-    private func mixerControl(_ label: String, value: UInt8?, player: Int, fader: Bool = false) -> some View {
+    private func mixerControl(_ label: String, value: Double?, player: Int, fader: Bool = false) -> some View {
         VStack(spacing: 3) {
             Text(label).foregroundStyle(.secondary)
             ZStack {
@@ -140,22 +144,22 @@ struct DJLinkConnectionCard: View {
                     Capsule().fill(.white.opacity(0.15)).frame(width: 3, height: 18)
                     if let value {
                         Capsule().fill(BoothStyle.accent).frame(width: 13, height: 3)
-                            .offset(y: 8 - Double(value) / 255 * 16)
+                            .offset(y: 8 - value / 100 * 16)
                     }
                 } else {
                     Circle().stroke(.white.opacity(0.18), lineWidth: 2).frame(width: 18, height: 18)
                     if let value {
                         Capsule().fill(BoothStyle.accent).frame(width: 2, height: 8).offset(y: -4)
-                            .rotationEffect(.degrees(Double(value) / 255 * 270 - 135))
+                            .rotationEffect(.degrees(value / 100 * 270 - 135))
                     }
                 }
             }.frame(height: 20)
-            Text(value.map { "\(Int((Double($0) / 255 * 100).rounded()))%" } ?? "—")
+            Text(value.map { "\(Int($0.rounded()))%" } ?? "—")
                 .monospacedDigit().foregroundStyle(value == nil ? .secondary : .primary)
         }.boothFont(9, relativeTo: .caption2).frame(maxWidth: .infinity)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Deck \(player) \(label)")
-            .accessibilityValue(value.map { "\(Int((Double($0) / 255 * 100).rounded())) percent" } ?? "Unavailable")
+            .accessibilityValue(value.map { "\(Int($0.rounded())) percent" } ?? "Unavailable")
             .accessibilityIdentifier("djlink.mixer.\(player).\(label.lowercased())")
     }
     private var title: String {

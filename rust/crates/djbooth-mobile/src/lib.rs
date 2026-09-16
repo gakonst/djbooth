@@ -1,5 +1,6 @@
 //! In-process C ABI for the Apple app. Requests are ephemeral projections of its
 //! library, not another durable workflow database. All calls run off MainActor.
+mod midi;
 mod recording;
 mod spotify;
 
@@ -284,6 +285,9 @@ fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
 }
 
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("midi.") {
+        return midi::request(operation, input);
+    }
     if let Some(operation) = operation.strip_prefix("recording.") {
         return recording::request(operation, input);
     }

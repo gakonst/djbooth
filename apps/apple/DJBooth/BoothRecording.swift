@@ -115,23 +115,43 @@ private final class RecordingMIDIQueue: @unchecked Sendable {
     }
 }
 
-@MainActor final class BoothMIDIInput {
+actor BoothMIDIInput {
     private var client: MIDIClientRef = 0
     private var ports: [MIDIEndpointRef: MIDIPortRef] = [:]
+    private var identities: [MIDIEndpointRef: String] = [:]
     private let queue = RecordingMIDIQueue()
     private var failure: String?
-    func start() throws {
-        let result = MIDIClientCreateWithBlock("DJ Booth recording" as CFString, &client) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refresh() }
+    private let operation: String
+    init(live: Bool = false) { operation = live ? "midi.packet" : "recording.midi" }
+    private func connection(_ identity: String, connected: Bool) {
+        guard operation == "midi.packet" else { return }
+        queue.enqueue {
+            do {
+                _ = try DJLinkBindings.request(connected ? "midi.connect" : "midi.disconnect",
+                    arguments: JSONSerialization.data(withJSONObject: ["source": identity]))
+            } catch { AppDiagnostics.shared.event("midi_connection_failed", ["source": identity, "error": error.localizedDescription]) }
         }
+    }
+    func start() throws {
+        guard client == 0 else { return }
+        AppDiagnostics.shared.event("midi_client_starting", ["operation": operation])
+        let result = MIDIClientCreateWithBlock("DJ Booth MIDI" as CFString, &client) { [weak self] _ in
+            Task { [weak self] in await self?.refresh() }
+        }
+        AppDiagnostics.shared.event("midi_client_started", ["operation": operation, "status": String(result)])
         guard result == noErr else { throw RecordingFailure(message: "CoreMIDI could not start (\(result)).") }
         refresh()
     }
     private func refresh() {
         guard client != 0 else { return }
-        let sources = Set((0..<MIDIGetNumberOfSources()).map { MIDIGetSource($0) })
+        let sources = Set((0..<MIDIGetNumberOfSources()).map { MIDIGetSource($0) }.filter { source in
+            var offline: Int32 = 0
+            MIDIObjectGetIntegerProperty(source, kMIDIPropertyOffline, &offline)
+            return offline == 0
+        })
         for source in Array(ports.keys) where !sources.contains(source) {
             if let port = ports.removeValue(forKey: source) { MIDIPortDispose(port) }
+            if let identity = identities.removeValue(forKey: source) { connection(identity, connected: false) }
         }
         for source in sources where ports[source] == nil {
             var value: Unmanaged<CFString>?
@@ -143,6 +163,7 @@ private final class RecordingMIDIQueue: @unchecked Sendable {
             let identity = "\(name) [\(uniqueID)]"
             var port: MIDIPortRef = 0
             let queue = self.queue
+            let operation = self.operation
             let result = MIDIInputPortCreateWithBlock(client, name as CFString, &port) { list, _ in
                 do {
                     var packet = UnsafeRawPointer(list).advanced(by: MemoryLayout<MIDIPacketList>.offset(of: \.packet)!).assumingMemoryBound(to: MIDIPacket.self)
@@ -153,28 +174,40 @@ private final class RecordingMIDIQueue: @unchecked Sendable {
                         queue.enqueue {
                             do {
                                 let timestamp = hostTime == 0 ? UInt64(ProcessInfo.processInfo.systemUptime * 1_000_000) : UInt64(AVAudioTime.seconds(forHostTime: hostTime) * 1_000_000)
-                                _ = try DJLinkBindings.request("recording.midi", arguments: JSONSerialization.data(withJSONObject:
+                                _ = try DJLinkBindings.request(operation, arguments: JSONSerialization.data(withJSONObject:
                                     ["source": identity, "timestampUs": timestamp, "bytes": bytes]))
-                            } catch { AppDiagnostics.shared.event("recording_midi_failed", ["error": error.localizedDescription]) }
+                            } catch { AppDiagnostics.shared.event("midi_packet_failed", ["operation": operation, "error": error.localizedDescription]) }
                         }
                         packet = UnsafePointer(MIDIPacketNext(packet))
                     }
                 }
             }
             guard result == noErr else { failure = "MIDI input could not open (\(result))."; continue }
+            // Register before connecting: CoreMIDI may deliver the first packet
+            // synchronously. The serial queue preserves this ordering in Rust.
+            connection(identity, connected: true)
             let connected = MIDIPortConnectSource(port, source, nil)
-            if connected == noErr { ports[source] = port }
-            else { MIDIPortDispose(port); failure = "MIDI source could not connect (\(connected))." }
+            if connected == noErr { ports[source] = port; identities[source] = identity }
+            else {
+                MIDIPortDispose(port); connection(identity, connected: false)
+                failure = "MIDI source could not connect (\(connected))."
+            }
         }
         let count = ports.count
         let error = failure
+        let operation = self.operation
         queue.enqueue {
-            try? RecordingBridge.event("midiSources", ["connected": count, "error": error.map { $0 as Any } ?? NSNull()])
+            AppDiagnostics.shared.event("midi_sources", ["operation": operation, "connected": String(count), "error": error ?? ""])
+            if operation == "recording.midi" {
+                try? RecordingBridge.event("midiSources", ["connected": count, "error": error.map { $0 as Any } ?? NSNull()])
+            }
         }
     }
     func stop() async {
         for port in ports.values { MIDIPortDispose(port) }
         ports = [:]
+        for identity in identities.values { connection(identity, connected: false) }
+        identities = [:]
         if client != 0 { MIDIClientDispose(client); client = 0 }
         await queue.finish()
     }
@@ -224,7 +257,7 @@ private final class RecordingMIDIQueue: @unchecked Sendable {
             timelineStarted = true
             try await PlaybackAudioSession.shared.startRecording(at: folder)
             let midi = BoothMIDIInput(); self.midi = midi
-            do { try midi.start() } catch {
+            do { try await midi.start() } catch {
                 try await Task.detached { try RecordingBridge.event("midiUnavailable", ["error": error.localizedDescription]) }.value
             }
             isRecording = true

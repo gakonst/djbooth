@@ -23,6 +23,22 @@ fn call(operation: &str, input: Value) -> Value {
     response["value"].clone()
 }
 
+#[test]
+fn mobile_ffi_live_midi_works_without_recording_or_network_session() {
+    let source = json!({"source":"DJM-A9 ABI"});
+    call("midi.connect", source.clone());
+    call(
+        "midi.packet",
+        json!({"source":"DJM-A9 ABI","timestampUs":1000,"bytes":[176,2,127,176,11,0]}),
+    );
+    let mixers = call("midi.snapshot", json!({}));
+    let mixer = &mixers[0]["mixer"];
+    assert_eq!(mixer["controls"]["channel.1.eq.high"]["percent"], 100.0);
+    assert_eq!(mixer["controls"]["crossfader.position"]["percent"], 0.0);
+    call("midi.disconnect", source);
+    assert_eq!(call("midi.snapshot", json!({})), json!([]));
+}
+
 fn hex(value: &str) -> Vec<u8> {
     value
         .trim()

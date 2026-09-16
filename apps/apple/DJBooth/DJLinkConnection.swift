@@ -45,6 +45,9 @@ private actor DJLinkEngine {
     }
     private var mixerSubscription: UInt64?
     private var mixers: [String: DJLinkMixerObservation] = [:]
+    func midiStatus() throws -> [DJLinkMIDIMixer] {
+        try request("midi.snapshot", as: [DJLinkMIDIMixer].self)
+    }
     private func mixerStatus() throws -> [String: DJLinkMixerObservation] {
         if mixerSubscription == nil {
             mixerSubscription = try request("server.subscribe_mixer_telemetry", as: UInt64.self)
@@ -252,6 +255,17 @@ private actor DJLinkEngine {
     var decks: [DJLinkDeck] = []
     var mixers: [String: DJLinkMixerObservation] = [:]
     var selectedMixerIP: String?
+    var midiMixers: [DJLinkMIDIMixer] = []
+    private var midiInput: BoothMIDIInput?
+    private var nextMIDIAt: TimeInterval = 0
+    private var midiFailure: String?
+    func mixerPercent(_ control: String, networkValue: UInt8?) -> Double? {
+        if let midi = midiMixers.first(where: { $0.mixer.connected }),
+           let percent = midi.mixer.controls[control]?.percent {
+            return percent
+        }
+        return networkValue.map { Double($0) / 255 * 100 }
+    }
     // 0 means explicitly unassigned. Player/channel matching is a default,
     // not an assertion about the user's physical audio wiring.
     private var channelAssignments: [Int: Int] = [:]
@@ -432,6 +446,14 @@ private actor DJLinkEngine {
     /// Independent of USB storage enumeration, sheets, and library navigation.
     func monitor(model: BoothModel) async {
         AppDiagnostics.shared.event("cdj_monitor_started")
+        if midiInput == nil {
+            let input = BoothMIDIInput(live: true)
+            midiInput = input
+            Task {
+                do { try await input.start() }
+                catch { AppDiagnostics.shared.event("midi_start_failed", ["error": error.localizedDescription]) }
+            }
+        }
         if unattendedHardwareTest {
             UIApplication.shared.isIdleTimerDisabled = true
             AppDiagnostics.shared.event("cdj_unattended_test_awake")
@@ -449,6 +471,19 @@ private actor DJLinkEngine {
         }
         while !Task.isCancelled {
             lastMonitorAt = ProcessInfo.processInfo.systemUptime
+            if lastMonitorAt >= nextMIDIAt {
+                do {
+                    let snapshot = try await engine.midiStatus()
+                    if midiMixers != snapshot { midiMixers = snapshot }
+                    midiFailure = nil
+                } catch {
+                    if midiFailure != error.localizedDescription {
+                        midiFailure = error.localizedDescription
+                        AppDiagnostics.shared.event("midi_snapshot_failed", ["error": error.localizedDescription])
+                    }
+                }
+                nextMIDIAt = lastMonitorAt + 0.1
+            }
             await autoConnect(model: model)
             let interval = UIApplication.shared.applicationState == .background ? 1000 : (status.devices?.isEmpty == false ? 33 : 125)
             do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }

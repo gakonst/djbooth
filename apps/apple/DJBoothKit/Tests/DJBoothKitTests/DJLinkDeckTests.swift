@@ -58,4 +58,12 @@ final class DJLinkDeckTests: XCTestCase {
         XCTAssertNil(observation.channel(3, at: 14), "Old values must not look live after disconnect")
         XCTAssertFalse(observation.isFresh(at: 9))
     }
+    func testLiveMIDISnapshotPreservesUnknownControls() throws {
+        let json = #"[{"id":"DJM-A9 [1]","packets":2,"mixer":{"device":"DJM-A9 [1]","connected":true,"controls":{"channel.1.eq.high":{"percent":100},"crossfader.position":{"percent":0}}}}]"#
+        let mixers = try JSONDecoder().decode([DJLinkMIDIMixer].self, from: Data(json.utf8))
+        XCTAssertEqual(mixers.first?.mixer.controls["channel.1.eq.high"]?.percent, 100)
+        XCTAssertEqual(mixers.first?.mixer.controls["crossfader.position"]?.percent, 0)
+        XCTAssertNil(mixers.first?.mixer.controls["channel.2.eq.high"])
+        XCTAssertTrue(mixers.first?.mixer.connected == true)
+    }
 }

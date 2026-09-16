@@ -79,3 +79,19 @@ public struct DJLinkMixerObservation: Equatable, Sendable {
         return event.mixer.channels.first { $0.id == number }
     }
 }
+
+/// The desktop Rust booth reducer's MIDI control snapshot. MIDI emits changes,
+/// so values stay valid until CoreMIDI reports that their source disconnected.
+public struct DJLinkMIDIMixer: Decodable, Equatable, Sendable, Identifiable {
+    public struct Control: Decodable, Equatable, Sendable {
+        public let percent: Double?
+    }
+    public struct Mixer: Decodable, Equatable, Sendable {
+        public let device: String
+        public let connected: Bool
+        public let controls: [String: Control]
+    }
+    public let id: String
+    public let packets: UInt64
+    public let mixer: Mixer
+}
