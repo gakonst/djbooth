@@ -1,5 +1,6 @@
 //! In-process C ABI for the Apple app. Requests are ephemeral projections of its
 //! library, not another durable workflow database. All calls run off MainActor.
+mod recording;
 mod spotify;
 
 use std::collections::{BTreeMap, HashSet};
@@ -26,7 +27,7 @@ mod api;
 static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
 struct Session {
-    server: RwLock<DjLinkServer>,
+    server: Arc<RwLock<DjLinkServer>>,
     runtime: Option<Runtime>,
     started: AtomicBool,
     subscriptions: Mutex<api::Subscriptions>,
@@ -35,7 +36,7 @@ struct Session {
 impl Session {
     fn new(server: DjLinkServer, runtime: Runtime, started: bool) -> Self {
         Self {
-            server: RwLock::new(server),
+            server: Arc::new(RwLock::new(server)),
             runtime: Some(runtime),
             started: AtomicBool::new(started),
             subscriptions: Mutex::new(Default::default()),
@@ -60,15 +61,16 @@ impl Session {
             })).collect::<Vec<_>>()})
     }
     fn stop(&self) {
-        self.server.write().expect("DJ Link server lock").stop();
         self.started.store(false, Ordering::Release);
+        let _ = recording::stop();
+        self.server.write().expect("DJ Link server lock").stop();
         *self.subscriptions.lock().expect("Subscription lock") = Default::default();
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
         self.server
-            .get_mut()
+            .write()
             .unwrap_or_else(|error| error.into_inner())
             .stop();
         if let Some(runtime) = self.runtime.take() {
@@ -282,6 +284,9 @@ fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
 }
 
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("recording.") {
+        return recording::request(operation, input);
+    }
     if let Some(operation) = operation.strip_prefix("diagnostics.") {
         return diagnostic_request(operation, input);
     }

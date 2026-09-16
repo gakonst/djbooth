@@ -117,6 +117,9 @@ private actor DJLinkEngine {
         let omitted: Int
     }
     private var cached: Prepared?
+    func recordingLibrary() throws -> Data {
+        try JSONEncoder().encode(cached?.tracks ?? [])
+    }
     private var folder: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("DJBooth-DJLink/v1", isDirectory: true)
@@ -297,9 +300,16 @@ private actor DJLinkEngine {
     private var backgroundExpired = false
     private var backgroundGeneration = UUID()
     private var backgroundAudio = false
+    let recording = BoothRecordingController()
+    func recordingLibrary() async throws -> Data { try await engine.recordingLibrary() }
+    private var hasBackgroundAudio: Bool { backgroundAudio || recording.isRecording }
+    func recordingChanged(_ active: Bool) {
+        if active { backgroundExpired = false; endBackgroundTime() }
+        else if UIApplication.shared.applicationState == .background { extendBackgroundSession() }
+    }
     private var lastMonitorAt = ProcessInfo.processInfo.systemUptime
     private var canRun: Bool {
-        UIApplication.shared.applicationState != .background || backgroundTask != .invalid || backgroundAudio
+        UIApplication.shared.applicationState != .background || backgroundTask != .invalid || hasBackgroundAudio
     }
 
     #if DEBUG && targetEnvironment(simulator)
@@ -360,7 +370,7 @@ private actor DJLinkEngine {
         if UIApplication.shared.applicationState == .background { extendBackgroundSession() }
     }
     private func extendBackgroundSession() {
-        guard status.running || busy, !backgroundAudio, backgroundTask == .invalid else { return }
+        guard status.running || busy, !hasBackgroundAudio, backgroundTask == .invalid else { return }
         guard !backgroundExpired else {
             Task { await self.disconnect(message: "Reopen DJBooth to reconnect your decks.") }
             return
@@ -372,7 +382,7 @@ private actor DJLinkEngine {
                       UIApplication.shared.applicationState == .background else { return }
                 self.backgroundExpired = true
                 AppDiagnostics.shared.event("cdj_background_time_expired")
-                if !self.backgroundAudio {
+                if !self.hasBackgroundAudio {
                     await self.disconnect(message: "iOS paused the CDJ connection. Keep DJBooth open for uninterrupted playback.")
                 }
                 self.endBackgroundTime()
@@ -590,6 +600,7 @@ private actor DJLinkEngine {
         }
     }
     func disconnect(message: String? = nil) async {
+        if recording.isRecording { await recording.stop(reason: message ?? "The DJ Link connection ended. Recording saved.") }
         AppDiagnostics.shared.event("cdj_disconnect", ["connection": generation.uuidString, "reason": message ?? "lifecycle_or_interface_change"])
         lifecycle.resetRetry()
         activeInterfaceID = nil
@@ -648,7 +659,8 @@ struct DJLinkConnectionView: View {
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
                 }
                 Section("While connected") {
-                    Text("Keep DJBooth open for uninterrupted deck playback. Brief app switches use the background time iOS grants. A locked phone or a longer switch can pause this USB network connection; returning to the app reconnects automatically.")
+                    NavigationLink("Record audio + deck timeline") { BoothRecordingView(model: model) }
+                    Text("An active USB audio recording keeps the audio session running in the background. Otherwise, keep DJBooth open for uninterrupted deck playback; iOS limits background time and returning to the app reconnects automatically.")
                     Text("Only audio already downloaded to this phone is shared. Reconnect after downloading more tracks or changing playlists.")
                     Text("CDJ waveforms, beat grids, seek tables, and cues download with your tracks. Connecting never analyzes audio.")
                         .font(.caption).foregroundStyle(.secondary)

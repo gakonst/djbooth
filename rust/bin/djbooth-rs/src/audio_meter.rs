@@ -1,3 +1,4 @@
+pub(crate) use djtools_link::booth::{MeterFrame, StereoMeter};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -12,27 +13,9 @@ const PUBLISH_INTERVAL: Duration = Duration::from_millis(33);
 const SILENCE_DBFS: f64 = -120.0;
 
 #[derive(Clone, Debug)]
-pub(crate) struct MeterFrame {
-    pub(crate) pairs: Vec<StereoMeter>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) enum MeterEvent {
     Frame(MeterFrame),
     Disconnected { device: String, error: String },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct StereoMeter {
-    pub(crate) pair: u8,
-    pub(crate) left_channel: u8,
-    pub(crate) right_channel: u8,
-    pub(crate) peak_dbfs: f64,
-    pub(crate) rms_dbfs: f64,
-    pub(crate) left_peak_dbfs: f64,
-    pub(crate) right_peak_dbfs: f64,
-    pub(crate) left_rms_dbfs: f64,
-    pub(crate) right_rms_dbfs: f64,
 }
 
 pub(crate) fn connect_audio_meter(

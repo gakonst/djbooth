@@ -454,13 +454,70 @@ import DJBoothKit
 /// updates; AVPlayer itself and its observation remain owned by MainActor.
 actor PlaybackAudioSession {
     static let shared = PlaybackAudioSession()
+    private var recordingEngine: AVAudioEngine?
+    private var recordingWriter: BoothAudioWriter?
+    private var recordingInput: String?
+    private var recordingRate: Double = 0
+    private var recordingChannels: AVAudioChannelCount = 0
+    struct Input: Sendable { let uid, name: String }
     func activate() throws {
         try Task.checkCancellation()
         let session = AVAudioSession.sharedInstance()
-        if session.category != .playback || session.mode != .default {
+        if recordingInput == nil && (session.category != .playback || session.mode != .default) {
             try session.setCategory(.playback, mode: .default)
         }
         try session.setActive(true)
+    }
+    func prepareRecording() throws -> Input {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+        try session.setActive(true)
+        let inputs = (session.availableInputs ?? []).filter { $0.portType == .usbAudio }
+        guard let usb = inputs.first(where: { $0.portName.localizedCaseInsensitiveContains("DJM-A9") }) ?? (inputs.count == 1 ? inputs.first : nil) else {
+            throw DJLinkBindingError(message: "Connect the mixer's USB audio output to the phone. The CDJ network cable alone does not carry master audio.")
+        }
+        try session.setPreferredInput(usb)
+        if session.maximumInputNumberOfChannels > 0 {
+            try session.setPreferredInputNumberOfChannels(session.maximumInputNumberOfChannels)
+        }
+        guard session.currentRoute.inputs.contains(where: { $0.uid == usb.uid && $0.portType == .usbAudio }) else {
+            throw DJLinkBindingError(message: "The USB mixer is not the active audio input.")
+        }
+        recordingInput = usb.uid
+        return Input(uid: usb.uid, name: usb.portName)
+    }
+    func startRecording(at directory: URL) throws {
+        guard recordingInput != nil else { throw DJLinkBindingError(message: "Select a USB mixer before recording.") }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw DJLinkBindingError(message: "The mixer has no audio input channels.") }
+        let writer = try BoothAudioWriter(url: directory.appendingPathComponent("master.caf"), format: format)
+        recordingRate = format.sampleRate; recordingChannels = format.channelCount
+        recordingWriter = writer; recordingEngine = engine
+        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, time in writer.append(buffer, at: time) }
+        try engine.start()
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute.inputs.map { ["name": $0.portName, "uid": $0.uid, "type": $0.portType.rawValue] }
+        _ = try DJLinkBindings.request("recording.event", arguments: JSONSerialization.data(withJSONObject: ["kind": "audioStarted", "payload": [
+            "file": "master.caf", "sampleRate": format.sampleRate, "channels": format.channelCount,
+            "inputLatency": session.inputLatency, "ioBufferDuration": session.ioBufferDuration, "inputs": route]]))
+    }
+    func recordingHealth() async -> String? {
+        guard let engine = recordingEngine, engine.isRunning else { return "The audio engine stopped. Recording saved." }
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate == recordingRate, format.channelCount == recordingChannels else { return "The mixer audio format changed. Recording saved." }
+        return await recordingWriter?.health()
+    }
+    func stopRecording() async -> String? {
+        if let engine = recordingEngine { engine.inputNode.removeTap(onBus: 0); engine.stop() }
+        recordingEngine = nil
+        let writer = recordingWriter; recordingWriter = nil
+        let error = await writer?.finish()
+        recordingInput = nil
+        do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default) }
+        catch { return error.localizedDescription }
+        return error
     }
 }
 #endif

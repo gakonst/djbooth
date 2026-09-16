@@ -1,13 +1,16 @@
 #if os(iOS) && DEBUG
 import Foundation
+import AVFoundation
 import UIKit
 
 /// Paired-device development transport only. All operations go through the
-/// same Rust bindings as the app; this opens no network listener.
+/// same Rust bindings and native recording controller as the app; no network listener.
 final class DJLinkHardwareControl: @unchecked Sendable {
     static let shared = DJLinkHardwareControl()
     private let queue = DispatchQueue(label: "xyz.gakonst.djbooth.hardware-control", qos: .utility)
     private var timer: DispatchSourceTimer?
+    private var recordingCommandPending = false
+    @MainActor weak var model: BoothModel?
 
     @MainActor func start() {
         guard ProcessInfo.processInfo.arguments.contains("--dj-link-hardware-test") else { return }
@@ -32,6 +35,7 @@ final class DJLinkHardwareControl: @unchecked Sendable {
     }
 
     private func poll(_ root: URL) {
+        guard !recordingCommandPending else { return }
         let request = root.appendingPathComponent("request.json")
         guard let data = try? Data(contentsOf: request), data.count <= 1024 * 1024,
               let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -40,18 +44,40 @@ final class DJLinkHardwareControl: @unchecked Sendable {
               let expires = input["expires_ms"] as? Double else { return }
         // Claim before execution. A client timeout must never retry a mutation.
         do { try FileManager.default.removeItem(at: request) } catch { return }
+        if operation.hasPrefix("phone.recording.") {
+            recordingCommandPending = true
+            Task {
+                let response = await self.controlRecording(data)
+                self.queue.async {
+                    defer { self.recordingCommandPending = false }
+                    do { try response.write(to: root.appendingPathComponent("response.json"), options: .atomic) }
+                    catch { NSLog("[DJLink] recording response failed: %@", error.localizedDescription) }
+                }
+            }
+            return
+        }
         var response: [String: Any] = ["id": id]
         do {
             guard expires > Date().timeIntervalSince1970 * 1000 else {
                 throw DJLinkBindingError(message: "Hardware command expired before execution")
             }
             guard operation.hasPrefix("server.") || operation.hasPrefix("function.") ||
-                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush"].contains(operation) else {
+                    ["status", "interfaces", "api", "diagnostics.status", "diagnostics.flush", "recording.status", "audio.inputs"].contains(operation) else {
                 throw DJLinkBindingError(message: "Operation is not a DJ Link hardware control")
             }
             let args = try JSONSerialization.data(withJSONObject: input["arguments"] ?? [:], options: [.fragmentsAllowed])
             AppDiagnostics.shared.event("hardware_command_started", ["id": id, "operation": operation])
-            let result = try DJLinkBindings.request(operation, arguments: args)
+            let result: Data
+            if operation == "audio.inputs" {
+                let session = AVAudioSession.sharedInstance()
+                func port(_ input: AVAudioSessionPortDescription) -> [String: Any] {
+                    ["name": input.portName, "uid": input.uid, "type": input.portType.rawValue,
+                     "channels": input.channels?.count ?? 0]
+                }
+                result = try JSONSerialization.data(withJSONObject: ["available": (session.availableInputs ?? []).map(port),
+                    "current": session.currentRoute.inputs.map(port), "outputs": session.currentRoute.outputs.map(port), "sampleRate": session.sampleRate,
+                    "category": session.category.rawValue, "permission": AVAudioApplication.shared.recordPermission.rawValue])
+            } else { result = try DJLinkBindings.request(operation, arguments: args) }
             response["value"] = try JSONSerialization.jsonObject(with: result, options: [.fragmentsAllowed])
             response["ok"] = true
         } catch {
@@ -63,6 +89,32 @@ final class DJLinkHardwareControl: @unchecked Sendable {
             try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
                 .write(to: root.appendingPathComponent("response.json"), options: .atomic)
         } catch { NSLog("[DJLink] hardware response failed: %@", error.localizedDescription) }
+    }
+
+    @MainActor private func controlRecording(_ data: Data) async -> Data {
+        var response: [String: Any] = [:]
+        do {
+            guard let input = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let operation = input["operation"] as? String, let expires = input["expires_ms"] as? Double else {
+                throw DJLinkBindingError(message: "Invalid recording request")
+            }
+            response["id"] = input["id"]
+            guard expires > Date().timeIntervalSince1970 * 1000 else { throw DJLinkBindingError(message: "Recording command expired") }
+            guard let model else { throw DJLinkBindingError(message: "The library is still opening") }
+            let recording = model.djLink.recording
+            guard !recording.busy else { throw DJLinkBindingError(message: "Recording is changing state") }
+            switch operation {
+            case "phone.recording.start":
+                await recording.start(model: model)
+                guard recording.isRecording else { throw DJLinkBindingError(message: recording.error ?? "Recording did not start") }
+            case "phone.recording.stop": await recording.stop()
+            default: throw DJLinkBindingError(message: "Unknown recording command")
+            }
+            let result = try await Task.detached { try DJLinkBindings.request("recording.status") }.value
+            response["value"] = try JSONSerialization.jsonObject(with: result)
+            response["ok"] = true
+        } catch { response["ok"] = false; response["error"] = error.localizedDescription }
+        return (try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 }
 #endif

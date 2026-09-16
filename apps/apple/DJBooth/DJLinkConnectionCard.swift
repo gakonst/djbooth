@@ -5,6 +5,7 @@ import DJBoothKit
 struct DJLinkConnectionCard: View {
     @Bindable var model: BoothModel
     @State private var showingMixer = true
+    @State private var showingRecording = false
     private var link: DJLinkConnection { model.djLink }
     private var network: Bool { link.cableDetected || link.busy || link.status.running }
     var body: some View {
@@ -47,6 +48,16 @@ struct DJLinkConnectionCard: View {
                     .frame(minHeight: 32)
             }.accessibilityIdentifier("djlink.mixer.toggle")
             Spacer()
+            Button { showingRecording = true } label: {
+                Label(link.recording.isRecording ? "Recording" : "Record", systemImage: link.recording.isRecording ? "record.circle.fill" : "record.circle")
+                    .foregroundStyle(link.recording.isRecording ? .red : BoothStyle.accent)
+            }.accessibilityIdentifier("recording.open")
+                .sheet(isPresented: $showingRecording) {
+                    NavigationStack {
+                        BoothRecordingView(model: model)
+                            .toolbar { Button("Done") { showingRecording = false } }
+                    }
+                }
             if link.mixers.count > 1 {
                 Menu(link.selectedMixer?.event.source_ip ?? "Select mixer") {
                     ForEach(link.mixers.keys.sorted(), id: \.self) { ip in

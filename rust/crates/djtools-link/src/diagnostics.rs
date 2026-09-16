@@ -329,6 +329,9 @@ pub(crate) fn udp(
     bytes: &[u8],
 ) {
     if let Ok(local) = local {
+        if direction == "rx" {
+            crate::recording::packet(local, peer, bytes);
+        }
         capture("udp", direction, local, peer, 0, bytes);
     }
 }

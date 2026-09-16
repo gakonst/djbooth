@@ -102,6 +102,9 @@ struct BoothRoot: View {
                 Button("OK") { model.message = nil; model.player.error = nil }
             } message: { Text(model.message ?? model.player.error ?? "") }
             .task {
+                #if os(iOS) && DEBUG
+                DJLinkHardwareControl.shared.model = model
+                #endif
                 model.player.onAdvance = { track in Task { await model.play(track, preservingQueue: true) } }
                 async let analysis: Void = model.finishLoadingLibrary()
                 if !PerformanceProbe.offline { await model.startup() }

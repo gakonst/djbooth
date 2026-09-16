@@ -115,7 +115,7 @@ fn mobile_ffi_browse_load_back_switch_and_reconnect() {
         all_tracks: tracks,
         playlists: vec![],
     };
-    for _ in 0..2 {
+    for take in 0..2 {
         call(
             "server.new",
             json!({"config": DjLinkConfig {
@@ -128,6 +128,18 @@ fn mobile_ffi_browse_load_back_switch_and_reconnect() {
         }, "library": library}),
         );
         call("server.start", json!({}));
+        let recording = root.path().join(format!("take-{take}"));
+        assert_eq!(
+            call(
+                "recording.start",
+                json!({"directory":recording,"tracks":[]})
+            )["recording"],
+            true
+        );
+        call(
+            "recording.midi",
+            json!({"source":"DJM-A9", "timestampUs":1000,"bytes":[176,0,127]}),
+        );
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
         client
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -179,6 +191,10 @@ fn mobile_ffi_browse_load_back_switch_and_reconnect() {
             );
         }
         call("server.stop", json!({}));
+        assert_eq!(call("recording.status", json!({}))["recording"], false);
+        let timeline = std::fs::read_to_string(recording.join("events.jsonl")).unwrap();
+        assert!(timeline.contains("recordingStopped"));
+        assert!(timeline.contains("midiRaw"));
         let mut byte = [0];
         assert_eq!(
             client.read(&mut byte).unwrap(),

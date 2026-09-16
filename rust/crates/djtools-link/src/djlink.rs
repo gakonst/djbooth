@@ -15302,4 +15302,69 @@ notes: []
             master_bpm_hundreds: AtomicU16::new(0),
         }
     }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn captures_midi_audio_anchors_and_replay_snapshots_without_overwriting() {
+        use crate::recording::BoothRecording;
+        use serde_json::{Value, json};
+        let directory = tempfile::tempdir().unwrap();
+        let library = LibrarySnapshot {
+            master_db_id: 1,
+            tracks_by_id: Default::default(),
+            all_tracks: vec![],
+            playlists: vec![],
+        };
+        let mut server = DjLinkServer::new(DjLinkConfig::default(), library)
+            .await
+            .unwrap();
+        let actor = tokio::spawn(
+            ServerActor::with_telemetry(server.state.telemetry_tx.clone())
+                .run(server.actor_rx.take().unwrap()),
+        );
+        let server = Arc::new(std::sync::RwLock::new(server));
+        let mut recording =
+            BoothRecording::start(server.clone(), directory.path(), json!([])).unwrap();
+        recording
+            .midi("DJM-A9".into(), 1_000_000, vec![0xb0, 0x00, 127])
+            .unwrap();
+        recording
+            .event(
+                "audioBuffer".into(),
+                json!({"frameOffset":0,"frames":4096,"hostTimeNs":"1000000000"}),
+            )
+            .unwrap();
+        let status = recording.stop().unwrap();
+        assert_eq!(status["recording"], false);
+        assert_eq!(status["gaps"], 0);
+        actor.abort();
+        let bytes = std::fs::read(directory.path().join("events.jsonl")).unwrap();
+        assert!(BoothRecording::start(server.clone(), directory.path(), json!([])).is_err());
+        assert_eq!(
+            std::fs::read(directory.path().join("events.jsonl")).unwrap(),
+            bytes
+        );
+        let rows: Vec<Value> = String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.first().unwrap()["kind"], "recordingStarted");
+        assert_eq!(rows.last().unwrap()["kind"], "recordingStopped");
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "hardware" && row["payload"]["type"] == "snapshot")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "hardware" && row["payload"]["type"] == "event")
+        );
+        assert!(rows.iter().any(|row| row["kind"] == "midiRaw"));
+        assert!(rows.iter().any(|row| row["kind"] == "audioBuffer"));
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(row["sequence"], (index + 1) as u64);
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(row["capturedAt"].as_str().unwrap()).is_ok()
+            );
+            assert!(row["monotonicNs"].as_str().unwrap().parse::<u64>().is_ok());
+        }
+    }
 }
