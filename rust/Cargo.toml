@@ -6,6 +6,7 @@ members = [
   "crates/djtools-link",
   "crates/djbooth-mobile",
 ]
+exclude = ["vendor/librespot-core"]
 resolver = "3"
 
 [workspace.package]
@@ -59,3 +60,7 @@ codegen-units = 1
 lto = "thin"
 panic = "abort"
 strip = "symbols"
+
+# iOS AP protocol compatibility; see vendor/librespot-core/README.djbooth.md.
+[patch.crates-io]
+librespot-core = { path = "vendor/librespot-core" }
