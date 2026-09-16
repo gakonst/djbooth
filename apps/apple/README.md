@@ -122,3 +122,51 @@ Nanocodex approval and agent boundary is simulated, with Alice/Bob fixture accou
 It does not connect real Spotify/SoundCloud accounts, download music, or spend money.
 The test skips when its fixture is absent; use an empty dedicated simulator to avoid
 mixing previous sessions. Fixture servers listen only on loopback ports 8791/8792.
+
+
+## iPhone DJ Link development
+
+The sidebar's **Connect to CDJ** embeds the shared Rust RemoteDB/NFS engine. It projects
+locally downloaded audio and ordered playlists into an in-memory session. Content-addressed
+hard links preserve audio extensions and stable exported paths across reconnects. The C ABI
+uses the shared Rust ANLZ reader/writer only to relocate audio paths. Cloud publishing
+uploads the existing desktop DAT/EXT/2EX files as immutable content-addressed objects;
+normal phone sync downloads them for offline tracks independently of a deck connection.
+The recording hash ties analysis to the exact audio. Sharing omits tracks whose audio or
+analysis is missing. Connecting never decodes audio or runs analysis, and Swift implements
+no ANLZ or DSP encoding. Original waveforms, seek tables, grids, phrases, and cues are retained.
+Keep the app foregrounded: it disables idle sleep while sharing and disconnects on background
+or interface loss. Its source player number is 17, matching the desktop server.
+
+The native Xcode build compiles `djbooth-mobile` for the selected iOS architectures; install
+those Rust targets with rustup first. Normal device builds retain their existing signing and
+automatically discover decks using unicast DJ Link probes on the attached IPv4 subnet.
+They use kernel UDP sockets for discovery and NFS, without the desktop BPF fallback.
+Discovery is limited to actual /16–/30 subnets, probes at most 128 addresses per second,
+checks the phone's /24 and low host addresses first, and repeats while foregrounded.
+After a deck responds, scanning slows to fewer than eight candidates per second to keep
+the USB adapter available for browsing and NFS. Darwin sockets reserve 128 KiB of send
+buffer space for full-size NFS replies; the default 9 KiB limit rejects these datagrams.
+A full /16 search can take about nine minutes; a /24 takes about two seconds per sweep.
+Only valid CDJ/XDJ replies appear as discovered decks. USB interface detection, automatic
+startup, deck discovery, and browsing have been observed on an iPhone 17 Pro and the
+connected deck. Reliable playback and RGB display still require a hardware retest after
+the offline artifact transfer and large-datagram fixes.
+
+`pnpm native:device --device <id>` installs the automatic unicast build.
+Wired network appearance starts sharing without entering addresses or opening the sheet.
+Disconnect pauses automatic sharing until that connection disappears; foregrounding resumes
+wired sharing. For Wi-Fi, select the connection in **Connect to CDJ**.
+
+Optional broadcast discovery needs Apple's Multicast Networking entitlement assigned to
+team and bundle ID `xyz.gakonst.djbooth`, a matching provisioning profile, and an Xcode account.
+With that capability, use `pnpm native:device --device <id> --dj-link`.
+`pnpm --filter @gakonst/djbooth-apple build:ios --physical --dj-link` checks signing without installing.
+Simulator builds exercise the bridge without claiming physical-device connectivity.
+
+For a CDJ-3000, connect the iPhone to the rear USB-B port, wait for the network to appear,
+and select **DJ Booth iPhone** on the deck. A USB Ethernet adapter
+or the same local network is also a test path. The USB transport, iOS kernel UDP behavior,
+and real deck browsing/loading still require a device test; a successful build is not proof of playback.
+See [AlphaTheta's connection guide](https://rekordbox.com/en/support/faq/connecting-to-dj-units/#faq-q100037)
+and [Apple's multicast entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast).

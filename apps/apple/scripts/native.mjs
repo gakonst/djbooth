@@ -27,6 +27,9 @@ Options:
   --launch-only            Relaunch an already installed physical-device app without rebuilding
   --offline-track <id>     Keep a cloud track on this device after it syncs (Debug builds)
   --offline-collection <id> Keep a cloud collection on this device as its tracks arrive (Debug builds)
+  --dj-link               Enable DJ Link signing (requires Apple Multicast Networking approval)
+  --console               Stream physical-device app logs until it exits
+  --physical              Build for iPhone without installing (build:ios)
   --optimized             Optimize Swift (-O) while retaining Debug features
   --demo                  Explicit DEBUG-only sample library
   --only-testing <test>    Restrict native UI tests to one Xcode test identifier
@@ -77,6 +80,7 @@ const build = (platform, options = {}) => {
     if (physical) parameters.push("-allowProvisioningDeviceRegistration");
     if (process.env.DJBOOTH_APPLE_TEAM) parameters.push(`DEVELOPMENT_TEAM=${process.env.DJBOOTH_APPLE_TEAM}`);
   } else parameters.push("CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-");
+  if (args.includes("--dj-link")) parameters.push("DJBOOTH_LINK_ENTITLEMENTS=DJBooth/DJLink.entitlements", "DJBOOTH_LINK_ENABLED=YES");
   parameters.push(...optimizationSettings, `DJBOOTH_OFFLINE_COLLECTION=${offlineCollection ?? ""}`, "build");
   run("xcodebuild", parameters);
   return resolve(derived, "Build/Products", platform === "macos" ? configuration : `${configuration}-${physical ? "iphoneos" : "iphonesimulator"}`, "DJBooth.app");
@@ -110,7 +114,7 @@ if (command === "test-kit") {
 } else {
   await import("./project.mjs");
   switch (command) {
-    case "build": build(args[0] === "ios" ? "ios" : "macos"); break;
+    case "build": build(args[0] === "ios" ? "ios" : "macos", { physical: args.includes("--physical") }); break;
     case "check": build("macos"); build("ios"); break;
     case "run": {
       const platform = args[0] === "ios" ? "ios" : "macos";
@@ -149,7 +153,7 @@ if (command === "test-kit") {
         const app = build("ios", { physical: true });
         run("xcrun", ["devicectl", "device", "install", "app", "--device", device, app]);
       }
-      run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", "xyz.gakonst.djbooth", ...appArguments], { env: { ...process.env, ...environment } });
+      run("xcrun", ["devicectl", "device", "process", "launch", "--device", device, "--terminate-existing", ...(args.includes("--console") ? ["--console"] : []), "xyz.gakonst.djbooth", ...appArguments], { env: { ...process.env, ...environment } });
       break;
     }
     case "test-ui": {

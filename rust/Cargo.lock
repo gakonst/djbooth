@@ -549,6 +549,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "djbooth-mobile"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "djbooth-analyzer",
+ "djtools-link",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "djbooth-rs"
 version = "0.1.0"
 dependencies = [
@@ -596,6 +609,7 @@ dependencies = [
  "image",
  "libc",
  "rusqlite",
+ "serde",
  "socket2",
  "tempfile",
  "thiserror 2.0.19",

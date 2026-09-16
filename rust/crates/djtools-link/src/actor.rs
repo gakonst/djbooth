@@ -597,7 +597,7 @@ impl ServerActor {
             .filter(|(ip, existing)| {
                 **ip != device.ip_addr
                     && (existing.player_number == device.player_number
-                        || existing.mac_addr == device.mac_addr)
+                        || (!device.mac_addr.is_empty() && existing.mac_addr == device.mac_addr))
             })
             .map(|(ip, _)| *ip)
             .collect::<Vec<_>>();

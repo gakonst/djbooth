@@ -16,7 +16,7 @@ pub use djlink::*;
 pub use error::{LinkError, LinkResult};
 pub use library::{
     LibrarySnapshot, LibraryValidationReport, PlaylistRecord, RekordboxLibraryLoad,
-    RekordboxLibraryLoadReport, TrackRecord,
+    RekordboxLibraryLoadReport, TrackRecord, normalize_camelot_key,
 };
 pub use remote_db_audit::{RemoteDbCursorAudit, RemoteDbCursorExchange, audit_remote_db_cursors};
 pub use telemetry::LogLevel;

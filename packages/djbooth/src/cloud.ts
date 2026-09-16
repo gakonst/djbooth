@@ -35,13 +35,14 @@ type CloudTrack = Pick<
   mediaHash?: string;
   mediaExtension?: string;
   waveform?: CloudWaveform;
+  analysis?: { mediaHash: string; dat: string; ext: string; twoEx: string };
 };
 type CloudWaveform = Omit<TrackWaveform, "beatGrid"> & {
   beatGrid?: { times: number[]; beats: number[] };
 };
 type Collection = { id: string; name: string; trackIDs: string[] };
 type Library = Pick<RekordboxLibraryService, "getTracks" | "getPlaylists" | "getAudioPath"> &
-  Partial<Pick<RekordboxLibraryService, "getWaveform">>;
+  Partial<Pick<RekordboxLibraryService, "getWaveform" | "getAnalysisPaths">>;
 type Progress = { phase: string; current: number; total: number };
 export type CloudPublishOptions = {
   endpoint?: string;
@@ -91,6 +92,7 @@ export function cloudTrack(track: TrackSummary, previous?: Change): CloudTrack {
       ? {
           mediaHash: old.mediaHash,
           ...(typeof old.mediaExtension === "string" ? { mediaExtension: old.mediaExtension } : {}),
+          ...(old.analysis?.mediaHash === old.mediaHash ? { analysis: old.analysis } : {}),
         }
       : {}),
   };
@@ -468,6 +470,38 @@ export async function publishCloudLibrary(
           if (waveform) value.waveform = waveform;
           value.mediaHash = digest;
           value.mediaExtension = extname(path).slice(1).toLowerCase();
+          if (track.analyzed && library.getAnalysisPaths) {
+            const paths = library.getAnalysisPaths(track.id);
+            const hashes: string[] = [];
+            for (const type of ["DAT", "EXT", "2EX"] as const) {
+              const path = paths[type];
+              if (!path)
+                throw new Error(`Missing ${type} analysis; run analyze before cloud publish`);
+              const bytes = await readFile(path);
+              const hash = createHash("sha256").update(bytes).digest("hex");
+              const exists = await call(`/v1/media/${hash}`, { method: "HEAD" });
+              if (exists.status === 404) {
+                const uploaded = await checked(
+                  await call(`/v1/media/${hash}`, {
+                    method: "PUT",
+                    headers: {
+                      "Content-Type": "application/octet-stream",
+                      "Content-Length": String(bytes.length),
+                    },
+                    body: bytes,
+                  }),
+                );
+                await uploaded.body?.cancel();
+              } else await checked(exists);
+              hashes.push(hash);
+            }
+            value.analysis = {
+              mediaHash: digest,
+              dat: hashes[0]!,
+              ext: hashes[1]!,
+              twoEx: hashes[2]!,
+            };
+          }
           await publish("track", trackID(track.id), value);
         } catch (error) {
           result.failures.push({
