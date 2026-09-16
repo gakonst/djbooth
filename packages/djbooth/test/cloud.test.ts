@@ -165,6 +165,7 @@ describe("cloud publishing", () => {
         tracks: 1,
         published: 3,
         uploaded: 1,
+        cdjReady: 1,
         failures: [],
         conflicts: [],
       });
@@ -198,6 +199,7 @@ describe("cloud publishing", () => {
         published: 0,
         uploaded: 0,
         reusedMedia: 1,
+        cdjReady: 1,
         failures: [],
         conflicts: [],
       });

@@ -11,6 +11,7 @@ const imported = { playlistId: "17", dbPath: "/data/master.db", entries: 3, sour
 const published = {
   tracks: 3,
   availableAudio: 3,
+  cdjReady: 3,
   conflicts: [],
   failures: [],
   playlists: [{ id: `${options.namespace}:playlist:17`, tracks: 3 }],
@@ -79,6 +80,7 @@ describe("playlist container pipeline", () => {
     { ...published, conflicts: ["track:3"] },
     { ...published, availableAudio: 2 },
     { ...published, tracks: 2 },
+    { ...published, cdjReady: 2 },
   ])("does not report completion for incomplete publication", async (result) => {
     const run = vi.fn().mockResolvedValueOnce(imported).mockResolvedValueOnce(result);
     expect(
@@ -97,7 +99,7 @@ describe("playlist container pipeline", () => {
     const run = vi
       .fn()
       .mockResolvedValueOnce(imported)
-      .mockResolvedValueOnce({ ...published, tracks: 2, availableAudio: 2 });
+      .mockResolvedValueOnce({ ...published, tracks: 2, availableAudio: 2, cdjReady: 2 });
     expect(
       (
         await processCloudImport(

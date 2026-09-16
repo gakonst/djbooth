@@ -3,12 +3,14 @@ import type { PlaylistContainer } from "./playlist-container.js";
 export { PlaylistContainer } from "./playlist-container.js";
 import { authenticate, authRoute, AuthError, type Account } from "./auth.js";
 import { agentRoute } from "./agent.js";
+import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
 
 export interface Env {
   LIBRARY_DB: D1Database;
   MEDIA: R2Bucket;
   CONNECT_API_SERVICE?: Fetcher;
+  LEGACY_LIBRARY_OWNER?: string;
   ASSETS?: Fetcher;
   PLAYLIST_CONTAINERS?: DurableObjectNamespace<PlaylistContainer>;
   IMPORT_PROVIDER_ENV?: string;
@@ -697,6 +699,9 @@ export default {
       .bind(Date.now())
       .run();
     if (!env.PLAYLIST_CONTAINERS) return;
+    await env.LIBRARY_DB.prepare(
+      "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Updating CDJ files in the cloud', updated_at=? WHERE status='complete' AND analysis_version<1",
+    ).bind(Date.now()).run();
     const pending = await env.LIBRARY_DB.prepare(
       "SELECT account_id, id, source FROM import_requests WHERE status IN ('queued','running') ORDER BY created_at LIMIT 100",
     ).all<{ account_id: string; id: string; source: string }>();
@@ -720,6 +725,8 @@ export default {
       )
         return env.ASSETS.fetch(request);
       const account = await authenticate(request, env);
+      if (url.pathname === "/v1/migrations/legacy")
+        return await migrateLegacy(request, env, account);
       if (url.pathname.startsWith("/v1/agent/"))
         return await agentRoute(request, env, account, readJSON);
       return await accountFetch(request, env, account);

@@ -12,6 +12,7 @@ export type ImportProgress = {
   total: number;
   message: string;
   collectionID?: string;
+  analysisVersion?: 1;
 };
 export type CommandRunner = (
   args: string[],
@@ -28,6 +29,7 @@ const importResult = z.object({
 const publishResult = z.object({
   tracks: z.number().int().nonnegative(),
   availableAudio: z.number().int().nonnegative(),
+  cdjReady: z.number().int().nonnegative(),
   conflicts: z.array(z.string()),
   failures: z.array(z.unknown()),
   playlists: z.array(z.object({ id: z.string(), tracks: z.number().int().nonnegative() })),
@@ -350,6 +352,7 @@ export async function processCloudImport(
     published.conflicts.length ||
     published.tracks === 0 ||
     published.availableAudio !== published.tracks ||
+    published.cdjReady !== published.tracks ||
     published.playlists.find((playlist) => playlist.id === collectionID)?.tracks !== result.entries
   )
     return {
@@ -357,12 +360,13 @@ export async function processCloudImport(
       phase: "failed",
       current: 0,
       total: 1,
-      message: `Publishing needs attention: ${published.failures.length} upload failures, ${published.conflicts.length} conflicts. Retry to resume; review conflicting library edits in settings.`,
+      message: `Publishing needs attention: ${published.cdjReady}/${published.tracks} tracks have CDJ files, ${published.failures.length} upload failures, ${published.conflicts.length} conflicts. Retry to resume.`,
       collectionID,
     };
   return {
     status: "complete",
     phase: "complete",
+    analysisVersion: 1,
     current: result.entries,
     total: result.entries,
     message: result.sourceSetFallbacks
