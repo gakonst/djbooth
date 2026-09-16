@@ -204,30 +204,10 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
         let observed = state.clone();
         rt.spawn(async move {
             while let Some(event) = events.recv().await {
-                let Ok(mut state) = observed.lock() else { break };
-                if let PlayerEvent::PlayRequestIdChanged { play_request_id } = &event {
-                    let next = state["pendingLoads"].as_array_mut().and_then(|pending| {
-                        if pending.is_empty() { None } else { Some(pending.remove(0)) }
-                    });
-                    if next.as_ref() == Some(&state["requestID"]) {
-                        state["playerRequestID"] = json!(play_request_id);
-                    }
-                    continue;
-                }
-                if let Some(id) = event.get_play_request_id() {
-                    if state["playerRequestID"].as_u64() != Some(id) { continue; }
-                }
-                match event {
-                    PlayerEvent::Playing { track_id, position_ms, .. } | PlayerEvent::PositionChanged { track_id, position_ms, .. } => {
-                        if state["track"].as_str() == track_id.to_uri().ok().as_deref() { state["position"] = json!(position_ms); state["playing"] = json!(true); }
-                    }
-                    PlayerEvent::Paused { track_id, position_ms, .. } => {
-                        if state["track"].as_str() == track_id.to_uri().ok().as_deref() { state["position"] = json!(position_ms); state["playing"] = json!(false); }
-                    }
-                    PlayerEvent::EndOfTrack { track_id, .. } => { if state["track"].as_str() == track_id.to_uri().ok().as_deref() { state["playing"] = json!(false); state["ended"] = json!(true); } }
-                    PlayerEvent::Unavailable { track_id, .. } => { if state["track"].as_str() == track_id.to_uri().ok().as_deref() { state["playing"] = json!(false); state["error"] = json!("Spotify could not play this track. Check Premium and regional availability."); } }
-                    _ => {}
-                }
+                let Ok(mut state) = observed.lock() else {
+                    break;
+                };
+                apply_player_event(&mut state, event);
             }
         });
         *engine = Some(Engine {
@@ -265,8 +245,10 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
                 .cloned()
                 .unwrap_or_default();
             pending.push(input["requestID"].clone());
+            let last_player_request_id = state["lastPlayerRequestID"].clone();
             *state = json!({"track": uri, "requestID": input["requestID"], "pendingLoads": pending,
-                "playing": false, "position": 0, "ended": false});
+                "lastPlayerRequestID": last_player_request_id,
+                "playing": false, "position": position(&input)?, "ended": false});
             drop(state);
             clear_pcm();
             AUDIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -301,6 +283,84 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
     }
     Ok(json!({}))
 }
+fn apply_player_event(state: &mut Value, event: PlayerEvent) {
+    if let PlayerEvent::PlayRequestIdChanged { play_request_id } = event {
+        // Seeking during loading emits this event again with the SAME engine ID.
+        // Such a restart must not consume a newer Swift load queued behind it.
+        if state["lastPlayerRequestID"]
+            .as_u64()
+            .is_some_and(|last| play_request_id <= last)
+        {
+            return;
+        }
+        state["lastPlayerRequestID"] = json!(play_request_id);
+        let next = state["pendingLoads"].as_array_mut().and_then(|pending| {
+            if pending.is_empty() {
+                None
+            } else {
+                Some(pending.remove(0))
+            }
+        });
+        if next.as_ref() == Some(&state["requestID"]) {
+            state["playerRequestID"] = json!(play_request_id);
+        }
+        return;
+    }
+    if let Some(id) = event.get_play_request_id() {
+        if state["playerRequestID"].as_u64() != Some(id) {
+            return;
+        }
+    }
+    match event {
+        PlayerEvent::Playing {
+            track_id,
+            position_ms,
+            ..
+        }
+        | PlayerEvent::PositionChanged {
+            track_id,
+            position_ms,
+            ..
+        } => {
+            if state["track"].as_str() == track_id.to_uri().ok().as_deref() {
+                state["position"] = json!(position_ms);
+                state["playing"] = json!(true);
+            }
+        }
+        PlayerEvent::Paused {
+            track_id,
+            position_ms,
+            ..
+        } => {
+            if state["track"].as_str() == track_id.to_uri().ok().as_deref() {
+                state["position"] = json!(position_ms);
+                state["playing"] = json!(false);
+            }
+        }
+        PlayerEvent::Seeked {
+            track_id,
+            position_ms,
+            ..
+        } => {
+            if state["track"].as_str() == track_id.to_uri().ok().as_deref() {
+                state["position"] = json!(position_ms);
+            }
+        }
+        PlayerEvent::EndOfTrack { track_id, .. } => {
+            if state["track"].as_str() == track_id.to_uri().ok().as_deref() {
+                state["playing"] = json!(false);
+                state["ended"] = json!(true);
+            }
+        }
+        PlayerEvent::Unavailable { track_id, .. } => {
+            if state["track"].as_str() == track_id.to_uri().ok().as_deref() {
+                state["playing"] = json!(false);
+                state["error"] = json!("Spotify could not load this track. Please retry.");
+            }
+        }
+        _ => {}
+    }
+}
 fn position(input: &Value) -> Result<u32> {
     let value = input["position"].as_u64().unwrap_or(0);
     ensure!(value <= u32::MAX as u64, "Invalid playback position");
@@ -325,6 +385,60 @@ mod tests {
         assert_eq!(left, [0.1, 0.3, 0.0]);
         assert_eq!(right, [0.2, 0.4, 0.0]);
         AUDIBLE.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[test]
+    fn seek_restart_does_not_consume_a_newer_queued_load() {
+        let uri = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+        let mut state = json!({"track": uri, "requestID": "new", "pendingLoads": ["new"],
+            "lastPlayerRequestID": 0, "playing": false, "position": 0, "ended": false});
+        apply_player_event(
+            &mut state,
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 0 },
+        );
+        assert_eq!(state["pendingLoads"], json!(["new"]));
+        assert!(state["playerRequestID"].is_null());
+        apply_player_event(
+            &mut state,
+            PlayerEvent::PlayRequestIdChanged { play_request_id: 1 },
+        );
+        assert_eq!(state["playerRequestID"], 1);
+        assert_eq!(state["pendingLoads"], json!([]));
+        apply_player_event(
+            &mut state,
+            PlayerEvent::Unavailable {
+                play_request_id: 0,
+                track_id: SpotifyUri::from_uri(uri).unwrap(),
+            },
+        );
+        assert!(state["error"].is_null());
+        apply_player_event(
+            &mut state,
+            PlayerEvent::Playing {
+                play_request_id: 1,
+                track_id: SpotifyUri::from_uri(uri).unwrap(),
+                position_ms: 1500,
+            },
+        );
+        assert_eq!(state["playing"], true);
+        assert_eq!(state["position"], 1500);
+    }
+    #[test]
+    fn seeked_updates_position_without_resuming_paused_playback() {
+        let uri = "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
+        for playing in [false, true] {
+            let mut state =
+                json!({"track": uri, "playerRequestID": 3, "playing": playing, "position": 1000});
+            apply_player_event(
+                &mut state,
+                PlayerEvent::Seeked {
+                    play_request_id: 3,
+                    track_id: SpotifyUri::from_uri(uri).unwrap(),
+                    position_ms: 30000,
+                },
+            );
+            assert_eq!(state["position"], 30000);
+            assert_eq!(state["playing"], playing);
+        }
     }
     #[test]
     fn seek_position_rejects_overflow() {
