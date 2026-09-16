@@ -24,7 +24,7 @@ function fixture(responses: Record<string, unknown>) {
       fetch: async (r: Request) => {
         expect(r.headers.get("authorization")).toBe("Bearer token");
         expect(r.headers.get("origin")).toBe("https://library.test");
-        if (new URL(r.url).pathname === "/v1/agent/account-info")
+        if (new URL(r.url).pathname.endsWith("/connectors"))
           return Response.json({
             connectors: {
               spotify: { connections: [{ id: "spotify-a", account_id: "alice", label: "Alice" }] },
@@ -77,6 +77,25 @@ describe("connected music authorization and provider contracts", () => {
     await expect(
       musicRoute(request("spotify/not-approved/playlists"), env, account, async () => ({})),
     ).rejects.toMatchObject({ status: 403 });
+  });
+  it("uses only the current request's issuer-verified connector projection", async () => {
+    const { env } = fixture({});
+    env.CONNECT_API_SERVICE!.fetch = vi.fn(async () => {
+      throw new Error("Duplicate issuer request");
+    }) as NonNullable<Env["CONNECT_API_SERVICE"]>["fetch"];
+    const verified = {
+      ...account,
+      musicConnectors: {
+        spotify: { connections: [{ id: "approved", account_id: "alice" }] },
+      },
+    };
+    expect((await musicSources(request("sources"), env, verified)).map((v) => v.accountID)).toEqual(
+      ["alice"],
+    );
+    expect(
+      await musicSources(request("sources"), env, { ...verified, musicConnectors: {} }),
+    ).toEqual([]);
+    expect(env.CONNECT_API_SERVICE!.fetch).not.toHaveBeenCalled();
   });
   it("rejects pagination changing endpoint, host or injecting credentials", () => {
     for (const url of [
@@ -302,8 +321,8 @@ describe("SoundCloud stream startup latency", () => {
     const paths: string[] = [];
     env.CONNECT_API_SERVICE!.fetch = (async (r: Request) => {
       paths.push(
-        r.url.endsWith("account-info")
-          ? "account-info"
+        new URL(r.url).pathname.endsWith("/connectors")
+          ? "connectors"
           : ((await r.clone().json()) as { path: string }).path,
       );
       await gate;
@@ -316,7 +335,7 @@ describe("SoundCloud stream startup latency", () => {
       async () => ({}),
     );
     await vi.waitFor(() =>
-      expect(paths).toEqual(["account-info", "/tracks/123", "/tracks/123/streams"]),
+      expect(paths).toEqual(["connectors", "/tracks/123", "/tracks/123/streams"]),
     );
     release();
     expect((await result).status).toBe(200);
@@ -373,7 +392,7 @@ describe("SoundCloud stream startup latency", () => {
     expect(calls).toHaveLength(4);
     const original = env.CONNECT_API_SERVICE!.fetch.bind(env.CONNECT_API_SERVICE);
     env.CONNECT_API_SERVICE!.fetch = (async (request: Request) =>
-      request.url.endsWith("account-info")
+      new URL(request.url).pathname.endsWith("/connectors")
         ? Response.json({ connectors: {} })
         : original(request)) as NonNullable<Env["CONNECT_API_SERVICE"]>["fetch"];
     await expect(read()).rejects.toMatchObject({ status: 403 });

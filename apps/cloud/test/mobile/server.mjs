@@ -86,8 +86,9 @@ async function issuer(request) {
       : request.headers.get("authorization") === `Bearer ${token("Bob")}`
         ? "Bob"
         : undefined;
-  if (who && path === "/v1/agent/account-info")
+  if (who && (path === "/v1/agent/account-info" || path === `/v1/grants/${grant(who)}/connectors`))
     return Response.json({
+      ...wire(who),
       connectors: musicEnabled
         ? {
             spotify: {

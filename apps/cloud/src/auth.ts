@@ -12,6 +12,8 @@ export interface Account {
   appToolCatalogDigest?: string;
   expiresAt: number;
   capabilities: string[];
+  /** Fresh issuer projection, retained only for this incoming music request. */
+  musicConnectors?: Record<string, unknown>;
 }
 export class AuthError extends Error {
   constructor(
@@ -49,7 +51,9 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
   assertSameOrigin(request);
   const match = CREDENTIAL.exec(credential(request) ?? "");
   if (!match) throw new AuthError(401, "Continue with Nanocodex to access your library.");
-  const verification = new Request(`${CONNECT_API}/v1/grants/${match[1]}`, {
+  const music = new URL(request.url).pathname.startsWith("/v1/music/");
+  const route = `/v1/grants/${match[1]}${music ? "/connectors?providers=spotify,soundcloud" : ""}`;
+  const verification = new Request(`${CONNECT_API}${route}`, {
     headers: {
       authorization: `Bearer ${match[2]}`,
       origin: new URL(request.url).origin,
@@ -71,6 +75,7 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
   const wire = await response.json<{
     account_id?: string;
     agent_id?: string;
+    connectors?: Record<string, unknown>;
     grant?: {
       id?: string;
       status?: string;
@@ -93,6 +98,11 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
     !grant.capabilities.every((v) => typeof v === "string")
   )
     throw new AuthError(401, "Invalid or expired Nanocodex connection.");
+  if (
+    music &&
+    (!wire.connectors || typeof wire.connectors !== "object" || Array.isArray(wire.connectors))
+  )
+    throw new AuthError(503, "Nanocodex connector status is temporarily unavailable.");
   return {
     id: `nc_${await digest(wire.account_id)}`,
     grantId: grant.id,
@@ -101,6 +111,7 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
       : {}),
     expiresAt: grant.expires_at!,
     capabilities: grant.capabilities,
+    ...(music ? { musicConnectors: wire.connectors } : {}),
     ...(typeof grant.app_tool_catalog_digest === "string"
       ? { appToolCatalogDigest: grant.app_tool_catalog_digest }
       : {}),

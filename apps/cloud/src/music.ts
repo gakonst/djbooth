@@ -79,8 +79,19 @@ export async function musicSources(
   account: Account,
 ): Promise<MusicSource[]> {
   if (!account.capabilities.some((v) => v === "spotify" || v === "soundcloud")) return [];
-  const info = record(await connect(request, env, "/v1/agent/account-info"));
-  const connectors = record(info.connectors);
+  // Public music requests already received this live projection during grant
+  // authentication. Internal callers still validate directly with the issuer.
+  const connectors =
+    account.musicConnectors ??
+    record(
+      record(
+        await connect(
+          request,
+          env,
+          `/v1/grants/${encodeURIComponent(account.grantId)}/connectors?providers=spotify,soundcloud`,
+        ),
+      ).connectors,
+    );
   return (["spotify", "soundcloud"] as const).flatMap((provider) => {
     if (!account.capabilities.includes(provider)) return [];
     return list(record(connectors[provider]).connections).flatMap((connection) => {

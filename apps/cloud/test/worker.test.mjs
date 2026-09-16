@@ -14,6 +14,8 @@ let issuerStatus = 200;
 let grantStatus = "active";
 let expired = false;
 let agentRequests = [];
+let issuerRequests = [];
+let musicConnectors = {};
 const phoneCatalog = JSON.parse(
   await readFile(
     new URL(
@@ -50,6 +52,7 @@ async function connectIssuer(request) {
   )
     return new Response(null, { status: 401 });
   const path = new URL(request.url).pathname;
+  issuerRequests.push(path);
   const who = token.endsWith("b") ? "b" : "a";
   if (path.includes("/agents/")) {
     if (path.endsWith("/tool-host/ticket")) {
@@ -78,6 +81,7 @@ async function connectIssuer(request) {
   }
   return Response.json({
     account_id: `account-${who}`,
+    ...(path.endsWith("/connectors") ? { connectors: musicConnectors } : {}),
     agent_id: `agent-${who}`,
     grant: {
       id: token.endsWith("c") ? GRANT_RELOGIN : GRANT,
@@ -194,6 +198,25 @@ function push(operation) {
     body: JSON.stringify(operation),
   });
 }
+
+test("music sources authenticate and read live approved identities in one issuer call", async () => {
+  issuerRequests = [];
+  musicConnectors = {
+    spotify: { connections: [{ id: "approved", account_id: "alice", label: "Alice" }] },
+  };
+  const first = await runtime.dispatchFetch("https://library.test/v1/music/sources", {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  assert.equal(first.status, 200, await first.clone().text());
+  assert.equal((await first.json()).sources[0].accountID, "alice");
+  assert.deepEqual(issuerRequests, [`/v1/grants/${GRANT}/connectors`]);
+  musicConnectors = {};
+  const next = await runtime.dispatchFetch("https://library.test/v1/music/sources", {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  assert.deepEqual((await next.json()).sources, []);
+  assert.equal(issuerRequests.length, 2);
+});
 
 test("playlist publication can reconcile its own history without downloading other libraries", async () => {
   const namespace = `cloud:${randomUUID()}`;
