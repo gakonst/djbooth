@@ -911,6 +911,34 @@ export async function acquireManifest(
                     variant.preferredCandidate,
                     variant.preferredCandidatePlacement,
                     options.signal,
+                    "candidates" in state.entry.acquisition
+                      ? state.entry.acquisition.candidates
+                      : undefined,
+                    (candidate) =>
+                      checkpoint(() => {
+                        const prior =
+                          "candidates" in state.entry.acquisition
+                            ? (state.entry.acquisition.candidates ?? [])
+                            : [];
+                        const candidates = [
+                          ...prior.filter(
+                            (item) =>
+                              item.backend !== candidate.backend ||
+                              item.source !== candidate.source,
+                          ),
+                          candidate,
+                        ];
+                        state.entry.acquisition =
+                          state.entry.acquisition.status === "pending" ||
+                          state.entry.acquisition.status === "skipped"
+                            ? {
+                                status: "searching",
+                                query: variant.searchQuery ?? variant.title,
+                                candidates,
+                              }
+                            : { ...state.entry.acquisition, candidates };
+                        replaceEntry(manifest, structuredClone(state.entry));
+                      }),
                   );
                 } catch (error) {
                   if (!localArtifactRejection) throw error;
@@ -1276,6 +1304,8 @@ async function acquireVariant(
   preferredCandidate?: YoutubeSearchCandidate & { backend: AcquisitionBackend },
   preferredCandidatePlacement: "first" | "backend-fallback" = "first",
   signal?: AbortSignal,
+  priorCandidates: readonly AcquisitionCandidate[] = [],
+  rememberCandidate?: (candidate: AcquisitionCandidate) => Promise<void>,
 ): Promise<{
   acquirer: TrackAcquirer;
   candidate: ScoredYoutubeCandidate;
@@ -1285,6 +1315,17 @@ async function acquireVariant(
   const failures: string[] = [];
   let capabilityFallback: AcquirerFallback | undefined;
   const retryCandidates = new Map<AcquisitionBackend, ScoredYoutubeCandidate[]>();
+  for (const backend of ["slsk", "ytdlp"] as const) {
+    // Re-evaluate saved identities against this recording; never trust an old
+    // score if enrichment or the chosen variant has changed since the attempt.
+    retryCandidates.set(
+      backend,
+      scoreYoutubeCandidates(
+        target,
+        priorCandidates.filter((candidate) => candidate.backend === backend),
+      ),
+    );
+  }
   const preferredAcquirer = preferredCandidate
     ? acquirers.find((acquirer) => acquirer.backend === preferredCandidate.backend)
     : undefined;
@@ -1302,6 +1343,7 @@ async function acquireVariant(
     if (!preferredCandidate || preferredAttempted.has(acquirer)) return undefined;
     preferredAttempted.add(acquirer);
     const selected: ScoredYoutubeCandidate = { ...preferredCandidate, score: 1 };
+    await rememberCandidate?.(manifestCandidate(acquirer, selected));
     let source: IndividualDownload | undefined;
     let validating = false;
     try {
@@ -1333,11 +1375,18 @@ async function acquireVariant(
     const acquired = await acquirePreferred(preferredAcquirer);
     if (acquired) return acquired;
   }
-  const searchAcquirer = async (acquirer: TrackAcquirer) => {
+  const searchAcquirer = async (acquirer: TrackAcquirer, audio = false) => {
     try {
       return {
         ok: true as const,
-        candidates: scoreYoutubeCandidates(target, await acquirer.search(target)),
+        candidates: scoreYoutubeCandidates(
+          target,
+          await acquirer.search(
+            audio
+              ? { ...target, searchQuery: [...target.artists, target.title, "audio"].join(" ") }
+              : target,
+          ),
+        ),
       };
     } catch (error) {
       return { ok: false as const, error };
@@ -1345,6 +1394,7 @@ async function acquireVariant(
   };
   const searches = acquirers.map((acquirer) =>
     acquirer.requiresPriorCapabilityFailure ||
+    retryCandidates.get(acquirer.backend)?.length ||
     (preferredCandidate && acquirer.backend === preferredCandidate.backend)
       ? undefined
       : searchAcquirer(acquirer),
@@ -1362,69 +1412,92 @@ async function acquireVariant(
       const acquired = await acquirePreferred(acquirer);
       if (acquired) return acquired;
     }
-    const search = await (searches[index] ?? searchAcquirer(acquirer));
-    signal?.throwIfAborted();
-    if (!search.ok) {
-      throwIfAcquisitionCancelled(signal, search.error);
-      failures.push(`${acquirer.backend} search: ${errorMessage(search.error)}`);
-      const shouldContinue = acquirer.shouldContinueAfterError?.(search.error, "search");
-      if (shouldContinue === false) throw search.error;
-      if (shouldContinue) capabilityFallback = shouldContinue;
-      continue;
-    }
     // Provider search rankings can differ between engines. If a permitted
     // download fallback found the right recording, retry that exact identity
-    // before considering the next engine's search results.
-    const candidates = [
-      ...(retryCandidates.get(acquirer.backend) ?? []),
-      ...search.candidates,
-    ].filter(
-      (candidate, index, all) =>
-        all.findIndex((other) => other.id === candidate.id && other.source === candidate.source) ===
-        index,
-    );
-    const eligible = candidates.filter(
-      (candidate) => candidate.score >= minimumScore && !hasWrongDuration(target, candidate),
-    );
-    if (!eligible.length) {
-      const best = candidates[0];
-      failures.push(
-        `${acquirer.backend}: no candidate met score ${minimumScore.toFixed(2)}${best ? ` (best ${best.score.toFixed(3)}: ${best.title})` : ""}`,
-      );
-      continue;
+    // before making another search request (which can itself fail).
+    const attempted = new Set<string>();
+    if (preferredCandidate && preferredAttempted.has(acquirer)) {
+      attempted.add(preferredCandidate.source);
     }
-    for (const selected of eligible) {
-      let source: IndividualDownload | undefined;
-      let validating = false;
-      try {
-        source = await acquirer.download(
-          selected,
-          candidateStagingDirectory(stagingDirectory, variant, acquirer.backend, selected),
-          variantKey(variant),
-        );
+    for (const stage of ["saved", "search", "audio-search"] as const) {
+      if (stage === "audio-search" && (acquirer.backend !== "ytdlp" || attempted.size > 0))
+        continue;
+      let candidates = retryCandidates.get(acquirer.backend) ?? [];
+      if (stage !== "saved") {
+        // Ordinary search often ranks music videos/radio edits ahead of the
+        // album recording. Try one bounded audio query without relaxing the
+        // identity or duration checks.
+        const search = await (stage === "audio-search"
+          ? searchAcquirer(acquirer, true)
+          : (searches[index] ?? searchAcquirer(acquirer)));
         signal?.throwIfAborted();
-        validating = true;
-        await validateAcquiredSource(source, target);
-        signal?.throwIfAborted();
-        return {
-          acquirer,
-          candidate: selected,
-          source:
-            acquirer.requiresPriorCapabilityFailure && capabilityFallback
-              ? { ...source, fallback: capabilityFallback }
-              : source,
-        };
-      } catch (error) {
-        if (source && source.temporary !== false) await rm(source.path, { force: true });
-        throwIfAcquisitionCancelled(signal, error);
-        failures.push(`${acquirer.backend} ${selected.id}: ${errorMessage(error)}`);
-        if (!validating) {
-          const shouldContinue = acquirer.shouldContinueAfterError?.(error, "download");
-          if (shouldContinue === false) throw error;
+        if (!search.ok) {
+          throwIfAcquisitionCancelled(signal, search.error);
+          failures.push(`${acquirer.backend} search: ${errorMessage(search.error)}`);
+          const shouldContinue = acquirer.shouldContinueAfterError?.(search.error, "search");
+          if (shouldContinue === false) throw search.error;
           if (shouldContinue) capabilityFallback = shouldContinue;
-          const retained = retryCandidates.get(acquirer.backend) ?? [];
-          retained.push(selected);
-          retryCandidates.set(acquirer.backend, retained);
+          continue;
+        }
+        candidates = search.candidates;
+      }
+      candidates = candidates.filter(
+        (candidate, index, all) =>
+          all.findIndex(
+            (other) => other.id === candidate.id && other.source === candidate.source,
+          ) === index,
+      );
+      const eligible = candidates.filter(
+        (candidate) =>
+          candidate.score >= minimumScore &&
+          !hasWrongDuration(target, candidate) &&
+          !attempted.has(candidate.source),
+      );
+      if (!eligible.length) {
+        const best = candidates[0];
+        if (stage === "search")
+          failures.push(
+            `${acquirer.backend}: no candidate met score ${minimumScore.toFixed(2)}${best ? ` (best ${best.score.toFixed(3)}: ${best.title})` : ""}`,
+          );
+        continue;
+      }
+      for (const selected of eligible) {
+        attempted.add(selected.source);
+        // Commit the source identity before network I/O so a killed process or a
+        // transient failure can resume without rediscovering the recording.
+        await rememberCandidate?.(manifestCandidate(acquirer, selected));
+        let source: IndividualDownload | undefined;
+        let validating = false;
+        try {
+          source = await acquirer.download(
+            selected,
+            candidateStagingDirectory(stagingDirectory, variant, acquirer.backend, selected),
+            variantKey(variant),
+          );
+          signal?.throwIfAborted();
+          validating = true;
+          await validateAcquiredSource(source, target);
+          signal?.throwIfAborted();
+          return {
+            acquirer,
+            candidate: selected,
+            source:
+              acquirer.requiresPriorCapabilityFailure && capabilityFallback
+                ? { ...source, fallback: capabilityFallback }
+                : source,
+          };
+        } catch (error) {
+          if (source && source.temporary !== false) await rm(source.path, { force: true });
+          throwIfAcquisitionCancelled(signal, error);
+          failures.push(`${acquirer.backend} ${selected.id}: ${errorMessage(error)}`);
+          if (!validating) {
+            const shouldContinue = acquirer.shouldContinueAfterError?.(error, "download");
+            if (shouldContinue === false) throw error;
+            if (shouldContinue) capabilityFallback = shouldContinue;
+            const retained = retryCandidates.get(acquirer.backend) ?? [];
+            retained.push(selected);
+            retryCandidates.set(acquirer.backend, retained);
+          }
         }
       }
     }
@@ -1480,7 +1553,18 @@ function persistPartial(
 ): void {
   const first = completed[0];
   if (!first) return;
-  const candidates = completed.flatMap((item) => (item.candidate ? [item.candidate] : []));
+  const candidates = [
+    ...completed.flatMap((item) => (item.candidate ? [item.candidate] : [])),
+    ...("candidates" in entry.acquisition ? (entry.acquisition.candidates ?? []) : []),
+  ].filter(
+    (candidate, index, all) =>
+      all.findIndex(
+        (other) =>
+          other.backend === candidate.backend &&
+          other.source === candidate.source &&
+          other.id === candidate.id,
+      ) === index,
+  );
   entry.acquisition = {
     status: "downloaded",
     query:
@@ -2380,8 +2464,10 @@ function canonicalValue(value: unknown): unknown {
 }
 
 function markFailure(entry: ResolvedTrack, message: string, query?: string): void {
+  const candidates = "candidates" in entry.acquisition ? entry.acquisition.candidates : undefined;
   entry.acquisition = {
     status: "failed",
+    ...(candidates?.length ? { candidates } : {}),
     ...(query ? { query } : {}),
     error: { stage: "acquisition", message, retryable: true },
   };

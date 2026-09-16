@@ -164,6 +164,23 @@ export function importProgress(line: string): Partial<ImportProgress> | undefine
   };
 }
 
+/** Keep per-recording analysis updates inside the playlist's overall progress. */
+export function importProgressTracker() {
+  let downloading: ReturnType<typeof importProgress>;
+  return (line: string) => {
+    const update = importProgress(line);
+    if (update?.phase === "download") downloading = update;
+    if (
+      update?.phase === "analyze" &&
+      downloading?.current !== undefined &&
+      downloading.total !== undefined &&
+      downloading.current < downloading.total
+    )
+      return { ...downloading, message: "Downloading and analyzing recordings" };
+    return update;
+  };
+}
+
 export async function processCloudImport(
   source: string,
   options: {
@@ -210,19 +227,9 @@ export async function processCloudImport(
   ];
   if (options.providerPlaylistFile)
     args.push("--provider-playlist-file", options.providerPlaylistFile);
-  let downloading: ReturnType<typeof importProgress>;
+  const trackProgress = importProgressTracker();
   const onLine = (line: string) => {
-    let update = importProgress(line);
-    if (update?.phase === "download") downloading = update;
-    // Analysis runs per recording while the rest of the playlist downloads.
-    // Its local 1/1 counter must not replace the playlist's bounded progress.
-    if (
-      update?.phase === "analyze" &&
-      downloading?.current !== undefined &&
-      downloading.total !== undefined &&
-      downloading.current < downloading.total
-    )
-      update = { ...downloading, message: "Downloading and analyzing recordings" };
+    const update = trackProgress(line);
     if (update)
       emit({
         status: "running",

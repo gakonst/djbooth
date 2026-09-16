@@ -144,7 +144,7 @@ export class YtdlpNativeAcquirer implements TrackAcquirer {
   }
 
   async search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]> {
-    const query = [...target.artists, target.title].join(" ").trim();
+    const query = target.searchQuery ?? [...target.artists, target.title].join(" ").trim();
     const load = async () =>
       sanitizeNativeSearchResults(
         await this.#dependencies.searchYoutube(query, {
@@ -288,7 +288,7 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
   }
 
   async search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]> {
-    const query = [...target.artists, target.title].join(" ");
+    const query = target.searchQuery ?? [...target.artists, target.title].join(" ");
     const source = `ytsearch${this.#searchLimit}:${query}`;
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       flatPlaylist: true,

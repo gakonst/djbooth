@@ -49,6 +49,8 @@ export type YoutubeTarget = {
   title: string;
   artists: string[];
   durationSeconds?: number;
+  /** Search hint only; matching still uses the original recording identity. */
+  searchQuery?: string;
 };
 
 export type ScoredYoutubeCandidate = YoutubeSearchCandidate & {

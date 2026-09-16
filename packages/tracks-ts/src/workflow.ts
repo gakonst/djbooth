@@ -1006,12 +1006,21 @@ function assertAcquisitionReady(manifest: SetManifest): void {
     (entry) => entry.acquisition.status === "downloaded",
   ).length;
   if (!incomplete.length && downloaded) return;
+  const summary = downloaded
+    ? `Acquisition has ${String(incomplete.length)} unresolved entries; refusing Rekordbox import`
+    : "Acquisition produced no downloadable tracks";
+  const firstFailure = incomplete.find((entry) => entry.acquisition.status === "failed");
+  const reason =
+    firstFailure?.acquisition.status === "failed"
+      ? firstFailure.acquisition.error.message
+      : undefined;
   throw new TracksError(
     "TOOL_FAILED",
-    downloaded
-      ? `Acquisition has ${String(incomplete.length)} unresolved entries; refusing Rekordbox import`
-      : "Acquisition produced no downloadable tracks",
+    reason ? `${summary}. Track ${firstFailure!.order}: ${reason}` : summary,
     {
+      retryable: incomplete.some(
+        (entry) => entry.acquisition.status === "failed" && entry.acquisition.error.retryable,
+      ),
       details: {
         incomplete: incomplete.map((entry) => ({
           id: entry.id,

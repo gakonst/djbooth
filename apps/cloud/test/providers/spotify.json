@@ -1,0 +1,20 @@
+{
+  "provider": "spotify",
+  "id": "37i9dQZF1DXbcCmWfoUaw2",
+  "title": "00s Pop Run",
+  "url": "https://open.spotify.com/playlist/37i9dQZF1DXbcCmWfoUaw2",
+  "tracks": [
+    {
+      "provider": "spotify",
+      "order": 1,
+      "title": "All For You",
+      "artists": ["Janet Jackson"],
+      "album": "All For You",
+      "durationMs": 329933,
+      "isrc": "USVI20100057",
+      "id": "5X8kkUaUlAyAUr9TYqDFTH",
+      "uri": "spotify:track:5X8kkUaUlAyAUr9TYqDFTH",
+      "url": "https://open.spotify.com/track/5X8kkUaUlAyAUr9TYqDFTH"
+    }
+  ]
+}

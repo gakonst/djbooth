@@ -243,7 +243,12 @@ describe("runSetToRekordbox", () => {
           },
         },
       }),
-    ).rejects.toThrow("1 unresolved entries");
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        "1 unresolved entries; refusing Rekordbox import. Track 2: HTTP 403",
+      ),
+      retryable: true,
+    });
     expect(state.entries[0]!.acquisition.status).toBe("downloaded");
     expect(state.entries[1]!.acquisition.status).toBe("failed");
     expect(cacheSourceSet).not.toHaveBeenCalled();

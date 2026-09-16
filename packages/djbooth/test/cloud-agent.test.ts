@@ -85,6 +85,26 @@ test("missing analysis or partial uploads cannot make the app show complete", as
   await finish(exec, "publish");
   expect(progress.mock.calls.some(([p]) => p.status === "complete")).toBe(false);
 });
+test("per-track analysis does not replace playlist download progress with 1/1", async () => {
+  vi.mocked(runCloudCommand)
+    .mockReset()
+    .mockImplementationOnce(async (_args, _signal, line) => {
+      line("[acquisition] progress: 12/50 recordings processed");
+      line("[analysis] analyzed 1/1");
+      return imported;
+    });
+  const { exec, progress } = setup();
+  await exec({ operation: "start", process_id: "import", args: ["import", source] });
+  await finish(exec, "import");
+  expect(progress).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      phase: "download",
+      current: 12,
+      total: 50,
+      message: "Downloading and analyzing recordings",
+    }),
+  );
+});
 test("failure preserves saved workflow, surfaces the error, and allows a new resumable command", async () => {
   vi.mocked(runCloudCommand)
     .mockReset()

@@ -1273,7 +1273,7 @@ describe("acquireManifest", () => {
           continueOnError: false,
         });
 
-        expect(referenceSearches).toBe(1);
+        expect(referenceSearches).toBe(reason === "capability" ? 0 : 1);
         expect(referenceDownloads).toBe(1);
         expect(result.manifest.entries[0]!.acquisition).toMatchObject({
           status: "downloaded",
@@ -1284,6 +1284,146 @@ describe("acquireManifest", () => {
               : {}),
           },
         });
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest(
+    "tries an audio search when music-video results have the wrong duration",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-audio-search-"));
+      const manifestPath = join(directory, "manifest.json");
+      const bin = await installFakeAudioTools(directory);
+      const manifest = oneTrackManifest();
+      // An older attempt selected an edit. Saved candidates must be checked too.
+      manifest.entries[0]!.acquisition = {
+        status: "failed",
+        query: "Artist Track",
+        candidates: [
+          {
+            backend: "ytdlp",
+            id: "edit",
+            source: "https://youtube.test/edit",
+            title: "Artist - Track",
+            durationSeconds: 60,
+            score: 1,
+          },
+        ],
+        error: { stage: "acquisition", message: "Transfer failed", retryable: true },
+      };
+      await writeManifestAtomic(manifestPath, manifest);
+      const queries: (string | undefined)[] = [];
+      const acquirer: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: async () => ({ available: true }),
+        search: async (target) => {
+          queries.push(target.searchQuery);
+          return [
+            {
+              id: target.searchQuery ? "album" : "edit",
+              source: `https://youtube.test/${target.searchQuery ? "album" : "edit"}`,
+              title: "Artist - Track",
+              artist: "Artist",
+              durationSeconds: target.searchQuery ? 100 : 60,
+            },
+          ];
+        },
+        download: async (selected, destination) => {
+          expect(selected.id).toBe("album");
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "track.m4a");
+          await writeFile(path, "album audio");
+          return { path, source: selected.source, temporary: true };
+        },
+      };
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [acquirer],
+          requireCompletePlan: true,
+          continueOnError: false,
+        });
+        expect(result.failures).toEqual([]);
+        expect(queries).toEqual([undefined, "Artist Track audio"]);
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
+  audioToolTest.each(["failed", "interrupted"] as const)(
+    "resumes a %s transfer from its durable candidate before searching again",
+    async (outcome) => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-candidate-resume-"));
+      const manifestPath = join(directory, "manifest.json");
+      const bin = await installFakeAudioTools(directory);
+      await writeManifestAtomic(manifestPath, oneTrackManifest());
+      const candidate = {
+        id: "abcdefghijk",
+        source: "https://www.youtube.com/watch?v=abcdefghijk",
+        title: "Artist - Track",
+        artist: "Artist",
+        durationSeconds: 100,
+      };
+      const controller = new AbortController();
+      const first: TrackAcquirer = {
+        backend: "ytdlp",
+        availability: async () => ({ available: true }),
+        search: async () => [candidate],
+        download: async () => {
+          const persisted = await readManifest(manifestPath);
+          expect(persisted.entries[0]!.acquisition).toMatchObject({
+            candidates: [expect.objectContaining({ source: candidate.source })],
+          });
+          if (outcome === "interrupted") controller.abort();
+          throw new Error("Connection lost during transfer");
+        },
+      };
+      await expect(
+        acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [first],
+          continueOnError: false,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow();
+      expect((await readManifest(manifestPath)).entries[0]!.acquisition).toMatchObject({
+        candidates: [expect.objectContaining({ source: candidate.source })],
+      });
+      let searches = 0;
+      const resumed: TrackAcquirer = {
+        ...first,
+        search: async () => {
+          searches++;
+          throw new Error("Search unavailable");
+        },
+        download: async (selected, destination) => {
+          expect(selected.source).toBe(candidate.source);
+          await mkdir(destination, { recursive: true });
+          const path = join(destination, "track.m4a");
+          await writeFile(path, "resumed audio");
+          return { path, source: selected.source, temporary: true };
+        },
+      };
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [resumed],
+          requireCompletePlan: true,
+          continueOnError: false,
+        });
+        expect(result.failures).toEqual([]);
+        expect(result.manifest.entries[0]!.acquisition.status).toBe("downloaded");
+        expect(searches).toBe(0);
       } finally {
         process.env.PATH = previousPath;
       }
@@ -1529,7 +1669,7 @@ describe("acquireManifest", () => {
         expect(error).toMatchObject({ name: "AbortError" });
         const durable = await readManifest(manifestPath);
         expect(durable.entries.map((entry) => entry.acquisition.status)).toEqual([
-          "pending",
+          "searching",
           "pending",
           "pending",
         ]);
@@ -1682,10 +1822,10 @@ describe("acquireManifest", () => {
             maxConcurrency: 3,
           }),
         );
-        expect(result.performance.checkpoints).toMatchObject({ calls: 36 });
-        expect(result.performance.checkpoints.flushes).toBeLessThanOrEqual(36);
+        expect(result.performance.checkpoints).toMatchObject({ calls: 70 });
+        expect(result.performance.checkpoints.flushes).toBeLessThanOrEqual(70);
         expect(result.performance.checkpoints.coalesced).toBe(
-          36 - result.performance.checkpoints.flushes,
+          70 - result.performance.checkpoints.flushes,
         );
         expect(
           result.manifest.entries.every((entry) => entry.acquisition.status === "downloaded"),

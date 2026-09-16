@@ -160,3 +160,12 @@ smoke test inside that image. `check` tests the Worker/API and container lifecyc
 paid containers. `pnpm --filter @gakonst/djbooth-cloud run deploy` builds and rolls out both
 the Worker and its container image. Container updates target 100% in one rollout step; a successful
 deploy starts replacement, so verify the active application image before testing. The iPhone uses its Nanocodex account login; playlist processing needs no workstation connection.
+
+Live provider checks use the same image and public CLI, then exercise the agent executor,
+audio and analysis publication to a local HTTP fixture, and a warm resume. They require network
+access and fetch one real recording each; they do not need an iPhone or write to a user's library:
+
+```sh
+pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/spotify.json
+pnpm --filter @gakonst/djbooth-cloud test:container:provider /fixtures/providers/soundcloud.json
+```

@@ -1,4 +1,5 @@
-// Runs inside the built Linux image. No external providers or paid services.
+// Runs inside the built Linux image. Offline by default; an optional one-track
+// provider snapshot exercises real acquisition through the same public CLI.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
@@ -13,53 +14,69 @@ const root = await mkdtemp("/tmp/playlist-smoke-");
 try {
   const path = join(root, "master.db");
   MasterDatabase.createManaged(path).close();
+  const providerFile = process.argv[2];
+  const provider = providerFile ? JSON.parse(await readFile(providerFile, "utf8")) : undefined;
+  if (provider) assert.equal(provider.tracks.length, 1, "Use a one-recording provider fixture");
+  const source = provider?.url ?? "https://soundcloud.com/fixture/set";
   const audio = join(root, "pulse.wav");
-  execFileSync("ffmpeg", [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-f",
-    "lavfi",
-    "-i",
-    "aevalsrc=0.5*sin(2*PI*220*t)*exp(-30*mod(t\\,0.5)):s=44100:d=20",
-    "-ac",
-    "2",
-    audio,
-  ]);
-  const source = "https://soundcloud.com/fixture/set";
-  const manifest = createManifest({
-    source,
-    provider: "description",
-    title: "Container fixture",
-    complete: true,
-    tracks: [
-      { order: 1, startSeconds: 0, endSeconds: 20, artist: "Fixture artist", title: "Pulse" },
-    ],
-    warnings: [],
-  });
-  manifest.entries[0].acquisition = {
-    status: "downloaded",
-    download: {
-      backend: "ytdlp",
-      kind: "individual",
+  if (!provider) {
+    execFileSync("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-f",
+      "lavfi",
+      "-i",
+      "aevalsrc=0.5*sin(2*PI*220*t)*exp(-30*mod(t\\,0.5)):s=44100:d=20",
+      "-ac",
+      "2",
+      audio,
+    ]);
+    const manifest = createManifest({
       source,
-      mediaPath: audio,
-      files: [audio],
-      sha256: createHash("sha256")
-        .update(await readFile(audio))
-        .digest("hex"),
-    },
-  };
-  const store = new RekordboxPipelineStore({ source, outputDirectory: root, dbPath: path });
-  manifest.artifacts.root = store.artifactDirectory;
-  manifest.artifacts.downloadDirectory = root;
-  await store.save(manifest);
-  store.close();
+      provider: "description",
+      title: "Container fixture",
+      complete: true,
+      tracks: [
+        { order: 1, startSeconds: 0, endSeconds: 20, artist: "Fixture artist", title: "Pulse" },
+      ],
+      warnings: [],
+    });
+    manifest.entries[0].acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "ytdlp",
+        kind: "individual",
+        source,
+        mediaPath: audio,
+        files: [audio],
+        sha256: createHash("sha256")
+          .update(await readFile(audio))
+          .digest("hex"),
+      },
+    };
+    const store = new RekordboxPipelineStore({ source, outputDirectory: root, dbPath: path });
+    manifest.artifacts.root = store.artifactDirectory;
+    manifest.artifacts.downloadDirectory = root;
+    await store.save(manifest);
+    store.close();
+  }
+  const sourceArgs = providerFile
+    ? [
+        "--provider-playlist-file",
+        providerFile,
+        "--reference-ytdlp",
+        "--analysis-concurrency",
+        "2",
+        "--analysis-threads",
+        "2",
+      ]
+    : ["--source-set-path", audio];
   const run = (args) => {
     const output = execFileSync("djbooth", [...args, "--format", "json"], {
       cwd: "/app",
       encoding: "utf8",
-      timeout: 180_000,
+      timeout: 600_000,
     });
     const result = JSON.parse(output);
     assert.notEqual(result.ok, false, JSON.stringify(result));
@@ -68,8 +85,7 @@ try {
   const result = run([
     "import",
     source,
-    "--source-set-path",
-    audio,
+    ...sourceArgs,
     "--db-path",
     path,
     "--output-directory",
@@ -189,14 +205,14 @@ try {
     const imported = await cli("agent-import", [
       "import",
       source,
-      "--source-set-path",
-      audio,
+      ...sourceArgs,
       "--db-path",
       path,
       "--output-directory",
       root,
     ]);
     assert.equal(imported.playlistId, result.playlistId);
+    if (provider) await cli("agent-enrich", ["enrich", "--db-path", path]);
     assert.equal(
       progress.some((value) => value.status === "complete"),
       false,
@@ -245,8 +261,7 @@ try {
   const resume = run([
     "import",
     source,
-    "--source-set-path",
-    audio,
+    ...sourceArgs,
     "--db-path",
     path,
     "--output-directory",
@@ -256,6 +271,10 @@ try {
   ]);
   assert.equal(resume.playlistId, result.playlistId);
   assert.equal(resume.entries, 1);
+  assert.equal(resume.downloaded, 0);
+  assert.equal(resume.resumed, 1);
+  assert.equal(resume.analyzed, 0);
+  assert.equal(resume.analysisCacheHits, 1);
   console.log(
     "Linux import, Rust analysis, audio + DAT/EXT/2EX/RGB publication, and resume passed",
   );

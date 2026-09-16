@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { importProgress, runCloudCommand, type ImportProgress } from "./cloud-worker.js";
+import { importProgressTracker, runCloudCommand, type ImportProgress } from "./cloud-worker.js";
 
 /** Transport only: the agent chooses public CLI commands; master.db owns their workflow. */
 export function cloudAgent(options: {
@@ -97,12 +97,13 @@ export function cloudAgent(options: {
     });
     void (async () => {
       try {
+        const progress = importProgressTracker();
         const result = await runCloudCommand(
           args,
           AbortSignal.any([controller.signal, options.signal]),
           (line) => {
             process.result.diagnostics = `${process.result.diagnostics}\n${line}`.slice(-12000);
-            const update = importProgress(line);
+            const update = progress(line);
             if (update)
               options.progress({
                 status: "running",

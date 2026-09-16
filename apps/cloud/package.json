@@ -18,7 +18,8 @@
     "build:container": "docker build --platform linux/amd64 -f ../../Dockerfile.playlist -t djbooth-playlist:dev ../..",
     "test:container": "docker run --rm --platform linux/amd64 --network none --entrypoint node --mount type=bind,source=\"$PWD/test/image-smoke.mjs\",target=/app/packages/djbooth/image-smoke.mjs,readonly djbooth-playlist:dev /app/packages/djbooth/image-smoke.mjs",
     "build:client": "vite build client --outDir ../public --emptyOutDir",
-    "test:mobile-server": "pnpm build && node test/mobile/server.mjs"
+    "test:mobile-server": "pnpm build && node test/mobile/server.mjs",
+    "test:container:provider": "docker run --rm --platform linux/amd64 --entrypoint node --mount type=bind,source=\"$PWD/test\",target=/fixtures,readonly --mount type=bind,source=\"$PWD/test/image-smoke.mjs\",target=/app/packages/djbooth/image-smoke.mjs,readonly djbooth-playlist:dev /app/packages/djbooth/image-smoke.mjs"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",

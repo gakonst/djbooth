@@ -1,0 +1,17 @@
+{
+  "provider": "soundcloud",
+  "id": "soundcloud:playlists:2230839041",
+  "title": "afrow",
+  "url": "https://soundcloud.com/gakonst/sets/afrow?utm_medium=api&utm_campaign=social_sharing&utm_source=id_333241",
+  "tracks": [
+    {
+      "provider": "soundcloud",
+      "order": 1,
+      "title": "Sound of the Police - Jats (ofc), Moarasia, Ochlea",
+      "artists": ["Mektoub Records"],
+      "durationMs": 369319,
+      "urn": "soundcloud:tracks:2117577912",
+      "permalinkUrl": "https://soundcloud.com/mektoub-records/5848cee6-4355-4946-b757-53070f24b775?utm_medium=api&utm_campaign=social_sharing&utm_source=id_333241"
+    }
+  ]
+}
