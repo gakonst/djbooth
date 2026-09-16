@@ -339,10 +339,22 @@ export async function musicRoute(
       source,
       `/tracks/${encodeURIComponent(id)}/streams`,
     );
-    const value = string(
-      streams.hls_aac_160_url ?? streams.hls_mp3_128_url ?? streams.http_mp3_128_url,
-    );
-    let stream = new URL(value);
+    const value = [
+      streams.hls_aac_160_url,
+      streams.hls_aac_96_url,
+      streams.hls_mp3_128_url,
+      streams.http_mp3_128_url,
+    ]
+      .map(string)
+      .find(Boolean);
+    if (!value)
+      throw new AuthError(403, "SoundCloud does not provide a full stream for this track.");
+    let stream: URL;
+    try {
+      stream = new URL(value);
+    } catch {
+      throw new AuthError(502, "SoundCloud did not return a playable stream.");
+    }
     if (
       stream.origin === "https://api.soundcloud.com" &&
       !stream.search &&
@@ -357,14 +369,25 @@ export async function musicRoute(
           connection_id: source.connectionID,
         }),
       );
-      stream = new URL(string(resolved.url));
+      try {
+        stream = new URL(string(resolved.url));
+      } catch {
+        throw new AuthError(502, "SoundCloud did not return a playable stream.");
+      }
     }
     if (
       stream.protocol !== "https:" ||
-      !stream.hostname.endsWith(".sndcdn.com") ||
+      !(
+        stream.hostname.endsWith(".sndcdn.com") ||
+        stream.hostname === "playback.media-streaming.soundcloud.cloud"
+      ) ||
       stream.username ||
       stream.password ||
-      stream.port
+      stream.port ||
+      stream.hash ||
+      [...stream.searchParams.keys()].some((name) =>
+        /^(oauth_token|access_token|refresh_token|client_secret)$/i.test(name),
+      )
     )
       throw new AuthError(502, "SoundCloud did not return a playable stream.");
     return json({ url: stream.href });

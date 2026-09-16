@@ -201,6 +201,63 @@ describe("connected music authorization and provider contracts", () => {
     });
     expect(calls.at(-1)).toBe(path);
   });
+  it.each(["hls_aac_160_url", "hls_aac_96_url"])(
+    "plays modern SoundCloud %s streams",
+    async (field) => {
+      const path = "/tracks/123/streams/abc-123/hls";
+      const url =
+        "https://playback.media-streaming.soundcloud.cloud/track/aac/uuid/playlist.m3u8?Policy=signed";
+      const { env } = fixture({
+        "/tracks/123": { id: 123, title: "Full", access: "playable", streamable: true },
+        "/tracks/123/streams": {
+          hls_aac_160_url: "",
+          [field]: "https://api.soundcloud.com" + path,
+        },
+        [path]: { url },
+      });
+      const response = await musicRoute(
+        request("soundcloud/soundcloud-a/tracks/123/stream"),
+        env,
+        account,
+        async () => ({}),
+      );
+      expect(await response.json()).toEqual({ url });
+    },
+  );
+  it.each([
+    "https://playback.media-streaming.soundcloud.cloud.evil.test/audio.m3u8",
+    "https://user:secret@playback.media-streaming.soundcloud.cloud/audio.m3u8",
+    "https://playback.media-streaming.soundcloud.cloud:444/audio.m3u8",
+    "https://playback.media-streaming.soundcloud.cloud/audio.m3u8?access_token=secret",
+    "not a URL",
+  ])("rejects unsafe full stream URLs: %s", async (url) => {
+    const { env } = fixture({
+      "/tracks/123": { id: 123, title: "Full", streamable: true },
+      "/tracks/123/streams": { hls_aac_160_url: url },
+    });
+    await expect(
+      musicRoute(
+        request("soundcloud/soundcloud-a/tracks/123/stream"),
+        env,
+        account,
+        async () => ({}),
+      ),
+    ).rejects.toMatchObject({ status: 502 });
+  });
+  it("reports preview-only stream responses as unavailable instead of an internal error", async () => {
+    const { env } = fixture({
+      "/tracks/123": { id: 123, title: "Full", streamable: true },
+      "/tracks/123/streams": { preview_mp3_128_url: "https://media.sndcdn.com/preview.mp3" },
+    });
+    await expect(
+      musicRoute(
+        request("soundcloud/soundcloud-a/tracks/123/stream"),
+        env,
+        account,
+        async () => ({}),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
   it("does not present previews as full playback or return arbitrary streaming hosts", async () => {
     let { env } = fixture({ "/tracks/123": { id: 123, title: "Preview", access: "preview" } });
     await expect(
