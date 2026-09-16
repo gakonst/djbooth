@@ -265,6 +265,7 @@ struct TrackRow: View {
                 Button("Comment & color") { editingAnnotation = true }
                 Button(model.favorites.contains(track.id) ? "Remove from favorites" : "Add to favorites") { model.favorite(track) }
                 Button("Add to playlist") { model.choosePlaylist(for: track) }
+                if model.hasCloudSession { Button("Add to crew") { model.beginCrewAdd(track) } }
                 if let collection, let position = collection.trackIDs.firstIndex(of: track.id) {
                     if position > 0 { Button("Move earlier") { model.move(track, in: collection, by: -1) } }
                     if position < collection.trackIDs.count - 1 { Button("Move later") { model.move(track, in: collection, by: 1) } }

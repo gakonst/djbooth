@@ -10,6 +10,7 @@ import { authenticate, authRoute, AuthError, type Account } from "./auth.js";
 import { agentRoute } from "./agent.js";
 import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
+import { crewRoute } from "./crews.js";
 
 export interface Env {
   DOWNLOAD_WORKFLOW?: Workflow<DownloadParams>;
@@ -800,6 +801,12 @@ export async function accountFetch(
   try {
     if (url.pathname === "/v1/imports" || url.pathname.startsWith("/v1/imports/"))
       return await imports(request, env, account, readJSON);
+    if (
+      url.pathname === "/v1/crews" ||
+      url.pathname.startsWith("/v1/crews/") ||
+      url.pathname.startsWith("/v1/crew-invites/")
+    )
+      return await crewRoute(request, env, account, readJSON);
     if (url.pathname === "/v1/sync/changes") {
       if (request.method === "GET") return await pull(url, env, account);
       if (request.method === "POST") return await push(request, env, account);

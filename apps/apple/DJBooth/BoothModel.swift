@@ -310,6 +310,13 @@ private struct BoothLaunchConfiguration: Sendable {
     var importError: String?
     var importRefreshError: String?
     var submittingImport = false
+    var crews: [CrewSummary] = []
+    var crewDetails: [String: CrewDetail] = [:]
+    var crewCrates: [String: CrewCrateDetail] = [:]
+    var crewsLoading = false
+    var crewError: String?
+    var showCrews = false
+    var crewTrackToAdd: Track?
     private var refreshingImports = false
     var canImportToCloud: Bool { cloud != nil && !demo }
     private var pendingImportKey: String { "pendingImport:" + cloudStorageScope }
@@ -339,6 +346,87 @@ private struct BoothLaunchConfiguration: Sendable {
             guard generation == connectionGeneration else { return }
             cloudCapabilities = account.capabilities
         } catch { if generation == connectionGeneration { message = error.localizedDescription } }
+    }
+    func refreshCrews() async {
+        guard let cloud, !crewsLoading else { return }
+        let generation = connectionGeneration
+        crewsLoading = true; defer { if generation == connectionGeneration { crewsLoading = false } }
+        do {
+            let value = try await cloud.crews()
+            guard generation == connectionGeneration else { return }
+            crews = value; crewError = nil; persistCrewCache()
+        } catch {
+            if generation == connectionGeneration, !(error is CancellationError) { crewError = error.localizedDescription }
+        }
+    }
+    func createCrew(_ name: String) async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        let crew = try await cloud.createCrew(name: name)
+        crews.removeAll { $0.id == crew.id }; crews.insert(crew, at: 0)
+        crewDetails[crew.id] = try await cloud.crew(crew.id)
+        persistCrewCache()
+    }
+    func acceptCrewInvite(_ value: String, displayName: String = "DJ") async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        let token = value.split(separator: "/").last.map(String.init) ?? value
+        let detail = try await cloud.acceptCrewInvite(token: token.trimmingCharacters(in: .whitespacesAndNewlines), displayName: displayName)
+        crewDetails[detail.crew.id] = detail
+        persistCrewCache()
+        await refreshCrews()
+    }
+    func loadCrew(_ id: String) async {
+        guard let cloud else { return }
+        do { crewDetails[id] = try await cloud.crew(id); crewError = nil; persistCrewCache() }
+        catch { if !(error is CancellationError) { crewError = error.localizedDescription } }
+    }
+    func createCrewCrate(crewID: String, name: String) async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        _ = try await cloud.createCrewCrate(crewID: crewID, name: name)
+        crewDetails[crewID] = try await cloud.crew(crewID)
+        persistCrewCache()
+        await refreshCrews()
+    }
+    func loadCrewCrate(crewID: String, crateID: String) async {
+        guard let cloud else { return }
+        do { crewCrates[crateID] = try await cloud.crewCrate(crewID: crewID, crateID: crateID); crewError = nil; persistCrewCache() }
+        catch { if !(error is CancellationError) { crewError = error.localizedDescription } }
+    }
+    func addToCrew(_ track: Track, crewID: String, crateID: String) async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        crewCrates[crateID] = try await cloud.addCrewTrack(crewID: crewID, crateID: crateID, track: track)
+        persistCrewCache()
+        await loadCrew(crewID)
+    }
+    func removeFromCrew(crewID: String, crateID: String, itemID: String) async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        try await cloud.removeCrewTrack(crewID: crewID, crateID: crateID, itemID: itemID)
+        crewCrates[crateID]?.items.removeAll { $0.id == itemID }
+        persistCrewCache()
+        await loadCrew(crewID)
+    }
+    func moveCrewItem(crewID: String, crateID: String, itemID: String, afterItemID: String?) async throws {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        crewCrates[crateID] = try await cloud.moveCrewTrack(crewID: crewID, crateID: crateID, itemID: itemID, afterItemID: afterItemID)
+        persistCrewCache()
+    }
+    func inviteToCrew(_ crewID: String) async throws -> CrewInvite {
+        guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        return try await cloud.createCrewInvite(crewID: crewID)
+    }
+    func localTrack(for item: CrewCrateItem) -> Track? {
+        tracksByID[item.localTrackID ?? item.recordingID]
+            ?? tracks.first { item.assetHash != nil && $0.mediaHash == item.assetHash }
+    }
+    func beginCrewAdd(_ track: Track) {
+        crewTrackToAdd = track; showCrews = true
+    }
+    func addPendingTrack(crewID: String, crateID: String) async throws {
+        guard let track = crewTrackToAdd else { return }
+        try await addToCrew(track, crewID: crewID, crateID: crateID)
+        crewTrackToAdd = nil; showCrews = false
+    }
+    private func persistCrewCache() {
+        try? store.saveCrewCache(CrewCache(crews: crews, details: crewDetails, crates: crewCrates))
     }
     func beginAgentTurn(_ input: String) {
         guard cloud != nil, phoneToolsReady, agentPendingID == nil else { return }
@@ -512,6 +600,8 @@ private struct BoothLaunchConfiguration: Sendable {
         // Connection changes never mix cursors, outboxes, or libraries from different servers.
         cloudAccountID = configuration.accountID
         store = try LibraryStore(prepared: prepared)
+        let crewCache = try store.crewCache()
+        crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates
         PerformanceProbe.event("library_store_ready")
         audio = try AudioFiles(directory: configuration.audioDirectory, session: PerformanceProbe.serverUnavailableSession)
         playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
@@ -1448,6 +1538,7 @@ private struct BoothLaunchConfiguration: Sendable {
         clearAgent()
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
         cloud = nil; cloudAccountID = nil; cloudURL = ""
+        crews = []; crewDetails = [:]; crewCrates = [:]; crewError = nil; showCrews = false; crewTrackToAdd = nil
         UserDefaults.standard.removeObject(forKey: "cloudURL")
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
@@ -1519,10 +1610,13 @@ private struct BoothLaunchConfiguration: Sendable {
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []
         audio = newAudio
-        store = newStore; usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
+        store = newStore
+        let crewCache = try store.crewCache()
+        crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates; crewError = nil
+        usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
         try await reload()
         restorePlaybackSession()
-        Task { await synchronize(); await refreshMusic(force: true) }
+        Task { await synchronize(); await refreshMusic(force: true); await refreshCrews() }
     }
 }
 

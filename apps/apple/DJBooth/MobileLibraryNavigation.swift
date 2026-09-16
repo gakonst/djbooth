@@ -16,6 +16,7 @@ struct MobileLibraryNavigation: View {
             ? [.browse(model.browseMode)] + (model.browseGroup.map { [.group(model.browseMode, $0)] } ?? [])
             : folders + (selected.map { [.collection($0.id)] } ?? [])
         NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion)
+            .sheet(isPresented: $model.showCrews, onDismiss: { model.crewTrackToAdd = nil }) { CrewListView(model: model) }
     }
 }
 
@@ -33,6 +34,9 @@ private struct LibrarySidebar: View {
                     }.accessibilityIdentifier("library.drawer.\(mode)")
                         .accessibilityValue(model.browseMode == mode ? "Selected" : "")
                 }
+                Button { guard !suppressSelection else { return }; close(); model.showCrews = true } label: {
+                    row("Crews", symbol: "person.3", count: model.crews.count)
+                }.accessibilityIdentifier("library.drawer.crews")
                 Button { guard !suppressSelection else { return }; close(); model.showImport = true } label: {
                     row("Download", symbol: "arrow.down.circle", count: model.importJobs.filter(\.isActive).count)
                 }.accessibilityIdentifier("library.drawer.download")
