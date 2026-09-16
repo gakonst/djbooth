@@ -104,6 +104,10 @@ import XCTest
     }
 
     private func openSettings(_ app: XCUIApplication) {
+        for _ in 0..<5 {
+            if app.buttons["playlist.folder.back"].exists { app.buttons["playlist.folder.back"].tap() }
+            else { break }
+        }
         let menu = app.buttons["library.drawer.open"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20)); menu.tap()
         let settings = app.buttons["library.drawer.settings"]
@@ -117,8 +121,8 @@ import XCTest
         else if springboard.buttons["Continue"].waitForExistence(timeout: 3) { springboard.buttons["Continue"].tap() }
         let web = XCUIApplication(bundleIdentifier: "com.apple.SafariViewService")
         let connect = web.buttons["Continue with Nanocodex"]
-        if connect.waitForExistence(timeout: 10) { connect.tap() }
-        else if app.webViews.buttons["Continue with Nanocodex"].exists { app.webViews.buttons["Continue with Nanocodex"].tap() }
+        if connect.waitForExistence(timeout: 10) { connect.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        else if app.webViews.buttons["Continue with Nanocodex"].exists { app.webViews.buttons["Continue with Nanocodex"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
         let approve = web.buttons["Approve \(who)"]
         if approve.waitForExistence(timeout: 15) {
             XCTAssertTrue(web.staticTexts["Choose a test account"].waitForExistence(timeout: 10))

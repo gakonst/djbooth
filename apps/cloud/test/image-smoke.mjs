@@ -104,7 +104,7 @@ try {
       for await (const chunk of request) chunks.push(chunk);
       const body = Buffer.concat(chunks);
       response.setHeader("content-type", "application/json");
-      if (request.url === "/v1/sync/changes") {
+      if (new URL(request.url, "http://fixture").pathname === "/v1/sync/changes") {
         if (request.method === "GET") {
           response.end(JSON.stringify({ changes, cursor: changes.length, hasMore: false }));
         } else {
@@ -160,7 +160,9 @@ try {
         });
         child.on("error", reject);
         child.on("close", (code) =>
-          code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)),
+          code === 0
+            ? resolve(JSON.parse(output))
+            : reject(new Error(`Publish exited ${code}: ${output}`)),
         );
       });
     const output = await publish();
