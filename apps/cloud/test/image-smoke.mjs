@@ -128,39 +128,42 @@ try {
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
-    const output = await new Promise((resolve, reject) => {
-      const child = spawn(
-        "djbooth",
-        [
-          "cloud",
-          "publish",
-          "--endpoint",
-          `http://127.0.0.1:${server.address().port}`,
-          "--db-path",
-          path,
-          "--playlist",
-          result.playlistId,
-          "--namespace",
-          "cloud:11111111-1111-1111-1111-111111111111",
-          "--progress",
-          "never",
-          "--format",
-          "json",
-        ],
-        {
-          env: { ...process.env, DJBOOTH_CLOUD_TOKEN: "fixture-token" },
-          stdio: ["ignore", "pipe", "inherit"],
-        },
-      );
-      let output = "";
-      child.stdout.on("data", (chunk) => {
-        output += chunk;
+    const publish = (extra = []) =>
+      new Promise((resolve, reject) => {
+        const child = spawn(
+          "djbooth",
+          [
+            "cloud",
+            "publish",
+            "--endpoint",
+            `http://127.0.0.1:${server.address().port}`,
+            "--db-path",
+            path,
+            "--playlist",
+            result.playlistId,
+            "--namespace",
+            "cloud:11111111-1111-1111-1111-111111111111",
+            "--progress",
+            "never",
+            "--format",
+            "json",
+            ...extra,
+          ],
+          {
+            env: { ...process.env, DJBOOTH_CLOUD_TOKEN: "fixture-token" },
+            stdio: ["ignore", "pipe", "inherit"],
+          },
+        );
+        let output = "";
+        child.stdout.on("data", (chunk) => {
+          output += chunk;
+        });
+        child.on("error", reject);
+        child.on("close", (code) =>
+          code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)),
+        );
       });
-      child.on("error", reject);
-      child.on("close", (code) =>
-        code === 0 ? resolve(JSON.parse(output)) : reject(new Error(`Publish exited ${code}`)),
-      );
-    });
+    const output = await publish();
     assert.equal((output.data ?? output).cdjReady, 1);
     const published = JSON.parse(changes.findLast((change) => change.kind === "track").payload);
     assert.equal(published.analysis.mediaHash, published.mediaHash);
@@ -172,6 +175,20 @@ try {
       media.get(published.analysis.ext).includes(Buffer.from("PWV5")),
       "RGB waveform is published",
     );
+    const previous = changes.findLast((change) => change.kind === "track");
+    const edited = { ...published, title: "Edited on the phone" };
+    delete edited.analysis;
+    changes.push({
+      ...previous,
+      operationID: "phone-edit",
+      sequence: changes.length + 1,
+      payload: JSON.stringify(edited),
+    });
+    const repaired = await publish(["--artifacts-only"]);
+    assert.equal((repaired.data ?? repaired).cdjReady, 1);
+    const restored = JSON.parse(changes.at(-1).payload);
+    assert.equal(restored.title, edited.title);
+    assert.deepEqual(restored.analysis, published.analysis);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
