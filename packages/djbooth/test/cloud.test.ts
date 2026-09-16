@@ -104,6 +104,68 @@ function cloud(initial: Change[] = []) {
 }
 
 describe("cloud publishing", () => {
+  test("artifact repair retains phone edits and retries reusable ANLZ uploads", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "djbooth-cdj-repair-"));
+    try {
+      const path = join(directory, "recording.flac");
+      await writeFile(path, "recording bytes");
+      const paths = {
+        DAT: join(directory, "a.DAT"),
+        EXT: join(directory, "a.EXT"),
+        "2EX": join(directory, "a.2EX"),
+      };
+      for (const [kind, path] of Object.entries(paths)) await writeFile(path, kind);
+      const original = {
+        ...track,
+        title: "My edited title",
+        mediaHash: createHash("sha256").update("recording bytes").digest("hex"),
+        mediaExtension: "flac",
+      };
+      const server = cloud([
+        {
+          sequence: 1,
+          operationID: "phone-edit",
+          kind: "track",
+          entityID: track.id,
+          deleted: false,
+          payload: JSON.stringify(original),
+        },
+      ]);
+      server.media.set(original.mediaHash, Buffer.from("recording bytes"));
+      let failed = false;
+      const request: typeof fetch = async (input, init) => {
+        if (init?.method === "PUT" && !failed) {
+          failed = true;
+          throw new TypeError("fetch failed");
+        }
+        return server.request(input, init);
+      };
+      const source = { ...library(path), getAnalysisPaths: () => paths };
+      const result = await publishCloudLibrary(
+        source,
+        { endpoint: "https://library.test", token: "test-token", artifactsOnly: true },
+        request,
+      );
+      expect(result).toMatchObject({ cdjReady: 1, failures: [], conflicts: [] });
+      expect(server.changes).toHaveLength(2);
+      const updated = JSON.parse(server.changes[1]!.payload!);
+      const { analysis, ...retained } = updated;
+      expect(retained).toEqual(original);
+      expect(analysis.mediaHash).toBe(original.mediaHash);
+      expect(server.changes[1]!.operationID).toMatch(/^cdj-analysis:/);
+      await writeFile(path, "different recording");
+      const mismatch = await publishCloudLibrary(
+        source,
+        { endpoint: "https://library.test", token: "test-token", artifactsOnly: true },
+        server.request,
+      );
+      expect(mismatch.cdjReady).toBe(0);
+      expect(mismatch.failures[0]!.message).toContain("recording changed or was deleted");
+      expect(server.changes).toHaveLength(2);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   test("retains scrolling waveform detail with aligned transient colors and bounded payloads", () => {
     const peaks = Array.from({ length: 16_384 }, (_, index) => (index % 2 ? 1 : 0.25));
     const colors = peaks.map((peak): [number, number, number] =>

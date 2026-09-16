@@ -294,7 +294,10 @@ export async function publishCloudLibrary(
     async function call(path: string, init: RequestInit = {}, timeout = 60_000): Promise<Response> {
       // JSON sync writes carry stable operation IDs. Audio streams must instead
       // resume through the outer workflow because their bodies cannot be replayed.
-      const attempts = init.body == null || typeof init.body === "string" || init.body instanceof Uint8Array ? 3 : 1;
+      const attempts =
+        init.body == null || typeof init.body === "string" || init.body instanceof Uint8Array
+          ? 3
+          : 1;
       for (let attempt = 0; ; attempt++) {
         try {
           const response = await request(new URL(path, endpoint), {
@@ -400,19 +403,27 @@ export async function publishCloudLibrary(
       emit("metadata", ++current, metadataTotal);
     }
     if (!options.metadataOnly) {
-      const audio = tracks.filter((track) => track.fileExists && (options.artifactsOnly || accepted.has(track.id)));
+      const audio = tracks.filter(
+        (track) => track.fileExists && (options.artifactsOnly || accepted.has(track.id)),
+      );
       current = 0;
       emit("audio", 0, audio.length);
       const uploadTrack = async (track: TrackSummary) => {
         try {
+          if (options.artifactsOnly && (!track.analyzed || !library.getAnalysisPaths))
+            throw new Error(
+              "CDJ analysis is missing from the saved library; resume analysis first",
+            );
           const path = library.getAudioPath(track.id);
           const before = await stat(path);
           const hash = createHash("sha256");
           for await (const chunk of createReadStream(path)) hash.update(chunk);
           const digest = hash.digest("hex");
           const previous = remote.get(entityKey("track", trackID(track.id)));
-          const original = options.artifactsOnly && previous?.payload && !previous.deleted
-            ? JSON.parse(previous.payload) as CloudTrack : undefined;
+          const original =
+            options.artifactsOnly && previous?.payload && !previous.deleted
+              ? (JSON.parse(previous.payload) as CloudTrack)
+              : undefined;
           if (options.artifactsOnly && original?.mediaHash !== digest)
             throw new Error("Cloud recording changed or was deleted; retained its current version");
           const head = await call(`/v1/media/${digest}`, { method: "HEAD" });
@@ -479,8 +490,10 @@ export async function publishCloudLibrary(
           const value = original ? { ...original } : portableTrack(track);
           const waveform = waveforms.get(track.id);
           if (waveform) value.waveform = waveform;
-          value.mediaHash = digest;
-          value.mediaExtension = extname(path).slice(1).toLowerCase();
+          if (!original) {
+            value.mediaHash = digest;
+            value.mediaExtension = extname(path).slice(1).toLowerCase();
+          }
           if (track.analyzed && library.getAnalysisPaths) {
             const paths = library.getAnalysisPaths(track.id);
             const hashes: string[] = [];
@@ -577,7 +590,12 @@ export const cloudCli = Cli.create("cloud", {
       .boolean()
       .default(false)
       .describe("Publish catalog now without uploading audio"),
-    artifactsOnly: z.boolean().default(false).describe("Attach existing CDJ analysis to matching cloud audio while preserving library edits"),
+    artifactsOnly: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Attach existing CDJ analysis to matching cloud audio while preserving library edits",
+      ),
     uploadConcurrency: z
       .number()
       .int()

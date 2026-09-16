@@ -17,6 +17,18 @@ const published = {
   playlists: [{ id: `${options.namespace}:playlist:17`, tracks: 3 }],
 };
 describe("playlist container pipeline", () => {
+  test("cloud backfill attaches artifacts without replacing mobile library edits", async () => {
+    const run = vi.fn().mockResolvedValueOnce(imported).mockResolvedValueOnce(published);
+    const result = await processCloudImport(
+      "https://youtu.be/example",
+      { ...options, artifactsOnly: true },
+      new AbortController().signal,
+      () => {},
+      run,
+    );
+    expect(run.mock.calls[1]![0]).toContain("--artifacts-only");
+    expect(result).toMatchObject({ status: "complete", analysisVersion: 1 });
+  });
   test("recovers a blocked provider using the saved playlist and a verified alternate upload", async () => {
     const source = "https://youtube.com/watch?v=example";
     const alternate = "https://soundcloud.com/publisher/same-set";
