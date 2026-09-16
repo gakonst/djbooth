@@ -603,7 +603,13 @@ private struct BoothLaunchConfiguration: Sendable {
             // A new demo library may have been seeded after preparation.
             try await reload(metadataOnly: true)
         }
-        player.onStateChange = { [weak self] force in self?.persistPlaybackSession(force: force) }
+        player.onStateChange = { [weak self] force in
+            guard let self else { return }
+            self.persistPlaybackSession(force: force)
+            #if os(iOS)
+            self.djLink.audioPlaybackChanged(self.player.playing)
+            #endif
+        }
         player.onResumeRequested = { [weak self] in Task { await self?.togglePlayback() } }
         player.onPauseRequested = { [weak self] in self?.playbackRequest = UUID() }
         #if DEBUG
@@ -627,6 +633,9 @@ private struct BoothLaunchConfiguration: Sendable {
         if demo, arguments.contains("--ui-test-player"), let track = tracks.first(where: { $0.id == "demo-5" }) {
             player.prepare(track, url: nil, queue: tracks)
         }
+        #endif
+        #if DEBUG && os(iOS) && targetEnvironment(simulator)
+        if demo, arguments.contains("--ui-test-decks") { try djLink.installPreviewDecks() }
         #endif
         try await prepareInitialWaveforms()
         PerformanceProbe.libraryReady(trackCount: tracks.count)

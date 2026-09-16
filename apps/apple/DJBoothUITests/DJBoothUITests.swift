@@ -294,7 +294,16 @@ final class DJBoothUITests: XCTestCase {
         surface.swipeRight()
         XCTAssertTrue(player.staticTexts["Preview track \(index - 1)"].waitForExistence(timeout: 5), "Later queue selection must preserve the preceding track")
         let footerY = player.frame.minY
-        app.descendants(matching: .any)["library.tracks"].firstMatch.swipeUp()
+        let list = app.descendants(matching: .any)["library.tracks"].firstMatch
+        // UIKit lays the collection view behind the pinned footer and uses a
+        // content inset. Its default swipe can start on the player instead of
+        // a library row, so drag within the visible library viewport.
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: list.frame.midX - app.frame.minX,
+                                              dy: min(list.frame.maxY, footerY) - app.frame.minY - 30))
+        let end = origin.withOffset(CGVector(dx: list.frame.midX - app.frame.minX,
+                                            dy: list.frame.minY - app.frame.minY + 30))
+        start.press(forDuration: 0.05, thenDragTo: end)
         XCTAssertFalse(app.staticTexts["playlist.title"].isHittable, "Row pans must leave vertical list scrolling intact")
         XCTAssertEqual(player.frame.minY, footerY, accuracy: 1)
         capture(app, "Full queue scrolled to later recordings")

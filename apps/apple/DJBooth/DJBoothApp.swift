@@ -112,11 +112,14 @@ struct BoothRoot: View {
                     model.persistPlaybackSession()
                     model.stopPhoneTools()
                     #if os(iOS)
-                    if phase == .background, model.djLink.status.running || model.djLink.busy {
-                        Task { await model.djLink.disconnect() }
+                    if phase == .background {
+                        model.djLink.sceneChanged(background: true, audioPlaying: model.player.playing)
                     }
                     #endif
                 }
+                #if os(iOS)
+                if phase == .active { model.djLink.sceneChanged(background: false, audioPlaying: model.player.playing) }
+                #endif
             }
             .task(id: "\(model.accountConnectionID):\(scenePhase)") {
                 guard scenePhase == .active, !model.demo else { return }
@@ -130,10 +133,7 @@ struct BoothRoot: View {
                 }
             }
             #if os(iOS)
-            .task(id: scenePhase == .background) {
-                guard scenePhase != .background else { return }
-                await model.djLink.monitor(model: model)
-            }
+            .task { await model.djLink.monitor(model: model) }
             #endif
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }

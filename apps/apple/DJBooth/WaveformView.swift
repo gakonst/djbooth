@@ -31,10 +31,10 @@ import UIKit
 
 /// This node observes track data only: playback ticks do not hash the waveform task ID.
 struct PlaybackWaveformLoader: View {
-    let player: BoothPlayer
+    let track: Track?
     let cache: PlaybackWaveformCache
     var body: some View {
-        let request = PlaybackWaveformRequest(trackID: player.track?.id, waveform: player.track?.waveform)
+        let request = PlaybackWaveformRequest(trackID: track?.id, waveform: track?.waveform)
         Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
             .task(id: request) { await cache.load(request.waveform, trackID: request.trackID) }
     }
@@ -48,6 +48,7 @@ private struct PlaybackWaveformRequest: Equatable {
 /// Eight musical bars from the actual Rekordbox grid, never a BPM-derived estimate.
 struct PlaybackWaveform: View {
     let player: BoothPlayer
+    let display: PlaybackDisplay
     let cache: PlaybackWaveformCache
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -57,16 +58,16 @@ struct PlaybackWaveform: View {
     var body: some View {
         let timing = player.timing
         let clock = player.mediaClock
-        let trackID = player.track?.id
+        let trackID = display.track?.id
         let content = cache.content?.trackID == trackID ? cache.content : nil
         let waveformDuration = content?.duration ?? 0
-        let duration = waveformDuration > 0 ? waveformDuration : timing.duration
-        let heldPosition = player.scrubPosition
+        let duration = waveformDuration > 0 ? waveformDuration : (display.isDeck ? (display.deckDuration ?? 0) : timing.duration)
+        let heldPosition = display.isDeck ? (display.deckPosition ?? 0) : player.scrubPosition
         let currentPosition = heldPosition ?? clock.position()
-        let hasWindow = content?.grid?.centeredBarWindow(at: currentPosition, bars: 8, duration: duration) != nil
+        let hasWindow = (!display.isDeck || display.deckPosition != nil) && content?.grid?.centeredBarWindow(at: currentPosition, bars: 8, duration: duration) != nil
         let overview = reduceMotion || !hasWindow
         let preview = scrub.flatMap { $0.trackID == trackID && player.isScrubbing($0.id) ? $0 : nil }
-        let animated = timing.playing && scenePhase == .active && !overview && content != nil && heldPosition == nil
+        let animated = !display.isDeck && timing.playing && scenePhase == .active && !overview && content != nil && heldPosition == nil
         let highContrast = contrast == .increased
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !animated)) { _ in
             let position = heldPosition ?? clock.position()
@@ -106,7 +107,7 @@ struct PlaybackWaveform: View {
         .background(BoothStyle.background).clipped()
         #if os(iOS)
         .overlay {
-            WaveformScrubSurface(trackID: trackID, enabled: scenePhase == .active && (hasWindow || preview != nil),
+            WaveformScrubSurface(trackID: trackID, enabled: !display.isDeck && scenePhase == .active && (hasWindow || preview != nil),
                                  began: { width in beginScrub(width: width, duration: duration) },
                                  changed: { translation in updateScrub(translation: translation) },
                                  ended: { translation in finishScrub(translation: translation) },
@@ -114,20 +115,20 @@ struct PlaybackWaveform: View {
         }
         #endif
         .accessibilityElement(children: .ignore).accessibilityLabel("Current track waveform")
-        .accessibilityValue(content == nil ? "Analysis unavailable" : "\(timing.playing ? "Playing" : "Paused"), \(overview ? "full duration" : "8 bars, Rekordbox beatgrid")")
-        .accessibilityHint("Drag left to seek forward, right to seek backward.")
+        .accessibilityValue(content == nil ? "Analysis unavailable" : "\((display.deck?.playing ?? timing.playing) ? "Playing" : "Paused"), \(overview ? "full duration" : "8 bars, Rekordbox beatgrid")")
+        .accessibilityHint(display.isDeck ? "Position reported by the deck" : "Drag left to seek forward, right to seek backward.")
         .accessibilityAdjustableAction { direction in
-            guard player.track != nil else { return }
+            guard !display.isDeck, player.track != nil else { return }
             player.seek(player.elapsed + (direction == .increment ? 5 : -5))
         }
         .accessibilityIdentifier("nowPlaying.waveform")
-        .onChange(of: trackID) { _, _ in scrub = nil }
+        .onChange(of: display.identity) { _, _ in cancelScrub() }
         .onChange(of: player.seekRevision) { _, _ in scrub = nil }
         .onChange(of: scenePhase) { _, phase in if phase != .active { cancelScrub() } }
         .onDisappear { cancelScrub() }
     }
     private func beginScrub(width: Double, duration: Double) {
-        guard let trackID = player.track?.id, cache.content?.trackID == trackID, width > 0, duration > 0 else { return }
+        guard !display.isDeck, let trackID = player.track?.id, cache.content?.trackID == trackID, width > 0, duration > 0 else { return }
         let position = player.mediaClock.position()
         guard let window = cache.content?.grid?.centeredBarWindow(at: position, bars: 8, duration: duration),
               let id = player.beginScrubbing() else { return }
@@ -135,11 +136,11 @@ struct PlaybackWaveform: View {
                                      width: width, duration: duration)
     }
     private func updateScrub(translation: Double) {
-        guard let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
+        guard !display.isDeck, let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
         player.updateScrubbing(value.id, to: value.target(translation: translation))
     }
     private func finishScrub(translation: Double) {
-        guard let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
+        guard !display.isDeck, let value = scrub, value.trackID == player.track?.id else { scrub = nil; return }
         scrub = nil
         player.endScrubbing(value.id, at: value.target(translation: translation))
     }
@@ -231,11 +232,14 @@ private struct WaveformScrubSurface: UIViewRepresentable {
 /// Reuses the same immutable raster behind the title, with full-track progress.
 struct PlaybackOverviewBackground: View {
     let player: BoothPlayer
+    let display: PlaybackDisplay
     let cache: PlaybackWaveformCache
     @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
-        let content = cache.content?.trackID == player.track?.id ? cache.content : nil
-        let progress = min(1, max(0, player.elapsed / max(1, player.duration)))
+        let content = cache.content?.trackID == display.track?.id ? cache.content : nil
+        let elapsed = display.isDeck ? (display.deckPosition ?? 0) : player.elapsed
+        let duration = display.isDeck ? (display.deckDuration ?? 0) : player.duration
+        let progress = min(1, max(0, elapsed / max(1, duration)))
         let waveformOpacity = contrast == .increased ? 0.18 : 0.34
         Canvas { context, size in
             guard let content else { return }

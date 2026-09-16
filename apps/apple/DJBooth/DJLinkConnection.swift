@@ -20,6 +20,13 @@ struct DJLinkStatus: Decodable, Sendable {
     var playlistCount: Int?
     var devices: [Device]?
 }
+struct DJLinkDeck: Identifiable, Equatable, Sendable {
+    let state: DJLinkDeckState
+    let model: String
+    let libraryTrackID: String?
+    var waveform: Waveform? = nil
+    var id: Int { state.player }
+}
 private struct LinkError: LocalizedError { let message: String; var errorDescription: String? { message } }
 
 /// Serializes C ABI calls and disk preparation away from the UI actor.
@@ -27,6 +34,7 @@ private actor DJLinkEngine {
     private var bindingsVerified = false
     private var directory: URL?
     private var preparation = UUID()
+    private var presentationByDeck: [Int: (track: UInt32?, canonical: String?, waveform: Waveform?)] = [:]
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
         try DJLinkBindings.decode(operation, input: input, as: type)
     }
@@ -35,7 +43,69 @@ private actor DJLinkEngine {
         if !bindingsVerified { try DJLinkBindings.verifyInventory(); bindingsVerified = true }
         return try request("interfaces", as: [DJLinkInterface].self)
     }
-    func status() throws -> DJLinkStatus { try request("status", as: DJLinkStatus.self) }
+    private var mixerSubscription: UInt64?
+    private var mixers: [String: DJLinkMixerObservation] = [:]
+    private func mixerStatus() throws -> [String: DJLinkMixerObservation] {
+        if mixerSubscription == nil {
+            mixerSubscription = try request("server.subscribe_mixer_telemetry", as: UInt64.self)
+        }
+        guard let subscription = mixerSubscription else { return mixers }
+        struct Events: Decodable { let events: [DJLinkMixerEvent]; let lagged: Int; let closed: Bool }
+        let batch = try request("server.poll_events", input: "{\"subscription\":\(subscription),\"limit\":128}", as: Events.self)
+        let now = ProcessInfo.processInfo.systemUptime
+        for event in batch.events {
+            if mixers[event.source_ip] == nil {
+                AppDiagnostics.shared.event("cdj_mixer_telemetry_started", ["ip": event.source_ip])
+            }
+            mixers[event.source_ip] = DJLinkMixerObservation(event: event, receivedAt: now)
+        }
+        if batch.lagged > 0 {
+            AppDiagnostics.shared.event("cdj_mixer_telemetry_lagged", ["count": String(batch.lagged)])
+        }
+        if batch.closed {
+            _ = try request("server.unsubscribe", input: "{\"subscription\":\(subscription)}", as: Bool.self)
+            mixerSubscription = nil
+            mixers.removeAll()
+        }
+        return mixers
+    }
+    func status() throws -> (DJLinkStatus, [DJLinkDeck], [String: DJLinkMixerObservation]) {
+        let status = try request("status", as: DJLinkStatus.self)
+        guard status.running else { return (status, [], [:]) }
+        struct Snapshot: Decodable { let deck: DJLinkDeckState? }
+        struct Metadata: Decodable { let track_id: UInt32 }
+        var decks: [DJLinkDeck] = []
+        for device in status.devices ?? [] where (1...6).contains(device.player) {
+            let snapshot = try request("server.monitor_snapshot", input: "{\"player\":\(device.player)}", as: Snapshot.self)
+            guard let state = snapshot.deck else { continue }
+            // USB mobile browsing can report the deck itself as source_player.
+            // Resolve identity through the same Rust library lookup as the web booth.
+            var canonical: String?
+            var waveform: Waveform?
+            if let known = presentationByDeck[state.player], known.track == state.track_id {
+                canonical = known.canonical
+                waveform = known.waveform
+            } else if let id = state.track_id {
+                let metadata = try request("server.library_track_metadata", input: "{\"track_id\":\(id)}", as: Metadata?.self)
+                canonical = metadata.flatMap { metadata in cached?.tracks.first { $0.trackId == metadata.track_id }?.canonicalName }
+                waveform = try request("server.library_waveform", input: "{\"track_id\":\(id)}", as: DJLinkWaveform?.self)?.waveform
+            }
+            presentationByDeck[state.player] = (state.track_id, canonical, waveform)
+            decks.append(DJLinkDeck(state: state, model: device.model, libraryTrackID: canonical, waveform: waveform))
+        }
+        do {
+            return (status, decks, try mixerStatus())
+        } catch {
+            // An optional mixer stream must not interrupt track serving.
+            AppDiagnostics.shared.event("cdj_mixer_telemetry_failed", ["error": error.localizedDescription])
+            if let subscription = mixerSubscription {
+                _ = try? request("server.unsubscribe", input: "{\"subscription\":\(subscription)}", as: Bool.self)
+            }
+            mixerSubscription = nil
+            mixers.removeAll()
+            return (status, decks, [:])
+        }
+    }
     private struct Prepared {
         let source: [Track]
         let collections: [Collection]
@@ -147,6 +217,9 @@ private actor DJLinkEngine {
         return (status, library.omitted)
     }
     func stop() throws {
+        presentationByDeck.removeAll()
+        mixerSubscription = nil
+        mixers.removeAll()
         preparation = UUID()
         _ = try request("stop", as: DJLinkStatus.self)
         directory = nil
@@ -173,6 +246,34 @@ private actor DJLinkEngine {
     var interfaces: [DJLinkInterface] = []
     var selectedIP = ""
     var status = DJLinkStatus(running: false)
+    var decks: [DJLinkDeck] = []
+    var mixers: [String: DJLinkMixerObservation] = [:]
+    var selectedMixerIP: String?
+    // 0 means explicitly unassigned. Player/channel matching is a default,
+    // not an assertion about the user's physical audio wiring.
+    private var channelAssignments: [Int: Int] = [:]
+    var detectedDecks: [DJLinkStatus.Device] {
+        (status.devices ?? []).filter { (1...6).contains($0.player) }.sorted { $0.player < $1.player }
+    }
+    var selectedMixer: DJLinkMixerObservation? {
+        if let selectedMixerIP { return mixers[selectedMixerIP] }
+        let ordered = mixers.keys.sorted().compactMap { mixers[$0] }
+        return ordered.first { $0.isFresh(at: ProcessInfo.processInfo.systemUptime) } ?? ordered.first
+    }
+    func mixerChannel(for player: Int) -> Int? {
+        let channel = channelAssignments[player] ?? ((1...4).contains(player) ? player : 0)
+        return channel == 0 ? nil : channel
+    }
+    func assignMixerChannel(_ channel: Int?, to player: Int) {
+        channelAssignments[player] = channel ?? 0
+    }
+    var selectedPlayer: Int?
+    var showingPhonePlayer = false
+    var cableDetected: Bool { lifecycle.attachment != nil }
+    var selectedDeck: DJLinkDeck? {
+        let selected = DJLinkDeckState.selected(in: decks.map(\.state), preferred: selectedPlayer)
+        return decks.first { $0.id == selected?.player }
+    }
     var busy = false
     var error: String?
     var omittedTracks = 0
@@ -187,10 +288,108 @@ private actor DJLinkEngine {
     private var checking = false
     private var checkAgain = false
     private var nextStatusAt: TimeInterval = 0
+    private var nextInterfaceAt: TimeInterval = 0
     private var reportedInterfaces = ""
     private var reportedAutomaticState = ""
     private var generation = UUID()
     private let engine = DJLinkEngine()
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var backgroundExpired = false
+    private var backgroundGeneration = UUID()
+    private var backgroundAudio = false
+    private var lastMonitorAt = ProcessInfo.processInfo.systemUptime
+    private var canRun: Bool {
+        UIApplication.shared.applicationState != .background || backgroundTask != .invalid || backgroundAudio
+    }
+
+    #if DEBUG && targetEnvironment(simulator)
+    /// Explicit UI-test fixture only; it never starts or advertises a Rust server.
+    func installPreviewDecks() throws {
+        func deck(_ player: Int, playing: Bool) throws -> DJLinkDeckState {
+            let row: [String: Any] = ["player": player, "active": true, "source_player": 17,
+                "source_slot": 4, "track_type": 1, "track_id": player, "playing": playing,
+                "play_state": playing ? "playing" : "paused", "synced": false,
+                "tempo_master": playing, "bpm_hundreds": 12800, "effective_bpm_hundreds": 12800,
+                "pitch_centi_percent": 0, "beat_in_bar": 1, "playhead_ms": 45000,
+                "track_length_sec": 240, "track_progress_milli": 188,
+                "master_tempo": true, "key_shift_cents": player == 2 ? 200 : 0,
+                "effective_key": player == 2 ? "D" : "C"]
+            return try JSONDecoder().decode(DJLinkDeckState.self, from: JSONSerialization.data(withJSONObject: row))
+        }
+        decks = [DJLinkDeck(state: try deck(1, playing: false), model: "CDJ-3000", libraryTrackID: "demo-5"),
+                 DJLinkDeck(state: try deck(2, playing: true), model: "CDJ-3000", libraryTrackID: "demo-7")]
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-six-decks") {
+            for player in 3...6 {
+                decks.append(DJLinkDeck(state: try deck(player, playing: false), model: "CDJ-3000", libraryTrackID: "demo-5"))
+            }
+            let channels: [[String: Int]] = (1...4).map { channel in
+                ["channel": channel, "input_source": 1, "trim": 128, "eq_high": channel == 1 ? 255 : 128,
+                 "eq_mid": 128, "eq_low": channel == 1 ? 0 : 128, "color": 128,
+                 "fader": 255, "crossfader_assign": 1]
+            }
+            let event = try JSONDecoder().decode(DJLinkMixerEvent.self, from: JSONSerialization.data(withJSONObject:
+                ["source_ip": "192.0.2.33", "mixer": ["channels": channels, "crossfader": 128]]))
+            mixers[event.source_ip] = DJLinkMixerObservation(event: event, receivedAt: ProcessInfo.processInfo.systemUptime)
+        }
+        status = DJLinkStatus(running: true, trackCount: decks.count, devices: decks.map {
+            DJLinkStatus.Device(player: $0.id, ip: "192.0.2.\($0.id)", model: $0.model)
+        })
+    }
+    #endif
+
+    func sceneChanged(background: Bool, audioPlaying: Bool) {
+        backgroundAudio = audioPlaying
+        if background {
+            extendBackgroundSession()
+        } else {
+            backgroundExpired = false
+            endBackgroundTime()
+            if let model = monitoredModel {
+                // An unexpected suspension can leave BSD sockets defunct even
+                // when iOS did not deliver the background expiration callback.
+                let wasSuspended = ProcessInfo.processInfo.systemUptime - lastMonitorAt > 3
+                Task {
+                    if wasSuspended && self.status.running { await self.disconnect() }
+                    await self.autoConnect(model: model)
+                }
+            }
+        }
+    }
+    func audioPlaybackChanged(_ playing: Bool) {
+        backgroundAudio = playing
+        if UIApplication.shared.applicationState == .background { extendBackgroundSession() }
+    }
+    private func extendBackgroundSession() {
+        guard status.running || busy, !backgroundAudio, backgroundTask == .invalid else { return }
+        guard !backgroundExpired else {
+            Task { await self.disconnect(message: "Reopen DJBooth to reconnect your decks.") }
+            return
+        }
+        let request = UUID(); backgroundGeneration = request
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "DJ Link connection") { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.backgroundGeneration == request,
+                      UIApplication.shared.applicationState == .background else { return }
+                self.backgroundExpired = true
+                AppDiagnostics.shared.event("cdj_background_time_expired")
+                if !self.backgroundAudio {
+                    await self.disconnect(message: "iOS paused the CDJ connection. Keep DJBooth open for uninterrupted playback.")
+                }
+                self.endBackgroundTime()
+            }
+        }
+        AppDiagnostics.shared.event("cdj_background_time_started", ["granted": String(backgroundTask != .invalid)])
+        if backgroundTask == .invalid {
+            backgroundExpired = true
+            Task { await self.disconnect(message: "Keep DJBooth open for uninterrupted deck playback.") }
+        }
+    }
+    private func endBackgroundTime() {
+        guard backgroundTask != .invalid else { return }
+        backgroundGeneration = UUID()
+        let task = backgroundTask; backgroundTask = .invalid
+        UIApplication.shared.endBackgroundTask(task)
+    }
 
     init() {
         let changed: @Sendable (NWPath, Bool) -> Void = { [weak self] path, usb in
@@ -202,6 +401,7 @@ private actor DJLinkEngine {
             Task { @MainActor [weak self] in
                 if usb { self?.usbWiredNames = names } else { self?.wiredNames = names }
                 if let self, let model = self.monitoredModel {
+                    self.nextInterfaceAt = 0
                     await self.autoConnect(model: model)
                 }
                 #if DEBUG
@@ -238,14 +438,24 @@ private actor DJLinkEngine {
             AppDiagnostics.shared.event("cdj_monitor_stopped")
         }
         while !Task.isCancelled {
+            lastMonitorAt = ProcessInfo.processInfo.systemUptime
             await autoConnect(model: model)
-            do { try await Task.sleep(for: .milliseconds(125)) } catch { return }
+            let interval = UIApplication.shared.applicationState == .background ? 1000 : (status.devices?.isEmpty == false ? 33 : 125)
+            do { try await Task.sleep(for: .milliseconds(interval)) } catch { return }
         }
     }
 
     /// Called while foregrounded, even with the connection sheet closed.
     func autoConnect(model: BoothModel) async {
-        guard !model.demo, UIApplication.shared.applicationState != .background else { return }
+        #if DEBUG && targetEnvironment(simulator)
+        if model.demo && ProcessInfo.processInfo.arguments.contains("--ui-test-six-decks") {
+            let now = ProcessInfo.processInfo.systemUptime
+            if mixers.values.contains(where: { now - $0.receivedAt >= 1 }) {
+                mixers = mixers.mapValues { DJLinkMixerObservation(event: $0.event, receivedAt: now) }
+            }
+        }
+        #endif
+        guard !model.demo, canRun else { return }
         guard !checking else { checkAgain = true; return }
         guard !busy else { return }
         checking = true
@@ -260,8 +470,12 @@ private actor DJLinkEngine {
             }
         }
         let request = generation
-        await refresh()
-        guard generation == request, !Task.isCancelled, !busy, UIApplication.shared.applicationState != .background else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now >= nextInterfaceAt {
+            await refresh()
+            nextInterfaceAt = now + 0.125
+        }
+        guard generation == request, !Task.isCancelled, !busy, canRun else { return }
         let wired = interfaces.first(where: {
             wiredNames.contains($0.name) || usbWiredNames.contains($0.name) || ($0.name != "en0" && $0.ip.hasPrefix("169.254."))
         })
@@ -276,15 +490,15 @@ private actor DJLinkEngine {
         }
         reportAutomaticState("wired_interface_ready:\(wired.id)")
         if status.running && activeInterfaceID != wired.id { await disconnect() }
-        guard !Task.isCancelled, !busy, UIApplication.shared.applicationState != .background else { return }
+        guard !Task.isCancelled, !busy, canRun else { return }
         if status.running {
             let now = ProcessInfo.processInfo.systemUptime
             if now >= nextStatusAt {
                 let request = generation
                 do {
-                    let next = try await engine.status()
+                    let (next, observedDecks, observedMixers) = try await engine.status()
                     guard generation == request, !Task.isCancelled, !busy,
-                          UIApplication.shared.applicationState != .background else { return }
+                          canRun else { return }
                     let previousDevices = status.devices?.map { "\($0.player):\($0.ip)" } ?? []
                     let nextDevices = next.devices?.map { "\($0.player):\($0.ip)" } ?? []
                     if previousDevices != nextDevices {
@@ -292,9 +506,16 @@ private actor DJLinkEngine {
                         AppDiagnostics.shared.event("cdj_devices_changed", ["devices": nextDevices.joined(separator: ",")])
                     }
                     status = next
-                    nextStatusAt = now + (nextDevices.isEmpty ? 0.125 : 0.5)
+                    if decks != observedDecks { decks = observedDecks }
+                    // Publish knob changes immediately, but coalesce unchanged
+                    // heartbeats so an open channel menu stays stable.
+                    let mixerChanged = Set(mixers.keys) != Set(observedMixers.keys) || observedMixers.contains { ip, observation in
+                        mixers[ip]?.event != observation.event || now - (mixers[ip]?.receivedAt ?? 0) >= 1
+                    }
+                    if mixerChanged { mixers = observedMixers }
+                    nextStatusAt = now + (nextDevices.isEmpty ? 0.125 : 0)
                 } catch {
-                    guard generation == request, !Task.isCancelled, !busy, UIApplication.shared.applicationState != .background else { return }
+                    guard generation == request, !Task.isCancelled, !busy, canRun else { return }
                     await disconnect(message: error.localizedDescription)
                 }
             }
@@ -332,7 +553,7 @@ private actor DJLinkEngine {
         }
     }
     func connect(model: BoothModel) async {
-        guard !Task.isCancelled, UIApplication.shared.applicationState != .background,
+        guard !Task.isCancelled, canRun,
               !busy, !status.running, let interface = interfaces.first(where: { $0.ip == selectedIP }) else { return }
         let request = UUID(); generation = request
         AppDiagnostics.shared.event("cdj_connect_started", ["connection": request.uuidString, "interface": interface.name, "ip": interface.ip])
@@ -372,6 +593,7 @@ private actor DJLinkEngine {
         AppDiagnostics.shared.event("cdj_disconnect", ["connection": generation.uuidString, "reason": message ?? "lifecycle_or_interface_change"])
         lifecycle.resetRetry()
         activeInterfaceID = nil
+        decks = []; mixers = [:]; selectedPlayer = nil; showingPhonePlayer = false
         let request = UUID(); generation = request
         busy = true
         UIApplication.shared.isIdleTimerDisabled = unattendedHardwareTest && UIApplication.shared.applicationState != .background
@@ -384,6 +606,7 @@ private actor DJLinkEngine {
             self.error = error.localizedDescription
         }
         busy = false
+        endBackgroundTime()
     }
 }
 
@@ -425,7 +648,7 @@ struct DJLinkConnectionView: View {
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
                 }
                 Section("While connected") {
-                    Text("Keep DJBooth open. The screen stays awake while sharing. Switching apps or locking the phone disconnects DJ Link.")
+                    Text("Keep DJBooth open for uninterrupted deck playback. Brief app switches use the background time iOS grants. A locked phone or a longer switch can pause this USB network connection; returning to the app reconnects automatically.")
                     Text("Only audio already downloaded to this phone is shared. Reconnect after downloading more tracks or changing playlists.")
                     Text("CDJ waveforms, beat grids, seek tables, and cues download with your tracks. Connecting never analyzes audio.")
                         .font(.caption).foregroundStyle(.secondary)

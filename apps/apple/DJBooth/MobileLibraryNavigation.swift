@@ -16,6 +16,7 @@ struct MobileLibraryNavigation: View {
             ? [.browse(model.browseMode)] + (model.browseGroup.map { [.group(model.browseMode, $0)] } ?? [])
             : folders + (selected.map { [.collection($0.id)] } ?? [])
         NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion)
+            .safeAreaInset(edge: .top, spacing: 0) { DJLinkConnectionCard(model: model) }
     }
 }
 
