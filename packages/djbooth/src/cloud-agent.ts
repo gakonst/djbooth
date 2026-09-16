@@ -21,11 +21,30 @@ export function cloudAgent(options: {
     | undefined;
   const receipts = new Map<string, Record<string, unknown>>();
   let imported: { playlistId: string; entries: number } | undefined;
+  const stages: NonNullable<ImportProgress["stages"]> = {};
+  let latest: ImportProgress | undefined;
+  const emit = (value: ImportProgress) => {
+    if (value.phase === "download") {
+      stages.resolve = { status: "complete", current: value.total, total: value.total };
+    }
+    if (["resolve", "download", "analyze", "enrich", "publish"].includes(value.phase)) {
+      stages[value.phase] = { status: "running", current: value.current, total: value.total };
+    }
+    latest = { ...value, stages: structuredClone(stages) };
+    options.progress(latest);
+  };
+  const complete = (phase: string, total: number) => {
+    stages[phase] = { status: "complete", current: total, total };
+  };
   return async (input: Record<string, unknown>): Promise<unknown> => {
     if (input.operation === "instructions")
       return {
         instructions: await readFile("/app/AGENTS.md", "utf8"),
         source: options.source,
+        activeProcess: active?.result ?? null,
+        recentReceipts: [...receipts.values()].slice(-10),
+        imported: imported ?? null,
+        progress: latest ?? null,
         dbPath: "/data/master.db",
         outputDirectory: "/data/audio",
         providerPlaylistFile: existsSync("/tmp/provider-playlist.json")
@@ -34,7 +53,7 @@ export function cloudAgent(options: {
         endpoint: options.endpoint ?? "http://djbooth.internal",
         namespace: `cloud:${options.id}`,
         guidance:
-          "Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
+          "If activeProcess is non-null, poll its process_id until terminal before starting anything. Reuse imported and recentReceipts to continue unfinished work across agent turns. Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
           options.id +
           ". Poll the process until terminal; inspect errors and resume with the same CLI workflow. No phone connection is needed. Do not report success before publication is verified.",
       };
@@ -67,7 +86,11 @@ export function cloudAgent(options: {
     if (input.operation !== "start") throw new Error("Invalid operation");
     if (active?.id === id) return active.result;
     if (receipts.has(id)) return receipts.get(id);
-    if (active) throw new Error("A command is already running. Poll it before starting another.");
+    if (active)
+      return {
+        ...active.result,
+        message: "A command is already running. Poll this process_id before starting another.",
+      };
     if (
       !Array.isArray(input.args) ||
       !input.args.length ||
@@ -88,11 +111,16 @@ export function cloudAgent(options: {
       result: { status: "running", process_id: id, diagnostics: "" } as Record<string, unknown>,
     };
     active = process;
-    options.progress({
+    emit({
       status: "running",
-      phase: "import",
+      phase:
+        args[0] === "enrich"
+          ? "enrich"
+          : args[0] === "cloud" && args[1] === "publish"
+            ? "publish"
+            : "resolve",
       current: 0,
-      total: 1,
+      total: 0,
       message: `Agent running djbooth ${args[0]}`,
     });
     void (async () => {
@@ -105,7 +133,7 @@ export function cloudAgent(options: {
             process.result.diagnostics = `${process.result.diagnostics}\n${line}`.slice(-12000);
             const update = progress(line);
             if (update)
-              options.progress({
+              emit({
                 status: "running",
                 phase: "import",
                 current: 0,
@@ -130,8 +158,21 @@ export function cloudAgent(options: {
           typeof value.playlistId === "string" &&
           Number.isSafeInteger(value.entries) &&
           Number(value.entries) > 0
-        )
+        ) {
           imported = { playlistId: value.playlistId, entries: Number(value.entries) };
+          for (const phase of ["resolve", "download", "analyze"]) complete(phase, imported.entries);
+          if (latest) {
+            latest = { ...latest, stages: structuredClone(stages) };
+            options.progress(latest);
+          }
+        }
+        if (args[0] === "enrich" && imported) {
+          complete("enrich", imported.entries);
+          if (latest) {
+            latest = { ...latest, stages: structuredClone(stages) };
+            options.progress(latest);
+          }
+        }
         if (
           args[0] === "cloud" &&
           args[1] === "publish" &&
@@ -153,8 +194,9 @@ export function cloudAgent(options: {
             value.availableAudio === value.tracks &&
             value.cdjReady === value.tracks &&
             playlist?.tracks === imported.entries
-          )
-            options.progress({
+          ) {
+            complete("publish", imported.entries);
+            emit({
               status: "complete",
               phase: "complete",
               current: imported.entries,
@@ -163,6 +205,7 @@ export function cloudAgent(options: {
               collectionID,
               message: `Published ${imported.entries} tracks`,
             });
+          }
         }
       } catch (error) {
         await options.save().catch(() => undefined);

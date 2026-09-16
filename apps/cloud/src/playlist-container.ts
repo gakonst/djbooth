@@ -40,14 +40,19 @@ export class PlaylistContainer extends Container<Env> {
         throw new Error("Container ownership mismatch");
       if (
         previous.agentGrantId !== (row?.agent_grant_id ?? undefined) ||
-        previous.agentId !== (row?.agent_id ?? undefined) ||
-        previous.agentTurnId !== (row?.agent_turn_id ?? undefined)
+        previous.agentId !== (row?.agent_id ?? undefined)
       ) {
-        // A user-authorized retry is a new agent turn. Stop the old executor;
-        // the same private master.db snapshot provides resumable workflow state.
+        // A different grant or agent must not inherit a live executor.
+        // Its authorized retry restores the private master.db snapshot.
         await this.destroy();
         this.deleteSchedules("poll");
       } else {
+        // A continuation belongs to the same workflow. Keep its CLI process,
+        // receipts and original runtime budget alive across agent turns.
+        if (previous.agentTurnId !== (row?.agent_turn_id ?? undefined)) {
+          previous.agentTurnId = row?.agent_turn_id ?? undefined;
+          await this.ctx.storage.put("job", previous);
+        }
         // Repair a lost alarm after eviction or an interrupted submission.
         if (!this.polling && !previous.completedAt) {
           this.deleteSchedules("poll");
@@ -201,9 +206,20 @@ export class PlaylistContainer extends Container<Env> {
       if (!response.ok) throw new Error("Container status unavailable");
       const progress = await response.json<Record<string, unknown>>();
       if (!validProgress(progress)) throw new Error("Invalid container status");
+      if (job.agentGrantId && progress.status === "failed") {
+        // An agent-mode terminal status here means workspace initialization
+        // failed; command failures are receipts owned by the running agent.
+        // Restart from the existing snapshot and keep the download active.
+        await this.destroy();
+        throw new Error("Workspace initialization will retry");
+      }
+      if (job.failures) {
+        job.failures = 0;
+        await this.ctx.storage.put("job", job);
+      }
       const terminal = progress.status === "complete" || progress.status === "failed";
       await this.env.LIBRARY_DB.prepare(
-        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, collection_id=COALESCE(?,collection_id), analysis_version=CASE WHEN ?=1 THEN 1 ELSE analysis_version END, updated_at=? WHERE account_id=? AND id=?",
+        "UPDATE import_requests SET status=?, phase=?, current=?, total=?, message=?, stage_progress=json_patch(COALESCE(stage_progress,'{}'),COALESCE(?,'{}')), collection_id=COALESCE(?,collection_id), analysis_version=CASE WHEN ?=1 THEN 1 ELSE analysis_version END, updated_at=? WHERE account_id=? AND id=? AND status IN ('queued','running')",
       )
         .bind(
           progress.status,
@@ -211,6 +227,7 @@ export class PlaylistContainer extends Container<Env> {
           progress.current,
           progress.total,
           progress.message,
+          progress.stages ? JSON.stringify(progress.stages) : null,
           progress.collectionID ?? null,
           progress.status === "complete" ? progress.analysisVersion : 0,
           Date.now(),
@@ -229,17 +246,16 @@ export class PlaylistContainer extends Container<Env> {
     } catch {
       job.failures++;
       await this.ctx.storage.put("job", job);
-      if (job.failures >= 5)
-        await this.finish(
-          job,
-          "Playlist container could not run. Check cloud configuration, then retry to resume.",
-        );
+      // Temporary startup/status failures do not require a tap to resume.
+      // Preserve any live process and retry within the original job budget.
+      this.deleteSchedules("poll");
+      await this.schedule(Math.min(120, 15 * 2 ** Math.min(job.failures, 3)), "poll");
     }
   }
 
   private async finish(job: Job, message: string): Promise<void> {
     await this.env.LIBRARY_DB.prepare(
-      "UPDATE import_requests SET status='failed', phase='failed', message=?, updated_at=? WHERE account_id=? AND id=?",
+      "UPDATE import_requests SET status='failed', message=?, updated_at=? WHERE account_id=? AND id=?",
     )
       .bind(message, Date.now(), job.accountId, job.id)
       .run();
@@ -271,6 +287,20 @@ export function validProgress(value: Record<string, unknown>): boolean {
     Number(value.total) >= Number(value.current) &&
     typeof value.message === "string" &&
     value.message.length <= 500 &&
+    (value.stages == null ||
+      (typeof value.stages === "object" &&
+        !Array.isArray(value.stages) &&
+        Object.entries(value.stages).every(
+          ([key, stage]) =>
+            ["resolve", "download", "analyze", "enrich", "publish"].includes(key) &&
+            stage &&
+            typeof stage === "object" &&
+            ["running", "complete"].includes(stage.status) &&
+            Number.isSafeInteger(stage.current) &&
+            stage.current >= 0 &&
+            Number.isSafeInteger(stage.total) &&
+            stage.total >= stage.current,
+        ))) &&
     (value.collectionID == null ||
       (typeof value.collectionID === "string" &&
         /^cloud:[a-f0-9-]{36}:playlist:[\w-]{1,128}$/i.test(value.collectionID)))

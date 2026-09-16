@@ -59,10 +59,24 @@ export class AgentTools extends DurableObject<Env> {
     )
       throw new Error("Tool host ownership mismatch");
     await this.ctx.storage.put("owner", owner);
+    await this.recoverDownloads(owner);
     await this.ctx.storage.setAlarm(Date.now() + 30_000);
     await (this.connecting ??= this.attach(owner).finally(() => {
       this.connecting = undefined;
     }));
+  }
+  /** Cron repairs a missing alarm without exposing the stored Connect credential. */
+  async wake(): Promise<void> {
+    if (await this.ctx.storage.get<Owner>("owner")) await this.ctx.storage.setAlarm(Date.now() + 1);
+  }
+  private async recoverDownloads(owner: Owner): Promise<void> {
+    // Recover jobs stopped by the old turn-boundary behavior when their approved
+    // owner reconnects. Real acquisition/auth failures are deliberately excluded.
+    await this.env.LIBRARY_DB.prepare(
+      "UPDATE import_requests SET status='queued', phase='restore', message='Continuing download', updated_at=? WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'",
+    )
+      .bind(Date.now(), owner.account.id, owner.account.grantId, owner.account.agentId)
+      .run();
   }
   private async verified(): Promise<Owner> {
     const owner = await this.ctx.storage.get<Owner>("owner");
@@ -168,8 +182,11 @@ export class AgentTools extends DurableObject<Env> {
       .connect();
   }
   async alarm(): Promise<void> {
+    // Recover even if this invocation is interrupted during a network request.
+    await this.ctx.storage.setAlarm(Date.now() + 30_000);
     try {
       const owner = await this.verified();
+      await this.recoverDownloads(owner);
       const jobs = await this.env.LIBRARY_DB.prepare(
         "SELECT id, source, agent_turn_id FROM import_requests WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running')",
       )
@@ -188,54 +205,74 @@ export class AgentTools extends DurableObject<Env> {
             job.source,
           );
         };
-        if (!job.agent_turn_id) {
-          await resubmit();
-          continue;
-        }
-        const request = new Request(
-          `${CONNECT_API}/v1/grants/${owner.account.grantId}/agents/${owner.account.agentId}/turns/${job.agent_turn_id}`,
-          {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${owner.token.split(".")[2]}`,
-              origin: owner.origin,
-              "x-nanocodex-app-id": CONNECT_APP_ID,
+        try {
+          if (!job.agent_turn_id) {
+            await resubmit();
+            continue;
+          }
+          const request = new Request(
+            `${CONNECT_API}/v1/grants/${owner.account.grantId}/agents/${owner.account.agentId}/turns/${job.agent_turn_id}`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${owner.token.split(".")[2]}`,
+                origin: owner.origin,
+                "x-nanocodex-app-id": CONNECT_APP_ID,
+              },
+              signal: AbortSignal.timeout(20_000),
             },
-          },
-        );
-        const response = await (this.env.CONNECT_API_SERVICE
-          ? this.env.CONNECT_API_SERVICE.fetch(request)
-          : fetch(request));
-        if (response.status === 404) {
-          await resubmit();
-          continue;
+          );
+          const response = await (this.env.CONNECT_API_SERVICE
+            ? this.env.CONNECT_API_SERVICE.fetch(request)
+            : fetch(request));
+          if (response.status === 404) {
+            await resubmit();
+            continue;
+          }
+          if (!response.ok) continue;
+          const value = await response.json<{ terminal?: unknown }>();
+          if (value.terminal) {
+            // Flush publication first: a completed job needs no further agent turn.
+            await this.env.PLAYLIST_CONTAINERS?.getByName(`${owner.account.id}:${job.id}`).poll();
+            // Claim one continuation durably before sending it. If delivery is
+            // interrupted, the next alarm resubmits this same idempotent turn ID.
+            const claimed = await this.env.LIBRARY_DB.prepare(
+              "UPDATE import_requests SET agent_turn_id=?, updated_at=? WHERE account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND agent_turn_id=? AND status IN ('queued','running') RETURNING id",
+            )
+              .bind(
+                crypto.randomUUID(),
+                Date.now(),
+                owner.account.id,
+                job.id,
+                owner.account.grantId,
+                owner.account.agentId,
+                job.agent_turn_id,
+              )
+              .first<{ id: string }>();
+            if (claimed) await resubmit();
+          }
+        } catch (error) {
+          if (error instanceof AuthError && [401, 403].includes(error.status)) throw error;
+          // A temporary broker/container error is retried by the next alarm.
+          // It must not stop this download or the owner's other downloads.
         }
-        if (!response.ok) continue;
-        const value = await response.json<{ terminal?: unknown }>();
-        if (value.terminal)
-          await this.env.PLAYLIST_CONTAINERS?.getByName(`${owner.account.id}:${job.id}`).poll();
-        if (value.terminal)
-          await this.env.LIBRARY_DB.prepare(
-            "UPDATE import_requests SET status='failed', phase='failed', message='Your agent stopped before publishing all tracks. Retry to resume saved work.', updated_at=? WHERE account_id=? AND id=? AND status IN ('queued','running')",
-          )
-            .bind(Date.now(), owner.account.id, job.id)
-            .run();
       }
       if (jobs.results.length || this.phone || this.queries.size) await this.initialize(owner);
       else {
         await this.runtime?.close();
         this.runtime = undefined;
         this.attachment = undefined;
+        await this.ctx.storage.deleteAlarm();
       }
     } catch (error) {
-      if (!(error instanceof AuthError) || error.status >= 500) {
+      if (!(error instanceof AuthError) || ![401, 403].includes(error.status)) {
         await this.ctx.storage.setAlarm(Date.now() + 30_000);
         return;
       }
       const owner = await this.ctx.storage.get<Owner>("owner");
       if (owner)
         await this.env.LIBRARY_DB.prepare(
-          "UPDATE import_requests SET status='failed', phase='failed', message='Nanocodex authorization expired or was revoked. Reconnect, then retry.', updated_at=? WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running')",
+          "UPDATE import_requests SET status='failed', message='Nanocodex authorization expired or was revoked. Reconnect, then retry.', updated_at=? WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'))",
         )
           .bind(Date.now(), owner.account.id, owner.account.grantId, owner.account.agentId)
           .run();

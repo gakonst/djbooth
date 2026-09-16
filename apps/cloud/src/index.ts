@@ -703,6 +703,15 @@ export default {
       .bind(Date.now())
       .run();
     if (!env.PLAYLIST_CONTAINERS) return;
+    if (env.AGENT_TOOLS) {
+      const owners = await env.LIBRARY_DB.prepare(
+        "SELECT DISTINCT account_id, agent_grant_id, agent_id FROM import_requests WHERE agent_grant_id IS NOT NULL AND agent_id IS NOT NULL AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.')) LIMIT 100",
+      ).all<{ account_id: string; agent_grant_id: string; agent_id: string }>();
+      for (const owner of owners.results)
+        await env.AGENT_TOOLS.getByName(
+          `${owner.account_id}:${owner.agent_grant_id}:${owner.agent_id}`,
+        ).wake();
+    }
     await env.LIBRARY_DB.prepare(
       "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Updating CDJ files in the cloud', analysis_repair=1, updated_at=? WHERE status='complete' AND analysis_version<1",
     )

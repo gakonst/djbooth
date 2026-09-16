@@ -13,6 +13,7 @@ export type ImportProgress = {
   message: string;
   collectionID?: string;
   analysisVersion?: 1;
+  stages?: Record<string, { status: "running" | "complete"; current: number; total: number }>;
 };
 export type CommandRunner = (
   args: string[],
@@ -129,8 +130,16 @@ export const runCloudCommand: CommandRunner = (args, signal, progress, environme
 
 /** Only allowlisted phases/counts leave the container; provider diagnostics stay in container logs. */
 export function importProgress(line: string): Partial<ImportProgress> | undefined {
+  const publishing = /^cloud ([a-z-]+) (\d+)\/(\d+)/.exec(line);
+  if (publishing)
+    return {
+      phase: "publish",
+      current: Number(publishing[2]),
+      total: Number(publishing[3]),
+      message: "Saving to your library",
+    };
   const stage =
-    /\[(prepare|source-set|resolve|enrich|spotify|download|acquire|acquisition|analysis|analyze)\]/.exec(
+    /\[(prepare|source-set|resolve|enrich|spotify|download|acquire|acquisition|analysis|analyze)(?::[a-z-]+)?\]/.exec(
       line,
     )?.[1];
   const count = /\b(\d+)\/(\d+)\b/.exec(line);

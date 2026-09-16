@@ -5,6 +5,10 @@ vi.mock("../src/cloud-worker.js", async (original) => ({
   ...(await original<typeof import("../src/cloud-worker.js")>()),
   runCloudCommand: vi.fn(),
 }));
+vi.mock("node:fs/promises", async (original) => ({
+  ...(await original<typeof import("node:fs/promises")>()),
+  readFile: vi.fn(async () => "Use the normal DJBooth CLI."),
+}));
 const source = "https://soundcloud.com/owner/sets/playlist";
 const publishArgs = [
   "cloud",
@@ -134,4 +138,40 @@ test("dry-run publication and a different destination never complete the app dow
     await finish(exec, "publish");
     expect(progress.mock.calls.some(([p]) => p.status === "complete")).toBe(false);
   }
+});
+
+test("a new agent turn discovers and polls the existing CLI process without restarting it", async () => {
+  let resolve!: (value: unknown) => void;
+  vi.mocked(runCloudCommand)
+    .mockReset()
+    .mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+  const { exec } = setup();
+  await exec({ operation: "start", process_id: "running-import", args: ["import", source] });
+  const instructions = (await exec({ operation: "instructions" })) as any;
+  expect(instructions.activeProcess.process_id).toBe("running-import");
+  expect(
+    await exec({
+      operation: "start",
+      process_id: "accidental-duplicate",
+      args: ["import", source],
+    }),
+  ).toMatchObject({ status: "running", process_id: "running-import" });
+  expect(runCloudCommand).toHaveBeenCalledOnce();
+  resolve(imported);
+  await finish(exec, "running-import");
+  const resumed = (await exec({ operation: "instructions" })) as any;
+  expect(resumed.activeProcess).toBeNull();
+  expect(resumed.imported).toEqual(imported);
+  expect(resumed.recentReceipts).toEqual([
+    expect.objectContaining({ process_id: "running-import", status: "completed" }),
+  ]);
+  expect(resumed.progress.stages).toMatchObject({
+    download: { status: "complete" },
+    analyze: { status: "complete" },
+  });
 });

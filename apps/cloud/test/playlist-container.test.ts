@@ -82,7 +82,7 @@ test("scheduled cloud maintenance resumes old completed imports once, without re
     db.close();
   }
 });
-function setup(admit = true, repair = false) {
+function setup(admit = true, repair = false, owner: Record<string, string> = {}) {
   const state = new Map<string, unknown>();
   const writes: unknown[][] = [];
   const storage = {
@@ -102,7 +102,7 @@ function setup(admit = true, repair = false) {
               ? admit
                 ? { id }
                 : null
-              : { status: "queued", analysis_repair: repair ? 1 : 0 },
+              : { status: "queued", analysis_repair: repair ? 1 : 0, ...owner },
           run: async () => {
             writes.push(args);
             return {};
@@ -158,7 +158,21 @@ describe("playlist container lifecycle", () => {
     expect(state.size).toBe(0);
     expect(runner.schedules.has("poll")).toBe(false);
     expect(writes.at(-1)![0]).toBe("complete");
-    expect(writes.at(-1)![6]).toBe(1);
+    expect(writes.at(-1)![7]).toBe(1);
+  });
+  test("continuation preserves the running executor and its original deadline", async () => {
+    const owner = { agent_grant_id: "grant", agent_id: "agent", agent_turn_id: "turn-one" };
+    const { runner, state } = setup(true, false, owner);
+    await runner.enqueue("account-a", id, "https://youtu.be/set");
+    const original = structuredClone(state.get("job")) as any;
+    owner.agent_turn_id = "turn-two";
+    await runner.enqueue("account-a", id, "https://youtu.be/set");
+    expect(state.get("job")).toEqual({ ...original, agentTurnId: "turn-two" });
+    expect(runner.destroy).not.toHaveBeenCalled();
+    expect(runner.schedules.has("poll")).toBe(true);
+    owner.agent_grant_id = "new-grant";
+    await runner.enqueue("account-a", id, "https://youtu.be/set");
+    expect(runner.destroy).toHaveBeenCalledOnce();
   });
   test("capacity keeps playlists queued without launching or consuming startup retries", async () => {
     const { runner, state } = setup(false);
@@ -168,20 +182,41 @@ describe("playlist container lifecycle", () => {
     expect((state.get("job") as any).failures).toBe(0);
     expect(runner.schedules.has("poll")).toBe(true);
   });
-  test("startup failures are bounded and retry schedules a fresh attempt on the same identity", async () => {
-    const { runner, state, writes } = setup();
+  test("temporary startup failures keep retrying without deleting saved work", async () => {
+    const { runner, state } = setup();
     await runner.enqueue("account-a", id, "https://youtu.be/set");
-    vi.mocked(runner.startAndWaitForPorts).mockRejectedValue(
-      new Error("capacity or configuration"),
-    );
-    for (let attempt = 0; attempt < 5; attempt++) await runner.poll();
-    expect(writes.at(-1)![0]).toContain("could not run");
-    expect(runner.destroy).toHaveBeenCalledOnce();
-    expect(state.size).toBe(0);
-    await runner.enqueue("account-a", id, "https://youtu.be/set");
-    expect((state.get("job") as any).id).toBe(id);
-    expect((state.get("job") as any).failures).toBe(0);
+    vi.mocked(runner.startAndWaitForPorts).mockRejectedValue(new Error("capacity"));
+    for (let attempt = 0; attempt < 6; attempt++) await runner.poll();
+    expect(runner.destroy).not.toHaveBeenCalled();
+    expect((state.get("job") as any).failures).toBe(6);
     expect(runner.schedules.has("poll")).toBe(true);
+    vi.mocked(runner.startAndWaitForPorts).mockResolvedValue(undefined as any);
+    await runner.poll();
+    expect((state.get("job") as any).failures).toBe(0);
+  });
+  test("agent workspace initialization failures restart automatically with the same job", async () => {
+    const { runner, state, writes } = setup(true, false, {
+      agent_grant_id: "grant",
+      agent_id: "agent",
+      agent_turn_id: "turn",
+    });
+    await runner.enqueue("account-a", id, "https://youtu.be/set");
+    vi.mocked(runner.containerFetch).mockResolvedValueOnce(
+      Response.json({
+        status: "failed",
+        phase: "failed",
+        current: 0,
+        total: 1,
+        message: "Storage temporarily unavailable",
+      }),
+    );
+    await runner.poll();
+    expect(runner.destroy).toHaveBeenCalledOnce();
+    expect((state.get("job") as any).failures).toBe(1);
+    expect(writes).toEqual([]);
+    expect(runner.schedules.has("poll")).toBe(true);
+    await runner.poll();
+    expect((state.get("job") as any).failures).toBe(0);
   });
   test("overlapping alarms share one in-flight poll", async () => {
     const { runner } = setup();

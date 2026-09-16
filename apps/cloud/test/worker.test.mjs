@@ -212,6 +212,9 @@ before(async () => {
   );
   await database.exec(agents.replace(/^--.*$/gm, "").replace(/\n/g, " "));
   await database.exec(
+    await readFile(new URL("../migrations/0007_import_progress.sql", import.meta.url), "utf8"),
+  );
+  await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
 });
@@ -829,12 +832,16 @@ test("failed playlist retries reuse identity; completed playlists stay completed
     await submitImport({ id: randomUUID(), source: "https://youtu.be/" + randomUUID() })
   ).json();
   await database
-    .prepare("UPDATE import_requests SET status='failed' WHERE id=?")
-    .bind(job.id)
+    .prepare("UPDATE import_requests SET status='failed',stage_progress=? WHERE id=?")
+    .bind(JSON.stringify({ resolve: { status: "complete", current: 50, total: 50 } }), job.id)
     .run();
   const retried = await (await submitImport({}, `/v1/imports/${job.id}/retry`)).json();
   assert.equal(retried.id, job.id);
   assert.equal(retried.status, "queued");
+  assert.deepEqual(retried.stages, { resolve: { status: "complete", current: 50, total: 50 } });
+  const page = await (await request("/v1/imports")).json();
+  assert.deepEqual(page.jobs.find((value) => value.id === job.id).stages, retried.stages);
+  assert.equal("stageProgress" in retried, false);
   await database
     .prepare("UPDATE import_requests SET status='complete' WHERE id=?")
     .bind(job.id)

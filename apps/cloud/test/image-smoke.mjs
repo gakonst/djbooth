@@ -195,9 +195,13 @@ try {
     assert.match(instructions.instructions, /master.db/);
     const cli = async (process_id, args) => {
       await agent({ operation: "start", process_id, args });
+      // Simulate a fresh agent turn: discover the live process from instructions,
+      // then keep polling it instead of restarting the CLI.
+      const resumed = await agent({ operation: "instructions" });
+      assert.equal(resumed.activeProcess.process_id, process_id);
       let value;
       do {
-        value = await agent({ operation: "poll", process_id });
+        value = await agent({ operation: "poll", process_id: resumed.activeProcess.process_id });
       } while (value.status === "running");
       assert.equal(value.status, "completed", JSON.stringify(value));
       return value.result;
