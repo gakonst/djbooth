@@ -54,6 +54,8 @@ export class MasterPlaylistXml {
     this.root = asRecord(this.document.MASTER_PLAYLIST);
     this.product = asRecord(this.root.PRODUCT);
     this.playlists = asRecord(this.root.PLAYLISTS);
+    // An empty <PLAYLISTS/> parses as a string; retain the new writable object.
+    this.root.PLAYLISTS = this.playlists;
     if (!Object.keys(this.root).length || !Object.keys(this.product).length)
       throw new TypeError(`Invalid master playlist XML '${path}'`);
   }

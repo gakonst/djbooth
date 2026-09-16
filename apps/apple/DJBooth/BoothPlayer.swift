@@ -9,6 +9,10 @@ import DJBoothKit
     var elapsed: Double = 0
     var duration: Double = 0
     var queue: [Track] = []
+    private(set) var seekRevision: UInt64 = 0
+    private(set) var scrubPosition: Double?
+    var playbackRequested: Bool { wantsToPlay }
+    var transportPlaying: Bool { scrubSession == nil ? playing : wantsToPlay }
     var queueIndex = 0
     private var usbPlaybackAccess: USBPlaybackAccess?
     private(set) var timing = PlaybackTiming()
@@ -23,12 +27,20 @@ import DJBoothKit
         guard let item = player.currentItem else { return false }
         return item.status != .failed
     }
+    #if DEBUG
+    var actualPlaybackTime: Double { player.currentTime().seconds }
+    var seekIsSettled: Bool { pendingSeek == nil && inFlightSeek == nil }
+    var itemIsReady: Bool { player.currentItem?.status == .readyToPlay }
+    var preparationDiagnostic: String {
+        "preparing=\(preparingItem), wants=\(wantsToPlay), pendingSeek=\(pendingSeek.map(String.init(describing:)) ?? "none"), seekInFlight=\(inFlightSeek != nil), activating=\(audioStartTask != nil), itemStatus=\(player.currentItem?.status.rawValue ?? -1), timeControl=\(player.timeControlStatus.rawValue), rate=\(player.rate), waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none")"
+    }
+    #endif
     private var pendingSeek: Double?
     private var preparingItem = false
-    private var seekGeneration = UUID()
     private var inFlightSeek: UUID?
+    private var scrubSession: (id: UUID, origin: Double)?
     private var wantsToPlay = false
-    private let player = AVPlayer()
+    private let player: AVPlayer
     private var timeObserver: Any?
     private var ended: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
@@ -37,13 +49,16 @@ import DJBoothKit
     private var audioStartTask: Task<Void, Never>?
     private var audioStartID = UUID()
     init() {
+        PerformanceProbe.event("player_init_begin")
+        player = AVPlayer()
+        PerformanceProbe.event("player_engine_ready")
         #if DEBUG
         // UI verification can exercise real cached audio without touching system volume.
         player.isMuted = ProcessInfo.processInfo.arguments.contains("--ui-test-muted")
         #endif
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.player.currentItem != nil, self.pendingSeek == nil else { return }
+                guard let self, self.player.currentItem != nil, self.pendingSeek == nil, self.scrubSession == nil else { return }
                 let time = self.player.currentTime().seconds
                 self.elapsed = time.isFinite ? time : 0
                 let duration = self.player.currentItem?.duration.seconds ?? 0
@@ -82,14 +97,18 @@ import DJBoothKit
             let position = event.positionTime
             Task { @MainActor in self?.seek(position) }; return .success
         }
+        PerformanceProbe.event("player_init_end")
     }
     func prepare(_ track: Track, url: URL?, queue: [Track], elapsed: Double = 0, autoplay: Bool = false, queueIndex: Int? = nil) {
+        PerformanceProbe.event("player_prepare", trackID: track.id)
+        seekRevision &+= 1
         cancelStartingPlayback()
         let generation = UUID(); playbackGeneration = generation
         wantsToPlay = autoplay
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
-        itemObservation = nil; pendingSeek = nil; inFlightSeek = nil; seekGeneration = UUID()
+        itemObservation = nil; pendingSeek = nil; inFlightSeek = nil
+        scrubSession = nil; scrubPosition = nil
         self.queueIndex = queueIndex.flatMap { queue.indices.contains($0) && queue[$0].id == track.id ? $0 : nil } ?? queue.firstIndex { $0.id == track.id } ?? 0
         self.track = track; self.queue = queue; duration = track.durationSeconds ?? 0
         self.elapsed = elapsed.isFinite ? max(0, duration > 0 ? min(elapsed, duration) : elapsed) : 0
@@ -115,11 +134,29 @@ import DJBoothKit
         Task { [weak self] in
             let mime = await AudioFiles.detectPlaybackMIMEType(url: url, mediaExtension: track.mediaExtension)
             guard let self, self.playbackGeneration == generation else { return }
-            self.installItem(url: url, mimeType: mime, generation: generation)
+            PerformanceProbe.event("player_mime_ready", trackID: track.id)
+            let asset = AudioFiles.playbackAsset(url: url, mimeType: mime)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--ui-test-load-asset") {
+                PerformanceProbe.event("player_asset_load_begin", trackID: track.id)
+                do {
+                    let (playable, _) = try await asset.load(.isPlayable, .duration)
+                    guard self.playbackGeneration == generation else { return }
+                    PerformanceProbe.event(playable ? "player_asset_load_ready" : "player_asset_unplayable", trackID: track.id)
+                } catch {
+                    guard self.playbackGeneration == generation else { return }
+                    PerformanceProbe.event("player_asset_load_failed", trackID: track.id)
+                    self.preparingItem = false; self.wantsToPlay = false
+                    self.error = error.localizedDescription
+                    return
+                }
+            }
+            #endif
+            self.installItem(asset: asset, generation: generation)
         }
     }
-    private func installItem(url: URL, mimeType: String?, generation: UUID) {
-        let item = AVPlayerItem(asset: AudioFiles.playbackAsset(url: url, mimeType: mimeType))
+    private func installItem(asset: AVURLAsset, generation: UUID) {
+        let item = AVPlayerItem(asset: asset)
         itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             let failed = item.status == .failed
             let ready = item.status == .readyToPlay
@@ -129,14 +166,21 @@ import DJBoothKit
                 if failed {
                     self.error = message; self.wantsToPlay = false; self.playing = false
                     self.pendingSeek = nil; self.inFlightSeek = nil
+                    self.scrubSession = nil; self.scrubPosition = nil; self.seekRevision &+= 1
                     self.updateNowPlaying()
                 }
-                if ready { self.finishPreparing(generation: generation) }
+                if ready {
+                    PerformanceProbe.event("player_item_ready", trackID: self.track?.id)
+                    self.finishPreparing(generation: generation)
+                }
             }
         }
         ended = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.playbackGeneration == generation else { return }
+                guard let self, self.playbackGeneration == generation, self.scrubSession == nil,
+                      self.pendingSeek == nil, self.wantsToPlay else { return }
+                let end = self.player.currentItem?.duration.seconds ?? self.duration
+                guard end.isFinite, end > 0, self.player.currentTime().seconds >= end - 0.1 else { return }
                 self.advance(1)
             }
         }
@@ -152,16 +196,33 @@ import DJBoothKit
             updateNowPlaying()
             return
         }
-        guard inFlightSeek != seekGeneration else { return }
-        let seekID = seekGeneration
+        // Chase the latest requested position with one native seek at a time.
+        // Cancelling/restarting on every finger movement starves the decoder.
+        guard inFlightSeek == nil else { return }
+        let seekID = UUID()
         inFlightSeek = seekID
         player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
             Task { @MainActor in
-                guard let self, self.playbackGeneration == generation,
-                      self.seekGeneration == seekID, self.inFlightSeek == seekID else { return }
-                self.pendingSeek = nil; self.inFlightSeek = nil
+                guard let self, self.playbackGeneration == generation, self.inFlightSeek == seekID else { return }
+                self.inFlightSeek = nil
+                if self.pendingSeek != position {
+                    self.finishPreparing(generation: generation)
+                    return
+                }
+                self.pendingSeek = nil
                 if finished { self.elapsed = position }
-                else { self.captureCurrentTime() }
+                else {
+                    // An interrupted native seek is not a warmed target. While
+                    // held, reconcile the preview so release retries its target.
+                    let actual = self.player.currentTime().seconds
+                    self.elapsed = actual.isFinite ? max(0, actual) : self.scrubSession?.origin ?? 0
+                    if self.scrubSession != nil { self.scrubPosition = self.elapsed }
+                    else {
+                        self.wantsToPlay = false; self.player.pause(); self.playing = false
+                        self.error = "The playback position could not be changed. Please try again."
+                    }
+                }
+                guard self.scrubSession == nil else { self.refreshTiming(); return }
                 if self.wantsToPlay { self.startPlayback() }
                 self.updateNowPlaying()
                 self.onStateChange?(true)
@@ -169,18 +230,20 @@ import DJBoothKit
         }
     }
     private func startPlayback() {
-        guard wantsToPlay else { return }
+        guard wantsToPlay, scrubSession == nil else { return }
         #if os(iOS)
         guard audioStartTask == nil else { return }
         let generation = playbackGeneration
         let request = UUID(); audioStartID = request
         audioStartTask = Task { [weak self] in
             do {
+                PerformanceProbe.event("player_session_begin", trackID: self?.track?.id)
                 try await PlaybackAudioSession.shared.activate()
+                PerformanceProbe.event("player_session_ready", trackID: self?.track?.id)
                 guard let self, self.audioStartID == request else { return }
                 self.audioStartTask = nil
                 guard !Task.isCancelled, self.playbackGeneration == generation,
-                      self.wantsToPlay, self.pendingSeek == nil else { return }
+                      self.wantsToPlay, self.pendingSeek == nil, self.scrubSession == nil else { return }
                 self.player.play()
             } catch {
                 guard let self, self.audioStartID == request else { return }
@@ -197,7 +260,7 @@ import DJBoothKit
     private func cancelStartingPlayback() {
         audioStartTask?.cancel(); audioStartTask = nil; audioStartID = UUID()
     }
-    func toggle() { playing ? pause() : resume() }
+    func toggle() { transportPlaying ? pause() : resume() }
     func resume() {
         PerformanceProbe.playRequested(trackID: track?.id)
         guard hasPreparedItem else { onResumeRequested?(); return }
@@ -206,6 +269,7 @@ import DJBoothKit
         if pendingSeek == nil { startPlayback() }
     }
     func pause() {
+        PerformanceProbe.event("player_pause", trackID: track?.id)
         cancelStartingPlayback()
         wantsToPlay = false; player.pause(); playing = false
         captureCurrentTime()
@@ -213,19 +277,59 @@ import DJBoothKit
     }
     func seek(_ seconds: Double) {
         guard seconds.isFinite else { return }
+        seekRevision &+= 1
+        scrubSession = nil; scrubPosition = nil
+        requestSeek(seconds)
+        updateNowPlaying(); onStateChange?(true)
+    }
+    /// Both the timeline and eight-bar waveform share this held position. Keep
+    /// the decoder close to the finger while holding audio until release.
+    @discardableResult func beginScrubbing() -> UUID? {
+        guard track != nil, duration.isFinite, duration > 0, scrubSession == nil else { return nil }
+        let id = UUID(), origin = mediaClock.position()
+        scrubSession = (id, origin); scrubPosition = origin; elapsed = origin
+        cancelStartingPlayback()
+        player.pause(); playing = false
+        refreshTiming()
+        return id
+    }
+    func isScrubbing(_ id: UUID) -> Bool { scrubSession?.id == id }
+    func updateScrubbing(_ id: UUID, to seconds: Double) {
+        guard scrubSession?.id == id, seconds.isFinite else { return }
+        let position = max(0, min(seconds, duration))
+        guard scrubPosition != position else { return }
+        scrubPosition = position
+        requestSeek(position)
+        refreshTiming()
+    }
+    func endScrubbing(_ id: UUID, at seconds: Double) {
+        guard scrubSession?.id == id else { return }
+        updateScrubbing(id, to: seconds)
+        scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
+        // A settled held seek is already at the release position. Do not issue
+        // another exact seek before playing it.
+        if pendingSeek == nil, !preparingItem { startPlayback() }
+        updateNowPlaying(); onStateChange?(true)
+    }
+    func cancelScrubbing(_ id: UUID) {
+        guard let session = scrubSession, session.id == id else { return }
+        scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
+        requestSeek(session.origin)
+        updateNowPlaying(); onStateChange?(true)
+    }
+    private func requestSeek(_ seconds: Double) {
         let position = max(0, duration > 0 ? min(seconds, duration) : seconds)
         elapsed = position
         if pendingSeek != nil || hasPreparedItem {
             pendingSeek = position
-            seekGeneration = UUID(); inFlightSeek = nil
             if player.currentItem?.status == .readyToPlay { finishPreparing(generation: playbackGeneration) }
         }
-        updateNowPlaying(); onStateChange?(true)
     }
     func stop() {
         cancelStartingPlayback()
         playbackGeneration = UUID(); wantsToPlay = false; pendingSeek = nil
-        seekGeneration = UUID(); inFlightSeek = nil
+        inFlightSeek = nil; scrubSession = nil; scrubPosition = nil
+        seekRevision &+= 1
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
         itemObservation = nil
@@ -255,12 +359,12 @@ import DJBoothKit
     }
     private func refreshTiming() {
         timing = PlaybackTiming(elapsed: elapsed, duration: duration, playing: playing)
-        let timebase = pendingSeek == nil && player.currentItem?.status == .readyToPlay
+        let timebase = pendingSeek == nil && scrubSession == nil && player.currentItem?.status == .readyToPlay
             ? player.currentItem?.timebase : nil
         mediaClock = PlaybackMediaClock(timebase: timebase, elapsed: elapsed, duration: duration)
     }
     private func captureCurrentTime() {
-        guard pendingSeek == nil, player.currentItem?.status == .readyToPlay else { return }
+        guard pendingSeek == nil, scrubSession == nil, player.currentItem?.status == .readyToPlay else { return }
         let position = player.currentTime().seconds
         if position.isFinite { elapsed = max(0, position) }
     }

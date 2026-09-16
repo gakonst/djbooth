@@ -978,6 +978,11 @@ export class RekordboxLibraryService {
     }
   }
 
+  /** Original analysis artifacts owned by master.db; no analysis is run here. */
+  getAnalysisPaths(id: string): Record<"DAT" | "EXT" | "2EX", string | undefined> {
+    return this.getDatabase().getContentAnlzPaths(id);
+  }
+
   /** Return bounded precomputed Rekordbox peaks or a streaming-safe placeholder instruction. */
   getWaveform(id: string): TrackWaveform {
     const cached = this.waveformCache.get(id);

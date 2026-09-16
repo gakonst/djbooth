@@ -59,15 +59,21 @@ for (const platform of ["macOS", "iOS"]) {
   const frameworks = object(`${targetName}.frameworks`, `isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (${packageBuild}); runOnlyForDeploymentPostprocessing = 0;`);
   const assetBuild = object(`${targetName}.assets`, `isa = PBXBuildFile; fileRef = ${fileReferences.get("DJBooth/Assets.xcassets")};`);
   const resources = object(`${targetName}.resources`, `isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (${assetBuild}); runOnlyForDeploymentPostprocessing = 0;`);
+  const linkPhase = platform === "iOS" ? object(`${targetName}.linkBuild`, `isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = (); outputPaths = (); alwaysOutOfDate = 1; runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = ${quote('export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nnode "$SRCROOT/scripts/build-link.mjs"')}; name = "Build embedded DJ Link";`) : null;
   const configuration = configurationList(targetName, {
     ...common, ...platformSettings, PRODUCT_NAME: "DJBooth", PRODUCT_MODULE_NAME: "DJBooth",
     PRODUCT_BUNDLE_IDENTIFIER: "xyz.gakonst.djbooth", INFOPLIST_FILE: `DJBooth/Info.${platform}.plist`,
     INFOPLIST_KEY_CFBundleDisplayName: "DJ Booth", INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.music",
     ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon", ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "AccentColor",
     LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@executable_path/../Frameworks"],
-    ...(platform === "iOS" ? { INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES", INFOPLIST_KEY_UILaunchScreen_Generation: "YES" } : { ENABLE_HARDENED_RUNTIME: "YES" }),
+    ...(platform === "iOS" ? {
+      ENABLE_USER_SCRIPT_SANDBOXING: "NO", SWIFT_OBJC_BRIDGING_HEADER: "DJBooth/DJLinkBridge.h",
+      LIBRARY_SEARCH_PATHS: ["$(inherited)", "$(BUILT_PRODUCTS_DIR)"],
+      OTHER_LDFLAGS: ["$(inherited)", "-ldjbooth_mobile", "-lc++", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration"],
+      CODE_SIGN_ENTITLEMENTS: "$(DJBOOTH_LINK_ENTITLEMENTS)", DJBOOTH_LINK_ENTITLEMENTS: "", DJBOOTH_LINK_ENABLED: "NO",
+      INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES", INFOPLIST_KEY_UILaunchScreen_Generation: "YES" } : { ENABLE_HARDENED_RUNTIME: "YES" }),
   }, { INFOPLIST_FILE: `DJBooth/Info.Debug.${platform}.plist`, DJBOOTH_OFFLINE_COLLECTION: "" });
-  targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct});`));
+  targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${linkPhase ? `${linkPhase}, ` : ""}${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct});`));
   const testProduct = object(`${testTargetName}.product`, `isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ${quote(`${testTargetName}.xctest`)}; sourceTree = BUILT_PRODUCTS_DIR;`);
   products.push(testProduct);
   const testBuildFiles = testSources.map((path) => object(`${testTargetName}.build.${path}`, `isa = PBXBuildFile; fileRef = ${fileReferences.get(path)};`));

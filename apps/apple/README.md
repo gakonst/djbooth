@@ -4,6 +4,13 @@ SwiftUI applications for macOS and iOS, sharing `DJBoothKit`. The interface foll
 workstation palette and dense library layout. Apple system glass is used for controls; track
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
+At the library root, swipe inward from the left edge to open the native side drawer over the current view.
+UIKit owns the sidebar gesture, presentation, and dismissal; the current library remains behind it.
+Choose **Playlists**, **Artists**, **Albums**, or **All Tracks**. Artist and album groups open their
+tracks with a scoped playback queue; the edge gesture inside groups, folders, and playlists goes back.
+Choose **Download → Paste → Download** to start a playlist/set import in the cloud. The sheet shows
+submission confirmation, current progress, retry for failed jobs, and an **Open playlist** action when ready.
+An unconnected phone can open cloud settings from the same sheet. The app can close while the import runs.
 On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
@@ -21,15 +28,32 @@ and sync outbox; security bookmarks and USB file locations remain device-local. 
 not write edits back to the USB database or export libraries to the stick yet.
 OneLibrary-only (`exportLibrary.db`) sticks are explicitly reported as unsupported; a classic
 Device Library export is required. Databases larger than 256 MB are currently unsupported.
+Assigned track colors appear beside the key badge; uncolored rows have no marker. Edit colors from the bottom player.
+The bottom color square toggles a flat palette in the comment row immediately, with no popover or transition.
+Choosing a color (or None) saves it and returns to the comment; tapping the square again closes the palette.
+The mobile layout follows Apple's [typography](https://developer.apple.com/design/human-interface-guidelines/typography),
+[accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility), and
+[materials](https://developer.apple.com/design/human-interface-guidelines/materials) guidance while retaining the compact DJ palette.
+System text scales with Dynamic Type, large-text rows stack their metadata, and primary touch targets are at least 44 points.
+The player uses a native seek slider and a prominent system play button with opaque fallbacks for accessibility settings.
+The slider and focused waveform share a live scrub position. During a drag, audio pauses and the player
+prepares the latest position with one asynchronous seek at a time, following Apple's
+[AVPlayer scrubbing guidance](https://developer.apple.com/library/archive/qa/qa1820/_index.html).
+Release resumes the prior playback intent without repeating a completed seek; paused tracks remain paused.
+Cancellation restores the original position, and switching tracks invalidates the old gesture.
+Current-track symbols, selection marks, accessibility values, and optional lettered color swatches supplement color cues.
+Long current-track titles scroll only when they overflow, using native Core Animation with pauses to read each end.
+The animation pauses with playback or the app, resets for a new track, and becomes static with Reduce Motion;
+VoiceOver always receives one full title. Short titles stay still.
 The footer keeps a horizontally scrollable queue above the title, a moving eight-bar waveform,
 and a one-sided full-duration waveform behind the track details. The focused view follows real Rekordbox
 beat and downbeat positions, including tempo changes; tracks without a usable grid show an overview.
-Drag the focused waveform left to seek forward or right to rewind. It previews under the fixed
-playhead and seeks on release, preserving the queue and whether playback was paused.
+Drag the focused waveform left to seek forward or right to rewind. It follows the finger under the fixed
+playhead, and dragging the timeline moves the same waveform immediately. Both preserve the queue.
 Waveform display gain and its image are prepared off the UI thread and reused by both views; animation pauses when
 playback stops or the app backgrounds, with a static overview for Reduce Motion. There is no
 separate expanded player screen.
-Playlist titles scroll away with their tracks; mobile has no navigation toolbar, filter chips,
+Playlist titles scroll away with their tracks; the native navigation bar appears only at the library root. Mobile has no filter chips,
 search/sort controls, playlist thumbnails, or trailing row menus. Long press opens row actions.
 Mobile uses native lists with solid rectangular swipe actions and UIKit gesture recognition.
 Folders and playlists are real navigation-controller
@@ -67,6 +91,25 @@ Database opening, waveform decoding and display preparation, and audio-session a
 from the main actor. SwiftData's writable context and native player/UI controls keep their actor ownership.
 Waveform RGB values use compact byte storage with the same cloud JSON; unchanged snapshots and
 small row waveform summaries are reused instead of rebuilding the library on playback updates.
+Cold launch starts opening the saved library while the first window is being created. It prepares
+the restored page's first screenful of track waveforms and the last-played track's waveform before
+showing the library, including the player's raster and compact row drawing data. Playlist, artist,
+and album indexes need only the player's waveform. Offscreen waveforms load afterward and reuse
+the already-decoded tracks without replacing the playing item or resetting its position.
+
+To measure five process launches against a simulator's existing library and saved player, run:
+
+```sh
+TEST_RUNNER_DJBOOTH_STARTUP_RUN=$(uuidgen) pnpm native:test:ui --optimized --simulator <uuid> \
+  --only-testing DJBoothUITests-iOS/DJBoothUITests/testCachedStartupPerformance
+```
+
+The test disables cloud/workstation sync, preserves the cached library, and verifies restoration of
+the last track paused with its waveform available. Debug-only phase timings are written to the app container's
+`tmp/DJBoothPerformance/<run UUID>.jsonl`; compare `app_begin` to `library_rendered` per process.
+This interval starts in `App.init`, excluding OS work before the app enters Swift.
+`first_render_waveforms_ready` must precede `library_rendered`; background completion is recorded
+separately as `library_analysis_ready`.
 
 The Mac uses the existing loopback API for library reads and guarded mutations. Acquisition and
 account authorization run through the public djbooth CLI. Debug development builds locate the
@@ -99,3 +142,51 @@ or acquisition activity. Release builds ignore it. Production data is never repl
 This is the native library/listening surface. The existing web workstation retains its advanced
 two-deck mixing, cue editor, stems controls, USB management, and assistant while those interfaces
 are migrated. The shared acquisition, analysis, and Rekordbox engine remains authoritative.
+
+
+## iPhone DJ Link development
+
+The sidebar's **Connect to CDJ** embeds the shared Rust RemoteDB/NFS engine. It projects
+locally downloaded audio and ordered playlists into an in-memory session. Content-addressed
+hard links preserve audio extensions and stable exported paths across reconnects. The C ABI
+uses the shared Rust ANLZ reader/writer only to relocate audio paths. Cloud publishing
+uploads the existing desktop DAT/EXT/2EX files as immutable content-addressed objects;
+normal phone sync downloads them for offline tracks independently of a deck connection.
+The recording hash ties analysis to the exact audio. Sharing omits tracks whose audio or
+analysis is missing. Connecting never decodes audio or runs analysis, and Swift implements
+no ANLZ or DSP encoding. Original waveforms, seek tables, grids, phrases, and cues are retained.
+Keep the app foregrounded: it disables idle sleep while sharing and disconnects on background
+or interface loss. Its source player number is 17, matching the desktop server.
+
+The native Xcode build compiles `djbooth-mobile` for the selected iOS architectures; install
+those Rust targets with rustup first. Normal device builds retain their existing signing and
+automatically discover decks using unicast DJ Link probes on the attached IPv4 subnet.
+They use kernel UDP sockets for discovery and NFS, without the desktop BPF fallback.
+Discovery is limited to actual /16–/30 subnets, probes at most 128 addresses per second,
+checks the phone's /24 and low host addresses first, and repeats while foregrounded.
+After a deck responds, scanning slows to fewer than eight candidates per second to keep
+the USB adapter available for browsing and NFS. Darwin sockets reserve 128 KiB of send
+buffer space for full-size NFS replies; the default 9 KiB limit rejects these datagrams.
+A full /16 search can take about nine minutes; a /24 takes about two seconds per sweep.
+Only valid CDJ/XDJ replies appear as discovered decks. USB interface detection, automatic
+startup, deck discovery, and browsing have been observed on an iPhone 17 Pro and the
+connected deck. Reliable playback and RGB display still require a hardware retest after
+the offline artifact transfer and large-datagram fixes.
+
+`pnpm native:device --device <id>` installs the automatic unicast build.
+Wired network appearance starts sharing without entering addresses or opening the sheet.
+Disconnect pauses automatic sharing until that connection disappears; foregrounding resumes
+wired sharing. For Wi-Fi, select the connection in **Connect to CDJ**.
+
+Optional broadcast discovery needs Apple's Multicast Networking entitlement assigned to
+team and bundle ID `xyz.gakonst.djbooth`, a matching provisioning profile, and an Xcode account.
+With that capability, use `pnpm native:device --device <id> --dj-link`.
+`pnpm --filter @gakonst/djbooth-apple build:ios --physical --dj-link` checks signing without installing.
+Simulator builds exercise the bridge without claiming physical-device connectivity.
+
+For a CDJ-3000, connect the iPhone to the rear USB-B port, wait for the network to appear,
+and select **DJ Booth iPhone** on the deck. A USB Ethernet adapter
+or the same local network is also a test path. The USB transport, iOS kernel UDP behavior,
+and real deck browsing/loading still require a device test; a successful build is not proof of playback.
+See [AlphaTheta's connection guide](https://rekordbox.com/en/support/faq/connecting-to-dj-units/#faq-q100037)
+and [Apple's multicast entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast).

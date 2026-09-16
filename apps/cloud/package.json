@@ -1,0 +1,33 @@
+{
+  "name": "@gakonst/djbooth-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --containers-rollout none --outdir dist",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply LIBRARY_DB --remote",
+    "db:migrate:local": "wrangler d1 migrations apply LIBRARY_DB --local",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "format": "oxfmt --write src test package.json tsconfig.json wrangler.jsonc",
+    "format:check": "oxfmt --check src test package.json tsconfig.json wrangler.jsonc",
+    "lint": "oxlint src test",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm build && node --test test/*.test.mjs && vitest run test/*.test.ts",
+    "build:container": "docker build --platform linux/amd64 -f ../../Dockerfile.playlist -t djbooth-playlist:dev ../..",
+    "test:container": "docker run --rm --platform linux/amd64 --network none --entrypoint node --mount type=bind,source=\"$PWD/test/image-smoke.mjs\",target=/app/packages/djbooth/image-smoke.mjs,readonly djbooth-playlist:dev /app/packages/djbooth/image-smoke.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251117.0",
+    "miniflare": "^4.20251117.0",
+    "oxfmt": "^0.35.0",
+    "oxlint": "^1.50.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.47.0"
+  }
+}

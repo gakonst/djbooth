@@ -13,6 +13,7 @@ import {
   downloadMedia,
   ExtractorRegistry,
   MUSIC_FORMAT_SPEC,
+  ReferenceClient,
   type MediaInfo,
 } from "@gakonst/ytdlp-ts";
 
@@ -139,6 +140,11 @@ export type RunSetToRekordboxOptions = {
   allowSourceSetClips?: boolean;
   /** Optional existing local set recording; otherwise cue recovery caches the set URL. */
   sourceSet?: SetSourceClip;
+  /** Verified alternate upload of the same performance, with matching cue timing. */
+  sourceSetDownloadUrl?: string;
+  /** Also permit the explicitly requested reference downloader for exact source-set recovery. */
+  referenceYtdlp?: boolean;
+  wholeSet?: boolean;
   stagingDirectory?: string;
   cacheMode?: CacheMode;
   acquisitionConcurrency?: number;
@@ -191,7 +197,12 @@ export type RunSetToRekordboxDependencies = {
     spotify: SpotifyLibraryClient,
     options?: SpotifyEnrichmentOptions,
   ): Promise<SpotifyEnrichmentResult>;
-  cacheSourceSet(source: string, directory: string, signal?: AbortSignal): Promise<SetSourceClip>;
+  cacheSourceSet(
+    source: string,
+    directory: string,
+    signal?: AbortSignal,
+    referenceYtdlp?: boolean,
+  ): Promise<SetSourceClip>;
   describeSourceSet(source: SetSourceClip, manifest: SetManifest): Promise<SourceSetArtifact>;
   buildPlan(manifest: SetManifest, options: BuildAcquisitionPlanOptions): Promise<AcquisitionPlan>;
   acquire(options: Parameters<typeof acquireManifest>[0]): Promise<AcquireManifestResult>;
@@ -314,6 +325,33 @@ export async function runSetToRekordbox(
       details: { status: "completed", operations: resolved.entries.length },
     };
   });
+  // Older agent submissions stored starts without ends, disabling every cue fallback.
+  // Repair only missing boundaries; preserve explicit cues and successfully acquired media.
+  let repairedCues = false;
+  if (allowSourceSetClips && manifest.tracklist.provider === "agent") {
+    for (const [index, entry] of manifest.entries.entries()) {
+      const end = manifest.entries[index + 1]?.cue.startSeconds ?? manifest.source.durationSeconds;
+      if (
+        entry.cue.endSeconds !== undefined ||
+        entry.cue.startSeconds === undefined ||
+        end === undefined ||
+        end <= entry.cue.startSeconds
+      )
+        continue;
+      entry.cue.endSeconds = end;
+      repairedCues = true;
+      if (
+        entry.acquisition.status === "skipped" &&
+        entry.acquisition.reason.startsWith("Recording unavailable:")
+      ) {
+        const reason = entry.acquisition.reason;
+        entry.acquisition = { status: "pending" };
+        entry.rekordbox = { status: "pending" };
+        entry.errors.push({ stage: "acquisition", message: reason });
+      }
+    }
+    if (repairedCues) await savePipelineState(manifest);
+  }
   const checkpointedPlaylistId = manifest.artifacts.rekordbox?.playlistId;
   const sourceSetStage: WorkflowStage = {
     stage: "source-set",
@@ -345,13 +383,25 @@ export async function runSetToRekordbox(
     } else if (prior && (await dependencies.exists(prior.path))) {
       sourceSet = prior;
     } else {
-      const remoteSource = automaticSourceSetUrl(manifest, options.source);
+      const remoteSource =
+        options.sourceSetDownloadUrl ?? automaticSourceSetUrl(manifest, options.source);
       const cached = await dependencies.cacheSourceSet(
         remoteSource,
         join(artifactDirectory, "source"),
         options.signal,
+        options.referenceYtdlp,
       );
       sourceSet = await dependencies.describeSourceSet(cached, manifest);
+      if (
+        options.sourceSetDownloadUrl &&
+        (manifest.source.durationSeconds === undefined ||
+          Math.abs(sourceSet.durationSeconds - manifest.source.durationSeconds) > 2)
+      ) {
+        throw new TracksError(
+          "INVALID_SOURCE",
+          "Alternate set upload duration does not match the resolved cue timeline",
+        );
+      }
       downloaded = true;
     }
     sourceSetPrepared = true;
@@ -374,11 +424,24 @@ export async function runSetToRekordbox(
   };
   if (
     allowSourceSetClips &&
-    (options.sourceSet !== undefined ||
+    (options.wholeSet ||
+      options.sourceSet !== undefined ||
       manifest.artifacts.sourceSet !== undefined ||
       requiresImmediateSourceSet(manifest))
   ) {
     await ensureSourceSet();
+  }
+  if (options.wholeSet && sourceSet) {
+    if (manifest.entries.length !== 1)
+      throw new TracksError("INVALID_SOURCE", "Whole-set import requires exactly one recording", {
+        exitCode: 2,
+      });
+    const entry = manifest.entries[0]!;
+    if (entry.cue.startSeconds !== 0 || entry.cue.endSeconds !== sourceSet.durationSeconds) {
+      entry.cue = { timestamp: "00:00", startSeconds: 0, endSeconds: sourceSet.durationSeconds };
+      manifest.source.durationSeconds = sourceSet.durationSeconds;
+      await savePipelineState(manifest);
+    }
   }
 
   let spotifyResult: SpotifyEnrichmentResult | undefined;
@@ -419,17 +482,6 @@ export async function runSetToRekordbox(
       status: "completed",
       message: `spotify selected ${String(spotifyCanonicalSelections)} deterministic acquisition primar${spotifyCanonicalSelections === 1 ? "y" : "ies"}; retained every candidate`,
     });
-  }
-
-  const pendingSpotify = manifest.entries.filter(
-    (entry) => entry.identity.status === "identified" && entry.spotify.status === "pending",
-  );
-  if (pendingSpotify.length) {
-    throw new TracksError(
-      "AUTH_REQUIRED",
-      `${String(pendingSpotify.length)} identified tracks still need Spotify enrichment; provide one Spotify client before acquisition`,
-      { exitCode: 2 },
-    );
   }
 
   const analysisConcurrency = options.analysisConcurrency ?? DEFAULT_NATIVE_ANALYSIS_CONCURRENCY;
@@ -520,6 +572,7 @@ export async function runSetToRekordbox(
               localDirectories: (options.localArtifactDirectories ?? []).map((path) =>
                 resolve(path),
               ),
+              ...(options.wholeSet ? { wholeSet: true } : {}),
               ...(sourceSet
                 ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
                 : {}),
@@ -600,6 +653,11 @@ export async function runSetToRekordbox(
     throw error;
   }
   manifest = acquisition.manifest;
+  if (!options.wholeSet)
+    sourceSetFallbacks = recoveredSourceSetFallbacks(
+      manifest,
+      manifest.entries.map((entry) => entry.order),
+    );
   const unavailable = settleUnavailableAcquisitions(manifest);
   if (unavailable) await savePipelineState(manifest);
   assertAcquisitionReady(manifest);
@@ -838,6 +896,7 @@ async function cacheSourceSet(
   source: string,
   directory: string,
   signal?: AbortSignal,
+  referenceYtdlp = false,
 ): Promise<SetSourceClip> {
   if (!isSupportedDownloadUrl(source)) {
     throw new TracksError(
@@ -847,9 +906,7 @@ async function cacheSourceSet(
     );
   }
   const context = signal ? { signal } : {};
-  const info = await new ExtractorRegistry().extract(source, context);
-  assertSingleSourceSet(info, source);
-  const result = await downloadMedia(info, {
+  const downloadOptions = {
     format: MUSIC_FORMAT_SPEC,
     paths: directory,
     output: "source-set [%(id)s].%(ext)s",
@@ -859,7 +916,20 @@ async function cacheSourceSet(
     writeInfoJson: false,
     writeThumbnail: false,
     ...(signal ? { signal } : {}),
-  });
+  };
+  let info: MediaInfo;
+  let result: { files: string[] };
+  try {
+    info = await new ExtractorRegistry().extract(source, context);
+    assertSingleSourceSet(info, source);
+    result = await downloadMedia(info, downloadOptions);
+  } catch (error) {
+    if (!referenceYtdlp || signal?.aborted) throw error;
+    const reference = new ReferenceClient();
+    info = await reference.inspect(source, { playlist: false, ...context });
+    assertSingleSourceSet(info, source);
+    result = await reference.download(source, { ...downloadOptions, playlist: false });
+  }
   const path = result.files[0];
   if (!path) {
     throw new TracksError("TOOL_FAILED", `Source-set download produced no media for '${source}'`);

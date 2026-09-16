@@ -3,6 +3,95 @@ import Testing
 @testable import DJBoothKit
 
 @MainActor struct LibrarySnapshotTests {
+    @Test func firstRenderLoadsOnlyRequestedWaveformsAndReusesThemDuringBackgroundLoading() async throws {
+        let store = try LibraryStore(inMemory: true)
+        let waveform = Waveform(peaks: [0.1, 0.8], colors: [[1, 2, 3], [4, 5, 6]])
+        try store.ingest([Track(id: "a", title: "A", waveform: waveform),
+                          Track(id: "b", title: "B", waveform: waveform),
+                          Track(id: "c", title: "C", waveform: waveform)], enqueue: false)
+        let decoder = LibrarySnapshotDecoder()
+        let source = try store.payloadSnapshot()
+        let directory = FileManager.default.temporaryDirectory
+        _ = try await decoder.decode(source, audioDirectory: directory, metadataOnly: true)
+        let firstScreen = try await decoder.decode(source, audioDirectory: directory, metadataOnly: true, waveformTrackIDs: ["b"])
+        #expect(firstScreen.tracks.map { $0.waveform != nil } == [false, true, false])
+        #expect(firstScreen.tracks[1].waveform == waveform)
+        #expect(await decoder.trackDecodeCount == 4)
+        _ = try await decoder.decode(source, audioDirectory: directory, metadataOnly: true, waveformTrackIDs: ["b"])
+        #expect(await decoder.trackDecodeCount == 4)
+        let complete = try await decoder.decode(source, audioDirectory: directory)
+        #expect(complete.tracks.allSatisfy { $0.waveform == waveform })
+        #expect(await decoder.trackDecodeCount == 6, "Background loading must reuse the first screen's complete tracks")
+        let revisited = try await decoder.decode(source, audioDirectory: directory, metadataOnly: true, waveformTrackIDs: ["c"])
+        #expect(revisited.tracks == complete.tracks, "A viewport change must not discard already-loaded waveforms")
+        var edited = try #require(try store.track(id: "b")); edited.waveform = Waveform(peaks: [0.9])
+        try store.save(edited, kind: .track, id: edited.id)
+        let refreshed = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory, metadataOnly: true, waveformTrackIDs: ["b"])
+        #expect(refreshed.tracks[1].waveform == edited.waveform)
+    }
+    @Test func backgroundPreparationPreservesSavedLibraryAndSubsequentEdits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let waveform = Waveform(peaks: [0.3, 0.9])
+        var original: LibraryStore? = try LibraryStore(directory: directory)
+        try original!.ingest([Track(id: "a", title: "Saved", waveform: waveform)], enqueue: false)
+        try original!.setNote("Pending local edit", trackID: "a")
+        let operation = try original!.nextOperation()?.operationID
+        original = nil
+        let prepared = try await Task.detached { try LibraryStore.prepare(directory: directory) }.value
+        let store = try LibraryStore(prepared: prepared)
+        let decoder = LibrarySnapshotDecoder()
+        let first = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory, metadataOnly: true)
+        #expect(first.tracks.first?.title == "Saved" && first.tracks.first?.waveform == nil)
+        #expect(first.annotations["a"]?.note == "Pending local edit")
+        #expect(try store.nextOperation()?.operationID == operation)
+        try store.setNote("Edited after launch", trackID: "a")
+        let latest = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory)
+        #expect(latest.revision > first.revision)
+        #expect(latest.annotations["a"]?.note == "Edited after launch" && latest.tracks.first?.waveform == waveform)
+        let cancelled = Task { try LibraryStore.prepare(directory: directory) }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; Issue.record("Cancelled preparation must stop") }
+        catch is CancellationError { }
+    }
+    @Test func startupMetadataPreservesLibraryAndHydratesAnalysisAfterEarlyEdits() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let hash = String(repeating: "c", count: 64)
+        try Data([1]).write(to: directory.appendingPathComponent("\(hash).audio"))
+        let waveform = Waveform(peaks: [0.2, 0.8], colors: [[1, 2, 3], [4, 5, 6]],
+            durationSeconds: 90, beatGrid: BeatGrid(times: [0, 0.5], beats: [1, 2]))
+        let track = Track(id: "a", title: "Saved track", artist: "Artist", durationSeconds: 90,
+            analyzed: true, mediaHash: hash, waveform: waveform)
+        let store = try LibraryStore(inMemory: true)
+        try store.ingest([track], enqueue: false)
+        let playlist = try store.createCollection(name: "Saved playlist", trackIDs: [track.id])
+        try store.toggleFavorite(track.id)
+        try store.setNote("Saved cue notes", trackID: track.id)
+        let decoder = LibrarySnapshotDecoder()
+        let metadata = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory, metadataOnly: true)
+        var expected = track; expected.waveform = nil
+        #expect(metadata.tracks == [expected])
+        #expect(metadata.collections == [playlist])
+        #expect(metadata.favorites == [track.id] && metadata.offlineIDs == [track.id])
+        #expect(metadata.annotations[track.id]?.note == "Saved cue notes")
+        // An edit made before analysis appears must use the complete durable row.
+        var edited = try #require(try store.track(id: track.id))
+        #expect(edited == track)
+        edited.title = "Early edit"
+        try store.save(edited, kind: .track, id: edited.id)
+        let complete = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory)
+        #expect(complete.tracks == [edited] && complete.tracks[0].waveform == waveform)
+        #expect(complete.collections == metadata.collections && complete.annotations == metadata.annotations)
+        #expect(complete.offlineIDs == metadata.offlineIDs && complete.favorites == metadata.favorites)
+        let decodeCount = await decoder.trackDecodeCount
+        _ = try await decoder.decode(store.payloadSnapshot(), audioDirectory: directory)
+        #expect(await decoder.trackDecodeCount == decodeCount)
+        #expect(metadata.tracks[0].waveform == nil)
+        try store.delete(kind: .track, id: track.id)
+        #expect(try store.track(id: track.id) == nil)
+    }
     @Test func asynchronousStoreOpeningPreservesDurableEditsAndHonorsCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -288,7 +288,7 @@ export async function acquireManifest(
     if (artifactCallbackErrors.length) {
       throw new AggregateError(
         artifactCallbackErrors,
-        `Verified-artifact callbacks failed for ${String(artifactCallbackErrors.length)} track(s)`,
+        `Verified-artifact callbacks failed for ${String(artifactCallbackErrors.length)} track(s): ${artifactCallbackErrors.map((error) => error.message).join("; ")}`,
       );
     }
   };
@@ -1990,11 +1990,11 @@ function validatePlan(
           : [];
     const identityFallback =
       !spotifyCandidates.length &&
-      entry.spotify.status === "unmatched" &&
+      (entry.spotify.status === "unmatched" || entry.spotify.status === "pending") &&
       entry.identity.status === "identified";
     if (!spotifyCandidates.length && !identityFallback) {
       throw new Error(
-        `Recording plan for order ${recording.entryOrder} requires Spotify metadata or an identified Spotify-unmatched identity`,
+        `Recording plan for order ${recording.entryOrder} requires Spotify metadata or an identified recording identity`,
       );
     }
     const expectedById = new Map(spotifyCandidates.map((candidate) => [candidate.id, candidate]));

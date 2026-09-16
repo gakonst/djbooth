@@ -9,6 +9,34 @@ import { writeManifestAtomic } from "../src/acquisition.js";
 import { buildAcquisitionPlan } from "../src/generic-acquisition-plan.js";
 import { createManifest, type SetManifest, type SpotifyCandidate } from "../src/manifest.js";
 
+test("acquires a publisher-identified recording while optional Spotify enrichment stays pending", async () => {
+  const value = createManifest({
+    source: "https://youtube.test/set",
+    provider: "agent",
+    complete: true,
+    tracks: [
+      { order: 1, startSeconds: 0, artist: "Artist", title: "Exact Track", mix: "Club Mix" },
+    ],
+  });
+  const plan = await buildAcquisitionPlan(value, { outputDirectory: "/tmp/djbooth-no-spotify" });
+  expect(value.entries[0]!.spotify.status).toBe("pending");
+  expect(plan.recordings).toHaveLength(1);
+  expect(plan.recordings[0]!.variants[0]!.metadata).toMatchObject({
+    title: "Exact Track (Club Mix)",
+    artists: ["Artist"],
+  });
+  const result = await acquireManifest({
+    state: value,
+    saveState: async () => {},
+    plan,
+    acquirers: [],
+    requireCompletePlan: true,
+    continueOnError: true,
+  });
+  expect(result.failures).toHaveLength(1);
+  expect(result.failures[0]!.message).not.toContain("requires Spotify metadata");
+});
+
 function candidate(id: string, name: string, artist: string): SpotifyCandidate {
   return {
     score: 0.95,
@@ -97,6 +125,38 @@ function manifest(sourcePath: string): SetManifest {
 }
 
 describe("buildAcquisitionPlan", () => {
+  test("keeps a verified full DJ mix as one continuous recording without provider matching", async () => {
+    const value = manifest("/tmp/full-source.m4a");
+    value.entries = [value.entries[0]!];
+    value.entries[0]!.spotify = { status: "pending" };
+    value.entries[0]!.identity = {
+      status: "identified",
+      artist: "Brunello",
+      title: "Full DJ set",
+      searchQuery: "Brunello Full DJ set",
+    };
+    const options = {
+      outputDirectory: "/tmp/full-set-library",
+      allowSourceSetClips: true,
+      sourceSetPath: "/tmp/full-source.m4a",
+      wholeSet: true,
+    };
+    const plan = await buildAcquisitionPlan(value, options);
+    expect(plan.recordings).toEqual([]);
+    expect(plan.clips).toHaveLength(1);
+    expect(plan.clips[0]).toMatchObject({
+      startSeconds: 0,
+      endSeconds: 900,
+      sourcePath: "/tmp/full-source.m4a",
+      metadata: { title: "Full DJ set", artists: ["Brunello"] },
+      containsTransitions: true,
+    });
+    expect(plan.clips[0]!.outputPath).toContain("[full-set-aaaaaaaaaaaa].m4a");
+    expect(plan.sourceSets).toHaveLength(1);
+    value.entries.push(manifest("/tmp/full-source.m4a").entries[1]!);
+    await expect(buildAcquisitionPlan(value, options)).rejects.toThrow("one identified entry");
+  });
+
   test("fans out Spotify ambiguity and preserves an identified Spotify miss", async () => {
     const directory = await mkdtemp(join(tmpdir(), "generic-plan-"));
     const outputDirectory = join(directory, "output");

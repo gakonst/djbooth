@@ -11,6 +11,81 @@ enum BoothStyle {
     static let mint = Color(red: 0.494, green: 0.886, blue: 0.722)
 }
 
+#if os(iOS)
+import UIKit
+
+extension BoothStyle {
+    static func configureLibraryNavigation(_ navigation: UINavigationController) {
+        navigation.navigationBar.prefersLargeTitles = false
+        navigation.view.backgroundColor = UIColor(background)
+        navigation.view.tintColor = UIColor(accent)
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor(background)
+        appearance.shadowColor = UIColor(border)
+        navigation.navigationBar.standardAppearance = appearance
+        navigation.navigationBar.scrollEdgeAppearance = appearance
+        navigation.navigationBar.compactAppearance = appearance
+    }
+}
+
+extension View {
+    func boothLibraryList() -> some View {
+        listStyle(.plain).scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
+            .background(BoothStyle.background)
+    }
+    func boothLibraryCell(horizontalInset: CGFloat = 0) -> some View {
+        listRowInsets(EdgeInsets(top: 0, leading: horizontalInset, bottom: 0, trailing: horizontalInset))
+            .listRowSeparator(.hidden).listRowBackground(BoothStyle.background)
+    }
+}
+#endif
+
+/// Compact system type that participates in Dynamic Type and Bold Text.
+private struct BoothFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    @Environment(\.legibilityWeight) private var legibility
+    let weight: Font.Weight
+    let design: Font.Design
+    init(size: CGFloat, relativeTo style: Font.TextStyle, weight: Font.Weight, design: Font.Design) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: style)
+        self.weight = weight; self.design = design
+    }
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: legibility == .bold && weight == .regular ? .semibold : weight, design: design))
+    }
+}
+
+extension View {
+    func boothFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .caption,
+                   weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(BoothFont(size: size, relativeTo: style, weight: weight, design: design))
+    }
+}
+
+/// Immediate touch feedback, without scaling content or competing with row pans.
+struct BoothRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.65 : 1)
+            .background(configuration.isPressed ? Color.primary.opacity(0.06) : .clear)
+    }
+}
+
+/// Glass belongs to the primary transport control, never to the music/waveform layer.
+struct BoothTransportStyle: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    func body(content: Content) -> some View {
+        if #available(iOS 26, macOS 26, *), !reduceTransparency, contrast != .increased {
+            content.buttonStyle(.glassProminent).buttonBorderShape(.circle).tint(.white)
+        } else {
+            content.buttonStyle(.borderedProminent).buttonBorderShape(.circle).tint(.white)
+        }
+    }
+}
+
 struct BoothGlass: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {

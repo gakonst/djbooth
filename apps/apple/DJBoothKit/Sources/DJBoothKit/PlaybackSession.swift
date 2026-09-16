@@ -1,6 +1,8 @@
 import Foundation
 
 public struct PlaylistNavigation: Codable, Equatable, Sendable {
+    public var browseMode: String?
+    public var browseGroup: String?
     public var showBrowser: Bool
     public var folderPath: [String]
     public var preferredCollectionID: String?
@@ -10,7 +12,8 @@ public struct PlaylistNavigation: Codable, Equatable, Sendable {
     public var trackSortAscending: Bool
     public init(showBrowser: Bool = false, folderPath: [String] = [], preferredCollectionID: String? = nil,
                 playlistSort: String = "title", playlistSortAscending: Bool = true,
-                trackSort: String = "default", trackSortAscending: Bool = true) {
+                trackSort: String = "default", trackSortAscending: Bool = true, browseMode: String? = nil, browseGroup: String? = nil) {
+        self.browseMode = browseMode; self.browseGroup = browseGroup
         self.showBrowser = showBrowser; self.folderPath = folderPath; self.preferredCollectionID = preferredCollectionID
         self.playlistSort = playlistSort; self.playlistSortAscending = playlistSortAscending
         self.trackSort = trackSort; self.trackSortAscending = trackSortAscending

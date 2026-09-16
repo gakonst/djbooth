@@ -7,6 +7,7 @@ import {
   type SpotifyProviderPlaylistTrack,
 } from "./provider-playlist-manifest.js";
 import type { SetManifest } from "./manifest.js";
+import { TracksError } from "./errors.js";
 
 export type ImportSourceKind = "dj-set" | "soundcloud-playlist" | "spotify-playlist";
 
@@ -57,14 +58,22 @@ type SpotifyTrack = {
 export async function prepareHostedImportSource(
   source: string,
   clients: {
-    spotify: SpotifyRawClient;
+    spotify?: SpotifyRawClient;
     soundcloud?: SoundCloudClient;
     createSoundcloud?(): Promise<SoundCloudClient>;
     signal?: AbortSignal;
   },
 ): Promise<PreparedImportSource | undefined> {
   const spotifyId = spotifyPlaylistId(source);
-  if (spotifyId) return prepareSpotifyPlaylist(source, spotifyId, clients.spotify, clients.signal);
+  if (spotifyId) {
+    if (!clients.spotify)
+      throw new TracksError(
+        "AUTH_REQUIRED",
+        "Spotify playlist import requires a Spotify session; run `spots auth login`",
+        { exitCode: 2 },
+      );
+    return prepareSpotifyPlaylist(source, spotifyId, clients.spotify, clients.signal);
+  }
 
   if (!isSoundCloudPlaylistSource(source)) return undefined;
   const soundcloud = clients.soundcloud ?? (await clients.createSoundcloud?.());

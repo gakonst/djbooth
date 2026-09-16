@@ -128,6 +128,54 @@ final class DJBoothUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testAccessiblePlayerAndRemovalConfirmation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString]
+        app.launch()
+        openPlaylist("demo-c2", in: app)
+        let waveform = app.buttons["track.waveform.demo-4"]
+        XCTAssertTrue(waveform.waitForExistence(timeout: 5))
+        XCTAssertTrue(waveform.isHittable)
+        waveform.tap()
+        let player = app.descendants(matching: .any)["nowPlaying.bottom"].firstMatch
+        let playerTitle = player.staticTexts["nowPlaying.title"]
+        expectation(for: NSPredicate(format: "label == %@", "Nespole"), evaluatedWith: playerTitle)
+        waitForExpectations(timeout: 5)
+        for control in [player.buttons["nowPlaying.play"], player.buttons["nowPlaying.color"], waveform] {
+            XCTAssertTrue(control.isHittable)
+            XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(control.frame.width, 44)
+        }
+        XCTAssertTrue(player.textFields["nowPlaying.annotation"].isHittable)
+        XCTAssertTrue(player.scrollViews["nowPlaying.queue"].isHittable)
+        let viewport = app.windows.firstMatch.frame
+        for element in [playerTitle, player.buttons["nowPlaying.play"], player.buttons["nowPlaying.color"],
+                        player.textFields["nowPlaying.annotation"], player.sliders["nowPlaying.progress"]] {
+            XCTAssertGreaterThanOrEqual(element.frame.minX, viewport.minX - 1, "\(element.identifier) extends past the leading edge")
+            XCTAssertLessThanOrEqual(element.frame.maxX, viewport.maxX + 1, "\(element.identifier) extends past the trailing edge")
+        }
+        capture(app, "Readable library and accessible player controls")
+
+        let row = app.descendants(matching: .any)["track.row.demo-4"].firstMatch
+        fullRowSwipe(in: app, through: row, right: false)
+        let confirmation = app.alerts["Remove from playlist?"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertTrue(waveform.exists, "Removal waits for confirmation")
+        capture(app, "Accessible removal confirmation")
+        confirmation.buttons["playlist.removal.confirm"].firstMatch.tap()
+        let undo = app.buttons["playlist.removal.undo"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 5))
+        XCTAssertTrue(undo.isHittable)
+        XCTAssertGreaterThanOrEqual(undo.frame.height, 44)
+        capture(app, "Accessible persistent Undo")
+        undo.tap()
+        XCTAssertTrue(waveform.waitForExistence(timeout: 5))
+        XCTAssertTrue(waveform.isHittable)
+        XCTAssertEqual(playerTitle.label, "Nespole", "Undo preserves the selected player track")
+        app.buttons["playlist.back"].tap()
+        XCTAssertTrue(app.buttons["playlist.row.demo-c2"].waitForExistence(timeout: 5))
+    }
+
     func testMinimalListsAndScrollingPlaylistTitle() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-long-playlist"]
@@ -245,6 +293,63 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["playlist.title"].isHittable, "Row pans must leave vertical list scrolling intact")
         XCTAssertEqual(player.frame.minY, footerY, accuracy: 1)
         capture(app, "Full queue scrolled to later recordings")
+    }
+
+    func testInlineFooterColorPersistsAndCloses() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString]
+        app.launch()
+        openPlaylist("demo-c2", in: app)
+        app.buttons["track.waveform.demo-5"].tap()
+        let footer = app.descendants(matching: .any)["nowPlaying.bottom"].firstMatch
+        let color = footer.buttons["nowPlaying.color"]
+        let palette = footer.descendants(matching: .any)["nowPlaying.color.palette"].firstMatch
+        let note = footer.textFields["nowPlaying.annotation"]
+        note.tap()
+        note.typeText("Cue before drop\n")
+        let footerY = footer.frame.minY
+        let waveformY = footer.descendants(matching: .any)["nowPlaying.waveform"].firstMatch.frame.minY
+        XCTAssertEqual(color.value as? String, "None")
+        XCTAssertFalse(palette.exists)
+        color.tap()
+        XCTAssertTrue(palette.waitForExistence(timeout: 3))
+        XCTAssertTrue(footer.buttons["track.color.red"].isHittable, "Color choices belong to the footer, not a popup")
+        XCTAssertFalse(app.menus.firstMatch.exists)
+        XCTAssertFalse(app.sheets.firstMatch.exists)
+        XCTAssertEqual(footer.frame.minY, footerY, accuracy: 1)
+        XCTAssertEqual(footer.descendants(matching: .any)["nowPlaying.waveform"].firstMatch.frame.minY, waveformY, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(palette.frame.minX, app.frame.minX)
+        XCTAssertLessThanOrEqual(palette.frame.maxX, app.frame.maxX)
+        XCTAssertTrue(app.buttons["playlist.back"].isHittable)
+        capture(app, "Inline footer color palette")
+        color.tap()
+        XCTAssertFalse(palette.exists, "Tapping the swatch closes the inline palette")
+        color.tap()
+        footer.buttons["track.color.red"].tap()
+        XCTAssertFalse(palette.exists)
+        XCTAssertEqual(color.value as? String, "Red")
+        XCTAssertEqual(note.value as? String, "Cue before drop")
+        XCTAssertEqual(app.staticTexts["track.key.demo-5"].value as? String, "Red color")
+        capture(app, "Inline footer color selection")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(color.waitForExistence(timeout: 15))
+        XCTAssertEqual(footer.staticTexts["nowPlaying.title"].label, "A Walk")
+        XCTAssertEqual(color.value as? String, "Red")
+        XCTAssertEqual(note.value as? String, "Cue before drop")
+        XCTAssertFalse(palette.exists, "Transient palette state must not return after relaunch")
+        color.tap()
+        footer.buttons["track.color.none"].tap()
+        XCTAssertEqual(color.value as? String, "None")
+        XCTAssertFalse(palette.exists)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(color.waitForExistence(timeout: 15))
+        XCTAssertEqual(color.value as? String, "None", "Clearing the color must persist")
+        color.tap()
+        footer.buttons["nowPlaying.queue.track.demo-7"].tap()
+        XCTAssertFalse(palette.exists, "Changing the current recording closes the palette")
+        XCTAssertEqual(footer.staticTexts["nowPlaying.title"].label, "Two Thousand and Seventeen")
     }
 
     func testPlayerRestoresTrackQueuePositionAndCollection() throws {
@@ -491,6 +596,31 @@ final class DJBoothUITests: XCTestCase {
         capture(app, "Earlier Undo survives playlist deletion")
     }
 
+    /// Opt-in process launches against the same on-device library, with sync disabled.
+    func testCachedStartupPerformance() throws {
+        let run = ProcessInfo.processInfo.environment["DJBOOTH_STARTUP_RUN"] ?? ""
+        try XCTSkipUnless(UUID(uuidString: run) != nil, "Set DJBOOTH_STARTUP_RUN to a UUID to measure the cached library")
+        print("DJBooth startup run: \(run)")
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-muted", "--performance-probe", "--performance-offline", "--performance-run", run]
+        var restoredTitle: String?
+        for _ in 0..<5 {
+            app.launch()
+            let footer = app.descendants(matching: .any)["nowPlaying.bottom"].firstMatch
+            XCTAssertTrue(footer.waitForExistence(timeout: 20))
+            let title = app.descendants(matching: .any)["nowPlaying.title"].firstMatch
+            XCTAssertTrue(title.exists)
+            XCTAssertNotEqual(title.label, "No track selected")
+            if let restoredTitle { XCTAssertEqual(title.label, restoredTitle, "Last-played track survives a process restart") }
+            else { restoredTitle = title.label }
+            XCTAssertEqual(app.buttons["nowPlaying.play"].label, "Play", "Startup restores the player paused")
+            let waveform = app.descendants(matching: .any)["nowPlaying.waveform"].firstMatch
+            XCTAssertTrue(waveform.exists)
+            XCTAssertNotEqual(waveform.value as? String, "Analysis unavailable", "The first screen includes the saved track's waveform")
+            app.terminate()
+        }
+    }
+
     /// Opt-in, read-only media workload on the dedicated simulator. No library mutations or network.
     func testRealCachedPerformanceWorkload() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["DJBOOTH_PERFORMANCE_TEST"] == "1",
@@ -513,8 +643,7 @@ final class DJBoothUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Pause"), evaluatedWith: play)
         waitForExpectations(timeout: 10)
         play.tap()
-        player.descendants(matching: .any)["nowPlaying.progress"].firstMatch
-            .coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5)).tap()
+        seek(player.descendants(matching: .any)["nowPlaying.progress"].firstMatch, fraction: 0)
         app.terminate()
         app.launchArguments += ["--performance-run", run]
         for _ in 0..<3 {
@@ -563,7 +692,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertFalse(player.buttons["nowPlaying.expand"].exists)
         let progress = player.descendants(matching: .any)["nowPlaying.progress"].firstMatch
         if play.label == "Pause" { play.tap() }
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.001, dy: 0.5)).tap()
+        seek(progress, fraction: 0)
         XCTAssertLessThanOrEqual(playbackSeconds(progress), 1)
         let waveform = player.descendants(matching: .any)["nowPlaying.waveform"].firstMatch
         expectation(for: NSPredicate(format: "value CONTAINS %@", "8 bars, Rekordbox beatgrid"), evaluatedWith: waveform)
@@ -582,15 +711,14 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertEqual(queue.buttons.allElementsBoundByIndex.map(\.identifier), queueIDs)
         dragWaveform(waveform, forward: false)
         XCTAssertLessThan(playbackSeconds(progress), scrubbed, "Dragging the focused waveform right must seek backward")
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.999, dy: 0.5)).tap()
-        let duration = ((progress.value as? String)?.components(separatedBy: " of ").last ?? "0")
-            .split(separator: ":").compactMap { Double($0) }.reduce(0) { $0 * 60 + $1 }
+        seek(progress, fraction: 1)
+        let duration = playbackClockSeconds(identifier: "nowPlaying.duration")
         dragWaveform(waveform, forward: true)
         XCTAssertEqual(playbackSeconds(progress), duration, accuracy: 1, "Forward scrubbing clamps at the recording end")
         XCTAssertEqual(currentTitle.label, title)
         XCTAssertEqual(play.label, "Play")
 
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        seek(progress, fraction: 0.25)
         let sought = playbackSeconds(progress)
         XCTAssertGreaterThan(sought, 5, "Real cached media must seek away from its start")
         if play.label == "Pause" { play.tap() }
@@ -603,9 +731,11 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertEqual(playbackSeconds(progress), sought, accuracy: 2)
         play.tap()
         defer { if play.exists, play.label == "Pause" { play.tap() } }
-        let advancing = NSPredicate { _, _ in self.playbackSeconds(progress) > sought + 1 }
+        capture(app, "Long current title at playback start")
+        let advancing = NSPredicate { _, _ in self.playbackSeconds(progress) > sought + 3 }
         expectation(for: advancing, evaluatedWith: progress)
         waitForExpectations(timeout: 10)
+        capture(app, "Long current title scrolling during playback")
         XCTAssertEqual(play.label, "Pause")
         XCTAssertTrue((waveform.value as? String)?.contains("Playing, 8 bars") == true)
         let beforePlayingScrub = playbackSeconds(progress)
@@ -623,7 +753,9 @@ final class DJBoothUITests: XCTestCase {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["DJBOOTH_REAL_PLAYBACK_TEST"] == "1",
                           "Requires the dedicated simulator's existing offline media")
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-test-muted", "--performance-probe", "--performance-offline", "--ui-test-playback-races"]
+        let runID = UUID().uuidString
+        print("Playback race diagnostics run: \(runID)")
+        app.launchArguments = ["--ui-test-muted", "--performance-probe", "--performance-run", runID, "--performance-offline", "--ui-test-playback-races"]
         app.launch()
         let result = app.staticTexts["playback.race.result"]
         XCTAssertTrue(result.waitForExistence(timeout: 30))
@@ -631,6 +763,86 @@ final class DJBoothUITests: XCTestCase {
         waitForExpectations(timeout: 35)
         XCTAssertEqual(result.label, "Passed 3 playback races")
         XCTAssertEqual(app.buttons["nowPlaying.play"].label, "Play")
+    }
+
+    func testRealCachedLiveScrubbingReadiness() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DJBOOTH_REAL_PLAYBACK_TEST"] == "1",
+                          "Requires the dedicated simulator's existing offline media")
+        let app = XCUIApplication()
+        let runID = UUID().uuidString
+        print("Live scrub diagnostics run: \(runID)")
+        app.launchArguments = ["--ui-test-muted", "--performance-probe", "--performance-run", runID,
+                               "--performance-offline", "--ui-test-playback-races", "--ui-test-live-scrubbing"]
+        app.launch()
+        let result = app.staticTexts["playback.race.result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        expectation(for: NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "Passed", "Failed"), evaluatedWith: result)
+        waitForExpectations(timeout: 45)
+        XCTAssertEqual(result.label, "Passed live scrub checks")
+        XCTAssertEqual(app.buttons["nowPlaying.play"].label, "Play")
+        capture(app, "Native decoder ready before scrub release")
+    }
+
+    /// Slow, held gestures are also recorded for visual comparison during the touch.
+    /// The direct probe above checks decoder time while the shared scrub session stays held.
+    func testRealCachedCoordinatedScrubControls() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["DJBOOTH_REAL_PLAYBACK_TEST"] == "1",
+                          "Requires the dedicated simulator's existing offline media")
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-muted", "--performance-probe", "--performance-offline"]
+        app.launch()
+        let footer = app.descendants(matching: .any)["nowPlaying.bottom"].firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 30))
+        let play = footer.buttons["nowPlaying.play"]
+        let title = footer.staticTexts["nowPlaying.title"]
+        let originalTitle = title.label
+        XCTAssertEqual(title.value as? String, "Available offline")
+        let slider = footer.sliders["nowPlaying.progress"]
+        let waveform = footer.descendants(matching: .any)["nowPlaying.waveform"].firstMatch
+        let originalPosition = playbackSeconds(slider)
+        let duration = playbackClockSeconds(identifier: "nowPlaying.duration")
+        let queue = footer.descendants(matching: .any)["nowPlaying.queue"].firstMatch
+        let queueIDs = queue.buttons.allElementsBoundByIndex.map(\.identifier)
+        defer {
+            if play.exists, play.label == "Pause" { play.tap() }
+            if slider.exists { seek(slider, fraction: originalPosition / duration) }
+        }
+        if play.label == "Pause" { play.tap() }
+        seek(slider, fraction: 0.25)
+        capture(app, "Paused before held timeline scrub")
+        slider.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+            .press(forDuration: 0.1,
+                   thenDragTo: slider.coordinate(withNormalizedOffset: CGVector(dx: 0.60, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 1)
+        let afterTimeline = playbackSeconds(slider)
+        XCTAssertGreaterThan(afterTimeline, duration * 0.5)
+        XCTAssertEqual(play.label, "Play")
+        capture(app, "Paused after held timeline scrub")
+        waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+            .press(forDuration: 0.1,
+                   thenDragTo: waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 1)
+        let afterWaveform = playbackSeconds(slider)
+        XCTAssertGreaterThan(afterWaveform, afterTimeline + 2)
+        XCTAssertEqual(play.label, "Play")
+        capture(app, "Timeline follows held eight-bar waveform")
+        play.tap()
+        expectation(for: NSPredicate { _, _ in self.playbackSeconds(slider) > afterWaveform + 1 }, evaluatedWith: slider)
+        waitForExpectations(timeout: 8)
+        let beforePlayingDrag = playbackSeconds(slider)
+        waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+            .press(forDuration: 0.1,
+                   thenDragTo: waveform.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 1)
+        let afterPlayingDrag = playbackSeconds(slider)
+        XCTAssertLessThan(afterPlayingDrag, beforePlayingDrag - 2)
+        XCTAssertEqual(play.label, "Pause", "Held scrub preserves playback intent")
+        expectation(for: NSPredicate { _, _ in self.playbackSeconds(slider) > afterPlayingDrag + 1 }, evaluatedWith: slider)
+        waitForExpectations(timeout: 8)
+        XCTAssertEqual(title.label, originalTitle)
+        XCTAssertEqual(queue.buttons.allElementsBoundByIndex.map(\.identifier), queueIDs)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        capture(app, "Playback continues after live waveform scrub")
     }
 
     func testRealCachedPlaybackWithServerUnavailable() throws {
@@ -653,7 +865,7 @@ final class DJBoothUITests: XCTestCase {
         expectation(for: NSPredicate { _, _ in self.playbackSeconds(progress) > before + 1 }, evaluatedWith: progress)
         waitForExpectations(timeout: 8)
         play.tap()
-        progress.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        seek(progress, fraction: 0.25)
         let sought = playbackSeconds(progress)
         XCTAssertGreaterThan(sought, 5)
         app.terminate()
@@ -676,14 +888,40 @@ final class DJBoothUITests: XCTestCase {
         capture(app, "Cached library works with both services unavailable")
     }
 
+    private func seek(_ progress: XCUIElement, fraction: CGFloat) {
+        if progress.elementType == .slider {
+            progress.adjust(toNormalizedSliderPosition: fraction)
+        } else {
+            progress.coordinate(withNormalizedOffset: CGVector(dx: max(0.001, min(0.999, fraction)), dy: 0.5)).tap()
+        }
+    }
+
     private func playbackSeconds(_ progress: XCUIElement) -> Double {
-        guard let value = progress.value as? String,
-              let clock = value.components(separatedBy: " of ").first else { return 0 }
-        return clock.split(separator: ":").compactMap { Double($0) }.reduce(0) { $0 * 60 + $1 }
+        playbackClockSeconds(identifier: "nowPlaying.elapsed")
+    }
+
+    private func playbackClockSeconds(identifier: String, file: StaticString = #filePath, line: UInt = #line) -> Double {
+        let clock = XCUIApplication().staticTexts[identifier].firstMatch
+        XCTAssertTrue(clock.exists, "Playback clock is missing: \(identifier)", file: file, line: line)
+        let value = (clock.value as? String) ?? clock.label
+        let components = value.split(separator: ":", omittingEmptySubsequences: false)
+        let numbers = components.compactMap { Double($0) }
+        guard (2...3).contains(components.count), numbers.count == components.count,
+              numbers.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+            XCTFail("Invalid playback clock \(identifier): \(value)", file: file, line: line)
+            return .nan
+        }
+        return numbers.reduce(0) { $0 * 60 + $1 }
     }
 
     private func openPlaylist(_ id: String, in app: XCUIApplication) {
         let playlist = app.buttons["playlist.row.\(id)"]
+        let browser = app.collectionViews["playlist.browser"]
+        XCTAssertTrue(browser.waitForExistence(timeout: 15))
+        for _ in 0..<5 {
+            if playlist.exists && playlist.isHittable { break }
+            browser.swipeUp()
+        }
         XCTAssertTrue(playlist.waitForExistence(timeout: 15))
         playlist.tap()
         XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))

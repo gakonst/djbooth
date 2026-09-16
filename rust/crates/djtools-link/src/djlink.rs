@@ -4,6 +4,7 @@ use std::io;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "ios"))]
 use std::process::Command;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -153,6 +154,9 @@ pub struct DjLinkConfig {
     pub player_number: u8,
     pub bind_ip: Option<Ipv4Addr>,
     pub broadcast_ip: Option<Ipv4Addr>,
+    /// Discover local peers with unicast probes and use kernel sockets only.
+    /// The mask must be the selected interface's actual IPv4 netmask.
+    pub unicast_discovery_netmask: Option<Ipv4Addr>,
     pub db_server_port: u16,
     pub mount_port: Option<u16>,
     pub announce_interval: Duration,
@@ -217,6 +221,7 @@ impl Default for DjLinkConfig {
             player_number: REKORDBOX_PLAYER_NUMBER,
             bind_ip: None,
             broadcast_ip: None,
+            unicast_discovery_netmask: None,
             db_server_port: DEFAULT_DBSERVER_PORT,
             mount_port: Some(DEFAULT_MOUNT_PORT),
             announce_interval: FAST_ANNOUNCE_INTERVAL,
@@ -521,10 +526,21 @@ impl DjLinkServer {
         let broadcast_ip = config
             .broadcast_ip
             .unwrap_or_else(|| default_broadcast_ip(bind_ip));
+        if let Some(mask) = config.unicast_discovery_netmask {
+            anyhow::ensure!(
+                !config.stagehand_monitor,
+                "Unicast discovery cannot run Stagehand"
+            );
+            discovery_addresses(bind_ip, mask)?;
+        }
         let interface_name = default_interface_name(bind_ip);
         let log_path = config.log_path.clone();
-        let raw_udp = RawUdpTx::spawn(interface_name.clone(), config.wire_capture_path.clone())
-            .context("failed to initialize raw wire capture")?;
+        let raw_udp = if config.unicast_discovery_netmask.is_some() {
+            RawUdpTx::disabled()
+        } else {
+            RawUdpTx::spawn(interface_name.clone(), config.wire_capture_path.clone())
+                .context("failed to initialize raw wire capture")?
+        };
         let mac_addr = default_mac(bind_ip);
         // The real Stagehand app is a separate network host. Keep that identity
         // distinct from the Rekordbox source so peers never see two protocol
@@ -568,6 +584,7 @@ impl DjLinkServer {
             stagehand_link_mac,
             raw_udp,
             interface_name,
+            nfs_exports: library.nfs_exports(),
             library: Arc::new(library),
             search_index,
             actor_tx,
@@ -1005,24 +1022,30 @@ impl DjLinkServer {
             return Ok(());
         }
 
+        let unicast = self.state.config.unicast_discovery_netmask.is_some();
+        let receive_ip = if unicast {
+            self.state.bind_ip
+        } else {
+            Ipv4Addr::UNSPECIFIED
+        };
         let keepalive_sock = bind_udp(
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, KEEPALIVE_PORT),
+            SocketAddrV4::new(receive_ip, KEEPALIVE_PORT),
             self.state.interface_name.as_deref(),
-            true,
+            !unicast,
         )
         .context("failed to bind UDP/50000 keepalive")?;
 
         let status_sock = bind_udp(
             SocketAddrV4::new(self.state.bind_ip, STATUS_PORT),
             self.state.interface_name.as_deref(),
-            true,
+            !unicast,
         )
         .context("failed to bind UDP/50002 status")?;
 
         let (beat_tx_sock, beat_rx_sock) = match bind_udp(
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, BEAT_PORT),
+            SocketAddrV4::new(receive_ip, BEAT_PORT),
             self.state.interface_name.as_deref(),
-            true,
+            !unicast,
         ) {
             Ok(sock) => {
                 let sock = Arc::new(sock);
@@ -1037,7 +1060,7 @@ impl DjLinkServer {
                 let sock = bind_udp(
                     SocketAddrV4::new(self.state.bind_ip, 0),
                     self.state.interface_name.as_deref(),
-                    true,
+                    !unicast,
                 )
                 .context("failed to bind UDP beat sender")?;
                 (Arc::new(sock), None)
@@ -1089,7 +1112,7 @@ impl DjLinkServer {
         let mount_port = mount_sock.local_addr()?.port();
 
         let portmap_sock = bind_udp(
-            SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORTMAP_PORT),
+            SocketAddrV4::new(receive_ip, PORTMAP_PORT),
             self.state.interface_name.as_deref(),
             false,
         )
@@ -1137,6 +1160,14 @@ impl DjLinkServer {
         ));
         self.tasks
             .push(spawn_announce(self.state.clone(), keepalive_sock.clone()));
+        if let Some(mask) = self.state.config.unicast_discovery_netmask {
+            self.tasks.push(spawn_unicast_discovery(
+                self.state.clone(),
+                keepalive_sock.clone(),
+                status_sock.clone(),
+                mask,
+            ));
+        }
         if self.state.config.stagehand_monitor {
             if let Some(stagehand_ip) = self
                 .state
@@ -2559,6 +2590,7 @@ struct ServerState {
     interface_name: Option<String>,
     raw_udp: RawUdpTx,
     library: Arc<LibrarySnapshot>,
+    nfs_exports: crate::library::NfsExports,
     search_index: SearchIndex,
     actor_tx: ServerActorSender,
     telemetry_tx: broadcast::Sender<DjLinkTelemetryEvent>,
@@ -2819,6 +2851,9 @@ impl NfsContext for ServerState {
     }
 
     async fn nfs_handle_for_path(&self, path: &Path, parent_fh: Option<&[u8]>) -> Option<Vec<u8>> {
+        if !self.nfs_exports.paths.contains(path) {
+            return None;
+        }
         self.actor_reply(|reply| ServerMsg::NfsHandleForPath {
             path: path.to_path_buf(),
             parent_fh: parent_fh.map(<[u8]>::to_vec),
@@ -2842,6 +2877,12 @@ impl NfsContext for ServerState {
         offset: u64,
         count: usize,
     ) -> std::io::Result<Vec<u8>> {
+        if !self.nfs_exports.files.contains(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "file is not in the DJ Link library",
+            ));
+        }
         read_nfs_file_chunk(path, offset, count).await
     }
 
@@ -3232,6 +3273,17 @@ async fn send_udp_packet(
 ) -> std::io::Result<usize> {
     let started = Instant::now();
     let is_broadcast = *target.ip() == state.broadcast_ip || *target.ip() == Ipv4Addr::BROADCAST;
+    if state.config.unicast_discovery_netmask.is_some() {
+        if is_broadcast || target.ip().is_multicast() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Unicast DJ Link cannot send broadcasts",
+            ));
+        }
+        // Match the iPhone transport on every platform, including large NFS
+        // replies: no BPF, raw sockets, or broadcast fallback on failure.
+        return sock.send_to(packet, target).await;
+    }
     #[cfg(target_os = "macos")]
     if is_broadcast && state.interface_name.is_some() {
         match send_raw_udp_packet_to_mac(
@@ -3895,10 +3947,12 @@ struct IfconfigIpv4 {
     name: String,
     ip: Ipv4Addr,
     broadcast: Option<Ipv4Addr>,
+    netmask: Option<Ipv4Addr>,
     mac: Option<String>,
     active: bool,
 }
 
+#[cfg(not(target_os = "ios"))]
 fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
     let Ok(output) = Command::new("ifconfig").output() else {
         return Vec::new();
@@ -3907,6 +3961,106 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
     parse_ifconfig_ipv4_entries(&text)
 }
 
+/// Network choices for embedded clients; iOS uses getifaddrs, without subprocesses.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DjLinkInterface {
+    pub name: String,
+    pub ip: Ipv4Addr,
+    pub broadcast: Ipv4Addr,
+    pub netmask: Ipv4Addr,
+}
+
+pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
+    ifconfig_ipv4_entries()
+        .into_iter()
+        .filter_map(|entry| {
+            if !entry.active
+                || is_tunnel_interface(&entry.name)
+                || !is_physical_interface(&entry.name)
+            {
+                return None;
+            }
+            Some(DjLinkInterface {
+                name: entry.name,
+                ip: entry.ip,
+                broadcast: entry.broadcast?,
+                netmask: entry.netmask?,
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "ios")]
+fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
+    use std::ffi::CStr;
+    let mut head = std::ptr::null_mut();
+    // getifaddrs owns the linked list until freeifaddrs. Preserve a wired
+    // adapter's MAC when the OS exposes it; ignore iOS's Wi-Fi privacy sentinel.
+    unsafe {
+        if libc::getifaddrs(&mut head) != 0 {
+            return Vec::new();
+        }
+        let mut entries = Vec::new();
+        let mut cursor = head;
+        let mut macs = HashMap::new();
+        while let Some(entry) = cursor.as_ref() {
+            cursor = entry.ifa_next;
+            if entry.ifa_addr.is_null()
+                || (*entry.ifa_addr).sa_family as i32 != libc::AF_LINK
+                || ((*entry.ifa_addr).sa_len as usize) < std::mem::size_of::<libc::sockaddr_dl>()
+            {
+                continue;
+            }
+            let link = &*(entry.ifa_addr as *const libc::sockaddr_dl);
+            let offset = link.sdl_nlen as usize;
+            if link.sdl_alen != 6 || offset + 6 > link.sdl_data.len() {
+                continue;
+            }
+            let bytes: [u8; 6] = std::array::from_fn(|i| link.sdl_data[offset + i] as u8);
+            if bytes == [0; 6] || bytes == [2, 0, 0, 0, 0, 0] {
+                continue;
+            }
+            let name = CStr::from_ptr(entry.ifa_name)
+                .to_string_lossy()
+                .into_owned();
+            macs.insert(name, format_mac(bytes));
+        }
+        cursor = head;
+        while let Some(entry) = cursor.as_ref() {
+            cursor = entry.ifa_next;
+            if entry.ifa_addr.is_null()
+                || entry.ifa_netmask.is_null()
+                || (*entry.ifa_addr).sa_family as i32 != libc::AF_INET
+            {
+                continue;
+            }
+            let flags = entry.ifa_flags as i32;
+            if flags & libc::IFF_LOOPBACK != 0 || flags & libc::IFF_BROADCAST == 0 {
+                continue;
+            }
+            let address = &*(entry.ifa_addr as *const libc::sockaddr_in);
+            let mask = &*(entry.ifa_netmask as *const libc::sockaddr_in);
+            let ip = Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes());
+            let netmask = u32::from_be_bytes(mask.sin_addr.s_addr.to_ne_bytes());
+            let name = CStr::from_ptr(entry.ifa_name)
+                .to_string_lossy()
+                .into_owned();
+            entries.push(IfconfigIpv4 {
+                mac: macs.get(&name).cloned(),
+                name,
+                ip,
+                broadcast: Some(Ipv4Addr::from(u32::from(ip) | !netmask)),
+                netmask: Some(Ipv4Addr::from(netmask)),
+                active: flags & libc::IFF_UP != 0 && flags & libc::IFF_RUNNING != 0,
+            });
+        }
+        libc::freeifaddrs(head);
+        entries
+    }
+}
+
+#[cfg(any(test, not(target_os = "ios")))]
 fn parse_ifconfig_ipv4_entries(text: &str) -> Vec<IfconfigIpv4> {
     let mut entries = Vec::new();
     let mut block = Vec::new();
@@ -3921,6 +4075,7 @@ fn parse_ifconfig_ipv4_entries(text: &str) -> Vec<IfconfigIpv4> {
     entries
 }
 
+#[cfg(any(test, not(target_os = "ios")))]
 fn append_ifconfig_block(entries: &mut Vec<IfconfigIpv4>, lines: &[&str]) {
     let Some(header) = lines.first() else {
         return;
@@ -3954,15 +4109,24 @@ fn append_ifconfig_block(entries: &mut Vec<IfconfigIpv4>, lines: &[&str]) {
                 continue;
             }
             let mut broadcast = None;
+            let mut netmask = None;
             for pair in parts.windows(2) {
                 if pair[0] == "broadcast" {
                     broadcast = pair[1].parse().ok();
+                }
+                if pair[0] == "netmask" {
+                    netmask = if let Some(hex) = pair[1].strip_prefix("0x") {
+                        u32::from_str_radix(hex, 16).ok().map(Ipv4Addr::from)
+                    } else {
+                        pair[1].parse().ok()
+                    };
                 }
             }
             entries.push(IfconfigIpv4 {
                 name: name.to_string(),
                 ip,
                 broadcast,
+                netmask,
                 mac: mac.clone(),
                 active,
             });
@@ -5028,6 +5192,98 @@ fn spawn_keepalive_rx(
     })
 }
 
+/// Probe only the attached IPv4 subnet. Large networks are deliberately rejected
+/// rather than silently scanning unrelated address space. Check the local /24
+/// first, then low host addresses across the subnet, then the remaining hosts.
+fn discovery_addresses(ip: Ipv4Addr, netmask: Ipv4Addr) -> Result<Vec<Ipv4Addr>> {
+    let mask = u32::from(netmask);
+    let host_bits = (!mask).trailing_ones();
+    anyhow::ensure!(
+        mask.leading_ones() + host_bits == 32 && (16..=30).contains(&mask.leading_ones()),
+        "Automatic unicast DJ Link discovery requires an IPv4 subnet between /16 and /30"
+    );
+    let local = u32::from(ip);
+    let network = local & mask;
+    let broadcast = network | !mask;
+    let mut addresses = (network + 1..broadcast)
+        .filter(|candidate| *candidate != local)
+        .collect::<Vec<_>>();
+    addresses.sort_unstable_by_key(|candidate| {
+        (
+            if candidate & 0xffffff00 == local & 0xffffff00 {
+                0
+            } else if candidate & 0xff <= 8 {
+                1
+            } else {
+                2
+            },
+            *candidate,
+        )
+    });
+    Ok(addresses.into_iter().map(Ipv4Addr::from).collect())
+}
+
+fn spawn_unicast_discovery(
+    state: Arc<ServerState>,
+    keepalive: Arc<UdpSocket>,
+    status: Arc<UdpSocket>,
+    mask: Ipv4Addr,
+) -> TokioJoinHandle<()> {
+    tokio::spawn(async move {
+        let addresses =
+            discovery_addresses(state.bind_ip, mask).expect("validated discovery subnet");
+        let hello = build_keepalive_status_packet(
+            &state.config.model_name,
+            state.config.player_number,
+            state.bind_ip,
+            &state.mac_addr,
+            1,
+        );
+        let init = build_status_link_init(&state.config.model_name, state.config.player_number);
+        loop {
+            // At most 128 candidates per second. Continue after permission or
+            // ARP failures so granting Local Network access needs no restart.
+            let mut reported_send_error = false;
+            let mut interval = tokio::time::interval(Duration::from_millis(125));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            for batch in addresses.chunks(16) {
+                // Once a deck replies, prioritize its browsing and audio over
+                // finding additional decks. Avoid continuous ARP pressure on
+                // the phone's USB adapter while NFS is serving a recording.
+                if !state.devices_sorted().await.is_empty() {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                interval.tick().await;
+                for ip in batch {
+                    let hello_result = send_udp_packet(
+                        &state,
+                        &keepalive,
+                        &hello,
+                        SocketAddrV4::new(*ip, KEEPALIVE_PORT),
+                        "unicast discovery hello",
+                    )
+                    .await;
+                    if let Err(error) = hello_result
+                        && !reported_send_error
+                    {
+                        reported_send_error = true;
+                        tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
+                    }
+                    let _ = send_udp_packet(
+                        &state,
+                        &status,
+                        &init,
+                        SocketAddrV4::new(*ip, STATUS_PORT),
+                        "unicast discovery link-init",
+                    )
+                    .await;
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    })
+}
+
 fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(state.config.announce_interval);
@@ -5040,7 +5296,14 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
                 &state.mac_addr,
                 state.device_count().await,
             );
-            let targets = if state.config.stagehand_monitor {
+            let targets = if state.config.unicast_discovery_netmask.is_some() {
+                state
+                    .devices_sorted()
+                    .await
+                    .into_iter()
+                    .map(|device| SocketAddrV4::new(device.ip_addr, KEEPALIVE_PORT))
+                    .collect()
+            } else if state.config.stagehand_monitor {
                 state
                     .devices_sorted()
                     .await
@@ -6223,6 +6486,32 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
                 continue;
             }
             let status_header = status::decode_header(packet).ok();
+            if state.config.unicast_discovery_netmask.is_some() {
+                // A configured/probed IP alone is never a discovered device.
+                // Require a valid CDJ status or source query from that address.
+                let player = parse_status_link_query_detail(packet)
+                    .map(|query| query.0)
+                    .or_else(|| parse_cdj_status(packet).map(|status| status.player));
+                if let (Some(player), Some(header)) = (player, status_header.as_ref())
+                    && (1..=6).contains(&player)
+                    && (header.model.starts_with("CDJ-") || header.model.starts_with("XDJ-"))
+                {
+                    let mac_addr = state
+                        .device_for_ip(ip)
+                        .await
+                        .map(|device| device.mac_addr)
+                        .unwrap_or_default();
+                    state
+                        .record_device(LinkDevice {
+                            player_number: player,
+                            ip_addr: ip,
+                            mac_addr,
+                            model: header.model.clone(),
+                            last_seen: Instant::now(),
+                        })
+                        .await;
+                }
+            }
             if let Some((remote_player, slot, _unknown)) = parse_status_link_query_detail(packet) {
                 let reply = build_status_link_reply(
                     &state.config.model_name,
@@ -9542,6 +9831,10 @@ fn spawn_startup_hello(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJo
 }
 
 async fn send_startup_hello(state: &ServerState, sock: &UdpSocket) {
+    if state.config.unicast_discovery_netmask.is_some() {
+        // Each candidate receives the unicast join in spawn_unicast_discovery.
+        return;
+    }
     let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
     for sequence in 1..=3 {
         let packet =
@@ -9667,7 +9960,14 @@ async fn send_regular_djlink_packet(
     port: u16,
     context: &str,
 ) {
-    let targets = if state.config.stagehand_monitor {
+    let targets = if state.config.unicast_discovery_netmask.is_some() {
+        state
+            .devices_sorted()
+            .await
+            .into_iter()
+            .map(|device| SocketAddrV4::new(device.ip_addr, port))
+            .collect()
+    } else if state.config.stagehand_monitor {
         state
             .devices_sorted()
             .await
@@ -9691,6 +9991,128 @@ async fn send_regular_djlink_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unicast_discovery_covers_only_usable_attached_subnet_addresses() {
+        let ip = Ipv4Addr::new(169, 254, 99, 30);
+        let candidates = discovery_addresses(ip, Ipv4Addr::new(255, 255, 0, 0)).unwrap();
+        assert_eq!(candidates.len(), 65_533);
+        assert_eq!(
+            candidates.iter().copied().collect::<HashSet<_>>().len(),
+            candidates.len()
+        );
+        assert!(!candidates.contains(&ip));
+        assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 0, 0)));
+        assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 255, 255)));
+        assert!(candidates.iter().all(|ip| ip.octets()[..2] == [169, 254]));
+        assert!(candidates[..255].iter().all(|ip| ip.octets()[2] == 99));
+        assert!(
+            candidates
+                .iter()
+                .position(|ip| *ip == Ipv4Addr::new(169, 254, 7, 4))
+                .unwrap()
+                < 512
+        );
+        assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 0, 0)).is_err());
+        assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 255, 0)).is_err());
+        let small = discovery_addresses(
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(255, 255, 255, 252),
+        )
+        .unwrap();
+        assert_eq!(small, [Ipv4Addr::new(10, 0, 0, 6)]);
+    }
+
+    #[tokio::test]
+    async fn unicast_transport_sends_large_replies_and_rejects_broadcasts() {
+        let mut state = test_state();
+        state.broadcast_ip = Ipv4Addr::BROADCAST;
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 255, 0));
+        let sender = bind_udp(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0), None, false).unwrap();
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(target) = receiver.local_addr().unwrap() else {
+            panic!()
+        };
+        // Exceeds the Ethernet MTU, exercising the kernel-only NFS path even
+        // on macOS, where the default server would attempt raw fragmentation.
+        let payload = vec![0x55; NFS_READ_CHUNK_MAX + 100];
+        assert_eq!(
+            send_udp_packet(&state, &sender, &payload, target, "test")
+                .await
+                .unwrap(),
+            payload.len()
+        );
+        let mut received = vec![0; 65_535];
+        let len = tokio::time::timeout(Duration::from_secs(1), receiver.recv(&mut received))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&received[..len], payload);
+        let error = send_udp_packet(
+            &state,
+            &sender,
+            &payload,
+            SocketAddrV4::new(Ipv4Addr::BROADCAST, target.port()),
+            "test",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[tokio::test]
+    async fn unicast_query_discovers_a_real_reply_without_keepalive_broadcasts() {
+        let mut state = test_state();
+        state.bind_ip = Ipv4Addr::new(10, 0, 0, 2);
+        state.broadcast_ip = Ipv4Addr::new(10, 0, 0, 255);
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 255, 0));
+        let state = Arc::new(state);
+        assert!(state.devices_sorted().await.is_empty());
+        let listener = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let address = listener.local_addr().unwrap();
+        let task = spawn_status(state.clone(), listener);
+        let deck = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let mut query = vec![0; 48];
+        query[..10].copy_from_slice(DJLINK_MAGIC);
+        query[10] = STATUS_TYPE_LINK_QUERY;
+        query[11..31].copy_from_slice(&cstr_padded_ascii("CDJ-3000", 20));
+        query[43] = 3;
+        query[47] = 2;
+        deck.send_to(&query, address).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let devices = state.devices_sorted().await;
+                if let Some(device) = devices.first() {
+                    assert_eq!(device.player_number, 3);
+                    assert_eq!(device.ip_addr, Ipv4Addr::LOCALHOST);
+                    assert_eq!(device.model, "CDJ-3000");
+                    assert!(device.mac_addr.is_empty());
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn unicast_devices_without_mac_addresses_do_not_replace_each_other() {
+        let state = test_state();
+        for player in 1..=2 {
+            state
+                .record_device(LinkDevice {
+                    player_number: player,
+                    ip_addr: Ipv4Addr::new(10, 0, 0, player),
+                    mac_addr: String::new(),
+                    model: "CDJ-3000".into(),
+                    last_seen: Instant::now(),
+                })
+                .await;
+        }
+        assert_eq!(state.devices_sorted().await.len(), 2);
+    }
 
     const IFCONFIG_WITH_VPN_AND_DJLINK: &str = r#"utun8: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1420
 	inet 10.2.0.2 --> 10.2.0.2 netmask 0xffffffff
@@ -13752,6 +14174,7 @@ notes: []
             playlists: vec![playlist],
         });
         state.search_index = SearchIndex::new(&state.library);
+        state.nfs_exports = state.library.nfs_exports();
         state
     }
 
@@ -13965,6 +14388,7 @@ notes: []
             stagehand_link_mac: None,
             interface_name: None,
             raw_udp: RawUdpTx::disabled(),
+            nfs_exports: library.nfs_exports(),
             library,
             search_index,
             actor_tx,

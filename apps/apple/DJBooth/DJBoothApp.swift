@@ -3,7 +3,12 @@ import SwiftUI
 @main struct DJBoothApp: App {
     @State private var model: BoothModel?
     @State private var startupError: String?
-    init() { PerformanceProbe.applicationBegan() }
+    @State private var startupTask: Task<BoothModel, Error>
+    init() {
+        PerformanceProbe.applicationBegan()
+        // Open the local library while SwiftUI creates the first window.
+        _startupTask = State(initialValue: BoothModel.startLoading())
+    }
     var body: some Scene {
         WindowGroup {
             Group {
@@ -14,7 +19,7 @@ import SwiftUI
             }
             .task {
                 guard model == nil, startupError == nil else { return }
-                do { model = try await BoothModel() } catch { startupError = error.localizedDescription }
+                do { model = try await startupTask.value } catch { startupError = error.localizedDescription }
             }
             #if DEBUG
             .overlay(alignment: .top) {
@@ -57,6 +62,9 @@ struct BoothRoot: View {
     var body: some View {
         platformRoot
             .background(BoothStyle.background)
+            #if os(iOS)
+            .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
+            #endif
             .sheet(isPresented: $model.showSettings) { ConnectionSettings(model: model) }
             .sheet(isPresented: $model.showImport) { ImportSheet(model: model) }
             .alert("Remove from playlist?", isPresented: Binding(
@@ -79,15 +87,25 @@ struct BoothRoot: View {
             } message: { Text(model.message ?? model.player.error ?? "") }
             .task {
                 model.player.onAdvance = { track in Task { await model.play(track, preservingQueue: true) } }
+                async let analysis: Void = model.finishLoadingLibrary()
                 if !PerformanceProbe.offline { await model.startup() }
+                await analysis
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { model.persistPlaybackSession() }
+                #if os(iOS)
+                if phase == .background, model.djLink.status.running || model.djLink.busy {
+                    Task { await model.djLink.disconnect(message: "DJ Link paused in the background. Wired sharing resumes when DJBooth is open.") }
+                }
+                #endif
             }
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
                 while !Task.isCancelled {
                     await model.refreshUSBConnection()
+                    #if os(iOS)
+                    await model.djLink.autoConnect(model: model)
+                    #endif
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }
@@ -115,12 +133,6 @@ struct BoothRoot: View {
         }
         #else
         MobileLibraryNavigation(model: model)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    PlaylistRemovalNotice(model: model)
-                    MobileNowPlaying(model: model)
-                }
-            }
         #endif
     }
     #if os(macOS)
@@ -176,22 +188,22 @@ struct BoothRoot: View {
     }
 }
 
-private struct PlaylistRemovalNotice: View {
+struct PlaylistRemovalNotice: View {
     @Bindable var model: BoothModel
     var body: some View {
         if let undo = model.undoablePlaylistRemoval {
             HStack(spacing: 8) {
                 Text("Removed “\(undo.trackTitle)”")
-                    .font(.system(size: 12)).lineLimit(1)
+                    .boothFont(12, relativeTo: .caption).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Removed \(undo.trackTitle) from \(undo.collectionName)")
                 Button { model.undoPlaylistRemoval() } label: {
-                    Text("Undo").font(.system(size: 13, weight: .semibold))
+                    Text("Undo").boothFont(13, relativeTo: .subheadline, weight: .semibold)
                         .frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
                 }.foregroundStyle(BoothStyle.accent)
                     .accessibilityIdentifier("playlist.removal.undo")
                 Button { model.dismissPlaylistRemovalUndo() } label: {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .medium))
+                    Image(systemName: "xmark").boothFont(12, relativeTo: .caption, weight: .medium)
                         .frame(width: 44, height: 44).contentShape(Rectangle())
                 }.foregroundStyle(.secondary).accessibilityLabel("Dismiss removal notice")
                     .accessibilityIdentifier("playlist.removal.dismiss")

@@ -6,6 +6,13 @@ import Testing
     private let tracks = [Track(id: "a", title: "A", durationSeconds: 100), Track(id: "b", title: "B", durationSeconds: 200)]
     private let collection = Collection(id: "set", name: "Set", trackIDs: ["b", "a"])
 
+    @Test func browsingContextRoundTripsAndOlderNavigationStillDecodes() throws {
+        let navigation = PlaylistNavigation(browseMode: "Artists", browseGroup: "Tycho")
+        #expect(try JSONDecoder().decode(PlaylistNavigation.self, from: JSONEncoder().encode(navigation)) == navigation)
+        let legacy = Data(#"{"showBrowser":true,"folderPath":[],"playlistSort":"title","playlistSortAscending":true,"trackSort":"default","trackSortAscending":true}"#.utf8)
+        let restored = try JSONDecoder().decode(PlaylistNavigation.self, from: legacy)
+        #expect(restored.browseMode == nil && restored.browseGroup == nil && restored.showBrowser)
+    }
     @Test func restoresOrderedQueuePositionAndIndependentBrowseContext() {
         let session = PlaybackSession(trackID: "a", queueIDs: ["b", "a"], elapsed: 45,
                                       selectedCollection: "set", filter: "Favorites", query: "bass",

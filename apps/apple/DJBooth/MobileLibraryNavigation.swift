@@ -11,14 +11,78 @@ struct MobileLibraryNavigation: View {
         let folder = model.playlistFolderPath
         let folders = (0...folder.count).map { LibraryDestination.folder(Array(folder.prefix($0))) }
         let selected = model.showPlaylistBrowser ? nil : model.collections.first { $0.id == model.selectedCollection }
-        let destinations = folders + (selected.map { [.collection($0.id)] } ?? [])
-        NativeLibraryStack(model: model, destinations: destinations, reduceMotion: reduceMotion)
+        let browsing = model.browseMode != .playlists && selected == nil && model.pendingQuickAddTrackID == nil
+        let pages: [LibraryDestination] = browsing
+            ? [.browse(model.browseMode)] + (model.browseGroup.map { [.group(model.browseMode, $0)] } ?? [])
+            : folders + (selected.map { [.collection($0.id)] } ?? [])
+        NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion)
+    }
+}
+
+private struct LibrarySidebar: View {
+    @Bindable var model: BoothModel
+    let close: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var suppressSelection = false
+    var body: some View {
+        List {
+            Group {
+                ForEach(LibraryBrowseMode.allCases, id: \.self) { mode in
+                    Button { guard !suppressSelection else { return }; model.browse(mode); close() } label: {
+                        row(mode.rawValue, symbol: mode.symbol, selected: model.browseMode == mode)
+                    }.accessibilityIdentifier("library.drawer.\(mode)")
+                        .accessibilityValue(model.browseMode == mode ? "Selected" : "")
+                }
+                Button { guard !suppressSelection else { return }; close(); model.showImport = true } label: {
+                    row("Download", symbol: "arrow.down.circle", count: model.importJobs.filter(\.isActive).count)
+                }.accessibilityIdentifier("library.drawer.download")
+                Button { guard !suppressSelection else { return }; close(); model.showDJLink = true } label: {
+                    row("Connect to CDJ", symbol: "network")
+                }.accessibilityIdentifier("library.drawer.djlink")
+                Button { guard !suppressSelection else { return }; close(); model.showSettings = true } label: {
+                    row("Sync & settings", symbol: "gearshape")
+                }.accessibilityIdentifier("library.drawer.settings")
+            }.boothLibraryCell()
+        }
+        .buttonStyle(BoothRowButtonStyle())
+        .boothLibraryList()
+        .accessibilityIdentifier("library.sidebar")
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 12)
+                .onChanged { value in
+                    if abs(value.translation.width) > abs(value.translation.height) { suppressSelection = true }
+                }
+                .onEnded { value in
+                    if suppressSelection && value.translation.width < -44 { close() }
+                    // Keep touch-up from turning a closing swipe into a menu tap.
+                    Task { @MainActor in await Task.yield(); suppressSelection = false }
+                }
+        )
+    }
+    private func row(_ title: String, symbol: String, selected: Bool = false, count: Int = 0) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).font(.body).foregroundStyle(BoothStyle.accent)
+                .frame(width: 32).accessibilityHidden(true)
+            Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                .foregroundStyle(.primary).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if selected {
+                Image(systemName: "checkmark").font(.caption.weight(.semibold)).foregroundStyle(BoothStyle.accent)
+                    .accessibilityHidden(true)
+            } else if count > 0 {
+                Text("\(count)").boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
+            }
+        }.padding(.horizontal, 12).frame(minHeight: 48).contentShape(Rectangle())
+            .background(selected ? BoothStyle.accent.opacity(0.12) : .clear)
+            .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
     }
 }
 
 private enum LibraryDestination: Hashable {
     case folder([String])
     case collection(String)
+    case browse(LibraryBrowseMode)
+    case group(LibraryBrowseMode, String)
 }
 
 private struct LibraryPage: View {
@@ -29,6 +93,11 @@ private struct LibraryPage: View {
             switch destination {
             case .folder(let path): PlaylistBrowserView(model: model, folderPath: path)
             case .collection(let id): MobileTrackList(model: model, collectionID: id)
+            case .browse(let mode):
+                if mode == .tracks { MobileTrackList(model: model, collectionID: nil) }
+                else { MobileGroupBrowser(model: model, mode: mode) }
+            case .group(let mode, let name):
+                MobileTrackList(model: model, collectionID: nil, groupMode: mode, groupName: name)
             }
         }.background(BoothStyle.background).tint(BoothStyle.accent).preferredColorScheme(.dark)
     }
@@ -36,13 +105,97 @@ private struct LibraryPage: View {
 
 private final class LibraryPageController: UIHostingController<LibraryPage> {
     let destination: LibraryDestination
-    init(model: BoothModel, destination: LibraryDestination) {
+    init(model: BoothModel, destination: LibraryDestination, openSidebar: @escaping () -> Void) {
         self.destination = destination
         super.init(rootView: LibraryPage(model: model, destination: destination))
         view.backgroundColor = UIColor(BoothStyle.background)
+        switch destination {
+        case .folder(let path): title = path.last ?? "Playlists"
+        case .browse(let mode): title = mode.rawValue
+        case .group(_, let name): title = name
+        case .collection: break
+        }
+        navigationItem.largeTitleDisplayMode = .never
+        let hasDrawer: Bool
+        switch destination {
+        case .folder(let path): hasDrawer = path.isEmpty
+        case .browse: hasDrawer = true
+        case .collection, .group: hasDrawer = false
+        }
+        if hasDrawer {
+            let button = UIBarButtonItem(image: UIImage(systemName: "sidebar.left"),
+                                         primaryAction: UIAction { _ in openSidebar() })
+            button.accessibilityLabel = "Show Sidebar"
+            button.accessibilityIdentifier = "library.drawer.open"
+            navigationItem.leftBarButtonItem = button
+        }
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+}
+
+private final class LibrarySplitController: UISplitViewController {
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = view.bounds.width * 2 / 3
+        guard width > 0, maximumPrimaryColumnWidth != width else { return }
+        maximumPrimaryColumnWidth = width
+        minimumPrimaryColumnWidth = width
+    }
+}
+
+private struct LibraryPlayerFooter: View {
+    let model: BoothModel
+    var body: some View {
+        VStack(spacing: 0) {
+            PlaylistRemovalNotice(model: model)
+            MobileNowPlaying(model: model)
+        }.background(BoothStyle.background).tint(BoothStyle.accent).preferredColorScheme(.dark)
+    }
+}
+
+/// The player belongs to the secondary column, and stays put as its pages move.
+/// The primary column can then cover both the library and the player.
+private final class LibraryNavigationController: UINavigationController {
+    private let footer: UIHostingController<LibraryPlayerFooter>
+    private var footerBottom: NSLayoutConstraint?
+
+    init(model: BoothModel) {
+        footer = UIHostingController(rootView: LibraryPlayerFooter(model: model))
+        super.init(nibName: nil, bundle: nil)
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        footer.safeAreaRegions = []
+        footer.sizingOptions = .intrinsicContentSize
+        addChild(footer)
+        footer.view.backgroundColor = UIColor(BoothStyle.background)
+        footer.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(footer.view)
+        let bottom = footer.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        bottom.priority = .defaultHigh
+        footerBottom = bottom
+        view.keyboardLayoutGuide.usesBottomSafeArea = false
+        NSLayoutConstraint.activate([
+            footer.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            footer.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottom,
+            footer.view.bottomAnchor.constraint(lessThanOrEqualTo: view.keyboardLayoutGuide.topAnchor),
+        ])
+        footer.didMove(toParent: self)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let bottom = max(0, view.safeAreaInsets.bottom - additionalSafeAreaInsets.bottom)
+        if footerBottom?.constant != -bottom { footerBottom?.constant = -bottom }
+        let height = max(0, view.bounds.maxY - footer.view.frame.minY - bottom)
+        if additionalSafeAreaInsets.bottom != height { additionalSafeAreaInsets.bottom = height }
+        view.bringSubviewToFront(footer.view)
+    }
 }
 
 private struct NativeLibraryStack: UIViewControllerRepresentable {
@@ -51,40 +204,86 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
     let reduceMotion: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
-    func makeUIViewController(context: Context) -> UINavigationController {
-        let navigation = UINavigationController()
-        navigation.setNavigationBarHidden(true, animated: false)
-        navigation.view.backgroundColor = UIColor(BoothStyle.background)
+    func makeUIViewController(context: Context) -> UISplitViewController {
+        let split = LibrarySplitController(style: .doubleColumn)
+        // Keep the real overlay sidebar on a portrait phone instead of adapting
+        // the primary column into a full-screen navigation destination.
+        split.traitOverrides.horizontalSizeClass = .regular
+        split.preferredSplitBehavior = .overlay
+        split.primaryBackgroundStyle = .none
+        split.preferredDisplayMode = .secondaryOnly
+        // Own the buttons in each navigation bar; UIKit's automatic button moves
+        // between columns and can disappear while the secondary stack changes.
+        split.displayModeButtonVisibility = .never
+        split.preferredPrimaryColumnWidthFraction = 2.0 / 3.0
+        split.overrideUserInterfaceStyle = .dark
+        split.view.tintColor = UIColor(BoothStyle.accent)
+        let sidebar = UIHostingController(rootView: LibrarySidebar(model: model, close: { [weak split] in split?.hide(.primary) }))
+        sidebar.title = "Library"
+        sidebar.navigationItem.largeTitleDisplayMode = .never
+        let closeButton = UIBarButtonItem(image: UIImage(systemName: "sidebar.left"),
+                                         primaryAction: UIAction { [weak split] _ in split?.hide(.primary) })
+        closeButton.accessibilityLabel = "Hide Sidebar"
+        closeButton.accessibilityIdentifier = "library.drawer.close"
+        sidebar.navigationItem.leftBarButtonItem = closeButton
+        sidebar.view.backgroundColor = UIColor(BoothStyle.background)
+        let primary = UINavigationController(rootViewController: sidebar)
+        BoothStyle.configureLibraryNavigation(primary)
+        split.setViewController(primary, for: .primary)
+        let navigation = LibraryNavigationController(model: model)
+        BoothStyle.configureLibraryNavigation(navigation)
         navigation.delegate = context.coordinator
+        split.setViewController(navigation, for: .secondary)
+        context.coordinator.split = split
         context.coordinator.navigation = navigation
         navigation.interactivePopGestureRecognizer?.delegate = context.coordinator
         context.coordinator.update(destinations, animated: false)
-        return navigation
+        return split
     }
-    func updateUIViewController(_ navigation: UINavigationController, context: Context) {
-        context.coordinator.update(destinations, animated: !reduceMotion && navigation.view.window != nil)
+    func updateUIViewController(_ split: UISplitViewController, context: Context) {
+        context.coordinator.update(destinations, animated: !reduceMotion && split.view.window != nil)
     }
 
     @MainActor final class Coordinator: NSObject, UINavigationControllerDelegate, UIGestureRecognizerDelegate {
         let model: BoothModel
         weak var navigation: UINavigationController?
+        weak var split: UISplitViewController?
         private var desired: [LibraryDestination] = []
         private var programmaticTransition = false
+        private var awaitingParentTransition = false
         private var interactiveStart: [LibraryDestination]?
         private var animateChanges = true
         init(model: BoothModel) { self.model = model }
 
         func update(_ destinations: [LibraryDestination], animated: Bool) {
             desired = destinations; animateChanges = animated
+            let atRoot = destinations.count == 1 && model.pendingQuickAddTrackID == nil
+            split?.presentsWithGesture = atRoot
+            if !atRoot { split?.hide(.primary) }
             applyDesiredStack()
         }
         private func applyDesiredStack() {
-            guard let navigation, navigation.transitionCoordinator == nil, !programmaticTransition else { return }
+            guard let navigation, !programmaticTransition else { return }
+            if let transition = navigation.transitionCoordinator {
+                // A sidebar dismissal can still be animating when its selection
+                // changes the secondary page. Apply that selection after UIKit settles.
+                if !awaitingParentTransition {
+                    awaitingParentTransition = true
+                    transition.animate(alongsideTransition: nil) { [weak self] _ in
+                        Task { @MainActor in
+                            self?.awaitingParentTransition = false
+                            self?.applyDesiredStack()
+                        }
+                    }
+                }
+                return
+            }
             let existing = navigation.viewControllers.compactMap { $0 as? LibraryPageController }
             guard existing.map(\.destination) != desired else { return }
             let controllers = desired.enumerated().map { index, destination in
                 if index < existing.count, existing[index].destination == destination { return existing[index] }
-                return LibraryPageController(model: model, destination: destination)
+                return LibraryPageController(model: model, destination: destination,
+                                             openSidebar: { [weak split] in split?.show(.primary) })
             }
             interactiveStart = nil
             programmaticTransition = true
@@ -100,6 +299,16 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
             return true
         }
         func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
+            if let page = viewController as? LibraryPageController {
+                let hidden: Bool
+                switch page.destination {
+                case .browse: hidden = false
+                case .folder(let path): hidden = !path.isEmpty || model.pendingQuickAddTrackID != nil
+                case .collection, .group: hidden = true
+                }
+                navigationController.setNavigationBarHidden(hidden, animated: animated)
+
+            }
             if !programmaticTransition, animated, interactiveStart == nil { interactiveStart = desired }
         }
         func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
@@ -112,6 +321,8 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
                 // never changes the persisted selection or playlist contents.
                 desired = actual
                 switch destination {
+                case .browse(let mode): model.browse(mode)
+                case .group(let mode, let name): model.browse(mode, group: name)
                 case .folder(let path): model.openPlaylistFolder(path)
                 case .collection(let id):
                     if let collection = model.collections.first(where: { $0.id == id }) { model.openCollection(collection) }

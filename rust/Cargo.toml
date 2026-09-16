@@ -4,6 +4,7 @@ members = [
   "crates/djbooth-analyzer",
   "crates/djtools-core",
   "crates/djtools-link",
+  "crates/djbooth-mobile",
 ]
 resolver = "3"
 
@@ -29,7 +30,7 @@ flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 libc = "0.2"
 midir = "0.11"
-rusqlite = { version = "0.39", features = ["bundled-sqlcipher"] }
+rusqlite = "0.39"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"

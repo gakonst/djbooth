@@ -52,7 +52,6 @@ describe("hosted import sources", () => {
     }));
 
     const result = await prepareHostedImportSource("https://soundcloud.com/dj/sets/late-night", {
-      spotify: { raw: vi.fn() },
       soundcloud: { getPlaylist } as unknown as SoundCloudClient,
     });
 
@@ -65,10 +64,14 @@ describe("hosted import sources", () => {
 
   it("leaves ordinary DJ-set URLs on the resolver path", async () => {
     await expect(
-      prepareHostedImportSource("https://soundcloud.com/dj/recorded-set", {
-        spotify: { raw: vi.fn() },
-      }),
+      prepareHostedImportSource("https://soundcloud.com/dj/recorded-set", {}),
     ).resolves.toBeUndefined();
+  });
+
+  it("still requires authorization when the source is a Spotify playlist", async () => {
+    await expect(prepareHostedImportSource("spotify:playlist:abc123", {})).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+    });
   });
 });
 
