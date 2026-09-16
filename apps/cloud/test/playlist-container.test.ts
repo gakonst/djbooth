@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 
 vi.mock("@cloudflare/containers", () => ({
   ContainerProxy: class {},
@@ -33,6 +34,49 @@ import * as library from "../src/index.js";
 import { PlaylistContainer, validProgress } from "../src/playlist-container.js";
 
 const id = "11111111-1111-1111-1111-111111111111";
+
+test("scheduled cloud maintenance resumes old completed imports once, without retrying failures or ready libraries", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE login_codes(expires_at INTEGER);
+    CREATE TABLE import_requests(account_id TEXT, id TEXT, source TEXT, status TEXT, phase TEXT,
+      current INTEGER, total INTEGER, message TEXT, updated_at INTEGER, created_at INTEGER, analysis_version INTEGER);
+    INSERT INTO import_requests VALUES
+      ('account-a','old','https://youtu.be/old','complete','complete',3,3,'done',0,0,0),
+      ('account-b','ready','https://youtu.be/ready','complete','complete',3,3,'done',0,0,1),
+      ('account-a','failed','https://youtu.be/failed','failed','failed',0,3,'failed',0,0,0);`);
+  const launched: string[] = [];
+  const env = {
+    LIBRARY_DB: {
+      prepare(sql: string) {
+        const statement = db.prepare(sql);
+        return {
+          bind: (...args: any[]) => ({ run: async () => statement.run(...args) }),
+          all: async () => ({ results: statement.all() }),
+        };
+      },
+    },
+    PLAYLIST_CONTAINERS: {
+      getByName: (name: string) => ({
+        enqueue: async () => {
+          launched.push(name);
+        },
+      }),
+    },
+  };
+  try {
+    await library.default.scheduled({} as any, env as any);
+    expect(launched).toEqual(["account-a:old"]);
+    expect(
+      db.prepare("SELECT status,message FROM import_requests WHERE id='old'").get(),
+    ).toMatchObject({ status: "queued", message: "Updating CDJ files in the cloud" });
+    db.exec("UPDATE import_requests SET status='complete',analysis_version=1 WHERE id='old'");
+    launched.length = 0;
+    await library.default.scheduled({} as any, env as any);
+    expect(launched).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
 function setup(admit = true) {
   const state = new Map<string, unknown>();
   const writes: unknown[][] = [];
@@ -129,7 +173,15 @@ describe("playlist container lifecycle", () => {
     expect(runner.containerFetch).toHaveBeenCalledOnce();
   });
   test("rejects corrupt progress", () => {
-    expect(validProgress({ status: "complete", phase: "complete", current: 3, total: 3, message: "Audio only" })).toBe(false);
+    expect(
+      validProgress({
+        status: "complete",
+        phase: "complete",
+        current: 3,
+        total: 3,
+        message: "Audio only",
+      }),
+    ).toBe(false);
     expect(
       validProgress({ status: "running", phase: "analyze", current: 5, total: 3, message: "bad" }),
     ).toBe(false);
