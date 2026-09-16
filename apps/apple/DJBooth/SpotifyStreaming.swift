@@ -1,54 +1,10 @@
 import SwiftUI
 import AVFoundation
 import DJBoothKit
+#if os(iOS)
+import SafariServices
+#endif
 
-struct SpotifyPairing: Decodable, Sendable {
-    let device_code, user_code, verification_uri: String
-    let verification_uri_complete: String?
-    let expires_in, interval: Int
-    var url: URL? {
-        guard let url = URL(string: verification_uri_complete ?? verification_uri), url.scheme == "https",
-              ["spotify.com", "www.spotify.com"].contains(url.host ?? ""), url.path == "/pair" else { return nil }
-        return url
-    }
-}
-private struct SpotifyOAuthToken: Decodable, Sendable { let access_token: String }
-/// Spotify pairing keeps the device code and access token in memory only. The reusable
-/// librespot credential is stored in the device Keychain under the Nanocodex account/connection.
-enum SpotifyPairingClient {
-    private static let clientID = "65b708073fc0480ea92a077233ca87bd"
-    static func begin() async throws -> SpotifyPairing {
-        let (data, status) = try await post("oauth2/device/authorize", ["client_id": clientID, "scope": "streaming"])
-        guard status == 200 else { throw ClientError.http(status, "Spotify streaming sign-in could not start") }
-        let pairing = try JSONDecoder().decode(SpotifyPairing.self, from: data)
-        guard pairing.url != nil, (1...3600).contains(pairing.expires_in), (1...60).contains(pairing.interval) else { throw ClientError.invalidEndpoint }
-        return pairing
-    }
-    static func token(_ pairing: SpotifyPairing) async throws -> String {
-        let expires = Date().addingTimeInterval(Double(pairing.expires_in))
-        var interval = pairing.interval
-        while Date() < expires {
-            try await Task.sleep(for: .seconds(interval))
-            let (data, status) = try await post("api/token", ["client_id": clientID, "device_code": pairing.device_code, "grant_type": "urn:ietf:params:oauth:grant-type:device_code"])
-            if status == 200 { return try JSONDecoder().decode(SpotifyOAuthToken.self, from: data).access_token }
-            struct Failure: Decodable { let error: String }
-            let error = try JSONDecoder().decode(Failure.self, from: data).error
-            if error == "slow_down" { interval += 5; continue }
-            if error == "authorization_pending" { continue }
-            throw ClientError.http(status, "Spotify sign-in was declined or expired. Try again.")
-        }
-        throw ClientError.http(401, "Spotify sign-in expired. Try again.")
-    }
-    private static func post(_ path: String, _ values: [String: String]) async throws -> (Data, Int) {
-        var request = URLRequest(url: URL(string: "https://accounts.spotify.com/" + path)!)
-        request.httpMethod = "POST"; request.timeoutInterval = 30
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        request.httpBody = Data(values.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: allowed)!)" }.joined(separator: "&").utf8)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
-    }
-}
 #if os(iOS)
 private actor SpotifyBridge {
     struct Status: Decodable, Sendable { let track: String; let playing: Bool; let position: Double; let ended: Bool; let error: String? }
@@ -88,7 +44,10 @@ private actor SpotifyBridge {
     #endif
     func authorize(_ source: MusicSource, key: String, token: String) async throws {
         #if os(iOS)
+        let request = UUID(); generation = request
         let credential = try await bridge.connect(account: source.accountID, device: deviceID(key), credentials: nil, token: token)
+        try Task.checkCancellation()
+        guard generation == request else { throw CancellationError() }
         try Keychain.save(credential, key: key); connectionKey = key
         #else
         throw ClientError.http(501, "Spotify streaming is available in the iPhone app")
@@ -161,27 +120,77 @@ struct SpotifyStreamingSignIn: View {
     @State private var pairing: SpotifyPairing?
     @State private var error: String?
     @State private var attempt = UUID()
+    @State private var connecting = false
+    @State private var showBrowser = false
+    @State private var copied = false
+    private let client = SpotifyPairingClient()
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Image(systemName: "music.note").font(.largeTitle)
-                Text("Enable Spotify streaming").font(.title2.bold())
-                Text("Sign in to \(source.label) to play inside DJ Booth. Spotify Premium is required.").multilineTextAlignment(.center)
-                if let pairing, let url = pairing.url {
-                    Text(pairing.user_code).font(.title.monospaced()).textSelection(.enabled)
-                    Button("Continue to Spotify") { openURL(url) }.buttonStyle(.borderedProminent)
-                    Text("Approve on Spotify, then return to DJ Booth.").font(.caption).foregroundStyle(.secondary)
-                    ProgressView("Waiting for Spotify")
-                } else if error == nil { ProgressView("Preparing sign-in") }
-                if let error { Text(error).foregroundStyle(.red); Button("Try again") { self.error = nil; pairing = nil; attempt = UUID() } }
-            }.padding(24)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
-        }.task(id: attempt) {
+            ScrollView {
+                VStack(spacing: 24) {
+                    Image(systemName: "music.note").font(.system(size: 44)).foregroundStyle(BoothStyle.accent)
+                    Text("Connect Spotify playback").font(.title2.bold())
+                    Text("Use Spotify account **\(source.accountID)**, the account connected to Nanocodex. Spotify Premium is required to stream.")
+                        .multilineTextAlignment(.center).foregroundStyle(.secondary)
+                    if let error {
+                        Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+                            .accessibilityIdentifier("spotify.signin.error")
+                        Button("Try again") { self.error = nil; pairing = nil; connecting = false; copied = false; attempt = UUID() }
+                            .buttonStyle(.borderedProminent).accessibilityIdentifier("spotify.signin.retry")
+                    } else if connecting {
+                        ProgressView("Connecting playback…").accessibilityIdentifier("spotify.signin.connecting")
+                    } else if let pairing {
+                        VStack(spacing: 12) {
+                            Text("Your sign-in code").font(.subheadline).foregroundStyle(.secondary)
+                            Text(pairing.userCode).font(.largeTitle.monospaced().bold()).textSelection(.enabled)
+                            #if os(iOS)
+                            Button(copied ? "Code copied" : "Copy code", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = pairing.userCode; copied = true
+                            }.accessibilityIdentifier("spotify.signin.copy")
+                            #endif
+                            TimelineView(.periodic(from: .now, by: 1)) { context in
+                                Text(context.date < pairing.expiresAt ? "Code expires in \(max(0, Int(pairing.expiresAt.timeIntervalSince(context.date)))) seconds" : "Code expired")
+                                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            }
+                        }.padding(20).frame(maxWidth: .infinity).background(BoothStyle.surface, in: RoundedRectangle(cornerRadius: 16))
+                        Button("Continue to Spotify") {
+                            #if os(iOS)
+                            showBrowser = true
+                            #else
+                            openURL(pairing.url)
+                            #endif
+                        }.buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("spotify.signin.continue")
+                        Text("Approve access on Spotify. If asked, enter the code above. Playback connects automatically after approval.")
+                            .font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                        ProgressView("Waiting for approval…").accessibilityIdentifier("spotify.signin.waiting")
+                    } else { ProgressView("Preparing secure sign-in…") }
+                }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
+            }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.accessibilityIdentifier("spotify.signin.cancel") } }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showBrowser) {
+            if let pairing { SpotifyApprovalBrowser(url: pairing.url).ignoresSafeArea() }
+        }
+        #endif
+        .task(id: attempt) {
             do {
-                let value = try await SpotifyPairingClient.begin(); pairing = value
-                let token = try await SpotifyPairingClient.token(value)
-                try Task.checkCancellation(); try await complete(token); dismiss()
-            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                let value = try await client.begin()
+                try Task.checkCancellation(); pairing = value
+                let token = try await client.token(value)
+                try Task.checkCancellation(); showBrowser = false; connecting = true
+                try await complete(token)
+                try Task.checkCancellation(); dismiss()
+            } catch {
+                if !Task.isCancelled { showBrowser = false; connecting = false; pairing = nil; self.error = error.localizedDescription }
+            }
         }
     }
 }
+#if os(iOS)
+private struct SpotifyApprovalBrowser: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
+#endif

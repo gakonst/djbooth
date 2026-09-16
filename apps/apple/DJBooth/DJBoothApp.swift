@@ -67,7 +67,7 @@ struct BoothRoot: View {
             #if os(iOS)
             .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
             #endif
-            .sheet(item: $model.spotifySignIn) { source in
+            .sheet(item: $model.spotifySignIn, onDismiss: { model.spotifySignInDismissed() }) { source in
                 SpotifyStreamingSignIn(source: source) { token in try await model.authorizeSpotify(source, token: token) }
             }
             .sheet(isPresented: $model.showImport) { ImportSheet(model: model) }

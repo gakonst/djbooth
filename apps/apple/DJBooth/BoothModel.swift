@@ -74,14 +74,25 @@ private struct BoothLaunchConfiguration: Sendable {
 @MainActor @Observable final class BoothModel {
     let spotifyStreaming = SpotifyStreaming()
     var spotifySignIn: MusicSource?
+    private var pendingSpotifyTrackID: String?
+    func beginSpotifySignIn(_ source: MusicSource) {
+        pendingSpotifyTrackID = nil
+        spotifySignIn = source
+    }
+    func spotifySignInDismissed() { pendingSpotifyTrackID = nil }
     private func spotifyKey(_ source: MusicSource) -> String { "spotify-streaming:" + cloudStorageScope + ":" + source.connectionID }
     func authorizeSpotify(_ source: MusicSource, token: String) async throws {
         let generation = connectionGeneration
+        let pendingTrackID = pendingSpotifyTrackID
+        let pendingRequest = playbackRequest
         guard musicCatalog.sources.contains(source), cloud != nil else { throw ClientError.http(403, "Connect this account first") }
         try await spotifyStreaming.authorize(source, key: spotifyKey(source), token: token)
         guard generation == connectionGeneration else { await spotifyStreaming.disconnect(); throw CancellationError() }
-        spotifySignIn = nil
-        if let track = player.track { await play(track, preservingQueue: true) }
+        try Task.checkCancellation()
+        pendingSpotifyTrackID = nil
+        if pendingRequest == playbackRequest, let track = player.track, track.id == pendingTrackID {
+            await play(track, preservingQueue: true)
+        }
     }
     private func prepareSpotifyPlayback(_ track: MusicTrack, source: MusicSource, request: UUID, generation: UUID) async throws {
         guard request == playbackRequest, generation == connectionGeneration else { return }
@@ -92,7 +103,7 @@ private struct BoothLaunchConfiguration: Sendable {
         }
         catch {
             guard request == playbackRequest, generation == connectionGeneration else { return }
-            if case ClientError.http(let status, _) = error, status == 401 || status == 400 { spotifySignIn = source; return }
+            if case ClientError.http(let status, _) = error, status == 401 || status == 400 { pendingSpotifyTrackID = track.id; spotifySignIn = source; return }
             throw error
         }
     }
@@ -101,6 +112,7 @@ private struct BoothLaunchConfiguration: Sendable {
     var musicLoading = false
     var musicError: String?
     var musicPlaylistLoading: Set<String> = []
+    var musicPlaylistErrors: [String: String] = [:]
     var musicDownloads: Set<String> = []
     private var musicDownloadIDs: [String: String] = [:]
     func connectedPlaylist(_ id: String) -> MusicPlaylist? { musicCatalog.playlists.first { $0.id == id } }
@@ -160,13 +172,14 @@ private struct BoothLaunchConfiguration: Sendable {
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicPlaylistLoading.contains(item.id) else { return }
         if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 { return }
         let generation = connectionGeneration
+        musicPlaylistErrors[item.id] = nil
         musicPlaylistLoading.insert(item.id); defer { if generation == connectionGeneration { musicPlaylistLoading.remove(item.id) } }
         do {
             let value = try await cloud.musicPlaylist(item, source: source)
             guard generation == connectionGeneration else { return }
             musicCatalog.snapshots[item.id] = value
             try store.saveMusicCatalog(musicCatalog); try await reload(); musicError = nil
-        } catch { if generation == connectionGeneration { musicError = error.localizedDescription; message = error.localizedDescription } }
+        } catch { if generation == connectionGeneration, !Task.isCancelled { musicPlaylistErrors[item.id] = error.localizedDescription } }
     }
     func downloadMusic(_ item: MusicPlaylist) async {
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicDownloads.contains(item.id) else { return }
@@ -371,6 +384,7 @@ private struct BoothLaunchConfiguration: Sendable {
     private var playbackRequest = UUID()
     private var playbackPreferences: PlaybackSessionPreferences?
     private var playbackSessionReady = false
+    private var navigationChanged = false
     private var restoredSavedPlaybackSession = false
     private var lastSessionSave = Date.distantPast
     private var queueCollection: String?
@@ -826,6 +840,7 @@ private struct BoothLaunchConfiguration: Sendable {
         return collections.first { $0.id == id }
     }
     private func changeNavigation(_ update: () -> Void) {
+        navigationChanged = true
         let ready = playbackSessionReady; playbackSessionReady = false
         update()
         playbackSessionReady = ready; persistPlaybackSession()
@@ -1023,6 +1038,7 @@ private struct BoothLaunchConfiguration: Sendable {
         return audio.url(hash: hash)
     }
     private func restorePlaybackSession() {
+        navigationChanged = false
         playbackSessionReady = false
         let previous = playbackPreferences?.load()
         restoredSavedPlaybackSession = previous != nil
@@ -1032,7 +1048,13 @@ private struct BoothLaunchConfiguration: Sendable {
         persistPlaybackSession()
     }
     private func reconcilePlaybackSession() {
-        let saved = player.track == nil ? (playbackPreferences?.load() ?? currentPlaybackSession()) : currentPlaybackSession()
+        var saved = player.track == nil ? (playbackPreferences?.load() ?? currentPlaybackSession()) : currentPlaybackSession()
+        // Metadata-only browsing cannot persist while the library has no tracks yet.
+        // Keep the user's current page when the first provider tracks arrive.
+        if navigationChanged {
+            saved.selectedCollection = selectedCollection; saved.navigation = currentPlaybackSession().navigation
+            saved.filter = filter; saved.query = query
+        }
         let resolved = saved.resolved(tracks: tracks, collections: collections)
         playbackSessionReady = false
         applyPlaybackSession(resolved, replacingItem: player.track?.id != resolved.trackID)
@@ -1350,7 +1372,7 @@ private struct BoothLaunchConfiguration: Sendable {
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         importJobs = []; importError = nil
-        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicDownloads = []; musicDownloadIDs = [:]
+        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []
         #if DEBUG
         pendingOfflineTrackID = nil; offlineCollectionID = nil; offlineCollectionSelected = false; offlineLaunchRequestKey = nil
@@ -1389,7 +1411,7 @@ private struct BoothLaunchConfiguration: Sendable {
         cloudCapabilities = account.capabilities
         cloudAccountID = account.id
         importJobs = []; importError = nil
-        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicDownloads = []; musicDownloadIDs = [:]
+        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         cloud = client
         connectionGeneration = UUID(); playbackRequest = UUID()
         #if DEBUG

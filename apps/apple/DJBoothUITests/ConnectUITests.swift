@@ -77,7 +77,7 @@ import XCTest
     }
     func testConnectedMusicFoldersBrowseAndDownload() throws {
         guard let _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_fixture")!) else { throw XCTSkip("Start mobile fixture") }
-        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=1")!)
+        _ = try Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=1&delay=1&fail=1")!)
         defer { _ = try? Data(contentsOf: URL(string: "http://127.0.0.1:8791/__mobile_music?enabled=0")!) }
         let app = XCUIApplication()
         app.launchEnvironment["DJBOOTH_CLOUD_URL"] = "http://127.0.0.1:8791"
@@ -90,6 +90,13 @@ import XCTest
         app.buttons["music.source.Spotify"].tap()
         XCTAssertTrue(app.buttons["music.playlist.fixture-playlist"].waitForExistence(timeout: 10))
         app.buttons["music.playlist.fixture-playlist"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["music.playlist.loading"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["No tracks"].exists)
+        XCTAssertTrue(app.buttons["music.playlist.retry"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["No tracks"].exists)
+        capture(app, "Playlist load failure with retry")
+        app.buttons["music.playlist.retry"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["music.playlist.loading"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Alice streaming track"].waitForExistence(timeout: 10))
         capture(app, "Spotify metadata without acquisition or analysis")
         app.buttons["playlist.back"].tap()
@@ -105,7 +112,8 @@ import XCTest
 
     private func openSettings(_ app: XCUIApplication) {
         for _ in 0..<5 {
-            if app.buttons["playlist.folder.back"].exists { app.buttons["playlist.folder.back"].tap() }
+            if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }
+            else if app.buttons["playlist.folder.back"].exists { app.buttons["playlist.folder.back"].tap() }
             else { break }
         }
         let menu = app.buttons["library.drawer.open"]

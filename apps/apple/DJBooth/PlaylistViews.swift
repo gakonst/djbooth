@@ -224,7 +224,7 @@ struct PlaylistBrowserView: View {
             Button("Refresh playlist") { Task { await model.loadMusicPlaylist(item, force: true) } }
             if let url = URL(string: item.url) { Link("Open original playlist", destination: url) }
             if let source = model.musicCatalog.sources.first(where: { $0.id == item.sourceID }), source.provider == "spotify" {
-                Button("Enable Spotify streaming") { model.spotifySignIn = source }
+                Button("Enable Spotify streaming") { model.beginSpotifySignIn(source) }
             }
         }
     }

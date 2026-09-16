@@ -88,7 +88,11 @@ struct LibraryView: View {
             #if os(macOS)
             TrackTableHeader().padding(.horizontal, 8)
             #endif
-            if tracks.isEmpty {
+            if let selected, let item = model.connectedPlaylist(selected.id) { ConnectedPlaylistStatus(model: model, item: item) }
+            if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id),
+               model.musicCatalog.snapshots[item.id] == nil || model.musicPlaylistLoading.contains(item.id) || model.musicPlaylistErrors[item.id] != nil {
+                Spacer()
+            } else if tracks.isEmpty {
                 ContentUnavailableView(model.query.isEmpty ? "No tracks" : "No matching tracks", systemImage: "music.note.list",
                                        description: Text(model.filter == "Unsorted" ? "Every recording already belongs to a playlist." : model.query.isEmpty ? "Import music or add tracks to this playlist." : "Try another title, artist, or comment."))
             } else {
@@ -187,7 +191,13 @@ struct MobileTrackList: View {
                 }.padding(.vertical, 12).padding(.trailing, 8)
                     .boothLibraryCell(horizontalInset: 8)
             }
-            if tracks.isEmpty {
+            if let selected, let item = model.connectedPlaylist(selected.id) {
+                ConnectedPlaylistStatus(model: model, item: item).boothLibraryCell()
+            }
+            if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id),
+               model.musicCatalog.snapshots[item.id] == nil || model.musicPlaylistLoading.contains(item.id) || model.musicPlaylistErrors[item.id] != nil {
+                EmptyView()
+            } else if tracks.isEmpty {
                 ContentUnavailableView("No tracks", systemImage: "music.note.list").boothLibraryCell()
             } else {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { position, track in
@@ -196,9 +206,33 @@ struct MobileTrackList: View {
                 }
             }
         }.boothLibraryList().accessibilityIdentifier("library.tracks")
+            .task(id: collectionID) {
+                if let collectionID, let item = model.connectedPlaylist(collectionID) { await model.loadMusicPlaylist(item) }
+            }
+            .refreshable {
+                if let collectionID, let item = model.connectedPlaylist(collectionID) { await model.loadMusicPlaylist(item, force: true) }
+            }
     }
 }
 #endif
+
+struct ConnectedPlaylistStatus: View {
+    @Bindable var model: BoothModel
+    let item: MusicPlaylist
+    var body: some View {
+        if let error = model.musicPlaylistErrors[item.id] {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Couldn’t load playlist", systemImage: "exclamationmark.circle").font(.headline).accessibilityIdentifier("music.playlist.error")
+                Text(error).font(.subheadline).foregroundStyle(.secondary)
+                Button("Retry") { Task { await model.loadMusicPlaylist(item, force: true) } }
+                    .accessibilityIdentifier("music.playlist.retry")
+            }.padding()
+        } else if model.musicPlaylistLoading.contains(item.id) || model.musicCatalog.snapshots[item.id] == nil {
+            ProgressView(model.musicCatalog.snapshots[item.id] == nil ? "Loading tracks…" : "Refreshing playlist…")
+                .frame(maxWidth: .infinity).padding(28).accessibilityIdentifier("music.playlist.loading")
+        }
+    }
+}
 
 struct TrackRow: View {
     let track: Track

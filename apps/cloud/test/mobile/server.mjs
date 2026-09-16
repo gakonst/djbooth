@@ -14,6 +14,9 @@ const grant = (who) => `0x${(who === "Alice" ? "1" : "2").repeat(64)}`;
 const token = (who) => (who === "Alice" ? "a" : "b").repeat(43);
 const account = (who) => `nc_${createHash("sha256").update(who).digest("hex")}`;
 let musicEnabled = false;
+let musicRunID = "initial";
+let musicDelay = 0;
+let musicFailOnce = false;
 const turns = new Map();
 const sockets = new Map();
 const tickets = new Map();
@@ -87,15 +90,23 @@ async function issuer(request) {
     return Response.json({
       connectors: musicEnabled
         ? {
-            spotify: { connections: [{ id: "spotify-" + who, account_id: who, label: who }] },
-            soundcloud: { connections: [{ id: "soundcloud-" + who, account_id: who, label: who }] },
+            spotify: {
+              connections: [
+                { id: "spotify-" + who + "-" + musicRunID, account_id: who, label: who },
+              ],
+            },
+            soundcloud: {
+              connections: [
+                { id: "soundcloud-" + who + "-" + musicRunID, account_id: who, label: who },
+              ],
+            },
           }
         : {},
     });
   if (who && musicEnabled && path.match(/^\/v1\/connectors\/(spotify|soundcloud)\/request$/)) {
     const body = await request.json();
     const spotify = path.includes("spotify");
-    if (body.connection_id !== `${spotify ? "spotify" : "soundcloud"}-${who}`)
+    if (body.connection_id !== `${spotify ? "spotify" : "soundcloud"}-${who}-${musicRunID}`)
       return new Response(null, { status: 403 });
     const track = {
       id: "fixture-song",
@@ -108,8 +119,14 @@ async function issuer(request) {
     if (body.path.startsWith("/v1/me/playlists"))
       return Response.json({ items: [playlist], next: null });
     if (body.path === "/v1/playlists/fixture-playlist") return Response.json(playlist);
-    if (body.path.startsWith("/v1/playlists/fixture-playlist/items"))
+    if (body.path.startsWith("/v1/playlists/fixture-playlist/items")) {
+      if (musicDelay) await new Promise((resolve) => setTimeout(resolve, musicDelay));
+      if (musicFailOnce) {
+        musicFailOnce = false;
+        return new Response(null, { status: 503 });
+      }
       return Response.json({ items: [{ item: track }], next: null });
+    }
     if (body.path.startsWith("/me/playlists"))
       return Response.json({
         collection: [
@@ -298,6 +315,9 @@ const app = await serve(8791, async (request) => {
   const path = new URL(request.url).pathname;
   if (path === "/__mobile_music") {
     musicEnabled = new URL(request.url).searchParams.get("enabled") === "1";
+    if (musicEnabled) musicRunID = crypto.randomUUID();
+    musicDelay = new URL(request.url).searchParams.get("delay") === "1" ? 3000 : 0;
+    musicFailOnce = new URL(request.url).searchParams.get("fail") === "1";
     return new Response("ok");
   }
   if (path === "/__mobile_fixture") return new Response("djbooth-mobile-fixture");
