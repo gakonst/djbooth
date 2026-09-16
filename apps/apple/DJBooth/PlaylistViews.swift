@@ -49,9 +49,6 @@ struct PlaylistBrowserView: View {
         }
         #else
         model.collections.sorted { first, second in
-            let firstDownloaded = model.connectedPlaylist(first.id).map(model.musicIsDownloaded) ?? false
-            let secondDownloaded = model.connectedPlaylist(second.id).map(model.musicIsDownloaded) ?? false
-            if firstDownloaded != secondDownloaded { return firstDownloaded }
             let comparison = first.name.localizedStandardCompare(second.name)
             return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
         }
