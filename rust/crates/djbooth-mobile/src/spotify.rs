@@ -163,7 +163,15 @@ pub fn request(operation: &str, input: &str) -> Result<Value> {
             tokio::time::timeout(Duration::from_secs(25), session.connect(credentials, false))
                 .await
                 .context("Spotify connection timed out")?
-                .map_err(|_| anyhow::anyhow!("Spotify streaming login expired. Sign in again."))?;
+                .map_err(|error| anyhow::anyhow!("Spotify playback connection failed: {error}"))?;
+            tokio::time::timeout(Duration::from_secs(20), session.spclient().client_token())
+                .await
+                .context("Spotify playback client validation timed out")?
+                .map_err(|error| anyhow::anyhow!("Spotify playback client validation failed: {error}"))?;
+            tokio::time::timeout(Duration::from_secs(20), session.login5().auth_token())
+                .await
+                .context("Spotify playback authorization timed out")?
+                .map_err(|error| anyhow::anyhow!("Spotify playback authorization failed: {error}"))?;
             Ok::<_, anyhow::Error>(session)
         })?;
         if session.username() != input.expected_account {

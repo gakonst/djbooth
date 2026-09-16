@@ -66,12 +66,7 @@ private actor SpotifyBridge {
         guard generation == request, player.track?.id == track.id else { return }
         if node == nil {
             guard let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2) else { throw ClientError.invalidMedia }
-            let node = AVAudioSourceNode(format: format) { _, _, frames, output in
-                let buffers = UnsafeMutableAudioBufferListPointer(output)
-                guard buffers.count == 2, let left = buffers[0].mData, let right = buffers[1].mData else { return noErr }
-                djbooth_spotify_read(left.assumingMemoryBound(to: Float.self), right.assumingMemoryBound(to: Float.self), Int(frames))
-                return noErr
-            }
+            let node = AVAudioSourceNode(format: format, renderBlock: Self.renderAudio)
             audio.attach(node); audio.connect(node, to: audio.mainMixerNode, format: format); self.node = node
         }
         if !audio.isRunning { try audio.start() }
@@ -81,6 +76,7 @@ private actor SpotifyBridge {
             Task { try? await self.bridge.command(command, position: position, requestID: request.uuidString) }
         }
         try await bridge.command("load", uri: "spotify:track:" + track.remoteID, position: player.elapsed, requestID: request.uuidString)
+        guard generation == request, player.track?.id == track.id else { return }
         polling?.cancel()
         polling = Task { [weak self, weak player] in
             while let self, let player, !Task.isCancelled, self.generation == request, player.track?.id == track.id {
@@ -105,6 +101,18 @@ private actor SpotifyBridge {
         #endif
     }
     #if os(iOS)
+    // Core Audio invokes this on its real-time thread. A closure created in
+    // play() inherits MainActor isolation and traps as soon as rendering starts.
+    nonisolated private static func renderAudio(
+        _ silence: UnsafeMutablePointer<ObjCBool>, _ time: UnsafePointer<AudioTimeStamp>,
+        _ frames: AVAudioFrameCount, _ output: UnsafeMutablePointer<AudioBufferList>
+    ) -> OSStatus {
+        let buffers = UnsafeMutableAudioBufferListPointer(output)
+        guard buffers.count == 2, let left = buffers[0].mData, let right = buffers[1].mData else { return noErr }
+        djbooth_spotify_read(left.assumingMemoryBound(to: Float.self), right.assumingMemoryBound(to: Float.self), Int(frames))
+        return noErr
+    }
+
     private func deviceID(_ key: String) throws -> String {
         if let value = try Keychain.read(key + ":device") { return value }
         let value = UUID().uuidString; try Keychain.save(value, key: key + ":device"); return value
