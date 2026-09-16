@@ -56,6 +56,8 @@ import DJBoothKit
     private var ended: NSObjectProtocol?
     private var statusObservation: NSKeyValueObservation?
     private var itemObservation: NSKeyValueObservation?
+    private var bufferObservation: NSKeyValueObservation?
+    private var fastStreamStartup = false
     private var playbackGeneration = UUID()
     private var audioStartTask: Task<Void, Never>?
     private var audioStartID = UUID()
@@ -87,6 +89,7 @@ import DJBoothKit
                 guard let self, self.streamControl == nil else { return }
                 self.captureCurrentTime()
                 self.playing = self.player.timeControlStatus == .playing
+                if self.playing { self.fastStreamStartup = false; self.bufferObservation = nil }
                 PerformanceProbe.playbackState(playing: self.playing, trackID: self.track?.id)
                 self.updateNowPlaying()
             }
@@ -119,7 +122,8 @@ import DJBoothKit
         wantsToPlay = autoplay
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
-        itemObservation = nil; pendingSeek = nil; inFlightSeek = nil
+        itemObservation = nil; bufferObservation = nil; fastStreamStartup = false
+        pendingSeek = nil; inFlightSeek = nil
         scrubSession = nil; scrubPosition = nil
         self.queueIndex = queueIndex.flatMap { queue.indices.contains($0) && queue[$0].id == track.id ? $0 : nil } ?? queue.firstIndex { $0.id == track.id } ?? 0
         self.track = track; self.queue = queue; duration = track.durationSeconds ?? 0
@@ -141,9 +145,10 @@ import DJBoothKit
     }
     /// Resolve audio for an already-selected recording without resetting its
     /// player state, queue, or any seek made while the file was being located.
-    func attach(url: URL, autoplay: Bool) {
+    func attach(url: URL, autoplay: Bool, fastStreamStart: Bool = false) {
         guard let track else { return }
         let generation = playbackGeneration
+        fastStreamStartup = fastStreamStart
         wantsToPlay = autoplay
         preparingItem = true
         // New items already start at zero. An exact seek forces an unnecessary
@@ -175,6 +180,20 @@ import DJBoothKit
     }
     private func installItem(asset: AVURLAsset, generation: UUID) {
         let item = AVPlayerItem(asset: asset)
+        if fastStreamStartup {
+            // Start a chosen remote track when its first segment arrives. Keep
+            // AVPlayer's automatic stall recovery for the rest of the stream.
+            item.preferredForwardBufferDuration = 5
+            bufferObservation = item.observe(\.isPlaybackBufferEmpty, options: [.initial, .new]) { [weak self] item, _ in
+                let buffered = !item.isPlaybackBufferEmpty
+                Task { @MainActor in
+                    guard let self, buffered, self.playbackGeneration == generation,
+                          self.fastStreamStartup, self.player.currentItem?.status == .readyToPlay,
+                          self.wantsToPlay, self.pendingSeek == nil, self.scrubSession == nil else { return }
+                    self.startPlayback()
+                }
+            }
+        }
         itemObservation = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             let failed = item.status == .failed
             let ready = item.status == .readyToPlay
@@ -263,7 +282,7 @@ import DJBoothKit
                 self.audioStartTask = nil
                 guard !Task.isCancelled, self.playbackGeneration == generation,
                       self.wantsToPlay, self.pendingSeek == nil, self.scrubSession == nil else { return }
-                self.player.play()
+                self.playBufferedItem()
             } catch {
                 guard let self, self.audioStartID == request else { return }
                 self.audioStartTask = nil
@@ -273,8 +292,14 @@ import DJBoothKit
             }
         }
         #else
-        player.play()
+        playBufferedItem()
         #endif
+    }
+    private func playBufferedItem() {
+        if fastStreamStartup, player.currentItem?.status == .readyToPlay,
+           player.currentItem?.isPlaybackBufferEmpty == false {
+            player.playImmediately(atRate: 1)
+        } else { player.play() }
     }
     private func cancelStartingPlayback() {
         audioStartTask?.cancel(); audioStartTask = nil; audioStartID = UUID()
@@ -357,7 +382,7 @@ import DJBoothKit
         seekRevision &+= 1
         player.pause(); player.replaceCurrentItem(with: nil); usbPlaybackAccess = nil; cloudPlayback = nil
         if let ended { NotificationCenter.default.removeObserver(ended); self.ended = nil }
-        itemObservation = nil
+        itemObservation = nil; bufferObservation = nil; fastStreamStartup = false
         preparingItem = false
         track = nil; queue = []; playing = false; elapsed = 0; duration = 0; error = nil
         timing = PlaybackTiming()

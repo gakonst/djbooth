@@ -168,9 +168,28 @@ private struct BoothLaunchConfiguration: Sendable {
             }
         }
     }
+    private var soundCloudPrewarm: Task<Void, Never>?
+    private func warmSoundCloudStreams(_ tracks: [MusicTrack], source: MusicSource) {
+        guard source.provider == "soundcloud", let cloud else { return }
+        soundCloudPrewarm?.cancel()
+        let upcoming = Array(tracks.filter { $0.available && $0.id.hasPrefix("connected:" + source.id + ":track:") }.prefix(2))
+        // Metadata only: resolve signed URLs into the server's short-lived,
+        // grant-bound cache. AVPlayer is created only after an actual play tap.
+        soundCloudPrewarm = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for track in upcoming {
+                    guard !Task.isCancelled else { break }
+                    group.addTask { _ = try? await cloud.musicStream(track, source: source) }
+                }
+            }
+        }
+    }
     func loadMusicPlaylist(_ item: MusicPlaylist, force: Bool = false) async {
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicPlaylistLoading.contains(item.id) else { return }
-        if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 { return }
+        if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 {
+            warmSoundCloudStreams(cached.tracks, source: source)
+            return
+        }
         let generation = connectionGeneration
         musicPlaylistErrors[item.id] = nil
         musicPlaylistLoading.insert(item.id); defer { if generation == connectionGeneration { musicPlaylistLoading.remove(item.id) } }
@@ -179,6 +198,7 @@ private struct BoothLaunchConfiguration: Sendable {
             guard generation == connectionGeneration else { return }
             musicCatalog.snapshots[item.id] = value
             try store.saveMusicCatalog(musicCatalog); try await reload(); musicError = nil
+            warmSoundCloudStreams(value.tracks, source: source)
         } catch { if generation == connectionGeneration, !Task.isCancelled { musicPlaylistErrors[item.id] = error.localizedDescription } }
     }
     func downloadMusic(_ item: MusicPlaylist) async {
@@ -1137,9 +1157,14 @@ private struct BoothLaunchConfiguration: Sendable {
                       let item = musicCatalog.snapshots.values.lazy.flatMap({ $0.tracks }).first(where: { $0.id == track.id }), let cloud {
                 guard item.available else { throw ClientError.http(403, "This track is unavailable for streaming") }
                 if source.provider == "soundcloud" {
+                    PerformanceProbe.event("soundcloud_resolve_begin", trackID: track.id)
                     let url = try await cloud.musicStream(item, source: source)
                     guard request == playbackRequest, generation == connectionGeneration else { return }
-                    player.attach(url: url, autoplay: true)
+                    PerformanceProbe.event("soundcloud_resolve_ready", trackID: track.id)
+                    player.attach(url: url, autoplay: true, fastStreamStart: true)
+                    let nextIDs = Set(queue.dropFirst(player.queueIndex + 1).prefix(2).map(\.id))
+                    let next = musicCatalog.snapshots.values.flatMap(\.tracks).filter { nextIDs.contains($0.id) }
+                    warmSoundCloudStreams(next, source: source)
                 } else {
                     try await prepareSpotifyPlayback(item, source: source, request: request, generation: generation)
                 }
@@ -1362,6 +1387,7 @@ private struct BoothLaunchConfiguration: Sendable {
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
         cloud = nil; cloudAccountID = nil; cloudURL = ""
         UserDefaults.standard.removeObject(forKey: "cloudURL")
+        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
         connectionGeneration = UUID(); playbackRequest = UUID()
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
@@ -1413,6 +1439,7 @@ private struct BoothLaunchConfiguration: Sendable {
         importJobs = []; importError = nil
         musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         cloud = client
+        soundCloudPrewarm?.cancel(); soundCloudPrewarm = nil
         connectionGeneration = UUID(); playbackRequest = UUID()
         #if DEBUG
         let offlineKey = "djbooth.debug.offline.\(scope)"
