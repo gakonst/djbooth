@@ -157,7 +157,8 @@ struct SpotifyStreamingSignIn: View {
                             }.accessibilityIdentifier("spotify.signin.copy")
                             #endif
                             TimelineView(.periodic(from: .now, by: 1)) { context in
-                                Text(context.date < pairing.expiresAt ? "Code expires in \(max(0, Int(pairing.expiresAt.timeIntervalSince(context.date)))) seconds" : "Code expired")
+                                let remaining = max(0, Int(pairing.expiresAt.timeIntervalSince(context.date)))
+                                Text(remaining > 0 ? "Code expires in \(String(format: "%d:%02d", remaining / 60, remaining % 60))" : "Code expired")
                                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             }
                         }.padding(20).frame(maxWidth: .infinity).background(BoothStyle.surface, in: RoundedRectangle(cornerRadius: 16))

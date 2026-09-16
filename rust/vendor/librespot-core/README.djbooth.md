@@ -1,7 +1,7 @@
 # DJBooth librespot-core patch
 
 Source: unmodified crates.io `librespot-core` 0.8.0 release, except
-`src/connection/handshake.rs`. Crates.io archive checksum:
+`src/connection/handshake.rs` and `src/config.rs`. Crates.io archive checksum:
 `168bbe1c416980ddd9a969ebd6b50fb6c924eb1a3ded194285fa8ec0e2b1c68b`.
 The release Cargo manifest is normalized by Cargo;
 `Cargo.toml.orig` preserves its original manifest. License: MIT (included).
@@ -11,8 +11,11 @@ The release Cargo manifest is normalized by Cargo;
 Upstream iOS AP identifiers reject OAuth-authenticated sessions with `TryAnotherAP`:
 <https://github.com/librespot-org/librespot/issues/1477>. Android already maps to
 Linux AP identifiers for the same protocol incompatibility. This patch extends
-that mapping to iOS. It keeps librespot's explicit authentication identity,
-Premium requirement, OAuth consent and all other platform behavior unchanged.
+that mapping to iOS. DJBooth also selects the Linux desktop protocol profile on
+iOS consistently across AP, client-token, Login5 and HTTP. This matches its
+ncspot-style desktop OAuth credentials; mixing those with the iOS client-token
+and HTTP profile returned Login5 `BAD_REQUEST` on the physical phone. Librespot's
+explicit identity, Premium requirement and OAuth consent remain intact.
 
 `platform_for` tests cover iOS device/simulator identifiers and unchanged desktop
 mappings. Live iPhone authentication must also be verified; the pure mapping tests

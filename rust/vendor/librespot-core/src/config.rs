@@ -11,6 +11,12 @@ pub(crate) const IOS_CLIENT_ID: &str = "58bd3c95768941ea9eb4350aaa033eb3";
 // android or ios needs to be mocked, the `os_version` has to be set to a valid version.
 // Otherwise, client-token or login5 requests will fail with a generic invalid-credential error.
 /// See [std::env::consts::OS]
+// DJBooth uses ncspot's desktop OAuth credentials on iOS. Select the same
+// desktop protocol profile for AP, client-token, Login5, and HTTP requests;
+// mixing desktop OAuth with the iOS client-token profile fails Login5.
+#[cfg(target_os = "ios")]
+pub const OS: &str = "linux";
+#[cfg(not(target_os = "ios"))]
 pub const OS: &str = std::env::consts::OS;
 
 // valid versions for some os:
