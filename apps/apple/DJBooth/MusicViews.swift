@@ -268,6 +268,8 @@ struct TrackRow: View {
     @Bindable var model: BoothModel
     var collection: Collection? = nil
     var sharedPlaylist = false
+    var contributor: CrewMember? = nil
+    var contributorItemID: String? = nil
     var removeSharedTrack: (() -> Void)? = nil
     var preservingQueue = false
     var queuePosition: Int? = nil
@@ -394,10 +396,10 @@ struct TrackRow: View {
                 }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
                     .accessibilityIdentifier("track.waveform.\(track.id)")
                 mobileTrackTitle(activation: activation, selected: selected)
-                if !typeSize.isAccessibilitySize { mobileTrackMetadata }
+                if !typeSize.isAccessibilitySize { mobileTrackDetails }
             }
             if typeSize.isAccessibilitySize {
-                mobileTrackMetadata.frame(maxWidth: .infinity, alignment: .trailing)
+                mobileTrackDetails.frame(maxWidth: .infinity, alignment: .trailing)
             }
         }.padding(.horizontal, 4).padding(.vertical, 7)
             .background(selected ? BoothStyle.accent.opacity(contrast == .increased ? 0.24 : 0.12) : .clear)
@@ -427,6 +429,14 @@ struct TrackRow: View {
             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
         }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
             .accessibilityValue("\(track.artist ?? "Unknown artist"), \(selected ? "Current track, " : "")\(model.offlineIDs.contains(track.id) ? "Available offline" : "Not on this device")")
+    }
+    private var mobileTrackDetails: some View {
+        HStack(spacing: 6) {
+            #if os(iOS)
+            if let contributorItemID { CrewContributorBadge(member: contributor, itemID: contributorItemID) }
+            #endif
+            mobileTrackMetadata
+        }
     }
     private var mobileTrackMetadata: some View {
         let color = model.annotation(for: track).color

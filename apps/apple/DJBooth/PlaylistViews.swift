@@ -777,7 +777,7 @@ private struct CrewTrackRow: View {
         HStack(spacing: 6) {
             if let track {
                 VStack(alignment: .leading, spacing: 2) {
-                    TrackRow(track: track, model: model, sharedPlaylist: true, removeSharedTrack: canEdit ? {
+                    TrackRow(track: track, model: model, sharedPlaylist: true, contributor: member, contributorItemID: item.id, removeSharedTrack: canEdit ? {
                         Task { do { try await model.removeFromCrew(crewID: crewID, crateID: item.crateID, itemID: item.id) }
                                catch { model.crewError = error.localizedDescription } }
                     } : nil)
@@ -789,13 +789,13 @@ private struct CrewTrackRow: View {
                     Text(item.artist ?? "Unknown artist").font(.caption).foregroundStyle(.secondary)
                     Label("Audio not shared yet", systemImage: "icloud.slash").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading)
+                CrewContributorBadge(member: member, itemID: item.id)
             }
-            CrewContributorBadge(member: member, itemID: item.id)
         }
     }
 }
 
-private struct CrewContributorBadge: View {
+struct CrewContributorBadge: View {
     let member: CrewMember?
     let itemID: String
     @State private var showingContributor = false

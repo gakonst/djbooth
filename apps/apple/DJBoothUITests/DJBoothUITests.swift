@@ -26,6 +26,9 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(app.buttons["track.waveform.crew:item-alex"].exists)
         XCTAssertEqual(app.staticTexts["track.bpm.crew:item-alex"].label, "100.0")
         XCTAssertEqual(app.staticTexts["track.key.crew:item-alex"].label, "3B")
+        let row = app.otherElements["track.row.crew:item-alex"]
+        XCTAssertTrue(row.buttons["crew.contributor.item-alex"].exists)
+        XCTAssertLessThanOrEqual(alex.frame.maxX, app.staticTexts["track.bpm.crew:item-alex"].frame.minX)
         app.buttons["track.waveform.crew:item-alex"].tap()
         capture(app, "Shared playlist contributor initials")
         alex.tap()
@@ -41,6 +44,11 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(contributorName.waitForExistence(timeout: 5))
         XCTAssertEqual(contributorName.label, "Unknown contributor")
         XCTAssertTrue(app.staticTexts["Member details are unavailable."].exists)
+        app.terminate()
+        app.launch()
+        let restored = app.buttons["nowPlaying.queue.track.crew:item-alex"]
+        XCTAssertTrue(restored.waitForExistence(timeout: 15), "Shared playback queue survives an app restart")
+        XCTAssertEqual(app.descendants(matching: .any)["nowPlaying.title"].firstMatch.label, "A Walk")
     }
 
     func testSharedFolderInviteSharesLinkAndQRCode() throws {

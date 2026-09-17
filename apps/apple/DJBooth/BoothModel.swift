@@ -385,6 +385,11 @@ private struct BoothLaunchConfiguration: Sendable {
         }
         tracksByID = index
     }
+    private var playbackTracks: [Track] {
+        let personalIDs = Set(tracks.map(\.id))
+        return tracks + tracksByID.values.filter { !personalIDs.contains($0.id) }.sorted { $0.id < $1.id }
+    }
+    private var crewAudioCache: Task<Void, Never>?
     private var crewLoadRequests: [String: UUID] = [:]
     var crewsLoading = false
     var crewError: String?
@@ -563,14 +568,14 @@ private struct BoothLaunchConfiguration: Sendable {
         do {
             let detail = try await cloud.crewCrate(crewID: crewID, crateID: crateID)
             guard generation == connectionGeneration, crewLoadRequests[crateID] == request else { return }
-            crewCrates[crateID] = detail; crewError = nil; persistCrewCache()
+            crewCrates[crateID] = detail; crewError = nil; persistCrewCache(); cacheSharedAudio()
         } catch { if generation == connectionGeneration, crewLoadRequests[crateID] == request, !(error is CancellationError) { crewError = error.localizedDescription } }
     }
     func addToCrew(_ track: Track, crewID: String, crateID: String) async throws {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         guard track.mediaHash != nil else { throw ClientError.http(409, "Finish uploading this track to your cloud library before sharing it.") }
         crewCrates[crateID] = try await cloud.addCrewTrack(crewID: crewID, crateID: crateID, track: track)
-        persistCrewCache()
+        persistCrewCache(); cacheSharedAudio()
         await loadCrew(crewID)
     }
     func removeFromCrew(crewID: String, crateID: String, itemID: String) async throws {
@@ -1092,11 +1097,14 @@ private struct BoothLaunchConfiguration: Sendable {
         let availableTracks = snapshot.tracks.filter { sourceIsAvailable($0.id) } + musicCatalog.tracks
         let availableCollections = snapshot.collections.filter { sourceIsAvailable($0.id) } + musicCatalog.collections(jobs: importJobs, library: snapshot.collections)
         if tracks != availableTracks { tracks = availableTracks }
+        else { rebuildTrackIndex() } // A crew-only account can launch with no personal rows.
         if collections != availableCollections { collections = availableCollections }
         if favorites != snapshot.favorites { favorites = snapshot.favorites }
         if annotations != snapshot.annotations { annotations = snapshot.annotations }
-        let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }
+        let sharedOffline = offlineIDs.filter { $0.hasPrefix("crew:") && tracksByID[$0] != nil }
+        let availableOffline = snapshot.offlineIDs.filter { !$0.hasPrefix("usb:") }.union(sharedOffline)
         if offlineIDs != availableOffline { offlineIDs = availableOffline }
+        cacheSharedAudio()
         prunePlaylistRemovalHistory()
         try reloadSyncState()
         if playbackSessionReady { reconcilePlaybackSession() }
@@ -1570,7 +1578,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func persistPlaybackSession(force: Bool = true) {
         guard playbackSessionReady, force || Date().timeIntervalSince(lastSessionSave) >= 10 else { return }
         // An empty pre-sync launch must not erase a prior session before its library arrives.
-        guard !tracks.isEmpty else { return }
+        guard !tracksByID.isEmpty else { return }
         playbackPreferences?.save(currentPlaybackSession())
         lastSessionSave = Date()
     }
@@ -1584,7 +1592,7 @@ private struct BoothLaunchConfiguration: Sendable {
         let previous = playbackPreferences?.load()
         restoredSavedPlaybackSession = previous != nil
         let saved = previous ?? PlaybackSession()
-        applyPlaybackSession(saved.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] }), replacingItem: true)
+        applyPlaybackSession(saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] }), replacingItem: true)
         playbackSessionReady = true
         persistPlaybackSession()
     }
@@ -1596,7 +1604,7 @@ private struct BoothLaunchConfiguration: Sendable {
             saved.selectedCollection = selectedCollection; saved.navigation = currentPlaybackSession().navigation
             saved.filter = filter; saved.query = query
         }
-        let resolved = saved.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
+        let resolved = saved.resolved(tracks: playbackTracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
         playbackSessionReady = false
         applyPlaybackSession(resolved, replacingItem: player.track?.id != resolved.trackID)
         playbackSessionReady = true
@@ -1880,7 +1888,7 @@ private struct BoothLaunchConfiguration: Sendable {
             }
             var visited = Set<String>()
             while !Task.isCancelled, self?.connectionGeneration == generation {
-                guard let track = self?.tracks.first(where: {
+                guard let track = self?.tracksByID.values.first(where: {
                     !visited.contains($0.id) && self?.offlineIDs.contains($0.id) == true &&
                     $0.analysis != nil && $0.analysis?.mediaHash == $0.mediaHash
                 }), let analysis = track.analysis else { return }
@@ -1898,12 +1906,40 @@ private struct BoothLaunchConfiguration: Sendable {
             }
         }
     }
+    /// Shared playlist metadata is already persisted in the account's crew cache.
+    /// Warm the same immutable audio cache used by personal tracks, without delaying playback.
+    private func cacheSharedAudio() {
+        guard !demo, cloud != nil, crewAudioCache == nil else { return }
+        let generation = connectionGeneration
+        crewAudioCache = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == connectionGeneration { crewAudioCache = nil } }
+            var visited = Set<String>()
+            while !Task.isCancelled, generation == connectionGeneration {
+                guard let track = crewCrates.values.lazy.flatMap({ $0.items }).compactMap({ self.localTrack(for: $0) })
+                    .first(where: { $0.mediaHash != nil && !visited.contains($0.id) }) else { return }
+                visited.insert(track.id)
+                do { _ = try await offlineAudio(track) }
+                catch {
+                    if error is CancellationError { return }
+                    // A failed or interrupted download retries on the next playlist refresh.
+                    #if os(iOS)
+                    AppDiagnostics.shared.event("crew_audio_cache_failed", ["track": track.id, "error": error.localizedDescription])
+                    #endif
+                }
+            }
+        }
+    }
     private func offlineAudio(_ track: Track) async throws -> URL {
         let generation = connectionGeneration
-        if let hash = track.mediaHash, let file = await audio.existing(hash: hash) { downloadOfflineCDJAnalysis(); return file }
+        if let hash = track.mediaHash, let file = await audio.existing(hash: hash) {
+            guard generation == connectionGeneration else { throw CancellationError() }
+            offlineIDs.insert(track.id); downloadOfflineCDJAnalysis(); return file
+        }
         guard generation == connectionGeneration else { throw CancellationError() }
+        let downloadKey = track.mediaHash ?? track.id
         let download: Task<(URL, String), Error>
-        if let existing = audioDownloads[track.id] { download = existing }
+        if let existing = audioDownloads[downloadKey] { download = existing }
         else {
             let usbLocation = try store.usbFile(track.id), usbAccess = usbDevice
             let cloud = cloud
@@ -1926,9 +1962,10 @@ private struct BoothLaunchConfiguration: Sendable {
                     return try await audio.download(URLRequest(url: workstation.endpoint.path("api", "audio", localID)))
                 } else { throw ClientError.http(404, "Download this recording on your Mac first") }
             }
-            audioDownloads[track.id] = download; downloading.insert(track.id)
+            audioDownloads[downloadKey] = download
         }
-        defer { if generation == connectionGeneration { audioDownloads.removeValue(forKey: track.id); downloading.remove(track.id) } }
+        downloading.insert(track.id)
+        defer { if generation == connectionGeneration { audioDownloads.removeValue(forKey: downloadKey); downloading.remove(track.id) } }
         let result = try await download.value
         guard generation == connectionGeneration else { throw CancellationError() }
         if var updated = try store.track(id: track.id), updated.mediaHash != result.1 {
@@ -2015,6 +2052,7 @@ private struct BoothLaunchConfiguration: Sendable {
         crews = []; crewDetails = [:]; crewCrates = [:]; crewError = nil
         selectedCrewID = nil; selectedCrewCrateID = nil
         UserDefaults.standard.removeObject(forKey: "cloudURL")
+        crewAudioCache?.cancel(); crewAudioCache = nil
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
@@ -2084,6 +2122,7 @@ private struct BoothLaunchConfiguration: Sendable {
         offlineCollectionID = UserDefaults.standard.string(forKey: "\(offlineKey).collection")
         offlineCollectionSelected = false
         #endif
+        crewAudioCache?.cancel(); crewAudioCache = nil
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
         audioDownloads.removeAll(); downloading.removeAll()
