@@ -12,11 +12,16 @@ struct MobileLibraryNavigation: View {
         let folders = (0...folder.count).map { LibraryDestination.folder(Array(folder.prefix($0))) }
         let selected = model.showPlaylistBrowser ? nil : model.collections.first { $0.id == model.selectedCollection }
         let browsing = model.browseMode != .playlists && selected == nil && model.pendingQuickAddTrackID == nil
-        let pages: [LibraryDestination] = browsing
+        let libraryPages: [LibraryDestination] = browsing
             ? [.browse(model.browseMode)] + (model.browseGroup.map { [.group(model.browseMode, $0)] } ?? [])
             : folders + (selected.map { [.collection($0.id)] } ?? [])
+        let pages: [LibraryDestination] = model.selectedCrewID.map { crewID in
+            [.folder([]), .crewFolder(crewID)] + (model.selectedCrewCrateID.map { [.crewPlaylist(crewID, $0)] } ?? [])
+        } ?? libraryPages
         NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion)
-            .sheet(isPresented: $model.showCrews, onDismiss: { model.crewTrackToAdd = nil }) { CrewListView(model: model) }
+            .alert("Shared folder unavailable", isPresented: Binding(get: { model.crewError != nil }, set: { if !$0 { model.crewError = nil } })) {
+                Button("OK") { model.crewError = nil }
+            } message: { Text(model.crewError ?? "") }
     }
 }
 
@@ -34,9 +39,6 @@ private struct LibrarySidebar: View {
                     }.accessibilityIdentifier("library.drawer.\(mode)")
                         .accessibilityValue(model.browseMode == mode ? "Selected" : "")
                 }
-                Button { guard !suppressSelection else { return }; close(); model.showCrews = true } label: {
-                    row("Crews", symbol: "person.3", count: model.crews.count)
-                }.accessibilityIdentifier("library.drawer.crews")
                 Button { guard !suppressSelection else { return }; close(); model.showImport = true } label: {
                     row("Download", symbol: "arrow.down.circle", count: model.importJobs.filter(\.isActive).count)
                 }.accessibilityIdentifier("library.drawer.download")
@@ -92,6 +94,8 @@ private enum LibraryDestination: Hashable {
     case collection(String)
     case browse(LibraryBrowseMode)
     case group(LibraryBrowseMode, String)
+    case crewFolder(String)
+    case crewPlaylist(String, String)
 }
 
 private struct LibraryPage: View {
@@ -102,6 +106,8 @@ private struct LibraryPage: View {
             switch destination {
             case .folder(let path): PlaylistBrowserView(model: model, folderPath: path)
             case .collection(let id): MobileTrackList(model: model, collectionID: id)
+            case .crewFolder(let id): CrewFolderView(model: model, crewID: id)
+            case .crewPlaylist(let crewID, let crateID): CrewPlaylistView(model: model, crewID: crewID, crateID: crateID)
             case .browse(let mode):
                 if mode == .tracks { MobileTrackList(model: model, collectionID: nil) }
                 else { MobileGroupBrowser(model: model, mode: mode) }
@@ -123,13 +129,15 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         case .browse(let mode): title = mode.rawValue
         case .group(_, let name): title = name
         case .collection: break
+        case .crewFolder(let id): title = model.crews.first { $0.id == id }?.name ?? "Shared folder"
+        case .crewPlaylist(let crewID, let crateID): title = model.crewDetails[crewID]?.crates.first { $0.id == crateID }?.name ?? "Playlist"
         }
         navigationItem.largeTitleDisplayMode = .never
         let hasDrawer: Bool
         switch destination {
         case .folder(let path): hasDrawer = path.isEmpty
         case .browse: hasDrawer = true
-        case .collection, .group: hasDrawer = false
+        case .collection, .group, .crewFolder, .crewPlaylist: hasDrawer = false
         }
         if hasDrawer {
             let button = UIBarButtonItem(image: UIImage(systemName: "sidebar.left"),
@@ -314,6 +322,7 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
                 case .browse: hidden = false
                 case .folder(let path): hidden = !path.isEmpty || model.pendingQuickAddTrackID != nil
                 case .collection, .group: hidden = true
+                case .crewFolder, .crewPlaylist: hidden = false
                 }
                 navigationController.setNavigationBarHidden(hidden, animated: animated)
 
@@ -333,6 +342,8 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
                 case .browse(let mode): model.browse(mode)
                 case .group(let mode, let name): model.browse(mode, group: name)
                 case .folder(let path): model.openPlaylistFolder(path)
+                case .crewFolder(let id): model.openCrewFolder(id)
+                case .crewPlaylist(let crewID, let crateID): model.openCrewPlaylist(crewID: crewID, crateID: crateID)
                 case .collection(let id):
                     if let collection = model.collections.first(where: { $0.id == id }) { model.openCollection(collection) }
                 }

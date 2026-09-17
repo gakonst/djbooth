@@ -315,8 +315,8 @@ private struct BoothLaunchConfiguration: Sendable {
     var crewCrates: [String: CrewCrateDetail] = [:]
     var crewsLoading = false
     var crewError: String?
-    var showCrews = false
-    var crewTrackToAdd: Track?
+    var selectedCrewID: String?
+    var selectedCrewCrateID: String?
     private var refreshingImports = false
     var canImportToCloud: Bool { cloud != nil && !demo }
     private var pendingImportKey: String { "pendingImport:" + cloudStorageScope }
@@ -359,20 +359,22 @@ private struct BoothLaunchConfiguration: Sendable {
             if generation == connectionGeneration, !(error is CancellationError) { crewError = error.localizedDescription }
         }
     }
-    func createCrew(_ name: String) async throws {
+    func createCrew(_ name: String, displayName: String) async throws -> String {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
-        let crew = try await cloud.createCrew(name: name)
+        let crew = try await cloud.createCrew(name: name, displayName: displayName)
         crews.removeAll { $0.id == crew.id }; crews.insert(crew, at: 0)
         crewDetails[crew.id] = try await cloud.crew(crew.id)
         persistCrewCache()
+        return crew.id
     }
-    func acceptCrewInvite(_ value: String, displayName: String = "DJ") async throws {
+    func acceptCrewInvite(_ value: String, displayName: String = "DJ") async throws -> String {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         let token = value.split(separator: "/").last.map(String.init) ?? value
         let detail = try await cloud.acceptCrewInvite(token: token.trimmingCharacters(in: .whitespacesAndNewlines), displayName: displayName)
         crewDetails[detail.crew.id] = detail
         persistCrewCache()
         await refreshCrews()
+        return detail.crew.id
     }
     func loadCrew(_ id: String) async {
         guard let cloud else { return }
@@ -417,13 +419,19 @@ private struct BoothLaunchConfiguration: Sendable {
         tracksByID[item.localTrackID ?? item.recordingID]
             ?? tracks.first { item.assetHash != nil && $0.mediaHash == item.assetHash }
     }
-    func beginCrewAdd(_ track: Track) {
-        crewTrackToAdd = track; showCrews = true
+    func openCrewFolder(_ crewID: String) {
+        openPlaylistFolder([])
+        selectedCrewID = crewID
+        selectedCrewCrateID = nil
+    }
+    func openCrewPlaylist(crewID: String, crateID: String) {
+        openCrewFolder(crewID)
+        selectedCrewCrateID = crateID
     }
     func addPendingTrack(crewID: String, crateID: String) async throws {
-        guard let track = crewTrackToAdd else { return }
+        guard let trackID = pendingQuickAddTrackID, let track = tracksByID[trackID] else { return }
         try await addToCrew(track, crewID: crewID, crateID: crateID)
-        crewTrackToAdd = nil; showCrews = false
+        finishQuickAdd(preferredID: nil)
     }
     private func persistCrewCache() {
         try? store.saveCrewCache(CrewCache(crews: crews, details: crewDetails, crates: crewCrates))
@@ -647,6 +655,32 @@ private struct BoothLaunchConfiguration: Sendable {
             }
             #endif
         }
+        #if DEBUG
+        if uiTestID != nil, arguments.contains("--ui-test-crews") {
+            let role = arguments.contains("--ui-test-crew-viewer") ? "viewer" : "owner"
+            let contributors = arguments.contains("--ui-test-crew-contributors")
+            let items = contributors ? """
+            [{"id":"item-georgios","crateID":"crate-demo","recordingID":"demo-5","title":"A Walk","artist":"Tycho",
+              "sortKey":1024,"addedBy":"georgios","createdAt":"now","updatedAt":"now"},
+             {"id":"item-alex","crateID":"crate-demo","recordingID":"missing-edit","title":"Unreleased edit","artist":"Alex Rivera",
+              "sortKey":2048,"addedBy":"alex","createdAt":"now","updatedAt":"now"},
+             {"id":"item-unknown","crateID":"crate-demo","recordingID":"missing-recording","title":"Late night find",
+              "sortKey":3072,"addedBy":"unavailable-account","createdAt":"now","updatedAt":"now"}]
+            """ : "[]"
+            let itemCount = contributors ? 3 : 0
+            let fixture = """
+            {"crews":[{"id":"crew-demo","name":"No Static","role":"\(role)","memberCount":2,"crateCount":1}],
+             "details":{"crew-demo":{"crew":{"id":"crew-demo","name":"No Static","role":"\(role)"},
+               "members":[{"accountID":"georgios","displayName":"\(contributors ? "Georgios Konstantopoulos" : "Georgios")","role":"owner","joinedAt":"now"},
+                          {"accountID":"alex","displayName":"\(contributors ? "Alex Rivera" : "Alex")","role":"dj","joinedAt":"now"}],
+               "crates":[{"id":"crate-demo","crewID":"crew-demo","name":"Friday Warmup","itemCount":\(itemCount)}]}},
+             "crates":{"crate-demo":{"crate":{"id":"crate-demo","crewID":"crew-demo","name":"Friday Warmup","itemCount":\(itemCount)},"items":\(items)}}}
+            """
+            let cache = try JSONDecoder().decode(CrewCache.self, from: Data(fixture.utf8))
+            crews = cache.crews; crewDetails = cache.details; crewCrates = cache.crates
+            persistCrewCache()
+        }
+        #endif
         usbDevice = try store.usbDevice()
         if snapshot.revision == store.revision {
             try applyLibrarySnapshot(snapshot, metadataOnly: true)
@@ -1000,6 +1034,7 @@ private struct BoothLaunchConfiguration: Sendable {
         playbackSessionReady = ready; persistPlaybackSession()
     }
     func browse(_ mode: LibraryBrowseMode, group: String? = nil) {
+        selectedCrewID = nil; selectedCrewCrateID = nil
         changeNavigation {
             browseMode = mode; browseGroup = group
             trackSort = mode == .playlists ? "default" : "title"; trackSortAscending = true
@@ -1008,13 +1043,16 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func showLibrary(filter: String = "All music") {
+        selectedCrewID = nil; selectedCrewCrateID = nil
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation { showPlaylistBrowser = false; selectedCollection = nil; self.filter = filter; query = "" }
     }
     func openPlaylistBrowser() {
+        selectedCrewID = nil; selectedCrewCrateID = nil
         changeNavigation { browseMode = .playlists; browseGroup = nil; showPlaylistBrowser = true; selectedCollection = nil; query = "" }
     }
     func openPlaylistFolder(_ path: [String]) {
+        selectedCrewID = nil; selectedCrewCrateID = nil
         changeNavigation {
             browseMode = .playlists; browseGroup = nil
             playlistFolderPath = path; showPlaylistBrowser = true; selectedCollection = nil; query = ""
@@ -1033,6 +1071,7 @@ private struct BoothLaunchConfiguration: Sendable {
         changeNavigation {
             browseMode = .playlists; browseGroup = nil
             preferredCollectionID = current.id; selectedCollection = current.id
+            selectedCrewID = nil; selectedCrewCrateID = nil
             // A pinned playlist may live elsewhere: Back returns to the folder
             // the user was browsing, including an explicitly selected root.
             if !showPlaylistBrowser { playlistFolderPath = current.folderPath ?? [] }
@@ -1046,6 +1085,7 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func cancelQuickAdd() { finishQuickAdd(preferredID: nil) }
     private func finishQuickAdd(preferredID: String?) {
+        selectedCrewID = nil; selectedCrewCrateID = nil
         let previous = quickAddReturnSession?.resolved(tracks: tracks, collections: collections)
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation {
@@ -1065,7 +1105,7 @@ private struct BoothLaunchConfiguration: Sendable {
         guard tracks.contains(where: { $0.id == track.id }) else { return }
         quickAddReturnSession = currentPlaybackSession(); pendingQuickAddTrackID = track.id
         openPlaylistBrowser()
-        if collections.isEmpty { showNewCollection = true }
+        if collections.isEmpty && crews.isEmpty { showNewCollection = true }
     }
     func createCollection(_ name: String) {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -1539,7 +1579,8 @@ private struct BoothLaunchConfiguration: Sendable {
         clearAgent()
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
         cloud = nil; cloudAccountID = nil; cloudURL = ""
-        crews = []; crewDetails = [:]; crewCrates = [:]; crewError = nil; showCrews = false; crewTrackToAdd = nil
+        crews = []; crewDetails = [:]; crewCrates = [:]; crewError = nil
+        selectedCrewID = nil; selectedCrewCrateID = nil
         UserDefaults.standard.removeObject(forKey: "cloudURL")
         cdjDownloads?.cancel(); cdjDownloads = nil; cdjDownloadStatus = nil
         for task in audioDownloads.values { task.cancel() }
@@ -1614,6 +1655,7 @@ private struct BoothLaunchConfiguration: Sendable {
         store = newStore
         let crewCache = try store.crewCache()
         crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates; crewError = nil
+        selectedCrewID = nil; selectedCrewCrateID = nil
         usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
         try await reload()
         restorePlaybackSession()
