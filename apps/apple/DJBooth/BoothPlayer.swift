@@ -12,8 +12,11 @@ import DJBoothKit
     private(set) var seekRevision: UInt64 = 0
     private(set) var scrubPosition: Double?
     var playbackRequested: Bool { wantsToPlay }
-    var transportPlaying: Bool { scrubSession == nil ? playing : wantsToPlay }
+    var transportPlaying: Bool { scrubSession == nil && streamControl == nil ? playing : wantsToPlay }
     var queueIndex = 0
+    /// Navigation intent while a remote renderer is still selecting a track.
+    /// The actual queue index and waveform stay attached to its latest report.
+    var pendingStreamQueueIndex: Int?
     private var cloudPlayback: CloudPlayback?
     private var usbPlaybackAccess: USBPlaybackAccess?
     private(set) var timing = PlaybackTiming()
@@ -24,14 +27,43 @@ import DJBoothKit
     var onPauseRequested: (() -> Void)?
     var onStateChange: ((Bool) -> Void)?
     private var streamControl: ((String, Double) -> Void)?
-    func attachStream(control: @escaping (String, Double) -> Void) {
-        streamControl = control; preparingItem = false; pendingSeek = nil; wantsToPlay = true; updateNowPlaying()
+    private var streamClock: PlaybackMediaClock?
+    private var streamClockTrackID: String?
+    private var streamClockQueueIndex: Int?
+    private struct PublishedMetadata: Equatable {
+        let trackID, title: String
+        let artist: String?
+        let duration: Double
+        let playing: Bool
     }
-    func updateStream(playing: Bool, elapsed: Double, error: String?) {
+    private var publishedMetadata: PublishedMetadata?
+    private var publishedTiming: PlaybackTiming?
+    func attachStream(playing requestedPlaying: Bool = true, control: @escaping (String, Double) -> Void) {
+        pendingStreamQueueIndex = nil
+        streamClock = nil; streamClockTrackID = track?.id; streamClockQueueIndex = queueIndex
+        streamControl = control; preparingItem = false; pendingSeek = nil; wantsToPlay = requestedPlaying; updateNowPlaying()
+    }
+    func updateStream(playing: Bool, elapsed: Double, error: String?, positionResolution: Double = 0,
+                      requestedPlaying: Bool? = nil) {
         guard streamControl != nil else { return }
-        self.playing = scrubSession == nil && playing; if scrubSession == nil { self.elapsed = elapsed }; self.error = error
+        let sameItem = streamClockTrackID == track?.id && streamClockQueueIndex == queueIndex
+        if !sameItem, scrubSession != nil {
+            // A speaker can advance independently while a finger is held. Drop
+            // that old item's scrub without restoring its origin on the new
+            // item; later gesture cancellation/release must become a no-op.
+            scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
+        }
+        self.playing = scrubSession == nil && playing
+        if scrubSession == nil {
+            let now = ProcessInfo.processInfo.systemUptime
+            let clock = PlaybackMediaClock.remoteReport(elapsed: elapsed, duration: duration, playing: playing,
+                resolution: positionResolution, previous: sameItem ? streamClock : nil, at: now)
+            streamClock = clock; streamClockTrackID = track?.id; streamClockQueueIndex = queueIndex
+            self.elapsed = clock.position(at: now); wantsToPlay = requestedPlaying ?? playing
+        }
+        self.error = error
         PerformanceProbe.playbackState(playing: self.playing, trackID: track?.id)
-        updateNowPlaying(); onStateChange?(false)
+        updateNowPlaying(coalescingRemoteTick: true); onStateChange?(false)
     }
     var hasPreparedItem: Bool {
         if streamControl != nil { return true }
@@ -120,6 +152,8 @@ import DJBoothKit
         PerformanceProbe.event("player_prepare", trackID: track.id)
         seekRevision &+= 1
         streamControl?("stop", 0); streamControl = nil
+        streamClock = nil
+        pendingStreamQueueIndex = nil
         cancelStartingPlayback()
         let generation = UUID(); playbackGeneration = generation
         wantsToPlay = autoplay
@@ -343,6 +377,10 @@ import DJBoothKit
     }
     func pause() {
         PerformanceProbe.event("player_pause", trackID: track?.id)
+        if streamControl != nil {
+            let held = mediaClock.paused()
+            elapsed = held.position(); streamClock = held
+        }
         streamControl?("pause", elapsed)
         cancelStartingPlayback()
         wantsToPlay = false; player.pause(); playing = false
@@ -361,6 +399,7 @@ import DJBoothKit
     @discardableResult func beginScrubbing() -> UUID? {
         guard track != nil, duration.isFinite, duration > 0, scrubSession == nil else { return nil }
         let id = UUID(), origin = mediaClock.position()
+        streamClock = nil
         scrubSession = (id, origin); scrubPosition = origin; elapsed = origin
         streamControl?("pause", elapsed)
         cancelStartingPlayback()
@@ -374,13 +413,17 @@ import DJBoothKit
         let position = max(0, min(seconds, duration))
         guard scrubPosition != position else { return }
         scrubPosition = position
-        requestSeek(position)
+        // Remote speakers cannot consume a network seek for every drag frame.
+        // Preview locally while held; send the final position on release.
+        if streamControl != nil { elapsed = position }
+        else { requestSeek(position) }
         refreshTiming()
     }
     func endScrubbing(_ id: UUID, at seconds: Double) {
         guard scrubSession?.id == id else { return }
         updateScrubbing(id, to: seconds)
         scrubSession = nil; scrubPosition = nil; seekRevision &+= 1
+        if streamControl != nil { requestSeek(seconds) }
         // A settled held seek is already at the release position. Do not issue
         // another exact seek before playing it.
         if pendingSeek == nil, !preparingItem { startPlayback() }
@@ -396,6 +439,7 @@ import DJBoothKit
     private func requestSeek(_ seconds: Double) {
         let position = max(0, duration > 0 ? min(seconds, duration) : seconds)
         elapsed = position
+        streamClock = nil
         if let streamControl { streamControl("seek", position); updateNowPlaying(); return }
         if pendingSeek != nil || hasPreparedItem {
             pendingSeek = position
@@ -404,6 +448,8 @@ import DJBoothKit
     }
     func stop() {
         streamControl?("stop", 0); streamControl = nil
+        streamClock = nil
+        pendingStreamQueueIndex = nil
         cancelStartingPlayback()
         playbackGeneration = UUID(); wantsToPlay = false; pendingSeek = nil
         inFlightSeek = nil; scrubSession = nil; scrubPosition = nil
@@ -420,16 +466,30 @@ import DJBoothKit
     }
     func advance(_ step: Int) {
         guard let track else { return }
-        guard let index = queue.indices.contains(queueIndex) && queue[queueIndex].id == track.id ? queueIndex : queue.firstIndex(where: { $0.id == track.id }) else { return }
-        if step < 0 && elapsed > 3 { seek(0); return }
+        let pending = streamControl != nil ? pendingStreamQueueIndex.flatMap { queue.indices.contains($0) ? $0 : nil } : nil
+        guard let index = pending ?? (queue.indices.contains(queueIndex) && queue[queueIndex].id == track.id ? queueIndex : queue.firstIndex(where: { $0.id == track.id })) else { return }
+        if step < 0 && elapsed > 3 && (streamControl == nil || index == queueIndex) { seek(0); return }
         let next = index + step
         guard queue.indices.contains(next) else { pause(); return }
-        queueIndex = next
+        if streamControl != nil { pendingStreamQueueIndex = next }
+        else { queueIndex = next }
         onAdvance?(queue[next])
     }
-    private func updateNowPlaying() {
+    private func updateNowPlaying(coalescingRemoteTick: Bool = false) {
         refreshTiming()
         guard let track else { return }
+        let metadata = PublishedMetadata(trackID: track.id, title: track.title, artist: track.artist,
+                                         duration: duration, playing: playing)
+        let now = ProcessInfo.processInfo.systemUptime
+        if coalescingRemoteTick, metadata == publishedMetadata, let publishedTiming,
+           now - publishedTiming.observedAt < 15, abs(publishedTiming.position(at: now) - elapsed) < 0.5 {
+            // The system advances its own clock from elapsed/rate. Re-sending
+            // the complete dictionary on every Sonos poll adds synchronous
+            // media-server work without changing the lock-screen presentation.
+            return
+        }
+        publishedMetadata = metadata
+        publishedTiming = PlaybackTiming(elapsed: elapsed, duration: duration, playing: playing, observedAt: now)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: track.title, MPMediaItemPropertyArtist: track.artist ?? "Unknown artist",
             MPMediaItemPropertyPlaybackDuration: duration, MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsed,
@@ -440,7 +500,12 @@ import DJBoothKit
         timing = PlaybackTiming(elapsed: elapsed, duration: duration, playing: playing)
         let timebase = pendingSeek == nil && scrubSession == nil && player.currentItem?.status == .readyToPlay
             ? player.currentItem?.timebase : nil
-        mediaClock = PlaybackMediaClock(timebase: timebase, elapsed: elapsed, duration: duration)
+        if streamControl != nil, scrubSession == nil, let streamClock {
+            if mediaClock != streamClock { mediaClock = streamClock }
+        } else {
+            mediaClock = PlaybackMediaClock(timebase: timebase, elapsed: elapsed, duration: duration,
+                                           timing: streamControl != nil && scrubSession == nil ? timing : nil)
+        }
     }
     private func captureCurrentTime() {
         guard pendingSeek == nil, scrubSession == nil, player.currentItem?.status == .readyToPlay else { return }
@@ -460,17 +525,22 @@ actor PlaybackAudioSession {
     private var recordingRate: Double = 0
     private var recordingChannels: AVAudioChannelCount = 0
     struct Input: Sendable { let uid, name: String }
+    /// Configure routing before opening the system picker, without taking over
+    /// another app's audio or changing an active mixer recording session.
+    func prepareRouting() throws {
+        let session = AVAudioSession.sharedInstance()
+        if recordingInput == nil && (session.category != .playback || session.mode != .default || session.routeSharingPolicy != .longFormAudio) {
+            try session.setCategory(.playback, mode: .default, policy: .longFormAudio)
+        }
+    }
     func activate() throws {
         try Task.checkCancellation()
-        let session = AVAudioSession.sharedInstance()
-        if recordingInput == nil && (session.category != .playback || session.mode != .default) {
-            try session.setCategory(.playback, mode: .default)
-        }
-        try session.setActive(true)
+        try prepareRouting()
+        try AVAudioSession.sharedInstance().setActive(true)
     }
     func prepareRecording() throws -> Input {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .measurement, policy: .default, options: [.defaultToSpeaker])
         try session.setActive(true)
         let inputs = (session.availableInputs ?? []).filter { $0.portType == .usbAudio }
         guard let usb = inputs.first(where: { $0.portName.localizedCaseInsensitiveContains("DJM-A9") }) ?? (inputs.count == 1 ? inputs.first : nil) else {
@@ -515,7 +585,7 @@ actor PlaybackAudioSession {
         let writer = recordingWriter; recordingWriter = nil
         let error = await writer?.finish()
         recordingInput = nil
-        do { try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default) }
+        do { try prepareRouting() }
         catch { return error.localizedDescription }
         return error
     }

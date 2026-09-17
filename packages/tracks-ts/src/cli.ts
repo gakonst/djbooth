@@ -23,7 +23,12 @@ import {
   MAX_VERIFICATION_CONCURRENCY,
   type TrackAcquirer,
 } from "./acquire-manifest.js";
-import { parseAgentTracklist, type AgentResolutionRequest } from "./agent-resolution.js";
+import {
+  parseAgentTracklist,
+  needs1001Research,
+  retainResolvedRecordings,
+  type AgentResolutionRequest,
+} from "./agent-resolution.js";
 import { cacheDigest, type CacheMode } from "./cache.js";
 import { TracksError, errorMessage } from "./errors.js";
 import { identify } from "./identify.js";
@@ -161,8 +166,8 @@ const identifyOptions = z.object({
     .describe("AudD long-file scan or local clip sampling"),
   preferDescription: z
     .boolean()
-    .default(true)
-    .describe("Resolve timestamped tracks from the media description first"),
+    .default(false)
+    .describe("Explicitly use publisher description before 1001Tracklists research"),
   full: z
     .boolean()
     .default(false)
@@ -1080,6 +1085,7 @@ async function runSetWorkflowCommand(
       const submitted = createManifest(
         parseAgentTracklist(context.args.source, context.options.agentResultJson),
       );
+      retainResolvedRecordings(initialState, submitted);
       submitted.artifacts.root = stateStore.artifactDirectory;
       submitted.artifacts.downloadDirectory = outputDirectory;
       await stateStore.save(submitted);
@@ -1105,6 +1111,22 @@ async function runSetWorkflowCommand(
         initialState = manifest;
       }
       sourceKind = input.provider === "spotify" ? "spotify-playlist" : "soundcloud-playlist";
+    }
+    if (
+      initialState &&
+      !context.options.wholeSet &&
+      !context.options.agentResultJson &&
+      sourceKind === "dj-set" &&
+      (context.options.provider ?? "auto") === "auto" &&
+      needs1001Research(initialState)
+    ) {
+      // Leave durable rows/media untouched until the researched replacement is submitted.
+      await identify(context.args.source, {
+        provider: "agent",
+        cacheMode: context.options.cacheMode,
+        env: { ...process.env, ...context.env },
+        signal: controller.signal,
+      });
     }
     if (!initialState && !isHostedPlaylistCandidate(context.args.source)) {
       const resolved = createManifest(
@@ -1311,7 +1333,7 @@ function isHostedPlaylistCandidate(source: string): boolean {
 export const resolveCli = Cli.create("resolve", {
   aliases: ["identify"],
   description:
-    "Resolve a set from timestamped publisher metadata or return a browser-research prompt to the calling agent, without downloading the remote set.",
+    "Resolve playlist rows or request 1001Tracklists-first set research from the calling agent, without downloading the remote set.",
   args: z.object({ source: z.string().describe("YouTube/SoundCloud URL or local audio file") }),
   options: identifyOptions.extend({
     providerPlaylistFile: z.string().optional().describe("Connected-provider playlist snapshot"),
@@ -1337,8 +1359,7 @@ export const resolveCli = Cli.create("resolve", {
   examples: [
     {
       args: { source: "https://www.youtube.com/watch?v=vtJ100Znqw0" },
-      description:
-        "Use timestamped YouTube metadata or hand browser research back to the calling agent",
+      description: "Read set metadata and hand 1001Tracklists research back to the calling agent",
     },
     {
       args: { source: "set.mp3" },
@@ -1361,6 +1382,7 @@ export const resolveCli = Cli.create("resolve", {
         const submitted = createManifest(
           parseAgentTracklist(context.args.source, context.options.agentResultJson),
         );
+        retainResolvedRecordings(await stateStore.load(), submitted);
         submitted.artifacts.root = stateStore.artifactDirectory;
         submitted.artifacts.downloadDirectory = resolve(outputDirectory);
         await stateStore.save(submitted);
@@ -1368,7 +1390,14 @@ export const resolveCli = Cli.create("resolve", {
       }
       if (!context.options.refresh) {
         const existing = await stateStore.load();
-        if (existing) return existing;
+        if (
+          existing &&
+          ((context.options.provider ?? "auto") !== "auto" ||
+            context.options.preferDescription ||
+            inferImportSourceKind(existing) !== "dj-set" ||
+            !needs1001Research(existing))
+        )
+          return existing;
       }
       let hostedManifest;
       if (context.options.providerPlaylistFile) {

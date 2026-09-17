@@ -255,6 +255,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn assigned_usb_address_selection_is_exposed_through_generated_bindings() {
+        let input = json!({"interfaces":[
+            {"name":"en0","index":1,"ip":"10.0.0.77","broadcast":"10.0.0.255","netmask":"255.255.255.0"},
+            {"name":"en5","index":42,"ip":"192.168.8.20","broadcast":"192.168.8.255","netmask":"255.255.255.0"}
+        ],"excluded_names":["en0"]});
+        let selected = function("select_djlink_interface", &input.to_string()).unwrap();
+        assert_eq!(selected["name"], "en5");
+        assert_eq!(selected["ip"], "192.168.8.20");
+        assert_eq!(selected["index"], 42);
+        assert!(
+            function(
+                "select_djlink_interface",
+                &json!({"interfaces":[],"excluded_names":["en0"]}).to_string()
+            )
+            .unwrap()
+            .is_null()
+        );
+    }
+
     #[tokio::test]
     async fn generated_calls_preserve_rust_results_errors_and_binary_payloads() {
         let folder = tempfile::tempdir().unwrap();

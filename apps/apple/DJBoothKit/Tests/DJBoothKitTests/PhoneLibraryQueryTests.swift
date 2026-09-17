@@ -57,7 +57,7 @@ import Testing
         for bad in ["wss://evil.example/tool-host", "ws://nanocodex-connect-api.gakonst.workers.dev/tool-host", "wss://user@nanocodex-connect-api.gakonst.workers.dev/tool-host"] {
             #expect(throws: ClientError.self) { try PhoneToolHost.socketRequest(URL(string: bad)!, endpoint: endpoint) }
         }
-        #expect(try PhoneToolHost.catalog().count == 2)
+        #expect(try PhoneToolHost.catalog().count == PhoneMCPServer.tools().count + 1)
         #expect(try PhoneToolHost.catalogDigest().hasPrefix("0x") == true)
     }
 }

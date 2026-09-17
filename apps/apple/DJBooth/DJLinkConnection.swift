@@ -3,7 +3,7 @@ import SwiftUI
 import DJBoothKit
 import Network
 
-struct DJLinkInterface: Decodable, Identifiable, Sendable, Equatable {
+struct DJLinkInterface: Codable, Identifiable, Sendable, Equatable {
     let name, ip, broadcast, netmask: String
     let index: UInt32
     var id: String { "\(name):\(index):\(ip):\(netmask)" }
@@ -49,10 +49,17 @@ private actor DJLinkEngine {
     private func request<T: Decodable>(_ operation: String, input: String = "{}", as type: T.Type) throws -> T {
         try DJLinkBindings.decode(operation, input: input, as: type)
     }
-    func interfaces() async throws -> [DJLinkInterface] {
+    func interfaces(excluding excludedNames: [String]) async throws -> ([DJLinkInterface], DJLinkInterface?) {
         await AppDiagnostics.shared.ready()
         if !bindingsVerified { try DJLinkBindings.verifyInventory(); bindingsVerified = true }
-        return try request("interfaces", as: [DJLinkInterface].self)
+        let available = try request("interfaces", as: [DJLinkInterface].self)
+        struct Selection: Encodable {
+            let interfaces: [DJLinkInterface]
+            let excluded_names: [String]
+        }
+        let input = try JSONEncoder().encode(Selection(interfaces: available, excluded_names: excludedNames))
+        let selected = try request("function.select_djlink_interface", input: String(decoding: input, as: UTF8.self), as: DJLinkInterface?.self)
+        return (available, selected)
     }
     private var mixerSubscription: UInt64?
     private var mixers: [String: DJLinkMixerObservation] = [:]
@@ -302,7 +309,16 @@ private actor DJLinkEngine {
     }
     var selectedPlayer: Int?
     var showingPhonePlayer = false
-    var cableDetected: Bool { lifecycle.attachment != nil }
+    var cableDetected: Bool { lifecycle.attachment != nil || !wiredNames.isEmpty || !usbWiredNames.isEmpty }
+    var waitingForWiredAddress: Bool { cableDetected && automaticInterface == nil }
+    /// Presentation only. Never suggest a Wi-Fi, Mac USB, or routed-network
+    /// address: a real deck must have answered on this selected interface.
+    var wiredSetupInterface: DJLinkInterface? {
+        guard status.running, !detectedDecks.isEmpty,
+              let interface = interfaces.first(where: { $0.id == activeInterfaceID }),
+              interface.ip.hasPrefix("169.254."), interface.netmask == "255.255.0.0" else { return nil }
+        return interface
+    }
     var selectedDeck: DJLinkDeck? {
         let selected = DJLinkDeckState.selected(in: decks.map(\.state), preferred: selectedPlayer)
         return decks.first { $0.id == selected?.player }
@@ -311,6 +327,8 @@ private actor DJLinkEngine {
     var error: String?
     var omittedTracks = 0
     private var wiredNames: Set<String> = []
+    private var wirelessNames: Set<String> = ["en0"]
+    private var automaticInterface: DJLinkInterface?
     private var usbWiredNames: Set<String> = []
     private let wiredMonitor = NWPathMonitor()
     private let usbMonitor = NWPathMonitor(requiredInterfaceType: .other)
@@ -446,7 +464,12 @@ private actor DJLinkEngine {
                 "interfaces": path.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ", ")
             ])
             Task { @MainActor [weak self] in
-                if usb { self?.usbWiredNames = names } else { self?.wiredNames = names }
+                if usb { self?.usbWiredNames = names } else {
+                    self?.wiredNames = names
+                    self?.wirelessNames = Set(path.availableInterfaces.filter {
+                        $0.type == .wifi || $0.type == .cellular
+                    }.map(\.name)).union(["en0"])
+                }
                 if let self, let model = self.monitoredModel {
                     self.nextInterfaceAt = 0
                     await self.autoConnect(model: model)
@@ -484,7 +507,7 @@ private actor DJLinkEngine {
         let run = UUID(); monitorGeneration = run
         monitoredModel = model
         let warmup = Task { [engine] in
-            try? await engine.warm(tracks: model.tracks, collections: model.collections,
+            try? await engine.warm(tracks: model.tracks, collections: model.playlistCollections,
                                    annotations: model.annotations, audio: model.audio.directory)
         }
         defer {
@@ -544,9 +567,7 @@ private actor DJLinkEngine {
             nextInterfaceAt = now + 0.125
         }
         guard generation == request, !Task.isCancelled, !busy, canRun else { return }
-        let wired = interfaces.first(where: {
-            wiredNames.contains($0.name) || usbWiredNames.contains($0.name) || ($0.name != "en0" && $0.ip.hasPrefix("169.254."))
-        })
+        let wired = automaticInterface
         let changed = lifecycle.observe(wired?.id)
         if changed {
             AppDiagnostics.shared.event("cdj_attachment_changed", ["interface": wired?.id ?? "detached"])
@@ -603,9 +624,11 @@ private actor DJLinkEngine {
     func refresh() async {
         let request = generation
         do {
-            let available = try await engine.interfaces()
+            let excluded = wirelessNames.subtracting(wiredNames.union(usbWiredNames)).sorted()
+            let (available, selected) = try await engine.interfaces(excluding: excluded)
             guard generation == request, !Task.isCancelled else { return }
             if interfaces != available { interfaces = available }
+            automaticInterface = selected
             let description = interfaces.map { "\($0.name)=\($0.ip)/\($0.netmask)" }.joined(separator: ", ")
             if description != reportedInterfaces {
                 reportedInterfaces = description
@@ -635,7 +658,7 @@ private actor DJLinkEngine {
         }
         do {
             let result = try await engine.start(interface: interface, unicastDiscovery: !broadcastEnabled,
-                                                tracks: model.tracks, collections: model.collections,
+                                                tracks: model.tracks, collections: model.playlistCollections,
                                                 annotations: model.annotations, audio: model.audio.directory)
             guard generation == request else { return }
             status = result.0; omittedTracks = result.1
@@ -710,11 +733,20 @@ struct DJLinkConnectionView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
-                        Label("Waiting for a CDJ", systemImage: "cable.connector")
-                        Text("Plug in the cable. Connection starts automatically.")
+                        Label(link.waitingForWiredAddress ? "Waiting for a wired address…" : "Waiting for a CDJ", systemImage: "cable.connector")
+                        Text(link.waitingForWiredAddress ? "iPhone is setting up the wired network. This can take about 20 seconds." : "Plug in the cable. Connection starts automatically.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if let error = link.error { Text(error).foregroundStyle(.red).accessibilityIdentifier("djlink.error") }
+                }
+                Section {
+                    NavigationLink {
+                        DJLinkWiredSetupView(link: link)
+                    } label: {
+                        Label("Connect faster next time", systemImage: "bolt.horizontal.circle")
+                    }.accessibilityIdentifier("djlink.wiredSetup.open")
+                } footer: {
+                    Text("Optional one-time iPhone Ethernet setup to skip waiting for an automatic address. Your CDJs need no changes.")
                 }
                 Section("While connected") {
                     NavigationLink("Record your set") { BoothRecordingView(model: model) }

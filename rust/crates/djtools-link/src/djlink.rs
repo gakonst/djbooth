@@ -2733,6 +2733,7 @@ impl ServerState {
             "last_a9_control_or_vu_ms":self.stagehand_last_a9_ms.load(Ordering::Relaxed),
             "rejoin_requested_ms":self.stagehand_rejoin_requested_ms.load(Ordering::Relaxed),
             "neighbours":neighbours,"devices":devices,
+            "raw_transport_capabilities":crate::network::raw_transport_capabilities(),
         })
     }
 
@@ -4223,7 +4224,7 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
 }
 
 /// Network choices for embedded clients; iOS uses getifaddrs, without subprocesses.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DjLinkInterface {
     pub name: String,
@@ -4231,6 +4232,40 @@ pub struct DjLinkInterface {
     pub ip: Ipv4Addr,
     pub broadcast: Ipv4Addr,
     pub netmask: Ipv4Addr,
+}
+
+/// Select an already-assigned address with the desktop preference policy.
+/// Embedded clients can exclude Wi-Fi/cellular interfaces without duplicating
+/// IP selection or requiring a link-local address. This never assigns an IP.
+pub fn select_djlink_interface(
+    interfaces: &[DjLinkInterface],
+    excluded_names: &[String],
+) -> Option<DjLinkInterface> {
+    let candidates = interfaces
+        .iter()
+        .filter(|interface| {
+            !excluded_names.contains(&interface.name)
+                && is_physical_interface(&interface.name)
+                && !interface.ip.is_unspecified()
+                && !interface.ip.is_loopback()
+                && !interface.ip.is_multicast()
+                && !interface.ip.is_broadcast()
+        })
+        .map(|interface| IfconfigIpv4 {
+            name: interface.name.clone(),
+            ip: interface.ip,
+            broadcast: Some(interface.broadcast),
+            netmask: Some(interface.netmask),
+            mac: None,
+            active: true,
+        })
+        .collect::<Vec<_>>();
+    let selected = preferred_interface(&candidates, true)
+        .or_else(|| preferred_interface(&candidates, false))?;
+    interfaces
+        .iter()
+        .find(|interface| interface.name == selected.name && interface.ip == selected.ip)
+        .cloned()
 }
 
 pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
@@ -5570,6 +5605,7 @@ fn spawn_unicast_discovery(
         let mut neighbours = Vec::new();
         let mut known_players = BTreeMap::new();
         let mut cursor = 0;
+        let mut swept = false;
         let mut tick = 0u64;
         let mut first_response = false;
         let mut reported_send_error = false;
@@ -5602,9 +5638,9 @@ fn spawn_unicast_discovery(
             if changed && let Err(error) = crate::discovery::save_peers(cache_path, &cached).await {
                 tracing::warn!(%error, "unicast_discovery_cache_failed");
             }
-            // Ask the kernel only every two seconds. Unlike a /16 sweep, the
-            // resolved USB neighbour is normally available as soon as IPv4 is.
-            if tick.is_multiple_of(16) {
+            // Watch the neighbour arriving just after IPv4 assignment, then
+            // reduce kernel reads once the attachment has settled.
+            if crate::discovery::neighbours_due(tick, started.elapsed()) {
                 match crate::discovery::neighbours(state.interface_name.as_deref()) {
                     Ok(peers) => neighbours = peers,
                     Err(error) if !reported_neighbour_error => {
@@ -5615,12 +5651,7 @@ fn spawn_unicast_discovery(
                 }
             }
             let mut targets = Vec::new();
-            let priority_due = if started.elapsed() < Duration::from_secs(5) {
-                tick.is_multiple_of(4)
-            } else {
-                tick.is_multiple_of(16)
-            };
-            if priority_due {
+            if crate::discovery::priority_due(tick) {
                 targets = discovery_priority_targets(
                     state.bind_ip,
                     mask,
@@ -5639,14 +5670,26 @@ fn spawn_unicast_discovery(
                     );
                 }
             }
-            // Retain the bounded fallback scan. Once connected, reduce only
-            // fallback traffic, never the priority/recovery timer.
-            if devices.is_empty() || tick.is_multiple_of(16) {
-                let end = (cursor + 16).min(addresses.len());
+            let has_deck = devices
+                .iter()
+                .any(|device| (1..=6).contains(&device.player_number));
+            let batch = crate::discovery::sweep_batch(tick, swept, has_deck);
+            if batch > 0 {
+                let end = (cursor + batch).min(addresses.len());
                 for ip in &addresses[cursor..end] {
-                    if !targets.contains(ip) {
+                    if !targets.contains(ip) && !devices.iter().any(|device| device.ip_addr == *ip)
+                    {
                         targets.push(*ip);
                     }
+                }
+                if end == addresses.len() && !swept {
+                    swept = true;
+                    tracing::info!(
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        addresses = addresses.len(),
+                        peers = devices.len(),
+                        "unicast_discovery_first_sweep_complete"
+                    );
                 }
                 cursor = if end == addresses.len() { 0 } else { end };
             }
@@ -5835,8 +5878,8 @@ async fn send_stagehand_heartbeats(state: &ServerState, sock: &UdpSocket, target
 }
 
 // Each supported device gets the shared Rust monitoring session over UDP.
-// CDJs need the join sequence as well as heartbeats to report key shift; the
-// regular Rekordbox announcement and source services continue alongside it.
+// Presence must remain isolated from the library identity: a phone has only
+// one assigned IP, whereas desktop Stagehand has its own raw-transport IP.
 fn spawn_unicast_stagehand(
     state: Arc<ServerState>,
     sock: Arc<UdpSocket>,
@@ -5901,10 +5944,23 @@ async fn run_stagehand_announce(
     const MODEL: &str = "Stagehand";
     const REJOIN_AFTER_MS: u64 = 10_000;
     const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
-    let mixer_target = state
-        .device_for_ip(*target.ip())
-        .await
-        .is_none_or(|device| is_stagehand_mixer(&device));
+    let device = state.device_for_ip(*target.ip()).await;
+    let mixer_target = device.as_ref().is_none_or(is_stagehand_mixer);
+    if !stagehand_can_claim(&state, device.as_ref()) {
+        // Advertising two identities from one IP makes CDJs repeatedly
+        // introduce the Rekordbox source again. Keep status requests, but do
+        // not replace the source with a Stagehand announcement/claim/keepalive.
+        crate::diagnostics::event(
+            "stagehand_presence_suppressed",
+            serde_json::json!({"target":target.to_string(),"reason":"shared_library_ip"}),
+        );
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            send_stagehand_heartbeats(&state, &status_sock, *target.ip()).await;
+        }
+    }
     let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
     let link_mac = match parse_mac(&state.mac_addr) {
         Ok(mac) => mac,
@@ -6019,6 +6075,11 @@ async fn run_stagehand_announce(
             debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
         }
     }
+}
+
+fn stagehand_can_claim(state: &ServerState, device: Option<&LinkDevice>) -> bool {
+    state.stagehand_ip.is_some_and(|ip| ip != state.bind_ip)
+        || device.is_some_and(is_stagehand_mixer)
 }
 
 fn stagehand_rejoin_reason(
@@ -10769,6 +10830,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_ip_deck_monitoring_never_announces_a_second_identity() {
+        let mut state = test_state();
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 0, 0, 0));
+        state.config.stagehand_monitor = true;
+        state.stagehand_ip = Some(state.bind_ip);
+        let deck = LinkDevice {
+            player_number: 1,
+            ip_addr: Ipv4Addr::LOCALHOST,
+            mac_addr: String::new(),
+            model: "CDJ-3000".into(),
+            last_seen: Instant::now(),
+        };
+        assert!(!stagehand_can_claim(&state, Some(&deck)));
+        assert!(!stagehand_can_claim(&state, None));
+        state.stagehand_ip = Some(Ipv4Addr::new(169, 254, 85, 94));
+        assert!(stagehand_can_claim(&state, Some(&deck)));
+        assert!(stagehand_can_claim(&state, None)); // desktop broadcast
+        state.stagehand_ip = Some(state.bind_ip);
+        state.record_device(deck).await;
+        let state = Arc::new(state);
+        let sender = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(target) = receiver.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let task = tokio::spawn(run_stagehand_announce(
+            state,
+            sender.clone(),
+            sender,
+            target,
+        ));
+        let mut bytes = [0; 1024];
+        // Cover the entire three-announcement/three-claim sequence and the
+        // first periodic keepalive, not just its initial announcement.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(2200), receiver.recv_from(&mut bytes))
+                .await
+                .is_err()
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
     async fn unicast_stagehand_uses_the_shared_handshake_on_kernel_udp() {
         let mut state = test_state();
         state.broadcast_ip = Ipv4Addr::BROADCAST;
@@ -10776,6 +10881,15 @@ mod tests {
         state.config.stagehand_monitor = true;
         state.config.stagehand_protocol_nonce = Some(42);
         state.stagehand_ip = Some(state.bind_ip);
+        state
+            .record_device(LinkDevice {
+                player_number: 33,
+                ip_addr: Ipv4Addr::LOCALHOST,
+                mac_addr: String::new(),
+                model: "DJM-A9".into(),
+                last_seen: Instant::now(),
+            })
+            .await;
         let state = Arc::new(state);
         let sender = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
         let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -11361,6 +11475,58 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             preferred_routed_ip(&entries),
             Some(Ipv4Addr::new(10, 0, 0, 195))
         );
+    }
+
+    #[test]
+    fn assigned_interface_selection_accepts_usb_dhcp_without_path_classification() {
+        let make = |name: &str, ip: &str| DjLinkInterface {
+            name: name.into(),
+            index: 42,
+            ip: ip.parse().unwrap(),
+            netmask: "255.255.255.0".parse().unwrap(),
+            broadcast: "192.168.8.255".parse().unwrap(),
+        };
+        let wifi = make("en0", "10.0.0.77");
+        let usb = make("en5", "192.168.8.20");
+        let excluded = ["en0".into()];
+        // NWPath can omit this USB interface entirely. Its assigned address is
+        // sufficient; waiting specifically for 169.254 would never succeed.
+        let selected = select_djlink_interface(&[wifi.clone(), usb.clone()], &excluded).unwrap();
+        assert_eq!(selected.name, usb.name);
+        assert_eq!(selected.ip, usb.ip);
+        assert_eq!(selected.index, 42);
+        assert!(select_djlink_interface(&[wifi], &excluded).is_none());
+        assert!(select_djlink_interface(&[], &excluded).is_none());
+        for (name, ip) in [
+            ("utun0", "192.168.8.1"),
+            ("en5", "0.0.0.0"),
+            ("en5", "127.0.0.1"),
+        ] {
+            assert!(select_djlink_interface(&[make(name, ip)], &excluded).is_none());
+        }
+    }
+
+    #[test]
+    fn assigned_interface_selection_matches_desktop_preference_independent_of_order() {
+        let entries = parse_ifconfig_ipv4_entries(IFCONFIG_WITH_VPN_AND_DJLINK);
+        let mut interfaces = entries
+            .iter()
+            .filter(|entry| entry.active)
+            .map(|entry| DjLinkInterface {
+                name: entry.name.clone(),
+                index: 1,
+                ip: entry.ip,
+                netmask: entry.netmask.unwrap(),
+                broadcast: entry.broadcast.unwrap_or(Ipv4Addr::BROADCAST),
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..2 {
+            assert_eq!(
+                select_djlink_interface(&interfaces, &[]).map(|entry| entry.ip),
+                preferred_link_local_ip(&entries)
+            );
+            interfaces.reverse();
+        }
     }
 
     #[test]

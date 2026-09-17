@@ -1,5 +1,6 @@
 #if os(iOS)
 import Foundation
+import DJBoothKit
 import MetricKit
 import UIKit
 
@@ -79,6 +80,17 @@ final class AppDiagnostics: NSObject, MXMetricManagerSubscriber, @unchecked Send
     }
     func ready() async {
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+    }
+    static func failureFields(_ error: Error) -> [String: String] {
+        if error is CancellationError { return ["failure": "cancelled"] }
+        if let client = error as? ClientError, case let .http(status, _) = client {
+            return ["failure": [401, 403].contains(status) ? "authorization" : status == 429 ? "rate_limit" : "http", "http_status": String(status)]
+        }
+        let value = error as NSError
+        if value.domain == NSURLErrorDomain {
+            return ["failure": value.code == NSURLErrorTimedOut ? "timeout" : "transport", "error_code": String(value.code)]
+        }
+        return ["failure": "internal"]
     }
     func event(_ name: String, _ fields: [String: String] = [:]) {
         var observed = fields

@@ -352,6 +352,26 @@ describe("buildAcquisitionPlan", () => {
     });
     expect(resumed.recordings[2]!.variants[0]!.localArtifact).toBeUndefined();
     expect(resumed.recordings[2]!.variants[0]!.sourceClip).toBeDefined();
+    const retry = await buildAcquisitionPlan(value, {
+      outputDirectory,
+      allowSourceSetClips: true,
+      sourceSetPath: sourcePath,
+      retryIndividualRecordings: true,
+    });
+    expect(retry.recordings[2]!.variants[0]!.sourceClip).toBeUndefined();
+    expect(retry.recordings[2]!.variants[0]!.localArtifact).toBeUndefined();
+    expect(retry.recordings[2]!.variants[0]!.metadata.title).not.toContain("Set Extract");
+
+    // Fresh research can replace acquisition rows; the old extract remains on disk.
+    value.entries[2]!.acquisition = { status: "pending" };
+    const researched = await buildAcquisitionPlan(value, {
+      outputDirectory,
+      allowSourceSetClips: true,
+      sourceSetPath: sourcePath,
+      retryIndividualRecordings: true,
+    });
+    expect(researched.recordings[2]!.variants[0]!.localArtifact).toBeUndefined();
+    expect(researched.recordings[2]!.variants[0]!.sourceClip).toBeUndefined();
 
     value.entries[2]!.acquisition = {
       status: "downloaded",

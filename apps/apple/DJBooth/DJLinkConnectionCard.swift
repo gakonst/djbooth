@@ -36,7 +36,7 @@ struct DJLinkConnectionCard: View {
         if link.error != nil { return "CDJ connection needs attention" }
         let count = link.status.devices?.filter { (1...6).contains($0.player) }.count ?? 0
         if count > 0 { return count == 1 ? "CDJ connected" : "\(count) decks connected" }
-        return link.status.running ? "Finding decks…" : "Cable detected"
+        return link.status.running ? "Finding decks…" : link.waitingForWiredAddress ? "Setting up wired network…" : "Cable detected"
     }
     private var detail: String {
         if !network { return model.usbDevice?.name ?? "Your USB music is available" }
@@ -44,7 +44,7 @@ struct DJLinkConnectionCard: View {
         if let devices = link.status.devices, !devices.isEmpty {
             return devices.map { "\($0.model) · Player \($0.player)" }.joined(separator: "  •  ")
         }
-        return link.status.running ? "Connecting automatically" : "Starting your CDJ connection…"
+        return link.status.running ? "Connecting automatically" : link.waitingForWiredAddress ? "iPhone is assigning an address. Tap for faster setup next time." : "Starting your CDJ connection…"
     }
 }
 

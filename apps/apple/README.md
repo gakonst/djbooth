@@ -192,14 +192,27 @@ The native Xcode build compiles `djbooth-mobile` for the selected iOS architectu
 those Rust targets with rustup first. Normal device builds retain their existing signing and
 automatically discover decks using unicast DJ Link probes on the attached IPv4 subnet.
 They use kernel UDP sockets for discovery and NFS, without the desktop BPF fallback.
-Discovery is limited to actual /16–/30 subnets, probes at most 128 addresses per second,
+Discovery is limited to actual /16–/30 subnets, with a fallback budget of 512 addresses per second,
 interleaves the phone's /24 with low host addresses across the subnet, and repeats
 while foregrounded. A random phone link-local address does not force the deck to
 wait behind the phone's entire /24.
-After a deck responds, scanning slows to fewer than eight candidates per second to keep
-the USB adapter available for browsing and NFS. Darwin sockets reserve 128 KiB of send
+The first sweep continues even after a deck or mixer responds. Subsequent fallback sweeps
+slow to eight candidates per second when a deck is present; cached and lost peers are
+retried every 250 ms independently. Darwin sockets reserve 128 KiB of send
 buffer space for full-size NFS replies; the default 9 KiB limit rejects these datagrams.
-A full /16 search can take about nine minutes; a /24 takes about two seconds per sweep.
+A first /16 sweep has about 128 seconds of scheduled probe time; a /24 fits in four
+125 ms batches. Socket backpressure can extend these times. These budgets start only
+after iOS assigns the wired IPv4 address. A measured direct CDJ USB attachment spent
+21.288 seconds waiting for that address, then started serving in 89 ms. Faster peer
+probing does not remove this earlier wait. AlphaTheta documents about 20 seconds for
+the same wired setup in [rekordbox for iOS](https://rekordbox.com/en/support/faq/ios/#faq-12293).
+The existing **CDJs → Connect faster next time** guide walks through optional
+manual Ethernet addressing in iPhone Settings. Copyable values appear only after
+a real deck responds on the selected link-local interface; Wi-Fi, a Mac USB
+connection, and routed networks never supply suggested manual addresses. The
+guide keeps its values in memory across the Settings round-trip, explains how
+to restore Automatic, and asks the user to replug to check the result. It does
+not claim to change iOS settings or verify the manual configuration itself.
 Only valid CDJ/XDJ replies appear as discovered decks. USB interface detection, automatic
 startup, deck discovery, and browsing have been observed on an iPhone 17 Pro and the
 connected deck. Reliable playback and RGB display still require a hardware retest after
@@ -294,3 +307,29 @@ MetricKit notifications. The generated 55-method/11-function inventory is checke
 runtime; binding tests compare native results, errors, subscriptions and transmitted
 bytes, and shared-server tests cover browse/Back/track changes. Physical deck behavior
 still requires a recorded hardware test; the binding inventory alone cannot prove it.
+
+### Agent app controls over reverse MCP
+
+The app owns the MCP catalog (`DJBoothKit/Resources/app-mcp.json`), JSON-RPC
+endpoint (`PhoneMCPServer`), and action dispatch (`BoothMCPActions`). Playback,
+playlist edits, Sonos, DJLink, connected music and recording tools call the same
+model/controller methods as the UI. Deck and Sonos protocols remain in Rust.
+The existing outbound authenticated phone socket carries MCP requests; the app
+opens no listening port. Cloudflare relays requests and caches the signed native
+catalog for discovery. Nanocodex's `createTools({ mcp: ... })` and hosted broker
+provide deferred `tool_search`; no bespoke discovery tool is added.
+
+Mutations require a stable UUID `requestID`. They return an account-local durable
+receipt immediately; use `operation_status` until completed/failed/interrupted.
+A matching retry returns the original receipt, and changed arguments with the
+same ID fail. An app restart never automatically replays an unfinished action.
+These receipts live in the existing account store and do not enter library sync.
+Execution requires the app awake and connected. Audio permission and account
+sign-in still use normal system UI; cloud download jobs run independently.
+
+The signed `phone-tools.json` approval catalog must match the MCP adapter exactly
+(provider, remote name, schema, parallel flag and timeout). Cloud contract tests
+compare the real SDK attachment and consent digests. Catalog changes require new
+Connect consent. The paired-device DEBUG diagnostic operation `phone.mcp` can
+exercise the same JSON-RPC handler using the existing `link --arguments-file`
+transport; it is not an agent authentication bypass in release builds.

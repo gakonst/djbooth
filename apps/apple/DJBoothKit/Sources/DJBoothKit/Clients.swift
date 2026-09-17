@@ -145,6 +145,29 @@ public struct AgentTurn: Codable, Sendable {
 }
 
 public struct CloudClient: Sendable {
+    public struct SpeakerTrack: Encodable, Sendable {
+        public let hash: String
+        public let `extension`: String
+        public init(hash: String, mediaExtension: String) { self.hash = hash; self.extension = mediaExtension }
+    }
+    public struct SpeakerSession: Decodable, Sendable {
+        public let session: String
+        public let expiresAt: Double
+        public let urls: [String: URL]
+    }
+    public func speakerSession(tracks: [SpeakerTrack]) async throws -> SpeakerSession {
+        var request = request("v1/playback", method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["tracks": tracks])
+        let (data, response) = try await session.data(for: request)
+        return try await decodeResponse(SpeakerSession.self, from: checked(data, response))
+    }
+    public func revokeSpeakerSession(_ token: String) async throws {
+        guard token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw ClientError.invalidMedia }
+        let (data, response) = try await session.data(for: request("v1/playback/\(token)", method: "DELETE"))
+        _ = try checked(data, response)
+    }
+    public func speakerMediaExists(hash: String) async throws -> Bool { try await mediaExists(hash) }
     public struct PhoneToolTicket: Decodable, Sendable {
         public let url: URL
         public let catalogDigest: String
@@ -152,6 +175,16 @@ public struct CloudClient: Sendable {
     public func phoneToolTicket() async throws -> PhoneToolTicket {
         let (data, response) = try await session.data(for: request("v1/agent/tool-host/ticket", method: "POST"))
         return try await decodeResponse(PhoneToolTicket.self, from: checked(data, response))
+    }
+    public func agentHistory(before: String? = nil) async throws -> MusicAgentHistory {
+        var req = request("v1/agent/history")
+        if let before {
+            var url = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+            url.queryItems = [URLQueryItem(name: "before", value: before)]
+            req.url = url.url
+        }
+        let (data, response) = try await session.data(for: req)
+        return try await decodeResponse(MusicAgentHistory.self, from: checked(data, response))
     }
     public func agentTurn(id: String, input: String? = nil, cancel: Bool = false) async throws -> AgentTurn {
         guard id.range(of: "^[A-Za-z0-9_-]{1,128}$", options: .regularExpression) != nil else { throw ClientError.http(400, "Invalid agent turn") }
@@ -348,9 +381,17 @@ public struct CloudClient: Sendable {
     public func submitImport(id: String, source: String) async throws -> CloudImportJob {
         try await importRequest("v1/imports", body: ["id": id, "source": source])
     }
-    public func retryImport(id: String) async throws -> CloudImportJob {
+    public func retryImport(id: String, requestID: String = UUID().uuidString, refresh: Bool = false) async throws -> CloudImportJob {
         guard UUID(uuidString: id) != nil else { throw ClientError.http(400, "Invalid import ID") }
-        return try await importRequest("v1/imports/\(id)/retry", body: [:])
+        return try await importRequest("v1/imports/\(id)/retry", body: ["requestID": requestID, "mode": refresh ? "refresh" : "failed"])
+    }
+    public func importStatus(id: String, offset: Int = 0) async throws -> String {
+        guard UUID(uuidString: id) != nil, offset >= 0, offset % 50 == 0 else { throw ClientError.http(400, "Invalid import ID or report offset") }
+        var req = request("v1/imports/\(id)")
+        var components = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "offset", value: String(offset))]; req.url = components.url
+        let (data, response) = try await session.data(for: req)
+        return String(decoding: try checked(data, response), as: UTF8.self)
     }
     private func importRequest(_ path: String, body: [String: String]) async throws -> CloudImportJob {
         var request = request(path, method: "POST")

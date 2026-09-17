@@ -80,6 +80,10 @@ public struct DJLinkLibrary: Encodable, Sendable {
             // The library can contain both durable and connected-provider copies.
             // Keep the first (canonical library) row, as with track identity above.
             guard collectionIDs.insert(collection.id).inserted else { continue }
+            let playable = collection.trackIDs.compactMap { ids[$0] }
+            // Streaming-only and not-yet-downloaded playlists have no CDJ
+            // entries. Filter before creating their ancestor folders too.
+            guard !playable.isEmpty else { continue }
             var parent: UInt32 = 0, path: [String] = []
             for name in collection.folderPath ?? [] {
                 path.append(name)
@@ -92,7 +96,7 @@ public struct DJLinkLibrary: Encodable, Sendable {
             let id = try stableID("playlist:" + collection.id)
             playlists.append(PlaylistRow(playlistId: id, name: collection.name, parentId: parent, isFolder: false,
                                          sequence: UInt32(playlists.filter { $0.parentId == parent }.count + 1),
-                                         tracks: collection.trackIDs.compactMap { ids[$0] }))
+                                         tracks: playable))
         }
         return DJLinkLibrary(tracks: rows, playlists: playlists, omittedTracks: source.count - rows.count)
     }

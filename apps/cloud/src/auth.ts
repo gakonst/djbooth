@@ -9,6 +9,7 @@ export interface Account {
   id: string;
   grantId: string;
   agentId?: string;
+  conversationId?: string;
   appToolCatalogDigest?: string;
   expiresAt: number;
   capabilities: string[];
@@ -82,6 +83,7 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
       expires_at?: number;
       capabilities?: string[];
       app_tool_catalog_digest?: string;
+      conversation_id?: string;
     };
   }>();
   const grant = wire.grant;
@@ -111,6 +113,9 @@ export async function authenticate(request: Request, env: Env): Promise<Account>
       : {}),
     expiresAt: grant.expires_at!,
     capabilities: grant.capabilities,
+    ...(typeof grant.conversation_id === "string" && /^[a-f0-9-]{36}$/.test(grant.conversation_id)
+      ? { conversationId: grant.conversation_id }
+      : {}),
     ...(music ? { musicConnectors: wire.connectors } : {}),
     ...(typeof grant.app_tool_catalog_digest === "string"
       ? { appToolCatalogDigest: grant.app_tool_catalog_digest }

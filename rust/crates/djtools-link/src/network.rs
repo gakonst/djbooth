@@ -25,6 +25,44 @@ use std::time::{Duration, Instant};
 pub(crate) const RAW_IPV4_MTU: usize = 1500;
 const RAW_UDP_QUEUE_CAPACITY: usize = 1024;
 
+/// Check the actual process permissions before proposing the desktop transport
+/// on a phone. Opening and immediately closing these descriptors sends nothing
+/// and does not change an interface or its addresses. Cache to avoid repeatedly
+/// probing sandbox-protected devices in the diagnostic heartbeat.
+pub(crate) fn raw_transport_capabilities() -> &'static serde_json::Value {
+    static CAPABILITIES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    CAPABILITIES.get_or_init(|| {
+        #[cfg(target_vendor = "apple")]
+        {
+            fn outcome<T>(result: io::Result<T>) -> serde_json::Value {
+                match result {
+                    Ok(_) => serde_json::json!({"available":true}),
+                    Err(error) => serde_json::json!({
+                        "available":false,"error":error.to_string(),"os_error":error.raw_os_error()
+                    }),
+                }
+            }
+            let mut bpf = Err(io::Error::new(io::ErrorKind::NotFound, "No BPF devices"));
+            for index in 0..256 {
+                bpf = OpenOptions::new().read(true).write(true).open(format!("/dev/bpf{index}"));
+                // Busy descriptors can have free siblings. Permission denial
+                // or an absent device is definitive for this process.
+                if !bpf.as_ref().is_err_and(|error| error.raw_os_error() == Some(libc::EBUSY)) {
+                    break;
+                }
+            }
+            serde_json::json!({
+                "bpf":outcome(bpf),
+                "raw_ipv4":outcome(Socket::new(Domain::IPV4, Type::from(libc::SOCK_RAW), Some(Protocol::UDP))),
+                "effective_uid":unsafe { libc::geteuid() },
+                "desktop_transport_compiled":cfg!(target_os = "macos"),
+            })
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        serde_json::json!({"probe_supported":false})
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RawUdpDatagram {
     pub(crate) src_mac: [u8; 6],

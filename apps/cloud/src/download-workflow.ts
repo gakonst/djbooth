@@ -1,3 +1,4 @@
+import { telemetry, failureKind, WORKFLOW_POLICY_VERSION, type EventFields } from "./telemetry.js";
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Env } from "./index.js";
@@ -22,6 +23,45 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
     const { accountId, id, source } = event.payload;
     const workflowId = event.instanceId;
     const workspace = () => this.env.PLAYLIST_CONTAINERS!.getByName(`${accountId}:${id}`);
+    const observe = async (event: string, fields: EventFields = {}) => {
+      const entry = {
+        importID: id,
+        workflowID: workflowId,
+        policyVersion: WORKFLOW_POLICY_VERSION,
+        ...fields,
+      };
+      telemetry(event, entry);
+      try {
+        await workspace().recordImportEvent(accountId, id, event, entry);
+      } catch {
+        telemetry("telemetry_storage_failed", { importID: id });
+      }
+    };
+    const measured = async <T>(
+      name: string,
+      attempt: number,
+      run: () => Promise<T>,
+    ): Promise<T> => {
+      const started = Date.now();
+      await observe("workflow_stage_started", { stage: name, attempt });
+      try {
+        const result = await run();
+        await observe("workflow_stage_completed", {
+          stage: name,
+          attempt,
+          durationMs: Date.now() - started,
+        });
+        return result;
+      } catch (error) {
+        await observe("workflow_stage_failed", {
+          stage: name,
+          attempt,
+          durationMs: Date.now() - started,
+          failure: failureKind(error),
+        });
+        throw error;
+      }
+    };
     const stage = (name: string, imported?: Receipt["result"]) =>
       step.do(
         name,
@@ -29,52 +69,53 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
           retries: { limit: 90, delay: "10 seconds", backoff: "constant" },
           timeout: "10 minutes",
         },
-        async (context) => {
-          const container = workspace();
-          const row = await this.env.LIBRARY_DB.prepare(
-            "SELECT status, workflow_id, collection_id, analysis_version FROM import_requests WHERE account_id=? AND id=?",
-          )
-            .bind(accountId, id)
-            .first<{
-              status: string;
-              workflow_id: string;
-              collection_id: string;
-              analysis_version: number;
-            }>();
-          if (!row || row.workflow_id !== workflowId || row.status === "failed")
-            throw new NonRetryableError("Download was cancelled or superseded");
-          if (
-            name === "publish" &&
-            row.status === "complete" &&
-            row.analysis_version === 1 &&
-            row.collection_id
-          )
-            return { collectionID: row.collection_id };
-          await container.enqueue(accountId, id, source);
-          // A replay attaches to an existing process. Only a failed/lost command is rerun.
-          let receipt = (await container.workflowExecute(accountId, id, workflowId, {
-            operation: "start",
-            stage: name,
-            process_id: `${name}-${context.attempt}`,
-            imported,
-          })) as Receipt;
-          const until = Date.now() + 240_000;
-          while (receipt.status === "running" && Date.now() < until) {
-            receipt = (await container.workflowExecute(accountId, id, workflowId, {
-              operation: "poll",
-              process_id: receipt.process_id,
+        async (context) =>
+          measured(name, context.attempt, async () => {
+            const container = workspace();
+            const row = await this.env.LIBRARY_DB.prepare(
+              "SELECT status, workflow_id, collection_id, analysis_version FROM import_requests WHERE account_id=? AND id=?",
+            )
+              .bind(accountId, id)
+              .first<{
+                status: string;
+                workflow_id: string;
+                collection_id: string;
+                analysis_version: number;
+              }>();
+            if (!row || row.workflow_id !== workflowId || row.status === "failed")
+              throw new NonRetryableError("Download was cancelled or superseded");
+            if (
+              name === "publish" &&
+              row.status === "complete" &&
+              row.analysis_version === 1 &&
+              row.collection_id
+            )
+              return { collectionID: row.collection_id };
+            await container.enqueue(accountId, id, source);
+            // A replay attaches to an existing process. Only a failed/lost command is rerun.
+            let receipt = (await container.workflowExecute(accountId, id, workflowId, {
+              operation: "start",
+              stage: name,
+              process_id: `${name}-${context.attempt}`,
+              imported,
             })) as Receipt;
-          }
-          if (receipt.status !== "completed") {
-            // Long commands remain alive across step retries; temporary transport loss does not cancel them.
-            throw new Error(
-              receipt.status === "failed"
-                ? (receipt.error ?? "Command failed")
-                : "Waiting for saved work",
-            );
-          }
-          return receipt.result ?? {};
-        },
+            const until = Date.now() + 240_000;
+            while (receipt.status === "running" && Date.now() < until) {
+              receipt = (await container.workflowExecute(accountId, id, workflowId, {
+                operation: "poll",
+                process_id: receipt.process_id,
+              })) as Receipt;
+            }
+            if (receipt.status !== "completed") {
+              // Long commands remain alive across step retries; temporary transport loss does not cancel them.
+              throw new Error(
+                receipt.status === "failed"
+                  ? (receipt.error ?? "Command failed")
+                  : "Waiting for saved work",
+              );
+            }
+            return receipt.result ?? {};
+          }),
       );
     try {
       await step.do(
@@ -83,18 +124,19 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
           retries: { limit: 2160, delay: "30 seconds", backoff: "constant" },
           timeout: "2 minutes",
         },
-        async () => {
-          const container = workspace();
-          const row = await this.env.LIBRARY_DB.prepare(
-            "SELECT status, workflow_id FROM import_requests WHERE account_id=? AND id=?",
-          )
-            .bind(accountId, id)
-            .first<{ status: string; workflow_id: string }>();
-          if (!row || row.workflow_id !== workflowId || row.status === "failed")
-            throw new NonRetryableError("Download was cancelled or superseded");
-          await container.enqueue(accountId, id, source);
-          await container.workflowExecute(accountId, id, workflowId, { operation: "ready" });
-        },
+        async (context) =>
+          measured("prepare-workspace", context.attempt, async () => {
+            const container = workspace();
+            const row = await this.env.LIBRARY_DB.prepare(
+              "SELECT status, workflow_id FROM import_requests WHERE account_id=? AND id=?",
+            )
+              .bind(accountId, id)
+              .first<{ status: string; workflow_id: string }>();
+            if (!row || row.workflow_id !== workflowId || row.status === "failed")
+              throw new NonRetryableError("Download was cancelled or superseded");
+            await container.enqueue(accountId, id, source);
+            await container.workflowExecute(accountId, id, workflowId, { operation: "ready" });
+          }),
       );
       await stage("resolve");
       const imported = await stage("import");
@@ -109,11 +151,13 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
           .first<{ status: string; collection_id: string }>();
         if (row?.status !== "complete" || row.collection_id !== published.collectionID)
           throw new Error("Publication is not yet confirmed");
+        await observe("workflow_completed", { status: "complete" });
         return { collectionID: row.collection_id };
       });
       return published;
     } catch (error) {
       await step.do("record-failure", async () => {
+        await observe("workflow_failed", { status: "failed", failure: failureKind(error) });
         await this.env.LIBRARY_DB.prepare(
           "UPDATE import_requests SET status='failed', message='Cloud processing could not finish after automatic retries. Saved tracks are retained.', updated_at=? WHERE account_id=? AND id=? AND workflow_id=? AND status IN ('queued','running')",
         )

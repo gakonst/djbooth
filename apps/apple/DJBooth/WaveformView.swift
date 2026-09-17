@@ -236,18 +236,31 @@ struct PlaybackOverviewBackground: View {
     let display: PlaybackDisplay
     let cache: PlaybackWaveformCache
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         let content = cache.content?.trackID == display.track?.id ? cache.content : nil
-        let elapsed = display.isDeck ? (display.deckPosition ?? 0) : player.elapsed
+        let clock = player.mediaClock
+        let heldPosition = display.isDeck ? (display.deckPosition ?? 0) : player.scrubPosition
         let duration = display.isDeck ? (display.deckDuration ?? 0) : player.duration
-        let progress = min(1, max(0, elapsed / max(1, duration)))
+        let animated = !display.isDeck && player.timing.playing && scenePhase == .active && heldPosition == nil
         let waveformOpacity = contrast == .increased ? 0.18 : 0.34
         Canvas { context, size in
             guard let content else { return }
             context.opacity = waveformOpacity
             context.draw(Image(decorative: content.raster.overview, scale: 1), in: CGRect(origin: .zero, size: size))
-            context.opacity = 1
-            context.fill(Path(CGRect(x: progress * size.width, y: 0, width: 1, height: size.height)), with: .color(.white.opacity(0.45)))
+        }.overlay {
+            // Move only the needle between speaker reports. The raster and title
+            // remain outside the frame timeline and do not need redrawing.
+            if content != nil {
+                GeometryReader { geometry in
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !animated)) { _ in
+                        let position = heldPosition ?? clock.position()
+                        let progress = min(1, max(0, position / max(1, duration)))
+                        Rectangle().fill(.white.opacity(0.45)).frame(width: 1)
+                            .offset(x: progress * geometry.size.width)
+                    }
+                }
+            }
         }.clipped().allowsHitTesting(false)
             .accessibilityElement(children: .ignore).accessibilityLabel("Full track waveform")
             .accessibilityValue("Full duration, single-sided")

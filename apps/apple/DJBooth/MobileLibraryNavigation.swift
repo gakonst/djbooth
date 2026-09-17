@@ -18,7 +18,7 @@ struct MobileLibraryNavigation: View {
         let pages: [LibraryDestination] = model.selectedCrewID.map { crewID in
             [.folder([]), .crewFolder(crewID)] + (model.selectedCrewCrateID.map { [.crewPlaylist(crewID, $0)] } ?? [])
         } ?? libraryPages
-        NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion)
+        NativeLibraryStack(model: model, destinations: pages, reduceMotion: reduceMotion, obscured: model.showAgent)
             .safeAreaInset(edge: .top, spacing: 0) { DJLinkConnectionCard(model: model) }
             .alert("Shared folder unavailable", isPresented: Binding(get: { model.crewError != nil }, set: { if !$0 { model.crewError = nil } })) {
                 Button("OK") { model.crewError = nil }
@@ -55,6 +55,9 @@ private struct LibrarySidebar: View {
                     row("Sync & settings", symbol: "gearshape")
                 }.accessibilityIdentifier("library.drawer.settings")
             }.boothLibraryCell()
+            Section {
+                SonosSidebarControl(model: model) { close(); model.showSonosSettings = true }
+            }
         }
         .buttonStyle(BoothRowButtonStyle())
         .boothLibraryList()
@@ -133,6 +136,12 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         case .crewFolder(let id): title = model.crews.first { $0.id == id }?.name ?? "Shared folder"
         case .crewPlaylist(let crewID, let crateID): title = model.crewDetails[crewID]?.crates.first { $0.id == crateID }?.name ?? "Playlist"
         }
+        let agent = UIBarButtonItem(image: UIImage(systemName: "wand.and.stars"),
+                                    primaryAction: UIAction { _ in model.showAgent = true })
+        agent.accessibilityLabel = "Your DJ Booth companion"
+        agent.accessibilityIdentifier = "library.agent"
+        agent.tintColor = UIColor(BoothStyle.accent)
+        navigationItem.rightBarButtonItem = agent
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.backButtonDisplayMode = .minimal
         let hasDrawer: Bool
@@ -233,6 +242,7 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
     let model: BoothModel
     let destinations: [LibraryDestination]
     let reduceMotion: Bool
+    let obscured: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeUIViewController(context: Context) -> UISplitViewController {
@@ -272,6 +282,10 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
         return split
     }
     func updateUIViewController(_ split: UISplitViewController, context: Context) {
+        // SwiftUI accessibilityHidden does not hide this UIKit navigation tree.
+        // Keep its controllers mounted so returning preserves the browsing stack.
+        split.view.isHidden = obscured
+        split.view.accessibilityElementsHidden = obscured
         context.coordinator.update(destinations, animated: !reduceMotion && split.view.window != nil)
     }
 

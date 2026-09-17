@@ -11,7 +11,6 @@ struct ConnectionSettings: View {
     @State private var connecting = false
     @State private var showUSBLibrary = false
     @State private var connectionError: String?
-    @State private var showAgent = false
     var body: some View {
         NavigationStack {
             Form {
@@ -51,7 +50,7 @@ struct ConnectionSettings: View {
                         ForEach(["spotify", "soundcloud"], id: \.self) { provider in
                             LabeledContent(provider == "spotify" ? "Spotify" : "SoundCloud", value: model.cloudCapabilities.contains(provider) ? "Connected" : "Not approved")
                         }
-                        Button("Open your music agent") { showAgent = true }.accessibilityIdentifier("connect.agent")
+                        Button("Open your music agent") { dismiss(); model.showAgent = true }.accessibilityIdentifier("connect.agent")
                         Button("Sign out", role: .destructive) {
                             Task { do { try await model.signOutCloud(); dismiss() } catch { model.message = error.localizedDescription } }
                         }.disabled(connecting || model.syncing).accessibilityIdentifier("connect.logout")
@@ -97,7 +96,6 @@ struct ConnectionSettings: View {
                 }
             }.formStyle(.grouped).navigationTitle("Sync & settings")
                 .toolbar { Button("Done") { dismiss() }.accessibilityIdentifier("connect.done") }
-                .sheet(isPresented: $showAgent) { MusicAgentView(model: model) }
                 .task { await model.refreshCloudAccount() }
                 .onAppear { cloudURL = model.cloudURL.isEmpty ? "https://djbooth-library.gakonst.workers.dev" : model.cloudURL; workstationURL = model.workstationURL }
         }

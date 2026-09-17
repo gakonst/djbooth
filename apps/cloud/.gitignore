@@ -1,3 +1,4 @@
 .wrangler/
 .dev.vars
 .dev.vars.*
+!test/fixtures/sonos-tail-index.m4a

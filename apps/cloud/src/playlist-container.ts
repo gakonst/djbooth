@@ -1,3 +1,10 @@
+import {
+  diagnosticEvent,
+  telemetry,
+  failureKind,
+  type EventFields,
+  type DiagnosticEvent,
+} from "./telemetry.js";
 import { Container } from "@cloudflare/containers";
 import { accountFetch, type Env } from "./index.js";
 import { snapshots } from "./snapshots.js";
@@ -23,6 +30,75 @@ export class PlaylistContainer extends Container<Env> {
   defaultPort = 8080;
   sleepAfter = "2m";
   enableInternet = true;
+
+  /** Bounded diagnostic history only; never used to drive or resume the workflow. */
+  async recordImportEvent(accountId: string, id: string, event: string, fields: EventFields = {}) {
+    try {
+      const row = await this.env.LIBRARY_DB.prepare(
+        "SELECT id FROM import_requests WHERE account_id=? AND id=?",
+      )
+        .bind(accountId, id)
+        .first();
+      if (!row) return;
+      await this.ctx.storage.transaction(async (storage) => {
+        const prior = await storage.get<{
+          accountId: string;
+          id: string;
+          events: DiagnosticEvent[];
+        }>("import-telemetry");
+        if (prior && (prior.accountId !== accountId || prior.id !== id)) return;
+        const entry = diagnosticEvent(event, { ...fields, importID: id });
+        await storage.put("import-telemetry", {
+          accountId,
+          id,
+          events: [...(prior?.events ?? []), entry].slice(-100),
+        });
+      });
+    } catch {
+      telemetry("telemetry_storage_failed", { importID: id });
+    }
+  }
+
+  async importTelemetry(accountId: string, id: string, workflowID?: string | null) {
+    const value = await this.ctx.storage.get<{
+      accountId: string;
+      id: string;
+      events: DiagnosticEvent[];
+    }>("import-telemetry");
+    if (value?.accountId !== accountId || value.id !== id) return null;
+    const events =
+      workflowID === undefined
+        ? value.events
+        : value.events.filter((event) => (event.workflowID ?? null) === workflowID);
+    return { events: events.slice(-20), retained: events.length, limit: 100 };
+  }
+
+  /** Read a cached projection of master.db, including after the container sleeps. */
+  async importReport(accountId: string, id: string, offset: number) {
+    return this.ctx.storage.transaction(async (storage) => {
+      const summary = await storage.get<{
+        accountId: string;
+        id: string;
+        total: number;
+        updatedAt: string;
+        workflowID?: string;
+        tracklist: unknown;
+        warnings: unknown;
+      }>("import-report");
+      if (!summary || summary.accountId !== accountId || summary.id !== id) return null;
+      const { accountId: _account, id: _id, ...report } = summary;
+      const tracks =
+        offset >= summary.total
+          ? []
+          : ((await storage.get<unknown[]>(`import-report:${Math.floor(offset / 50)}`)) ?? []);
+      return {
+        ...report,
+        tracks,
+        offset,
+        nextOffset: offset + 50 < summary.total ? offset + 50 : null,
+      };
+    });
+  }
 
   async enqueue(accountId: string, id: string, source: string): Promise<void> {
     await this.polling;
@@ -252,6 +328,41 @@ export class PlaylistContainer extends Container<Env> {
       if (!response.ok) throw new Error("Container status unavailable");
       const progress = await response.json<Record<string, unknown>>();
       if (!validProgress(progress)) throw new Error("Invalid container status");
+      const report = progress.report as
+        | { updatedAt?: string; tracklist?: unknown; warnings?: unknown; tracks?: unknown[] }
+        | undefined;
+      if (
+        report &&
+        typeof report.updatedAt === "string" &&
+        Array.isArray(report.tracks) &&
+        report.tracks.length <= 10000
+      ) {
+        // Cache only the read projection. master.db remains the source of truth.
+        const tracks = report.tracks;
+        try {
+          await this.ctx.storage.transaction(async (storage) => {
+            const prior = await storage.get<{ updatedAt: string }>("import-report");
+            if (prior?.updatedAt !== report.updatedAt) {
+              for (let offset = 0; offset < tracks.length; offset += 50)
+                await storage.put(
+                  `import-report:${offset / 50}`,
+                  tracks.slice(offset, offset + 50),
+                );
+              await storage.put("import-report", {
+                accountId: job.accountId,
+                id: job.id,
+                updatedAt: report.updatedAt,
+                workflowID: job.workflowId ?? null,
+                tracklist: report.tracklist ?? null,
+                warnings: report.warnings ?? [],
+                total: tracks.length,
+              });
+            }
+          });
+        } catch {
+          telemetry("import_report_cache_failed", { importID: job.id });
+        }
+      }
       if ((job.agentGrantId || job.workflowId) && progress.status === "failed") {
         // An agent-mode terminal status here means workspace initialization
         // failed; command failures are receipts owned by the running agent.
@@ -262,6 +373,27 @@ export class PlaylistContainer extends Container<Env> {
       if (job.failures) {
         job.failures = 0;
         await this.ctx.storage.put("job", job);
+      }
+      const observed = {
+        workflowID: job.workflowId,
+        stage: progress.phase,
+        status: progress.status,
+        current: progress.current,
+        total: progress.total,
+      };
+      const signature = JSON.stringify(observed);
+      if (
+        (await this.ctx.storage.get<string>("telemetry-progress").catch(() => undefined)) !==
+        signature
+      ) {
+        telemetry("import_progress", { ...observed, importID: job.id });
+        await this.recordImportEvent(job.accountId, job.id, "import_progress", observed);
+        // This cache suppresses duplicate logs only; it never controls workflow progress.
+        try {
+          await this.ctx.storage.put("telemetry-progress", signature);
+        } catch {
+          /* best effort */
+        }
       }
       const terminal = progress.status === "complete" || progress.status === "failed";
       await this.env.LIBRARY_DB.prepare(
@@ -290,7 +422,16 @@ export class PlaylistContainer extends Container<Env> {
         await this.ctx.storage.delete("job");
         this.deleteSchedules("poll");
       }
-    } catch {
+    } catch (error) {
+      const retryDelayMs = Math.min(120, 15 * 2 ** Math.min(job.failures + 1, 3)) * 1000;
+      const fields = {
+        workflowID: job.workflowId,
+        attempt: job.failures + 1,
+        failure: failureKind(error),
+        retryDelayMs,
+      };
+      telemetry("container_retry", { ...fields, importID: job.id });
+      await this.recordImportEvent(job.accountId, job.id, "container_retry", fields);
       job.failures++;
       await this.ctx.storage.put("job", job);
       // Temporary startup/status failures do not require a tap to resume.

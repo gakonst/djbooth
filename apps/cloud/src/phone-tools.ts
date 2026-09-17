@@ -6,6 +6,8 @@ import catalog from "../../apple/DJBoothKit/Sources/DJBoothKit/Resources/phone-t
 export const phoneToolCatalog = catalog;
 export const phoneTools = catalog.map((entry) => ({
   name: entry.definition.name,
+  provider: entry.provider,
+  remoteName: entry.remote_name,
   description: entry.definition.description,
   parameters: entry.definition.parameters,
   strict: entry.definition.strict,
@@ -19,3 +21,6 @@ export const phoneTools = catalog.map((entry) => ({
 export async function phoneToolDigest(): Promise<string> {
   return hostedToolCatalogDigest(catalog);
 }
+
+// The native app owns this MCP catalog. The relay caches only its signed metadata.
+export { default as appMcpTools } from "../../apple/DJBoothKit/Sources/DJBoothKit/Resources/app-mcp.json";

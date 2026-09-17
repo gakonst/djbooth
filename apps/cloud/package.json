@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync:mcp": "node scripts/sync-mcp-catalog.mjs",
     "build": "pnpm build:client && wrangler deploy --dry-run --containers-rollout none --outdir dist",
     "dev": "wrangler dev",
     "deploy": "pnpm build:client && wrangler deploy",

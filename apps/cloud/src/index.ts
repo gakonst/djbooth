@@ -11,6 +11,7 @@ import { agentRoute } from "./agent.js";
 import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
 import { crewRoute } from "./crews.js";
+import { createPlayback, playbackMedia, revokePlayback } from "./playback.js";
 
 export interface Env {
   /** Optional authenticated, streaming, idempotent SoundCloud upload broker. */
@@ -705,6 +706,9 @@ async function media(
 
 export default {
   async scheduled(_event: ScheduledController, env: Env): Promise<void> {
+    await env.LIBRARY_DB.prepare("DELETE FROM playback_sessions WHERE expires_at<=?")
+      .bind(Date.now())
+      .run();
     await env.LIBRARY_DB.prepare("DELETE FROM login_codes WHERE expires_at<=?")
       .bind(Date.now())
       .run();
@@ -776,7 +780,16 @@ export default {
       const phone = /^\/v1\/agent\/phone\/([a-f0-9]{64})\/tool-host$/.exec(url.pathname);
       if (phone && env.AGENT_TOOLS)
         return env.AGENT_TOOLS.get(env.AGENT_TOOLS.idFromString(phone[1])).fetch(request);
+      const speaker = /^\/v1\/playback\/([a-f0-9]{64})\/([a-f0-9]{64})\/audio\.[a-z0-9]+$/.exec(
+        url.pathname,
+      );
+      if (speaker) return await playbackMedia(request, env, speaker[1], speaker[2], media);
       const account = await authenticate(request, env);
+      if (url.pathname === "/v1/playback")
+        return await createPlayback(request, env, account, readJSON);
+      const playback = /^\/v1\/playback\/([a-f0-9]{64})$/.exec(url.pathname);
+      if (playback && request.method === "DELETE")
+        return await revokePlayback(playback[1], env, account);
       if (url.pathname === "/v1/migrations/legacy")
         return await migrateLegacy(request, env, account);
       if (url.pathname.startsWith("/v1/music/"))

@@ -2,6 +2,7 @@
 //! library, not another durable workflow database. All calls run off MainActor.
 mod midi;
 mod recording;
+mod sonos;
 mod spotify;
 
 use std::collections::{BTreeMap, HashSet};
@@ -288,6 +289,9 @@ fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
 }
 
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("sonos.") {
+        return sonos::request(operation, input);
+    }
     if let Some(operation) = operation.strip_prefix("midi.") {
         return midi::request(operation, input);
     }

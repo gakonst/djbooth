@@ -1,3 +1,4 @@
+import { conversationAccess, FAST_AGENT_CONVERSATION_ID } from "../src/agent-permissions.js";
 import { Client, Dialog, Transport, type Connection } from "nanocodex/connect";
 import "./style.css";
 import { phoneTools } from "../src/phone-tools";
@@ -103,7 +104,7 @@ async function main() {
     el("workspace").hidden = false;
     el("logout").hidden = false;
     el("providers").textContent =
-      `Approved access: ${connection.grant.capabilities.filter((v) => /spotify|soundcloud/.test(v)).join(", ") || "ChatGPT"}`;
+      `Music connections: ${connection.grant.capabilities.filter((v) => /spotify|soundcloud/.test(v)).join(", ") || "None"}`;
     if (native && result.code) {
       const url = new URL(callback);
       url.searchParams.set("code", result.code);
@@ -139,21 +140,16 @@ async function main() {
       // catalog is asynchronous and otherwise loses Safari's user activation.
       client.dialog.showWallet?.();
       const connection = await client.connection.connect({
+        conversationId: FAST_AGENT_CONVERSATION_ID,
         tools: phoneTools,
         authorization: "hosted",
         permission: "agent.run",
         capabilities: {
           cloudAccounts: {
-            chatgpt: true,
             ...(el<HTMLInputElement>("spotify").checked ? { spotify: true } : {}),
             ...(el<HTMLInputElement>("soundcloud").checked ? { soundcloud: true } : {}),
           },
-          agent: {
-            finalMessages: true,
-            actionSummaries: true,
-            conversationHistory: false,
-            rawTraces: false,
-          },
+          agent: conversationAccess,
         },
       });
       await connected(connection);

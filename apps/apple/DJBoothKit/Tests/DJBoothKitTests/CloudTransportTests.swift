@@ -27,6 +27,44 @@ private final class RequestLog: @unchecked Sendable {
 }
 
 @Suite(.serialized) struct CloudTransportTests {
+    @Test @MainActor func phoneHostReportsApprovalFailuresOnceWithoutRetryingOrCallingTools() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session), log = RequestLog()
+        StubProtocol.handler = { request in
+            log.append(request.url!.path)
+            return (403, Data(#"{"error":{"message":"Approve the current tool catalog"}}"#.utf8))
+        }
+        var observed: [Int] = []
+        await PhoneToolHost().run(client: client, status: { ready, _ in #expect(!ready) }, diagnostics: { error, attempt in
+            #expect(attempt == 1)
+            if case ClientError.http(let code, _) = error { observed.append(code) }
+        }, query: { _, _ in Issue.record("Rejected host must not invoke a tool"); return "" })
+        #expect(observed == [403])
+        #expect(log.values().count == 1)
+    }
+
+    @Test func importStatusAndRefreshPreserveJobIdentityAndAuthentication() async throws {
+        let session = session(); defer { session.invalidateAndCancel() }
+        let client = try client(session), id = UUID().uuidString, requestID = UUID().uuidString
+        let log = RequestLog()
+        StubProtocol.handler = { request in
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer private-test-token")
+            log.append(request.httpMethod!)
+            if request.httpMethod == "GET" {
+                #expect(request.url!.path == "/v1/imports/\(id)")
+                #expect(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first?.value == "50")
+                return (200, Data(#"{"reportAvailable":true,"report":{"tracks":[],"nextOffset":null}}"#.utf8))
+            }
+            let body = try JSONSerialization.jsonObject(with: Self.body(request)) as! [String: String]
+            #expect(body == ["requestID": requestID, "mode": "refresh"])
+            #expect(request.url!.path == "/v1/imports/\(id)/retry")
+            return (200, try JSONSerialization.data(withJSONObject: ["id": id, "source": "https://youtu.be/set", "status": "queued", "phase": "queued", "current": 0, "total": 1, "message": "Preparing", "createdAt": 0, "updatedAt": 1]))
+        }
+        #expect(try await client.importStatus(id: id, offset: 50).contains("reportAvailable"))
+        #expect(try await client.retryImport(id: id, requestID: requestID, refresh: true).id == id)
+        do { _ = try await client.importStatus(id: id, offset: 1); Issue.record("Accepted invalid offset") } catch {}
+        #expect(log.values() == ["GET", "POST"])
+    }
     @Test func musicReadsRetryOneLostConnectionButDoNotRetryDeniedOrCancelledRequests() async throws {
         let session = session(); defer { session.invalidateAndCancel() }
         let client = try client(session), log = RequestLog()

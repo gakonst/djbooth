@@ -65,3 +65,108 @@ describe("cloud tracklist evidence", () => {
     ).toEqual(["https://www.1001tracklists.com/tracklist/abc.html", "https://set79.com/set/123"]);
   });
 });
+
+test("accepts exact multiline rows and standalone identities without invented timestamps", () => {
+  const markdown =
+    "DJ Exact Festival Set\n01\n00:00\nArtist One\nTrack One\n02\nArtist Two\nTrack Two";
+  const result = evidencedRows(
+    {
+      matched: true,
+      matchEvidence: "DJ Exact Festival Set",
+      tracks: [
+        {
+          timestamp: "00:00",
+          artist: "Artist One",
+          title: "Track One",
+          evidence: "01\n00:00\nArtist One\nTrack One",
+        },
+        { artist: "Artist Two", title: "Track Two", evidence: "02\nArtist Two\nTrack Two" },
+      ],
+    },
+    markdown,
+    600,
+  );
+  expect(result).toEqual([
+    { startSeconds: 0, artist: "Artist One", title: "Track One" },
+    { artist: "Artist Two", title: "Track Two" },
+  ]);
+});
+
+test("uses a verified direct 1001 page without searching or replacing it with publisher extracts", async () => {
+  const url = "https://www.1001tracklists.com/tracklist/example/set.html";
+  const visited: string[] = [];
+  const response = await resolveTracklist(
+    new Request("https://internal/resolve", {
+      method: "POST",
+      body: JSON.stringify({ source: url }),
+    }),
+    {
+      BROWSER: {
+        quickAction: async (_: string, options: { url: string }) => {
+          visited.push(options.url);
+          return Response.json({
+            success: true,
+            result: "DJ Exact Festival Set\nArtist - Recording",
+          });
+        },
+      },
+      AI: {
+        run: async () => ({
+          response: {
+            matched: true,
+            matchEvidence: "DJ Exact Festival Set",
+            tracks: [{ artist: "Artist", title: "Recording", evidence: "Artist - Recording" }],
+          },
+        }),
+      },
+    } as unknown as Env,
+  );
+  expect(response.status).toBe(200);
+  expect(visited).toEqual([url]);
+  expect(await response.json()).toMatchObject({
+    url,
+    tracks: [{ order: 1, artist: "Artist", title: "Recording" }],
+  });
+});
+
+test("searches 1001 before fallback and keeps its match even when another site lists more rows", async () => {
+  const source = "https://youtube.com/watch?v=performance",
+    page = "https://www.1001tracklists.com/tracklist/performance.html";
+  const visited: string[] = [];
+  const response = await resolveTracklist(
+    new Request("https://internal/resolve", {
+      method: "POST",
+      body: JSON.stringify({ source, context: { title: "DJ Exact Festival Set" } }),
+    }),
+    {
+      BROWSER: {
+        quickAction: async (_: string, options: { url: string }) => {
+          visited.push(options.url);
+          return Response.json({
+            success: true,
+            result: options.url.includes("duckduckgo")
+              ? `${page}\nhttps://set79.com/tracklist/longer`
+              : "DJ Exact Festival Set\nArtist - Recording",
+          });
+        },
+      },
+      AI: {
+        run: async () => ({
+          response: {
+            matched: true,
+            matchEvidence: "DJ Exact Festival Set",
+            tracks: [{ artist: "Artist", title: "Recording", evidence: "Artist - Recording" }],
+          },
+        }),
+      },
+    } as unknown as Env,
+  );
+  expect(response.status).toBe(200);
+  expect(visited).toHaveLength(3);
+  expect(
+    visited
+      .slice(0, 2)
+      .every((url) => new URL(url).searchParams.get("q")?.includes("site:1001tracklists.com")),
+  ).toBe(true);
+  expect(((await response.json()) as { url: string }).url).toBe(page);
+});

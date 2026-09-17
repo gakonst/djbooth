@@ -25,6 +25,7 @@ const help = `Native DJ Booth (requires macOS and Xcode 26+):
   pnpm --filter @gakonst/djbooth-apple test:ui                Run native UI tests on the dedicated simulator
 
 Options:
+  --arguments-file <file> Read hardware command JSON from a file instead of exposing it in process arguments
   --simulator <uuid>       Use an existing simulator (never changes unrelated devices)
   --bootstrap-env <file>   Read initial cloud URL/token from a private JSON file; token is never bundled
   --launch-only            Relaunch an already installed physical-device app without rebuilding
@@ -163,7 +164,9 @@ if (command === "test-kit") {
       const device = value("--device");
       const operation = value("--operation");
       if (!device || !operation) throw new Error("Specify --device and --operation. The app must be open with --dj-link-hardware-test.");
-      const input = JSON.parse(value("--arguments") ?? "{}");
+      const inputFile = value("--arguments-file");
+      if (inputFile && value("--arguments")) throw new Error("Use only one of --arguments or --arguments-file.");
+      const input = JSON.parse(inputFile ? readFileSync(resolve(inputFile), "utf8") : value("--arguments") ?? "{}");
       const result = await hardwareRequest(device, operation, input);
       console.log(JSON.stringify(result, null, 2));
       if (!result.ok) process.exitCode = 1;
@@ -232,12 +235,13 @@ if (command === "test-kit") {
       break;
     }
     case "test-ui": {
-      const id = simulator();
+      const device = value("--device");
+      const id = device ?? simulator();
       const results = resolve(root, ".build/ui-tests", `${Date.now()}.xcresult`);
       mkdirSync(dirname(results), { recursive: true });
       run("xcodebuild", ["-project", "DJBooth.xcodeproj", "-scheme", "DJBooth-iOS", "-configuration", configuration,
-        "-derivedDataPath", derived, "-destination", `platform=iOS Simulator,id=${id}`, "-resultBundlePath", results,
-        "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-", ...optimizationSettings,
+        "-derivedDataPath", derived, "-destination", `platform=${device ? "iOS" : "iOS Simulator"},id=${id}`, "-resultBundlePath", results,
+        "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=YES", ...(device ? ["-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration"] : ["CODE_SIGN_IDENTITY=-"]), ...optimizationSettings,
         ...(value("--only-testing") ? [`-only-testing:${value("--only-testing")}`] : []), "test"]);
       console.log(`UI test results: ${results}`);
       break;

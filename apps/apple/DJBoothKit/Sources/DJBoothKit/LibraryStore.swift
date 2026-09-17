@@ -418,6 +418,18 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     public func saveCrewCache(_ value: CrewCache) throws {
         try saveLocalUSB(value, kind: "crews", id: "cache")
     }
+    public func agentConversation() throws -> MusicAgentConversation {
+        try localUSBValue("music-agent", id: "conversation", as: MusicAgentConversation.self) ?? MusicAgentConversation()
+    }
+    public func saveAgentConversation(_ value: MusicAgentConversation) throws {
+        try saveLocalUSB(value, kind: "music-agent", id: "conversation")
+    }
+    public func phoneAction(_ id: String) throws -> PhoneActionReceipt? {
+        try localUSBValue("agent-action", id: id, as: PhoneActionReceipt.self)
+    }
+    public func savePhoneAction(_ value: PhoneActionReceipt) throws {
+        try saveLocalUSB(value, kind: "agent-action", id: value.requestID)
+    }
     public func usbDevice() throws -> USBDeviceAccess? {
         try localUSBValue("usb-access", id: "active", as: USBDeviceAccess.self)
     }

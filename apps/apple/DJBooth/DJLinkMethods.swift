@@ -60,6 +60,7 @@ enum DJLinkServerMethod: String, CaseIterable, Sendable {
     case `stop`
 }
 enum DJLinkFunction: String, CaseIterable, Sendable {
+    case `select_djlink_interface`
     case `djlink_interfaces`
     case `build_keepalive_status_packet`
     case `parse_keepalive_device`

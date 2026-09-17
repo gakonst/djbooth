@@ -101,6 +101,15 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
         guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(PlaybackSession.self, from: data)
     }
+    /// Opaque device playback connection, isolated with the account's normal
+    /// player preferences. It never enters library records or cloud sync.
+    public func loadSpeakerSession() -> Data? { defaults.data(forKey: key + ".speaker") }
+    public func loadSpeakerSettings() -> Data? { defaults.data(forKey: key + ".speaker.settings") }
+    public func saveSpeakerSettings(_ data: Data) { defaults.set(data, forKey: key + ".speaker.settings") }
+    public func saveSpeakerSession(_ data: Data?) {
+        if let data { defaults.set(data, forKey: key + ".speaker") }
+        else { defaults.removeObject(forKey: key + ".speaker") }
+    }
     public func save(_ session: PlaybackSession) {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(session), defaults.data(forKey: key) != data else { return }

@@ -48,11 +48,7 @@ struct PlaylistBrowserView: View {
             return model.playlistSortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
         }
         #else
-        let connectedDownloads = model.connectedDownloadCollectionIDs
-        return model.collections.filter { !connectedDownloads.contains($0.id) }.sorted { first, second in
-            let comparison = first.name.localizedStandardCompare(second.name)
-            return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
-        }
+        return model.playlistCollections
         #endif
     }
     private func browserRows(from sorted: [Collection]) -> [PlaylistBrowserRow] {

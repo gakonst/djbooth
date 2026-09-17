@@ -543,7 +543,8 @@ function unwantedVersionPenalty(expected: string, actual: string): number {
 function metadataArguments(metadata: AudioMetadata, extension: string): string[] {
   const arguments_: string[] = [];
   if (extension.toLocaleLowerCase("en-US") === ".m4a") {
-    arguments_.push("-movflags", "use_metadata_tags");
+    // Keep AAC metadata ahead of audio so network players can start without a tail fetch.
+    arguments_.push("-movflags", "use_metadata_tags+faststart");
   } else if (extension.toLocaleLowerCase("en-US") === ".mp3") {
     arguments_.push("-id3v2_version", "3");
   }

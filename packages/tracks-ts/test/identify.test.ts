@@ -4,7 +4,7 @@ import { parseAgentTracklist } from "../src/agent-resolution.js";
 import { identify } from "../src/identify.js";
 
 describe("identify", () => {
-  test("returns an authoritative timestamped publisher description", async () => {
+  test("returns a publisher description only when explicitly requested", async () => {
     const inspect = vi.fn(async () => ({
       id: "set-id",
       title: "Library Set",
@@ -15,6 +15,7 @@ describe("identify", () => {
     }));
 
     const result = await identify("https://youtu.be/library", {
+      provider: "description",
       cacheMode: "off",
       env: {},
       metadataClient: { inspect },
@@ -185,7 +186,7 @@ describe("agent tracklist submission", () => {
     expect(result.tracks[2]!.isId).toBe(true);
   });
 
-  test("rejects a mismatched source or missing cue", () => {
+  test("rejects a mismatched source but accepts identified recordings without cues", () => {
     expect(() =>
       parseAgentTracklist(
         "https://youtu.be/set",
@@ -198,7 +199,7 @@ describe("agent tracklist submission", () => {
       ),
     ).toThrow(/source must exactly match/);
 
-    expect(() =>
+    expect(
       parseAgentTracklist(
         "https://youtu.be/set",
         JSON.stringify({
@@ -208,6 +209,37 @@ describe("agent tracklist submission", () => {
           tracks: [{ order: 1, artist: "A", title: "B" }],
         }),
       ),
-    ).toThrow(/requires timestamp or startSeconds/);
+    ).toMatchObject({ tracks: [{ order: 1, artist: "A", title: "B" }] });
   });
+});
+
+test("auto always researches 1001 even when the publisher lists tracks", async () => {
+  await expect(
+    identify("https://youtu.be/library", {
+      metadataClient: {
+        inspect: async () => ({ title: "DJ Set", description: "00:00 A - B\n03:00 C - D" }),
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "AGENT_REQUIRED",
+    details: { context: { description: "00:00 A - B\n03:00 C - D" } },
+  });
+});
+
+test("missing intermediate cues never fabricate a clip spanning the rest of a set", () => {
+  const result = parseAgentTracklist(
+    "https://youtu.be/set",
+    JSON.stringify({
+      source: "https://youtu.be/set",
+      provider: "agent",
+      complete: false,
+      durationSeconds: 600,
+      tracks: [
+        { order: 1, startSeconds: 0, artist: "A", title: "B" },
+        { order: 2, artist: "C", title: "D" },
+        { order: 3, startSeconds: 500, artist: "E", title: "F" },
+      ],
+    }),
+  );
+  expect(result.tracks.map((row) => row.endSeconds)).toEqual([undefined, undefined, 600]);
 });

@@ -1,30 +1,43 @@
 # Account-scoped library and music agent
 
-Login signs the exact app tool catalog shared with DJBoothKit: `djbooth_query`
-for the live phone library and `djbooth_exec` for the private cloud CLI. Existing
-read-only grants must reconnect to approve this catalog. `AgentTools`, a Durable
-Object keyed by account + Connect grant + agent, attaches through the public SDK's
-`createTools` transport using a fresh one-use Connect ticket on every connection.
-Every execution revalidates the live grant and checks the download's owner, grant,
-and agent; callers cannot select a different user's container.
+Login signs the exact app tool catalog shared with DJBoothKit. The phone owns
+its MCP server and native action handlers; `djbooth_exec` remains the private
+cloud CLI. Catalog changes require renewed Connect consent. `AgentTools`, a
+Durable Object keyed by account + Connect grant + agent, uses the public SDK's
+`createTools({ mcp: ... })` reverse attachment. Nanocodex provides deferred tool
+search, keeping the app action schemas out of initial model context.
 
-The authenticated `POST /v1/agent/tool-host/ticket` returns a short-lived, single-use
-ticket for a same-origin phone bridge. The foreground app executes only
-`djbooth_query` against its current account's local model. The backend hosts both
-tools. Downloads run independently in Workflows and continue when the phone closes. Phone queries remain
-bounded and paginated; credentials, filesystem paths, audio bytes, and other
-account stores are never query sources.
-The integration fixture exercises native WebSocket calls and answers using phone-owned
-data: start `pnpm --filter @gakonst/djbooth-cloud test:mobile-server`, then run
-`DJBOOTH_PHONE_TOOL_FIXTURE=1 pnpm native:test`.
+The authenticated `POST /v1/agent/tool-host/ticket` returns a short-lived,
+single-use ticket for the phone's outbound socket. The relay caches the signed
+native catalog for discovery and forwards MCP JSON-RPC calls to the phone; it
+implements no phone actions. Every call revalidates the live grant. Cloud CLI
+calls also verify the job's owner, grant and agent. The phone calls normal UI
+handlers for library edits, playback, connected music, Sonos, decks and recording.
+Mutation requestIDs are durable and account-scoped; poll `operation_status`
+instead of assuming an accepted command completed. Background suspension makes
+phone tools unavailable; cloud downloads continue independently.
+
+Phone queries are bounded and paginated. Credentials, arbitrary filesystem paths,
+audio bytes and other account stores are not query sources. The integration
+fixture uses the same reverse MCP path: start
+`pnpm --filter @gakonst/djbooth-cloud test:mobile-server`, then run the native
+Connect UI tests. `test/app-mcp.test.ts` verifies that consent and the real SDK
+reverse attachment sign the exact same catalog.
 
 The Cloudflare Worker hosts the Nanocodex Connect login, music-agent page, and
 account-scoped D1/R2 API. Native chat uses the narrow `/v1/agent/turns` adapter to
 the same Connect grant-bound managed API. The verified issuer response selects the
 agent; callers cannot supply a different agent/account, and only permitted final
-messages are returned. Open the Worker origin, or choose **Continue with Nanocodex**
+messages are returned. `GET /v1/agent/history?before=<cursor>` reads only that same
+agent, using the signed `agent.history.read` capability. Consent requests agent
+conversation history, never account-wide `history:read` or raw traces. Existing
+grants must be renewed to add this permission. The native conversation is an
+account-scoped offline cache; server history remains authoritative, and pending
+turn IDs survive relaunch so retries reuse the same turn.
+
+Open the Worker origin, or choose **Continue with Nanocodex**
 in the native app. The same flow as Nanocodex's `js/connect-playground` requests
-ChatGPT and the user's selected Spotify/SoundCloud connections, then opens a durable
+only the user's selected Spotify/SoundCloud connections, then opens a durable
 Connect agent. DJ Booth uses the SDK popup dialog because the Nanocodex account host
 restricts iframe embedding to its registered playground origins. Provider credentials stay with Nanocodex. The published SDK dependency
 is pinned, with `patches/nanocodex@0.6.1.patch` carrying the three music-connector
@@ -35,6 +48,9 @@ must also have that checkout's Spotify/SoundCloud support deployed. The companio
 `nanocodex-djbooth-connect` worktree registers `djbooth` at
 `https://djbooth-library.gakonst.workers.dev`; update the registration for a different
 production origin. Production dialogs reject HTTP loopback callers; test login from HTTPS.
+
+Phone sign-in does not request the ChatGPT connector or require a ChatGPT subscription.
+Spotify and SoundCloud are optional; users can leave both unselected.
 
 Every private request verifies its grant with Nanocodex using app ID `djbooth` and the
 Worker's exact origin. The verified broker account ID determines storage ownership;

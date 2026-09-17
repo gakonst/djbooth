@@ -7,6 +7,48 @@ import { parseManifest, type SetManifest } from "./manifest.js";
 
 const PIPELINE_TABLE = "djboothSetPipeline";
 
+/** Bounded diagnostics derived from master.db; never a second workflow ledger. */
+export function inspectImportDetails(database: MasterDatabase, source: string) {
+  if (!database.hasTable(PIPELINE_TABLE)) return null;
+  const row = database.selectRawRows<{ StateJson: string; UpdatedAt: string }>(
+    `SELECT "StateJson", "UpdatedAt" FROM "${PIPELINE_TABLE}" WHERE "Source" = ?`,
+    [source],
+  )[0];
+  if (!row) return null;
+  const state = parseManifest(JSON.parse(row.StateJson));
+  const text = (value: string) => value.replace(/https?:\/\/\S+/g, "[provider URL]").slice(0, 300);
+  const analyzed = new Set(state.artifacts.analysis?.map((item) => item.mediaPath) ?? []);
+  return {
+    updatedAt: row.UpdatedAt,
+    tracklist: state.tracklist,
+    warnings: [
+      ...state.warnings,
+      ...state.errors.map((error) => `${error.stage}: ${error.message}`),
+    ]
+      .slice(-10)
+      .map(text),
+    tracks: state.entries.map((entry) => ({
+      order: entry.order,
+      artist: entry.identity.artist?.slice(0, 120),
+      title: entry.identity.title?.slice(0, 120),
+      identity: entry.identity.status,
+      acquisition: entry.acquisition.status,
+      kind:
+        entry.acquisition.status === "downloaded"
+          ? (entry.acquisition.download.kind ?? "individual")
+          : undefined,
+      analyzed:
+        entry.acquisition.status === "downloaded" &&
+        analyzed.has(entry.acquisition.download.mediaPath),
+      rekordbox: entry.rekordbox.status,
+      warnings: entry.warnings.slice(-2).map((warning) => text(warning).slice(0, 80)),
+      errors: entry.errors
+        .slice(-2)
+        .map((error) => ({ stage: error.stage, message: text(error.message).slice(0, 80) })),
+    })),
+  };
+}
+
 export type RekordboxPipelineLocation = {
   dbPath: string;
   dbDirectory: string;

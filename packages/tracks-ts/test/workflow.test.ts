@@ -779,145 +779,151 @@ describe("runSetToRekordbox", () => {
     );
   });
 
-  test("caches the remote set only after individual acquisition fails and recovers in the same invocation", async () => {
-    const sourceSetPath = resolve("/tmp/music-ts-workflow/source-set.m4a");
-    const sourceSet = {
-      url: source,
-      path: sourceSetPath,
-      sha256: "b".repeat(64),
-      durationSeconds: 3_600,
-      codec: "aac",
-      bitrate: 256_000,
-    };
-    const failed = enrichedManifest();
-    failed.entries[0]!.acquisition = {
-      status: "failed",
-      query: "Artist Track",
-      error: {
+  test.each(["fresh", "previous-failure"])(
+    "%s import caches the remote set only after individual acquisition fails",
+    async (initial) => {
+      const sourceSetPath = resolve("/tmp/music-ts-workflow/source-set.m4a");
+      const sourceSet = {
+        url: source,
+        path: sourceSetPath,
+        sha256: "b".repeat(64),
+        durationSeconds: 3_600,
+        codec: "aac",
+        bitrate: 256_000,
+      };
+      const failed = enrichedManifest();
+      failed.entries[0]!.acquisition = {
+        status: "failed",
+        query: "Artist Track",
+        error: {
+          stage: "acquisition",
+          message: "No individual recording candidate passed validation",
+          retryable: true,
+        },
+      };
+      failed.entries[0]!.errors.push({
         stage: "acquisition",
         message: "No individual recording candidate passed validation",
         retryable: true,
-      },
-    };
-    failed.entries[0]!.errors.push({
-      stage: "acquisition",
-      message: "No individual recording candidate passed validation",
-      retryable: true,
-    });
-    const recovered = structuredClone(failed);
-    recovered.entries[0]!.acquisition = {
-      status: "downloaded",
-      query: "Artist Track",
-      download: {
-        backend: "ytdlp",
-        kind: "source-set-clip",
-        mediaPath,
-        files: [mediaPath],
-        source,
-        engine: "reference",
-        sha256: "c".repeat(64),
-        spotifyId: "spotify-track",
-        clip: {
-          sourceSetUrl: source,
-          startSeconds: 0,
-          endSeconds: 180,
-          containsTransitions: true,
-          qualityNote: "Cue-bounded set recovery",
+      });
+      const recovered = structuredClone(failed);
+      recovered.entries[0]!.acquisition = {
+        status: "downloaded",
+        query: "Artist Track",
+        download: {
+          backend: "ytdlp",
+          kind: "source-set-clip",
+          mediaPath,
+          files: [mediaPath],
+          source,
+          engine: "reference",
+          sha256: "c".repeat(64),
+          spotifyId: "spotify-track",
+          clip: {
+            sourceSetUrl: source,
+            startSeconds: 0,
+            endSeconds: 180,
+            containsTransitions: true,
+            qualityNote: "Cue-bounded set recovery",
+          },
         },
-      },
-    };
-    recovered.entries[0]!.errors = [];
-    const acquire = vi.fn(
-      async (options: Parameters<RunSetToRekordboxDependencies["acquire"]>[0]) => {
-        const pass = acquire.mock.calls.length;
-        if (pass === 1) {
-          expect(options.continueOnError).toBe(true);
+      };
+      recovered.entries[0]!.errors = [];
+      const acquire = vi.fn(
+        async (options: Parameters<RunSetToRekordboxDependencies["acquire"]>[0]) => {
+          const pass = acquire.mock.calls.length;
+          if (pass === 1) {
+            expect(cacheSourceSet).not.toHaveBeenCalled();
+            expect(options.continueOnError).toBe(true);
+            await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
+            return {
+              manifest: failed,
+              downloaded: [],
+              resumed: [],
+              failures: [
+                {
+                  entryOrder: 1,
+                  spotifyId: "spotify-track",
+                  message: "No individual recording candidate passed validation",
+                },
+              ],
+              unavailableBackends: [],
+              performance: acquisitionPerformance(),
+            };
+          }
+          expect(options.continueOnError).toBe(false);
           await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
+          recovered.artifacts = structuredClone(failed.artifacts);
+          recovered.entries[0]!.warnings = [...failed.entries[0]!.warnings];
           return {
-            manifest: failed,
-            downloaded: [],
+            manifest: recovered,
+            downloaded: [mediaPath],
             resumed: [],
-            failures: [
-              {
-                entryOrder: 1,
-                spotifyId: "spotify-track",
-                message: "No individual recording candidate passed validation",
-              },
-            ],
+            failures: [],
             unavailableBackends: [],
             performance: acquisitionPerformance(),
           };
-        }
-        expect(options.continueOnError).toBe(false);
-        await (options.plan as (manifest: SetManifest) => Promise<unknown>)(failed);
-        recovered.artifacts = structuredClone(failed.artifacts);
-        recovered.entries[0]!.warnings = [...failed.entries[0]!.warnings];
-        return {
-          manifest: recovered,
-          downloaded: [mediaPath],
-          resumed: [],
-          failures: [],
-          unavailableBackends: [],
-          performance: acquisitionPerformance(),
-        };
-      },
-    );
-    const buildPlan = vi.fn(
-      async (_manifest: SetManifest, planOptions: BuildAcquisitionPlanOptions) => {
-        if (buildPlan.mock.calls.length === 1) {
-          expect(planOptions.allowSourceSetClips).toBeUndefined();
-        } else {
-          expect(planOptions).toMatchObject({
-            allowSourceSetClips: true,
-            sourceSetPath,
-          });
-        }
-        return { clips: [], recordings: [], stagingDirectory: "/tmp/staging" };
-      },
-    );
-    const cacheSourceSet = vi.fn(async () => ({ path: sourceSetPath, url: source }));
-    const dependencies: RunSetToRekordboxDependencies = {
-      exists: async () => false,
-      readManifest: vi.fn(),
-      writeManifest: vi.fn(),
-      identify: async () => tracklist(),
-      createManifest: () => enrichedManifest(),
-      enrichSpotify: vi.fn(),
-      cacheSourceSet,
-      describeSourceSet: async () => sourceSet,
-      buildPlan,
-      acquire,
-      analyze: async () => analysisResult(false),
-      importRekordbox: async (options) => importResult(options.manifest, true),
-    };
+        },
+      );
+      const buildPlan = vi.fn(
+        async (_manifest: SetManifest, planOptions: BuildAcquisitionPlanOptions) => {
+          if (buildPlan.mock.calls.length === 1) {
+            expect(planOptions.allowSourceSetClips).toBeUndefined();
+            expect(planOptions.retryIndividualRecordings).toBe(true);
+          } else {
+            expect(planOptions).toMatchObject({
+              allowSourceSetClips: true,
+              sourceSetPath,
+              retryIndividualRecordings: false,
+            });
+          }
+          return { clips: [], recordings: [], stagingDirectory: "/tmp/staging" };
+        },
+      );
+      const cacheSourceSet = vi.fn(async () => ({ path: sourceSetPath, url: source }));
+      const dependencies: RunSetToRekordboxDependencies = {
+        exists: async () => false,
+        readManifest: vi.fn(),
+        writeManifest: vi.fn(),
+        identify: async () => tracklist(),
+        createManifest: () => (initial === "fresh" ? enrichedManifest() : structuredClone(failed)),
+        enrichSpotify: vi.fn(),
+        cacheSourceSet,
+        describeSourceSet: async () => sourceSet,
+        buildPlan,
+        acquire,
+        analyze: async () => analysisResult(false),
+        importRekordbox: async (options) => importResult(options.manifest, true),
+      };
 
-    const result = await runSetToRekordbox({
-      source,
-      manifestPath,
-      outputDirectory,
-      allowSourceSetClips: true,
-      acquirers: [],
-      dependencies,
-    });
+      const result = await runSetToRekordbox({
+        source,
+        manifestPath,
+        outputDirectory,
+        allowSourceSetClips: true,
+        acquirers: [],
+        dependencies,
+      });
 
-    expect(acquire).toHaveBeenCalledTimes(2);
-    expect(buildPlan).toHaveBeenCalledTimes(2);
-    expect(cacheSourceSet).toHaveBeenCalledOnce();
-    expect(cacheSourceSet).toHaveBeenCalledWith(
-      source,
-      resolve("/tmp/music-ts-workflow/source"),
-      undefined,
-      undefined,
-    );
-    expect(result.acquisition.downloaded).toEqual([mediaPath]);
-    expect(result.acquisition.failures).toEqual([]);
-    expect(result.performance.automation).toEqual({
-      spotifyCanonicalSelections: 0,
-      acquisitionPasses: 2,
-      sourceSetFallbacks: 1,
-    });
-    expect(result.manifest.entries[0]!.warnings).toContain(
-      "Automatic source-set fallback after individual acquisition failure: No individual recording candidate passed validation",
-    );
-  });
+      expect(acquire).toHaveBeenCalledTimes(2);
+      expect(buildPlan).toHaveBeenCalledTimes(2);
+      expect(cacheSourceSet).toHaveBeenCalledOnce();
+      expect(cacheSourceSet).toHaveBeenCalledWith(
+        source,
+        resolve("/tmp/music-ts-workflow/source"),
+        undefined,
+        undefined,
+      );
+      expect(result.acquisition.downloaded).toEqual([mediaPath]);
+      expect(result.acquisition.failures).toEqual([]);
+      expect(result.performance.automation).toEqual({
+        spotifyCanonicalSelections: 0,
+        acquisitionPasses: 2,
+        sourceSetFallbacks: 1,
+      });
+      expect(result.manifest.entries[0]!.warnings).toContain(
+        "Automatic source-set fallback after individual acquisition failure: No individual recording candidate passed validation",
+      );
+    },
+  );
 });

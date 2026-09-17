@@ -106,6 +106,7 @@ test("workflow retries the interrupted stage and carries import evidence into pu
     };
     const collectionID = `cloud:${id}:playlist:17`;
     const container = {
+      recordImportEvent: vi.fn(async () => {}),
       enqueue: vi.fn(),
       poll: vi.fn(),
       workflowExecute: vi.fn(async (account: string, job: string, instance: string, input: any) => {
@@ -149,7 +150,28 @@ test("workflow retries the interrupted stage and carries import evidence into pu
     expect(await workflow.run(event, step)).toEqual({ collectionID });
     expect(stages).toEqual(["resolve", "import", "import", "enrich", "publish"]);
     // An RPC stub stays broken after eviction; every retry needs a fresh stub.
-    expect(env.PLAYLIST_CONTAINERS.getByName).toHaveBeenCalledTimes(7);
+    expect(env.PLAYLIST_CONTAINERS.getByName.mock.calls.length).toBeGreaterThanOrEqual(7);
+    const events = container.recordImportEvent.mock.calls as unknown as [
+      string,
+      string,
+      string,
+      Record<string, unknown>,
+    ][];
+    expect(
+      events
+        .filter(([, , name]) => name === "workflow_stage_failed")
+        .map(([, , , fields]) => fields),
+    ).toEqual([
+      expect.objectContaining({
+        importID: id,
+        workflowID: row.workflow_id,
+        stage: "import",
+        attempt: 1,
+        failure: "transport",
+      }),
+    ]);
+    expect(events.at(-1)?.[2]).toBe("workflow_completed");
+    expect(events.every(([account, job]) => account === "account-a" && job === id)).toBe(true);
   } finally {
     db.close();
   }

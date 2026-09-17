@@ -330,7 +330,10 @@ export async function runSetToRekordbox(
   let repairedCues = false;
   if (allowSourceSetClips && manifest.tracklist.provider === "agent") {
     for (const [index, entry] of manifest.entries.entries()) {
-      const end = manifest.entries[index + 1]?.cue.startSeconds ?? manifest.source.durationSeconds;
+      const end =
+        index === manifest.entries.length - 1
+          ? manifest.source.durationSeconds
+          : manifest.entries[index + 1]?.cue.startSeconds;
       if (
         entry.cue.endSeconds !== undefined ||
         entry.cue.startSeconds === undefined ||
@@ -424,10 +427,7 @@ export async function runSetToRekordbox(
   };
   if (
     allowSourceSetClips &&
-    (options.wholeSet ||
-      options.sourceSet !== undefined ||
-      manifest.artifacts.sourceSet !== undefined ||
-      requiresImmediateSourceSet(manifest))
+    (options.wholeSet || options.sourceSet !== undefined || requiresImmediateSourceSet(manifest))
   ) {
     await ensureSourceSet();
   }
@@ -572,7 +572,9 @@ export async function runSetToRekordbox(
               localDirectories: (options.localArtifactDirectories ?? []).map((path) =>
                 resolve(path),
               ),
-              ...(options.wholeSet ? { wholeSet: true } : {}),
+              ...(options.wholeSet
+                ? { wholeSet: true }
+                : { retryIndividualRecordings: currentPass === 1 }),
               ...(sourceSet
                 ? { allowSourceSetClips: true, sourceSetPath: resolve(sourceSet.path) }
                 : {}),
@@ -1086,13 +1088,9 @@ function requiresImmediateSourceSet(manifest: SetManifest): boolean {
       entry.cue.endSeconds !== undefined &&
       entry.cue.endSeconds > entry.cue.startSeconds;
     if (!completeCue) return false;
-    return (
-      entry.identity.status === "unidentified" ||
-      entry.errors.some((error) => error.stage === "acquisition") ||
-      entry.warnings.some((warning) =>
-        warning.includes("Automatic source-set fallback after individual acquisition failure"),
-      )
-    );
+    // A previous acquisition failure does not justify downloading the whole
+    // set before retrying its individual recordings.
+    return entry.identity.status === "unidentified";
   });
 }
 

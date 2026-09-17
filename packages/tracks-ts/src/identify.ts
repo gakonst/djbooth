@@ -41,7 +41,10 @@ export async function identify(source: string, options: IdentifyOptions = {}): P
       }
     }
 
-    if (provider !== "agent" && (options.preferDescription ?? true) && metadata) {
+    if (
+      (provider === "description" || (provider === "auto" && options.preferDescription === true)) &&
+      metadata
+    ) {
       const described = tracklistFromDescription(source, metadata);
       if (described) return described;
       if (provider === "description") {

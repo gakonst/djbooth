@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { FileSessionStore } from "@gakonst/spots";
 import { MasterDatabase } from "@gakonst/rekordbox";
+import { inspectImportDetails } from "@gakonst/tracks/pipeline-state";
 import { CloudSnapshots } from "./cloud-snapshots.js";
 import {
   CloudProcessingError,
@@ -153,7 +154,20 @@ export async function runPlaylistContainer(
       return;
     }
     response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-    response.end(JSON.stringify(progress));
+    let report;
+    if (agentReady && existsSync(dbPath)) {
+      try {
+        const db = new MasterDatabase({ path: dbPath, readonly: true, playlistXml: false });
+        try {
+          report = inspectImportDetails(db, source);
+        } finally {
+          db.close();
+        }
+      } catch {
+        /* Status remains available while the database is busy. */
+      }
+    }
+    response.end(JSON.stringify({ ...progress, report }));
   });
   const closed = new Promise<void>((resolve) => server.once("close", resolve));
   await new Promise<void>((resolve, reject) => {

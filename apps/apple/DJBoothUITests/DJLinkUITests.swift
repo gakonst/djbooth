@@ -3,6 +3,91 @@ import XCTest
 
 @MainActor
 final class DJLinkUITests: XCTestCase {
+    func testAgentTakesOverLibraryAndRestoresDraft() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-player"]
+        app.launch()
+        let agent = app.buttons["library.agent"]
+        XCTAssertTrue(agent.waitForExistence(timeout: 20))
+        agent.tap()
+        let input = app.descendants(matching: .any)["agent.input"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["library.drawer.open"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Booth companion"; screenshot.lifetime = .keepAlways; add(screenshot)
+        input.tap(); input.typeText("Build a warm-up set")
+        app.buttons["agent.done"].tap()
+        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        agent.tap()
+        XCTAssertEqual(input.value as? String, "Build a warm-up set")
+        app.buttons["agent.done"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(agent.waitForExistence(timeout: 20)); agent.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "Build a warm-up set")
+    }
+
+    func testSonosSidebarKeepsVolumeLimitAcrossRelaunch() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-player"]
+        app.launch()
+        let drawer = app.buttons["library.drawer.open"]
+        XCTAssertTrue(drawer.waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["nowPlaying.sonos"].exists)
+        drawer.tap()
+        XCTAssertTrue(app.switches["library.sonos.toggle"].waitForExistence(timeout: 5))
+        app.buttons["library.sonos.settings"].tap()
+        let limit = app.sliders["sonos.limit.master"]
+        XCTAssertTrue(limit.waitForExistence(timeout: 5))
+        let initial = limit.value as? String
+        limit.adjust(toNormalizedSliderPosition: 0.2)
+        let changed = NSPredicate { _, _ in (limit.value as? String) != initial }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: changed, object: limit)], timeout: 5), .completed)
+        let saved = limit.value as? String
+        app.buttons["Done"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(drawer.waitForExistence(timeout: 20)); drawer.tap()
+        app.buttons["library.sonos.settings"].tap()
+        XCTAssertTrue(limit.waitForExistence(timeout: 5))
+        XCTAssertEqual(limit.value as? String, saved, "The maximum volume is a persistent device preference")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Sonos room volume limits"; screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+
+    func testSonosHardwareVolumeButtons() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Volume buttons require a paired physical iPhone")
+        #else
+        guard ProcessInfo.processInfo.environment["DJBOOTH_SONOS_HARDWARE"] == "1" else {
+            throw XCTSkip("Explicit opt-in required for a real Sonos room")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--dj-link-hardware-test"]
+        app.launch()
+        let drawer = app.buttons["library.drawer.open"]
+        XCTAssertTrue(drawer.waitForExistence(timeout: 20)); drawer.tap()
+        app.buttons["library.sonos.settings"].tap()
+        let slider = app.sliders["All rooms volume"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH %@", "20"), object: slider)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        let initial = slider.value as? String
+        XCUIDevice.shared.press(.volumeDown)
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in slider.value as? String != initial }, object: nil)
+        let lowered = XCTWaiter.wait(for: [changed], timeout: 4) == .completed
+        if lowered {
+            XCUIDevice.shared.press(.volumeUp)
+        } else {
+            XCUIDevice.shared.press(.volumeUp)
+            let raised = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in slider.value as? String != initial }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [raised], timeout: 5), .completed)
+            XCUIDevice.shared.press(.volumeDown)
+        }
+        slider.adjust(toNormalizedSliderPosition: 0.2)
+        app.buttons["Done"].tap()
+        #endif
+    }
+
     func testSixDeckMixerRowsAndChannelAssignment() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-decks", "--ui-test-six-decks", "--ui-test-player"]
@@ -45,6 +130,7 @@ final class DJLinkUITests: XCTestCase {
         XCTAssertEqual(one.staticTexts["nowPlaying.title"].label, "A Walk")
         XCTAssertTrue(one.textFields["nowPlaying.annotation"].exists)
         XCTAssertFalse(one.buttons["nowPlaying.play"].isEnabled)
+        XCTAssertFalse(one.descendants(matching: .any)["nowPlaying.output.picker"].exists, "A CDJ status player has no phone audio to route")
         let two = app.descendants(matching: .any)["nowPlaying.deck.2"].firstMatch
         for _ in 0..<3 where !two.buttons["djlink.deck.select.2"].isHittable { rows.swipeUp() }
         XCTAssertEqual(two.staticTexts["nowPlaying.title"].label, "Two Thousand and Seventeen")
@@ -59,6 +145,7 @@ final class DJLinkUITests: XCTestCase {
         for _ in 0..<4 where !phone.buttons["nowPlaying.play"].isHittable { rows.swipeDown() }
         XCTAssertTrue(phone.buttons["nowPlaying.play"].isEnabled)
         XCTAssertEqual(phone.staticTexts["nowPlaying.title"].label, "A Walk")
+        XCTAssertFalse(phone.descendants(matching: .any)["nowPlaying.output.picker"].exists, "Output routing belongs in the sidebar")
         app.buttons["nowPlaying.phone.toggle"].tap()
         XCUIDevice.shared.press(.home)
         XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5))

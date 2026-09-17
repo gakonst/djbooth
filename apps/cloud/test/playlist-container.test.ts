@@ -40,6 +40,7 @@ const id = "11111111-1111-1111-1111-111111111111";
 test("scheduled cloud maintenance resumes old completed imports once, without retrying failures or ready libraries", async () => {
   const db = new DatabaseSync(":memory:");
   db.exec(`CREATE TABLE login_codes(expires_at INTEGER);
+    CREATE TABLE playback_sessions(expires_at INTEGER);
     CREATE TABLE import_requests(account_id TEXT, id TEXT, source TEXT, status TEXT, phase TEXT,
       current INTEGER, total INTEGER, message TEXT, updated_at INTEGER, created_at INTEGER, analysis_version INTEGER, analysis_repair INTEGER DEFAULT 0);
     INSERT INTO import_requests VALUES
@@ -87,6 +88,7 @@ function setup(admit = true, repair = false, owner: Record<string, string> = {})
   const state = new Map<string, unknown>();
   const writes: unknown[][] = [];
   const storage = {
+    transaction: async (callback: (storage: any) => Promise<unknown>) => callback(storage),
     get: async (key: string) => state.get(key),
     put: async (key: string, value: unknown) => {
       state.set(key, structuredClone(value));
@@ -120,6 +122,38 @@ function setup(admit = true, repair = false, owner: Record<string, string> = {})
 
 describe("playlist container lifecycle", () => {
   beforeEach(() => vi.restoreAllMocks());
+  test("retains paginated, account-scoped diagnostics after the workspace sleeps", async () => {
+    const { runner, state } = setup();
+    await runner.enqueue("account-a", id, "https://youtu.be/existing");
+    vi.mocked(runner.containerFetch).mockResolvedValue(
+      Response.json({
+        status: "complete",
+        phase: "complete",
+        current: 51,
+        total: 51,
+        message: "Published",
+        analysisVersion: 1,
+        report: {
+          updatedAt: "2026-09-17T00:00:00Z",
+          tracklist: { provider: "agent" },
+          warnings: [],
+          tracks: Array.from({ length: 51 }, (_, i) => ({
+            order: i + 1,
+            kind: i ? "individual" : "source-set-clip",
+          })),
+        },
+      }),
+    );
+    await runner.poll();
+    expect(state.has("job")).toBe(false);
+    expect((await runner.importReport("account-a", id, 0))?.tracks).toHaveLength(50);
+    expect(await runner.importReport("account-a", id, 50)).toMatchObject({
+      tracks: [{ order: 51, kind: "individual" }],
+      nextOffset: null,
+    });
+    expect((await runner.importReport("account-a", id, 100))?.tracks).toEqual([]);
+    expect(await runner.importReport("account-b", id, 0)).toBeNull();
+  });
   test("maintenance restores the saved import with artifact-only publication", async () => {
     const { runner, state } = setup(true, true);
     await runner.enqueue("account-a", id, "https://youtu.be/existing");
@@ -156,7 +190,10 @@ describe("playlist container lifecycle", () => {
     );
     await runner.poll();
     expect(runner.destroy).toHaveBeenCalledOnce();
-    expect(state.size).toBe(0);
+    expect(state.has("job")).toBe(false);
+    expect((await runner.importTelemetry("account-a", id))?.events.at(-1)).toMatchObject({
+      status: "complete",
+    });
     expect(runner.schedules.has("poll")).toBe(false);
     expect(writes.at(-1)![0]).toBe("complete");
     expect(writes.at(-1)![7]).toBe(1);
@@ -366,4 +403,57 @@ test("deployment adopts interrupted agent jobs once and preserves genuine source
   } finally {
     db.close();
   }
+});
+
+test("diagnostic history is bounded, account scoped and survives completion", async () => {
+  const { runner, state } = setup();
+  for (let attempt = 1; attempt <= 110; attempt++) {
+    await runner.recordImportEvent("account-a", id, "workflow_stage_started", {
+      attempt,
+      stage: "import",
+      token: "secret",
+      source: "https://private.test/?token=secret",
+    });
+  }
+  const history = await runner.importTelemetry("account-a", id);
+  expect(history).toMatchObject({ retained: 100, limit: 100 });
+  expect(history?.events).toHaveLength(20);
+  expect(history?.events.at(-1)).toMatchObject({ attempt: 110, importID: id });
+  expect(JSON.stringify(history)).not.toContain("secret");
+  expect(await runner.importTelemetry("account-b", id)).toBeNull();
+  await runner.recordImportEvent("account-b", id, "malicious_event");
+  expect((await runner.importTelemetry("account-a", id))?.events.at(-1)?.event).toBe(
+    "workflow_stage_started",
+  );
+  state.delete("job");
+  expect(await runner.importTelemetry("account-a", id)).toEqual(history);
+});
+
+test("diagnostic storage failures never prevent import progress", async () => {
+  const { runner } = setup();
+  await runner.enqueue("account-a", id, "https://youtu.be/existing");
+  vi.spyOn((runner as any).ctx.storage, "transaction").mockRejectedValue(
+    new Error("storage unavailable"),
+  );
+  await expect(
+    runner.recordImportEvent("account-a", id, "workflow_stage_started"),
+  ).resolves.toBeUndefined();
+  await runner.poll();
+  expect(runner.destroy).not.toHaveBeenCalled();
+});
+
+test("a refreshed import cannot inherit the earlier workflow's failure timeline", async () => {
+  const { runner } = setup();
+  await runner.recordImportEvent("account-a", id, "workflow_failed", {
+    workflowID: "old-run",
+    status: "failed",
+  });
+  expect((await runner.importTelemetry("account-a", id, "new-run"))?.events).toEqual([]);
+  await runner.recordImportEvent("account-a", id, "workflow_stage_started", {
+    workflowID: "new-run",
+    stage: "resolve",
+  });
+  expect((await runner.importTelemetry("account-a", id, "new-run"))?.events).toEqual([
+    expect.objectContaining({ workflowID: "new-run", stage: "resolve" }),
+  ]);
 });

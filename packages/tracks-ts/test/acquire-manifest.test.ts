@@ -1991,3 +1991,63 @@ describe("manifest locking", () => {
     await expect(readFile(lockPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+audioToolTest(
+  "never resumes a cached set extract as the standalone Spotify recording",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-upgrade-extract-"));
+    const manifest = oneTrackManifest();
+    const path = join(directory, "track.m4a");
+    await writeFile(path, "old set excerpt");
+    manifest.entries[0]!.acquisition = {
+      status: "downloaded",
+      download: {
+        backend: "local",
+        kind: "source-set-clip",
+        spotifyId: "spotify-1",
+        source: manifest.source.input,
+        clip: {
+          sourceSetUrl: manifest.source.input,
+          startSeconds: 0,
+          endSeconds: 60,
+          containsTransitions: true,
+          qualityNote: "Set extract",
+        },
+        mediaPath: path,
+        files: [path],
+        sha256: createHash("sha256").update("old set excerpt").digest("hex"),
+      },
+    };
+    const bin = await installFakeAudioTools(directory);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+    let searched = false;
+    try {
+      const result = await acquireManifest({
+        state: manifest,
+        saveState: async () => {},
+        plan: recordingPlan(directory),
+        continueOnError: true,
+        acquirers: [
+          {
+            backend: "slsk",
+            availability: async () => ({ available: true }),
+            search: async () => {
+              searched = true;
+              return [];
+            },
+            download: async () => {
+              throw new Error("No candidate");
+            },
+          },
+        ],
+      });
+      expect(searched).toBe(true);
+      expect(result.resumed).toEqual([]);
+      expect(result.failures).toHaveLength(1);
+      expect(await readFile(path, "utf8")).toBe("old set excerpt");
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  },
+);

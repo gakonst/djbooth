@@ -60,6 +60,23 @@ async function connectIssuer(request) {
       assert.equal(request.method, "POST");
       return Response.json({ ticket: `ticket-${who}` });
     }
+    if (path.endsWith("/events/history")) {
+      assert.equal(path, `/v1/grants/${GRANT}/agents/agent-${who}/events/history`);
+      assert.equal(request.method, "POST");
+      return Response.json({
+        data: [
+          {
+            type: "turn_accepted",
+            turn_id: "history-turn",
+            cursor: "1",
+            created_at: 1,
+            input: `Only ${who}'s thread`,
+          },
+        ],
+        has_more: false,
+        latest_cursor: "1",
+      });
+    }
     assert.ok(path.startsWith(`/v1/grants/${GRANT}/agents/agent-${who}/turns`));
     assert.equal(request.method, "POST");
     const body = await request.text();
@@ -157,6 +174,7 @@ before(async () => {
         script: `import { DurableObject } from "cloudflare:workers";
       export class TestPlaylist extends DurableObject {
         async poll() {}
+        async importReport() { return null; }
         async execute(account, grant, agent, id, input) { return { account, grant, agent, id, operation: input.operation }; }
         async enqueue(account, id, source) {
           await this.env.LIBRARY_DB.prepare("INSERT INTO test_launches (account_id, id, source) VALUES (?, ?, ?) ON CONFLICT(account_id, id) DO NOTHING").bind(account, id, source).run();
@@ -226,6 +244,11 @@ before(async () => {
   );
   await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
+  );
+  await database.exec(
+    (await readFile(new URL("../migrations/0009_playback_sessions.sql", import.meta.url), "utf8"))
+      .replace(/^--.*$/gm, "")
+      .replace(/\n/g, " "),
   );
 });
 after(async () => runtime?.dispose());
@@ -308,6 +331,132 @@ test("crews share item-level crates without exposing them to non-members", async
 
   const outsider = `nc1.${GRANT}.${"c".repeat(43)}`;
   assert.equal((await send(outsider, `/v1/crews/${created.id}`, null, "GET")).status, 401);
+});
+
+test("speaker capabilities are scoped, range-readable, expiring and owner-revocable", async () => {
+  const audio = Buffer.from("speaker-playback-range-fixture");
+  const hash = createHash("sha256").update(audio).digest("hex");
+  assert.equal(
+    (
+      await request(`/v1/media/${hash}`, {
+        method: "PUT",
+        body: audio,
+        headers: { "content-type": "audio/mpeg", "content-length": String(audio.length) },
+      })
+    ).status,
+    201,
+  );
+  const payload = JSON.stringify({ tracks: [{ hash, extension: "mp3" }] });
+  assert.equal(
+    (
+      await runtime.dispatchFetch("https://library.test/v1/playback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: payload,
+      })
+    ).status,
+    401,
+  );
+  const minted = await request("/v1/playback", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: payload,
+  });
+  assert.equal(minted.status, 200);
+  const session = await minted.json();
+  assert.match(session.session, /^[a-f0-9]{64}$/);
+  assert.ok(session.expiresAt <= Date.now() + 3600_000);
+  const url = session.urls[hash];
+  const range = await runtime.dispatchFetch(url, { headers: { range: "bytes=2-6" } });
+  assert.equal(range.status, 206);
+  assert.equal(await range.text(), audio.subarray(2, 7).toString());
+  assert.equal(range.headers.get("content-type"), "audio/mpeg");
+  assert.equal(range.headers.get("cache-control"), "private, no-store");
+  assert.equal((await runtime.dispatchFetch(url, { method: "HEAD" })).status, 200);
+  assert.equal(
+    (await runtime.dispatchFetch(url, { method: "PUT", body: "overwrite" })).status,
+    405,
+  );
+  assert.equal((await runtime.dispatchFetch(url.replace(hash, "f".repeat(64)))).status, 404);
+  await request(`/v1/playback/${session.session}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${TOKEN_B}` },
+  });
+  assert.equal((await runtime.dispatchFetch(url, { method: "HEAD" })).status, 200);
+  await request(`/v1/playback/${session.session}`, { method: "DELETE" });
+  assert.equal((await runtime.dispatchFetch(url)).status, 404);
+  const other = await (
+    await request("/v1/playback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+    })
+  ).json();
+  await database
+    .prepare("UPDATE playback_sessions SET expires_at=0 WHERE token_hash=?")
+    .bind(createHash("sha256").update(other.session).digest("hex"))
+    .run();
+  assert.equal((await runtime.dispatchFetch(other.urls[hash])).status, 404);
+  const foreign = await (
+    await request("/v1/playback", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN_B}`, "content-type": "application/json" },
+      body: payload,
+    })
+  ).json();
+  assert.equal((await runtime.dispatchFetch(foreign.urls[hash])).status, 404);
+});
+
+test("faststart capabilities preserve legacy playback bytes, canonical media and revocation", async () => {
+  const audio = await readFile(new URL("./fixtures/sonos-tail-index.m4a", import.meta.url));
+  const hash = createHash("sha256").update(audio).digest("hex");
+  assert.equal(
+    (
+      await request(`/v1/media/${hash}`, {
+        method: "PUT",
+        body: audio,
+        headers: { "content-type": "audio/mp4", "content-length": String(audio.length) },
+      })
+    ).status,
+    201,
+  );
+  const session = await (
+    await request("/v1/playback", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tracks: [{ hash, extension: "m4a" }] }),
+    })
+  ).json();
+  const url = session.urls[hash];
+  assert.equal(new URL(url).searchParams.get("layout"), "faststart-v1");
+  const optimized = await runtime.dispatchFetch(url);
+  assert.equal(optimized.status, 200);
+  assert.equal(optimized.headers.get("content-length"), String(audio.length));
+  assert.equal(optimized.headers.get("transfer-encoding"), null);
+  assert.equal(optimized.headers.get("x-djbooth-playback-layout"), "faststart-v1");
+  const bytes = Buffer.from(await optimized.arrayBuffer());
+  assert.equal(bytes.length, audio.length);
+  assert.ok(bytes.indexOf("moov") < bytes.indexOf("mdat"));
+  assert.ok(audio.indexOf("moov") > audio.indexOf("mdat"));
+  const ranged = await runtime.dispatchFetch(url, { headers: { range: "bytes=10-110" } });
+  assert.equal(ranged.status, 206);
+  assert.equal(ranged.headers.get("content-length"), "101");
+  assert.equal(ranged.headers.get("transfer-encoding"), null);
+  assert.equal(ranged.headers.get("content-range"), `bytes 10-110/${audio.length}`);
+  assert.deepEqual(Buffer.from(await ranged.arrayBuffer()), bytes.subarray(10, 111));
+  const legacy = new URL(url);
+  legacy.search = "";
+  assert.deepEqual(
+    Buffer.from(await (await runtime.dispatchFetch(legacy.href)).arrayBuffer()),
+    audio,
+  );
+  assert.deepEqual(Buffer.from(await (await request(`/v1/media/${hash}`)).arrayBuffer()), audio);
+  await request(`/v1/playback/${session.session}`, { method: "DELETE" });
+  assert.equal(
+    (await runtime.dispatchFetch(url)).status,
+    404,
+    "Cached headers never bypass revocation",
+  );
 });
 
 function makeOperation(kind = "collection", overrides = {}) {
@@ -1156,6 +1305,33 @@ test("production authentication uses the Workers global fetch receiver", async (
   }
 });
 
+test("native history requires renewed thread consent and never crosses account boundaries", async () => {
+  const saved = capabilities;
+  try {
+    assert.equal((await request("/v1/agent/history")).status, 403);
+    capabilities = [...saved, "agent.history.read"];
+    for (const [token, who] of [
+      [TOKEN, "a"],
+      [TOKEN_B, "b"],
+    ]) {
+      const response = await request("/v1/agent/history", {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.agentID, `agent-${who}`);
+      assert.equal(body.messages[0].text, `Only ${who}'s thread`);
+    }
+    assert.equal((await request("/v1/agent/history?agentId=agent-b")).status, 400);
+    assert.equal((await request("/v1/agent/history?thread=other")).status, 400);
+    revoked = true;
+    assert.equal((await request("/v1/agent/history")).status, 401);
+  } finally {
+    capabilities = saved;
+    revoked = false;
+  }
+});
+
 test("native agent routes use the verified grant agent and project only allowed output", async () => {
   agentRequests = [];
   for (const [token, who] of [
@@ -1478,6 +1654,20 @@ test("cloud tools execute only for the job's exact user, agent and live grant, w
     return value.outcome.output;
   }
   const input = { job_id: id, operation: "instructions" };
+  await database
+    .prepare("UPDATE import_requests SET workflow_id='managed-workflow' WHERE id=?")
+    .bind(id)
+    .run();
+  const status = await call("ticket-a", "djbooth_exec", { job_id: id, operation: "status" });
+  assert.equal(status.success, true, JSON.stringify(status));
+  assert.equal(JSON.parse(status.output).execution, "workflow");
+  assert.equal(JSON.parse(status.output).reportAvailable, false);
+  assert.equal(
+    (await call("ticket-b", "djbooth_exec", { job_id: id, operation: "status" })).success,
+    false,
+  );
+  assert.equal((await call("ticket-a", "djbooth_exec", input)).success, false);
+  await database.prepare("UPDATE import_requests SET workflow_id=NULL WHERE id=?").bind(id).run();
   const good = await call("ticket-a", "djbooth_exec", input);
   assert.equal(good.success, true, JSON.stringify(good));
   assert.match(good.output, /agent-a/);
@@ -1491,7 +1681,7 @@ test("cloud tools execute only for the job's exact user, agent and live grant, w
     .prepare("UPDATE import_requests SET agent_grant_id=? WHERE id=?")
     .bind(GRANT, id)
     .run();
-  const phone = await call("ticket-a", "djbooth_query", { resource: "state" });
+  const phone = await call("ticket-a", "mcp__djbooth__query", { resource: "state" });
   assert.equal(phone.success, false);
   assert.match(phone.output, /Open DJ Booth/);
   try {
@@ -1551,12 +1741,14 @@ test("phone query bridge consumes its ticket once and forwards live results thro
     method: "POST",
     body: JSON.stringify({
       ticket: "ticket-a",
-      name: "djbooth_query",
+      name: "mcp__djbooth__query",
       input: { resource: "state" },
     }),
   });
   const frame = await incoming;
-  assert.equal(frame.name, "djbooth_query");
+  assert.equal(frame.name, "mcp");
+  assert.equal(frame.input.method, "tools/call");
+  assert.equal(frame.input.params.name, "query");
   ws.send(
     JSON.stringify({
       type: "result",
@@ -1564,7 +1756,11 @@ test("phone query bridge consumes its ticket once and forwards live results thro
       outcome: {
         status: "completed",
         output: {
-          output: '{"tracks":42}',
+          output: JSON.stringify({
+            jsonrpc: "2.0",
+            id: frame.input.id,
+            result: { content: [{ type: "text", text: '{"tracks":42}' }], isError: false },
+          }),
           success: true,
           structured_result: null,
           metadata: null,

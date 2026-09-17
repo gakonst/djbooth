@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { cloudWorkflow } from "/app/dist/cloud-workflow.js";
 import { MasterDatabase } from "@gakonst/rekordbox";
 import { createManifest, RekordboxPipelineStore } from "@gakonst/tracks";
+import { inspectImportDetails } from "@gakonst/tracks/pipeline-state";
 
 const root = await mkdtemp("/tmp/playlist-smoke-");
 try {
@@ -34,7 +35,8 @@ try {
     ]);
     const manifest = createManifest({
       source,
-      provider: "description",
+      provider: "agent",
+      url: "https://www.1001tracklists.com/tracklist/container-fixture.html",
       title: "Container fixture",
       complete: true,
       tracks: [
@@ -109,6 +111,17 @@ try {
   assert.equal(result.entries, 1);
   assert.ok(result.playlistId);
   assert.equal(result.analyzed + result.analysisCacheHits, 1);
+  const reportDB = new MasterDatabase({ path, readonly: true, playlistXml: false });
+  try {
+    const report = inspectImportDetails(reportDB, source);
+    assert.equal(report.tracks.length, 1);
+    assert.equal(report.tracks[0].analyzed, true);
+    // The offline fixture is also the source-set file, so acquisition must
+    // honestly classify its audio as an extract. Provider fixtures are singles.
+    assert.equal(report.tracks[0].kind, provider ? "individual" : "source-set-clip");
+  } finally {
+    reportDB.close();
+  }
   const importMs = Math.round(performance.now() - importStarted);
   const library = run([
     "cloud",

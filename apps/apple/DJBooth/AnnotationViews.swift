@@ -1,5 +1,8 @@
 import SwiftUI
 import DJBoothKit
+#if os(iOS)
+import AVKit
+#endif
 
 extension TrackColor {
     var tint: Color {
@@ -381,6 +384,103 @@ struct MobileNowPlaying: View {
     }
 }
 
+#if os(iOS)
+/// Output selection belongs in the library sidebar; the footer stays a player.
+struct SonosSidebarControl: View {
+    let model: BoothModel
+    let showSettings: () -> Void
+    var body: some View {
+        Group {
+            Toggle(isOn: Binding(get: { model.sonos.enabled }, set: { enabled in
+                Task { await model.setSonosEnabled(enabled) }
+            })) {
+                Label("Sonos", systemImage: "hifispeaker.2")
+            }
+            .disabled(model.sonos.routing)
+            .accessibilityIdentifier("library.sonos.toggle")
+            if model.sonos.routing { ProgressView("Connecting rooms…") }
+            Button(action: showSettings) {
+                HStack {
+                    Text("Rooms & volume")
+                    Spacer()
+                    Text(model.sonos.enabled ? "All rooms" : "Off").foregroundStyle(.secondary)
+                }
+            }.accessibilityIdentifier("library.sonos.settings")
+            if !model.sonos.enabled {
+                HStack {
+                    Label("iPhone / AirPlay", systemImage: "airplay.audio")
+                    Spacer()
+                    AudioRoutePicker().frame(width: 44, height: 44)
+                }
+            }
+            if let error = model.sonos.error { Text(error).font(.caption).foregroundStyle(.red) }
+        }
+    }
+}
+
+struct SonosOutputSheet: View {
+    let model: BoothModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Sonos plays in all rooms on this network.")
+                    if model.sonos.volumeKnown && model.sonos.enabled {
+                        HStack { Text("Volume"); Spacer(); Text("\(Int(model.sonos.volume))%").monospacedDigit() }
+                        Slider(value: Binding(get: { model.sonos.volume }, set: { model.sonos.volume = $0 }), in: 0...100, step: 1) { editing in
+                            model.sonos.editingVolume = editing
+                            if !editing { Task { await model.sonos.setVolume(model.sonos.volume) } }
+                        }.accessibilityLabel("All rooms volume")
+                    }
+                    HStack { Text("Maximum for all rooms"); Spacer(); Text("\(model.sonos.limits.master)%").monospacedDigit() }
+                    Slider(value: Binding(get: { Double(model.sonos.limits.master) }, set: { model.sonos.limits.master = Int($0) }), in: 0...100, step: 1) { editing in
+                        if !editing { Task { await model.sonos.saveVolumeLimits() } }
+                    }.accessibilityLabel("Maximum volume for all rooms").accessibilityIdentifier("sonos.limit.master")
+                } header: { Text("All rooms") }
+                Section {
+                    ForEach(model.sonos.rooms) { room in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label(room.name, systemImage: "hifispeaker")
+                                Spacer()
+                                Text("Max \(model.sonos.limits.rooms[room.id] ?? 100)%").monospacedDigit()
+                            }
+                            Slider(value: Binding(get: { Double(model.sonos.limits.rooms[room.id] ?? 100) }, set: { model.sonos.limits.rooms[room.id] = Int($0) }), in: 0...100, step: 1) { editing in
+                                if !editing { Task { await model.sonos.saveVolumeLimits() } }
+                            }.accessibilityLabel("\(room.name) maximum volume").accessibilityIdentifier("sonos.limit.\(room.id)")
+                        }
+                    }
+                    if model.sonos.discovering { ProgressView("Finding speakers…") }
+                    if !model.sonos.discovering && model.sonos.rooms.isEmpty { Text("No Sonos speakers found on this network.").foregroundStyle(.secondary) }
+                    Button("Refresh rooms") {
+                        Task {
+                            if model.sonos.enabled { await model.setSonosEnabled(true) }
+                            else { await model.sonos.discover() }
+                        }
+                    }.disabled(model.sonos.discovering || model.sonos.routing)
+                } header: { Text("Room limits") } footer: { Text("DJ Booth volume changes stay below both the room limit and the all-room limit.") }
+                if let error = model.sonos.error { Text(error).foregroundStyle(.red) }
+            }
+            .navigationTitle("Sonos")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .task { if !model.sonos.grouped { await model.sonos.discover() } }
+        }.preferredColorScheme(.dark)
+    }
+}
+
+private struct AudioRoutePicker: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let view = AVRoutePickerView()
+        view.prioritizesVideoDevices = false
+        view.tintColor = UIColor.secondaryLabel
+        view.activeTintColor = UIColor(BoothStyle.accent)
+        return view
+    }
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+#endif
+
 /// Elapsed-time observations stay here instead of rebuilding the entire footer and queue.
 private struct PlaybackProgress: View {
     let player: BoothPlayer
@@ -398,6 +498,8 @@ private struct PlaybackProgress: View {
                 .accessibilityValue(elapsedLabel).accessibilityIdentifier("nowPlaying.elapsed")
             #if os(iOS)
             PlaybackPositionSlider(trackID: trackID, seekRevision: seekRevision, value: elapsed, duration: duration,
+                clock: display.isDeck ? nil : player.mediaClock,
+                animateClock: !display.isDeck && player.timing.playing && player.scrubPosition == nil && scenePhase == .active,
                 onBegin: {
                     guard !display.isDeck, trackID == player.track?.id, seekRevision == player.seekRevision else { return false }
                     scrubID = player.beginScrubbing()

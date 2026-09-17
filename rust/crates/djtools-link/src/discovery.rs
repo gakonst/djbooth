@@ -3,6 +3,33 @@ use std::{net::Ipv4Addr, path::Path};
 
 pub(crate) const MAX_PEERS: usize = 32;
 
+/// One bounded batch per 125 ms. Finish the first pass even if a mixer or one
+/// deck responds early: that response says nothing about the remaining decks.
+/// Later passes back off once a deck is present.
+pub(crate) fn sweep_batch(tick: u64, swept: bool, has_deck: bool) -> usize {
+    if !swept || !has_deck {
+        64
+    } else if tick.is_multiple_of(16) {
+        16
+    } else {
+        0
+    }
+}
+
+pub(crate) fn priority_due(tick: u64) -> bool {
+    // Cached and lost peers remain responsive even during a long subnet sweep.
+    tick.is_multiple_of(2)
+}
+
+pub(crate) fn neighbours_due(tick: u64, elapsed: std::time::Duration) -> bool {
+    // IPv4 can appear before the USB peer enters the neighbour table.
+    tick.is_multiple_of(if elapsed < std::time::Duration::from_secs(5) {
+        2
+    } else {
+        8
+    })
+}
+
 pub(crate) fn usable_peer(local: Ipv4Addr, mask: Ipv4Addr, peer: Ipv4Addr) -> bool {
     let local = u32::from(local);
     let mask = u32::from(mask);
@@ -162,6 +189,48 @@ fn parse_neighbours(mut bytes: &[u8], index: u32) -> Vec<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discovering_one_device_does_not_delay_the_rest_of_the_first_sweep() {
+        // A complete /24 in four ticks; a /16 in under 129 seconds, including
+        // when the first reply is a mixer or a deck at the start of the subnet.
+        for has_deck in [false, true] {
+            assert!(
+                (0..4)
+                    .map(|tick| sweep_batch(tick, false, has_deck))
+                    .sum::<usize>()
+                    >= 253
+            );
+            assert!(
+                (0..1024)
+                    .map(|tick| sweep_batch(tick, false, has_deck))
+                    .sum::<usize>()
+                    >= 65_533
+            );
+        }
+        assert_eq!(
+            (0..16)
+                .map(|tick| sweep_batch(tick, true, true))
+                .sum::<usize>(),
+            16
+        );
+        // A mixer alone must never make a deck search back off.
+        assert_eq!(sweep_batch(1, true, false), 64);
+    }
+
+    #[test]
+    fn hints_are_retried_promptly_without_waiting_for_the_subnet_sweep() {
+        for tick in 0..80 {
+            assert_eq!(priority_due(tick), tick % 2 == 0);
+            assert_eq!(
+                neighbours_due(tick, std::time::Duration::ZERO),
+                tick % 2 == 0
+            );
+            assert_eq!(
+                neighbours_due(tick, std::time::Duration::from_secs(5)),
+                tick % 8 == 0
+            );
+        }
+    }
     #[cfg(target_vendor = "apple")]
     #[test]
     fn route_hints_require_resolved_mac_and_the_selected_interface() {

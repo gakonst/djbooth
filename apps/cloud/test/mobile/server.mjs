@@ -172,7 +172,7 @@ async function issuer(request) {
           session_id: `agent-${who}`,
           call_id: body.id,
           model: "fixture",
-          name: "djbooth_query",
+          name: "mcp__djbooth__query",
           input: { resource: "playlists" },
           output_byte_budget: 32000,
           output_token_budget: 16000,
@@ -199,7 +199,9 @@ async function issuer(request) {
             terminal: {
               type: "turn_completed",
               final_message: turn.text.endsWith("What's in my library?")
-                ? `On this phone: ${JSON.parse(results.get(`${who}:${id}`))
+                ? `On this phone: ${JSON.parse(
+                    JSON.parse(results.get(`${who}:${id}`)).content[0].text,
+                  )
                     .items.map((item) => item.name)
                     .join(", ")}.`
                 : `${who}'s Spotify and SoundCloud: try a warm opening set. Local test reply.`,

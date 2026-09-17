@@ -97,4 +97,20 @@ public struct MusicCatalog: Codable, Sendable, Equatable {
             return Collection(id: item.id, name: item.name, trackIDs: imported?.trackIDs ?? snapshots[item.id]?.tracks.map(\.id) ?? [], folderPath: folder(for: source))
         }
     }
+
+    /// The phone browser and CDJ export use the same provider folder projection.
+    /// Hide an import's duplicate only when its connected-provider row is present;
+    /// cached downloads remain visible if the provider catalog is unavailable.
+    public func visibleCollections(in library: [Collection], jobs: [CloudImportJob] = []) -> [Collection] {
+        var catalog = self
+        catalog.rememberDownloads(jobs)
+        let present = Set(library.map(\.id))
+        let replaced = Set(playlists.compactMap { item -> String? in
+            guard present.contains(item.id),
+                  let imported = catalog.downloadedCollection(for: item, library: library),
+                  imported.id != item.id else { return nil }
+            return imported.id
+        })
+        return library.filter { !replaced.contains($0.id) }
+    }
 }

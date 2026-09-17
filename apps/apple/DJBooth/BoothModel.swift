@@ -152,8 +152,11 @@ private struct BoothLaunchConfiguration: Sendable {
         guard let collection = musicCatalog.downloadedCollection(for: playlist, library: collections) else { return false }
         return collection.trackIDs.allSatisfy { tracksByID[$0]?.mediaHash != nil }
     }
-    var connectedDownloadCollectionIDs: Set<String> {
-        Set(musicCatalog.playlists.compactMap { musicCatalog.downloadedCollection(for: $0, library: collections)?.id })
+    var playlistCollections: [Collection] {
+        musicCatalog.visibleCollections(in: collections, jobs: importJobs).sorted { first, second in
+            let comparison = first.name.localizedStandardCompare(second.name)
+            return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
+        }
     }
     private var musicRefreshTask: Task<Void, Never>?
     func refreshMusic(force: Bool = false, provider: String? = nil) async {
@@ -296,21 +299,26 @@ private struct BoothLaunchConfiguration: Sendable {
         } catch { if generation == connectionGeneration, !Task.isCancelled { musicPlaylistErrors[item.id] = error.localizedDescription } }
     }
     func downloadMusic(_ item: MusicPlaylist) async {
-        guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicDownloads.contains(item.id) else { return }
+        _ = await downloadMusicJob(item)
+    }
+    func downloadMusicJob(_ item: MusicPlaylist, requestID: String? = nil) async -> CloudImportJob? {
+        guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicDownloads.contains(item.id) else { return nil }
         let generation = connectionGeneration
-        let id = musicDownloadIDs[item.id] ?? UUID().uuidString
+        let id = requestID ?? musicDownloadIDs[item.id] ?? UUID().uuidString
         musicDownloadIDs[item.id] = id
         musicDownloads.insert(item.id); defer { if generation == connectionGeneration { musicDownloads.remove(item.id) } }
         do {
             let job = try await cloud.downloadMusicPlaylist(item, source: source, id: id)
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return nil }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
             if musicCatalog.rememberDownloads(importJobs) { try store.saveMusicCatalog(musicCatalog) }
             try reloadCollections()
             if job.status == "complete" { await synchronize() }
-            guard generation == connectionGeneration else { return }
+            guard generation == connectionGeneration else { return nil }
             showImport = true; importError = nil
+            return job
         } catch { if generation == connectionGeneration { message = error.localizedDescription } }
+        return nil
     }
     var tracks: [Track] = [] {
         didSet { tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
@@ -379,8 +387,58 @@ private struct BoothLaunchConfiguration: Sendable {
     var pendingImportSource: String { UserDefaults.standard.dictionary(forKey: pendingImportKey)?["source"] as? String ?? "" }
     var showNewCollection = false
     var player = BoothPlayer()
+    #if os(iOS)
+    let sonos = SonosPlayback()
+    var showSonosSettings = false
+    func testSonosLocalMedia(_ enabled: Bool) async throws {
+        if enabled, let track = player.track { _ = try await offlineAudio(track) }
+        try await sonos.setLocalMediaTest(enabled, audio: audio)
+    }
+    func reconnectSonos() async {
+        guard !demo, let cloud else { return }
+        let generation = connectionGeneration
+        while !Task.isCancelled, generation == connectionGeneration {
+            if await sonos.reconnect(cloud: cloud, tracks: tracksByID, player: player) {
+                if sonos.enabled && !sonos.grouped { await setSonosEnabled(true) }
+                return
+            }
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        }
+    }
+    func setSonosEnabled(_ enabled: Bool) async {
+        guard !sonos.routing else { return }
+        sonos.routing = true
+        defer { sonos.routing = false }
+        if !enabled {
+            await useSonos(nil)
+            return
+        }
+        do {
+            let room = try await sonos.connectAllRooms()
+            await useSonos(room)
+        } catch {
+            sonos.error = error.localizedDescription
+            sonos.rememberEnabled(sonos.room != nil)
+        }
+    }
+    func useSonos(_ room: SonosRoom?, reload: Bool = false) async {
+        if room == nil { await sonos.disableGroup() }
+        guard reload || sonos.room?.id != room?.id else { return }
+        let track = player.track, queue = player.queue, elapsed = player.elapsed, playing = player.transportPlaying
+        await sonos.disconnect()
+        sonos.room = room
+        guard let track else { return }
+        await preparePlayback(track, queue: queue, elapsed: elapsed, queueIndex: player.queueIndex, autoplay: playing)
+    }
+    #endif
     var showAgent = false
     var agentMessages: [MusicAgentMessage] = []
+    var agentDraft = ""
+    var agentHistoryLoading = false
+    var agentHistoryError: String?
+    var agentHistoryNeedsConsent = false
+    var agentNextBefore: String?
+    private var agentID: String?
     var agentPendingID: String?
     var agentError: String?
     var agentRetry = 0
@@ -491,36 +549,138 @@ private struct BoothLaunchConfiguration: Sendable {
     private func persistCrewCache() {
         try? store.saveCrewCache(CrewCache(crews: crews, details: crewDetails, crates: crewCrates))
     }
-    func beginAgentTurn(_ input: String) {
-        guard cloud != nil, phoneToolsReady, agentPendingID == nil else { return }
+    @discardableResult func persistAgentConversation() -> Bool {
+        do {
+            try store.saveAgentConversation(MusicAgentConversation(messages: agentMessages, draft: agentDraft, pendingID: agentPendingID, pendingInput: agentPendingInput, agentID: agentID, nextBefore: agentNextBefore))
+            return true
+        } catch { agentError = "Couldn’t save your conversation: \(error.localizedDescription)"; return false }
+    }
+    private func restoreAgentConversation() {
+        do {
+            let saved = try store.agentConversation()
+            agentID = saved.agentID; agentNextBefore = saved.nextBefore
+            agentMessages = saved.messages; agentDraft = saved.draft
+            agentPendingID = saved.pendingID; agentPendingInput = saved.pendingInput
+        } catch { agentError = "Couldn’t load your conversation: \(error.localizedDescription)" }
+    }
+    #if DEBUG
+    var agentDiagnosticState: [String: Any] {
+        ["phoneReady": phoneToolsReady, "phoneError": phoneToolsError ?? "", "agentError": agentError ?? "",
+         "historyError": agentHistoryError ?? "", "historyNeedsConsent": agentHistoryNeedsConsent,
+         "agentID": agentID ?? "", "pendingID": agentPendingID ?? "",
+         "pendingSubmission": agentPendingInput != nil, "messages": agentMessages.count]
+    }
+    #endif
+    func loadAgentHistory(earlier: Bool = false) async {
+        guard let cloud, !agentHistoryLoading else { return }
+        let generation = connectionGeneration
+        let initialCursor = earlier ? agentNextBefore : nil
+        if earlier && initialCursor == nil { return }
+        agentHistoryLoading = true; agentHistoryError = nil; agentHistoryNeedsConsent = false
+        defer { if generation == connectionGeneration { agentHistoryLoading = false } }
+        do {
+            var cursor = initialCursor
+            // Skip pages containing only internal events, keeping a continuation
+            // after a bounded batch so a large history cannot monopolize the UI.
+            for _ in 0..<8 {
+                let page = try await cloud.agentHistory(before: cursor)
+                guard !Task.isCancelled, generation == connectionGeneration else { return }
+                if let agentID, agentID != page.agentID {
+                    agentMessages = []; agentPendingID = nil; agentPendingInput = nil
+                    agentDraft = ""; agentNextBefore = nil
+                }
+                agentID = page.agentID
+                agentMessages = page.merging(agentMessages)
+                if earlier || initialCursor == nil { agentNextBefore = page.nextBefore }
+                persistAgentConversation()
+                guard page.messages.isEmpty, let next = page.nextBefore, next != cursor else { break }
+                cursor = next
+            }
+        } catch {
+            guard !Task.isCancelled, generation == connectionGeneration else { return }
+            agentHistoryError = error.localizedDescription
+            if case ClientError.http(403, _) = error { agentHistoryNeedsConsent = true }
+        }
+    }
+    @discardableResult func beginAgentTurn(_ input: String) -> Bool {
+        guard cloud != nil, agentPendingID == nil else { return false }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, text.count <= 16000 else { return }
-        agentMessages.append(MusicAgentMessage(role: "You", text: text))
-        agentPendingInput = text; agentPendingID = UUID().uuidString
-        agentError = nil
+        guard !text.isEmpty, text.count <= 16000 else { return false }
+        let previousDraft = agentDraft
+        let id = UUID().uuidString
+        agentMessages.append(MusicAgentMessage(id: "user:\(id)", role: "You", text: text))
+        agentPendingInput = text; agentPendingID = id
+        agentDraft = ""; agentError = nil
+        guard persistAgentConversation() else {
+            agentMessages.removeLast(); agentPendingID = nil; agentPendingInput = nil; agentDraft = previousDraft
+            return false
+        }
+        return true
     }
     func observeAgentTurn() async {
-        guard let cloud, let id = agentPendingID else { return }
+        guard let cloud, var id = agentPendingID else { return }
         let generation = connectionGeneration
         do {
             var turn = try await cloud.agentTurn(id: id, input: agentPendingInput)
-            guard generation == connectionGeneration, agentPendingID == id else { return }
-            agentPendingInput = nil
+            guard !Task.isCancelled, generation == connectionGeneration, agentPendingID == id else { return }
+            var accepted = MusicAgentConversation(messages: agentMessages, pendingID: id, pendingInput: agentPendingInput)
+            accepted.acceptTurn(turn.id)
+            agentMessages = accepted.messages; agentPendingInput = accepted.pendingInput
+            id = turn.id; agentPendingID = id; agentError = nil
+            persistAgentConversation()
             while !Task.isCancelled {
                 guard generation == connectionGeneration, agentPendingID == id else { return }
                 if turn.status == "completed" {
-                    agentMessages.append(MusicAgentMessage(role: "DJ Booth", text: turn.finalMessage ?? "No reply was shared by this connection."))
-                    agentPendingID = nil; agentError = nil; return
+                    let replyID = "assistant:\(id)"
+                    if !agentMessages.contains(where: { $0.id == replyID }) {
+                        agentMessages.append(MusicAgentMessage(id: replyID, role: "DJ Booth", text: turn.finalMessage ?? "No reply was shared by this connection."))
+                    }
+                    agentPendingID = nil; agentError = nil; persistAgentConversation(); return
                 }
                 if turn.status == "failed" || turn.status == "cancelled" {
                     agentError = turn.status == "cancelled" ? nil : (turn.error ?? "Your agent stopped.")
-                    agentPendingID = nil; return
+                    if !agentMessages.contains(where: { $0.id == "status:\(id)" }) {
+                        agentMessages.append(MusicAgentMessage(id: "status:\(id)", role: "Status", text: agentError ?? "Stopped. Send a message whenever you’re ready to continue."))
+                    }
+                    agentPendingID = nil; persistAgentConversation(); return
                 }
                 try await Task.sleep(for: .seconds(1))
                 turn = try await cloud.agentTurn(id: id)
             }
         } catch {
-            if !Task.isCancelled, generation == connectionGeneration, agentPendingID == id { agentError = error.localizedDescription }
+            guard !Task.isCancelled, generation == connectionGeneration, agentPendingID == id else { return }
+            #if os(iOS)
+            var fields = AppDiagnostics.failureFields(error)
+            fields["turnID"] = id; fields["pending_submission"] = String(agentPendingInput != nil)
+            AppDiagnostics.shared.event("agent_turn_failed", fields)
+            #endif
+            if case ClientError.http(404, _) = error, agentPendingInput == nil {
+                // A missing accepted turn must not permanently disable the
+                // composer. Reconcile history first; never replay its actions.
+                do {
+                    let page = try await cloud.agentHistory()
+                    guard !Task.isCancelled, generation == connectionGeneration, agentPendingID == id else { return }
+                    // Never reconcile a cached request against another thread.
+                    guard agentID == nil || agentID == page.agentID else {
+                        await loadAgentHistory()
+                        return
+                    }
+                    agentID = page.agentID
+                    var recovered = MusicAgentConversation(messages: page.merging(agentMessages), pendingID: id)
+                    if recovered.recoverMissingTurn(id) {
+                        agentMessages = recovered.messages; agentPendingID = nil; agentError = nil
+                        persistAgentConversation()
+                        #if os(iOS)
+                        AppDiagnostics.shared.event("agent_missing_turn_recovered", ["turnID": id])
+                        #endif
+                        return
+                    }
+                } catch {
+                    guard !Task.isCancelled, generation == connectionGeneration, agentPendingID == id else { return }
+                    agentHistoryError = error.localizedDescription
+                }
+            }
+            agentError = error.localizedDescription
         }
     }
     func cancelAgentTurn() async {
@@ -530,31 +690,52 @@ private struct BoothLaunchConfiguration: Sendable {
             _ = try await cloud.agentTurn(id: id, cancel: true)
             guard generation == connectionGeneration, agentPendingID == id else { return }
             agentPendingInput = nil; agentError = nil; agentRetry += 1
+            persistAgentConversation()
         } catch { if generation == connectionGeneration { agentError = error.localizedDescription } }
     }
     private func clearAgent() {
+        persistAgentConversation()
+        for task in phoneActions.values { task.cancel() }
+        phoneActions.removeAll()
         stopPhoneTools(); phoneToolsError = nil
         accountConnectionID = UUID()
-        agentMessages = []; agentPendingID = nil; agentPendingInput = nil; agentError = nil; cloudCapabilities = []
+        agentID = nil; agentNextBefore = nil; agentHistoryLoading = false; agentHistoryError = nil; agentHistoryNeedsConsent = false
+        showAgent = false; agentMessages = []; agentDraft = ""; agentPendingID = nil; agentPendingInput = nil; agentError = nil; cloudCapabilities = []
     }
+    var phoneActions: [String: Task<Void, Never>] = [:]
     func servePhoneTools() async {
         guard let cloud else { return }
         let generation = connectionGeneration
         let runID = UUID(); phoneToolsRunID = runID
         await phoneToolHost.run(client: cloud, status: { [weak self] ready, error in
             guard let self, self.connectionGeneration == generation, self.phoneToolsRunID == runID else { return }
+            #if os(iOS)
+            if self.phoneToolsReady != ready || self.phoneToolsError != error {
+                AppDiagnostics.shared.event("agent_phone_connection", ["ready": String(ready), "has_error": String(error != nil), "connectionID": runID.uuidString])
+            }
+            #endif
             self.phoneToolsReady = ready
             self.phoneToolsError = error
+        }, diagnostics: { [weak self] error, attempt in
+            guard let self, self.connectionGeneration == generation, self.phoneToolsRunID == runID else { return }
+            #if os(iOS)
+            var fields = AppDiagnostics.failureFields(error)
+            fields["attempt"] = String(attempt); fields["connectionID"] = runID.uuidString
+            AppDiagnostics.shared.event("agent_phone_connection_failed", fields)
+            #endif
         }, query: { [weak self] arguments, budget in
             guard let self, self.connectionGeneration == generation, self.phoneToolsRunID == runID, self.cloud != nil else {
                 throw ClientError.http(401, "This phone is no longer connected to that account")
             }
-            return try self.phoneLibraryQuery().execute(arguments, byteBudget: budget)
+            let reply = PhoneMCPServer.handle(arguments) { name, input in
+                try self.mcpCall(name, arguments: input, budget: budget)
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys]), as: UTF8.self)
         })
         if connectionGeneration == generation, phoneToolsRunID == runID { phoneToolsReady = false }
     }
     func stopPhoneTools() { phoneToolsRunID = UUID(); phoneToolHost.stop(); phoneToolsReady = false }
-    private func phoneLibraryQuery() -> PhoneLibraryQuery {
+    func phoneLibraryQuery() -> PhoneLibraryQuery {
         var library = PhoneLibraryQuery()
         library.tracks = tracks; library.collections = collections; library.favorites = favorites
         library.offlineIDs = offlineIDs; library.annotations = annotations; library.downloading = downloading
@@ -669,6 +850,9 @@ private struct BoothLaunchConfiguration: Sendable {
         PerformanceProbe.event("library_store_ready")
         audio = try AudioFiles(directory: configuration.audioDirectory, session: PerformanceProbe.serverUnavailableSession)
         playbackPreferences = PlaybackSessionPreferences(scope: demo ? "demo-\(uiTestID?.uuidString ?? UUID().uuidString)" : scope)
+        #if os(iOS)
+        sonos.configure(playbackPreferences)
+        #endif
         #if DEBUG
         if !demo {
             let key = "djbooth.debug.offline.\(scope)"
@@ -760,6 +944,7 @@ private struct BoothLaunchConfiguration: Sendable {
         }
         #endif
         restorePlaybackSession()
+        restoreAgentConversation()
         #if DEBUG
         if !demo, let token = ProcessInfo.processInfo.environment["DJBOOTH_SYNC_TOKEN"], !token.isEmpty {
             // Development bootstrap still goes through issuer verification and
@@ -1034,38 +1219,50 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     @discardableResult
     func submitImport(_ source: String) async -> Bool {
-        guard let cloud, !demo, !submittingImport else { return false }
+        await submitImportJob(source) != nil
+    }
+    func submitImportJob(_ source: String, requestID: String? = nil) async -> CloudImportJob? {
+        guard let cloud, !demo, !submittingImport else { return nil }
         submittingImport = true; defer { submittingImport = false }
         let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = pendingImportKey
         let pending = UserDefaults.standard.dictionary(forKey: key)
-        let id = pending?["source"] as? String == source ? (pending?["id"] as? String ?? UUID().uuidString) : UUID().uuidString
+        let id = requestID ?? (pending?["source"] as? String == source ? (pending?["id"] as? String ?? UUID().uuidString) : UUID().uuidString)
         // Persist the request identity before sending, so uncertain responses are safe to retry.
         UserDefaults.standard.set(["id": id, "source": source], forKey: key)
         let generation = connectionGeneration
         do {
             let job = try await cloud.submitImport(id: id, source: source)
             UserDefaults.standard.removeObject(forKey: key)
-            guard generation == connectionGeneration else { return false }
+            guard generation == connectionGeneration else { return nil }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
             importError = nil
-            return true
+            return job
         } catch {
-            guard generation == connectionGeneration else { return false }
+            guard generation == connectionGeneration else { return nil }
             importError = error.localizedDescription
-            return false
+            return nil
         }
     }
     func retryImport(_ job: CloudImportJob) async {
-        guard let cloud, !demo, !submittingImport else { return }
-        submittingImport = true; defer { submittingImport = false }
         let generation = connectionGeneration
         do {
-            let updated = try await cloud.retryImport(id: job.id)
-            guard generation == connectionGeneration else { return }
-            if let index = importJobs.firstIndex(where: { $0.id == job.id }) { importJobs[index] = updated }
-            importError = nil
+            _ = try await retryImportJob(id: job.id)
         } catch { if generation == connectionGeneration { importError = error.localizedDescription } }
+    }
+    func retryImportJob(id: String, requestID: String = UUID().uuidString, refresh: Bool = false) async throws -> CloudImportJob {
+        guard let cloud, !demo, !submittingImport else { throw ClientError.http(409, "Cloud account is unavailable or an import submission is running") }
+        submittingImport = true; defer { submittingImport = false }
+        let generation = connectionGeneration
+        let job = try await cloud.retryImport(id: id, requestID: requestID, refresh: refresh)
+        guard generation == connectionGeneration else { throw CancellationError() }
+        importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
+        importError = nil
+        return job
+    }
+    func importStatus(id: String, offset: Int) async throws -> String {
+        guard let cloud, !demo else { throw ClientError.http(503, "Cloud account is not connected") }
+        return try await cloud.importStatus(id: id, offset: offset)
     }
     func favorite(_ track: Track) {
         do { try store.toggleFavorite(track.id); favorites = try store.favoriteIDs(); try reloadSyncState() } catch { message = error.localizedDescription }
@@ -1333,6 +1530,12 @@ private struct BoothLaunchConfiguration: Sendable {
         if selectedCollection == nil { showPlaylistBrowser = browseMode == .playlists }
         #endif
         queueCollection = session.queueCollection; queueFilter = session.queueFilter
+        #if os(iOS)
+        if sonos.ownsPlayback {
+            sonos.refreshLibraryMetadata(tracksByID, player: player)
+            return
+        }
+        #endif
         let queue = session.queueIDs.compactMap { tracksByID[$0] }
         guard let id = session.trackID, let track = tracksByID[id] else { player.stop(); return }
         if replacingItem {
@@ -1357,13 +1560,33 @@ private struct BoothLaunchConfiguration: Sendable {
                               elapsed: player.track?.id == track.id ? player.elapsed : 0, queueIndex: player.queueIndex)
     }
     func play(_ track: Track, preservingQueue: Bool = false, queuePosition: Int? = nil) async {
-        guard let canonical = tracksByID[track.id] else { return }
-        if !preservingQueue { queueCollection = selectedCollection; queueFilter = filter }
         let queue = preservingQueue ? player.queue : visibleTracks
-        let index = queuePosition ?? (preservingQueue ? player.queueIndex : nil)
+        let index = queuePosition ?? (preservingQueue ? (player.pendingStreamQueueIndex ?? player.queueIndex) : nil)
+        #if os(iOS)
+        // A restored speaker queue already owns its media URLs and metadata.
+        // Its controls must work before the local library finishes hydrating.
+        let speakerTrack = tracksByID[track.id] ?? track
+        if sonos.canSelect(speakerTrack, queue: queue) {
+            if !preservingQueue { queueCollection = selectedCollection; queueFilter = filter }
+            let speakerIndex = index.flatMap { position -> Int? in
+                guard queue.indices.contains(position), queue[position].id == speakerTrack.id else { return nil }
+                return queue.prefix(position).filter { $0.mediaHash != nil }.count
+            }
+            await sonos.select(speakerTrack, queuePosition: speakerIndex); return
+        }
+        #endif
+        guard let canonical = tracksByID[track.id] else {
+            #if os(iOS)
+            AppDiagnostics.shared.event("playback_selection_dropped", ["track": track.id,
+                "queueIndex": String(index ?? -1), "reason": "missing_library_track",
+                "sonosOwned": String(sonos.ownsPlayback)])
+            #endif
+            return
+        }
+        if !preservingQueue { queueCollection = selectedCollection; queueFilter = filter }
         await preparePlayback(canonical, queue: queue.contains(where: { $0.id == canonical.id }) ? queue : [canonical] + queue, elapsed: 0, queueIndex: index)
     }
-    private func preparePlayback(_ track: Track, queue: [Track], elapsed: Double, queueIndex: Int? = nil) async {
+    private func preparePlayback(_ track: Track, queue: [Track], elapsed: Double, queueIndex: Int? = nil, autoplay: Bool = true) async {
         PerformanceProbe.playRequested(trackID: track.id)
         let request = UUID(); playbackRequest = request
         let generation = connectionGeneration
@@ -1373,6 +1596,56 @@ private struct BoothLaunchConfiguration: Sendable {
         // Preview gestures select a paused fixture without pretending to acquire audio.
         if demo && !track.id.hasPrefix("usb:") { return }
         do {
+            #if os(iOS)
+            if sonos.room != nil {
+                guard let cloud else { throw ClientError.http(400, "Connect your cloud library to play on Sonos.") }
+                guard !track.id.hasPrefix("connected:") else {
+                    throw ClientError.http(400, "This Sonos connection plays your library files. Connected streaming tracks need an AirPlay-capable speaker.")
+                }
+                if track.mediaHash == nil { _ = try await offlineAudio(track) }
+                guard request == playbackRequest, generation == connectionGeneration, sonos.room != nil,
+                      let selected = tracksByID[track.id], let hash = selected.mediaHash else { return }
+                let preparationStarted = ContinuousClock.now
+                // Both requests are independent. Do not put a full cloud round trip
+                // between checking the selected file and minting the queue capability.
+                async let mediaExists = sonos.mediaExists(hash, cloud: cloud)
+                // Keep the original occurrence while filtering unavailable rows.
+                // Identical recordings can occur more than once in a playlist.
+                let playableQueue = queue.enumerated().compactMap { position, track -> (position: Int, track: Track)? in
+                    guard let canonical = tracksByID[track.id], canonical.mediaHash != nil else { return nil }
+                    return (position, canonical)
+                }
+                let speakerQueue = playableQueue.map(\.track)
+                let available = speakerQueue.contains(where: { $0.id == selected.id }) ? speakerQueue : [selected] + speakerQueue
+                let index = playableQueue.firstIndex { $0.position == player.queueIndex && $0.track.id == selected.id }
+                    ?? available.firstIndex { $0.id == selected.id } ?? 0
+                let session = try await cloud.speakerSession(tracks: available.map {
+                    CloudClient.SpeakerTrack(hash: $0.mediaHash!, mediaExtension: SonosPlayback.mediaExtension($0.mediaExtension))
+                })
+                do {
+                    if !(try await mediaExists) {
+                        let file = try await offlineAudio(selected)
+                        try await cloud.upload(file: file, hash: hash)
+                    }
+                } catch {
+                    Task { try? await cloud.revokeSpeakerSession(session.session) }
+                    throw error
+                }
+                guard request == playbackRequest, generation == connectionGeneration, sonos.room != nil else {
+                    Task { try? await cloud.revokeSpeakerSession(session.session) }; return
+                }
+                AppDiagnostics.shared.event("sonos_media_ready", ["track": selected.id,
+                    "elapsed": String(describing: preparationStarted.duration(to: .now)), "queueCount": String(available.count)])
+                try await sonos.play(queue: available, index: index, session: session, cloud: cloud, player: player, autoplay: autoplay)
+                return
+            }
+            #endif
+            // A paused transfer back to this phone only prepares the selected
+            // item. Resume can acquire remote audio through the normal path.
+            if !autoplay {
+                if let url = localAudioURL(track) { player.attach(url: url, autoplay: false) }
+                return
+            }
             if track.id.hasPrefix("usb:") {
                 guard sourceIsAvailable(track.id), let location = try store.usbFile(track.id), let access = usbDevice else {
                     throw USBLibraryError.disconnected
@@ -1436,7 +1709,16 @@ private struct BoothLaunchConfiguration: Sendable {
                 player.attachCloud(client: cloud, hash: hash, mediaExtension: current.mediaExtension)
             }
             if track.waveform == nil { Task { await loadWaveform(track) } }
-        } catch { if request == playbackRequest, generation == connectionGeneration, !(error is CancellationError) { message = error.localizedDescription } }
+        } catch {
+            if request == playbackRequest, generation == connectionGeneration, !(error is CancellationError) {
+                #if os(iOS)
+                if sonos.room != nil {
+                    sonos.logPreparationFailure(error, trackID: track.id, requestID: request.uuidString)
+                }
+                #endif
+                message = error.localizedDescription
+            }
+        }
     }
     func keepOffline(_ track: Track) async {
         guard !demo || track.id.hasPrefix("usb:") else { return }
@@ -1642,6 +1924,7 @@ private struct BoothLaunchConfiguration: Sendable {
         #if os(iOS)
         await djLink.disconnect()
         await spotifyStreaming.disconnect(); spotifySignIn = nil
+        await sonos.disconnect()
         #endif
         persistPlaybackSession()
         clearAgent()
@@ -1667,6 +1950,9 @@ private struct BoothLaunchConfiguration: Sendable {
         #endif
         playbackSessionReady = false
         playbackPreferences = PlaybackSessionPreferences(scope: "local")
+        #if os(iOS)
+        sonos.configure(playbackPreferences)
+        #endif
         audio = localAudio; store = localStore
         usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
         try await reload(); restorePlaybackSession()
@@ -1692,10 +1978,14 @@ private struct BoothLaunchConfiguration: Sendable {
         #if os(iOS)
         await djLink.disconnect()
         await spotifyStreaming.disconnect(); spotifySignIn = nil
+        await sonos.disconnect()
         #endif
         persistPlaybackSession()
         playbackSessionReady = false
         playbackPreferences = PlaybackSessionPreferences(scope: scope)
+        #if os(iOS)
+        sonos.configure(playbackPreferences)
+        #endif
         cloudURL = endpoint.url.absoluteString
         clearAgent()
         workstationConnected = false; workstationTracks = [:]; bootstrap = nil; bootstrapEndpoint = nil
@@ -1727,6 +2017,7 @@ private struct BoothLaunchConfiguration: Sendable {
         crews = crewCache.crews; crewDetails = crewCache.details; crewCrates = crewCache.crates; crewError = nil
         selectedCrewID = nil; selectedCrewCrateID = nil
         usbDevice = try store.usbDevice(); usbConnected = false; usbSignature = nil
+        restoreAgentConversation()
         try await reload()
         restorePlaybackSession()
         Task { await synchronize(); await refreshMusic(force: true); await refreshCrews() }

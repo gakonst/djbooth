@@ -1,3 +1,5 @@
+import { telemetry, failureKind, receiptFields } from "./telemetry.js";
+import { configureAgent } from "./agent-settings.js";
 import { DurableObject } from "cloudflare:workers";
 import { createTools, type Tools, type AttachmentClient } from "nanocodex/tools";
 import {
@@ -9,7 +11,8 @@ import {
   digest,
   type Account,
 } from "./auth.js";
-import { phoneToolDigest, phoneTools } from "./phone-tools.js";
+import { phoneToolDigest, phoneTools, appMcpTools } from "./phone-tools.js";
+import { inspectImport } from "./imports.js";
 import type { Env } from "./index.js";
 
 type Owner = { account: Account; token: string; origin: string };
@@ -26,7 +29,7 @@ export async function requireAgentTools(account: Account): Promise<void> {
   )
     throw new AuthError(
       403,
-      "Sign in again with Nanocodex to approve your agent's DJ Booth cloud workspace and phone library tools.",
+      "Sign in again with Nanocodex to approve your agent's DJ Booth cloud workspace and phone app controls.",
     );
 }
 export async function ensureAgentTools(request: Request, env: Env, account: Account) {
@@ -40,7 +43,7 @@ export async function ensureAgentTools(request: Request, env: Env, account: Acco
   return host;
 }
 
-/** One signed Connect grant/agent owns the whole catalog; the phone is only a query bridge. */
+/** One signed Connect grant/agent owns the whole catalog; the phone owns its MCP server. */
 export class AgentTools extends DurableObject<Env> {
   private runtime?: Tools;
   private attachment?: AttachmentClient;
@@ -98,53 +101,112 @@ export class AgentTools extends DurableObject<Env> {
   }
   private async attach(owner: Owner): Promise<void> {
     if (this.attachment?.connected) return;
+    await configureAgent(this.env, owner);
     await this.runtime?.close();
     const target = `${CONNECT_API}/v1/grants/${owner.account.grantId}/agents/${owner.account.agentId}/tool-host`;
     this.runtime = await createTools({
-      tools: phoneTools.map((tool) => ({
-        ...tool,
-        handler: async (input: unknown) => {
-          const live = await this.verified();
-          if (tool.name === "djbooth_query") return this.query(input);
-          const value = input as Record<string, unknown>;
-          const id = value.job_id;
-          if (typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id))
-            throw new Error("Invalid download job ID");
-          const row = await this.env.LIBRARY_DB.prepare(
-            "SELECT source, status, collection_id, current, total FROM import_requests WHERE workflow_id IS NULL AND account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running','complete')",
-          )
-            .bind(live.account.id, id, live.account.grantId, live.account.agentId)
-            .first<{
-              source: string;
-              status: string;
-              collection_id: string | null;
-              current: number;
-              total: number;
-            }>();
-          if (!row || !this.env.PLAYLIST_CONTAINERS)
-            throw new Error("This download is not authorized for this agent and Connect grant");
-          if (row.status === "complete")
-            return JSON.stringify({
-              status: "completed",
-              download: "complete",
-              collectionID: row.collection_id,
-              current: row.current,
-              total: row.total,
-              message: "Audio and CDJ analysis were published and backed up.",
-            });
-          const sandbox = this.env.PLAYLIST_CONTAINERS.getByName(`${live.account.id}:${id}`);
-          await sandbox.enqueue(live.account.id, id, row.source);
-          return JSON.stringify(
-            await sandbox.execute(
-              live.account.id,
-              live.account.grantId,
-              live.account.agentId!,
-              id,
-              value,
-            ),
-          );
+      tools: phoneTools
+        .filter((tool) => tool.name === "djbooth_exec")
+        .map((tool) => ({
+          ...tool,
+          handler: async (input: unknown) => {
+            const live = await this.verified();
+            const value = input as Record<string, unknown>;
+            const id = value.job_id;
+            if (typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id))
+              throw new Error("Invalid download job ID");
+            if (value.operation === "status")
+              return JSON.stringify(
+                await inspectImport(
+                  this.env,
+                  live.account.id,
+                  id,
+                  value.offset === undefined ? 0 : Number(value.offset),
+                ),
+              );
+            const row = await this.env.LIBRARY_DB.prepare(
+              "SELECT source, status, collection_id, current, total FROM import_requests WHERE workflow_id IS NULL AND account_id=? AND id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running','complete')",
+            )
+              .bind(live.account.id, id, live.account.grantId, live.account.agentId)
+              .first<{
+                source: string;
+                status: string;
+                collection_id: string | null;
+                current: number;
+                total: number;
+              }>();
+            if (!row || !this.env.PLAYLIST_CONTAINERS)
+              throw new Error("This download is not authorized for this agent and Connect grant");
+            if (row.status === "complete")
+              return JSON.stringify({
+                status: "completed",
+                download: "complete",
+                collectionID: row.collection_id,
+                current: row.current,
+                total: row.total,
+                message: "Audio and CDJ analysis were published and backed up.",
+              });
+            const sandbox = this.env.PLAYLIST_CONTAINERS.getByName(`${live.account.id}:${id}`);
+            await sandbox.enqueue(live.account.id, id, row.source);
+            return JSON.stringify(
+              await sandbox.execute(
+                live.account.id,
+                live.account.grantId,
+                live.account.agentId!,
+                id,
+                value,
+              ),
+            );
+          },
+        })),
+      mcp: {
+        djbooth: {
+          description:
+            "DJ Booth phone: library, playlists, playback, Sonos, decks, mixer and recording controls. Open the app to execute. Actions return durable receipts; poll operation_status.",
+          client: {
+            // Offline discovery is allowed; execution always reaches the phone.
+            listTools: async () => ({ tools: appMcpTools }),
+            callTool: async (params) => {
+              const started = Date.now(),
+                rpcID = crypto.randomUUID();
+              const context = {
+                rpcID,
+                accountID: owner.account.id,
+                agentID: owner.account.agentId,
+                tool: params.name,
+                requestID: params.arguments?.requestID,
+                importID: params.arguments?.importID,
+              };
+              telemetry("mcp_call_started", context);
+              try {
+                await this.verified();
+                const reply = JSON.parse(
+                  await this.query({ jsonrpc: "2.0", id: rpcID, method: "tools/call", params }),
+                );
+                if (reply.error) throw new Error(reply.error.message);
+                telemetry("mcp_call_finished", {
+                  ...context,
+                  durationMs: Date.now() - started,
+                  status: reply.result?.isError ? "tool_error" : "delivered",
+                  responseBytes: new TextEncoder().encode(JSON.stringify(reply.result)).byteLength,
+                });
+                const receipt = receiptFields(reply.result);
+                if (receipt) telemetry("mcp_action_observed", { ...context, ...receipt });
+                return reply.result;
+              } catch (error) {
+                telemetry("mcp_call_failed", {
+                  ...context,
+                  durationMs: Date.now() - started,
+                  failure: failureKind(error),
+                });
+                throw error;
+              }
+            },
+          },
+          timeoutMs: 8000,
         },
-      })),
+      },
+      mcpOptions: { catalogProvider: () => "javascript" },
     });
     this.attachment = await this.runtime
       .attach({
@@ -266,10 +328,12 @@ export class AgentTools extends DurableObject<Env> {
       }
     } catch (error) {
       if (!(error instanceof AuthError) || ![401, 403].includes(error.status)) {
+        telemetry("agent_host_reconnect", { failure: failureKind(error) });
         await this.ctx.storage.setAlarm(Date.now() + 30_000);
         return;
       }
       const owner = await this.ctx.storage.get<Owner>("owner");
+      telemetry("agent_host_authorization_expired", { accountID: owner?.account.id });
       if (owner)
         await this.env.LIBRARY_DB.prepare(
           "UPDATE import_requests SET status='failed', message='Nanocodex authorization expired or was revoked. Reconnect, then retry.', updated_at=? WHERE workflow_id IS NULL AND account_id=? AND agent_grant_id=? AND agent_id=? AND (status IN ('queued','running') OR (status='failed' AND message='Your agent stopped before publishing all tracks. Retry to resume saved work.'))",
@@ -307,10 +371,13 @@ export class AgentTools extends DurableObject<Env> {
     const socket = pair[1];
     socket.accept();
     for (const pending of this.queries.values())
-      pending.reject(new Error("Phone reconnected; query again."));
+      pending.reject(
+        new Error("Phone reconnected; reuse the same action requestID when retrying."),
+      );
     this.queries.clear();
     this.phone?.close(1000, "Reconnected");
     this.phone = socket;
+    telemetry("phone_connected", { accountID: owner.account.id, agentID: owner.account.agentId });
     socket.addEventListener("message", (event) => {
       try {
         if (this.phone !== socket) return;
@@ -332,24 +399,38 @@ export class AgentTools extends DurableObject<Env> {
           socket.send(JSON.stringify({ type: "ack", call_id: frame.call_id }));
         }
       } catch {
+        telemetry("phone_frame_rejected");
         socket.close(1008, "Invalid phone frame");
       }
     });
     socket.addEventListener("close", () => {
-      if (this.phone === socket) this.phone = undefined;
+      if (this.phone === socket) {
+        telemetry("phone_disconnected", {
+          accountID: owner.account.id,
+          pending: this.queries.size,
+        });
+        this.phone = undefined;
+        for (const pending of this.queries.values())
+          pending.reject(
+            new Error("Phone disconnected; reuse the same action requestID when retrying."),
+          );
+        this.queries.clear();
+      }
     });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   private async query(input: unknown): Promise<string> {
     if (!this.phone || this.phone.readyState !== WebSocket.OPEN)
       throw new Error(
-        "Open DJ Booth on your phone to query its state. Cloud downloads remain available.",
+        "Open DJ Booth on your phone to use its MCP tools. Cloud downloads remain available.",
       );
     const id = crypto.randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.queries.delete(id);
-        reject(new Error("Phone query timed out"));
+        reject(
+          new Error("Phone MCP call timed out; reuse the same action requestID when retrying"),
+        );
       }, 8000);
       this.queries.set(id, {
         resolve: (value) => {
@@ -365,7 +446,7 @@ export class AgentTools extends DurableObject<Env> {
         JSON.stringify({
           type: "call",
           call_id: id,
-          name: "djbooth_query",
+          name: "mcp",
           input,
           deadline_at: Date.now() + 8000,
           output_byte_budget: 32000,

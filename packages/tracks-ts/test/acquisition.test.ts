@@ -7,9 +7,11 @@ import { describe, expect, test } from "vitest";
 
 import {
   audioMetadataWithAcquisitionSource,
+  createSourceSetClip,
   normalizeMatchText,
   probeAudio,
   readManifest,
+  retagAudio,
   safeFilename,
   scoreYoutubeCandidates,
   sourceSetClipEncoding,
@@ -45,6 +47,68 @@ describe("acquisition primitives", () => {
         await writeFile(path, bytes);
         await expect(probeAudio(path)).resolves.toMatchObject({ codec: "aac", durationSeconds: 1 });
         await expect(verifyAudioFile(path)).rejects.toThrow(/ffmpeg failed/);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(spawnSync("ffmpeg", ["-version"]).status !== 0)(
+    "writes streamable M4A atom order while preserving metadata for acquisitions and set clips",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-faststart-"));
+      try {
+        const sourcePath = join(directory, "source.m4a");
+        execFileSync("ffmpeg", [
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=1",
+          "-c:a",
+          "aac",
+          sourcePath,
+        ]);
+        const metadata = {
+          title: "Streamable & tagged",
+          artists: ["Test Artist"],
+          label: "Test Publisher",
+          comment: "Acquisition provenance",
+        };
+        for (const kind of ["retag", "clip"] as const) {
+          const outputPath = join(directory, `${kind}.m4a`);
+          const options = { sourcePath, outputPath, metadata };
+          const verified =
+            kind === "retag"
+              ? await retagAudio(options)
+              : await createSourceSetClip({ ...options, startSeconds: 0, endSeconds: 0.5 });
+          expect(verified.probe).toMatchObject({
+            codec: "aac",
+            tags: {
+              title: metadata.title,
+              artist: metadata.artists[0],
+              publisher: metadata.label,
+              comment: metadata.comment,
+            },
+          });
+          const bytes = await readFile(outputPath);
+          const atoms: string[] = [];
+          // Walk box boundaries: byte searches could mistake embedded metadata
+          // or audio payload for a top-level moov/mdat atom.
+          let offset = 0;
+          while (offset < bytes.length) {
+            expect(offset + 8).toBeLessThanOrEqual(bytes.length);
+            const size = bytes.readUInt32BE(offset);
+            expect(size).toBeGreaterThanOrEqual(8);
+            expect(offset + size).toBeLessThanOrEqual(bytes.length);
+            atoms.push(bytes.toString("ascii", offset + 4, offset + 8));
+            offset += size;
+          }
+          expect(atoms).toContain("moov");
+          expect(atoms).toContain("mdat");
+          expect(atoms.indexOf("moov")).toBeLessThan(atoms.indexOf("mdat"));
+        }
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

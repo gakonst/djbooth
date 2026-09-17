@@ -16,6 +16,7 @@ mod protocol;
 pub mod recording;
 mod remote_db_audit;
 mod search;
+pub mod sonos;
 mod telemetry;
 
 pub use djlink::*;

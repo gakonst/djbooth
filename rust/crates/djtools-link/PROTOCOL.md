@@ -110,6 +110,52 @@ The phone must call this same Rust Stagehand session and consume
 The desktop's isolated BPF identity is not available on iOS. The mobile binding
 can select the existing kernel UDP transport using its assigned interface IP.
 
+With a shared source IP, directed Stagehand presence is restricted to the A9;
+CDJs receive only the Rekordbox identity plus status-port telemetry requests.
+The 2026-09-17 capture `session-1789628315629-B12ED188-C4CC-49C9-9FBC-C1545577DDB4`
+showed both Rekordbox/player 17 and Stagehand/player 177 announced to both CDJs
+from `169.254.46.112`. Each deck opened six RemoteDB sessions in about 15 seconds,
+alternating between decks. This is evidence of a conflicting identity and
+session churn. The follow-up hardware capture
+`session-1789628823962-DE655B2F-F3C1-4BA5-8BC2-5AE9B2FE9E13`
+confirmed suppression on both CDJs, continuous discovery until cable removal,
+and playing status from both decks. The periodic two-second INTRODUCE loop was
+absent: each deck introduced once, followed by actual playlist, metadata, ANLZ,
+and audio reads. There were still three RemoteDB connections per deck, including
+client close/teardown requests; this is not evidence of zero reconnects. Three
+MENU_OFFSET requests were handled, but the capture alone does not verify the
+cursor visually returning to the correct item. Observation lasted 31 seconds.
+The same plug still took 21.445 seconds to receive IPv4, followed by 73 ms to
+serve and 0.97 seconds to list both decks. Address-assignment latency remains.
+Desktop continues its full Stagehand join from its distinct IP. On the phone,
+extended telemetry that requires a separate Stagehand registration (including
+key shift) is not guaranteed by the heartbeat-only path; normal CDJ status and
+library service remain active. Do not restore duplicate presence to obtain it.
+
+#### Wired address assignment precedes DJ Link discovery
+
+The 2026-09-17 UTC phone trace distinguishes three stages: `interface_scan_changed`
+first records USB `en5` with only an AF_LINK entry at `1789626884695`; its IPv4
+entry appears at `1789626905983` (21.288 seconds later); `cdj_serving` follows at
+`1789626906073`. The first deck's RemoteDB connection opens at `1789626906712`.
+Do not report discovery timer improvements as eliminating the address-assignment wait.
+
+AlphaTheta's [iOS FAQ](https://rekordbox.com/en/support/faq/ios/#faq-12293)
+documents approximately 20 seconds before wired communication starts. Apple's
+[DHCP implementation](https://github.com/apple-oss-distributions/bootp/blob/main/IPConfiguration.bproj/dhcp.c)
+allocates a link-local address after a retry threshold; the
+[defaults](https://github.com/apple-oss-distributions/bootp/blob/main/IPConfiguration.bproj/ipconfigd.c)
+use four retries and exponential backoff. This is consistent with the observed
+pre-IPv4 delay, not evidence of a 20-second timer in our Rust server.
+
+An on-device check in the signed development app returned `EPERM` for both
+opening `/dev/bpf0` and creating an IPv4 raw UDP socket (effective UID 501).
+`network_diagnostics().raw_transport_capabilities` records these read-only
+checks once per process. The desktop raw transport cannot be enabled merely
+by adding Swift bindings. A manual phone address or an available DHCP server
+would change address acquisition, but neither has been verified as a remedy
+on this CDJ USB connection. No automatic app-only bypass is currently verified.
+
 The initial 2026-09-16 iPhone 17 Pro test, connected through a CDJ-3000's rear USB port,
 received A9 announcements and on-air packets but no `0x39` control stream.
 Directed Stagehand announcements, the original subnet broadcast handshake, and

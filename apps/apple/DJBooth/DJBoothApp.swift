@@ -75,9 +75,16 @@ struct BoothRoot: View {
         platformRoot
             .background(BoothStyle.background)
             .sheet(isPresented: $model.showSettings) { ConnectionSettings(model: model) }
+            #if os(macOS)
             .sheet(isPresented: $model.showAgent) { MusicAgentView(model: model) }
+            #endif
+            .task(id: "agent:\(model.accountConnectionID):\(model.agentPendingID ?? ""):\(model.agentRetry):\(scenePhase)") {
+                guard scenePhase == .active else { return }
+                await model.observeAgentTurn()
+            }
             #if os(iOS)
             .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
+            .sheet(isPresented: $model.showSonosSettings) { SonosOutputSheet(model: model) }
             #endif
             .sheet(item: $model.spotifySignIn, onDismiss: { model.spotifySignInDismissed() }) { source in
                 SpotifyStreamingSignIn(source: source) { token in try await model.authorizeSpotify(source, token: token) }
@@ -105,17 +112,22 @@ struct BoothRoot: View {
                 #if os(iOS) && DEBUG
                 DJLinkHardwareControl.shared.model = model
                 #endif
-                model.player.onAdvance = { track in Task { await model.play(track, preservingQueue: true) } }
+                model.player.onAdvance = { track in
+                    let index = model.player.pendingStreamQueueIndex ?? model.player.queueIndex
+                    Task { await model.play(track, preservingQueue: true, queuePosition: index) }
+                }
                 async let analysis: Void = model.finishLoadingLibrary()
                 if !PerformanceProbe.offline { await model.startup() }
                 await analysis
             }
             .onChange(of: scenePhase) { _, phase in
+                if phase != .active { model.persistAgentConversation() }
                 if phase != .active {
                     model.persistPlaybackSession()
                     model.stopPhoneTools()
                     #if os(iOS)
                     if phase == .background {
+                        model.sonos.suspendVolumeControl()
                         model.djLink.sceneChanged(background: true, audioPlaying: model.player.playing)
                     }
                     #endif
@@ -137,6 +149,10 @@ struct BoothRoot: View {
             }
             #if os(iOS)
             .task { await model.djLink.monitor(model: model) }
+            .task(id: "sonos:\(model.accountConnectionID):\(scenePhase)") {
+                guard scenePhase == .active else { return }
+                await model.reconnectSonos()
+            }
             #endif
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
@@ -164,7 +180,11 @@ struct BoothRoot: View {
         if model.needsMobileSignIn {
             MobileSignInView(model: model)
         } else {
-            MobileLibraryNavigation(model: model)
+            ZStack {
+                MobileLibraryNavigation(model: model)
+                    .allowsHitTesting(!model.showAgent).accessibilityHidden(model.showAgent)
+                if model.showAgent { MusicAgentView(model: model).zIndex(1) }
+            }
         }
         #endif
     }

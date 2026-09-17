@@ -241,6 +241,7 @@ actor BoothMIDIInput {
             guard model.djLink.status.running else { throw RecordingFailure(message: "Connect your CDJs before recording.") }
             if includeAudio {
                 let allowed = await AVAudioApplication.requestRecordPermission()
+                try Task.checkCancellation()
                 guard allowed else { throw RecordingFailure(message: "Allow audio recording in Settings to capture the mixer.") }
                 model.player.pause()
             }
@@ -260,6 +261,7 @@ actor BoothMIDIInput {
             let arguments = try JSONSerialization.data(withJSONObject: ["directory": folder.path, "audio": includeAudio, "tracks": ["library": tracks, "served": served]])
             progress = try await Task.detached { try JSONDecoder().decode(RecordingProgress.self, from: DJLinkBindings.request("recording.start", arguments: arguments)) }.value
             timelineStarted = true
+            try Task.checkCancellation()
             if includeAudio { try await PlaybackAudioSession.shared.startRecording(at: folder) }
             let midi = BoothMIDIInput(); self.midi = midi
             do { try await midi.start() } catch {
@@ -333,7 +335,7 @@ actor BoothMIDIInput {
 }
 
 /// Apple file/codec adapter; track identity and timing come exclusively from Rust.
-private enum RecordedSetExport {
+enum RecordedSetExport {
     static func prepare(_ directory: URL) throws -> URL? {
         _ = try DJLinkBindings.request("recording.prepare", arguments: JSONSerialization.data(withJSONObject: ["directory": directory.path]))
         let source = directory.appendingPathComponent("master.caf")
@@ -365,6 +367,27 @@ private enum RecordedSetExport {
         } // Finalize the WAV header before making it available to the uploader.
         try FileManager.default.moveItem(at: temporary, to: destination)
         return destination
+    }
+}
+
+@MainActor extension BoothModel {
+    func publishRecordedSet(_ directory: URL, source: MusicSource,
+                            progress: (@Sendable (String) -> Void)? = nil) async throws -> RecordingUploadResult {
+        let account = accountConnectionID
+        progress?("Checking SoundCloud connection…")
+        let capability = try await recordingUploadAvailability(source)
+        guard capability.available else { throw RecordingFailure(message: capability.reason ?? "SoundCloud recording uploads are unavailable.") }
+        try Task.checkCancellation()
+        guard accountConnectionID == account else { throw CancellationError() }
+        progress?("Preparing audio and tracklist…")
+        guard let audio = try await Task.detached(operation: { try RecordedSetExport.prepare(directory) }).value else {
+            throw RecordingFailure(message: "This recording has a deck timeline only. Connect USB mixer audio to record a mix for SoundCloud.")
+        }
+        try Task.checkCancellation()
+        guard accountConnectionID == account else { throw CancellationError() }
+        let description = try String(contentsOf: directory.appendingPathComponent("tracklist.txt"), encoding: .utf8)
+        return try await uploadRecording(file: audio, source: source, title: "DJ set " + directory.lastPathComponent,
+                                         description: description, progress: progress)
     }
 }
 
@@ -413,19 +436,10 @@ private struct RecordedSetRow: View {
         Task {
             defer { preparing = false; uploadPhase = nil }
             do {
-                uploadPhase = "Checking SoundCloud connection…"
-                let capability = try await model.recordingUploadAvailability(source)
-                guard capability.available else { throw RecordingFailure(message: capability.reason ?? "SoundCloud recording uploads are unavailable.") }
-                uploadPhase = "Preparing audio and tracklist…"
-                guard let audio = try await Task.detached(operation: { try RecordedSetExport.prepare(directory) }).value else {
-                    throw RecordingFailure(message: "This recording has a deck timeline only. Connect USB mixer audio to record a mix for SoundCloud.")
+                let result = try await model.publishRecordedSet(directory, source: source) { phase in
+                    Task { @MainActor in uploadPhase = phase }
                 }
-                let description = try String(contentsOf: directory.appendingPathComponent("tracklist.txt"), encoding: .utf8)
                 prepared = true
-                let result = try await model.uploadRecording(file: audio, source: source,
-                    title: "DJ set " + directory.lastPathComponent, description: description) { phase in
-                        Task { @MainActor in uploadPhase = phase }
-                    }
                 uploaded = result.url
             } catch { failure = error.localizedDescription }
         }

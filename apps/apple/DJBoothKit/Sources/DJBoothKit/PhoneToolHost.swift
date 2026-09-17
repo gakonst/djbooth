@@ -26,6 +26,7 @@ import Foundation
 
     public func run(client: CloudClient,
                     status: @escaping @MainActor (Bool, String?) -> Void,
+                    diagnostics: (@MainActor (Error, Int) -> Void)? = nil,
                     query: @escaping @MainActor ([String: Any], Int) throws -> String) async {
         stop()
         let current = generation
@@ -83,7 +84,7 @@ import Foundation
                             if let receipt = receipts[id] { try await connection.send(.string(receipt)); continue }
                             let result: [String: Any]
                             do {
-                                guard frame["name"] as? String == "djbooth_query",
+                                guard frame["name"] as? String == "mcp",
                                       let budget = frame["output_byte_budget"] as? Int, budget > 0,
                                       let tokens = frame["output_token_budget"] as? Int, tokens > 0,
                                       let deadline = frame["deadline_at"] as? Double, deadline > Date().timeIntervalSince1970 * 1000 else {
@@ -115,6 +116,7 @@ import Foundation
             } catch {
                 guard !Task.isCancelled, generation == current else { return }
                 socket?.cancel(with: .goingAway, reason: nil); socket = nil
+                diagnostics?(error, failures + 1)
                 status(false, error.localizedDescription)
                 // Approval errors require an explicit new login, not retries.
                 if case ClientError.http(let code, _) = error, [401, 403, 409].contains(code) { return }

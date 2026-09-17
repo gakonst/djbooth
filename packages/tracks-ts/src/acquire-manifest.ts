@@ -1624,6 +1624,11 @@ function priorDownloadForVariant(
     );
     return byCue ?? (sourceClips.length === 1 ? sourceClips[0] : undefined);
   }
+  // Cached clips may carry the same Spotify/variant ID as the wanted recording.
+  // Never checkpoint or relabel them as an individual acquisition.
+  downloads = downloads.filter(
+    (download) => download.kind !== "source-set-clip" && download.clip === undefined,
+  );
   if (variant.spotifyId) {
     return downloads.find((download) => download.spotifyId === variant.spotifyId);
   }

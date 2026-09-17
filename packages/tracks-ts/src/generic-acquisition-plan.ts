@@ -22,6 +22,8 @@ export type BuildAcquisitionPlanOptions = {
   sourceSetPath?: string;
   /** Keep an entire verified mix as one recording, instead of acquiring its constituent tracks. */
   wholeSet?: boolean;
+  /** Re-attempt standalone recordings before honoring earlier set-clip failures. */
+  retryIndividualRecordings?: boolean;
   /** Absolute scratch directory. Defaults to `<outputDirectory>/.staging`. */
   stagingDirectory?: string;
 };
@@ -119,22 +121,46 @@ export async function buildAcquisitionPlan(
     };
   }
   const localDirectories = [...new Set([outputDirectory, ...(options.localDirectories ?? [])])];
-  const artifacts = await discoverLocalArtifacts(localDirectories);
+  // A set excerpt is never a standalone recording, even when its filename/Spotify ID matches.
+  const clipPaths = new Set(
+    manifest.entries.flatMap((entry) =>
+      entry.acquisition.status === "downloaded"
+        ? [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])]
+            .filter(
+              (download) => download.kind === "source-set-clip" || download.clip !== undefined,
+            )
+            .map((download) => resolve(download.mediaPath))
+        : [],
+    ),
+  );
+  const artifacts = (await discoverLocalArtifacts(localDirectories)).filter(
+    (artifact) =>
+      !clipPaths.has(resolve(artifact.path)) && !/\[set[ -]extract(?:\]|-)/i.test(artifact.path),
+  );
   const adoptedPaths = new Set<string>();
   const recordings = manifest.entries.flatMap((entry) => {
     const identities = recordingIdentities(entry);
     if (!identities.length) return [];
-    const availableArtifacts =
-      sourceSet && hasSourceSetRecoveryHistory(entry)
-        ? artifacts.filter((artifact) => !isWithin(outputDirectory, artifact.path))
-        : artifacts;
+    // Re-resolving a set can replace identities and their old failure history.
+    // Its output directory can still contain extracts named like recordings.
+    // Verified individual downloads resume from their durable acquisition rows.
+    const availableArtifacts = sourceSet
+      ? artifacts.filter((artifact) => !isWithin(outputDirectory, artifact.path))
+      : artifacts;
     return [
       {
         entryOrder: entry.order,
         variants: identities.map((identity) => {
           const local = selectLocalArtifact(identity, availableArtifacts, adoptedPaths);
           if (local) adoptedPaths.add(local.path);
-          return recordingVariant(manifest, entry, identity, outputDirectory, local, sourceSet);
+          return recordingVariant(
+            manifest,
+            entry,
+            identity,
+            outputDirectory,
+            local,
+            options.retryIndividualRecordings ? undefined : sourceSet,
+          );
         }),
       },
     ];
