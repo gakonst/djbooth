@@ -220,6 +220,11 @@ before(async () => {
       .replace(/\n/g, " "),
   );
   await database.exec(
+    (await readFile(new URL("../migrations/0009_crews.sql", import.meta.url), "utf8"))
+      .replace(/^--.*$/gm, "")
+      .replace(/\n/g, " "),
+  );
+  await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
 });
@@ -231,6 +236,79 @@ function request(path, init = {}) {
     headers: { authorization: `Bearer ${TOKEN}`, ...init.headers },
   });
 }
+
+test("crews share item-level crates without exposing them to non-members", async () => {
+  const send = (token, path, body, method = "POST") =>
+    runtime.dispatchFetch(`https://library.test${path}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  const createdResponse = await send(TOKEN, "/v1/crews", {
+    name: "No Static",
+    displayName: "Georgios",
+  });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json();
+  assert.match(created.id, /^crew_/);
+  assert.deepEqual((await (await send(TOKEN_B, "/v1/crews", null, "GET")).json()).crews, []);
+
+  const inviteResponse = await send(TOKEN, `/v1/crews/${created.id}/invites`, { role: "dj" });
+  assert.equal(inviteResponse.status, 201);
+  const invite = await inviteResponse.json();
+  assert.equal(invite.token.length, 43);
+  const accepted = await send(TOKEN_B, `/v1/crew-invites/${invite.token}/accept`, {
+    displayName: "John",
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).members.length, 2);
+  assert.equal(
+    (await (await send(TOKEN_B, "/v1/crews", null, "GET")).json()).crews[0].name,
+    "No Static",
+  );
+
+  const crateResponse = await send(TOKEN, `/v1/crews/${created.id}/crates`, { name: "Late night" });
+  assert.equal(crateResponse.status, 201);
+  const crate = await crateResponse.json();
+  const shared = await send(TOKEN_B, `/v1/crews/${created.id}/crates/${crate.id}/items`, {
+    track: {
+      recordingID: "track-1",
+      localTrackID: "local-a",
+      title: "Apathy",
+      artist: "Bontan",
+      bpm: 123,
+      musicalKey: "8A",
+    },
+    note: "Closer",
+  });
+  assert.equal(shared.status, 200);
+  const detail = await shared.json();
+  assert.equal(detail.items.length, 1);
+  assert.equal(detail.items[0].title, "Apathy");
+  assert.equal(detail.items[0].note, "Closer");
+  const second = await (
+    await send(TOKEN, `/v1/crews/${created.id}/crates/${crate.id}/items`, {
+      track: { recordingID: "track-2", title: "Dancing Shoes", artist: "ATSOU", bpm: 122 },
+    })
+  ).json();
+  const moved = await send(
+    TOKEN_B,
+    `/v1/crews/${created.id}/crates/${crate.id}/items/${detail.items[0].id}`,
+    { afterItemID: second.items[1].id },
+    "PATCH",
+  );
+  assert.equal(moved.status, 200);
+  assert.deepEqual(
+    (await moved.json()).items.map((item) => item.recordingID),
+    ["track-2", "track-1"],
+  );
+
+  const outsider = `nc1.${GRANT}.${"c".repeat(43)}`;
+  assert.equal((await send(outsider, `/v1/crews/${created.id}`, null, "GET")).status, 401);
+});
 
 function makeOperation(kind = "collection", overrides = {}) {
   const entityID = randomUUID();

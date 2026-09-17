@@ -7,6 +7,97 @@ final class DJBoothUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testSharedPlaylistContributorBadges() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews", "--ui-test-crew-contributors"]
+        app.launch()
+        let folder = app.buttons["crew.folder.crew-demo"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        folder.tap()
+        app.buttons["crew.playlist.crate-demo"].tap()
+
+        let georgios = app.buttons["crew.contributor.item-georgios"]
+        XCTAssertTrue(georgios.waitForExistence(timeout: 5))
+        XCTAssertEqual(georgios.label, "Added by Georgios Konstantopoulos")
+        let alex = app.buttons["crew.contributor.item-alex"]
+        XCTAssertEqual(alex.label, "Added by Alex Rivera")
+        XCTAssertTrue(alex.isEnabled, "Attribution stays available when audio is missing")
+        capture(app, "Shared playlist contributor initials")
+        alex.tap()
+        let contributorName = app.staticTexts["crew.contributor.name"]
+        XCTAssertTrue(contributorName.waitForExistence(timeout: 5))
+        XCTAssertEqual(contributorName.label, "Alex Rivera")
+        capture(app, "Contributor full name")
+        app.navigationBars["Friday Warmup"].tap()
+
+        let unknown = app.buttons["crew.contributor.item-unknown"]
+        XCTAssertEqual(unknown.label, "Added by unknown contributor")
+        unknown.tap()
+        XCTAssertTrue(contributorName.waitForExistence(timeout: 5))
+        XCTAssertEqual(contributorName.label, "Unknown contributor")
+        XCTAssertTrue(app.staticTexts["Member details are unavailable."].exists)
+    }
+
+    func testSharedFolderNavigationAndMembers() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews"]
+        app.launch()
+        let folder = app.buttons["crew.folder.crew-demo"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        folder.tap()
+        XCTAssertTrue(app.navigationBars["No Static"].waitForExistence(timeout: 5))
+        app.buttons["crew.members"].tap()
+        XCTAssertTrue(app.staticTexts["Alex"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["crew.members.add"].isHittable)
+        capture(app, "Shared folder members")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["crew.playlist.create"].waitForExistence(timeout: 5))
+        app.buttons["crew.playlist.crate-demo"].tap()
+        XCTAssertTrue(app.navigationBars["Friday Warmup"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["crew.playlist.addTracks"].isHittable)
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["crew.members"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        capture(app, "Shared folder at playlist root")
+
+        openPlaylist("demo-c2", in: app)
+        longPressTrack("A Walk", in: app)
+        app.buttons["Add to playlist"].tap()
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        folder.tap()
+        XCTAssertTrue(app.buttons["crew.playlist.crate-demo"].waitForExistence(timeout: 5))
+        app.buttons["playlist.picker.cancel"].tap()
+        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["playlist.title"].label, "Slow mornings")
+    }
+
+    func testSharedFolderViewerCannotEditOrInvite() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews", "--ui-test-crew-viewer"]
+        app.launch()
+        let folder = app.buttons["crew.folder.crew-demo"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        folder.tap()
+        XCTAssertTrue(app.buttons["crew.members"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["crew.playlist.create"].exists)
+        app.buttons["crew.members"].tap()
+        XCTAssertTrue(app.staticTexts["Alex"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["crew.members.add"].exists)
+        app.buttons["Done"].tap()
+        app.buttons["crew.playlist.crate-demo"].tap()
+        XCTAssertTrue(app.staticTexts["Empty playlist"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["crew.playlist.addTracks"].exists)
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
+
+        openPlaylist("demo-c2", in: app)
+        longPressTrack("A Walk", in: app)
+        app.buttons["Add to playlist"].tap()
+        XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        XCTAssertFalse(folder.isEnabled)
+    }
+
     func testOpenUSBLibraryAndReturnToPlaylists() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString]

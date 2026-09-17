@@ -133,6 +133,18 @@ struct PlaylistBrowserView: View {
             #if os(iOS)
             ZStack {
             List {
+                if path.isEmpty {
+                    ForEach(model.crews) { crew in
+                        LibraryNavigationButton { model.openCrewFolder(crew.id) } label: {
+                            browserNavigationRow(title: crew.name,
+                                                 detail: "\(crew.crateCount) playlists · \(crew.memberCount) members", symbol: "folder.badge.person.crop")
+                        }.buttonStyle(.plain).boothLibraryCell()
+                            .disabled(model.pendingQuickAddTrackID != nil && !crew.role.canEdit)
+                            .accessibilityIdentifier("crew.folder.\(crew.id)")
+                    }
+                    if model.hasCloudSession { SharedFolderActions(model: model).boothLibraryCell() }
+                    if model.crewsLoading && model.crews.isEmpty { ProgressView("Loading shared folders").boothLibraryCell() }
+                }
                 if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected, let device = model.usbDevice {
                     Button {
                         model.openPlaylistFolder([device.folderName])
@@ -165,8 +177,10 @@ struct PlaylistBrowserView: View {
         #if os(macOS)
         .accessibilityIdentifier("playlist.browser")
         #endif
+        .task { await model.refreshCrews() }
         .task(id: path.first) { await model.refreshMusic(provider: musicProvider) }
         .refreshable {
+            await model.refreshCrews()
             await model.refreshMusic(force: true, provider: musicProvider)
             if let provider = musicProvider, !empty {
                 refreshError = model.musicFolderError(provider)
@@ -210,20 +224,30 @@ struct PlaylistBrowserView: View {
                             if let item = model.connectedPlaylist(collection.id) { connectedRow(collection, item: item) }
                             else { row(collection, trackMap: trackMap) }
                         case .empty:
-                            if showsEmptyState {
-                                ContentUnavailableView {
-                                    Label(searching ? "No matching playlists" : "No playlists here", systemImage: "music.note.list")
-                                } description: {
-                                    Text(searching ? "Try another title or mood." : musicProvider != nil ? "Your playlists will appear here. Manage your connected account in Settings." : "Create a playlist to organize your music.")
-                                } actions: {
-                                    if !searching && musicProvider == nil {
-                                        Button("New playlist") { model.showNewCollection = true }
-                                            .accessibilityIdentifier("playlist.empty.create")
-                                    }
-                                }
-                            }
+                            #if os(iOS)
+                            if path.isEmpty && !model.crews.isEmpty {
+                                Button("New playlist", systemImage: "plus") { model.showNewCollection = true }
+                                    .accessibilityIdentifier("playlist.empty.create")
+                            } else { emptyPlaylists }
+                            #else
+                            emptyPlaylists
+                            #endif
                         }
                     }
+    }
+    @ViewBuilder private var emptyPlaylists: some View {
+        if showsEmptyState {
+            ContentUnavailableView {
+                Label(searching ? "No matching playlists" : "No playlists here", systemImage: "music.note.list")
+            } description: {
+                Text(searching ? "Try another title or mood." : musicProvider != nil ? "Your playlists will appear here. Manage your connected account in Settings." : "Create a playlist to organize your music.")
+            } actions: {
+                if !searching && musicProvider == nil {
+                    Button("New playlist") { model.showNewCollection = true }
+                        .accessibilityIdentifier("playlist.empty.create")
+                }
+            }
+        }
     }
     @ViewBuilder private var musicFolderStatus: some View {
         if let provider = musicProvider {
@@ -503,3 +527,376 @@ struct LibrarySearchField: View {
         }.font(.system(size: 12)).padding(9).background(BoothStyle.surface, in: RoundedRectangle(cornerRadius: 5))
     }
 }
+
+#if os(iOS)
+private struct SharedFolderActions: View {
+    @Bindable var model: BoothModel
+    @State private var creating = false
+    @State private var joining = false
+    @State private var crewName = ""
+    @State private var displayName = ""
+    @State private var inviteCode = ""
+    @State private var actionRunning = false
+
+    var body: some View {
+        Menu {
+            Button("New shared folder", systemImage: "folder.badge.plus") { creating = true }
+            Button("Join shared folder", systemImage: "person.badge.plus") { joining = true }
+        } label: {
+            Label("Shared folder", systemImage: "folder.badge.person.crop")
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+        }.disabled(actionRunning).accessibilityIdentifier("crew.folder.actions")
+        .alert("New shared folder", isPresented: $creating) {
+            TextField("Crew name", text: $crewName)
+            TextField("Your name", text: $displayName)
+            Button("Cancel", role: .cancel) { crewName = "" }
+            Button("Create") {
+                run {
+                    let id = try await model.createCrew(crewName, displayName: displayName)
+                    crewName = ""
+                    model.openCrewFolder(id)
+                }
+            }.disabled(crewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("Every playlist in this folder is shared with your crew.")
+        }
+        .alert("Join shared folder", isPresented: $joining) {
+            TextField("Invite code", text: $inviteCode)
+            TextField("Your name", text: $displayName)
+            Button("Cancel", role: .cancel) { inviteCode = "" }
+            Button("Join") {
+                run {
+                    let id = try await model.acceptCrewInvite(inviteCode, displayName: displayName)
+                    inviteCode = ""
+                    model.openCrewFolder(id)
+                }
+            }.disabled(inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
+        guard !actionRunning else { return }; actionRunning = true
+        Task { defer { actionRunning = false }; do { try await operation() } catch { model.crewError = error.localizedDescription } }
+    }
+}
+
+struct CrewFolderView: View {
+    @Bindable var model: BoothModel
+    let crewID: String
+    @State private var creating = false
+    @State private var playlistName = ""
+    @State private var showingMembers = false
+    @State private var actionRunning = false
+    private var detail: CrewDetail? { model.crewDetails[crewID] }
+
+    var body: some View {
+        List {
+            if let detail {
+                Section {
+                    Button { showingMembers = true } label: {
+                        HStack {
+                            Label("Members", systemImage: "person.2")
+                            Spacer()
+                            Text("\(detail.members.count)").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.accessibilityIdentifier("crew.members")
+                } footer: {
+                    Text("Every playlist in this folder is shared with these members.")
+                }
+                Section("Playlists") {
+                    if model.pendingQuickAddTrackID != nil {
+                        Button("Cancel adding track", role: .cancel) { model.cancelQuickAdd() }
+                            .accessibilityIdentifier("playlist.picker.cancel")
+                    }
+                    if detail.crew.role.canEdit {
+                        Button("New playlist", systemImage: "plus") { creating = true }
+                            .accessibilityIdentifier("crew.playlist.create")
+                    }
+                    if detail.crates.isEmpty {
+                        Text("No playlists here yet").foregroundStyle(.secondary)
+                    }
+                    ForEach(detail.crates) { crate in
+                        LibraryNavigationButton {
+                            if model.pendingQuickAddTrackID != nil { addPending(to: crate.id) }
+                            else { model.openCrewPlaylist(crewID: crewID, crateID: crate.id) }
+                        } label: {
+                            HStack(spacing: 11) {
+                                Image(systemName: "music.note.list").foregroundStyle(BoothStyle.accent).frame(width: 28)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(crate.name).boothFont(14, relativeTo: .body, weight: .semibold).foregroundStyle(.primary)
+                                    Text("\(crate.itemCount ?? 0) tracks").boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: model.pendingQuickAddTrackID == nil ? "chevron.right" : "plus.circle")
+                                    .foregroundStyle(BoothStyle.accent)
+                            }.padding(.vertical, 3).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .disabled(actionRunning || (model.pendingQuickAddTrackID != nil && !detail.crew.role.canEdit))
+                            .accessibilityIdentifier("crew.playlist.\(crate.id)")
+                    }
+                }
+            } else {
+                ProgressView("Loading shared folder").frame(maxWidth: .infinity)
+            }
+        }
+        .boothLibraryList()
+        .task(id: crewID) { await model.loadCrew(crewID) }
+        .refreshable { await model.loadCrew(crewID) }
+        .alert("New playlist", isPresented: $creating) {
+            TextField("Playlist name", text: $playlistName)
+            Button("Cancel", role: .cancel) { playlistName = "" }
+            Button("Create") {
+                actionRunning = true
+                Task {
+                    defer { actionRunning = false }
+                    do { try await model.createCrewCrate(crewID: crewID, name: playlistName); playlistName = "" }
+                    catch { model.crewError = error.localizedDescription }
+                }
+            }.disabled(playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || actionRunning)
+        } message: {
+            Text("Everyone in this folder will have access.")
+        }
+        .sheet(isPresented: $showingMembers) { CrewMembersView(model: model, crewID: crewID) }
+    }
+    private func addPending(to crateID: String) {
+        guard !actionRunning else { return }; actionRunning = true
+        Task { defer { actionRunning = false }; do { try await model.addPendingTrack(crewID: crewID, crateID: crateID) }
+               catch { model.crewError = error.localizedDescription } }
+    }
+}
+
+private struct CrewMembersView: View {
+    @Bindable var model: BoothModel
+    let crewID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var invite: CrewInvite?
+    @State private var inviting = false
+    @State private var error: String?
+    private var detail: CrewDetail? { model.crewDetails[crewID] }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let detail {
+                    Section {
+                        ForEach(detail.members) { member in
+                            HStack(spacing: 12) {
+                                CrewMark(name: member.displayName, small: true)
+                                Text(member.displayName)
+                                Spacer()
+                                Text(member.role == .dj ? "Can edit" : member.role == .viewer ? "Can view" : member.role.rawValue.capitalized)
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: { Text(detail.crew.name) } footer: {
+                        Text("Members have access to every playlist in this folder.")
+                    }
+                    if detail.crew.role.canInvite {
+                        Button {
+                            guard !inviting else { return }; inviting = true
+                            Task {
+                                defer { inviting = false }
+                                do { invite = try await model.inviteToCrew(crewID) }
+                                catch { self.error = error.localizedDescription }
+                            }
+                        } label: {
+                            HStack {
+                                Label("Add people", systemImage: "person.badge.plus")
+                                if inviting { Spacer(); ProgressView() }
+                            }
+                        }.disabled(inviting).accessibilityIdentifier("crew.members.add")
+                    }
+                }
+            }.boothLibraryList().navigationTitle("Members")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                .sheet(isPresented: Binding(get: { invite != nil }, set: { if !$0 { invite = nil } })) {
+                    if let invite { CrewInviteView(crewName: detail?.crew.name ?? "Shared folder", invite: invite) }
+                }
+                .alert("Could not invite", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                    Button("OK") { error = nil }
+                } message: { Text(error ?? "") }
+        }.preferredColorScheme(.dark)
+    }
+}
+
+struct CrewPlaylistView: View {
+    @Bindable var model: BoothModel
+    let crewID: String
+    let crateID: String
+    @State private var adding = false
+    private var detail: CrewCrateDetail? { model.crewCrates[crateID] }
+    private var canEdit: Bool { model.crewDetails[crewID]?.crew.role.canEdit == true }
+
+    var body: some View {
+        List {
+            if canEdit {
+                HStack {
+                    Button { adding = true } label: { Label("Add tracks", systemImage: "plus") }
+                        .accessibilityIdentifier("crew.playlist.addTracks")
+                    Spacer()
+                    EditButton()
+                }.buttonStyle(.borderless)
+            }
+            if let detail {
+                if detail.items.isEmpty {
+                    ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Add tracks from your library."))
+                }
+                ForEach(detail.items) { item in
+                    CrewTrackRow(model: model, crewID: crewID, item: item)
+                        .moveDisabled(!canEdit)
+                        .swipeActions(edge: .trailing) {
+                            if canEdit {
+                                Button("Remove", systemImage: "trash", role: .destructive) {
+                                    Task { do { try await model.removeFromCrew(crewID: crewID, crateID: crateID, itemID: item.id) }
+                                           catch { model.crewError = error.localizedDescription } }
+                                }
+                            }
+                        }
+                }
+                .onMove { source, destination in move(source, destination, items: detail.items) }
+            } else { ProgressView("Loading playlist").frame(maxWidth: .infinity) }
+        }
+        .boothLibraryList()
+        .task(id: crateID) { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
+        .refreshable { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
+        .sheet(isPresented: $adding) { CrewTrackPicker(model: model, crewID: crewID, crateID: crateID) }
+    }
+    private func move(_ source: IndexSet, _ destination: Int, items: [CrewCrateItem]) {
+        guard canEdit, let from = source.first else { return }
+        var reordered = items
+        let item = reordered.remove(at: from)
+        let target = min(destination > from ? destination - 1 : destination, reordered.count)
+        reordered.insert(item, at: target)
+        model.crewCrates[crateID]?.items = reordered
+        let after = target == 0 ? nil : reordered[target - 1].id
+        Task { do { try await model.moveCrewItem(crewID: crewID, crateID: crateID, itemID: item.id, afterItemID: after) }
+               catch { model.crewError = error.localizedDescription; await model.loadCrewCrate(crewID: crewID, crateID: crateID) } }
+    }
+}
+
+private struct CrewTrackRow: View {
+    @Bindable var model: BoothModel
+    let crewID: String
+    let item: CrewCrateItem
+    var body: some View {
+        let local = model.localTrack(for: item)
+        let member = model.crewDetails[crewID]?.members.first { $0.accountID == item.addedBy }
+        HStack(spacing: 11) {
+            Button { if let local { Task { await model.play(local, preservingQueue: false) } } } label: {
+                HStack(spacing: 11) {
+                    Image(systemName: local == nil ? "exclamationmark.circle" : "checkmark.circle.fill")
+                        .foregroundStyle(local == nil ? .secondary : BoothStyle.accent).accessibilityLabel(local == nil ? "Missing" : "Ready")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title).boothFont(14, relativeTo: .body, weight: .semibold).lineLimit(1)
+                        Text([item.artist, item.bpm.map { String(format: "%.0f BPM", $0) }, item.musicalKey].compactMap { $0 }.joined(separator: " · "))
+                            .boothFont(11, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
+                        if let note = item.note, !note.isEmpty { Text(note).boothFont(11, relativeTo: .caption).foregroundStyle(BoothStyle.accent).lineLimit(1) }
+                    }
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(local == nil)
+            CrewContributorBadge(member: member, itemID: item.id)
+        }.padding(.vertical, 3)
+    }
+}
+
+private struct CrewContributorBadge: View {
+    let member: CrewMember?
+    let itemID: String
+    @State private var showingContributor = false
+    private var name: String? {
+        guard let name = member?.displayName.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
+        return name
+    }
+    var body: some View {
+        Button { showingContributor = true } label: {
+            Group {
+                if let name { CrewMark(name: name, small: true) }
+                else {
+                    Image(systemName: "person.fill").foregroundStyle(.secondary)
+                        .frame(width: 38, height: 38).background(Circle().fill(Color.white.opacity(0.08)))
+                }
+            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+            .accessibilityLabel("Added by \(name ?? "unknown contributor")")
+            .accessibilityIdentifier("crew.contributor.\(itemID)")
+            .popover(isPresented: $showingContributor) {
+                VStack(spacing: 6) {
+                    Text("Added by").font(.caption).foregroundStyle(.secondary)
+                    Text(name ?? "Unknown contributor").font(.headline).accessibilityIdentifier("crew.contributor.name")
+                    if name == nil { Text("Member details are unavailable.").font(.caption).foregroundStyle(.secondary) }
+                }.padding().presentationCompactAdaptation(.popover)
+            }
+    }
+}
+
+private struct CrewTrackPicker: View {
+    @Bindable var model: BoothModel
+    let crewID: String
+    let crateID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var adding = Set<String>()
+    private var tracks: [Track] {
+        let source = query.isEmpty ? model.tracks : model.tracks.filter { "\($0.title) \($0.artist ?? "")".localizedStandardContains(query) }
+        return Array(source.prefix(500))
+    }
+    var body: some View {
+        NavigationStack {
+            List(tracks) { track in
+                Button {
+                    guard !adding.contains(track.id) else { return }; adding.insert(track.id)
+                    Task { defer { adding.remove(track.id) }; do { try await model.addToCrew(track, crewID: crewID, crateID: crateID) }
+                           catch { model.crewError = error.localizedDescription } }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(track.title).boothFont(14, relativeTo: .body, weight: .semibold).foregroundStyle(.primary)
+                            Text(track.artist ?? "Unknown artist").boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if adding.contains(track.id) { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "plus.circle").foregroundStyle(BoothStyle.accent) }
+                    }
+                }.buttonStyle(.plain)
+            }.boothLibraryList().searchable(text: $query, prompt: "Find tracks")
+                .navigationTitle("Add tracks")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }.preferredColorScheme(.dark)
+    }
+}
+
+private struct CrewInviteView: View {
+    let crewName: String
+    let invite: CrewInvite
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 22) {
+                CrewMark(name: crewName)
+                Text("Add people").font(.title2.bold())
+                Text(crewName).foregroundStyle(.secondary)
+                Text(invite.token).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    .padding().background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
+                ShareLink(item: "Join my \(crewName) shared folder in DJ Booth. Open Playlists → Shared folder → Join shared folder and enter this code: \(invite.token)") {
+                    Label("Share invite", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent)
+                Text("Single use · expires in 7 days").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }.padding(24).navigationTitle("Folder invite")
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }.presentationDetents([.medium, .large]).preferredColorScheme(.dark)
+    }
+}
+
+private struct CrewMark: View {
+    let name: String
+    var small = false
+    var body: some View {
+        Text(name.split(whereSeparator: \.isWhitespace).prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
+            .boothFont(small ? 12 : 16, relativeTo: small ? .caption : .body, weight: .bold)
+            .frame(width: small ? 38 : 46, height: small ? 38 : 46)
+            .background(Circle().fill(BoothStyle.accent.opacity(0.18))).foregroundStyle(BoothStyle.accent)
+    }
+}
+#endif

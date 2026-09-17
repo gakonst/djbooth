@@ -29,8 +29,23 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
 
+      - name: Set up Rust formatting
+        run: rustup component add --toolchain nightly rustfmt
+
+      - name: Set up iOS Rust target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-ios-sim
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libasound2-dev
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build iOS app
+        if: runner.os == 'macOS'
+        run: xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -destination 'generic/platform=iOS Simulator' -configuration Debug ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO build
 
       - name: Validate workspace
         run: pnpm validate

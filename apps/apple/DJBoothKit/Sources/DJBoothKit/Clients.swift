@@ -416,6 +416,58 @@ public struct CloudClient: Sendable {
         return true
     }
     public func mediaRequest(hash: String) -> URLRequest { request("v1/media/\(hash)") }
+
+    private func crewGet<Value: Decodable & Sendable>(_ path: String, as type: Value.Type = Value.self) async throws -> Value {
+        let (data, response) = try await session.data(for: request(path))
+        return try await decodeResponse(type, from: checked(data, response))
+    }
+    private func crewSend<Value: Decodable & Sendable, Body: Encodable>(
+        _ path: String, method: String = "POST", body: Body, as type: Value.Type = Value.self
+    ) async throws -> Value {
+        var value = request(path, method: method)
+        value.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        value.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await session.data(for: value)
+        return try await decodeResponse(type, from: checked(data, response))
+    }
+    public func crews() async throws -> [CrewSummary] {
+        struct Response: Decodable, Sendable { var crews: [CrewSummary] }
+        return try await crewGet("v1/crews", as: Response.self).crews
+    }
+    public func createCrew(name: String, displayName: String = "You") async throws -> CrewSummary {
+        struct Body: Encodable { var name: String; var displayName: String }
+        return try await crewSend("v1/crews", body: Body(name: name, displayName: displayName))
+    }
+    public func crew(_ id: String) async throws -> CrewDetail {
+        try await crewGet("v1/crews/\(id)")
+    }
+    public func createCrewInvite(crewID: String, role: CrewRole = .dj) async throws -> CrewInvite {
+        struct Body: Encodable { var role: CrewRole }
+        return try await crewSend("v1/crews/\(crewID)/invites", body: Body(role: role))
+    }
+    public func acceptCrewInvite(token: String, displayName: String = "DJ") async throws -> CrewDetail {
+        struct Body: Encodable { var displayName: String }
+        return try await crewSend("v1/crew-invites/\(token)/accept", body: Body(displayName: displayName))
+    }
+    public func createCrewCrate(crewID: String, name: String, note: String? = nil) async throws -> CrewCrate {
+        struct Body: Encodable { var name: String; var note: String? }
+        return try await crewSend("v1/crews/\(crewID)/crates", body: Body(name: name, note: note))
+    }
+    public func crewCrate(crewID: String, crateID: String) async throws -> CrewCrateDetail {
+        try await crewGet("v1/crews/\(crewID)/crates/\(crateID)")
+    }
+    public func addCrewTrack(crewID: String, crateID: String, track: Track, note: String? = nil) async throws -> CrewCrateDetail {
+        struct Body: Encodable { var track: CrewTrackReference; var note: String? }
+        return try await crewSend("v1/crews/\(crewID)/crates/\(crateID)/items", body: Body(track: CrewTrackReference(track), note: note))
+    }
+    public func removeCrewTrack(crewID: String, crateID: String, itemID: String) async throws {
+        let (data, response) = try await session.data(for: request("v1/crews/\(crewID)/crates/\(crateID)/items/\(itemID)", method: "DELETE"))
+        _ = try checked(data, response)
+    }
+    public func moveCrewTrack(crewID: String, crateID: String, itemID: String, afterItemID: String?) async throws -> CrewCrateDetail {
+        struct Body: Encodable { var afterItemID: String? }
+        return try await crewSend("v1/crews/\(crewID)/crates/\(crateID)/items/\(itemID)", method: "PATCH", body: Body(afterItemID: afterItemID))
+    }
 }
 
 @MainActor public final class SyncEngine {

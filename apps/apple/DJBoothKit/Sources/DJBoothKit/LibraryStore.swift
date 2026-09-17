@@ -412,6 +412,12 @@ public struct CollectionTrackRemoval: Sendable, Equatable {
     public func saveMusicCatalog(_ value: MusicCatalog) throws {
         try saveLocalUSB(value, kind: "connected-music", id: "catalog")
     }
+    public func crewCache() throws -> CrewCache {
+        try localUSBValue("crews", id: "cache", as: CrewCache.self) ?? CrewCache()
+    }
+    public func saveCrewCache(_ value: CrewCache) throws {
+        try saveLocalUSB(value, kind: "crews", id: "cache")
+    }
     public func usbDevice() throws -> USBDeviceAccess? {
         try localUSBValue("usb-access", id: "active", as: USBDeviceAccess.self)
     }
