@@ -19,6 +19,16 @@ import Testing
                                       queueCollection: "set", queueFilter: "All music")
         #expect(session.resolved(tracks: tracks, collections: [collection]) == session)
     }
+    @Test func emptyConnectedFoldersStayOpenDuringRefreshAndDisappearWhenDisconnected() {
+        let session = PlaybackSession(navigation: PlaylistNavigation(showBrowser: true, folderPath: ["SoundCloud"]))
+        let connected = session.resolved(tracks: [], collections: [], additionalFolderPaths: [["SoundCloud"], ["Spotify"]])
+        #expect(connected.navigation?.folderPath == ["SoundCloud"])
+        #expect(connected.navigation?.showBrowser == true)
+        let disconnected = connected.resolved(tracks: [], collections: [], additionalFolderPaths: [["Spotify"]])
+        #expect(disconnected.navigation?.folderPath == [])
+        let missing = PlaybackSession(navigation: PlaylistNavigation(folderPath: ["SoundCloud", "Removed"]))
+        #expect(missing.resolved(tracks: [], collections: [], additionalFolderPaths: [["SoundCloud"]]).navigation?.folderPath == [])
+    }
     @Test func repeatedHistoryTracksRestoreTheSelectedOccurrence() throws {
         let session = PlaybackSession(trackID: "b", queueIDs: ["missing", "b", "a", "b"], elapsed: 12, queueIndex: 3)
         let restored = session.resolved(tracks: tracks, collections: [])

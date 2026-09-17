@@ -1,5 +1,4 @@
-use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub(crate) const DB_FIELD_INT8: u8 = 0x0f;
 pub(crate) const DB_FIELD_INT16: u8 = 0x10;
@@ -75,6 +74,7 @@ pub(crate) const DB_REQ_MOUNT_INFO: u16 = 0x2102;
 pub(crate) const DB_REQ_CUE_POINTS: u16 = 0x2104;
 pub(crate) const DB_REQ_TRACK_INFO: u16 = 0x2202;
 pub(crate) const DB_REQ_BEAT_GRID: u16 = 0x2204;
+pub(crate) const DB_REQ_DELIVERY_INFO: u16 = 0x2602;
 pub(crate) const DB_REQ_EXT_2705: u16 = 0x2705;
 pub(crate) const DB_REQ_WAVEFORM_DETAIL: u16 = 0x2904;
 pub(crate) const DB_REQ_CUE_POINTS_EXT: u16 = 0x2b04;
@@ -82,9 +82,10 @@ pub(crate) const DB_REQ_ANLZ_TAG: u16 = 0x2c04;
 pub(crate) const DB_REQ_INTRODUCE: u16 = 0x3007;
 pub(crate) const DB_REQ_RENDER: u16 = 0x3000;
 pub(crate) const DB_REQ_EXT_3001: u16 = 0x3001;
-/// CDJ-3000 LINK-source availability request. Current players send this with
-/// only the r:m:s:t context after rendering playback metadata.
-pub(crate) const DB_REQ_EXT_3006: u16 = 0x3006;
+/// DJ identity request, issued after loading/previewing a track.
+pub(crate) const DB_REQ_DJ_ID: u16 = 0x3006;
+/// Locate an entry in the prepared, sorted menu when restoring Back selection.
+pub(crate) const DB_REQ_MENU_OFFSET: u16 = 0x3100;
 
 pub(crate) const DB_RES_SUCCESS: u16 = 0x4000;
 pub(crate) const DB_RES_MENU_HEADER: u16 = 0x4001;
@@ -97,6 +98,7 @@ pub(crate) const DB_RES_EXT_2504: u16 = 0x4502;
 pub(crate) const DB_RES_BEAT_GRID: u16 = 0x4602;
 pub(crate) const DB_RES_CUE_POINTS: u16 = 0x4702;
 pub(crate) const DB_RES_WAVEFORM_DETAIL: u16 = 0x4a02;
+pub(crate) const DB_RES_DJ_ID: u16 = 0x4d02;
 pub(crate) const DB_RES_CUE_POINTS_EXT: u16 = 0x4e02;
 pub(crate) const DB_RES_ANLZ_TAG: u16 = 0x4f02;
 
@@ -263,6 +265,7 @@ pub(crate) fn db_request_name(msg_type: u16) -> String {
         DB_REQ_HOT_CUE_BANK => "HOT_CUE_BANK",
         DB_REQ_METADATA => "METADATA",
         DB_REQ_MOUNT_INFO => "MOUNT_INFO",
+        DB_REQ_DELIVERY_INFO => "DELIVERY_INFO",
         DB_REQ_TRACK_INFO => "TRACK_INFO",
         DB_REQ_ARTWORK => "ARTWORK",
         DB_REQ_WAVEFORM_PREVIEW => "WAVEFORM_PREVIEW",
@@ -277,13 +280,13 @@ pub(crate) fn db_request_name(msg_type: u16) -> String {
         DB_REQ_INTRODUCE => "INTRODUCE",
         DB_REQ_RENDER => "RENDER",
         DB_REQ_EXT_3001 => "EXT_3001",
-        DB_REQ_EXT_3006 => "EXT_3006",
+        DB_REQ_DJ_ID => "DJ_ID",
         DB_REQ_SORT_MENU => "SORT_MENU",
         0x0001 => "INVALID_DATA_OR_CLOSE",
         DB_REQ_TEARDOWN => "TEARDOWN",
         0x2504 => "EXT_2504",
         0x2d04 => "ANLZ_TAG_EXT",
-        0x3100 => "EXT_3100",
+        DB_REQ_MENU_OFFSET => "MENU_OFFSET",
         _ => "UNKNOWN",
     };
     format!("{name}(0x{msg_type:04x})")
@@ -305,7 +308,7 @@ fn db_value_summary(value: &DbValue) -> String {
     }
 }
 
-pub(crate) async fn recv_db_message(stream: &mut TcpStream) -> DbResult<DbMessage> {
+pub(crate) async fn recv_db_message(stream: &mut (impl AsyncRead + Unpin)) -> DbResult<DbMessage> {
     let DbValue::Int32(magic) = recv_db_field(stream).await? else {
         return Err(DbError::InvalidMagicField);
     };
@@ -346,7 +349,7 @@ pub(crate) async fn recv_db_message(stream: &mut TcpStream) -> DbResult<DbMessag
     })
 }
 
-pub(crate) async fn recv_db_field(stream: &mut TcpStream) -> DbResult<DbValue> {
+pub(crate) async fn recv_db_field(stream: &mut (impl AsyncRead + Unpin)) -> DbResult<DbValue> {
     let mut ty = [0u8; 1];
     stream.read_exact(&mut ty).await?;
     match ty[0] {
@@ -451,10 +454,6 @@ pub(crate) fn strip_rmst_arg(args: &[DbValue]) -> &[DbValue] {
 
 pub(crate) fn rmst_menu_from_args(args: &[DbValue]) -> Option<u8> {
     rmst_from_args(args).map(|value| ((value >> 16) & 0xff) as u8)
-}
-
-pub(crate) fn rmst_slot_from_args(args: &[DbValue]) -> Option<u8> {
-    rmst_from_args(args).map(|value| ((value >> 8) & 0xff) as u8)
 }
 
 pub(crate) fn rmst_from_args(args: &[DbValue]) -> Option<u32> {
@@ -833,13 +832,13 @@ pub(crate) struct RenderWindow {
 #[derive(Default)]
 pub(crate) struct PendingRenderSession {
     key: Option<u32>,
-    entries: Vec<MenuEntry>,
+    menus: std::collections::BTreeMap<Option<u32>, Vec<MenuEntry>>,
 }
 
 impl PendingRenderSession {
     pub(crate) fn prepare(&mut self, key: Option<u32>, entries: Vec<MenuEntry>) {
         self.key = key;
-        self.entries = entries;
+        self.menus.insert(key, entries);
     }
 
     pub(crate) fn entries_for_render(
@@ -847,16 +846,29 @@ impl PendingRenderSession {
         key: Option<u32>,
         window: RenderWindow,
     ) -> Option<&[MenuEntry]> {
-        (self.key == key && render_entries_match(&self.entries, window))
-            .then_some(self.entries.as_slice())
+        let entries = self.menus.get(&key)?;
+        render_entries_match(entries, window).then_some(entries.as_slice())
     }
 
     pub(crate) fn key(&self) -> Option<u32> {
         self.key
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+    pub(crate) fn len_for_key(&self, key: Option<u32>) -> usize {
+        self.menus.get(&key).map_or(0, Vec::len)
+    }
+
+    pub(crate) fn menu_offset(&self, key: Option<u32>, entry_id: u32) -> u32 {
+        // Native GetListBufOffset compares the second menu ID in sorted row
+        // order. It returns a zero-based offset, -1 for an absent ID, and zero
+        // when no row set exists. Row.position is a separate, one-based field.
+        let Some(entries) = self.menus.get(&key) else {
+            return 0;
+        };
+        entries
+            .iter()
+            .position(|entry| entry.entry_id2 == entry_id)
+            .map_or(u32::MAX, |offset| offset as u32)
     }
 }
 
@@ -878,6 +890,43 @@ mod tests {
 
     use super::*;
     use crate::protocol::decode_hex;
+
+    #[test]
+    fn back_selection_uses_sorted_entry_ids_within_its_menu_context() {
+        let browse = Some(0x0301_0401);
+        let metadata = Some(0x0302_0401);
+        let mut session = PendingRenderSession::default();
+        assert_eq!(session.menu_offset(browse, 42), 0);
+        // Position/parent IDs are not offsets. This covers folders, artists,
+        // and tracks, including an ID repeated later in a playlist.
+        let rows = [91, 42, 73, 42]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let mut row = MenuEntry::plain(42, id, "entry", "", META_PLAYLIST);
+                row.position = 100 + index as u32;
+                row
+            })
+            .collect();
+        session.prepare(browse, rows);
+        session.prepare(
+            metadata,
+            vec![MenuEntry::plain(0, 42, "metadata", "", META_TITLE)],
+        );
+        assert_eq!(session.menu_offset(browse, 91), 0);
+        assert_eq!(session.menu_offset(browse, 42), 1);
+        assert_eq!(session.menu_offset(browse, 73), 2);
+        assert_eq!(session.menu_offset(metadata, 42), 0);
+        assert_eq!(session.menu_offset(browse, u32::MAX), u32::MAX);
+        session.prepare(
+            browse,
+            vec![MenuEntry::plain(0, 73, "new menu", "", META_TITLE)],
+        );
+        assert_eq!(session.menu_offset(browse, 73), 0);
+        assert_eq!(session.menu_offset(browse, 42), u32::MAX);
+        session.prepare(browse, vec![]);
+        assert_eq!(session.menu_offset(browse, 73), u32::MAX);
+    }
 
     #[tokio::test]
     async fn waveform_preview_omitted_blob_does_not_wait_for_the_next_request() {

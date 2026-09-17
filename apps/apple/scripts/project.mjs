@@ -17,12 +17,12 @@ const settings = (values) => `{ ${Object.entries(values).map(([key, value]) => `
 const configurationList = (name, base, debug = {}) => {
   const configurations = ["Debug", "Release"].map((mode) => object(`${name}.${mode}`, `isa = XCBuildConfiguration; name = ${mode}; buildSettings = ${settings({
     ...base,
-    ...(mode === "Debug" ? debug : {}),
     SWIFT_OPTIMIZATION_LEVEL: mode === "Debug" ? "-Onone" : "-O",
     SWIFT_ACTIVE_COMPILATION_CONDITIONS: mode === "Debug" ? "$(inherited) DEBUG" : "$(inherited)",
     DEBUG_INFORMATION_FORMAT: mode === "Debug" ? "dwarf" : "dwarf-with-dsym",
     ENABLE_TESTABILITY: mode === "Debug" ? "YES" : "NO",
     ONLY_ACTIVE_ARCH: mode === "Debug" ? "YES" : "NO",
+    ...(mode === "Debug" ? debug : {}),
   })};`));
   return object(`${name}.configurations`, `isa = XCConfigurationList; buildConfigurations = ${array(configurations)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;`);
 };
@@ -72,7 +72,8 @@ for (const platform of ["macOS", "iOS"]) {
       OTHER_LDFLAGS: ["$(inherited)", "-ldjbooth_mobile", "-lc++", "-liconv", "-framework", "Security", "-framework", "SystemConfiguration"],
       CODE_SIGN_ENTITLEMENTS: "$(DJBOOTH_LINK_ENTITLEMENTS)", DJBOOTH_LINK_ENTITLEMENTS: "", DJBOOTH_LINK_ENABLED: "NO",
       INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES", INFOPLIST_KEY_UILaunchScreen_Generation: "YES" } : { ENABLE_HARDENED_RUNTIME: "YES" }),
-  }, { INFOPLIST_FILE: `DJBooth/Info.Debug.${platform}.plist`, DJBOOTH_OFFLINE_COLLECTION: "" });
+  }, { INFOPLIST_FILE: `DJBooth/Info.Debug.${platform}.plist`, DJBOOTH_OFFLINE_COLLECTION: "",
+    ...(platform === "iOS" ? { DEBUG_INFORMATION_FORMAT: "dwarf-with-dsym" } : {}) });
   targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${linkPhase ? `${linkPhase}, ` : ""}${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct});`));
   const testProduct = object(`${testTargetName}.product`, `isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ${quote(`${testTargetName}.xctest`)}; sourceTree = BUILT_PRODUCTS_DIR;`);
   products.push(testProduct);

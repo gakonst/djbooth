@@ -2,6 +2,61 @@
 
 Hex payloads only; Ethernet/IP/UDP headers are intentionally excluded.
 
+## CDJ-3000 post-load delivery information
+
+`remotedb-cdj3000-delivery-info-request.hex` is the actual phone socket read at
+September 16, 2026 00:08:08.454 PDT, transaction `0x0975`, context `0x01090401`,
+track `777201902`. It followed the corrected DJ identity response; the previous
+server rejected it with `INVALID_REQUEST`, and no more browse requests arrived.
+
+Response behavior is derived from the same archived native executable identified
+below, not from a captured response. `OnSongInfCmd` calls `GetDeliveryInf` at
+`0x1016387d6`; `Ret4ByteToClient` (`0x101631680`) sends `0x4000` with request type
+and row count. `GetDeliveryInfDB` (`0x101218dd0`) and AppSync's `getDeliveryInf`
+(`0x101717dd0`) prepare 13 rows, types `[4f,04,07,02,06,23,0f,0b,12,0d,0e,36,37]`.
+The first contains track ID, database ID, delivery opt-in, and ISRC; the last
+two contain composer and lyricist. Unavailable delivery-specific data is unset.
+`DsqlListBuf_Clear`/`Insert` take the full context as the buffer key. Preserve
+other contexts when preparing this menu so Back can render its existing buffer.
+Tests cover the captured request and post-load delivery/render/Back/track-switch
+traffic on a real local TCP socket. Hardware validation remains a separate gate.
+
+## CDJ-3000 DJ identity request after track load
+
+- `remotedb-cdj3000-dj-id-request.hex`: actual phone socket capture on
+  September 15, 2026 at 23:18:06 PDT, transaction `0x0789`, immediately before
+  the user reported Back stuck. Request `0x3006`, context `0x01090401`.
+- `remotedb-dj-id-unavailable.hex`: expected absent-identity response derived
+  from native code, **not a captured response**. Type `0x4d02`, arguments
+  `[0x3006, 0, 0, omitted binary]`. The prior Rust reply was incorrectly
+  `SUCCESS(0x4000, [0x3006, 1])`.
+
+Native evidence: archived Rekordbox 6.8.2.0018 executable at
+`archive/rekordbox/artifacts/rekordbox/6.8.2.0018/rekordbox.app/Contents/MacOS/rekordbox`,
+SHA-256 `19db9964df3751fccd25ec9064b5a3031d7c05aa7c444e5dce3e7d6fc73598bc`.
+`PSvDBMain::OnUserCmd` at `0x10163a340` compares the request against `0x3006`,
+calls `GetDJID`, then invokes `RetBinToClient` with response `0x4d02`, status
+zero, and either 160 bytes or length zero/null. The no-identity branch is at
+`0x10163a41c`; `RetBinToClient` is at `0x101631760`.
+`DBCFmt_GetCmdPrmFmt` branches on `0x4d02` at `0x1016f5866` to
+`0x1016f5a41`, specifying four arguments with types `[6, 6, 6, 3]`.
+The handler regression test sends the captured request between metadata and
+the next browse sequence over one TCP connection and compares exact bytes.
+Hardware retesting is still required to establish whether this resolves all
+navigation failures; a successful write or cursor audit alone is insufficient.
+
+### September 15 capture-drop cross-check
+
+`CDJ-Rekordbox-Captures-2026-09-15.zip` contains 56 captures, plus
+`SHA256SUMS.txt` and `capture-provenance.md`. All 56 capture hashes were verified.
+A scan of 565,780 packets found no `0x3006` requests or `0x4d02` responses;
+this drop therefore does not supply a captured identity-response fixture.
+The two native Rekordbox files reproduce the documented menu-header cursor
+behavior (25 paired renders in `rb-tracks-native-123e84e.pcap`, 15 in
+`rb-tracks.pcap`, no cursor mismatches). The other captures include experimental
+implementations and must not be treated as native response authorities solely
+because a packet was captured from a working hardware session.
+
 ## Live baseline
 
 Source:

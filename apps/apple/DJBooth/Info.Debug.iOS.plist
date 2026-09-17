@@ -6,6 +6,10 @@
     <string>$(DJBOOTH_LINK_ENABLED)</string>
     <key>DJBoothOfflineCollection</key>
     <string>$(DJBOOTH_OFFLINE_COLLECTION)</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Record the USB mixer audio alongside your deck and mixer timeline.</string>
+    <key>UIFileSharingEnabled</key><true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key><true/>
     <key>UIBackgroundModes</key>
     <array><string>audio</string></array>
     <key>NSLocalNetworkUsageDescription</key>

@@ -66,6 +66,19 @@ const item = {
   external_ids: { isrc: "US0000000001" },
 };
 describe("connected music authorization and provider contracts", () => {
+  it("checks exact approved SoundCloud account before recording upload preflight", async () => {
+    const { env } = fixture({});
+    await expect(
+      musicRoute(request("soundcloud/not-approved/recordings"), env, account, async () => ({})),
+    ).rejects.toMatchObject({ status: 403 });
+    const response = await musicRoute(
+      request("soundcloud/soundcloud-a/recordings"),
+      env,
+      account,
+      async () => ({}),
+    );
+    expect(await response.json()).toMatchObject({ available: false });
+  });
   it("projects only opted-in sources and no unrelated account fields", async () => {
     const { env } = fixture({});
     expect(

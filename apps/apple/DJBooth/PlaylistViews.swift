@@ -5,12 +5,21 @@ struct PlaylistBrowserView: View {
     @Bindable var model: BoothModel
     var folderPath: [String]? = nil
     private var path: [String] { folderPath ?? model.playlistFolderPath }
+    private var musicProvider: String? { path.first.flatMap { model.musicProviderNames.contains($0) ? $0 : nil } }
+    private var showsEmptyState: Bool {
+        #if os(iOS)
+        if path.isEmpty && (!model.musicProviderNames.isEmpty || model.usbConnected) { return false }
+        if let provider = musicProvider, model.musicLoading || model.musicFolderError(provider) != nil { return false }
+        #endif
+        return true
+    }
     #if os(macOS)
     @State private var search = ""
     #endif
     @State private var pendingDelete: Collection?
     @State private var editing: Collection?
     @State private var showUSBLibrary = false
+    @State private var refreshError: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorSchemeContrast) private var contrast
@@ -39,10 +48,8 @@ struct PlaylistBrowserView: View {
             return model.playlistSortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
         }
         #else
-        model.collections.sorted { first, second in
-            let firstDownloaded = model.connectedPlaylist(first.id).map(model.musicIsDownloaded) ?? false
-            let secondDownloaded = model.connectedPlaylist(second.id).map(model.musicIsDownloaded) ?? false
-            if firstDownloaded != secondDownloaded { return firstDownloaded }
+        let connectedDownloads = model.connectedDownloadCollectionIDs
+        return model.collections.filter { !connectedDownloads.contains($0.id) }.sorted { first, second in
             let comparison = first.name.localizedStandardCompare(second.name)
             return comparison == .orderedSame ? first.id < second.id : comparison == .orderedAscending
         }
@@ -66,7 +73,7 @@ struct PlaylistBrowserView: View {
             #if os(iOS)
             // The connected device has one named entry, not a second folder row.
             if path.isEmpty, model.pendingQuickAddTrackID == nil, name == model.usbDevice?.folderName { continue }
-            if path.isEmpty, model.musicCatalog.sources.contains(where: { $0.providerName == name }) { continue }
+            if path.isEmpty, model.musicProviderNames.contains(name) { continue }
             #endif
             folderCounts[name, default: 0] += 1
         }
@@ -76,7 +83,11 @@ struct PlaylistBrowserView: View {
         #if os(iOS)
         if model.pendingQuickAddTrackID != nil { rows.append(.cancelQuickAdd) }
         #endif
+        #if os(iOS)
+        if folderPath == nil, !searching, let folder = path.last { rows.append(.back(folder)) }
+        #else
         if !searching, let folder = path.last { rows.append(.back(folder)) }
+        #endif
         if !pinnedPlaylists.isEmpty {
             #if os(macOS)
             rows.append(.pinnedHeader)
@@ -91,6 +102,7 @@ struct PlaylistBrowserView: View {
     var body: some View {
         let sorted = self.sorted
         let rows = browserRows(from: sorted)
+        let empty = rows.contains { if case .empty = $0 { return true }; return false }
         VStack(spacing: 0) {
             #if os(macOS)
             VStack(spacing: 10) {
@@ -119,6 +131,7 @@ struct PlaylistBrowserView: View {
             }.padding(12)
             #endif
             #if os(iOS)
+            ZStack {
             List {
                 if path.isEmpty {
                     ForEach(model.crews) { crew in
@@ -132,31 +145,28 @@ struct PlaylistBrowserView: View {
                     if model.hasCloudSession { SharedFolderActions(model: model).boothLibraryCell() }
                     if model.crewsLoading && model.crews.isEmpty { ProgressView("Loading shared folders").boothLibraryCell() }
                 }
-                if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected || model.usbDevice == nil {
+                if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected, let device = model.usbDevice {
                     Button {
-                        if model.usbConnected, let device = model.usbDevice { model.openPlaylistFolder([device.folderName]) }
-                        else { showUSBLibrary = true }
+                        model.openPlaylistFolder([device.folderName])
                     } label: {
-                        browserNavigationRow(title: model.usbDevice?.name ?? "Open USB library",
-                                             detail: model.usbDevice == nil ? "Rekordbox" : "USB · Connected", symbol: "externaldrive")
+                        browserNavigationRow(title: device.name, detail: "USB · Connected", symbol: "externaldrive")
                     }.buttonStyle(.plain).accessibilityIdentifier("usb.open")
                         .accessibilityValue(model.usbConnected ? "Connected" : "Disconnected")
                         .contextMenu { Button("Choose USB folder") { showUSBLibrary = true } }
                         .boothLibraryCell()
                 }
                 if path.isEmpty, model.pendingQuickAddTrackID == nil {
-                    ForEach(Array(Set(model.musicCatalog.sources.map(\.providerName))).sorted(), id: \.self) { name in
+                    ForEach(model.musicProviderNames, id: \.self) { name in
                         LibraryNavigationButton { model.openPlaylistFolder([name]) } label: {
-                            browserNavigationRow(title: name, detail: "Connected account", symbol: name == "Spotify" ? "music.note" : "cloud")
+                            let count = model.musicCatalog.playlists.filter { item in model.musicCatalog.sources.contains { $0.id == item.sourceID && $0.providerName == name } }.count
+                            browserNavigationRow(title: name, detail: "\(count) playlists", symbol: "folder")
                         }.buttonStyle(.plain).boothLibraryCell().accessibilityIdentifier("music.source.\(name)")
-                    }
-                    if model.musicLoading { ProgressView("Refreshing music accounts").boothLibraryCell() }
-                    if let error = model.musicError {
-                        VStack(alignment: .leading) { Text(error).font(.caption).foregroundStyle(.secondary); Button("Retry music accounts") { Task { await model.refreshMusic(force: true) } } }.boothLibraryCell()
                     }
                 }
                 browserContent(rows).boothLibraryCell()
-            }.boothLibraryList()
+            }.boothLibraryList().accessibilityIdentifier("playlist.browser")
+            if empty { musicFolderStatus }
+            }
             #else
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(spacing: 0) { browserContent(rows) }
@@ -164,10 +174,21 @@ struct PlaylistBrowserView: View {
             }
             #endif
         }
+        #if os(macOS)
         .accessibilityIdentifier("playlist.browser")
+        #endif
         .task { await model.refreshCrews() }
-        .task { await model.refreshMusic() }
-        .refreshable { await model.refreshCrews(); await model.refreshMusic(force: true) }
+        .task(id: path.first) { await model.refreshMusic(provider: musicProvider) }
+        .refreshable {
+            await model.refreshCrews()
+            await model.refreshMusic(force: true, provider: musicProvider)
+            if let provider = musicProvider, !empty {
+                refreshError = model.musicFolderError(provider)
+            }
+        }
+        .alert("Couldn’t refresh playlists", isPresented: Binding(get: { refreshError != nil }, set: { if !$0 { refreshError = nil } })) {
+            Button("OK", role: .cancel) { refreshError = nil }
+        } message: { Text(refreshError ?? "") }
         .sheet(item: $editing) { PlaylistEditSheet(collection: $0, model: model) }
         .sheet(isPresented: $showUSBLibrary) { USBLibraryView(model: model) }
         .alert("Delete playlist?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { collection in
@@ -214,36 +235,61 @@ struct PlaylistBrowserView: View {
                         }
                     }
     }
-    private var emptyPlaylists: some View {
-        ContentUnavailableView {
-            Label(searching ? "No matching playlists" : "No playlists here", systemImage: "music.note.list")
-        } description: {
-            Text(searching ? "Try another title or mood." : "Create a playlist to organize your music.")
-        } actions: {
-            if !searching {
-                Button("New playlist") { model.showNewCollection = true }
-                    .accessibilityIdentifier("playlist.empty.create")
+    @ViewBuilder private var emptyPlaylists: some View {
+        if showsEmptyState {
+            ContentUnavailableView {
+                Label(searching ? "No matching playlists" : "No playlists here", systemImage: "music.note.list")
+            } description: {
+                Text(searching ? "Try another title or mood." : musicProvider != nil ? "Your playlists will appear here. Manage your connected account in Settings." : "Create a playlist to organize your music.")
+            } actions: {
+                if !searching && musicProvider == nil {
+                    Button("New playlist") { model.showNewCollection = true }
+                        .accessibilityIdentifier("playlist.empty.create")
+                }
+            }
+        }
+    }
+    @ViewBuilder private var musicFolderStatus: some View {
+        if let provider = musicProvider {
+            if model.musicLoading {
+                ProgressView().accessibilityElement(children: .ignore).accessibilityLabel("Loading playlists")
+                    .accessibilityIdentifier("music.folder.loading")
+            } else if let error = model.musicFolderError(provider) {
+                ContentUnavailableView {
+                    Label("Couldn’t load playlists", systemImage: "wifi.exclamationmark")
+                        .accessibilityIdentifier("music.folder.error")
+                } description: {
+                    Text(error)
+                } actions: {
+                    Button("Retry") { Task { await model.refreshMusic(force: true, provider: provider) } }
+                        .accessibilityIdentifier("music.folder.retry")
+                }
             }
         }
     }
     private func connectedRow(_ collection: Collection, item: MusicPlaylist) -> some View {
-        HStack(spacing: 12) {
+        let downloaded = model.musicIsDownloaded(item)
+        return HStack(spacing: 12) {
             LibraryNavigationButton { model.openCollection(collection) } label: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.name).lineLimit(1)
-                    Text("\(item.trackCount) tracks · \(model.musicIsDownloaded(item) ? "Downloaded" : "Stream")").font(.caption).foregroundStyle(.secondary)
+                    Text("\(downloaded ? collection.trackIDs.count : item.trackCount) tracks\(downloaded ? "" : " · Stream")").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             }.buttonStyle(.plain).accessibilityIdentifier("music.playlist.\(item.remoteID)")
             if model.musicDownloads.contains(item.id) || model.musicPlaylistLoading.contains(item.id) { ProgressView() }
-            if model.musicIsDownloaded(item) {
-                Button { Task { await model.keepCollectionOffline(collection) } } label: { Image(systemName: "arrow.down.circle") }
-                    .accessibilityLabel("Keep playlist on this phone")
+            if downloaded {
+                Image(systemName: "checkmark").foregroundStyle(.secondary)
+                    .accessibilityLabel("Downloaded")
+                    .accessibilityIdentifier("music.downloaded.\(item.remoteID)")
             } else {
                 Button { Task { await model.downloadMusic(item) } } label: { Image(systemName: "arrow.down.circle") }
                     .disabled(model.musicDownloads.contains(item.id)).accessibilityLabel("Download playlist")
                     .accessibilityIdentifier("music.download.\(item.remoteID)")
             }
-        }.contextMenu {
+        }.padding(.horizontal, 12).contextMenu {
+            if downloaded {
+                Button("Keep playlist on this phone") { Task { await model.keepCollectionOffline(collection) } }
+            }
             Button("Refresh playlist") { Task { await model.loadMusicPlaylist(item, force: true) } }
             if let url = URL(string: item.url) { Link("Open original playlist", destination: url) }
             if let source = model.musicCatalog.sources.first(where: { $0.id == item.sourceID }), source.provider == "spotify" {

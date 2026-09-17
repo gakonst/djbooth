@@ -1,5 +1,15 @@
 import Foundation
 
+public struct RecordingUploadAvailability: Decodable, Sendable {
+    public let available: Bool
+    public let reason: String?
+}
+public struct RecordingUploadResult: Codable, Sendable {
+    public let url: URL
+    public let id: String
+    public let state: String
+}
+
 public struct MusicSource: Codable, Identifiable, Sendable, Equatable {
     public var id, provider, connectionID, accountID, label: String
     public var providerName: String { provider == "spotify" ? "Spotify" : "SoundCloud" }
@@ -37,6 +47,9 @@ public struct MusicCatalog: Codable, Sendable, Equatable {
     public var playlists: [MusicPlaylist] = []
     public var snapshots: [String: MusicPlaylistSnapshot] = [:]
     public var fetchedAt: Double = 0
+    // A replica of completed import provenance, not download/workflow state.
+    // Optional for catalogs written before these links were cached.
+    public var downloadedCollections: [String: String]?
     public init() {}
     public func folder(for source: MusicSource) -> [String] {
         sources.filter { $0.provider == source.provider }.count > 1
@@ -50,10 +63,37 @@ public struct MusicCatalog: Codable, Sendable, Equatable {
             return snapshot.tracks.filter { seen.insert($0.id).inserted }.map { $0.libraryTrack(provider: provider) }
         }
     }
+    private func sourceKey(_ value: String) -> String {
+        guard var url = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)) else { return value }
+        url.fragment = nil
+        if let host = url.host, host.hasPrefix("www.") { url.host = String(host.dropFirst(4)) }
+        let query = (url.queryItems ?? []).filter { !$0.name.hasPrefix("utm_") && !["si", "feature"].contains($0.name) }
+            .sorted { $0.name == $1.name ? ($0.value ?? "") < ($1.value ?? "") : $0.name < $1.name }
+        url.queryItems = query.isEmpty ? nil : query
+        return url.string ?? value
+    }
+    @discardableResult public mutating func rememberDownloads(_ jobs: [CloudImportJob]) -> Bool {
+        var links = downloadedCollections ?? [:]
+        // Apply the newest successful publication last. Failed retries never
+        // discard a previously acquired library playlist.
+        for job in jobs.filter({ $0.status == "complete" }).sorted(by: { $0.updatedAt < $1.updatedAt }) {
+            if let id = job.collectionID { links[sourceKey(job.source)] = id }
+        }
+        guard links != (downloadedCollections ?? [:]) else { return false }
+        downloadedCollections = links
+        return true
+    }
+    public func downloadedCollection(for item: MusicPlaylist, library: [Collection]) -> Collection? {
+        guard sources.contains(where: { $0.id == item.sourceID }),
+              let id = downloadedCollections?[sourceKey(item.url)] else { return nil }
+        return library.first { $0.id == id && !$0.trackIDs.isEmpty }
+    }
     public func collections(jobs: [CloudImportJob], library: [Collection]) -> [Collection] {
-        playlists.compactMap { item in
+        var catalog = self
+        catalog.rememberDownloads(jobs)
+        return playlists.compactMap { item in
             guard let source = sources.first(where: { $0.id == item.sourceID }) else { return nil }
-            let imported = jobs.first { $0.source == item.url && $0.status == "complete" }.flatMap { job in library.first { $0.id == job.collectionID } }
+            let imported = catalog.downloadedCollection(for: item, library: library)
             return Collection(id: item.id, name: item.name, trackIDs: imported?.trackIDs ?? snapshots[item.id]?.tracks.map(\.id) ?? [], folderPath: folder(for: source))
         }
     }

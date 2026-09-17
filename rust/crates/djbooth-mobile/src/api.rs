@@ -248,6 +248,8 @@ mod tests {
             "server.subscribe_mixer_telemetry",
             "server.subscribe_vu_telemetry",
             "server.send_raw_udp_payload_datagram_with_options",
+            "server.network_diagnostics",
+            "server.resolved_neighbours",
         ] {
             assert!(methods.contains(operation), "missing {operation}");
         }
@@ -453,6 +455,11 @@ mod ffi_tests {
         );
         assert_eq!(call("server.bind_ip", json!({}))["value"], "127.0.0.1");
         assert_eq!(call("server.library_track_count", json!({}))["value"], 0);
+        let network = call("server.network_diagnostics", json!({}));
+        assert_eq!(network["ok"], true);
+        assert_eq!(network["value"]["bind_ip"], "127.0.0.1");
+        assert_eq!(network["value"]["transport"], "kernel_unicast");
+        assert_eq!(network["value"]["stagehand_enabled"], false);
         assert_eq!(
             call("server.library_track_metadata", json!({"track_id":12})),
             json!({"ok":true,"value":null})

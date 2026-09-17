@@ -36,7 +36,7 @@ struct PlaybackPositionSlider: UIViewRepresentable {
         slider.onCancel = onCancel
         slider.minimumValue = 0
         slider.maximumValue = Float(max(1, duration))
-        slider.isEnabled = trackID != nil && duration > 0
+        slider.isEnabled = context.environment.isEnabled && trackID != nil && duration > 0
         if !slider.isTracking { slider.setValue(Float(value), animated: false) }
         slider.accessibilityValue = "\(timeLabel(value)) of \(timeLabel(duration))"
     }

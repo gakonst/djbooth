@@ -5,6 +5,12 @@ import SwiftUI
     @State private var startupError: String?
     @State private var startupTask: Task<BoothModel, Error>
     init() {
+        #if os(iOS)
+        AppDiagnostics.shared.start()
+        #if DEBUG
+        DJLinkHardwareControl.shared.start()
+        #endif
+        #endif
         PerformanceProbe.applicationBegan()
         // Open the local library while SwiftUI creates the first window.
         _startupTask = State(initialValue: BoothModel.startLoading())
@@ -19,7 +25,13 @@ import SwiftUI
             }
             .task {
                 guard model == nil, startupError == nil else { return }
-                do { model = try await startupTask.value } catch { startupError = error.localizedDescription }
+                do { model = try await startupTask.value }
+                catch {
+                    startupError = error.localizedDescription
+                    #if os(iOS)
+                    AppDiagnostics.shared.event("library_start_failed", ["error": error.localizedDescription])
+                    #endif
+                }
             }
             #if DEBUG
             .overlay(alignment: .top) {
@@ -90,6 +102,9 @@ struct BoothRoot: View {
                 Button("OK") { model.message = nil; model.player.error = nil }
             } message: { Text(model.message ?? model.player.error ?? "") }
             .task {
+                #if os(iOS) && DEBUG
+                DJLinkHardwareControl.shared.model = model
+                #endif
                 model.player.onAdvance = { track in Task { await model.play(track, preservingQueue: true) } }
                 async let analysis: Void = model.finishLoadingLibrary()
                 if !PerformanceProbe.offline { await model.startup() }
@@ -100,11 +115,14 @@ struct BoothRoot: View {
                     model.persistPlaybackSession()
                     model.stopPhoneTools()
                     #if os(iOS)
-                    if phase == .background, model.djLink.status.running || model.djLink.busy {
-                        Task { await model.djLink.disconnect() }
+                    if phase == .background {
+                        model.djLink.sceneChanged(background: true, audioPlaying: model.player.playing)
                     }
                     #endif
                 }
+                #if os(iOS)
+                if phase == .active { model.djLink.sceneChanged(background: false, audioPlaying: model.player.playing) }
+                #endif
             }
             .task(id: "\(model.accountConnectionID):\(scenePhase)") {
                 guard scenePhase == .active, !model.demo else { return }
@@ -118,10 +136,7 @@ struct BoothRoot: View {
                 }
             }
             #if os(iOS)
-            .task(id: scenePhase == .background) {
-                guard scenePhase != .background else { return }
-                await model.djLink.monitor(model: model)
-            }
+            .task { await model.djLink.monitor(model: model) }
             #endif
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }

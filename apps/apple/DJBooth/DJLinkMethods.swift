@@ -26,6 +26,8 @@ enum DJLinkServerMethod: String, CaseIterable, Sendable {
     case `monitor_snapshot`
     case `subscribe_telemetry`
     case `subscribe_mixer_telemetry`
+    case `resolved_neighbours`
+    case `network_diagnostics`
     case `subscribe_vu_telemetry`
     case `start`
     case `send_load_track`

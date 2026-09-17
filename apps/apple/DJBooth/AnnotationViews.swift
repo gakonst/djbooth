@@ -108,20 +108,58 @@ struct TrackAnnotationEditor: View {
     }
 }
 
+/// Presentation data only; deck transport state is supplied by the shared Rust runtime.
+struct PlaybackDisplay {
+    let track: Track?
+    let deck: DJLinkDeckState?
+    var deckPlayer: Int? = nil
+    var isDeck: Bool { deck != nil || deckPlayer != nil }
+    var key: String? { deck?.effective_key ?? track?.key }
+    var keyHint: String {
+        isDeck && deck?.effective_key == nil && key != nil
+            ? "Analyzed track key; live deck key shift is not available yet" : ""
+    }
+    var identity: String { "\(deck?.player ?? deckPlayer ?? 0):\(deck?.track_id.map(String.init) ?? track?.id ?? "")" }
+    var deckDuration: Double? { deck?.track_length_sec.map(Double.init) ?? track?.durationSeconds }
+    var deckPosition: Double? {
+        if let value = deck?.playhead_ms { return Double(value) / 1000 }
+        if let value = deck?.track_progress_milli, let duration = deckDuration {
+            return Double(value) / 1000 * duration
+        }
+        return nil
+    }
+}
+
 /// Current recording, its queue, and inline annotations stay anchored while browsing.
 struct MobileNowPlaying: View {
     @Bindable var model: BoothModel
+    var deckPlayer: Int? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @Environment(\.colorSchemeContrast) private var contrast
     @FocusState private var noteFocused: Bool
-    private var waveformCache: PlaybackWaveformCache { model.playbackWaveformCache }
+    @State private var deckWaveformCache = PlaybackWaveformCache()
+    private var waveformCache: PlaybackWaveformCache { deckPlayer == nil ? model.playbackWaveformCache : deckWaveformCache }
     @State private var swipeOffset: CGFloat = 0
     @State private var horizontalSwipe: Bool?
     @State private var colorPaletteOpen = false
+    private var display: PlaybackDisplay {
+        #if os(iOS)
+        if let deckPlayer {
+            let deck = model.djLink.decks.first { $0.id == deckPlayer }
+            return PlaybackDisplay(track: deck?.presentationTrack(in: model.tracksByID), deck: deck?.state, deckPlayer: deckPlayer)
+        }
+        if !model.djLink.showingPhonePlayer, model.djLink.status.running, let deck = model.djLink.selectedDeck {
+            let track = deck.presentationTrack(in: model.tracksByID)
+            return PlaybackDisplay(track: track, deck: deck.state)
+        }
+        #endif
+        return PlaybackDisplay(track: model.player.track, deck: nil)
+    }
+    private var playing: Bool { display.isDeck ? display.deck?.playing ?? false : model.player.transportPlaying }
     var body: some View {
-        let track = model.player.track
+        let track = display.track
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if let track {
@@ -167,10 +205,11 @@ struct MobileNowPlaying: View {
                     transaction.animation = nil
                     transaction.disablesAnimations = true
                 }
-            PlaybackWaveform(player: model.player, cache: waveformCache)
+            PlaybackWaveform(player: model.player, display: display, cache: waveformCache)
                 .frame(height: 64)
             VStack(spacing: 5) {
-                PlaybackQueueStrip(model: model)
+                sourceSelector
+                if !display.isDeck { PlaybackQueueStrip(model: model) }
                 Group {
                     if typeSize.isAccessibilitySize {
                         VStack(alignment: .leading, spacing: 6) {
@@ -200,21 +239,63 @@ struct MobileNowPlaying: View {
                         }
                     }
                 }.padding(.vertical, 5)
-                    .background { PlaybackOverviewBackground(player: model.player, cache: waveformCache) }
+                    .background { PlaybackOverviewBackground(player: model.player, display: display, cache: waveformCache) }
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: track?.id)
-                PlaybackProgress(player: model.player)
+                PlaybackProgress(player: model.player, display: display)
             }.padding(.horizontal, 12).padding(.top, 9).padding(.bottom, 3)
                 .clipped()
         }.background(BoothStyle.surface)
-            .background { PlaybackWaveformLoader(player: model.player, cache: waveformCache) }
+            .background { PlaybackWaveformLoader(track: track, cache: waveformCache) }
             .overlay(alignment: .top) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
-            .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.bottom")
-            .onChange(of: track?.id) { _, _ in noteFocused = false; colorPaletteOpen = false }
+            .accessibilityElement(children: .contain).accessibilityIdentifier(deckPlayer.map { "nowPlaying.deck.\($0)" } ?? "nowPlaying.bottom")
+            .onChange(of: display.identity) { _, _ in noteFocused = false; colorPaletteOpen = false; swipeOffset = 0; horizontalSwipe = nil }
+    }
+    @ViewBuilder private var sourceSelector: some View {
+        #if os(iOS)
+        if let deckPlayer {
+            HStack {
+                Button {
+                    model.djLink.selectedPlayer = deckPlayer
+                } label: {
+                    Label("Player \(deckPlayer)", systemImage: "opticaldisc")
+                        .boothFont(12, relativeTo: .caption, weight: .semibold).frame(minHeight: 36)
+                }.accessibilityIdentifier("djlink.deck.select.\(deckPlayer)")
+                Spacer()
+                Text(display.deck.map { $0.tempo_master ? "MASTER" : $0.play_state.capitalized } ?? "Waiting for deck status")
+                    .boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
+            }
+        } else if model.djLink.status.running, !model.djLink.decks.isEmpty {
+            HStack {
+                Menu {
+                    Button("Follow playing deck") {
+                        model.djLink.selectedPlayer = nil
+                        model.djLink.showingPhonePlayer = false
+                    }
+                    ForEach(model.djLink.decks) { deck in
+                        Button("Player \(deck.id)\(deck.state.tempo_master ? " · Master" : "")") {
+                            model.djLink.selectedPlayer = deck.id
+                            model.djLink.showingPhonePlayer = false
+                        }
+                    }
+                    Button("iPhone player") { model.djLink.showingPhonePlayer = true }
+                } label: {
+                    Label(display.deck.map { "Player \($0.player)\(model.djLink.selectedPlayer == nil ? " · Auto" : "")" } ?? "iPhone player",
+                          systemImage: display.isDeck ? "opticaldisc" : "iphone")
+                        .boothFont(12, relativeTo: .caption, weight: .semibold).frame(minHeight: 36)
+                }.accessibilityIdentifier("nowPlaying.source")
+                Spacer()
+                if let deck = display.deck {
+                    Text(deck.tempo_master ? "MASTER" : deck.play_state.capitalized)
+                        .boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        #endif
     }
     private func colorChoice(_ color: TrackColor?, for track: Track) -> some View {
         let selected = model.annotation(for: track).color == color
         return Button {
-            guard model.player.track?.id == track.id else { colorPaletteOpen = false; return }
+            guard display.track?.id == track.id else { colorPaletteOpen = false; return }
             model.setColor(color, for: track)
             colorPaletteOpen = false
         } label: {
@@ -240,43 +321,50 @@ struct MobileNowPlaying: View {
             }.frame(width: 44, height: 44).contentShape(Rectangle())
     }
     private func currentTitle(_ track: Track?) -> some View {
-        NowPlayingTitle(text: track?.title ?? "No track selected", trackID: track?.id,
-            playing: model.player.playing,
-            availability: track.map { model.offlineIDs.contains($0.id) ? "Available offline" : "Not on this device" } ?? "No track selected")
+        NowPlayingTitle(text: track?.title ?? display.deck?.track_id.map { "Track \($0)" } ?? "No track selected", trackID: track?.id,
+            playing: playing,
+            availability: display.deck.map { "Player \($0.player)" } ?? track.map { model.offlineIDs.contains($0.id) ? "Available offline" : "Not on this device" } ?? "No track selected")
     }
     private func currentArtist(_ track: Track?) -> some View {
-        Text(track.map { $0.artist ?? "Unknown artist" } ?? "Choose a track from your library")
+        Text(track.map { $0.artist ?? "Unknown artist" } ?? (display.isDeck ? "No library metadata" : "Choose a track from your library"))
             .boothFont(12, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
     }
     @ViewBuilder private func currentAnalysis(_ track: Track?) -> some View {
-        Text("\(track?.bpm.map { String(format: "%.1f", $0) } ?? "—") BPM")
+        let bpm = display.isDeck ? display.deck?.effective_bpm_hundreds.map { Double($0) / 100 } : track?.bpm
+        Text("\(bpm.map { String(format: "%.1f", $0) } ?? "—") BPM")
             .boothFont(12, relativeTo: .caption, weight: .semibold, design: .monospaced)
             .fixedSize(horizontal: true, vertical: false)
-        Text(track?.key ?? "—").boothFont(11, relativeTo: .caption2, weight: .semibold, design: .monospaced)
+        Text(display.key ?? "—")
+            .boothFont(11, relativeTo: .caption2, weight: .semibold, design: .monospaced)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8).padding(.vertical, 2)
             .background(.white.opacity(0.08)).overlay(Rectangle().stroke(.white.opacity(0.55), lineWidth: 0.5))
+            .accessibilityLabel("Key").accessibilityIdentifier("nowPlaying.key")
+            .accessibilityValue(display.key ?? "Unavailable")
+            .accessibilityHint(display.keyHint)
     }
     private func swipeSurface<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content().offset(x: reduceMotion ? 0 : swipeOffset)
             .contentShape(Rectangle()).simultaneousGesture(playerSwipe)
             .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.surface")
-            .accessibilityAction(named: "Previous track") { model.player.advance(-1) }
-            .accessibilityAction(named: "Next track") { model.player.advance(1) }
+            .accessibilityAction(named: "Previous track") { if !display.isDeck { model.player.advance(-1) } }
+            .accessibilityAction(named: "Next track") { if !display.isDeck { model.player.advance(1) } }
     }
     private var playButton: some View {
-        Button { Task { await model.togglePlayback() } } label: {
-            Image(systemName: model.player.transportPlaying ? "pause.fill" : "play.fill")
+        Button { if !display.isDeck { Task { await model.togglePlayback() } } } label: {
+            Image(systemName: playing ? "pause.fill" : "play.fill")
                 .font(.title3.weight(.semibold)).frame(minWidth: 24, minHeight: 24).padding(3)
                 .foregroundStyle(.black)
         }.modifier(BoothTransportStyle()).controlSize(.large)
             .frame(minWidth: 44, minHeight: 44)
-            .accessibilityLabel(model.player.transportPlaying ? "Pause" : "Play")
-            .accessibilityIdentifier("nowPlaying.play").disabled(model.player.track == nil)
+            .accessibilityLabel(playing ? "Pause" : "Play")
+            .accessibilityIdentifier("nowPlaying.play").disabled(display.isDeck || model.player.track == nil)
+            .accessibilityHint(display.isDeck ? "Playback is controlled on the deck" : "")
     }
     private var playerSwipe: some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard !display.isDeck else { return }
                 if horizontalSwipe == nil {
                     horizontalSwipe = abs(value.translation.width) > abs(value.translation.height)
                 }
@@ -284,7 +372,7 @@ struct MobileNowPlaying: View {
                 swipeOffset = min(80, max(-80, value.translation.width * 0.65))
             }
             .onEnded { value in
-                if horizontalSwipe == true, abs(value.translation.width) >= 64 {
+                if !display.isDeck, horizontalSwipe == true, abs(value.translation.width) >= 64 {
                     model.player.advance(value.translation.width < 0 ? 1 : -1)
                 }
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { swipeOffset = 0 }
@@ -296,41 +384,43 @@ struct MobileNowPlaying: View {
 /// Elapsed-time observations stay here instead of rebuilding the entire footer and queue.
 private struct PlaybackProgress: View {
     let player: BoothPlayer
+    let display: PlaybackDisplay
     @State private var scrubID: UUID?
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
-        let trackID = player.track?.id
+        let trackID = display.track?.id
         let seekRevision = player.seekRevision
-        let elapsed = player.scrubPosition ?? player.elapsed
-        let duration = player.duration
+        let elapsed = display.isDeck ? (display.deckPosition ?? 0) : (player.scrubPosition ?? player.elapsed)
+        let duration = display.isDeck ? (display.deckDuration ?? 0) : player.duration
+        let elapsedLabel = display.isDeck && display.deckPosition == nil ? "—:—" : ((display.deck?.playhead_source == "beat_grid" ? "≈" : "") + timeLabel(elapsed))
         HStack(spacing: 8) {
-            Text(timeLabel(elapsed)).fixedSize().accessibilityLabel("Elapsed time")
-                .accessibilityValue(timeLabel(elapsed)).accessibilityIdentifier("nowPlaying.elapsed")
+            Text(elapsedLabel).fixedSize().accessibilityLabel("Elapsed time")
+                .accessibilityValue(elapsedLabel).accessibilityIdentifier("nowPlaying.elapsed")
             #if os(iOS)
             PlaybackPositionSlider(trackID: trackID, seekRevision: seekRevision, value: elapsed, duration: duration,
                 onBegin: {
-                    guard trackID == player.track?.id, seekRevision == player.seekRevision else { return false }
+                    guard !display.isDeck, trackID == player.track?.id, seekRevision == player.seekRevision else { return false }
                     scrubID = player.beginScrubbing()
                     return scrubID != nil
                 },
                 onPreview: { value in
-                    if let scrubID { player.updateScrubbing(scrubID, to: value) }
+                    if !display.isDeck, let scrubID { player.updateScrubbing(scrubID, to: value) }
                 }, onCommit: { value in
-                    guard trackID == player.track?.id, seekRevision == player.seekRevision else { return }
+                    guard !display.isDeck, trackID == player.track?.id, seekRevision == player.seekRevision else { return }
                     if let scrubID { player.endScrubbing(scrubID, at: value) }
                     else { player.seek(value) }
                     scrubID = nil
                 }, onCancel: { cancelScrub() })
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: 44, minHeight: 44).disabled(display.isDeck)
             #else
             Slider(value: Binding(
                 get: { min(max(0, elapsed), max(1, duration)) },
                 set: { value in
-                    guard trackID == player.track?.id else { return }
-                    if let scrubID { player.updateScrubbing(scrubID, to: value) }
+                    guard !display.isDeck, trackID == player.track?.id else { return }
+                    if !display.isDeck, let scrubID { player.updateScrubbing(scrubID, to: value) }
                     else if player.track != nil { player.seek(value) }
                 }), in: 0...max(1, duration), onEditingChanged: { active in
-                    guard trackID == player.track?.id else { return }
+                    guard !display.isDeck, trackID == player.track?.id else { return }
                     if active {
                         scrubID = player.beginScrubbing()
                     } else {
@@ -339,7 +429,7 @@ private struct PlaybackProgress: View {
                     }
                 })
                 .tint(.white).frame(minWidth: 44, minHeight: 44)
-                .disabled(player.track == nil || duration <= 0)
+                .disabled(display.isDeck || player.track == nil || duration <= 0)
                 .accessibilityLabel("Playback position")
                 .accessibilityValue("\(timeLabel(elapsed)) of \(timeLabel(duration))")
                 .accessibilityIdentifier("nowPlaying.progress")
@@ -349,7 +439,7 @@ private struct PlaybackProgress: View {
                 .accessibilityValue(timeLabel(duration)).accessibilityIdentifier("nowPlaying.duration")
         }.boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
             .accessibilityElement(children: .contain).accessibilityIdentifier("nowPlaying.time")
-            .onChange(of: player.track?.id) { _, _ in scrubID = nil }
+            .onChange(of: display.identity) { _, _ in cancelScrub() }
             .onChange(of: player.seekRevision) { _, _ in scrubID = nil }
             .onChange(of: scenePhase) { _, phase in if phase != .active { cancelScrub() } }
             .onDisappear { cancelScrub() }

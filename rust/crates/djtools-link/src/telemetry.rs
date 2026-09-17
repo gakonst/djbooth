@@ -45,6 +45,9 @@ pub(crate) async fn init_djlink_tracing(
     log_path: Option<PathBuf>,
     level: LogLevel,
 ) -> LinkResult<()> {
+    if crate::diagnostics::initialized() {
+        return Ok(());
+    }
     let Some(path) = log_path.as_ref() else {
         return Ok(());
     };

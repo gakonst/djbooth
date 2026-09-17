@@ -12,7 +12,11 @@ tracks with a scoped playback queue; the edge gesture inside groups, folders, an
 Choose **Download → Paste → Download** to start a playlist/set import in the cloud. The sheet shows
 submission confirmation, current progress, retry for failed jobs, and an **Open playlist** action when ready.
 An unconnected phone can open cloud settings from the same sheet. The app can close while the import runs.
-On iOS, **Open USB library** at the top of the playlist browser opens a folder picker.
+On iOS, **Settings → USB library → Choose USB folder** opens the initial folder picker.
+A USB folder appears in the playlist browser only while its authorized drive is connected.
+Spotify and SoundCloud use the normal folder navigation bar and native Back gesture. A centered
+system spinner appears only while an empty folder or playlist first loads; cached contents stay
+in place during refresh. Pull to refresh. Connection errors and retry stay inside the affected folder.
 Connect a USB stick and choose its top-level folder containing `PIONEER` once. The app remembers
 that folder grant and checks for reconnects/catalog changes while foregrounded and on activation.
 iOS requires the initial folder permission; it cannot silently open an arbitrary newly connected stick.
@@ -172,7 +176,7 @@ mixing previous sessions. Fixture servers listen only on loopback ports 8791/879
 
 ## iPhone DJ Link development
 
-The sidebar's **Connect to CDJ** embeds the shared Rust RemoteDB/NFS engine. It projects
+CDJ connection starts automatically when a wired interface appears. The sidebar's **CDJs** status screen uses the shared Rust RemoteDB/NFS engine. It projects
 locally downloaded audio and ordered playlists into an in-memory session. Content-addressed
 hard links preserve audio extensions and stable exported paths across reconnects. The C ABI
 uses the shared Rust ANLZ reader/writer only to relocate audio paths. Cloud publishing
@@ -189,7 +193,9 @@ those Rust targets with rustup first. Normal device builds retain their existing
 automatically discover decks using unicast DJ Link probes on the attached IPv4 subnet.
 They use kernel UDP sockets for discovery and NFS, without the desktop BPF fallback.
 Discovery is limited to actual /16–/30 subnets, probes at most 128 addresses per second,
-checks the phone's /24 and low host addresses first, and repeats while foregrounded.
+interleaves the phone's /24 with low host addresses across the subnet, and repeats
+while foregrounded. A random phone link-local address does not force the deck to
+wait behind the phone's entire /24.
 After a deck responds, scanning slows to fewer than eight candidates per second to keep
 the USB adapter available for browsing and NFS. Darwin sockets reserve 128 KiB of send
 buffer space for full-size NFS replies; the default 9 KiB limit rejects these datagrams.
@@ -201,8 +207,7 @@ the offline artifact transfer and large-datagram fixes.
 
 `pnpm native:device --device <id>` installs the automatic unicast build.
 Wired network appearance starts sharing without entering addresses or opening the sheet.
-Disconnect pauses automatic sharing until that connection disappears; foregrounding resumes
-wired sharing. For Wi-Fi, select the connection in **Connect to CDJ**.
+Foregrounding resumes wired sharing; no Connect button or status-screen visit is required.
 
 Optional broadcast discovery needs Apple's Multicast Networking entitlement assigned to
 team and bundle ID `xyz.gakonst.djbooth`, a matching provisioning profile, and an Xcode account.
@@ -216,3 +221,76 @@ or the same local network is also a test path. The USB transport, iOS kernel UDP
 and real deck browsing/loading still require a device test; a successful build is not proof of playback.
 See [AlphaTheta's connection guide](https://rekordbox.com/en/support/faq/connecting-to-dj-units/#faq-q100037)
 and [Apple's multicast entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.networking.multicast).
+
+
+### Persistent iPhone diagnostics
+
+Diagnostics start at app launch in `Library/Application Support/DJBooth/Diagnostics`.
+They are local, excluded from backup, and survive app restarts and ordinary reinstalls.
+Uninstalling the app removes them. `pnpm native:diagnostics --device <id>` copies the
+retained sessions into `apps/apple/.build/diagnostics/` without restarting the phone app.
+
+Each session includes:
+
+- `manifest.json`: session ID, UTC creation time, app/OS versions, Git revision,
+  source fingerprint (including dirty Swift/Rust changes), SDK and build configuration.
+- `timeline*.jsonl`: Swift lifecycle, interface/connection transitions, binding calls
+  and durations, shared Rust request/reply diagnostics, panic backtraces, and main-thread
+  stalls/recovery. Row timestamps and monotonic elapsed times correlate all lanes.
+- `transport*.jsonl`: **application socket capture**, with direction, endpoints, TCP
+  connection ID, original payload length and complete hexadecimal payload bytes.
+  TCP chunks are actual successful socket reads/writes, not OS packet segments. UDP
+  records include discovery/status, RPC/mount, and NFS traffic. There are no IP/TCP
+  headers, retransmissions, other-app traffic, or CDJ button/screen events. Capture
+  may include audio bytes and library metadata; no Spotify/cloud requests are tapped.
+- `metrics*.jsonl`: original Apple MetricKit diagnostic/metric JSON. These reports
+  retain their original timestamps/version/binary UUIDs, even when delivered during
+  a later session. Apple controls delivery; absence is not proof that no crash occurred.
+
+For USB hot-plug failures, correlate `cdj_monitor_started/stopped`,
+`cdj_network_path`, `interface_scan_changed`, `cdj_interfaces`, and
+`cdj_automatic_state`. The Rust scan records raw interface names, address families,
+IPv4 addresses and flags before filtering, only when they change. This distinguishes
+an adapter missing from the OS enumeration from one rejected by the Rust filter.
+`interface_scan_failed` records OS enumeration errors. Reproduce by opening the app
+with no cable, plugging in while it stays visible, then unplugging/replugging without
+relaunching. A successful connection only after launch does not pass this check.
+For an unattended Debug device run, add `--dj-link-hardware-test` to
+`pnpm native:device --device <id>`. This keeps the foreground app awake while
+waiting for the USB IPv4 address, including before the Rust server starts. The
+flag is ignored in Release builds and does not enable background networking.
+It also enables a paired-device file command channel. With the app open, use
+`pnpm native:link --device <id> --operation status` to inspect the session, or
+`--operation api` for the generated Rust method catalog and argument schema.
+`--operation server.send_load_track --arguments '<json>'` and
+`--operation server.start_player --arguments '<json>'` invoke the existing Rust
+deck controls on the phone. `diagnostics.status` reports the active capture directory
+and loss counters. Swift only forwards JSON to the C ABI. There is no network listener,
+and the channel is absent from Release builds. Run one command at a time; commands
+expire after 60 seconds and are never automatically replayed after a timeout or restart.
+The returned result confirms the Rust operation; verify actual deck state with
+`server.monitor_snapshot` and the traffic capture before declaring playback successful.
+
+Four launch sessions are retained. Each has at most four 2 MiB timeline segments,
+four 4 MiB transport segments, and four 2 MiB metric segments (128 MiB total plus
+small manifests). `.1` is the preceding segment. Capture writes run on a bounded
+background queue; dropped records and disk errors are reported as `diagnostics_loss`
+and by the `diagnostics.status` C ABI operation. A capture with loss is incomplete.
+The independent one-second foreground heartbeat records main-thread stalls over
+three seconds. It suspends detection when inactive/backgrounded; it does not claim
+that a force-quit, device reboot, or missing termination callback is a crash.
+
+Native builds retain Rust line information and archive the matching iOS dSYM under
+`apps/apple/.build/diagnostic-symbols/<binary-UUID>/`, alongside its build ID. Keep
+that directory to symbolicate reports after another build. Apple crash/hang reports
+use MetricKit; see [Apple's diagnostic delivery documentation](https://developer.apple.com/documentation/metrickit/mxmetricmanager).
+For a dedicated simulator smoke test, `pnpm native:ios --demo --diagnostics-stall-probe`
+produces a deliberate five-second main-thread stall (Debug simulator only). Verify
+`main_thread_stall` and `main_thread_recovered`, then relaunch and confirm the old
+session remains. No deliberate stall runs on physical devices or release builds.
+
+DJ Link protocol logic remains in Rust. Swift forwards calls and iOS lifecycle/
+MetricKit notifications. The generated 55-method/11-function inventory is checked at
+runtime; binding tests compare native results, errors, subscriptions and transmitted
+bytes, and shared-server tests cover browse/Back/track changes. Physical deck behavior
+still requires a recorded hardware test; the binding inventory alone cannot prove it.

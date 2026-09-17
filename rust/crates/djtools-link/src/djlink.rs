@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinHandle as TokioJoinHandle, JoinSet};
@@ -167,6 +167,8 @@ pub struct DjLinkConfig {
     /// Discover local peers with unicast probes and use kernel sockets only.
     /// The mask must be the selected interface's actual IPv4 netmask.
     pub unicast_discovery_netmask: Option<Ipv4Addr>,
+    /// Optional bounded cache of verified peers, used only as discovery hints.
+    pub discovery_cache_path: Option<PathBuf>,
     pub db_server_port: u16,
     pub mount_port: Option<u16>,
     pub announce_interval: Duration,
@@ -232,6 +234,7 @@ impl Default for DjLinkConfig {
             bind_ip: None,
             broadcast_ip: None,
             unicast_discovery_netmask: None,
+            discovery_cache_path: None,
             db_server_port: DEFAULT_DBSERVER_PORT,
             mount_port: Some(DEFAULT_MOUNT_PORT),
             announce_interval: FAST_ANNOUNCE_INTERVAL,
@@ -282,6 +285,7 @@ pub struct DjLinkWaveform {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct DjLinkTrackMetadata {
     pub track_id: u32,
+    pub key: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -415,6 +419,7 @@ pub struct DjLinkMonitorSnapshot {
 pub struct DjLinkDeckState {
     pub player: u8,
     pub active: bool,
+    pub on_air: bool,
     pub source_player: u8,
     pub source_slot: u8,
     pub track_type: u8,
@@ -426,11 +431,15 @@ pub struct DjLinkDeckState {
     pub bpm_hundreds: Option<u16>,
     pub effective_bpm_hundreds: Option<u32>,
     pub pitch_centi_percent: i32,
+    pub master_tempo: Option<bool>,
+    pub key_shift_cents: Option<i64>,
+    pub effective_key: Option<String>,
     pub beat_in_bar: u8,
     pub beat_number: Option<u32>,
     pub track_progress_milli: Option<u16>,
     pub track_length_sec: Option<u32>,
     pub playhead_ms: Option<u32>,
+    pub playhead_source: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -538,8 +547,9 @@ impl DjLinkServer {
             .unwrap_or_else(|| default_broadcast_ip(bind_ip));
         if let Some(mask) = config.unicast_discovery_netmask {
             anyhow::ensure!(
-                !config.stagehand_monitor,
-                "Unicast discovery cannot run Stagehand"
+                !config.stagehand_monitor
+                    || config.stagehand_session_ip.is_none_or(|ip| ip == bind_ip),
+                "Unicast Stagehand must use the bound interface address"
             );
             discovery_addresses(bind_ip, mask)?;
         }
@@ -553,24 +563,36 @@ impl DjLinkServer {
         };
         let mac_addr = default_mac(bind_ip);
         // The real Stagehand app is a separate network host. Keep that identity
-        // distinct from the Rekordbox source so peers never see two protocol
-        // personas claiming the same IP address.
+        // distinct from the Rekordbox source on broadcast networks. Kernel-only
+        // unicast uses the real address with distinct protocol identities for
+        // Rekordbox sharing and Stagehand monitoring.
+        // Kernel-only sessions must reuse their protocol identity at the same
+        // real IP. Players can retain the first claim across app restarts.
+        let kernel_identity = (config.unicast_discovery_netmask.is_some()
+            || config.stagehand_session_ip == Some(bind_ip))
+        .then_some(u64::from(u32::from(bind_ip)));
         let stagehand_session_nonce = config.stagehand_monitor.then(|| {
             config
                 .stagehand_session_nonce
+                .or(kernel_identity)
                 .unwrap_or_else(stagehand_launch_nonce)
         });
         let stagehand_protocol_nonce = config.stagehand_monitor.then(|| {
             config
                 .stagehand_protocol_nonce
+                .or(kernel_identity.map(|identity| identity ^ 0x7374_6167_6568_616e))
                 .unwrap_or_else(stagehand_launch_nonce)
         });
         config.stagehand_session_nonce = stagehand_session_nonce;
         config.stagehand_protocol_nonce = stagehand_protocol_nonce;
         let stagehand_ip = config.stagehand_monitor.then(|| {
-            config
-                .stagehand_session_ip
-                .unwrap_or_else(|| isolated_stagehand_ip(bind_ip, stagehand_session_nonce.unwrap()))
+            config.stagehand_session_ip.unwrap_or_else(|| {
+                if config.unicast_discovery_netmask.is_some() {
+                    bind_ip
+                } else {
+                    isolated_stagehand_ip(bind_ip, stagehand_session_nonce.unwrap())
+                }
+            })
         });
         config.stagehand_session_ip = stagehand_ip;
         let stagehand_link_mac = stagehand_session_nonce.map(|nonce| {
@@ -605,6 +627,7 @@ impl DjLinkServer {
             stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path,
             cue_overrides_ms: RwLock::new(HashMap::new()),
+            timing_loaded: tokio::sync::Mutex::new(HashSet::new()),
             master_bpm_hundreds: AtomicU16::new(initial_bpm),
         });
         Ok(Self {
@@ -666,6 +689,7 @@ impl DjLinkServer {
         let track = self.state.library.tracks_by_id.get(&track_id)?;
         Some(DjLinkTrackMetadata {
             track_id,
+            key: track.key_label(),
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
@@ -676,15 +700,24 @@ impl DjLinkServer {
 
     pub async fn library_waveform(&self, track_id: u32) -> Option<DjLinkWaveform> {
         let track = self.state.library.tracks_by_id.get(&track_id)?;
-        let (peaks, colors) = if let Some(tag) = read_anlz_tag(track, "PWV4", None).await {
-            waveform_from_pwv4_tag(&tag).unwrap_or_default()
-        } else if let Some(tag) = read_anlz_tag(track, "PWAV", None).await {
-            waveform_from_pwav_tag(&tag).unwrap_or_default()
-        } else if let Some(tag) = read_anlz_tag(track, "PWV5", None).await {
-            waveform_from_pwv5_tag(&tag).unwrap_or_default()
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        // A scrolling beat-grid view needs full RGB detail. PWV4/PWAV are
+        // whole-track previews and look blocky when expanded to eight bars.
+        let mut waveform = None;
+        for name in ["PWV5", "PWV4", "PWAV"] {
+            let Some(tag) = read_anlz_tag(track, name, None).await else {
+                continue;
+            };
+            let decoded = match name {
+                "PWV5" => waveform_from_pwv5_tag(&tag),
+                "PWV4" => waveform_from_pwv4_tag(&tag),
+                _ => waveform_from_pwav_tag(&tag),
+            };
+            if decoded.as_ref().is_some_and(|(peaks, _)| !peaks.is_empty()) {
+                waveform = decoded;
+                break;
+            }
+        }
+        let (peaks, colors) = waveform.unwrap_or_default();
         let beat_grid = match read_anlz_tag(track, "PQTZ", None).await {
             Some(tag) => waveform_beats_from_pqtz_tag(&tag).unwrap_or_default(),
             None => Vec::new(),
@@ -1023,6 +1056,23 @@ impl DjLinkServer {
         self.state.mixer_telemetry_tx.subscribe()
     }
 
+    /// Kernel-resolved IPv4 neighbours on this session's network interface.
+    /// Discovery announcements alone do not establish a working return route.
+    /// Preserve route-table permission failures instead of reporting an empty LAN.
+    pub fn resolved_neighbours(&self) -> Result<Vec<Ipv4Addr>> {
+        crate::discovery::neighbours(self.state.interface_name.as_deref())
+            .context("failed to read DJ Link interface neighbours")
+    }
+
+    pub async fn network_diagnostics(&self) -> serde_json::Value {
+        let devices = if self.tasks.is_empty() {
+            Vec::new()
+        } else {
+            self.state.devices_sorted().await
+        };
+        self.state.network_diagnostics(devices)
+    }
+
     pub fn subscribe_vu_telemetry(&self) -> broadcast::Receiver<DjLinkVuTelemetryEvent> {
         self.state.vu_telemetry_tx.subscribe()
     }
@@ -1033,11 +1083,16 @@ impl DjLinkServer {
         }
 
         let unicast = self.state.config.unicast_discovery_netmask.is_some();
-        let receive_ip = if unicast {
-            self.state.bind_ip
-        } else {
-            Ipv4Addr::UNSPECIFIED
-        };
+        // IP_BOUND_IF confines Apple wildcard listeners to the selected cable.
+        // Directed discovery changes how we send, not which peer announcements
+        // we should receive. Binding our individual IP loses every broadcast
+        // keepalive, leaving additional decks dependent on the fallback scan.
+        let receive_ip =
+            if !unicast || (cfg!(target_vendor = "apple") && self.state.interface_name.is_some()) {
+                Ipv4Addr::UNSPECIFIED
+            } else {
+                self.state.bind_ip
+            };
         let keepalive_sock = bind_udp(
             SocketAddrV4::new(receive_ip, KEEPALIVE_PORT),
             self.state.interface_name.as_deref(),
@@ -1052,8 +1107,18 @@ impl DjLinkServer {
         )
         .context("failed to bind UDP/50002 status")?;
 
+        // Discovery can use directed packets while decks still broadcast beats
+        // and precise positions. An address-specific bind drops those packets.
+        // Darwin's IP_BOUND_IF keeps this listener on the chosen DJ Link cable;
+        // receiving does not enable broadcast sends on the unicast transport.
+        let beat_receive_ip =
+            if cfg!(target_vendor = "apple") && self.state.interface_name.is_some() {
+                Ipv4Addr::UNSPECIFIED
+            } else {
+                receive_ip
+            };
         let (beat_tx_sock, beat_rx_sock) = match bind_udp(
-            SocketAddrV4::new(receive_ip, BEAT_PORT),
+            SocketAddrV4::new(beat_receive_ip, BEAT_PORT),
             self.state.interface_name.as_deref(),
             !unicast,
         ) {
@@ -1195,10 +1260,19 @@ impl DjLinkServer {
                 self.tasks
                     .push(spawn_stagehand_raw_rx(self.state.clone(), raw_rx));
             }
-            self.tasks.push(spawn_stagehand_announce(
-                self.state.clone(),
-                keepalive_sock.clone(),
-            ));
+            self.tasks.push(if unicast {
+                spawn_unicast_stagehand(
+                    self.state.clone(),
+                    keepalive_sock.clone(),
+                    status_sock.clone(),
+                )
+            } else {
+                spawn_stagehand_announce(
+                    self.state.clone(),
+                    keepalive_sock.clone(),
+                    status_sock.clone(),
+                )
+            });
         }
         self.tasks
             .push(spawn_link_init(self.state.clone(), status_sock.clone()));
@@ -1223,6 +1297,22 @@ impl DjLinkServer {
             .push(spawn_portmap(self.state.clone(), portmap_sock, mount_port));
         self.tasks.push(spawn_mount(self.state.clone(), mount_sock));
         self.tasks.push(spawn_nfs(self.state.clone(), nfs_sock));
+
+        if crate::diagnostics::initialized() {
+            let state = self.state.clone();
+            self.tasks.push(tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    let devices = state.devices_sorted().await;
+                    crate::diagnostics::event(
+                        "djlink_network_context",
+                        state.network_diagnostics(devices),
+                    );
+                }
+            }));
+        }
 
         send_startup_link_init(&self.state, &status_sock).await;
         if !self.state.config.stagehand_monitor {
@@ -2610,6 +2700,7 @@ struct ServerState {
     stagehand_rejoin_requested_ms: AtomicU64,
     log_path: Option<PathBuf>,
     cue_overrides_ms: RwLock<HashMap<u32, u32>>,
+    timing_loaded: tokio::sync::Mutex<HashSet<u32>>,
     master_bpm_hundreds: AtomicU16,
 }
 
@@ -2620,6 +2711,31 @@ enum LoadProgressRecordResult {
 }
 
 impl ServerState {
+    fn network_diagnostics(&self, devices: Vec<LinkDevice>) -> serde_json::Value {
+        let neighbours = match crate::discovery::neighbours(self.interface_name.as_deref()) {
+            Ok(peers) => serde_json::json!({"resolved":peers}),
+            Err(error) => {
+                serde_json::json!({"error":error.to_string(),"os_error":error.raw_os_error()})
+            }
+        };
+        let protocol_mac = self.config.stagehand_protocol_nonce.and_then(|nonce| {
+            parse_mac(&self.mac_addr)
+                .ok()
+                .map(|mac| format_mac(stagehand::protocol_mac(mac, nonce)))
+        });
+        serde_json::json!({
+            "time_ms":epoch_millis(),"interface":self.interface_name,
+            "bind_ip":self.bind_ip,"broadcast_ip":self.broadcast_ip,"interface_mac":self.mac_addr,
+            "transport":if self.config.unicast_discovery_netmask.is_some() {"kernel_unicast"} else if self.stagehand_ip.is_some_and(|ip| ip != self.bind_ip) {"isolated_raw_stagehand"} else {"kernel_broadcast"},
+            "stagehand_enabled":self.config.stagehand_monitor,"stagehand_ip":self.stagehand_ip,
+            "stagehand_protocol_mac":protocol_mac,
+            "stagehand_runtime_number":self.config.stagehand_protocol_nonce.map(|nonce| 141 + (nonce.rotate_right(17) % 71) as u8),
+            "last_a9_control_or_vu_ms":self.stagehand_last_a9_ms.load(Ordering::Relaxed),
+            "rejoin_requested_ms":self.stagehand_rejoin_requested_ms.load(Ordering::Relaxed),
+            "neighbours":neighbours,"devices":devices,
+        })
+    }
+
     fn clear_actor(&self) {
         let _ = self.actor_tx.try_send(ServerMsg::Shutdown);
     }
@@ -2833,9 +2949,36 @@ impl ServerState {
     }
 
     async fn record_status(&self, status: CdjStatusSnapshot) -> bool {
-        self.actor_reply(|reply| ServerMsg::RecordStatus { status, reply })
-            .await
-            .unwrap_or(false)
+        let seen_at = Instant::now();
+        // Read immutable prepared analysis once per loaded track, never analyze
+        // audio or scan the library when a deck connects.
+        if let Some(track) = self.library.tracks_by_id.get(&status.track_id) {
+            let mut loaded = self.timing_loaded.lock().await;
+            if loaded.insert(status.track_id) {
+                if let Some(tag) = read_anlz_tag(track, "PQTZ", None).await {
+                    if let Some(stats) = pqtz_grid_stats(&tag) {
+                        let beats_ms = (0..stats.count)
+                            .map(|i| be_u32(&tag[28 + i * 8..32 + i * 8]))
+                            .collect();
+                        self.actor_send(ServerMsg::RegisterTrackTiming {
+                            track_id: status.track_id,
+                            timing: crate::playhead::TrackTiming {
+                                duration_ms: track.duration_sec.saturating_mul(1000),
+                                beats_ms,
+                            },
+                        })
+                        .await;
+                    }
+                }
+            }
+        }
+        self.actor_reply(|reply| ServerMsg::RecordStatus {
+            status,
+            seen_at,
+            reply,
+        })
+        .await
+        .unwrap_or(false)
     }
 
     async fn record_beat(&self, beat: CdjBeatSnapshot, seen_at: Instant) -> bool {
@@ -3020,6 +3163,13 @@ impl CdjStatusSnapshot {
         self.track_id
     }
 
+    pub(crate) fn same_track_as(&self, other: &Self) -> bool {
+        self.source_player == other.source_player
+            && self.source_slot == other.source_slot
+            && self.track_type == other.track_type
+            && self.track_id == other.track_id
+    }
+
     pub(crate) fn matches_track_from_source(
         &self,
         source_player: u8,
@@ -3029,6 +3179,25 @@ impl CdjStatusSnapshot {
         self.source_player == source_player
             && self.track_id == track_id
             && self.track_type == track_type
+    }
+
+    pub(crate) fn timing_input(&self) -> (Option<u32>, f64, bool, bool) {
+        let rate = if !self.is_playing() {
+            0.0
+        } else {
+            let direction = match self.play_state_3 {
+                0x09 | 0x0d => 1.0,
+                0x01 => -1.0,
+                _ => 0.0,
+            };
+            direction * f64::from(self.pitch_1) / 1_048_576.0
+        };
+        (
+            self.beat_number,
+            rate,
+            self.play_state_1 == 0x11,
+            self.play_state_1 == 0x06,
+        )
     }
 
     pub(crate) fn is_playing(&self) -> bool {
@@ -3066,6 +3235,7 @@ impl CdjStatusSnapshot {
         DjLinkDeckState {
             player: self.player,
             active: self.active != 0,
+            on_air: self.flags & 0x08 != 0,
             source_player: self.source_player,
             source_slot: self.source_slot,
             track_type: self.track_type,
@@ -3077,6 +3247,13 @@ impl CdjStatusSnapshot {
             bpm_hundreds: (bpm_hundreds != u16::MAX).then_some(bpm_hundreds),
             effective_bpm_hundreds: effective_bpm_hundreds(bpm_hundreds, pitch),
             pitch_centi_percent: (pitch_percent(pitch) * 100.0).round() as i32,
+            master_tempo: self.master_tempo.and_then(|value| match value {
+                0 => Some(false),
+                1 => Some(true),
+                _ => None,
+            }),
+            key_shift_cents: self.key_shift_cents,
+            effective_key: self.effective_key(),
             beat_in_bar: beat
                 .map(|beat| beat.beat_in_bar)
                 .unwrap_or(self.beat_in_bar),
@@ -3090,7 +3267,64 @@ impl CdjStatusSnapshot {
             }),
             track_length_sec: position.map(|position| position.track_length_sec),
             playhead_ms: position.map(|position| position.playhead_ms),
+            playhead_source: position.map(|_| "precise"),
         }
+    }
+
+    pub(crate) fn has_key_telemetry(&self) -> bool {
+        self.key.is_some() && self.key_shift_cents.is_some()
+    }
+
+    pub(crate) fn apply_key_telemetry(&self, detailed: &Self, deck: &mut DjLinkDeckState) {
+        // CDJs interleave short Rekordbox status with extended monitoring status.
+        // Absence in a short packet is not a key-shift reset. Never carry the
+        // extension across tracks or reuse a pitch-dependent key after pitch moves.
+        if self.has_key_telemetry() || !self.same_track_as(detailed) {
+            return;
+        }
+        deck.master_tempo = detailed.master_tempo.and_then(|value| match value {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        });
+        deck.key_shift_cents = detailed.key_shift_cents;
+        if self.pitch_1 == detailed.pitch_1 || deck.master_tempo == Some(true) {
+            deck.effective_key = detailed.effective_key();
+        }
+    }
+
+    fn effective_key(&self) -> Option<String> {
+        // CDJ-3000 status key already includes the tempo slider / Master Tempo
+        // effect, but excludes Key Shift. Do not apply the pitch ratio again.
+        // https://djl-analysis.deepsymmetry.org/djl-analysis/vcdj.html#key-values
+        if self.track_id == 0 {
+            return None;
+        }
+        let [note, mode, accidental] = self.key?;
+        let cents = self.key_shift_cents?;
+        if note >= 12
+            || mode > 1
+            || !matches!(accidental, 0 | 1 | 0xff | 0x64)
+            || !(-1200..=1200).contains(&cents)
+            || cents % 100 != 0
+        {
+            return None;
+        }
+        const MAJOR: [&str; 12] = [
+            "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
+        ];
+        const MINOR: [&str; 12] = [
+            "Am", "Bbm", "Bm", "Cm", "C#m", "Dm", "Ebm", "Em", "Fm", "F#m", "Gm", "Abm",
+        ];
+        let shifted = (i64::from(note) + cents / 100).rem_euclid(12) as usize;
+        Some(
+            if mode == 0 {
+                MINOR[shifted]
+            } else {
+                MAJOR[shifted]
+            }
+            .to_owned(),
+        )
     }
 
     pub(crate) fn log_worthy_change_from(&self, previous: &Self) -> bool {
@@ -3274,6 +3508,23 @@ impl CdjPositionSnapshot {
     }
 }
 
+async fn send_captured_udp(
+    sock: &UdpSocket,
+    packet: &[u8],
+    target: SocketAddrV4,
+    context: &str,
+) -> std::io::Result<usize> {
+    let result = sock.send_to(packet, target).await;
+    match &result {
+        Ok(n) => crate::diagnostics::udp("tx", sock.local_addr(), target.into(), &packet[..*n]),
+        Err(error) => crate::diagnostics::event(
+            "udp_send_error",
+            serde_json::json!({"context":context,"local":sock.local_addr().ok().map(|address| address.to_string()),"peer":target.to_string(),"bytes":packet.len(),"kind":packet.get(10),"error":error.to_string(),"os_error":error.raw_os_error()}),
+        ),
+    }
+    result
+}
+
 async fn send_udp_packet(
     state: &ServerState,
     sock: &UdpSocket,
@@ -3292,7 +3543,7 @@ async fn send_udp_packet(
         }
         // Match the iPhone transport on every platform, including large NFS
         // replies: no BPF, raw sockets, or broadcast fallback on failure.
-        return sock.send_to(packet, target).await;
+        return send_captured_udp(sock, packet, target, context).await;
     }
     #[cfg(target_os = "macos")]
     if is_broadcast && state.interface_name.is_some() {
@@ -3345,7 +3596,7 @@ async fn send_udp_packet(
         }
     }
 
-    match sock.send_to(packet, target).await {
+    match send_captured_udp(sock, packet, target, context).await {
         Ok(sent) => {
             trace!(
                 target: "djtools_link::udp",
@@ -3391,7 +3642,7 @@ async fn send_udp_packet(
                     "{context} unicast to {target} failed: {err}; retrying broadcast {broadcast_target}"
                 ),
             );
-            let sent = match sock.send_to(packet, broadcast_target).await {
+            let sent = match send_captured_udp(sock, packet, broadcast_target, context).await {
                 Ok(sent) => sent,
                 Err(broadcast_err) => {
                     send_raw_udp_packet_to_mac(
@@ -3976,6 +4227,7 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
 #[serde(rename_all = "camelCase")]
 pub struct DjLinkInterface {
     pub name: String,
+    pub index: u32,
     pub ip: Ipv4Addr,
     pub broadcast: Ipv4Addr,
     pub netmask: Ipv4Addr,
@@ -3992,6 +4244,7 @@ pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
                 return None;
             }
             Some(DjLinkInterface {
+                index: interface_index(&entry.name),
                 name: entry.name,
                 ip: entry.ip,
                 broadcast: entry.broadcast?,
@@ -3999,6 +4252,21 @@ pub fn djlink_interfaces() -> Vec<DjLinkInterface> {
             })
         })
         .collect()
+}
+
+fn interface_index(name: &str) -> u32 {
+    #[cfg(target_vendor = "apple")]
+    {
+        std::ffi::CString::new(name)
+            .ok()
+            .map(|name| unsafe { libc::if_nametoindex(name.as_ptr()) })
+            .unwrap_or(0)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = name;
+        0
+    }
 }
 
 #[cfg(target_os = "ios")]
@@ -4009,13 +4277,31 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
     // adapter's MAC when the OS exposes it; ignore iOS's Wi-Fi privacy sentinel.
     unsafe {
         if libc::getifaddrs(&mut head) != 0 {
+            crate::diagnostics::event(
+                "interface_scan_failed",
+                serde_json::json!({"error": io::Error::last_os_error().to_string()}),
+            );
             return Vec::new();
         }
         let mut entries = Vec::new();
+        let mut observed = BTreeSet::new();
         let mut cursor = head;
         let mut macs = HashMap::new();
         while let Some(entry) = cursor.as_ref() {
             cursor = entry.ifa_next;
+            let name = CStr::from_ptr(entry.ifa_name).to_string_lossy();
+            let family = entry.ifa_addr.as_ref().map(|address| address.sa_family);
+            let ip = if family == Some(libc::AF_INET as u8) {
+                let address = &*(entry.ifa_addr as *const libc::sockaddr_in);
+                Some(Ipv4Addr::from(address.sin_addr.s_addr.to_ne_bytes()).to_string())
+            } else {
+                None
+            };
+            observed.insert(format!(
+                "{name}:family={family:?},flags={:#x},ip={ip:?},netmask={}",
+                entry.ifa_flags,
+                !entry.ifa_netmask.is_null()
+            ));
             if entry.ifa_addr.is_null()
                 || (*entry.ifa_addr).sa_family as i32 != libc::AF_LINK
                 || ((*entry.ifa_addr).sa_len as usize) < std::mem::size_of::<libc::sockaddr_dl>()
@@ -4066,6 +4352,19 @@ fn ifconfig_ipv4_entries() -> Vec<IfconfigIpv4> {
             });
         }
         libc::freeifaddrs(head);
+        // Record only changes, including interfaces rejected above. Otherwise
+        // a missing USB adapter and a filtered adapter look identical on phone.
+        static LAST_SCAN: std::sync::Mutex<BTreeSet<String>> =
+            std::sync::Mutex::new(BTreeSet::new());
+        if let Ok(mut previous) = LAST_SCAN.lock()
+            && *previous != observed
+        {
+            crate::diagnostics::event(
+                "interface_scan_changed",
+                serde_json::json!({"raw": observed, "eligible": entries.iter().map(|entry| format!("{}={},active={}", entry.name, entry.ip, entry.active)).collect::<Vec<_>>() }),
+            );
+            *previous = observed;
+        }
         entries
     }
 }
@@ -4661,6 +4960,8 @@ fn parse_cdj_position(packet: &[u8]) -> Option<CdjPositionSnapshot> {
     if packet.len() < 0x3c
         || &packet[..10] != DJLINK_MAGIC
         || packet[10] != BEAT_TYPE_PRECISE_POSITION
+        // Stagehand reuses 0x0b for a different multiplexed telemetry layout.
+        || stagehand::peer_marker(packet).is_some()
     {
         return None;
     }
@@ -5103,6 +5404,7 @@ fn spawn_keepalive_rx(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -5117,6 +5419,10 @@ fn spawn_keepalive_rx(
                     || keepalive_header
                         .as_ref()
                         .is_some_and(|header| header.model.eq_ignore_ascii_case("DJM-A9")));
+            if is_stagehand_target && let Some(mut device) = parse_keepalive_device(packet) {
+                device.ip_addr = src_ip;
+                state.record_device(device).await;
+            }
             // A9 Stagehand endpoints are sensitive to the normal virtual-CDJ
             // collision protocol. They must see only the abbreviated Stagehand
             // handshake, never our Rekordbox source's compatibility replies.
@@ -5203,8 +5509,9 @@ fn spawn_keepalive_rx(
 }
 
 /// Probe only the attached IPv4 subnet. Large networks are deliberately rejected
-/// rather than silently scanning unrelated address space. Check the local /24
-/// first, then low host addresses across the subnet, then the remaining hosts.
+/// rather than silently scanning unrelated address space. Interleave the local
+/// /24 with low host addresses across the subnet, then check remaining hosts.
+/// USB link-local assignment need not put the phone in the deck's /24.
 fn discovery_addresses(ip: Ipv4Addr, netmask: Ipv4Addr) -> Result<Vec<Ipv4Addr>> {
     let mask = u32::from(netmask);
     let host_bits = (!mask).trailing_ones();
@@ -5215,22 +5522,29 @@ fn discovery_addresses(ip: Ipv4Addr, netmask: Ipv4Addr) -> Result<Vec<Ipv4Addr>>
     let local = u32::from(ip);
     let network = local & mask;
     let broadcast = network | !mask;
-    let mut addresses = (network + 1..broadcast)
-        .filter(|candidate| *candidate != local)
-        .collect::<Vec<_>>();
-    addresses.sort_unstable_by_key(|candidate| {
-        (
-            if candidate & 0xffffff00 == local & 0xffffff00 {
-                0
-            } else if candidate & 0xff <= 8 {
-                1
-            } else {
-                2
-            },
-            *candidate,
-        )
-    });
-    Ok(addresses.into_iter().map(Ipv4Addr::from).collect())
+    let mut nearby = Vec::new();
+    let mut low_hosts = Vec::new();
+    let mut remaining = Vec::new();
+    for candidate in (network + 1..broadcast).filter(|candidate| *candidate != local) {
+        if candidate & 0xffffff00 == local & 0xffffff00 {
+            nearby.push(candidate);
+        } else if candidate & 0xff <= 8 {
+            low_hosts.push(candidate);
+        } else {
+            remaining.push(candidate);
+        }
+    }
+    let mut addresses = Vec::with_capacity((broadcast - network - 2) as usize);
+    for index in 0..nearby.len().max(low_hosts.len()) {
+        if let Some(ip) = nearby.get(index) {
+            addresses.push(Ipv4Addr::from(*ip));
+        }
+        if let Some(ip) = low_hosts.get(index) {
+            addresses.push(Ipv4Addr::from(*ip));
+        }
+    }
+    addresses.extend(remaining.into_iter().map(Ipv4Addr::from));
+    Ok(addresses)
 }
 
 fn spawn_unicast_discovery(
@@ -5250,76 +5564,154 @@ fn spawn_unicast_discovery(
             1,
         );
         let init = build_status_link_init(&state.config.model_name, state.config.player_number);
-        // Keep a bounded, session-local address per real player. If a unicast
-        // deck goes quiet it disappears from the actor after ten seconds; it
-        // must not then wait for another complete /16 sweep to hear from us.
+        let started = Instant::now();
+        let cache_path = state.config.discovery_cache_path.as_deref();
+        let mut cached = crate::discovery::cached_peers(cache_path).await;
+        let mut neighbours = Vec::new();
         let mut known_players = BTreeMap::new();
-        let mut last_recovery = Instant::now();
+        let mut cursor = 0;
+        let mut tick = 0u64;
+        let mut first_response = false;
+        let mut reported_send_error = false;
+        let mut reported_neighbour_error = false;
+        let mut interval = tokio::time::interval(Duration::from_millis(125));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            // At most 128 candidates per second. Continue after permission or
-            // ARP failures so granting Local Network access needs no restart.
-            let mut reported_send_error = false;
-            let mut interval = tokio::time::interval(Duration::from_millis(125));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            for batch in addresses.chunks(16) {
-                // Once a deck replies, prioritize its browsing and audio over
-                // finding additional decks. Avoid continuous ARP pressure on
-                // the phone's USB adapter while NFS is serving a recording.
-                let devices = state.devices_sorted().await;
-                let recovery_targets = unicast_recovery_targets(&mut known_players, &devices);
-                if last_recovery.elapsed() >= Duration::from_secs(2) {
-                    for ip in recovery_targets {
-                        let _ = send_udp_packet(
-                            &state,
-                            &keepalive,
-                            &hello,
-                            SocketAddrV4::new(ip, KEEPALIVE_PORT),
-                            "unicast recovery hello",
-                        )
-                        .await;
-                        let _ = send_udp_packet(
-                            &state,
-                            &status,
-                            &init,
-                            SocketAddrV4::new(ip, STATUS_PORT),
-                            "unicast recovery link-init",
-                        )
-                        .await;
+            interval.tick().await;
+            let devices = state.devices_sorted().await;
+            if !devices.is_empty() && !first_response {
+                first_response = true;
+                tracing::info!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    peers = devices.len(),
+                    "unicast_discovery_first_response"
+                );
+            }
+            let recovery = unicast_recovery_targets(&mut known_players, &devices);
+            let mut changed = false;
+            for device in &devices {
+                if (1..=6).contains(&device.player_number)
+                    && crate::discovery::usable_peer(state.bind_ip, mask, device.ip_addr)
+                    && !cached.contains(&device.ip_addr)
+                {
+                    cached.insert(0, device.ip_addr);
+                    cached.truncate(crate::discovery::MAX_PEERS);
+                    changed = true;
+                }
+            }
+            if changed && let Err(error) = crate::discovery::save_peers(cache_path, &cached).await {
+                tracing::warn!(%error, "unicast_discovery_cache_failed");
+            }
+            // Ask the kernel only every two seconds. Unlike a /16 sweep, the
+            // resolved USB neighbour is normally available as soon as IPv4 is.
+            if tick.is_multiple_of(16) {
+                match crate::discovery::neighbours(state.interface_name.as_deref()) {
+                    Ok(peers) => neighbours = peers,
+                    Err(error) if !reported_neighbour_error => {
+                        reported_neighbour_error = true;
+                        tracing::debug!(%error, "unicast_discovery_neighbours_unavailable");
                     }
-                    last_recovery = Instant::now();
+                    Err(_) => {}
                 }
-                if !devices.is_empty() {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            let mut targets = Vec::new();
+            let priority_due = if started.elapsed() < Duration::from_secs(5) {
+                tick.is_multiple_of(4)
+            } else {
+                tick.is_multiple_of(16)
+            };
+            if priority_due {
+                targets = discovery_priority_targets(
+                    state.bind_ip,
+                    mask,
+                    &cached,
+                    &neighbours,
+                    &recovery,
+                    &devices,
+                );
+                if !targets.is_empty() {
+                    tracing::debug!(
+                        ?targets,
+                        cached = cached.len(),
+                        neighbours = neighbours.len(),
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "unicast_discovery_priority"
+                    );
                 }
-                interval.tick().await;
-                for ip in batch {
-                    let hello_result = send_udp_packet(
+            }
+            // Retain the bounded fallback scan. Once connected, reduce only
+            // fallback traffic, never the priority/recovery timer.
+            if devices.is_empty() || tick.is_multiple_of(16) {
+                let end = (cursor + 16).min(addresses.len());
+                for ip in &addresses[cursor..end] {
+                    if !targets.contains(ip) {
+                        targets.push(*ip);
+                    }
+                }
+                cursor = if end == addresses.len() { 0 } else { end };
+            }
+            for ip in targets {
+                if state.config.stagehand_monitor
+                    && devices
+                        .iter()
+                        .any(|device| device.ip_addr == ip && is_stagehand_mixer(device))
+                {
+                    continue;
+                }
+                // A neighbour/cache hint is not yet a CDJ. Advertising our
+                // Rekordbox identity here can bind an A9 to the wrong persona
+                // before its first announcement arrives. Probe with link-init;
+                // spawn_announce sends keepalives only after identification.
+                if !state.config.stagehand_monitor {
+                    let _ = send_udp_packet(
                         &state,
                         &keepalive,
                         &hello,
-                        SocketAddrV4::new(*ip, KEEPALIVE_PORT),
+                        SocketAddrV4::new(ip, KEEPALIVE_PORT),
                         "unicast discovery hello",
                     )
                     .await;
-                    if let Err(error) = hello_result
-                        && !reported_send_error
-                    {
-                        reported_send_error = true;
-                        tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
-                    }
-                    let _ = send_udp_packet(
-                        &state,
-                        &status,
-                        &init,
-                        SocketAddrV4::new(*ip, STATUS_PORT),
-                        "unicast discovery link-init",
-                    )
-                    .await;
+                }
+                if let Err(error) = send_udp_packet(
+                    &state,
+                    &status,
+                    &init,
+                    SocketAddrV4::new(ip, STATUS_PORT),
+                    "unicast discovery link-init",
+                )
+                .await
+                    && !reported_send_error
+                {
+                    reported_send_error = true;
+                    tracing::warn!(%ip, %error, "unicast_discovery_send_failed");
                 }
             }
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tick = tick.wrapping_add(1);
         }
     })
+}
+
+fn discovery_priority_targets(
+    local: Ipv4Addr,
+    mask: Ipv4Addr,
+    cached: &[Ipv4Addr],
+    neighbours: &[Ipv4Addr],
+    recovery: &[Ipv4Addr],
+    devices: &[LinkDevice],
+) -> Vec<Ipv4Addr> {
+    let mut targets = Vec::new();
+    for ip in recovery.iter().chain(cached).chain(neighbours) {
+        if crate::discovery::usable_peer(local, mask, *ip)
+            && !targets.contains(ip)
+            && !devices.iter().any(|device| device.ip_addr == *ip)
+        {
+            targets.push(*ip);
+            if targets.len() == crate::discovery::MAX_PEERS {
+                break;
+            }
+        }
+    }
+    targets
 }
 
 fn unicast_recovery_targets(
@@ -5356,6 +5748,7 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
                     .devices_sorted()
                     .await
                     .into_iter()
+                    .filter(|device| !state.config.stagehand_monitor || !is_stagehand_mixer(device))
                     .map(|device| SocketAddrV4::new(device.ip_addr, KEEPALIVE_PORT))
                     .collect()
             } else if state.config.stagehand_monitor {
@@ -5380,95 +5773,252 @@ fn spawn_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHan
     })
 }
 
-fn spawn_stagehand_announce(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<()> {
-    tokio::spawn(async move {
-        const MODEL: &str = "Stagehand";
-        const REJOIN_AFTER_MS: u64 = 10_000;
-        const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
-        let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
-        let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
-        let link_mac = match parse_mac(&state.mac_addr) {
-            Ok(mac) => mac,
-            Err(err) => {
-                warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
-                return;
-            }
+fn is_stagehand_mixer(device: &LinkDevice) -> bool {
+    device.model.eq_ignore_ascii_case("DJM-A9")
+}
+
+fn stagehand_heartbeat_for_device(state: &ServerState, device: &LinkDevice) -> Option<Vec<u8>> {
+    if device.ip_addr == state.bind_ip || Some(device.ip_addr) == state.stagehand_ip {
+        return None;
+    }
+    if is_stagehand_mixer(device) {
+        return Some(stagehand::build_mixer_heartbeat());
+    }
+    // Request detailed player telemetry alongside the library source.
+    if (1..=6).contains(&device.player_number) && device.model.eq_ignore_ascii_case("CDJ-3000") {
+        return Some(stagehand::build_player_heartbeat());
+    }
+    None
+}
+
+async fn send_stagehand_heartbeats(state: &ServerState, sock: &UdpSocket, target: Ipv4Addr) {
+    for device in state.devices_sorted().await {
+        if state.config.unicast_discovery_netmask.is_some() && device.ip_addr != target {
+            continue;
+        }
+        let Some(packet) = stagehand_heartbeat_for_device(state, &device) else {
+            continue;
         };
-        // AlphaTheta Connect generates both values once per Stagehand app
-        // launch. The supervising process may restart this native worker, so
-        // keep using the parent-owned launch identity across worker lifetimes.
-        let launch_nonce = state
-            .config
-            .stagehand_protocol_nonce
-            .unwrap_or_else(stagehand_launch_nonce);
-        let mac = stagehand::protocol_mac(link_mac, launch_nonce);
-        let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
+        let result = if let Some(ip) = state.stagehand_ip.filter(|ip| *ip != state.bind_ip) {
+            match parse_mac(&device.mac_addr) {
+                Ok(mac) => {
+                    state
+                        .raw_udp
+                        .send(RawUdpDatagram {
+                            src_mac: state.stagehand_link_mac.expect("isolated Stagehand MAC"),
+                            dst_mac: mac,
+                            src_ip: ip,
+                            src_port: STATUS_PORT,
+                            dst_ip: device.ip_addr,
+                            dst_port: STATUS_PORT,
+                            payload: packet,
+                        })
+                        .await
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            send_udp_packet(
+                state,
+                sock,
+                &packet,
+                SocketAddrV4::new(device.ip_addr, STATUS_PORT),
+                "stagehand heartbeat",
+            )
+            .await
+            .map(|_| ())
+        };
+        if let Err(error) = result {
+            debug!(target: "djtools_link::stagehand", ip = %device.ip_addr, %error, "stagehand_heartbeat_failed");
+        }
+    }
+}
 
-        send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-
-        tracing::info!(
-            target: "djtools_link::stagehand",
-            runtime_number,
-            ip = %stagehand_ip,
-            link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
-            protocol_mac = %format_mac(mac),
-            "stagehand_joined"
-        );
-        let mut interval = tokio::time::interval(Duration::from_secs(2));
-        let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
-        let mut last_join_ms = epoch_millis();
-        let mut quiet_since_ms = None;
+// Each supported device gets the shared Rust monitoring session over UDP.
+// CDJs need the join sequence as well as heartbeats to report key shift; the
+// regular Rekordbox announcement and source services continue alongside it.
+fn spawn_unicast_stagehand(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+) -> TokioJoinHandle<()> {
+    tokio::spawn(async move {
+        let mut sessions = tokio::task::JoinSet::new();
+        let mut joined = BTreeMap::<Ipv4Addr, tokio::task::AbortHandle>::new();
+        let mut interval = tokio::time::interval(Duration::from_millis(250));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
-            let now_ms = epoch_millis();
-            let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
-            if let Some(reason) = stagehand_rejoin_reason(
+            let peers = state
+                .devices_sorted()
+                .await
+                .into_iter()
+                .filter(|device| {
+                    is_stagehand_mixer(device)
+                        || ((1..=6).contains(&device.player_number)
+                            && device.model.eq_ignore_ascii_case("CDJ-3000"))
+                })
+                .map(|device| device.ip_addr)
+                .collect::<BTreeSet<_>>();
+            joined.retain(|ip, task| {
+                if peers.contains(ip) && !task.is_finished() {
+                    true
+                } else {
+                    task.abort();
+                    false
+                }
+            });
+            while sessions.try_join_next().is_some() {}
+            for ip in peers {
+                joined.entry(ip).or_insert_with(|| {
+                    sessions.spawn(run_stagehand_announce(
+                        state.clone(),
+                        sock.clone(),
+                        status_sock.clone(),
+                        SocketAddrV4::new(ip, KEEPALIVE_PORT),
+                    ))
+                });
+            }
+        }
+    })
+}
+
+fn spawn_stagehand_announce(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+) -> TokioJoinHandle<()> {
+    let target = SocketAddrV4::new(state.broadcast_ip, KEEPALIVE_PORT);
+    tokio::spawn(run_stagehand_announce(state, sock, status_sock, target))
+}
+
+async fn run_stagehand_announce(
+    state: Arc<ServerState>,
+    sock: Arc<UdpSocket>,
+    status_sock: Arc<UdpSocket>,
+    target: SocketAddrV4,
+) {
+    const MODEL: &str = "Stagehand";
+    const REJOIN_AFTER_MS: u64 = 10_000;
+    const QUIET_BEFORE_REJOIN_MS: u64 = 10_000;
+    let mixer_target = state
+        .device_for_ip(*target.ip())
+        .await
+        .is_none_or(|device| is_stagehand_mixer(&device));
+    let stagehand_ip = state.stagehand_ip.unwrap_or(state.bind_ip);
+    let link_mac = match parse_mac(&state.mac_addr) {
+        Ok(mac) => mac,
+        Err(err) => {
+            warn!(target: "djtools_link::stagehand", %err, "stagehand_invalid_mac");
+            return;
+        }
+    };
+    // AlphaTheta Connect generates both values once per Stagehand app
+    // launch. The supervising process may restart this native worker, so
+    // keep using the parent-owned launch identity across worker lifetimes.
+    let launch_nonce = state
+        .config
+        .stagehand_protocol_nonce
+        .unwrap_or_else(stagehand_launch_nonce);
+    let mac = stagehand::protocol_mac(link_mac, launch_nonce);
+    let runtime_number = 141 + (launch_nonce.rotate_right(17) % 71) as u8;
+
+    crate::diagnostics::event(
+        "stagehand_join_started",
+        serde_json::json!({
+            "target":target.to_string(),"source_ip":stagehand_ip,"protocol_mac":format_mac(mac),"runtime_number":runtime_number,
+        }),
+    );
+
+    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+
+    tracing::info!(
+        target: "djtools_link::stagehand",
+        runtime_number,
+        ip = %stagehand_ip,
+        link_mac = %format_mac(state.stagehand_link_mac.unwrap_or(link_mac)),
+        protocol_mac = %format_mac(mac),
+        "stagehand_join_sequence_finished"
+    );
+    let mut interval = tokio::time::interval(Duration::from_millis(250));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut next_keepalive = tokio::time::Instant::now();
+    let mut handled_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+    let mut last_join_ms = epoch_millis();
+    let mut quiet_since_ms = None;
+    loop {
+        interval.tick().await;
+        let requested_rejoin_ms = state.stagehand_rejoin_requested_ms.load(Ordering::Relaxed);
+        let now_ms = epoch_millis();
+        let last_a9_ms = state.stagehand_last_a9_ms.load(Ordering::Relaxed);
+        if mixer_target
+            && let Some(reason) = stagehand_rejoin_reason(
                 now_ms,
                 last_a9_ms,
                 last_join_ms,
                 requested_rejoin_ms,
                 handled_rejoin_ms,
                 REJOIN_AFTER_MS,
-            ) {
-                if reason == "peer-request" {
-                    tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
-                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-                    last_join_ms = epoch_millis();
-                    handled_rejoin_ms = requested_rejoin_ms;
-                    quiet_since_ms = None;
-                    continue;
-                }
-                if quiet_since_ms.is_none() {
-                    tracing::info!(
-                        target: "djtools_link::stagehand",
-                        quiet_ms = QUIET_BEFORE_REJOIN_MS,
-                        "stagehand_rejoin_quiet"
-                    );
-                    quiet_since_ms = Some(now_ms);
-                }
-            }
-            if let Some(quiet_started_ms) = quiet_since_ms {
-                if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
-                    tracing::info!(
-                        target: "djtools_link::stagehand",
-                        reason = "peer-silent",
-                        "stagehand_rejoining"
-                    );
-                    send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
-                    last_join_ms = epoch_millis();
-                    quiet_since_ms = None;
-                }
+            )
+        {
+            if reason == "peer-request" {
+                crate::diagnostics::event(
+                    "stagehand_rejoin",
+                    serde_json::json!({"target":target.to_string(),"reason":reason}),
+                );
+                tracing::info!(target: "djtools_link::stagehand", reason, "stagehand_rejoining");
+                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                last_join_ms = epoch_millis();
+                handled_rejoin_ms = requested_rejoin_ms;
+                quiet_since_ms = None;
+                next_keepalive = tokio::time::Instant::now();
                 continue;
             }
-            let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
-            if let Err(err) =
-                send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
-            {
-                debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
+            if quiet_since_ms.is_none() {
+                crate::diagnostics::event(
+                    "stagehand_rejoin_quiet",
+                    serde_json::json!({"target":target.to_string(),"quiet_ms":QUIET_BEFORE_REJOIN_MS,"last_a9_ms":last_a9_ms}),
+                );
+                tracing::info!(
+                    target: "djtools_link::stagehand",
+                    quiet_ms = QUIET_BEFORE_REJOIN_MS,
+                    "stagehand_rejoin_quiet"
+                );
+                quiet_since_ms = Some(now_ms);
             }
         }
-    })
+        if let Some(quiet_started_ms) = quiet_since_ms {
+            if now_ms.saturating_sub(quiet_started_ms) >= QUIET_BEFORE_REJOIN_MS {
+                crate::diagnostics::event(
+                    "stagehand_rejoin",
+                    serde_json::json!({"target":target.to_string(),"reason":"peer-silent"}),
+                );
+                tracing::info!(
+                    target: "djtools_link::stagehand",
+                    reason = "peer-silent",
+                    "stagehand_rejoining"
+                );
+                send_stagehand_join_sequence(&state, &sock, target, stagehand_ip, mac).await;
+                last_join_ms = epoch_millis();
+                quiet_since_ms = None;
+                next_keepalive = tokio::time::Instant::now();
+            }
+            continue;
+        }
+        // Pause both status heartbeats and presence during peer expiry. Sending
+        // either from a separate task would keep the stale session alive.
+        send_stagehand_heartbeats(&state, &status_sock, *target.ip()).await;
+        if tokio::time::Instant::now() < next_keepalive {
+            continue;
+        }
+        next_keepalive = tokio::time::Instant::now() + Duration::from_secs(2);
+        let packet = stagehand::build_keepalive(MODEL, runtime_number, stagehand_ip, mac, 1);
+        if let Err(err) =
+            send_stagehand_packet(&state, &sock, &packet, target, "stagehand keepalive").await
+        {
+            debug!(target: "djtools_link::stagehand", %target, %err, "stagehand_keepalive_failed");
+        }
+    }
 }
 
 fn stagehand_rejoin_reason(
@@ -5617,8 +6167,8 @@ async fn send_stagehand_packet(
         );
         return Ok(packet.len());
     }
-    // The real Stagehand client sends one subnet broadcast per frame. Some
-    // mixers stop responding when the same identity arrives again by unicast.
+    // Use the selected transport once per frame. Do not duplicate broadcast
+    // presence by unicast; mobile's directed-only session selects its peer here.
     send_udp_packet(state, sock, packet, broadcast_target, context).await
 }
 
@@ -6375,6 +6925,7 @@ fn spawn_beat_rx(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHand
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -6505,6 +7056,7 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let SocketAddr::V4(addr) = addr else {
                 continue;
             };
@@ -6793,17 +7345,24 @@ async fn log_unknown_dj_packet(
 
 fn spawn_db_query(state: Arc<ServerState>, listener: TcpListener) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
+        // Dropping the listener task must also close its accepted sockets.
+        let mut clients = JoinSet::new();
         loop {
-            let Ok((stream, addr)) = listener.accept().await else {
-                continue;
-            };
-            let state = state.clone();
-            tokio::spawn(handle_db_query_conn(state, stream, addr));
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((stream, addr)) = accepted else { continue };
+                    clients.spawn(handle_db_query_conn(state.clone(), stream, addr));
+                }
+                _ = clients.join_next(), if !clients.is_empty() => {}
+            }
         }
     })
 }
 
-async fn handle_db_query_conn(state: Arc<ServerState>, mut stream: TcpStream, addr: SocketAddr) {
+async fn handle_db_query_conn(state: Arc<ServerState>, stream: TcpStream, addr: SocketAddr) {
+    let Ok(mut stream) = crate::diagnostics::CapturedTcp::new(stream) else {
+        return;
+    };
     let mut buf = Vec::new();
     let mut tmp = [0u8; 128];
     while buf.len() < 64 {
@@ -6853,26 +7412,31 @@ fn spawn_db_server(
     status_sock: Arc<UdpSocket>,
 ) -> TokioJoinHandle<()> {
     tokio::spawn(async move {
+        let mut clients = JoinSet::new();
         loop {
-            let Ok((stream, addr)) = listener.accept().await else {
-                continue;
-            };
-            tracing::info!(target: "djtools_link::db", %addr, "db_client_connected");
-            let state = state.clone();
-            let status_sock = status_sock.clone();
-            tokio::spawn(handle_db_client(state, stream, addr, Some(status_sock)));
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((stream, addr)) = accepted else { continue };
+                    tracing::info!(target: "djtools_link::db", %addr, "db_client_connected");
+                    clients.spawn(handle_db_client(state.clone(), stream, addr, Some(status_sock.clone())));
+                }
+                _ = clients.join_next(), if !clients.is_empty() => {}
+            }
         }
     })
 }
 
-async fn write_db_response(stream: &mut TcpStream, response: &[u8]) -> io::Result<()> {
+async fn write_db_response(
+    stream: &mut (impl AsyncWrite + Unpin),
+    response: &[u8],
+) -> io::Result<()> {
     stream.write_all(response).await?;
     stream.flush().await
 }
 
 async fn handle_db_client(
     state: Arc<ServerState>,
-    mut stream: TcpStream,
+    stream: TcpStream,
     addr: SocketAddr,
     status_sock: Option<Arc<UdpSocket>>,
 ) {
@@ -6882,6 +7446,10 @@ async fn handle_db_client(
     if let Err(err) = stream.set_nodelay(true) {
         warn!(target: "djtools_link::db", %addr, %err, "db_tcp_nodelay_failed");
     }
+    let Ok(stream) = crate::diagnostics::CapturedTcp::new(stream) else {
+        return;
+    };
+    let mut stream = tokio::io::BufReader::new(stream);
     let mut pending = PendingRenderSession::default();
     if matches!(recv_db_field(&mut stream).await, Ok(DbValue::Int32(_))) {
         let response = encode_db_field(&DbValue::Int32(1));
@@ -7496,6 +8064,17 @@ async fn handle_db_client(
                 )
                 .await;
             }
+            DB_REQ_DELIVERY_INFO => {
+                write_pending_success(
+                    &mut stream,
+                    tx,
+                    msg.msg_type,
+                    &msg.args,
+                    &mut pending,
+                    delivery_info_entries(&state.library, &msg.args),
+                )
+                .await;
+            }
             DB_REQ_MOUNT_INFO => {
                 write_pending_success(
                     &mut stream,
@@ -7584,21 +8163,19 @@ async fn handle_db_client(
                 );
                 send_response!(success_with_count(tx, msg.msg_type, 0));
             }
-            DB_REQ_EXT_3006 => {
-                // Native Rekordbox returns one when this request targets its
-                // LINK source slot (4), and zero for any other source slot.
-                // Returning zero leaves CDJ-3000 browsers on "Waiting" when
-                // navigating back after a track begins playing.
-                let available = u32::from(rmst_slot_from_args(&msg.args) == Some(4));
+            DB_REQ_DJ_ID => {
+                // Rekordbox PSvDBMain::OnUserCmd calls GetDJID and replies with
+                // binary response 0x4d02, never SUCCESS(0x4000). We have no
+                // Rekordbox DJ identity, so use its native no-identity branch:
+                // [request, 0, length=0, omitted binary field]. See fixtures.
                 trace!(
                     target: "djtools_link::db",
                     %addr,
                     tx,
                     args = msg.args.len(),
-                    available,
-                    "db_extension_3006_ack"
+                    "db_dj_id_unavailable"
                 );
-                send_response!(success_with_count(tx, msg.msg_type, available));
+                send_response!(empty_blob_response(tx, msg.msg_type, DB_RES_DJ_ID, false));
             }
             DB_REQ_WAVEFORM_DETAIL => {
                 let track_id = track_id_from_request_at(&state.library, &msg.args, 0);
@@ -7733,15 +8310,27 @@ async fn handle_db_client(
                     blob.as_deref(),
                 ));
             }
-            0x3100 => {
-                send_response!(success_with_count(tx, 0x3100, 0));
+            DB_REQ_MENU_OFFSET => {
+                let key = pending_key_from_args(&msg.args);
+                let entry_id = db_int(msg.args.get(1)).unwrap_or(u32::MAX);
+                let offset = pending.menu_offset(key, entry_id);
+                trace!(
+                    target: "djtools_link::db",
+                    %addr,
+                    tx,
+                    ?key,
+                    entry_id,
+                    offset,
+                    "db_menu_offset"
+                );
+                send_response!(success_with_count(tx, DB_REQ_MENU_OFFSET, offset));
             }
             DB_REQ_RENDER => {
                 let render_started = Instant::now();
                 let window = parse_render_window(&msg.args);
                 let render_key = pending_key_from_args(&msg.args);
                 let prepared_key = pending.key();
-                let pending_len = pending.len();
+                let pending_len = pending.len_for_key(render_key);
                 let entries = pending.entries_for_render(render_key, window);
                 let render_miss = entries.is_none();
                 let end = window.offset.saturating_add(window.count).min(pending_len);
@@ -7819,7 +8408,7 @@ async fn handle_db_client(
 }
 
 async fn write_pending_success(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     tx: u32,
     request_type: u16,
     request_args: &[DbValue],
@@ -7837,15 +8426,18 @@ async fn write_pending_success(
         "db_menu_ready"
     );
     pending.prepare(pending_key_from_args(request_args), entries);
-    let _ = stream
+    if let Err(error) = stream
         .write_all(&success_with_count(tx, request_type, count))
-        .await;
+        .await
+    {
+        warn!(target: "djtools_link::db", tx, %error, "db_menu_response_failed");
+    }
 }
 
 async fn write_pending_browse_success(
     state: &ServerState,
     addr: SocketAddr,
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncWrite + Unpin),
     tx: u32,
     request_type: u16,
     request_args: &[DbValue],
@@ -8791,6 +9383,50 @@ fn metadata_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntr
     ]
 }
 
+fn delivery_info_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntry> {
+    let Some(track) = track_from_request(library, args) else {
+        return Vec::new();
+    };
+    // Rekordbox GetDeliveryInfDB / PSvAppSyncDBIF::getDeliveryInf: 13 rows,
+    // followed by the usual RENDER exchange. This is a separate menu context
+    // (0x09 on the CDJ-3000), not ordinary display metadata or a binary blob.
+    // The snapshot has no KUVO delivery opt-in, ISRC, delivery comment,
+    // composer or lyricist. Return their native unset values, not made-up IDs.
+    let file_type = match track.mount_path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => match ext.to_ascii_lowercase().as_str() {
+            "mp3" => 1,
+            "m4a" | "aac" => 4,
+            "flac" => 5,
+            "wav" => 11,
+            "aif" | "aiff" => 12,
+            _ => 0,
+        },
+        None => 0,
+    };
+    vec![
+        MenuEntry::plain(track.track_id, library.master_db_id, "", "", 0x004f),
+        MenuEntry::plain(track.track_id, track.track_id, &track.title, "", META_TITLE)
+            .with_entry_id3(track.artwork_id),
+        MenuEntry::plain(0, track.artist_id, &track.artist, "", META_ARTIST),
+        MenuEntry::plain(0, track.album_id, &track.album, "", META_ALBUM),
+        MenuEntry::plain(0, track.genre_id, &track.genre, "", META_GENRE),
+        MenuEntry::plain(0, track.track_id, "", "", META_COMMENT),
+        MenuEntry::plain(track.key_id, track.key_id, "", &track.key_label(), META_KEY),
+        MenuEntry::plain(0, track.duration_sec, "", "", META_DURATION),
+        MenuEntry::plain(0, file_type, "", "", 0x0012),
+        MenuEntry::plain(0, track.bpm_hundreds, "", "", META_BPM),
+        MenuEntry::plain(
+            0,
+            stable_text_id(&track.label),
+            &track.label,
+            "",
+            META_LABEL,
+        ),
+        MenuEntry::plain(0, 0, "", "", 0x0036),
+        MenuEntry::plain(0, track.track_id, "", "", 0x0037),
+    ]
+}
+
 fn mount_info_entries(library: &LibrarySnapshot, args: &[DbValue]) -> Vec<MenuEntry> {
     let Some(track) = track_from_request(library, args) else {
         return Vec::new();
@@ -9491,7 +10127,10 @@ fn cue_points_ext_from_pco2_tag(tag: &[u8]) -> Option<CuePointsExt> {
     let mut entries = Vec::new();
     let mut offset = header_len;
     let mut count = 0usize;
-    while offset + 16 <= tag_len && count < declared_count {
+    for _ in 0..declared_count {
+        if offset + 16 > tag_len {
+            return None;
+        }
         if tag.get(offset..offset + 4)? != b"PCP2" {
             return None;
         }
@@ -9549,7 +10188,10 @@ fn nexus_cue_entries_from_pcob_tag(tag: &[u8]) -> Option<(u32, Vec<u8>, u32)> {
     let mut entries = Vec::new();
     let mut offset = 24usize;
     let mut count = 0usize;
-    while offset + 40 <= tag_len && count < declared_count {
+    for _ in 0..declared_count {
+        if offset + 40 > tag_len {
+            return None;
+        }
         if tag.get(offset..offset + 4)? != b"PCPT" {
             return None;
         }
@@ -9782,6 +10424,7 @@ fn spawn_portmap(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let Some(call) = rpc_parse_call(&buf[..len]) else {
                 continue;
             };
@@ -9821,6 +10464,7 @@ fn spawn_mount(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             let call = rpc_parse_call(&buf[..len]);
             if let Some(call) = &call {
                 trace!(
@@ -9850,6 +10494,7 @@ fn spawn_nfs(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandle<(
             let Ok((len, addr)) = sock.recv_from(&mut buf).await else {
                 continue;
             };
+            crate::diagnostics::udp("rx", sock.local_addr(), addr, &buf[..len]);
             handle_nfs_datagram_reply(&state, &sock, &buf[..len], addr).await;
         }
     })
@@ -9982,6 +10627,15 @@ async fn send_load_settings_packet(
 }
 
 async fn send_link_init_once(state: &ServerState, sock: &UdpSocket, ip: Ipv4Addr, context: &str) {
+    if state.config.stagehand_monitor
+        && state
+            .device_for_ip(ip)
+            .await
+            .as_ref()
+            .is_some_and(is_stagehand_mixer)
+    {
+        return;
+    }
     if !state.should_send_link_init(ip).await {
         return;
     }
@@ -10020,6 +10674,7 @@ async fn send_regular_djlink_packet(
             .devices_sorted()
             .await
             .into_iter()
+            .filter(|device| !state.config.stagehand_monitor || !is_stagehand_mixer(device))
             .map(|device| SocketAddrV4::new(device.ip_addr, port))
             .collect()
     } else if state.config.stagehand_monitor {
@@ -10047,6 +10702,161 @@ async fn send_regular_djlink_packet(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn kernel_stagehand_identity_survives_server_recreation() {
+        let config = || DjLinkConfig {
+            bind_ip: Some(Ipv4Addr::LOCALHOST),
+            broadcast_ip: Some(Ipv4Addr::new(127, 0, 0, 255)),
+            unicast_discovery_netmask: Some(Ipv4Addr::new(255, 255, 255, 0)),
+            stagehand_monitor: true,
+            ..Default::default()
+        };
+        let library = (*test_state().library).clone();
+        let first = DjLinkServer::new(config(), library.clone()).await.unwrap();
+        let second = DjLinkServer::new(config(), library).await.unwrap();
+        assert_eq!(first.stagehand_session_ip(), Some(Ipv4Addr::LOCALHOST));
+        assert_eq!(
+            first.stagehand_session_nonce(),
+            second.stagehand_session_nonce()
+        );
+        assert_eq!(
+            first.stagehand_protocol_nonce(),
+            second.stagehand_protocol_nonce()
+        );
+        assert_ne!(
+            first.stagehand_session_nonce(),
+            first.stagehand_protocol_nonce()
+        );
+    }
+
+    #[test]
+    fn stagehand_heartbeats_include_mobile_decks_but_exclude_other_sources() {
+        let mut state = test_state();
+        state.stagehand_ip = Some(state.bind_ip);
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        let mut device = LinkDevice {
+            player_number: 33,
+            ip_addr: Ipv4Addr::new(169, 254, 69, 43),
+            mac_addr: String::new(),
+            model: "DJM-A9".into(),
+            last_seen: Instant::now(),
+        };
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_mixer_heartbeat())
+        );
+        device.player_number = 1;
+        device.model = "CDJ-3000".into();
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
+        state.config.unicast_discovery_netmask = None;
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
+        state.stagehand_ip = Some(Ipv4Addr::new(169, 254, 85, 94));
+        assert_eq!(
+            stagehand_heartbeat_for_device(&state, &device),
+            Some(stagehand::build_player_heartbeat())
+        );
+        device.model = "rekordbox".into();
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+        device.model = "DJM-A9".into();
+        device.ip_addr = state.bind_ip;
+        assert!(stagehand_heartbeat_for_device(&state, &device).is_none());
+    }
+
+    #[tokio::test]
+    async fn unicast_stagehand_uses_the_shared_handshake_on_kernel_udp() {
+        let mut state = test_state();
+        state.broadcast_ip = Ipv4Addr::BROADCAST;
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        state.config.stagehand_monitor = true;
+        state.config.stagehand_protocol_nonce = Some(42);
+        state.stagehand_ip = Some(state.bind_ip);
+        let state = Arc::new(state);
+        let sender = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let SocketAddr::V4(target) = receiver.local_addr().unwrap() else {
+            unreachable!()
+        };
+        let mac = stagehand::protocol_mac(parse_mac(&state.mac_addr).unwrap(), 42);
+        let task = tokio::spawn(run_stagehand_announce(
+            state.clone(),
+            sender.clone(),
+            sender.clone(),
+            target,
+        ));
+        let mut expected = vec![stagehand::build_announcement("Stagehand"); 3];
+        expected.extend(
+            (1..=3).map(|iteration| {
+                stagehand::build_claim("Stagehand", state.bind_ip, mac, iteration)
+            }),
+        );
+        expected.push(stagehand::build_keepalive(
+            "Stagehand",
+            141 + (42u64.rotate_right(17) % 71) as u8,
+            state.bind_ip,
+            mac,
+            1,
+        ));
+        for packet in expected {
+            let mut bytes = [0; 1024];
+            let (length, source) =
+                tokio::time::timeout(Duration::from_secs(2), receiver.recv_from(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                &bytes[..length],
+                packet,
+                "mobile must use the desktop wire contract"
+            );
+            assert_eq!(source, sender.local_addr().unwrap());
+        }
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn unicast_mixer_never_receives_the_rekordbox_persona() {
+        let mut state = test_state();
+        state.broadcast_ip = Ipv4Addr::BROADCAST;
+        state.config.unicast_discovery_netmask = Some(Ipv4Addr::new(255, 255, 0, 0));
+        state.config.stagehand_monitor = true;
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let mut peer = LinkDevice {
+            player_number: 33,
+            ip_addr: Ipv4Addr::LOCALHOST,
+            mac_addr: String::new(),
+            model: "DJM-A9".into(),
+            last_seen: Instant::now(),
+        };
+        state.record_device(peer.clone()).await;
+        let packet = build_status_link_init("rekordbox", REKORDBOX_PLAYER_NUMBER);
+        send_regular_djlink_packet(&state, &sender, &packet, port, "test").await;
+        let mut bytes = [0; 1024];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), receiver.recv_from(&mut bytes))
+                .await
+                .is_err()
+        );
+        peer.player_number = 1;
+        peer.model = "CDJ-3000".into();
+        state.record_device(peer).await;
+        send_regular_djlink_packet(&state, &sender, &packet, port, "test").await;
+        let (length, _) =
+            tokio::time::timeout(Duration::from_secs(1), receiver.recv_from(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(&bytes[..length], packet);
+    }
+
     #[test]
     fn unicast_recovery_retries_lost_decks_without_inventing_devices() {
         let mut known = BTreeMap::new();
@@ -10073,6 +10883,34 @@ mod tests {
             known.len(),
             1,
             "a player changing address replaces the old recovery target"
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_db_listener_closes_accepted_connections_and_releases_status_socket() {
+        let state = Arc::new(test_state());
+        let status = Arc::new(UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = spawn_db_server(state, listener, status.clone());
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client
+            .write_all(&encode_db_field(&DbValue::Int32(DB_MAGIC)))
+            .await
+            .unwrap();
+        assert_eq!(recv_db_field(&mut client).await.unwrap(), DbValue::Int32(1));
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let mut byte = [0];
+        let count = tokio::time::timeout(Duration::from_secs(1), client.read(&mut byte))
+            .await
+            .expect("stopping DJ Link must close existing deck sessions")
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            Arc::strong_count(&status),
+            1,
+            "old deck sessions must release the status port"
         );
     }
 
@@ -10146,7 +10984,7 @@ mod tests {
         let browse = 0x0101_0401;
         let metadata = 0x0102_0401;
         for (iteration, track) in [first, first + 1, first].into_iter().enumerate() {
-            let tx = iteration as u32 * 10;
+            let tx = 0x0782 + iteration as u32 * 16;
             let folders = menu(&mut client, tx, DB_REQ_PLAYLIST, &[browse, 0, 0, 1]).await;
             assert_eq!(db_int(folders[0].args.get(1)), Some(playlist));
             let tracks = menu(
@@ -10164,9 +11002,112 @@ mod tests {
                 rows.iter()
                     .any(|row| db_int(row.args.get(1)) == Some(track))
             );
-            // The next iteration is the deck's Back → playlist → another track.
+            // Actual CDJ-3000 post-load request from the failing phone session.
+            // A generic SUCCESS here leaves the deck waiting for 0x4d02.
+            let mut identity = decode_hex(
+                include_str!("../tests/fixtures/remotedb-cdj3000-dj-id-request.hex").trim(),
+            );
+            identity[6..10].copy_from_slice(&(tx + 7).to_be_bytes());
+            client.write_all(&identity).await.unwrap();
+            let mut expected =
+                decode_hex(include_str!("../tests/fixtures/remotedb-dj-id-unavailable.hex").trim());
+            expected[6..10].copy_from_slice(&(tx + 7).to_be_bytes());
+            let mut actual = vec![0; expected.len()];
+            tokio::time::timeout(Duration::from_secs(1), client.read_exact(&mut actual))
+                .await
+                .expect("DJ identity response deadline")
+                .unwrap();
+            assert_eq!(actual, expected);
+            let delivery = menu(
+                &mut client,
+                tx + 8,
+                DB_REQ_DELIVERY_INFO,
+                &[0x0109_0401, track],
+            )
+            .await;
+            assert_eq!(delivery.len(), 13);
+            assert_eq!(db_int(delivery[0].args.first()), Some(track));
+            assert_eq!(db_int(delivery[0].args.get(6)), Some(0x4f));
+            assert_eq!(db_int(delivery[1].args.get(1)), Some(track));
+            // Back can render the existing browse buffer without preparing it
+            // again. Delivery/metadata contexts must not replace that buffer.
+            client
+                .write_all(&encode_db_message(
+                    tx + 10,
+                    DB_REQ_RENDER,
+                    &[
+                        DbValue::Int32(browse),
+                        DbValue::Int32(1),
+                        DbValue::Int32(1),
+                        DbValue::Int32(0),
+                        DbValue::Int32(2),
+                        DbValue::Int32(0),
+                    ],
+                ))
+                .await
+                .unwrap();
+            let header = receive(&mut client).await;
+            assert_eq!(header.msg_type, DB_RES_MENU_HEADER);
+            assert_eq!(header.args, vec![DbValue::Int32(1), DbValue::Int32(1)]);
+            let row = receive(&mut client).await;
+            assert_eq!(row.msg_type, DB_RES_MENU_ITEM);
+            assert_eq!(db_int(row.args.get(1)), Some(first + 1));
+            assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_FOOTER);
+            // The next iteration checks that the response leaves no stray
+            // bytes in the stream before Back → playlist → another track.
         }
         handler.abort();
+    }
+
+    #[test]
+    fn cached_and_resolved_peers_are_probed_before_the_subnet_sweep() {
+        let local = Ipv4Addr::new(169, 254, 65, 9);
+        let mask = Ipv4Addr::new(255, 255, 0, 0);
+        let deck = Ipv4Addr::new(169, 254, 6, 175);
+        let second = Ipv4Addr::new(169, 254, 250, 200);
+        let unrelated = Ipv4Addr::new(10, 0, 0, 3);
+        // This observed deck used to be thousands of probes into the sweep.
+        assert!(
+            discovery_addresses(local, mask)
+                .unwrap()
+                .iter()
+                .position(|ip| *ip == deck)
+                .unwrap()
+                > 2000
+        );
+        assert_eq!(
+            discovery_priority_targets(
+                local,
+                mask,
+                &[deck, local, unrelated],
+                &[deck, second],
+                &[],
+                &[]
+            ),
+            [deck, second]
+        );
+        assert_eq!(
+            discovery_priority_targets(local, mask, &[deck], &[], &[second], &[]),
+            [second, deck]
+        );
+        let active = LinkDevice {
+            player_number: 3,
+            ip_addr: deck,
+            mac_addr: String::new(),
+            model: "CDJ-3000".into(),
+            last_seen: Instant::now(),
+        };
+        assert_eq!(
+            discovery_priority_targets(local, mask, &[deck], &[second], &[], &[active]),
+            [second]
+        );
+        let many = (1..100)
+            .map(|host| Ipv4Addr::new(169, 254, 8, host))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            discovery_priority_targets(local, mask, &many, &[], &[], &[]).len(),
+            32
+        );
     }
 
     #[test]
@@ -10182,13 +11123,19 @@ mod tests {
         assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 0, 0)));
         assert!(!candidates.contains(&Ipv4Addr::new(169, 254, 255, 255)));
         assert!(candidates.iter().all(|ip| ip.octets()[..2] == [169, 254]));
-        assert!(candidates[..255].iter().all(|ip| ip.octets()[2] == 99));
+        assert!(
+            candidates[..510]
+                .iter()
+                .filter(|ip| ip.octets()[2] == 99)
+                .count()
+                == 255
+        );
         assert!(
             candidates
                 .iter()
                 .position(|ip| *ip == Ipv4Addr::new(169, 254, 7, 4))
                 .unwrap()
-                < 512
+                < 192
         );
         assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 0, 0)).is_err());
         assert!(discovery_addresses(ip, Ipv4Addr::new(255, 0, 255, 0)).is_err());
@@ -10198,6 +11145,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(small, [Ipv4Addr::new(10, 0, 0, 6)]);
+    }
+
+    #[test]
+    fn unicast_discovery_reaches_deck_before_finishing_phones_random_link_local_block() {
+        // Failed phone capture: 192 addresses probed before backgrounding;
+        // the old local-/24-first order never reached the previously seen deck.
+        let deck = Ipv4Addr::new(169, 254, 7, 4);
+        for phone in [
+            Ipv4Addr::new(169, 254, 249, 121),
+            Ipv4Addr::new(169, 254, 7, 63),
+        ] {
+            let candidates = discovery_addresses(phone, Ipv4Addr::new(255, 255, 0, 0)).unwrap();
+            assert!(candidates[..192].contains(&deck));
+            // Nearby candidates continue progressing during cross-block probes.
+            assert!(candidates[..128].contains(&Ipv4Addr::new(169, 254, phone.octets()[2], 62)));
+        }
     }
 
     #[tokio::test]
@@ -10502,7 +11465,43 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
-    fn pending_render_session_uses_only_the_last_menu_prepared_on_its_connection() {
+    fn db_delivery_info_matches_native_row_layout_for_captured_request() {
+        let bytes = decode_hex(
+            include_str!("../tests/fixtures/remotedb-cdj3000-delivery-info-request.hex").trim(),
+        );
+        let request = recv_db_message_from_read(&mut std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(request.msg_type, DB_REQ_DELIVERY_INFO);
+        assert_eq!(request.tx_id, 2421);
+        assert_eq!(
+            request.args,
+            vec![DbValue::Int32(0x0109_0401), DbValue::Int32(777201902)]
+        );
+        let mut state = test_state_with_sample_library(123);
+        let library = Arc::make_mut(&mut state.library);
+        let mut track = library.all_tracks[0].clone();
+        track.track_id = 777201902;
+        track.mount_path = "test.FLAC".into();
+        library.tracks_by_id.insert(track.track_id, track);
+        let rows = delivery_info_entries(library, &request.args);
+        assert_eq!(
+            rows.iter().map(|row| row.entry_type).collect::<Vec<_>>(),
+            [0x4f, 4, 7, 2, 6, 0x23, 0xf, 0xb, 0x12, 0xd, 0xe, 0x36, 0x37]
+        );
+        assert_eq!(rows[0].entry_id1, 777201902);
+        assert_eq!(rows[0].entry_id2, library.master_db_id);
+        assert_eq!(rows[0].entry_id3, 0, "delivery opt-in is unset");
+        assert_eq!(rows[8].entry_id2, 5, "FLAC FileType");
+        assert!(
+            delivery_info_entries(
+                library,
+                &[DbValue::Int32(0x0109_0401), DbValue::Int32(u32::MAX)]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn pending_render_session_replaces_the_last_menu_in_the_same_context() {
         let key = 0x0302_0401;
         let mut session = PendingRenderSession::default();
         let playlist_rows = (1..=19)
@@ -11237,6 +12236,38 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
+    fn cue_conversion_counts_skipped_entries_and_rejects_truncation() {
+        let mut extended = Vec::from(&b"PCO2"[..]);
+        let skipped = test_pcp2_entry(0, 0, 0, 0, 0);
+        let valid = test_pcp2_entry(1, 1, 1_000, 0, 0);
+        extended.extend_from_slice(&20u32.to_be_bytes());
+        extended.extend_from_slice(&((20 + skipped.len() + valid.len()) as u32).to_be_bytes());
+        extended.extend_from_slice(&0u32.to_be_bytes());
+        extended.extend_from_slice(&1u16.to_be_bytes());
+        extended.extend_from_slice(&0u16.to_be_bytes());
+        extended.extend_from_slice(&skipped);
+        extended.extend_from_slice(&valid);
+        // The valid trailing entry is outside the declared array. Skipping the
+        // first entry must not pull it into the response.
+        let converted = cue_points_ext_from_pco2_tag(&extended).unwrap();
+        assert_eq!(converted.entry_count, 0);
+        assert!(converted.entries.is_empty());
+        extended[16..18].copy_from_slice(&3u16.to_be_bytes());
+        assert!(cue_points_ext_from_pco2_tag(&extended).is_none());
+
+        let mut nexus = test_pcob_tag(
+            1,
+            &[test_pcpt_entry(0, 0, 0, 0), test_pcpt_entry(1, 1, 1_000, 0)],
+        );
+        nexus[18..20].copy_from_slice(&1u16.to_be_bytes());
+        let (_, entries, count) = nexus_cue_entries_from_pcob_tag(&nexus).unwrap();
+        assert_eq!(count, 0);
+        assert!(entries.is_empty());
+        nexus[18..20].copy_from_slice(&3u16.to_be_bytes());
+        assert!(nexus_cue_entries_from_pcob_tag(&nexus).is_none());
+    }
+
+    #[test]
     fn db_cue_points_response_uses_native_nexus_two_blob_shape() {
         let first = vec![0x11; 36];
         let second = vec![0x22; 72];
@@ -11690,7 +12721,8 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         packet[0x8b] = 0x7a;
         packet[0x8c..0x90].copy_from_slice(&0x0010_8000u32.to_be_bytes());
         packet[0x92..0x94].copy_from_slice(&12_200u16.to_be_bytes());
-        packet[0x98..0x9c].copy_from_slice(&0x0010_8000u32.to_be_bytes());
+        // A synced deck can have a different local slider and effective pitch.
+        packet[0x98..0x9c].copy_from_slice(&0x000f_0000u32.to_be_bytes());
         packet[0x9d] = 0x09;
         packet[0x9e] = 1;
         packet[0x9f] = 0xff;
@@ -11724,12 +12756,159 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(status.buffer_forward, Some(0x44));
         assert_eq!(status.buffer_back, Some(0x11));
         assert_eq!(pitch_percent(status.pitch_1), 3.125);
+        assert_eq!(pitch_percent(status.pitch_2), -6.25);
         assert_eq!(
             effective_bpm_hundreds(status.bpm_hundreds, status.pitch_1),
             Some(12_581)
         );
         assert_eq!(status.loop_beats, Some(8));
         assert_eq!(status.loop_summary(), "65536ms..131072ms beats=8");
+    }
+
+    #[tokio::test]
+    async fn library_waveform_prefers_rgb_detail_and_falls_back_if_detail_is_invalid() {
+        let temp = tempfile::tempdir().unwrap();
+        let ext = temp.path().join("ANLZ0000.EXT");
+        fn tag(name: &[u8; 4], stride: u32, count: u32, data: &[u8]) -> Vec<u8> {
+            let mut tag = Vec::from(*name);
+            tag.extend_from_slice(&24u32.to_be_bytes());
+            tag.extend_from_slice(&(24u32 + data.len() as u32).to_be_bytes());
+            tag.extend_from_slice(&stride.to_be_bytes());
+            tag.extend_from_slice(&count.to_be_bytes());
+            tag.extend_from_slice(&0u32.to_be_bytes());
+            tag.extend_from_slice(data);
+            tag
+        }
+        let preview = tag(b"PWV4", 6, 1, &[0, 127, 0, 127, 0, 0]);
+        let detail = tag(b"PWV5", 2, 3, &[0xe0, 0x7c, 0x1c, 0x40, 0x03, 0x88]);
+        write_test_anlz_sections(&ext, &[preview.clone(), detail]);
+        let mut track = sample_track_record();
+        track.analysis_dat_path = Some(ext.with_extension("DAT"));
+        track.analysis_ext_path = Some(ext.clone());
+        track.analysis_twoex_path = None;
+        let id = track.track_id;
+        let server = DjLinkServer::new(
+            DjLinkConfig::default(),
+            LibrarySnapshot {
+                master_db_id: 1,
+                tracks_by_id: [(id, track.clone())].into(),
+                all_tracks: vec![track],
+                playlists: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        let waveform = server.library_waveform(id).await.unwrap();
+        assert_eq!(waveform.peaks.len(), 3, "detail must win over the overview");
+        assert_eq!(waveform.peaks[0], 1.0);
+        assert_eq!(waveform.colors, vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]]);
+        write_test_anlz_sections(&ext, &[preview, tag(b"PWV5", 2, 999, &[0])]);
+        let waveform = server.library_waveform(id).await.unwrap();
+        assert_eq!(
+            waveform.peaks.len(),
+            1,
+            "a broken detail tag must not hide the valid preview"
+        );
+        assert_eq!(waveform.colors, vec![[127, 0, 0]]);
+    }
+
+    #[tokio::test]
+    async fn monitor_snapshot_uses_prepared_grid_and_prioritizes_precise_position() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("ANLZ0000.DAT");
+        let tag = test_pqtz_tag(&[(1, 12000, 100), (2, 12000, 600), (3, 12000, 1100)]);
+        write_test_anlz_tag(&path, b"PQTZ", &tag[12..]);
+        let mut state = test_state_with_sample_library(1);
+        let id = state.library.all_tracks[0].track_id;
+        let track = Arc::make_mut(&mut state.library)
+            .tracks_by_id
+            .get_mut(&id)
+            .unwrap();
+        track.analysis_dat_path = Some(path);
+        track.duration_sec = 5;
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, id, 0x05);
+        status.play_state_2 = 0x7e;
+        status.beat_number = Some(2);
+        state.record_status(status.clone()).await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(600));
+        assert_eq!(deck.playhead_source, Some("beat_grid"));
+        assert_eq!(deck.track_length_sec, Some(5));
+        state
+            .record_position(CdjPositionSnapshot {
+                player: 3,
+                len_rest: 0x18,
+                track_length_sec: 5,
+                playhead_ms: 875,
+                pitch_centi_percent: 0,
+                effective_bpm_tenths: 1200,
+            })
+            .await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(875));
+        assert_eq!(deck.playhead_source, Some("precise"));
+        // Two sources can use the same numeric track ID. Never carry their
+        // position/beat packets across a source change.
+        status.source_player = 2;
+        status.beat_number = Some(3);
+        state.record_status(status).await;
+        let deck = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(deck.playhead_ms, Some(1100));
+        assert_eq!(deck.playhead_source, Some("beat_grid"));
+        state.record_status(test_cdj_status(2, id + 1, 0x03)).await;
+        assert_eq!(
+            state.monitor_snapshot(3).await.deck.unwrap().playhead_ms,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_snapshot_does_not_let_old_beats_override_new_deck_tempo() {
+        let state = test_state();
+        state
+            .record_status(test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03))
+            .await;
+        state
+            .record_beat(
+                CdjBeatSnapshot {
+                    player: 3,
+                    len_rest: 0x003c,
+                    next_beat_ms: 500,
+                    second_beat_ms: 1000,
+                    next_bar_ms: 2000,
+                    fourth_beat_ms: 2000,
+                    second_bar_ms: 4000,
+                    eighth_beat_ms: 4000,
+                    pitch: 0x100000,
+                    bpm_hundreds: 12000,
+                    beat_in_bar: 1,
+                },
+                Instant::now(),
+            )
+            .await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_bpm_hundreds,
+            Some(12000)
+        );
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x05);
+        status.play_state_2 = 0x7e;
+        status.bpm_hundreds = 12800;
+        status.pitch_1 = 0x110000;
+        state.record_status(status).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_bpm_hundreds,
+            Some(13600)
+        );
     }
 
     #[tokio::test]
@@ -11852,6 +13031,131 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
                 .contains("playhead=123456ms")
         );
         assert!(player_status_snapshot(&state, 3).await.is_some());
+    }
+
+    #[test]
+    fn deck_key_follows_signed_shift_without_applying_tempo_twice() {
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        assert_eq!(status.deck_state(None, None).effective_key, None);
+        status.key = Some([0, 1, 0]); // C major, before Key Shift.
+        status.key_shift_cents = Some(200);
+        status.master_tempo = Some(0);
+        status.pitch_1 = 0x0012_0000;
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("D")
+        );
+        assert_eq!(status.deck_state(None, None).master_tempo, Some(false));
+        status.key_shift_cents = Some(-100);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("B")
+        );
+        status.key = Some([0, 0, 0]); // A minor uses a different index origin.
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Abm")
+        );
+        status.key_shift_cents = Some(1200);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Am")
+        );
+        status.key = Some([1, 0, 0x64]); // Tempo slider already changed the key.
+        status.key_shift_cents = Some(100);
+        assert_eq!(
+            status.deck_state(None, None).effective_key.as_deref(),
+            Some("Bm")
+        );
+        for cents in [i64::MIN, i64::MAX, 50, 1300] {
+            status.key_shift_cents = Some(cents);
+            assert_eq!(status.deck_state(None, None).effective_key, None);
+        }
+        status.key_shift_cents = None;
+        assert_eq!(status.deck_state(None, None).effective_key, None);
+        status.key_shift_cents = Some(0);
+        status.key = Some([255, 0, 0]);
+        assert_eq!(status.deck_state(None, None).effective_key, None);
+    }
+
+    #[test]
+    fn deck_on_air_is_independent_of_playback_activity() {
+        let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        status.active = 1;
+        status.flags &= !0x08;
+        assert!(!status.deck_state(None, None).on_air);
+        status.active = 0;
+        status.flags |= 0x08;
+        assert!(status.deck_state(None, None).on_air);
+    }
+
+    #[tokio::test]
+    async fn monitor_key_survives_short_status_but_not_source_changes_or_expiry() {
+        let state = test_state();
+        let short = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        let mut detailed = short.clone();
+        detailed.key = Some([0, 1, 0]);
+        detailed.key_shift_cents = Some(200);
+        detailed.master_tempo = Some(1);
+        state.record_status(detailed.clone()).await;
+        state.record_status(short.clone()).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_key
+                .as_deref(),
+            Some("D")
+        );
+        detailed.key_shift_cents = Some(-100);
+        state.record_status(detailed.clone()).await;
+        state.record_status(short.clone()).await;
+        assert_eq!(
+            state
+                .monitor_snapshot(3)
+                .await
+                .deck
+                .unwrap()
+                .effective_key
+                .as_deref(),
+            Some("B")
+        );
+
+        let mut other_source = short.clone();
+        other_source.source_player = 2;
+        state.record_status(other_source).await;
+        assert_eq!(
+            state.monitor_snapshot(3).await.deck.unwrap().effective_key,
+            None
+        );
+
+        let _: Option<bool> = state
+            .actor_reply(|reply| ServerMsg::RecordStatus {
+                status: detailed,
+                seen_at: Instant::now() - Duration::from_secs(2),
+                reply,
+            })
+            .await;
+        state.record_status(short).await;
+        let expired = state.monitor_snapshot(3).await.deck.unwrap();
+        assert_eq!(expired.effective_key, None);
+        assert_eq!(expired.key_shift_cents, None);
+    }
+
+    #[test]
+    fn short_status_does_not_reuse_a_key_from_a_different_pitch() {
+        let mut short = test_cdj_status(REKORDBOX_PLAYER_NUMBER, 42, 0x03);
+        let mut detailed = short.clone();
+        detailed.key = Some([0, 1, 0]);
+        detailed.key_shift_cents = Some(100);
+        detailed.master_tempo = Some(0);
+        short.pitch_1 += 100_000;
+        let mut deck = short.deck_state(None, None);
+        short.apply_key_telemetry(&detailed, &mut deck);
+        assert_eq!(deck.effective_key, None);
+        assert_eq!(deck.key_shift_cents, Some(100));
     }
 
     #[test]
@@ -12342,6 +13646,11 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         assert_eq!(position.effective_bpm_tenths, 1_202);
         assert!(position.summary().contains("pitch=3.26%"));
         assert!(position.summary().contains("effective_bpm=120.2"));
+
+        // Stagehand multiplex telemetry reuses type 0x0b but has another body.
+        packet.resize(68, 0);
+        packet[0x1e] = 0x3a;
+        assert!(parse_cdj_position(&packet).is_none());
     }
 
     #[test]
@@ -13360,26 +14669,17 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             DB_REQ_TRACKS_FOR_REMIXER_ALBUM,
             DB_REQ_TRACKS_FOR_DATE_ADDED,
             DB_REQ_FOLDER_MENU,
-            DB_REQ_EXT_3006,
+            DB_REQ_DJ_ID,
         ] {
             assert!(!db_request_name(request).starts_with("UNKNOWN"));
         }
     }
 
     #[test]
-    fn db_extension_3006_reports_link_source_available() {
-        let link_args = [DbValue::Int32(0x0109_0401)];
-        let usb_args = [DbValue::Int32(0x0109_0301)];
-
-        assert_eq!(rmst_slot_from_args(&link_args), Some(4));
-        assert_eq!(rmst_slot_from_args(&usb_args), Some(3));
+    fn db_dj_id_without_identity_matches_native_binary_response() {
         assert_eq!(
-            success_with_count(0x451, DB_REQ_EXT_3006, 1),
-            encode_db_message(
-                0x451,
-                DB_RES_SUCCESS,
-                &[DbValue::Int32(0x3006), DbValue::Int32(1)],
-            )
+            empty_blob_response(0x789, DB_REQ_DJ_ID, DB_RES_DJ_ID, false),
+            decode_hex(include_str!("../tests/fixtures/remotedb-dj-id-unavailable.hex").trim())
         );
     }
 
@@ -14495,6 +15795,7 @@ notes: []
         let mut packet = vec![0u8; 266];
         packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
         packet[0x0a] = 0x39;
+        packet[0x0b..0x11].copy_from_slice(b"DJM-A9");
         packet[0x1e] = 0x3a;
         for index in 0..4 {
             let offset = 36 + index * 24;
@@ -14524,6 +15825,7 @@ notes: []
         let mut packet = vec![0u8; 584];
         packet[..DJLINK_MAGIC.len()].copy_from_slice(DJLINK_MAGIC);
         packet[0x0a] = 0x58;
+        packet[0x0b..0x11].copy_from_slice(b"DJM-A9");
         packet[0x1e] = 0x3a;
         for channel in 1u8..=4 {
             let offset = 44 + usize::from(channel - 1) * 60;
@@ -14576,7 +15878,127 @@ notes: []
             stagehand_rejoin_requested_ms: AtomicU64::new(0),
             log_path: None,
             cue_overrides_ms: RwLock::new(HashMap::new()),
+            timing_loaded: tokio::sync::Mutex::new(HashSet::new()),
             master_bpm_hundreds: AtomicU16::new(0),
         }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn captures_midi_audio_anchors_and_replay_snapshots_without_overwriting() {
+        use crate::recording::BoothRecording;
+        use serde_json::{Value, json};
+        let directory = tempfile::tempdir().unwrap();
+        let library = LibrarySnapshot {
+            master_db_id: 1,
+            tracks_by_id: Default::default(),
+            all_tracks: vec![],
+            playlists: vec![],
+        };
+        let mut server = DjLinkServer::new(DjLinkConfig::default(), library)
+            .await
+            .unwrap();
+        let actor = tokio::spawn(
+            ServerActor::with_telemetry(server.state.telemetry_tx.clone())
+                .run(server.actor_rx.take().unwrap()),
+        );
+        let server = Arc::new(std::sync::RwLock::new(server));
+        let mut recording =
+            BoothRecording::start(server.clone(), directory.path(), json!([]), true).unwrap();
+        recording
+            .midi("DJM-A9".into(), 1_000_000, vec![0xb0, 0x00, 127])
+            .unwrap();
+        recording
+            .event(
+                "audioBuffer".into(),
+                json!({"frameOffset":0,"frames":4096,"hostTimeNs":"1000000000"}),
+            )
+            .unwrap();
+        let status = recording.stop().unwrap();
+        assert_eq!(status["recording"], false);
+        assert_eq!(status["gaps"], 0);
+        let bytes = std::fs::read(directory.path().join("events.jsonl")).unwrap();
+        assert!(BoothRecording::start(server.clone(), directory.path(), json!([]), true).is_err());
+        assert_eq!(
+            std::fs::read(directory.path().join("events.jsonl")).unwrap(),
+            bytes
+        );
+        let rows: Vec<Value> = String::from_utf8(bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.first().unwrap()["kind"], "recordingStarted");
+        assert_eq!(rows.last().unwrap()["kind"], "recordingStopped");
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "hardware" && row["payload"]["type"] == "snapshot")
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row["kind"] == "hardware" && row["payload"]["type"] == "event")
+        );
+        assert!(rows.iter().any(|row| row["kind"] == "midiRaw"));
+        assert!(rows.iter().any(|row| row["kind"] == "audioBuffer"));
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(row["sequence"], (index + 1) as u64);
+            assert!(
+                chrono::DateTime::parse_from_rfc3339(row["capturedAt"].as_str().unwrap()).is_ok()
+            );
+            assert!(row["monotonicNs"].as_str().unwrap().parse::<u64>().is_ok());
+            let origin = rows[0]["monotonicNs"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                - rows[0]["elapsedUs"].as_u64().unwrap() * 1000;
+            let host = row["monotonicNs"].as_str().unwrap().parse::<u64>().unwrap();
+            assert!(host.abs_diff(origin + row["elapsedUs"].as_u64().unwrap() * 1000) < 1000);
+        }
+        let timeline_directory = tempfile::tempdir().unwrap();
+        let mut timeline =
+            BoothRecording::start(server.clone(), timeline_directory.path(), json!([]), false)
+                .unwrap();
+        for player in 1..=6 {
+            server
+                .read()
+                .unwrap()
+                .state
+                .telemetry_tx
+                .send(DjLinkTelemetryEvent {
+                    kind: DjLinkTelemetryKind::Status,
+                    player,
+                    deck: None,
+                })
+                .unwrap();
+        }
+        let status = timeline.stop().unwrap();
+        assert_eq!(status["audio"], false);
+        assert_eq!(status["deckEvents"], 6);
+        assert_eq!(status["audioFrames"], 0);
+        assert_eq!(status["gaps"], 0);
+        let rows: Vec<Value> =
+            std::fs::read_to_string(timeline_directory.path().join("events.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        assert_eq!(rows[0]["payload"]["mode"], "timeline");
+        assert!(rows[0]["payload"]["audioFile"].is_null());
+        assert_eq!(
+            rows[0]["payload"]["reconstruction"]["masterAudio"],
+            "notRequested"
+        );
+        assert!(!timeline_directory.path().join("master.caf").exists());
+        let players: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "deckRaw")
+            .map(|row| row["payload"]["player"].as_u64().unwrap())
+            .collect();
+        assert_eq!(players, vec![1, 2, 3, 4, 5, 6]);
+        assert!(
+            rows.windows(2)
+                .all(|rows| rows[0]["elapsedUs"].as_u64().unwrap()
+                    <= rows[1]["elapsedUs"].as_u64().unwrap())
+        );
+        actor.abort();
     }
 }

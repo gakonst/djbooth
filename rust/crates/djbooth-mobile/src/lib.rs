@@ -1,5 +1,7 @@
 //! In-process C ABI for the Apple app. Requests are ephemeral projections of its
 //! library, not another durable workflow database. All calls run off MainActor.
+mod midi;
+mod recording;
 mod spotify;
 
 use std::collections::{BTreeMap, HashSet};
@@ -26,7 +28,7 @@ mod api;
 static SESSION: Mutex<Option<Arc<Session>>> = Mutex::new(None);
 
 struct Session {
-    server: RwLock<DjLinkServer>,
+    server: Arc<RwLock<DjLinkServer>>,
     runtime: Option<Runtime>,
     started: AtomicBool,
     subscriptions: Mutex<api::Subscriptions>,
@@ -35,7 +37,7 @@ struct Session {
 impl Session {
     fn new(server: DjLinkServer, runtime: Runtime, started: bool) -> Self {
         Self {
-            server: RwLock::new(server),
+            server: Arc::new(RwLock::new(server)),
             runtime: Some(runtime),
             started: AtomicBool::new(started),
             subscriptions: Mutex::new(Default::default()),
@@ -60,15 +62,16 @@ impl Session {
             })).collect::<Vec<_>>()})
     }
     fn stop(&self) {
-        self.server.write().expect("DJ Link server lock").stop();
         self.started.store(false, Ordering::Release);
+        let _ = recording::stop();
+        self.server.write().expect("DJ Link server lock").stop();
         *self.subscriptions.lock().expect("Subscription lock") = Default::default();
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
         self.server
-            .get_mut()
+            .write()
             .unwrap_or_else(|error| error.into_inner())
             .stop();
         if let Some(runtime) = self.runtime.take() {
@@ -84,7 +87,11 @@ struct StartRequest {
     broadcast_ip: Ipv4Addr,
     unicast_discovery: bool,
     #[serde(default)]
+    stagehand_monitor: bool,
+    #[serde(default)]
     diagnostics: bool,
+    #[serde(default)]
+    discovery_cache_path: Option<PathBuf>,
     tracks: Vec<TrackRecord>,
     playlists: Vec<PlaylistRecord>,
 }
@@ -217,7 +224,79 @@ impl StartRequest {
     }
 }
 
+fn diagnostic_request(operation: &str, input: &str) -> Result<Value> {
+    use djtools_link::diagnostics;
+    anyhow::ensure!(
+        input.len() <= 1024 * 1024,
+        "Diagnostic payload exceeds 1 MiB"
+    );
+    match operation {
+        "initialize" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Init {
+                root: PathBuf,
+                session: String,
+                app: Value,
+            }
+            let init: Init = serde_json::from_str(input)?;
+            let initialized = diagnostics::initialized();
+            let status = diagnostics::initialize(
+                &init.root,
+                &init.session,
+                json!({
+                    "app":init.app, "rust":env!("DJBOOTH_BUILD_ID"),
+                }),
+            )?;
+            if !initialized {
+                let previous = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    diagnostics::event(
+                        "rust_panic",
+                        json!({"panic":info.to_string(),"backtrace":std::backtrace::Backtrace::force_capture().to_string()}),
+                    );
+                    let _ = diagnostics::flush();
+                    previous(info);
+                }));
+            }
+            Ok(status)
+        }
+        "event" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Event {
+                name: String,
+                fields: Value,
+            }
+            let event: Event = serde_json::from_str(input)?;
+            anyhow::ensure!(event.name.len() <= 80, "Invalid event name");
+            diagnostics::event(&event.name, event.fields);
+            Ok(Value::Null)
+        }
+        "metric" => {
+            diagnostics::metric(serde_json::from_str(input)?)?;
+            Ok(Value::Null)
+        }
+        "status" => Ok(diagnostics::status()),
+        "snapshot" => diagnostics::snapshot(),
+        "flush" => {
+            diagnostics::flush()?;
+            Ok(diagnostics::status())
+        }
+        _ => bail!("Unknown diagnostic operation"),
+    }
+}
+
 fn request(operation: &str, input: &str) -> Result<Value> {
+    if let Some(operation) = operation.strip_prefix("midi.") {
+        return midi::request(operation, input);
+    }
+    if let Some(operation) = operation.strip_prefix("recording.") {
+        return recording::request(operation, input);
+    }
+    if let Some(operation) = operation.strip_prefix("diagnostics.") {
+        return diagnostic_request(operation, input);
+    }
     if let Some(operation) = operation.strip_prefix("spotify.") {
         return spotify::request(operation, input);
     }
@@ -254,6 +333,8 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                 )?;
             let unicast_discovery_netmask = input.unicast_discovery.then_some(interface.netmask);
             let diagnostics = input.diagnostics;
+            let stagehand_monitor = input.stagehand_monitor;
+            let discovery_cache_path = input.discovery_cache_path.clone();
             let library = input.library()?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
@@ -267,6 +348,7 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     bind_ip: Some(bind_ip),
                     broadcast_ip: Some(broadcast_ip),
                     unicast_discovery_netmask,
+                    discovery_cache_path,
                     db_server_port: DEFAULT_DBSERVER_PORT,
                     mount_port: Some(DEFAULT_MOUNT_PORT),
                     announce_interval: Duration::from_millis(500),
@@ -279,10 +361,10 @@ fn request(operation: &str, input: &str) -> Result<Value> {
                     wire_capture_path: None,
                     serve_extended_anlz_tags: true,
                     emit_beat_clock: false,
-                    stagehand_monitor: false,
+                    stagehand_monitor,
                     stagehand_target_ip: None,
                     stagehand_target_mac: None,
-                    stagehand_session_ip: None,
+                    stagehand_session_ip: stagehand_monitor.then_some(bind_ip),
                     stagehand_session_nonce: None,
                     stagehand_protocol_nonce: None,
                     tcp_track_file_side_channel: false,
@@ -434,7 +516,9 @@ mod tests {
             bind_ip: Ipv4Addr::LOCALHOST,
             broadcast_ip: Ipv4Addr::BROADCAST,
             unicast_discovery: true,
+            stagehand_monitor: false,
             diagnostics: false,
+            discovery_cache_path: None,
             tracks: vec![TrackRecord {
                 track_id: 1,
                 mount_path: path.clone(),

@@ -72,6 +72,21 @@ private struct BoothLaunchConfiguration: Sendable {
 }
 
 @MainActor @Observable final class BoothModel {
+    func recordingUploadAvailability(_ source: MusicSource) async throws -> RecordingUploadAvailability {
+        guard let cloud else { throw ClientError.http(401, "Sign in before uploading a recording") }
+        return try await cloud.recordingUploadAvailability(source)
+    }
+    func uploadRecording(file: URL, source: MusicSource, title: String, description: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> RecordingUploadResult {
+        guard let cloud, musicCatalog.sources.contains(source) else { throw ClientError.http(403, "Connect this SoundCloud account first") }
+        let key = "recording-upload:" + cloudStorageScope + ":" + source.connectionID + ":" + file.deletingLastPathComponent().lastPathComponent
+        if let data = UserDefaults.standard.data(forKey: key + ":result"),
+           let result = try? JSONDecoder().decode(RecordingUploadResult.self, from: data) { return result }
+        let uploadID = UserDefaults.standard.string(forKey: key) ?? UUID().uuidString
+        UserDefaults.standard.set(uploadID, forKey: key)
+        let result = try await cloud.uploadRecording(file: file, source: source, title: title, description: description, uploadID: uploadID, progress: progress)
+        UserDefaults.standard.set(try JSONEncoder().encode(result), forKey: key + ":result")
+        return result
+    }
     let spotifyStreaming = SpotifyStreaming()
     var spotifySignIn: MusicSource?
     private var pendingSpotifyTrackID: String?
@@ -121,32 +136,62 @@ private struct BoothLaunchConfiguration: Sendable {
     var musicCatalog = MusicCatalog()
     var musicLoading = false
     var musicError: String?
+    var musicProviderErrors: [String: String] = [:]
+    var musicProviderNames: [String] {
+        Array(Set(musicCatalog.sources.map(\.providerName) + cloudCapabilities.compactMap {
+            $0 == "spotify" ? "Spotify" : $0 == "soundcloud" ? "SoundCloud" : nil
+        })).sorted()
+    }
+    func musicFolderError(_ provider: String) -> String? { musicProviderErrors[provider] ?? musicError }
     var musicPlaylistLoading: Set<String> = []
     var musicPlaylistErrors: [String: String] = [:]
     var musicDownloads: Set<String> = []
     private var musicDownloadIDs: [String: String] = [:]
     func connectedPlaylist(_ id: String) -> MusicPlaylist? { musicCatalog.playlists.first { $0.id == id } }
     func musicIsDownloaded(_ playlist: MusicPlaylist) -> Bool {
-        guard let job = importJobs.first(where: { $0.source == playlist.url && $0.status == "complete" }),
-              let collection = collections.first(where: { $0.id == job.collectionID }), !collection.trackIDs.isEmpty else { return false }
+        guard let collection = musicCatalog.downloadedCollection(for: playlist, library: collections) else { return false }
         return collection.trackIDs.allSatisfy { tracksByID[$0]?.mediaHash != nil }
     }
-    func refreshMusic(force: Bool = false) async {
+    var connectedDownloadCollectionIDs: Set<String> {
+        Set(musicCatalog.playlists.compactMap { musicCatalog.downloadedCollection(for: $0, library: collections)?.id })
+    }
+    private var musicRefreshTask: Task<Void, Never>?
+    func refreshMusic(force: Bool = false, provider: String? = nil) async {
+        if let task = musicRefreshTask {
+            await task.value
+            return
+        }
+        guard !Task.isCancelled else { return }
+        let generation = connectionGeneration
+        // Navigating into a folder must not cancel the shared account refresh.
+        let task = Task {
+            defer { if generation == connectionGeneration { musicRefreshTask = nil } }
+            await refreshMusicCatalog(force: force, provider: provider)
+        }
+        musicRefreshTask = task
+        await task.value
+    }
+    private func refreshMusicCatalog(force: Bool, provider: String?) async {
         guard let cloud, !demo, !musicLoading else { return }
-        if !force, Date().timeIntervalSince1970 - musicCatalog.fetchedAt < 300 { return }
+        if !force, musicError == nil, musicProviderErrors.isEmpty, Date().timeIntervalSince1970 - musicCatalog.fetchedAt < 300 { return }
         let generation = connectionGeneration
         musicLoading = true; defer { if generation == connectionGeneration { musicLoading = false } }
         do {
             let sources = try await cloud.musicSources()
             guard generation == connectionGeneration else { return }
+            try Task.checkCancellation()
+            musicError = nil
             musicCatalog.sources = sources
             let ids = Set(sources.map(\.id))
             musicCatalog.playlists.removeAll { !ids.contains($0.sourceID) }
             musicCatalog.snapshots = musicCatalog.snapshots.filter { ids.contains($0.value.playlist.sourceID) }
             try store.saveMusicCatalog(musicCatalog); try await reload()
+            guard generation == connectionGeneration else { return }
             // One provider page at a time; the broker coordinates quota across all agents/apps.
-            var failures: [String] = []
-            for source in sources {
+            musicProviderErrors = musicProviderErrors.filter { name, _ in sources.contains { $0.providerName == name } }
+            let selected = sources.filter { provider == nil || $0.providerName == provider }
+            for name in Set(selected.map(\.providerName)) { musicProviderErrors[name] = nil }
+            for source in selected {
                 do {
                 var items: [MusicPlaylist] = [], cursor: String?, seen = Set<String>()
                 repeat {
@@ -161,19 +206,22 @@ private struct BoothLaunchConfiguration: Sendable {
                 let retained = Set(musicCatalog.playlists.map(\.id))
                 musicCatalog.snapshots = musicCatalog.snapshots.filter { retained.contains($0.key) }
                 try store.saveMusicCatalog(musicCatalog); try await reload()
+                guard generation == connectionGeneration else { return }
                 } catch {
                     guard generation == connectionGeneration else { return }
-                    failures.append(source.providerName + ": " + error.localizedDescription)
+                    if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                    musicProviderErrors[source.providerName] = error.localizedDescription
                 }
             }
-            musicCatalog.fetchedAt = Date().timeIntervalSince1970
-            try store.saveMusicCatalog(musicCatalog); musicError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+            if provider == nil, musicProviderErrors.isEmpty { musicCatalog.fetchedAt = Date().timeIntervalSince1970 }
+            try store.saveMusicCatalog(musicCatalog)
         } catch {
-            if generation == connectionGeneration {
+            if generation == connectionGeneration, !Task.isCancelled, !(error is CancellationError), (error as? URLError)?.code != .cancelled {
                 if case ClientError.http(let status, _) = error, status == 401 || status == 403 {
                     musicCatalog = MusicCatalog(); musicCatalogLoaded = true; try? store.saveMusicCatalog(musicCatalog)
                     await spotifyStreaming.disconnect(); player.stop(); try? await reload()
                 }
+                guard generation == connectionGeneration else { return }
                 musicError = error.localizedDescription
             }
         }
@@ -227,6 +275,9 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func loadMusicPlaylist(_ item: MusicPlaylist, force: Bool = false) async {
+        // Acquired recordings use the regular library player and analysis. They
+        // do not need a streaming login or a connector request to open offline.
+        if !force, musicIsDownloaded(item) { return }
         guard let cloud, let source = musicCatalog.sources.first(where: { $0.id == item.sourceID }), !musicPlaylistLoading.contains(item.id) else { return }
         warmSpotifySession(source)
         if !force, let cached = musicCatalog.snapshots[item.id], Date().timeIntervalSince1970 - cached.fetchedAt < 300 {
@@ -240,7 +291,7 @@ private struct BoothLaunchConfiguration: Sendable {
             let value = try await cloud.musicPlaylist(item, source: source)
             guard generation == connectionGeneration else { return }
             musicCatalog.snapshots[item.id] = value
-            try store.saveMusicCatalog(musicCatalog); try await reload(); musicError = nil
+            try store.saveMusicCatalog(musicCatalog); try await reload()
             warmSoundCloudStreams(value.tracks, source: source)
         } catch { if generation == connectionGeneration, !Task.isCancelled { musicPlaylistErrors[item.id] = error.localizedDescription } }
     }
@@ -254,6 +305,10 @@ private struct BoothLaunchConfiguration: Sendable {
             let job = try await cloud.downloadMusicPlaylist(item, source: source, id: id)
             guard generation == connectionGeneration else { return }
             importJobs.removeAll { $0.id == job.id }; importJobs.insert(job, at: 0)
+            if musicCatalog.rememberDownloads(importJobs) { try store.saveMusicCatalog(musicCatalog) }
+            try reloadCollections()
+            if job.status == "complete" { await synchronize() }
+            guard generation == connectionGeneration else { return }
             showImport = true; importError = nil
         } catch { if generation == connectionGeneration { message = error.localizedDescription } }
     }
@@ -688,7 +743,13 @@ private struct BoothLaunchConfiguration: Sendable {
             // A new demo library may have been seeded after preparation.
             try await reload(metadataOnly: true)
         }
-        player.onStateChange = { [weak self] force in self?.persistPlaybackSession(force: force) }
+        player.onStateChange = { [weak self] force in
+            guard let self else { return }
+            self.persistPlaybackSession(force: force)
+            #if os(iOS)
+            self.djLink.audioPlaybackChanged(self.player.playing)
+            #endif
+        }
         player.onResumeRequested = { [weak self] in Task { await self?.togglePlayback() } }
         player.onPauseRequested = { [weak self] in self?.playbackRequest = UUID() }
         #if DEBUG
@@ -712,6 +773,9 @@ private struct BoothLaunchConfiguration: Sendable {
         if demo, arguments.contains("--ui-test-player"), let track = tracks.first(where: { $0.id == "demo-5" }) {
             player.prepare(track, url: nil, queue: tracks)
         }
+        #endif
+        #if DEBUG && os(iOS) && targetEnvironment(simulator)
+        if demo, arguments.contains("--ui-test-decks") { try djLink.installPreviewDecks() }
         #endif
         try await prepareInitialWaveforms()
         PerformanceProbe.libraryReady(trackCount: tracks.count)
@@ -958,6 +1022,10 @@ private struct BoothLaunchConfiguration: Sendable {
             guard generation == connectionGeneration else { return }
             let completed = jobs.contains { job in job.status == "complete" && !importJobs.contains { $0.id == job.id && $0.status == "complete" } }
             importJobs = jobs; importRefreshError = nil
+            if musicCatalog.rememberDownloads(jobs) { try store.saveMusicCatalog(musicCatalog) }
+            // Sync may already be running, or these tracks may already be on
+            // disk. Reproject membership as soon as provenance arrives.
+            try reloadCollections()
             if completed { await synchronize() }
         } catch {
             guard generation == connectionGeneration else { return }
@@ -1086,7 +1154,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func cancelQuickAdd() { finishQuickAdd(preferredID: nil) }
     private func finishQuickAdd(preferredID: String?) {
         selectedCrewID = nil; selectedCrewCrateID = nil
-        let previous = quickAddReturnSession?.resolved(tracks: tracks, collections: collections)
+        let previous = quickAddReturnSession?.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         changeNavigation {
             if let previous {
@@ -1237,7 +1305,7 @@ private struct BoothLaunchConfiguration: Sendable {
         let previous = playbackPreferences?.load()
         restoredSavedPlaybackSession = previous != nil
         let saved = previous ?? PlaybackSession()
-        applyPlaybackSession(saved.resolved(tracks: tracks, collections: collections), replacingItem: true)
+        applyPlaybackSession(saved.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] }), replacingItem: true)
         playbackSessionReady = true
         persistPlaybackSession()
     }
@@ -1249,7 +1317,7 @@ private struct BoothLaunchConfiguration: Sendable {
             saved.selectedCollection = selectedCollection; saved.navigation = currentPlaybackSession().navigation
             saved.filter = filter; saved.query = query
         }
-        let resolved = saved.resolved(tracks: tracks, collections: collections)
+        let resolved = saved.resolved(tracks: tracks, collections: collections, additionalFolderPaths: musicProviderNames.map { [$0] })
         playbackSessionReady = false
         applyPlaybackSession(resolved, replacingItem: player.track?.id != resolved.trackID)
         playbackSessionReady = true
@@ -1591,7 +1659,8 @@ private struct BoothLaunchConfiguration: Sendable {
         pendingQuickAddTrackID = nil; quickAddReturnSession = nil
         pendingPlaylistRemoval = nil; playlistRemovalHistory.removeAll()
         importJobs = []; importError = nil
-        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
+        musicRefreshTask?.cancel(); musicRefreshTask = nil
+        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicProviderErrors = [:]; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         tracks = []; collections = []; favorites = []; annotations = [:]; offlineIDs = []
         #if DEBUG
         pendingOfflineTrackID = nil; offlineCollectionID = nil; offlineCollectionSelected = false; offlineLaunchRequestKey = nil
@@ -1633,7 +1702,8 @@ private struct BoothLaunchConfiguration: Sendable {
         cloudCapabilities = account.capabilities
         cloudAccountID = account.id
         importJobs = []; importError = nil
-        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
+        musicRefreshTask?.cancel(); musicRefreshTask = nil
+        musicCatalog = MusicCatalog(); musicCatalogLoaded = false; musicError = nil; musicProviderErrors = [:]; musicLoading = false; musicPlaylistLoading = []; musicPlaylistErrors = [:]; pendingSpotifyTrackID = nil; musicDownloads = []; musicDownloadIDs = [:]
         cloud = client
         #if DEBUG
         let offlineKey = "djbooth.debug.offline.\(scope)"

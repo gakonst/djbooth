@@ -4,6 +4,8 @@
   "private": true,
   "description": "Local-first native DJ Booth for macOS and iOS",
   "scripts": {
+    "diagnostics": "node scripts/native.mjs diagnostics",
+    "link": "node scripts/native.mjs link",
     "project": "node scripts/project.mjs",
     "build": "node scripts/native.mjs build macos",
     "build:ios": "node scripts/native.mjs build ios",

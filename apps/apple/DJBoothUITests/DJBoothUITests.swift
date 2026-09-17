@@ -55,9 +55,9 @@ final class DJBoothUITests: XCTestCase {
         app.buttons["crew.playlist.crate-demo"].tap()
         XCTAssertTrue(app.navigationBars["Friday Warmup"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["crew.playlist.addTracks"].isHittable)
-        app.navigationBars.buttons["No Static"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.buttons["crew.members"].waitForExistence(timeout: 5))
-        app.navigationBars.buttons["Playlists"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
         capture(app, "Shared folder at playlist root")
 
@@ -88,8 +88,8 @@ final class DJBoothUITests: XCTestCase {
         app.buttons["crew.playlist.crate-demo"].tap()
         XCTAssertTrue(app.staticTexts["Empty playlist"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["crew.playlist.addTracks"].exists)
-        app.navigationBars.buttons["No Static"].tap()
-        app.navigationBars.buttons["Playlists"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
 
         openPlaylist("demo-c2", in: app)
         longPressTrack("A Walk", in: app)
@@ -102,15 +102,20 @@ final class DJBoothUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString]
         app.launch()
-        let openUSB = app.buttons["usb.open"]
-        XCTAssertTrue(openUSB.waitForExistence(timeout: 15))
-        openUSB.tap()
+        XCTAssertTrue(app.buttons["library.drawer.open"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["usb.open"].exists)
+        app.buttons["library.drawer.open"].tap()
+        app.buttons["library.drawer.settings"].tap()
+        let openUSB = app.buttons["settings.usb.chooseFolder"]
+        XCTAssertTrue(openUSB.waitForExistence(timeout: 5)); openUSB.tap()
         let choose = app.buttons["usb.chooseFolder"]
         XCTAssertTrue(choose.waitForExistence(timeout: 5))
         XCTAssertTrue(choose.isHittable)
         capture(app, "USB library folder selection")
         app.buttons["usb.done"].tap()
         XCTAssertTrue(openUSB.waitForExistence(timeout: 5))
+        app.buttons["connect.done"].tap()
+        XCTAssertFalse(app.buttons["usb.open"].exists)
         XCTAssertTrue(app.buttons["playlist.row.demo-c2"].exists)
     }
     #endif
@@ -380,7 +385,16 @@ final class DJBoothUITests: XCTestCase {
         surface.swipeRight()
         XCTAssertTrue(player.staticTexts["Preview track \(index - 1)"].waitForExistence(timeout: 5), "Later queue selection must preserve the preceding track")
         let footerY = player.frame.minY
-        app.descendants(matching: .any)["library.tracks"].firstMatch.swipeUp()
+        let list = app.descendants(matching: .any)["library.tracks"].firstMatch
+        // UIKit lays the collection view behind the pinned footer and uses a
+        // content inset. Its default swipe can start on the player instead of
+        // a library row, so drag within the visible library viewport.
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: list.frame.midX - app.frame.minX,
+                                              dy: min(list.frame.maxY, footerY) - app.frame.minY - 30))
+        let end = origin.withOffset(CGVector(dx: list.frame.midX - app.frame.minX,
+                                            dy: list.frame.minY - app.frame.minY + 30))
+        start.press(forDuration: 0.05, thenDragTo: end)
         XCTAssertFalse(app.staticTexts["playlist.title"].isHittable, "Row pans must leave vertical list scrolling intact")
         XCTAssertEqual(player.frame.minY, footerY, accuracy: 1)
         capture(app, "Full queue scrolled to later recordings")
@@ -532,10 +546,10 @@ final class DJBoothUITests: XCTestCase {
         edgeBack(in: app, through: nestedPlaylist)
         XCTAssertTrue(childFolder.waitForExistence(timeout: 5), "One edge gesture must return exactly one folder level")
         XCTAssertFalse(parentFolder.exists)
-        XCTAssertTrue(app.buttons["playlist.folder.back"].exists)
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists)
         edgeBack(in: app, through: childFolder)
         XCTAssertTrue(parentFolder.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["playlist.folder.back"].exists)
+        XCTAssertFalse(app.navigationBars.buttons["BackButton"].exists)
         parentFolder.tap()
         childFolder.tap()
         XCTAssertTrue(nestedPlaylist.waitForExistence(timeout: 5), "Folder navigation must preserve its playlist")

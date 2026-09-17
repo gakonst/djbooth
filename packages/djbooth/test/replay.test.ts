@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe("hardware replay", () => {
-  it("uses one checkpoint, skips later snapshots, and bounds meter deltas to 30 Hz", async () => {
+  it("preserves mixer snapshots and bounds meter deltas to 30 Hz", async () => {
     const directory = mkdtempSync(join(tmpdir(), "djbooth-replay-test-"));
     temporaryDirectories.push(directory);
     const rows = [
@@ -43,9 +43,33 @@ describe("hardware replay", () => {
       "deck",
       "meters",
       "meters",
+      "snapshot",
       "event",
     ]);
-    expect(replay.events.map(({ offsetMs }) => offsetMs)).toEqual([0, 0, 10, 40, 1_000]);
+    expect(replay.events.map(({ offsetMs }) => offsetMs)).toEqual([0, 0, 10, 40, 50, 1_000]);
+  });
+  it("restores changes between the last checkpoint and the requested start", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "djbooth-replay-test-"));
+    temporaryDirectories.push(directory);
+    const rows = [
+      hardware("2026-08-09T20:59:57.000Z", snapshot(1)),
+      hardware("2026-08-09T20:59:58.000Z", event(2)),
+      hardware("2026-08-09T20:59:59.000Z", snapshot(3)),
+      hardware("2026-08-09T20:59:59.500Z", event(4)),
+      hardware("2026-08-09T21:00:00.500Z", deck(5)),
+    ];
+    writeFileSync(
+      join(directory, "events.jsonl"),
+      rows.map((row) => JSON.stringify(row)).join("\n"),
+    );
+    const replay = await loadHardwareReplay({
+      from: "2026-08-09T21:00:00.000Z",
+      to: "2026-08-09T21:00:01.000Z",
+      recording: directory,
+    });
+    expect(replay.events.map(({ message }) => message.type)).toEqual(["snapshot", "event", "deck"]);
+    expect(replay.events.map(({ offsetMs }) => offsetMs)).toEqual([0, 0, 500]);
+    expect(replay.events[1]?.message.sequence).toBe(4);
   });
 });
 

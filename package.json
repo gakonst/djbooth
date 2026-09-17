@@ -5,6 +5,8 @@
   "description": "Agentic DJ workflow for acquisition, analysis, stems, library management, and Rekordbox-compatible exports",
   "license": "UNLICENSED",
   "scripts": {
+    "native:diagnostics": "pnpm --filter @gakonst/djbooth-apple diagnostics",
+    "native:link": "pnpm --filter @gakonst/djbooth-apple run link",
     "build": "pnpm -r --workspace-concurrency=2 run build",
     "changeset": "changeset",
     "changeset:publish": "pnpm build && changeset publish",

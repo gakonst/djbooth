@@ -17,6 +17,8 @@ let musicEnabled = false;
 let musicRunID = "initial";
 let musicDelay = 0;
 let musicFailOnce = false;
+let musicFolderFailure = false;
+let musicFolderDelay = 0;
 const turns = new Map();
 const sockets = new Map();
 const tickets = new Map();
@@ -128,6 +130,10 @@ async function issuer(request) {
       }
       return Response.json({ items: [{ item: track }], next: null });
     }
+    if (body.path.startsWith("/me/playlists") && musicFolderDelay)
+      await new Promise((resolve) => setTimeout(resolve, musicFolderDelay));
+    if (body.path.startsWith("/me/playlists") && musicFolderFailure)
+      return new Response(null, { status: 503 });
     if (body.path.startsWith("/me/playlists"))
       return Response.json({
         collection: [
@@ -253,13 +259,31 @@ const runtime = new Miniflare({
       durableObjects: {
         PLAYLIST_CONTAINERS: { className: "FixtureImport", scriptName: "imports" },
       },
+      workflows: {
+        DOWNLOAD_WORKFLOW: {
+          name: "mobile-download",
+          className: "FixtureDownload",
+          scriptName: "imports",
+        },
+      },
     },
     {
       name: "imports",
       modules: true,
       compatibilityDate: "2026-08-01",
       d1Databases: { LIBRARY_DB: "mobile" },
-      script: `import {DurableObject} from 'cloudflare:workers'; export class FixtureImport extends DurableObject { async enqueue(account,id,source) { await this.env.LIBRARY_DB.prepare("UPDATE import_requests SET status='running',phase='resolve',message='Local test import running' WHERE account_id=? AND id=?").bind(account,id).run(); } } export default {fetch(){return new Response('fixture')}};`,
+      script: `import {DurableObject, WorkflowEntrypoint} from 'cloudflare:workers';
+        export class FixtureImport extends DurableObject {}
+        export class FixtureDownload extends WorkflowEntrypoint {
+          async run(event, step) {
+            await step.do('show-download-progress', async () => {
+              await this.env.LIBRARY_DB.prepare("UPDATE import_requests SET status='running',phase='resolve',message='Local test import running' WHERE account_id=? AND id=? AND workflow_id=?")
+                .bind(event.payload.accountId, event.payload.id, event.instanceId).run();
+            });
+            await step.sleep('simulated-download', '1 hour');
+          }
+        }
+        export default {fetch(){return new Response('fixture')}};`,
     },
   ],
 });
@@ -319,7 +343,59 @@ const app = await serve(8791, async (request) => {
     if (musicEnabled) musicRunID = crypto.randomUUID();
     musicDelay = new URL(request.url).searchParams.get("delay") === "1" ? 3000 : 0;
     musicFailOnce = new URL(request.url).searchParams.get("fail") === "1";
+    musicFolderFailure = new URL(request.url).searchParams.get("folderFail") === "1";
+    musicFolderDelay = new URL(request.url).searchParams.get("folderDelay") === "1" ? 15000 : 0;
     return new Response("ok");
+  }
+  if (path === "/__mobile_music_folder_failure") {
+    musicFolderFailure = new URL(request.url).searchParams.get("enabled") === "1";
+    return new Response("ok");
+  }
+  if (path === "/__mobile_music_downloaded") {
+    // Published output fixture: use the real sync/import endpoints on the app
+    // side, without running external acquisition services in a UI test.
+    for (const provider of ["spotify", "soundcloud"]) {
+      const id = `downloaded-${provider}-${musicRunID}`;
+      const source =
+        provider === "spotify"
+          ? "https://open.spotify.com/playlist/fixture-playlist"
+          : "https://soundcloud.com/local-test/sets/alice";
+      const track = {
+        id: `${id}:track`,
+        title: `Acquired ${provider} recording`,
+        artist: "Fixture Artist",
+        analyzed: true,
+        bpm: 128,
+        key: "8A",
+        mediaHash: "a".repeat(64),
+        fileExists: false,
+        artworkAvailable: false,
+        durationSeconds: 120,
+        waveform: { peaks: [0.2, 0.8, 0.4], source: "rekordbox" },
+      };
+      const collection = {
+        id: `${id}:playlist`,
+        name: `Published ${provider} copy`,
+        trackIDs: [track.id],
+      };
+      for (const [kind, payload] of [
+        ["track", track],
+        ["collection", collection],
+      ])
+        await db
+          .prepare(
+            "INSERT INTO sync_changes(account_id,operation_id,kind,entity_id,base_version,payload,deleted) VALUES (?,?,?,?,0,?,0)",
+          )
+          .bind(account("Alice"), `${id}:${kind}`, kind, payload.id, JSON.stringify(payload))
+          .run();
+      await db
+        .prepare(
+          "INSERT INTO import_requests(account_id,id,container_id,source,status,phase,current,total,message,collection_id,created_at,updated_at) VALUES (?,?,?,?,'complete','complete',1,1,'Published',?,?,?) ON CONFLICT(account_id,source) DO UPDATE SET status='complete',phase='complete',collection_id=excluded.collection_id,updated_at=excluded.updated_at",
+        )
+        .bind(account("Alice"), id, id, source, collection.id, Date.now(), Date.now())
+        .run();
+    }
+    return Response.json({ runID: musicRunID });
   }
   if (path === "/__mobile_fixture") return new Response("djbooth-mobile-fixture");
   if (path === "/v1/auth/config")

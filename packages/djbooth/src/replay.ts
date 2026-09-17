@@ -62,6 +62,7 @@ export async function loadHardwareReplay(options: {
   if (toMs <= fromMs) throw new TypeError("Replay --to must be later than --from");
 
   let checkpoint: ReplayMessage | undefined;
+  let checkpointDeltas: HardwareReplayEvent[] = [];
   const events: HardwareReplayEvent[] = [];
   let lastMeterBucket = -1;
   const lines = createInterface({ input: createReadStream(source), crlfDelay: Infinity });
@@ -77,13 +78,22 @@ export async function loadHardwareReplay(options: {
     const capturedMs = typeof row.capturedAt === "string" ? Date.parse(row.capturedAt) : Number.NaN;
     if (!Number.isFinite(capturedMs)) continue;
     if (capturedMs < fromMs) {
-      if (row.payload.type === "snapshot") checkpoint = row.payload;
+      if (row.payload.type === "snapshot") {
+        checkpoint = row.payload;
+        checkpointDeltas = [];
+      } else if (checkpoint) {
+        checkpointDeltas.push({ offsetMs: 0, message: row.payload });
+      }
       continue;
     }
     if (capturedMs > toMs) break;
     if (row.payload.type === "snapshot") {
-      if (!checkpoint) checkpoint = row.payload;
-      continue;
+      if (!checkpoint) {
+        checkpoint = row.payload;
+        continue;
+      }
+      // Network A9 controls and device discovery arrive as snapshots, without
+      // separate control deltas. Dropping them loses mixer moves during replay.
     }
     const offsetMs = capturedMs - fromMs;
     if (row.payload.type === "meters") {
@@ -94,7 +104,7 @@ export async function loadHardwareReplay(options: {
     events.push({ offsetMs, message: row.payload });
   }
   if (!checkpoint) throw new Error(`Recording has no state checkpoint before ${options.from}`);
-  events.unshift({ offsetMs: 0, message: checkpoint });
+  events.unshift({ offsetMs: 0, message: checkpoint }, ...checkpointDeltas);
   return {
     durationMs: toMs - fromMs,
     events,

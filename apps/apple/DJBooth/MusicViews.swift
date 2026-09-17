@@ -192,9 +192,6 @@ struct MobileTrackList: View {
                 }.padding(.vertical, 12).padding(.trailing, 8)
                     .boothLibraryCell(horizontalInset: 8)
             }
-            if let selected, let item = model.connectedPlaylist(selected.id) {
-                ConnectedPlaylistStatus(model: model, item: item).boothLibraryCell()
-            }
             if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id),
                model.musicCatalog.snapshots[item.id] == nil || model.musicPlaylistLoading.contains(item.id) || model.musicPlaylistErrors[item.id] != nil {
                 EmptyView()
@@ -212,6 +209,11 @@ struct MobileTrackList: View {
                 }
             }
         }.boothLibraryList().accessibilityIdentifier("library.tracks")
+            .overlay {
+                if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id) {
+                    ConnectedPlaylistStatus(model: model, item: item)
+                }
+            }
             .task(id: tracks.filter { visibleTrackIDs.contains($0.id) }.map(\.id)) {
                 do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
                 await model.warmVisibleMusicStreams(tracks.filter { visibleTrackIDs.contains($0.id) }.map(\.id))
@@ -230,6 +232,22 @@ struct ConnectedPlaylistStatus: View {
     @Bindable var model: BoothModel
     let item: MusicPlaylist
     var body: some View {
+        #if os(iOS)
+        if let error = model.musicPlaylistErrors[item.id] {
+            ContentUnavailableView {
+                Label("Couldn’t load tracks", systemImage: "wifi.exclamationmark")
+                    .accessibilityIdentifier("music.playlist.error")
+            } description: {
+                Text(error)
+            } actions: {
+                Button("Retry") { Task { await model.loadMusicPlaylist(item, force: true) } }
+                    .accessibilityIdentifier("music.playlist.retry")
+            }
+        } else if model.musicPlaylistLoading.contains(item.id) || model.musicCatalog.snapshots[item.id] == nil {
+            ProgressView().accessibilityElement(children: .ignore).accessibilityLabel("Loading tracks")
+                .accessibilityIdentifier("music.playlist.loading")
+        }
+        #else
         if let error = model.musicPlaylistErrors[item.id] {
             VStack(alignment: .leading, spacing: 12) {
                 Label("Couldn’t load playlist", systemImage: "exclamationmark.circle").font(.headline).accessibilityIdentifier("music.playlist.error")
@@ -241,6 +259,7 @@ struct ConnectedPlaylistStatus: View {
             ProgressView(model.musicCatalog.snapshots[item.id] == nil ? "Loading tracks…" : "Refreshing playlist…")
                 .frame(maxWidth: .infinity).padding(28).accessibilityIdentifier("music.playlist.loading")
         }
+        #endif
     }
 }
 

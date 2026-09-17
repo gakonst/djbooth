@@ -42,7 +42,7 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
         self.navigation = navigation; self.queueIndex = queueIndex
     }
 
-    public func resolved(tracks: [Track], collections: [Collection]) -> PlaybackSession {
+    public func resolved(tracks: [Track], collections: [Collection], additionalFolderPaths: [[String]] = []) -> PlaybackSession {
         var result = self
         let current = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let collectionIDs = Set(collections.map(\.id))
@@ -54,7 +54,9 @@ public struct PlaybackSession: Codable, Equatable, Sendable {
         if let id = result.queueCollection, !collectionIDs.contains(id) { result.queueCollection = nil }
         if var navigation = result.navigation {
             if let id = navigation.preferredCollectionID, !collectionIDs.contains(id) { navigation.preferredCollectionID = nil }
-            if !navigation.folderPath.isEmpty, !collections.contains(where: { ($0.folderPath ?? []).starts(with: navigation.folderPath) }) { navigation.folderPath = [] }
+            if !navigation.folderPath.isEmpty,
+               !additionalFolderPaths.contains(where: { $0.starts(with: navigation.folderPath) }),
+               !collections.contains(where: { ($0.folderPath ?? []).starts(with: navigation.folderPath) }) { navigation.folderPath = [] }
             if !["title", "createdAt", "updatedAt"].contains(navigation.playlistSort) { navigation.playlistSort = "title" }
             if !["default", "title", "bpm", "key"].contains(navigation.trackSort) { navigation.trackSort = "default" }
             result.navigation = navigation

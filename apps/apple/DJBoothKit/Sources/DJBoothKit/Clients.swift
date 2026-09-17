@@ -243,6 +243,39 @@ public struct CloudClient: Sendable {
             throw error
         }
     }
+    public func recordingUploadAvailability(_ source: MusicSource) async throws -> RecordingUploadAvailability {
+        guard source.provider == "soundcloud" else { throw ClientError.http(400, "Select a SoundCloud account") }
+        return try await musicGet(source.route + "/recordings", forceRefresh: true)
+    }
+    public func uploadRecording(file: URL, source: MusicSource, title: String, description: String, uploadID: String, progress: (@Sendable (String) -> Void)? = nil) async throws -> RecordingUploadResult {
+        let availability = try await recordingUploadAvailability(source)
+        guard availability.available else { throw ClientError.http(503, availability.reason ?? "SoundCloud recording uploads are unavailable") }
+        guard description.unicodeScalars.count <= 4000 else {
+            throw ClientError.http(400, "The full tracklist exceeds SoundCloud's 4,000-character description limit. Export it intact; it has not been shortened.")
+        }
+        progress?("Checking recorded audio…")
+        let hash = try await Task.detached(priority: .utility) {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            var digest = SHA256()
+            while let part = try handle.read(upToCount: 1024 * 1024), !part.isEmpty {
+                try Task.checkCancellation(); digest.update(data: part)
+            }
+            return digest.finalize().map { String(format: "%02x", $0) }.joined()
+        }.value
+        try await upload(file: file, hash: hash) { value in
+            progress?(value < 1 ? "Uploading audio \(Int(value * 100))%" : "Verifying cloud audio…")
+        }
+        progress?("Publishing to SoundCloud…")
+        var publish = request(source.route + "/recordings", method: "POST")
+        publish.timeoutInterval = 3600
+        publish.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        publish.httpBody = try JSONEncoder().encode(["audioHash": hash, "title": title,
+            "description": description, "uploadID": uploadID])
+        // Never replay POST automatically: a lost response may already have created the track.
+        let (data, response) = try await session.data(for: publish)
+        return try await decodeResponse(RecordingUploadResult.self, from: checked(data, response))
+    }
     public func musicPlaylists(_ source: MusicSource, cursor: String? = nil) async throws -> MusicPlaylistPage {
         try await musicGet(source.route + "/playlists", cursor: cursor)
     }
@@ -296,8 +329,16 @@ public struct CloudClient: Sendable {
             var url = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
             url.queryItems = [URLQueryItem(name: "cursor", value: cursor)]; request.url = url.url
         }
-        let (data, response) = try await session.data(for: request)
-        return try await decodeResponse(T.self, from: checked(data, response))
+        for attempt in 0...1 {
+            do {
+                let (data, response) = try await session.data(for: request)
+                return try await decodeResponse(T.self, from: checked(data, response))
+            } catch let error as URLError where attempt == 0 && [.networkConnectionLost, .timedOut, .cannotConnectToHost].contains(error.code) {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
+        throw URLError(.networkConnectionLost)
     }
     public func imports() async throws -> [CloudImportJob] {
         struct Page: Decodable, Sendable { var jobs: [CloudImportJob] }
@@ -318,18 +359,20 @@ public struct CloudClient: Sendable {
         let (data, response) = try await session.data(for: request)
         return try await decodeResponse(CloudImportJob.self, from: checked(data, response))
     }
-    public func upload(file: URL, hash: String) async throws {
-        let job = Task.detached(priority: .utility) { try await uploadInBackground(file: file, hash: hash) }
+    public func upload(file: URL, hash: String, progress: (@Sendable (Double) -> Void)? = nil) async throws {
+        let job = Task.detached(priority: .utility) { try await uploadInBackground(file: file, hash: hash, progress: progress) }
         try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
     }
-    private func uploadInBackground(file: URL, hash: String) async throws {
+    private func uploadInBackground(file: URL, hash: String, progress: (@Sendable (Double) -> Void)?) async throws {
+        progress?(0)
         let length = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
         guard hash.utf8.count == 64, hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
               length > 0, length <= 4 * 1024 * 1024 * 1024 else { throw ClientError.invalidMedia }
-        guard !(try await mediaExists(hash)) else { return }
+        guard !(try await mediaExists(hash)) else { progress?(1); return }
         let chunkSize = 16 * 1024 * 1024
         if length <= chunkSize {
             try await uploadPart(file: file, hash: hash)
+            progress?(1)
             return
         }
         struct Chunk: Encodable { var hash: String; var size: Int }
@@ -337,6 +380,7 @@ public struct CloudClient: Sendable {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var chunks: [Chunk] = []
+        var transferred = 0
         while let data = try handle.read(upToCount: chunkSize), !data.isEmpty {
             try Task.checkCancellation()
             let partHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -347,6 +391,7 @@ public struct CloudClient: Sendable {
                 try await uploadPart(file: temporary, hash: partHash)
             }
             chunks.append(Chunk(hash: partHash, size: data.count))
+            transferred += data.count; progress?(Double(transferred) / Double(length))
         }
         var compose = request("v1/media/\(hash)/compose", method: "POST")
         compose.timeoutInterval = 600

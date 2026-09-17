@@ -1,6 +1,7 @@
 import { AuthError, CONNECT_API, CONNECT_APP_ID, credential, type Account } from "./auth.js";
 import type { Env } from "./index.js";
 import { imports, sourceURL } from "./imports.js";
+import { recordingUpload } from "./recording-upload.js";
 
 type Provider = "spotify" | "soundcloud";
 type Wire = Record<string, unknown>;
@@ -340,10 +341,24 @@ export async function musicRoute(
   env: Env,
   account: Account,
   readJSON: (r: Request) => Promise<unknown>,
+  readMedia?: (hash: string) => Promise<Response>,
 ): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/v1/music/sources" && request.method === "GET")
     return json({ sources: await musicSources(request, env, account) });
+  const recording = /^\/v1\/music\/soundcloud\/([A-Za-z0-9_-]{1,256})\/recordings$/.exec(
+    url.pathname,
+  );
+  if (recording) {
+    const sources = await musicSources(request, env, account);
+    if (
+      !sources.some(
+        (source) => source.provider === "soundcloud" && source.connectionID === recording[1],
+      )
+    )
+      throw new AuthError(403, "This SoundCloud account is not connected or approved.");
+    return recordingUpload(request, env, recording[1], readJSON, readMedia);
+  }
   const match =
     /^\/v1\/music\/(spotify|soundcloud)\/([A-Za-z0-9_-]{1,256})\/(playlists|tracks)(?:\/([^/]+)(?:\/(download|stream))?)?$/.exec(
       url.pathname,

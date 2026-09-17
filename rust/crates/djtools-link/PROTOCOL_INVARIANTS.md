@@ -15,9 +15,16 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
 
 - RemoteDB listens on the configured database port and returns that real port to CDJs.
 - `SETUP` and `INTRODUCE` are connection setup and must not mutate browse/load state.
-- Each RemoteDB TCP connection owns exactly one prepared menu: the last successful menu setup
-  request on that connection. A later setup replaces it; another connection cannot read or replace
-  it.
+- `MENU_OFFSET(0x3100)` restores Back selection using the zero-based index of
+  `entry_id2` in the prepared RMST menu; never substitute a constant zero or row position.
+- `DJ_ID(0x3006)` requires binary response `0x4d02`, not generic `SUCCESS(0x4000)`.
+  Without a Rekordbox DJ identity, reply with request type, zero status, zero length,
+  and an advertised but omitted binary field. This must not change the prepared menu.
+- Each RemoteDB TCP connection retains a prepared menu per `r:m:s:t` context. A setup replaces
+  that context only; post-load delivery/metadata must not erase the browse buffer used by Back.
+  Another connection cannot read or replace these buffers.
+- `DELIVERY_INFO(0x2602)` prepares 13 native delivery rows and replies with `SUCCESS` plus
+  their count. It uses the normal `RENDER` exchange, including an empty menu for a missing track.
 - `RENDER` must use the prepared menu's exact `r:m:s:t` context. Its `MENU_HEADER` second argument
   echoes the requested offset; hard-coding zero leaves the CDJ cursor transaction stale.
 - `RENDER` must repeat the complete prepared-menu result count in its total field even when it asks
@@ -27,6 +34,10 @@ These are the behaviors that must remain true while refactoring `djlink.rs`.
   failure has three exact nonzero-offset mismatches.
 - Reconnects do not inherit or recover render state. A new connection must prepare its own menu
   before rendering.
+- Stopping either RemoteDB listener also cancels its accepted connections. Detached client tasks
+  must not retain the old status socket or keep serving an obsolete library after disconnect.
+  The mobile C ABI regression exercises browse/metadata/delivery/Back/track switching and then
+  closes and recreates the session on the same port.
 - Legacy `SEARCH(0x1300)` and CDJ-3000 incremental `0x1500` requests receive the deck's context
   plus UTF-16 query and must render matching rows with loadable track IDs. Incremental keyboard
   edits must stay on one connection; a rejection/reconnect per keystroke is a protocol failure.
