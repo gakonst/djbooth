@@ -1,7 +1,9 @@
 import SwiftUI
+import DJBoothKit
 
 @main struct DJBoothApp: App {
     @State private var model: BoothModel?
+    @State private var incomingInvite: URL?
     @State private var startupError: String?
     @State private var startupTask: Task<BoothModel, Error>
     init() {
@@ -15,6 +17,11 @@ import SwiftUI
         // Open the local library while SwiftUI creates the first window.
         _startupTask = State(initialValue: BoothModel.startLoading())
     }
+    private func receive(_ url: URL) {
+        guard url.host == "join" || url.path.hasPrefix("/join/") else { return }
+        if let model { model.receiveCrewInvite(url.absoluteString) }
+        else { incomingInvite = url }
+    }
     var body: some Scene {
         WindowGroup {
             Group {
@@ -25,13 +32,20 @@ import SwiftUI
             }
             .task {
                 guard model == nil, startupError == nil else { return }
-                do { model = try await startupTask.value }
+                do {
+                    model = try await startupTask.value
+                    if let incomingInvite { model?.receiveCrewInvite(incomingInvite.absoluteString); self.incomingInvite = nil }
+                }
                 catch {
                     startupError = error.localizedDescription
                     #if os(iOS)
                     AppDiagnostics.shared.event("library_start_failed", ["error": error.localizedDescription])
                     #endif
                 }
+            }
+            .onOpenURL { url in receive(url) }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                if let url = activity.webpageURL { receive(url) }
             }
             #if DEBUG
             .overlay(alignment: .top) {
@@ -83,6 +97,7 @@ struct BoothRoot: View {
                 await model.observeAgentTurn()
             }
             #if os(iOS)
+            .sheet(item: $model.pendingCrewInvite) { invite in CrewJoinView(model: model, invite: invite) }
             .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
             .sheet(isPresented: $model.showSonosSettings) { SonosOutputSheet(model: model) }
             #endif
@@ -154,10 +169,22 @@ struct BoothRoot: View {
                 await model.reconnectSonos()
             }
             #endif
+            .task(id: "crews:\(model.accountConnectionID):\(scenePhase):\(model.crews.map(\.id).sorted().joined(separator: ","))") {
+                guard scenePhase == .active, !model.demo else { return }
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await model.observeCrewUpdates(nil) }
+                    for crew in model.crews {
+                        group.addTask { await model.observeCrewUpdates(crew.id) }
+                    }
+                }
+            }
             .task(id: scenePhase) {
                 guard scenePhase == .active, !model.demo, !PerformanceProbe.offline else { return }
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(20)) } catch { return }
+                    await model.refreshCrews()
+                    if let crewID = model.selectedCrewID { await model.loadCrew(crewID) }
+                    if let crewID = model.selectedCrewID, let crateID = model.selectedCrewCrateID { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
                     await model.refreshImports()
                     await model.synchronize()
                 }

@@ -233,3 +233,22 @@ The current neighboring Nanocodex `grantBrowserEgress`/`grantConnectorRequest` p
 accepts bounded JSON/base64 request envelopes. Add an equivalent authenticated
 stream-body entrypoint and durable publication coordination there; do not export OAuth
 credentials into DJBooth or enlarge the JSON body limit to fit recordings.
+
+## Crew sharing
+
+D1 stores crews, membership and playlist items. Migration `0010_crew_track_metadata.sql` adds
+portable track metadata and a verified media owner to each shared item. Sharing a cloud track
+references existing audio/analysis objects; R2 reads check current membership and the specific
+shared hashes. Other media in the owner's account remains private. Removing the last shared
+reference removes remote access, including cached speaker playback headers.
+
+`CrewRoom` uses one hibernating Durable Object per crew for WebSocket notifications, plus one
+account room for newly created/joined folders. D1 remains authoritative. Successful mutations
+broadcast invalidations; clients fetch fresh metadata on updates and every reconnect. Connections
+renew authorization regularly (about every five minutes). A missed notification never changes the mutation
+result; reconnect and periodic refresh reconcile it.
+
+Public `GET /join/:token` and `GET /v1/crew-invites/:token` only preview an unexpired invitation.
+They never accept it or return a member list. `POST /v1/crew-invites/:token/accept` requires login
+and explicit confirmation in the app. Invites remain single-use; retrying acceptance by the same
+member is idempotent. The Worker also serves the Apple association file for `/join/*`.

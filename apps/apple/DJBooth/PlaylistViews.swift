@@ -557,16 +557,12 @@ private struct SharedFolderActions: View {
             Text("Every playlist in this folder is shared with your crew.")
         }
         .alert("Join shared folder", isPresented: $joining) {
-            TextField("Invite code", text: $inviteCode)
-            TextField("Your name", text: $displayName)
+            TextField("Invite link or code", text: $inviteCode)
             Button("Cancel", role: .cancel) { inviteCode = "" }
-            Button("Join") {
-                run {
-                    let id = try await model.acceptCrewInvite(inviteCode, displayName: displayName)
-                    inviteCode = ""
-                    model.openCrewFolder(id)
-                }
-            }.disabled(inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Continue") {
+                model.receiveCrewInvite(inviteCode)
+                inviteCode = ""
+            }.disabled(inviteCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -706,7 +702,7 @@ private struct CrewMembersView: View {
             }.boothLibraryList().navigationTitle("Members")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
                 .sheet(isPresented: Binding(get: { invite != nil }, set: { if !$0 { invite = nil } })) {
-                    if let invite { CrewInviteView(crewName: detail?.crew.name ?? "Shared folder", invite: invite) }
+                    if let invite { CrewInviteView(crewName: detail?.crew.name ?? "Shared folder", invite: invite, endpoint: model.crewInviteEndpoint) }
                 }
                 .alert("Could not invite", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                     Button("OK") { error = nil }
@@ -738,7 +734,7 @@ struct CrewPlaylistView: View {
                     ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Add tracks from your library."))
                 }
                 ForEach(detail.items) { item in
-                    CrewTrackRow(model: model, crewID: crewID, item: item)
+                    CrewTrackRow(model: model, crewID: crewID, item: item, canEdit: canEdit)
                         .moveDisabled(!canEdit)
                         .swipeActions(edge: .trailing) {
                             if canEdit {
@@ -774,25 +770,28 @@ private struct CrewTrackRow: View {
     @Bindable var model: BoothModel
     let crewID: String
     let item: CrewCrateItem
+    let canEdit: Bool
     var body: some View {
-        let local = model.localTrack(for: item)
+        let track = model.localTrack(for: item)
         let member = model.crewDetails[crewID]?.members.first { $0.accountID == item.addedBy }
-        HStack(spacing: 11) {
-            Button { if let local { Task { await model.play(local, preservingQueue: false) } } } label: {
-                HStack(spacing: 11) {
-                    Image(systemName: local == nil ? "exclamationmark.circle" : "checkmark.circle.fill")
-                        .foregroundStyle(local == nil ? .secondary : BoothStyle.accent).accessibilityLabel(local == nil ? "Missing" : "Ready")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.title).boothFont(14, relativeTo: .body, weight: .semibold).lineLimit(1)
-                        Text([item.artist, item.bpm.map { String(format: "%.0f BPM", $0) }, item.musicalKey].compactMap { $0 }.joined(separator: " · "))
-                            .boothFont(11, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
-                        if let note = item.note, !note.isEmpty { Text(note).boothFont(11, relativeTo: .caption).foregroundStyle(BoothStyle.accent).lineLimit(1) }
-                    }
-                    Spacer(minLength: 0)
-                }.contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(local == nil)
+        HStack(spacing: 6) {
+            if let track {
+                VStack(alignment: .leading, spacing: 2) {
+                    TrackRow(track: track, model: model, sharedPlaylist: true, removeSharedTrack: canEdit ? {
+                        Task { do { try await model.removeFromCrew(crewID: crewID, crateID: item.crateID, itemID: item.id) }
+                               catch { model.crewError = error.localizedDescription } }
+                    } : nil)
+                    if let note = item.note, !note.isEmpty { Text(note).font(.caption).foregroundStyle(BoothStyle.accent) }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title).font(.subheadline.weight(.semibold))
+                    Text(item.artist ?? "Unknown artist").font(.caption).foregroundStyle(.secondary)
+                    Label("Audio not shared yet", systemImage: "icloud.slash").font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
             CrewContributorBadge(member: member, itemID: item.id)
-        }.padding(.vertical, 3)
+        }
     }
 }
 
@@ -859,29 +858,6 @@ private struct CrewTrackPicker: View {
                 .navigationTitle("Add tracks")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }.preferredColorScheme(.dark)
-    }
-}
-
-private struct CrewInviteView: View {
-    let crewName: String
-    let invite: CrewInvite
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 22) {
-                CrewMark(name: crewName)
-                Text("Add people").font(.title2.bold())
-                Text(crewName).foregroundStyle(.secondary)
-                Text(invite.token).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    .padding().background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.06)))
-                ShareLink(item: "Join my \(crewName) shared folder in DJ Booth. Open Playlists → Shared folder → Join shared folder and enter this code: \(invite.token)") {
-                    Label("Share invite", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent)
-                Text("Single use · expires in 7 days").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-            }.padding(24).navigationTitle("Folder invite")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }.presentationDetents([.medium, .large]).preferredColorScheme(.dark)
     }
 }
 

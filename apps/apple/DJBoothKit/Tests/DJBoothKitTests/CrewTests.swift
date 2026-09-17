@@ -3,6 +3,37 @@ import Testing
 @testable import DJBoothKit
 
 @MainActor struct CrewTests {
+    @Test func inviteLinksRoundTripAndRejectForeignOrMalformedURLs() throws {
+        let endpoint = try Endpoint(CrewInviteLink.productionURL).url
+        let token = String(repeating: "a", count: 43)
+        let link = try #require(CrewInviteLink(token, endpoint: endpoint))
+        #expect(CrewInviteLink(link.url.absoluteString, endpoint: endpoint) == link)
+        #expect(CrewInviteLink("djbooth://join/" + token, endpoint: endpoint) == link)
+        #expect(CrewInviteLink("  " + link.url.absoluteString + "\n", endpoint: endpoint) == link)
+        for value in ["https://evil.test/join/" + token, "djbooth://connect/" + token,
+                      "djbooth://join/short", link.url.absoluteString + "/accept",
+                      link.url.absoluteString + "?server=evil", link.url.absoluteString + "#anything",
+                      "https://user@djbooth-library.gakonst.workers.dev/join/" + token] {
+            #expect(CrewInviteLink(value, endpoint: endpoint) == nil)
+        }
+        #expect(CrewInviteLink("djbooth://join/" + token, endpoint: try Endpoint("https://other.test").url) == nil)
+    }
+
+    @Test func sharedTrackCarriesCloudAnalysisAndMediaFormat() throws {
+        let track = Track(id: "source", title: "Cloud track", key: "8A", bpm: 123, analyzed: true,
+                          mediaHash: String(repeating: "a", count: 64), mediaExtension: "flac",
+                          waveform: Waveform(peaks: [0.1, 0.9]))
+        let data = try JSONEncoder().encode(track)
+        let item = """
+        {"id":"item-one","crateID":"crate-one","recordingID":"source","title":"Cloud track",
+         "sortKey":1,"addedBy":"other-account","createdAt":"now","updatedAt":"now","track":\(String(decoding: data, as: UTF8.self))}
+        """
+        let decoded = try JSONDecoder().decode(CrewCrateItem.self, from: Data(item.utf8))
+        #expect(decoded.track?.analyzed == true)
+        #expect(decoded.track?.mediaExtension == "flac")
+        #expect(decoded.track?.waveform?.peaks == [0.1, 0.9])
+    }
+
     @Test func crewCacheSurvivesAStoreRestart() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

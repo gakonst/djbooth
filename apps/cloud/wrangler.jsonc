@@ -34,11 +34,13 @@
     "bindings": [
       { "name": "PLAYLIST_CONTAINERS", "class_name": "PlaylistContainer" },
       { "name": "AGENT_TOOLS", "class_name": "AgentTools" },
+      { "name": "CREW_ROOMS", "class_name": "CrewRoom" },
     ],
   },
   "migrations": [
     { "tag": "playlist-containers-v1", "new_sqlite_classes": ["PlaylistContainer"] },
     { "tag": "agent-tools-v1", "new_sqlite_classes": ["AgentTools"] },
+    { "tag": "crew-rooms-v1", "new_sqlite_classes": ["CrewRoom"] },
   ],
   "d1_databases": [
     {

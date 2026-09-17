@@ -5,6 +5,22 @@ workstation palette and dense library layout. Apple system glass is used for con
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
 On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in and connection approval. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. **Ask DJ Booth** in the library opens the connected agent. Its read-only phone tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts, and imports, including unsynced edits. The phone must remain in the foreground; backgrounding, signing out, or switching accounts detaches its tools. Existing logins must reconnect once to approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same approval flow. Signing out returns to the welcome screen; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
+Crew folders share all their playlists with their members. **Members → Add people** presents a
+QR code, Copy link, and the native share sheet (including AirDrop and Messages). HTTPS invites
+show a preview without consuming the single-use invite; **Open in DJ Booth** opens the join
+sheet through `djbooth://join/<token>`. Signing in preserves the invite and chosen display name.
+Direct HTTPS universal links are available with `pnpm native:device --universal-links`; this
+requires a provisioning profile with Associated Domains for `djbooth-library.gakonst.workers.dev`.
+The default development build uses the web-page button when that entitlement is unavailable.
+See [Apple’s associated domain requirements](https://developer.apple.com/documentation/xcode/supporting-associated-domains).
+
+Shared tracks use the normal track rows, waveform, BPM/key, queue and player, with contributor
+initials alongside. Adding an uploaded track shares its existing cloud audio and analyzed metadata;
+it does not upload or analyze again. Foreground apps subscribe to crew WebSockets, reconcile on
+reconnect, and also refresh periodically if a notification fails. Personal favorites, notes and
+copies into personal playlists retain the track metadata; cloud audio access still requires a
+shared reference or an owned upload.
+
 At the library root, swipe inward from the left edge to open the native side drawer over the current view.
 UIKit owns the sidebar gesture, presentation, and dismissal; the current library remains behind it.
 Choose **Playlists**, **Artists**, **Albums**, or **All Tracks**. Artist and album groups open their

@@ -260,6 +260,7 @@ const runtime = new Miniflare({
       },
       durableObjects: {
         PLAYLIST_CONTAINERS: { className: "FixtureImport", scriptName: "imports" },
+        CREW_ROOMS: { className: "CrewRoom" },
       },
       workflows: {
         DOWNLOAD_WORKFLOW: {

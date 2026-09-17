@@ -32,6 +32,7 @@ Options:
   --offline-track <id>     Keep a cloud track on this device after it syncs (Debug builds)
   --offline-collection <id> Keep a cloud collection on this device as its tracks arrive (Debug builds)
   --dj-link               Enable DJ Link signing (requires Apple Multicast Networking approval)
+  --universal-links       Enable direct HTTPS app links (requires Associated Domains signing)
   --snapshot              Export closed diagnostic files from the open hardware-test app
   --console               Stream physical-device app logs until it exits
   --physical              Build for iPhone without installing (build:ios)
@@ -89,6 +90,9 @@ const build = (platform, options = {}) => {
     if (process.env.DJBOOTH_APPLE_TEAM) parameters.push(`DEVELOPMENT_TEAM=${process.env.DJBOOTH_APPLE_TEAM}`);
   } else parameters.push("CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_IDENTITY=-");
   if (args.includes("--dj-link")) parameters.push("DJBOOTH_LINK_ENTITLEMENTS=DJBooth/DJLink.entitlements", "DJBOOTH_LINK_ENABLED=YES");
+  // Requires a provisioning profile with Associated Domains. Otherwise HTTPS
+  // invite pages still open the app through the registered djbooth:// scheme.
+  if (args.includes("--universal-links")) parameters.push(`DJBOOTH_LINK_ENTITLEMENTS=DJBooth/${args.includes("--dj-link") ? "DJLinkUniversal" : "App"}.entitlements`);
   parameters.push(...optimizationSettings, `DJBOOTH_OFFLINE_COLLECTION=${offlineCollection ?? ""}`, "build");
   run("xcodebuild", parameters);
   const products = resolve(derived, "Build/Products", platform === "macos" ? configuration : `${configuration}-${physical ? "iphoneos" : "iphonesimulator"}`);

@@ -490,6 +490,40 @@ public struct CloudClient: Sendable {
         struct Body: Encodable { var displayName: String }
         return try await crewSend("v1/crew-invites/\(token)/accept", body: Body(displayName: displayName))
     }
+    public func observeCrew(_ crewID: String?, onChange: @escaping @Sendable () async -> Void) async throws {
+        var req = request(crewID.map { "v1/crews/\($0)/events" } ?? "v1/crews/events")
+        var url = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        url.scheme = url.scheme == "https" ? "wss" : "ws"
+        req.url = url.url
+        let socket = session.webSocketTask(with: req)
+        socket.resume()
+        defer { socket.cancel(with: .goingAway, reason: nil) }
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    while !Task.isCancelled {
+                        let message = try await socket.receive()
+                        if case .string(let text) = message, text.contains("\"changed\"") { await onChange() }
+                    }
+                }
+                group.addTask {
+                    while !Task.isCancelled {
+                        try await Task.sleep(for: .seconds(25))
+                        try await socket.send(.string("ping"))
+                    }
+                }
+                do { _ = try await group.next() }
+                catch { socket.cancel(with: .goingAway, reason: nil); group.cancelAll(); throw error }
+                group.cancelAll()
+            }
+        } onCancel: { socket.cancel(with: .goingAway, reason: nil) }
+    }
+    public static func previewCrewInvite(_ invite: CrewInviteLink) async throws -> CrewInvitePreview {
+        let endpoint = invite.url.deletingLastPathComponent().deletingLastPathComponent()
+        let url = endpoint.appendingPathComponent("v1/crew-invites").appendingPathComponent(invite.token)
+        let (data, response) = try await URLSession.shared.data(from: url)
+        return try JSONDecoder().decode(CrewInvitePreview.self, from: checked(data, response))
+    }
     public func createCrewCrate(crewID: String, name: String, note: String? = nil) async throws -> CrewCrate {
         struct Body: Encodable { var name: String; var note: String? }
         return try await crewSend("v1/crews/\(crewID)/crates", body: Body(name: name, note: note))

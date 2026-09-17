@@ -321,7 +321,7 @@ private struct BoothLaunchConfiguration: Sendable {
         return nil
     }
     var tracks: [Track] = [] {
-        didSet { tracksByID = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }) }
+        didSet { rebuildTrackIndex() }
     }
     private(set) var tracksByID: [String: Track] = [:]
     var collections: [Collection] = []
@@ -375,9 +375,29 @@ private struct BoothLaunchConfiguration: Sendable {
     var submittingImport = false
     var crews: [CrewSummary] = []
     var crewDetails: [String: CrewDetail] = [:]
-    var crewCrates: [String: CrewCrateDetail] = [:]
+    var crewCrates: [String: CrewCrateDetail] = [:] { didSet { rebuildTrackIndex() } }
+    private func rebuildTrackIndex() {
+        var index = Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for detail in crewCrates.values {
+            for item in detail.items {
+                if var track = item.track { track.id = "crew:" + item.id; index[track.id] = track }
+            }
+        }
+        tracksByID = index
+    }
+    private var crewLoadRequests: [String: UUID] = [:]
     var crewsLoading = false
     var crewError: String?
+    var pendingCrewInvite: CrewInviteLink?
+    var crewInviteEndpoint: URL { (try? Endpoint(cloudURL))?.url ?? URL(string: CrewInviteLink.productionURL)! }
+    func receiveCrewInvite(_ value: String) {
+        guard let invite = CrewInviteLink(value, endpoint: crewInviteEndpoint) else {
+            message = "This isn’t a valid invite for your DJ Booth server. Ask for a new link."
+            return
+        }
+        showAgent = false
+        pendingCrewInvite = invite
+    }
     var selectedCrewID: String?
     var selectedCrewCrateID: String?
     private var refreshingImports = false
@@ -472,6 +492,34 @@ private struct BoothLaunchConfiguration: Sendable {
             if generation == connectionGeneration, !(error is CancellationError) { crewError = error.localizedDescription }
         }
     }
+    func observeCrewUpdates(_ crewID: String?) async {
+        guard let cloud else { return }
+        let generation = connectionGeneration
+        var retry = 1.0
+        while !Task.isCancelled, generation == connectionGeneration {
+            do {
+                try await cloud.observeCrew(crewID) { [weak self] in
+                    await self?.reloadLiveCrew(crewID, generation: generation)
+                }
+            } catch {
+                if Task.isCancelled || generation != connectionGeneration { return }
+            }
+            do { try await Task.sleep(for: .seconds(retry)) } catch { return }
+            retry = min(retry * 2, 15)
+        }
+    }
+    private func reloadLiveCrew(_ crewID: String?, generation: UUID) async {
+        guard generation == connectionGeneration, !Task.isCancelled else { return }
+        guard let crewID else { await refreshCrews(); return }
+        await loadCrew(crewID)
+        var crateIDs = Set(crewCrates.values.filter { $0.crate.crewID == crewID }.map { $0.crate.id })
+        if selectedCrewID == crewID, let selectedCrewCrateID { crateIDs.insert(selectedCrewCrateID) }
+        for crateID in crateIDs {
+            guard generation == connectionGeneration, !Task.isCancelled else { return }
+            await loadCrewCrate(crewID: crewID, crateID: crateID)
+        }
+        await refreshCrews()
+    }
     func createCrew(_ name: String, displayName: String) async throws -> String {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         let crew = try await cloud.createCrew(name: name, displayName: displayName)
@@ -482,8 +530,10 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func acceptCrewInvite(_ value: String, displayName: String = "DJ") async throws -> String {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
-        let token = value.split(separator: "/").last.map(String.init) ?? value
-        let detail = try await cloud.acceptCrewInvite(token: token.trimmingCharacters(in: .whitespacesAndNewlines), displayName: displayName)
+        guard let invite = CrewInviteLink(value, endpoint: crewInviteEndpoint) else { throw ClientError.http(400, "Invalid crew invite") }
+        let generation = connectionGeneration
+        let detail = try await cloud.acceptCrewInvite(token: invite.token, displayName: displayName)
+        guard generation == connectionGeneration else { throw CancellationError() }
         crewDetails[detail.crew.id] = detail
         persistCrewCache()
         await refreshCrews()
@@ -491,8 +541,13 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func loadCrew(_ id: String) async {
         guard let cloud else { return }
-        do { crewDetails[id] = try await cloud.crew(id); crewError = nil; persistCrewCache() }
-        catch { if !(error is CancellationError) { crewError = error.localizedDescription } }
+        let generation = connectionGeneration, request = UUID()
+        crewLoadRequests[id] = request
+        do {
+            let detail = try await cloud.crew(id)
+            guard generation == connectionGeneration, crewLoadRequests[id] == request else { return }
+            crewDetails[id] = detail; crewError = nil; persistCrewCache()
+        } catch { if generation == connectionGeneration, crewLoadRequests[id] == request, !(error is CancellationError) { crewError = error.localizedDescription } }
     }
     func createCrewCrate(crewID: String, name: String) async throws {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
@@ -503,11 +558,17 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func loadCrewCrate(crewID: String, crateID: String) async {
         guard let cloud else { return }
-        do { crewCrates[crateID] = try await cloud.crewCrate(crewID: crewID, crateID: crateID); crewError = nil; persistCrewCache() }
-        catch { if !(error is CancellationError) { crewError = error.localizedDescription } }
+        let generation = connectionGeneration, request = UUID()
+        crewLoadRequests[crateID] = request
+        do {
+            let detail = try await cloud.crewCrate(crewID: crewID, crateID: crateID)
+            guard generation == connectionGeneration, crewLoadRequests[crateID] == request else { return }
+            crewCrates[crateID] = detail; crewError = nil; persistCrewCache()
+        } catch { if generation == connectionGeneration, crewLoadRequests[crateID] == request, !(error is CancellationError) { crewError = error.localizedDescription } }
     }
     func addToCrew(_ track: Track, crewID: String, crateID: String) async throws {
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
+        guard track.mediaHash != nil else { throw ClientError.http(409, "Finish uploading this track to your cloud library before sharing it.") }
         crewCrates[crateID] = try await cloud.addCrewTrack(crewID: crewID, crateID: crateID, track: track)
         persistCrewCache()
         await loadCrew(crewID)
@@ -525,11 +586,16 @@ private struct BoothLaunchConfiguration: Sendable {
         persistCrewCache()
     }
     func inviteToCrew(_ crewID: String) async throws -> CrewInvite {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--ui-test-library"), ProcessInfo.processInfo.arguments.contains("--ui-test-crews") {
+            return try JSONDecoder().decode(CrewInvite.self, from: Data("{\"token\":\"\(String(repeating: "a", count: 43))\",\"role\":\"dj\",\"expiresAt\":2000000000}".utf8))
+        }
+        #endif
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         return try await cloud.createCrewInvite(crewID: crewID)
     }
     func localTrack(for item: CrewCrateItem) -> Track? {
-        tracksByID[item.localTrackID ?? item.recordingID]
+        tracksByID["crew:" + item.id] ?? tracksByID[item.localTrackID ?? item.recordingID]
             ?? tracks.first { item.assetHash != nil && $0.mediaHash == item.assetHash }
     }
     func openCrewFolder(_ crewID: String) {
@@ -917,6 +983,12 @@ private struct BoothLaunchConfiguration: Sendable {
             """
             let cache = try JSONDecoder().decode(CrewCache.self, from: Data(fixture.utf8))
             crews = cache.crews; crewDetails = cache.details; crewCrates = cache.crates
+            if contributors {
+                var shared = DemoLibrary.tracks[4]
+                shared.id = "someone-elses-track"; shared.mediaHash = String(repeating: "a", count: 64)
+                shared.mediaExtension = "mp3"; shared.analyzed = true
+                crewCrates["crate-demo"]?.items[1].track = shared
+            }
             persistCrewCache()
         }
         #endif
@@ -1050,6 +1122,7 @@ private struct BoothLaunchConfiguration: Sendable {
         if playbackSessionReady { reconcilePlaybackSession() }
     }
     var visibleTracks: [Track] {
+        if let crateID = selectedCrewCrateID, let detail = crewCrates[crateID] { return detail.items.compactMap { localTrack(for: $0) } }
         let members = selectedCollection.flatMap { id in collections.first { $0.id == id }?.trackIDs }
         let assigned = filter == "Unsorted" ? Set(collections.flatMap(\.trackIDs)) : []
         let candidates: [Track]
@@ -1264,8 +1337,13 @@ private struct BoothLaunchConfiguration: Sendable {
         guard let cloud, !demo else { throw ClientError.http(503, "Cloud account is not connected") }
         return try await cloud.importStatus(id: id, offset: offset)
     }
+    private func retainSharedTrack(_ track: Track) throws {
+        guard track.id.hasPrefix("crew:"), try store.track(id: track.id) == nil else { return }
+        try store.ingest([track])
+        tracks.append(track)
+    }
     func favorite(_ track: Track) {
-        do { try store.toggleFavorite(track.id); favorites = try store.favoriteIDs(); try reloadSyncState() } catch { message = error.localizedDescription }
+        do { try retainSharedTrack(track); try store.toggleFavorite(track.id); favorites = try store.favoriteIDs(); try reloadSyncState() } catch { message = error.localizedDescription }
     }
     func annotation(for track: Track) -> TrackAnnotation { annotations[track.id] ?? TrackAnnotation() }
     func setNote(_ note: String, for track: Track) {
@@ -1273,12 +1351,14 @@ private struct BoothLaunchConfiguration: Sendable {
             message = "This comment is too long. Keep it under 16 KB."; return
         }
         do {
+            try retainSharedTrack(track)
             try store.setNote(note, trackID: track.id)
             try annotationChanged(track.id)
         } catch { message = error.localizedDescription }
     }
     func setColor(_ color: TrackColor?, for track: Track) {
         do {
+            try retainSharedTrack(track)
             try store.setColor(color, trackID: track.id)
             try annotationChanged(track.id)
         } catch { message = error.localizedDescription }
@@ -1328,6 +1408,7 @@ private struct BoothLaunchConfiguration: Sendable {
         guard let current = collections.first(where: { $0.id == collection.id }) else { return }
         if let trackID = pendingQuickAddTrackID {
             do {
+                if let track = tracksByID[trackID] { try retainSharedTrack(track) }
                 try store.addTrack(trackID, toCollection: current.id); try reloadCollections()
                 finishQuickAdd(preferredID: current.id)
             } catch { message = error.localizedDescription }
@@ -1362,12 +1443,12 @@ private struct BoothLaunchConfiguration: Sendable {
         }
     }
     func quickAdd(_ track: Track) {
-        guard tracks.contains(where: { $0.id == track.id }) else { return }
+        guard tracksByID[track.id] != nil else { return }
         if let target = quickAddTarget { add(track, to: target); return }
         choosePlaylist(for: track)
     }
     func choosePlaylist(for track: Track) {
-        guard tracks.contains(where: { $0.id == track.id }) else { return }
+        guard tracksByID[track.id] != nil else { return }
         quickAddReturnSession = currentPlaybackSession(); pendingQuickAddTrackID = track.id
         openPlaylistBrowser()
         if collections.isEmpty && crews.isEmpty { showNewCollection = true }
@@ -1375,6 +1456,7 @@ private struct BoothLaunchConfiguration: Sendable {
     func createCollection(_ name: String) {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         do {
+            if let id = pendingQuickAddTrackID, let track = tracksByID[id] { try retainSharedTrack(track) }
             let ids = pendingQuickAddTrackID.map { [$0] } ?? []
             let collection = try store.createCollection(name: name, folderPath: playlistFolderPath, trackIDs: ids)
             try reloadCollections()
@@ -1384,7 +1466,7 @@ private struct BoothLaunchConfiguration: Sendable {
     }
     func add(_ track: Track, to collection: Collection) {
         guard !collection.id.hasPrefix("connected:") else { return }
-        do { try store.addTrack(track.id, toCollection: collection.id); try reloadCollections() }
+        do { try retainSharedTrack(track); try store.addTrack(track.id, toCollection: collection.id); try reloadCollections() }
         catch { message = error.localizedDescription }
     }
     func requestRemoval(_ track: Track, from collection: Collection) {

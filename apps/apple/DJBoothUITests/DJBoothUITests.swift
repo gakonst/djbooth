@@ -22,6 +22,11 @@ final class DJBoothUITests: XCTestCase {
         let alex = app.buttons["crew.contributor.item-alex"]
         XCTAssertEqual(alex.label, "Added by Alex Rivera")
         XCTAssertTrue(alex.isEnabled, "Attribution stays available when audio is missing")
+        XCTAssertTrue(app.otherElements["track.row.crew:item-alex"].exists)
+        XCTAssertTrue(app.buttons["track.waveform.crew:item-alex"].exists)
+        XCTAssertEqual(app.staticTexts["track.bpm.crew:item-alex"].label, "100.0")
+        XCTAssertEqual(app.staticTexts["track.key.crew:item-alex"].label, "3B")
+        app.buttons["track.waveform.crew:item-alex"].tap()
         capture(app, "Shared playlist contributor initials")
         alex.tap()
         let contributorName = app.staticTexts["crew.contributor.name"]
@@ -36,6 +41,22 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(contributorName.waitForExistence(timeout: 5))
         XCTAssertEqual(contributorName.label, "Unknown contributor")
         XCTAssertTrue(app.staticTexts["Member details are unavailable."].exists)
+    }
+
+    func testSharedFolderInviteSharesLinkAndQRCode() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews"]
+        app.launch()
+        let folder = app.buttons["crew.folder.crew-demo"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 15)); folder.tap()
+        app.buttons["crew.members"].tap()
+        app.buttons["crew.members.add"].tap()
+        XCTAssertTrue(app.images["crew.invite.qr"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["crew.invite.share"].exists)
+        XCTAssertFalse(app.staticTexts[String(repeating: "a", count: 43)].exists)
+        app.buttons["crew.invite.copy"].tap()
+        XCTAssertEqual(app.buttons["crew.invite.copy"].label, "Link copied")
+        capture(app, "Crew invite QR and share link")
     }
 
     func testSharedFolderNavigationAndMembers() throws {

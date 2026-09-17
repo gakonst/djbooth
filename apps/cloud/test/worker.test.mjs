@@ -129,6 +129,7 @@ before(async () => {
         durableObjects: {
           PLAYLIST_CONTAINERS: { className: "TestPlaylist", scriptName: "processor" },
           AGENT_TOOLS: { className: "AgentTools" },
+          CREW_ROOMS: { className: "CrewRoom" },
         },
       },
       {
@@ -239,6 +240,11 @@ before(async () => {
   );
   await database.exec(
     (await readFile(new URL("../migrations/0009_crews.sql", import.meta.url), "utf8"))
+      .replace(/^--.*$/gm, "")
+      .replace(/\n/g, " "),
+  );
+  await database.exec(
+    (await readFile(new URL("../migrations/0010_crew_track_metadata.sql", import.meta.url), "utf8"))
       .replace(/^--.*$/gm, "")
       .replace(/\n/g, " "),
   );
@@ -1773,4 +1779,199 @@ test("phone query bridge consumes its ticket once and forwards live results thro
   assert.equal(result.outcome.output.success, true);
   assert.match(result.outcome.output.output, /42/);
   ws.close();
+});
+
+test("crew links preview safely, live members receive changes, and cloud tracks play without copying", async () => {
+  const send = (token, path, body, method = "POST") =>
+    request(path, {
+      method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  const publicGet = (path) => runtime.dispatchFetch(`https://library.test${path}`);
+  const crew = await (
+    await send(TOKEN, "/v1/crews", { name: "Live <Crew>", displayName: "Alice" })
+  ).json();
+  const path = `/v1/crews/${crew.id}`;
+  const association = await (await publicGet("/.well-known/apple-app-site-association")).json();
+  assert.equal(association.applinks.details[0].appIDs[0], "C3Q4NN5ZQ8.xyz.gakonst.djbooth");
+  assert.equal(
+    (
+      await request(`${path}/events`, {
+        headers: { authorization: `Bearer ${TOKEN_B}`, upgrade: "websocket" },
+      })
+    ).status,
+    404,
+  );
+  const invite = await (await send(TOKEN, `${path}/invites`, { role: "dj" })).json();
+  assert.equal(
+    (await send(TOKEN, `/v1/crew-invites/${invite.token}/accept`, { displayName: "Alice" })).status,
+    200,
+  );
+  const page = await publicGet(`/join/${invite.token}`);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(page.headers.get("cache-control"), "private, no-store");
+  const html = await page.text();
+  assert.ok(html.includes("Live &lt;Crew&gt;"));
+  assert.ok(html.includes(`djbooth://join/${invite.token}`));
+  const preview = await (await publicGet(`/v1/crew-invites/${invite.token}`)).json();
+  assert.equal(preview.crewName, "Live <Crew>");
+  assert.deepEqual(Object.keys(preview).sort(), ["crewName", "expiresAt", "role"]);
+  const waitMessage = (ws) =>
+    new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("No crew update within 3 seconds")), 3000);
+      ws.addEventListener(
+        "message",
+        (event) => {
+          clearTimeout(timeout);
+          resolve(JSON.parse(event.data));
+        },
+        { once: true },
+      );
+    });
+  const upgrade = await request(`${path}/events`, { headers: { upgrade: "websocket" } });
+  assert.equal(upgrade.status, 101);
+  const ownerSocket = upgrade.webSocket;
+  let next = waitMessage(ownerSocket);
+  ownerSocket.accept();
+  assert.equal((await next).type, "changed");
+  const accountUpgrade = await request("/v1/crews/events", {
+    headers: { authorization: `Bearer ${TOKEN_B}`, upgrade: "websocket" },
+  });
+  assert.equal(accountUpgrade.status, 101);
+  const accountSocket = accountUpgrade.webSocket;
+  next = waitMessage(accountSocket);
+  accountSocket.accept();
+  await next;
+  let memberSocket;
+  try {
+    const membershipChanged = waitMessage(accountSocket);
+    next = waitMessage(ownerSocket);
+    assert.equal(
+      (await send(TOKEN_B, `/v1/crew-invites/${invite.token}/accept`, { displayName: "Bob" }))
+        .status,
+      200,
+    );
+    assert.equal((await next).type, "changed");
+    assert.equal((await membershipChanged).type, "changed");
+    assert.equal(
+      (await send(TOKEN_B, `/v1/crew-invites/${invite.token}/accept`, { displayName: "Bob" }))
+        .status,
+      200,
+    );
+    assert.equal((await publicGet(`/join/${invite.token}`)).status, 410);
+    assert.equal((await publicGet(`/v1/crew-invites/${invite.token}`)).status, 410);
+    const joined = await request(`${path}/events`, {
+      headers: { authorization: `Bearer ${TOKEN_B}`, upgrade: "websocket" },
+    });
+    assert.equal(joined.status, 101);
+    memberSocket = joined.webSocket;
+    next = waitMessage(memberSocket);
+    memberSocket.accept();
+    await next;
+    next = waitMessage(memberSocket);
+    const crate = await (
+      await send(TOKEN, `${path}/crates`, { name: "Instant shared tracks" })
+    ).json();
+    await next;
+    const audio = Buffer.from(
+      await readFile(new URL("./fixtures/sonos-tail-index.m4a", import.meta.url)),
+    );
+    audio[audio.indexOf("mdat") + 4] ^= 1; // Distinct valid MP4 layout from the standalone playback fixture.
+    const hash = createHash("sha256").update(audio).digest("hex");
+    assert.equal(
+      (
+        await request(`/v1/media/${hash}`, {
+          method: "PUT",
+          body: audio,
+          headers: { "content-type": "audio/mp4", "content-length": String(audio.length) },
+        })
+      ).status,
+      201,
+    );
+    assert.equal((await send(TOKEN_B, `/v1/media/${hash}`, null, "GET")).status, 404);
+    const track = {
+      id: randomUUID(),
+      title: "Instant cloud track",
+      artist: "DJ",
+      artworkAvailable: false,
+      fileExists: true,
+      analyzed: true,
+      bpm: 126,
+      key: "8A",
+      mediaHash: hash,
+      mediaExtension: "m4a",
+      waveform: { peaks: [0.1, 0.5, 0.9], source: "rekordbox" },
+    };
+    assert.equal(
+      (await push(makeOperation("track", { entityID: track.id, payload: JSON.stringify(track) })))
+        .status,
+      201,
+    );
+    const items = `${path}/crates/${crate.id}/items`;
+    // Knowing a hash is not permission to share another account's media.
+    assert.equal(
+      (
+        await send(TOKEN_B, items, {
+          track: { recordingID: track.id, assetHash: hash, title: track.title },
+        })
+      ).status,
+      409,
+    );
+    next = waitMessage(memberSocket);
+    const shared = await send(TOKEN, items, {
+      track: { recordingID: track.id, assetHash: hash, title: track.title },
+    });
+    assert.equal(shared.status, 200);
+    const item = (await shared.json()).items[0];
+    assert.deepEqual(item.track, track);
+    await next;
+    const read = await send(TOKEN_B, `${path}/crates/${crate.id}`, null, "GET");
+    assert.deepEqual((await read.json()).items[0].track.waveform, track.waveform);
+    const media = await request(`/v1/media/${hash}`, {
+      headers: { authorization: `Bearer ${TOKEN_B}`, range: "bytes=0-6" },
+    });
+    assert.equal(media.status, 206);
+    assert.equal(await media.text(), audio.subarray(0, 7).toString());
+    const accountB = `nc_${createHash("sha256").update("account-b").digest("hex")}`;
+    const bucket = await runtime.getR2Bucket("MEDIA", "library");
+    assert.equal(
+      await bucket.head(`accounts/${accountB}/sha256/${hash}`),
+      null,
+      "Sharing does not copy audio",
+    );
+    const speaker = await (
+      await send(TOKEN_B, "/v1/playback", { tracks: [{ hash, extension: "m4a" }] })
+    ).json();
+    const optimized = await runtime.dispatchFetch(speaker.urls[hash], {
+      headers: { range: "bytes=0-31" },
+    });
+    assert.equal(optimized.status, 206);
+    assert.equal(optimized.headers.get("x-djbooth-playback-layout"), "faststart-v1");
+    await optimized.arrayBuffer();
+    next = waitMessage(memberSocket);
+    assert.equal((await send(TOKEN, `${items}/${item.id}`, null, "DELETE")).status, 204);
+    await next;
+    assert.equal((await send(TOKEN_B, `/v1/media/${hash}`, null, "GET")).status, 404);
+    assert.equal(
+      (await runtime.dispatchFetch(speaker.urls[hash], { headers: { range: "bytes=0-31" } }))
+        .status,
+      404,
+      "Cached playback headers cannot bypass revoked sharing",
+    );
+    // Reconnect always receives a reconciliation event, even after missed edits.
+    memberSocket.close();
+    const reconnect = await request(`${path}/events`, {
+      headers: { authorization: `Bearer ${TOKEN_B}`, upgrade: "websocket" },
+    });
+    memberSocket = reconnect.webSocket;
+    next = waitMessage(memberSocket);
+    memberSocket.accept();
+    await next;
+  } finally {
+    ownerSocket.close();
+    accountSocket.close();
+    memberSocket?.close();
+  }
 });

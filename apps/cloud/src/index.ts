@@ -10,8 +10,11 @@ import { authenticate, authRoute, AuthError, type Account } from "./auth.js";
 import { agentRoute } from "./agent.js";
 import { migrateLegacy } from "./legacy-migration.js";
 import { imports } from "./imports.js";
-import { crewRoute } from "./crews.js";
+import { crewInvitePage, crewRoute, sharedMediaOwner } from "./crews.js";
 import { createPlayback, playbackMedia, revokePlayback } from "./playback.js";
+
+export { CrewRoom } from "./crew-room.js";
+import type { CrewRoom } from "./crew-room.js";
 
 export interface Env {
   /** Optional authenticated, streaming, idempotent SoundCloud upload broker. */
@@ -22,6 +25,7 @@ export interface Env {
   CONNECT_API_SERVICE?: Fetcher;
   LEGACY_LIBRARY_OWNER?: string;
   ASSETS?: Fetcher;
+  CREW_ROOMS?: DurableObjectNamespace<CrewRoom>;
   AGENT_TOOLS?: DurableObjectNamespace<AgentTools>;
   PLAYLIST_CONTAINERS?: DurableObjectNamespace<PlaylistContainer>;
   IMPORT_PROVIDER_ENV?: string;
@@ -615,7 +619,17 @@ async function media(
   hash: string,
   account: Account,
 ): Promise<Response> {
-  const key = `accounts/${account.id}/sha256/${hash}`;
+  let mediaAccount = account;
+  if (["GET", "HEAD"].includes(request.method)) {
+    const own =
+      (await env.MEDIA.head(`accounts/${account.id}/sha256/${hash}`)) ??
+      (await env.MEDIA.head(`accounts/${account.id}/compositions/${hash}`));
+    if (!own) {
+      const owner = await sharedMediaOwner(env, account.id, hash);
+      if (owner) mediaAccount = { ...account, id: owner };
+    }
+  }
+  const key = `accounts/${mediaAccount.id}/sha256/${hash}`;
   if (request.method === "PUT") {
     const rawLength = request.headers.get("content-length");
     if (!rawLength || !/^\d+$/.test(rawLength))
@@ -658,7 +672,7 @@ async function media(
   const object = await env.MEDIA.head(key);
   let composition: Composition | undefined;
   if (!object) {
-    const stored = await env.MEDIA.get(`accounts/${account.id}/compositions/${hash}`);
+    const stored = await env.MEDIA.get(`accounts/${mediaAccount.id}/compositions/${hash}`);
     if (!stored) throw new HTTPError(404, "Media is not available.");
     composition = await stored.json<Composition>();
   }
@@ -688,7 +702,7 @@ async function media(
     return new Response(null, { status: 416, headers });
   }
   let body: ReadableStream<Uint8Array>;
-  if (composition) body = compositionBody(env, composition, account, range);
+  if (composition) body = compositionBody(env, composition, mediaAccount, range);
   else {
     const stored = await env.MEDIA.get(key, range ? { range } : {});
     if (!stored || !("body" in stored)) throw new HTTPError(503, "Media unavailable; retry.");
@@ -768,6 +782,19 @@ export default {
       const url = new URL(request.url);
       if (url.pathname === "/health" && request.method === "GET")
         return json({ service: "djbooth-library", version: 1 });
+      if (
+        url.pathname === "/.well-known/apple-app-site-association" &&
+        ["GET", "HEAD"].includes(request.method)
+      )
+        return Response.json({
+          applinks: {
+            details: [
+              { appIDs: ["C3Q4NN5ZQ8.xyz.gakonst.djbooth"], components: [{ "/": "/join/*" }] },
+            ],
+          },
+        });
+      const invitePage = await crewInvitePage(request, env);
+      if (invitePage) return invitePage;
       if (url.pathname.startsWith("/v1/auth/")) return await authRoute(request, env, readJSON);
       if (
         env.ASSETS &&

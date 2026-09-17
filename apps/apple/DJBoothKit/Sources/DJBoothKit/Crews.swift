@@ -69,6 +69,7 @@ public struct CrewTrackReference: Codable, Sendable, Equatable {
 }
 
 public struct CrewCrateItem: Codable, Identifiable, Sendable, Equatable {
+    public var track: Track? = nil
     public var id: String
     public var crateID: String
     public var recordingID: String

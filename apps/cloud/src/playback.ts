@@ -99,6 +99,14 @@ export async function playbackMedia(
     ["m4a", "mp4"].includes(media[hash]!) &&
     new URL(request.url).searchParams.get("layout") === "faststart-v1"
   ) {
+    // Cached MP4 headers must not outlive a shared playlist's media permission.
+    const authorized = await readMedia(
+      new Request(request.url, { method: "HEAD" }),
+      env,
+      hash,
+      account,
+    );
+    if (!authorized.ok) return authorized;
     const optimized = await fastStartPlayback(
       request,
       env.MEDIA,

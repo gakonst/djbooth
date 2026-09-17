@@ -267,6 +267,8 @@ struct TrackRow: View {
     let track: Track
     @Bindable var model: BoothModel
     var collection: Collection? = nil
+    var sharedPlaylist = false
+    var removeSharedTrack: (() -> Void)? = nil
     var preservingQueue = false
     var queuePosition: Int? = nil
     @State private var editingAnnotation = false
@@ -281,6 +283,7 @@ struct TrackRow: View {
             }
             .sheet(isPresented: $editingAnnotation) { TrackAnnotationEditor(track: track, model: model) }
             .contextMenu {
+                if let removeSharedTrack { Button("Remove from shared playlist", role: .destructive, action: removeSharedTrack) }
                 Button("Comment & color") { editingAnnotation = true }
                 Button(model.favorites.contains(track.id) ? "Remove from favorites" : "Add to favorites") { model.favorite(track) }
                 Button("Add to playlist") { model.choosePlaylist(for: track) }
@@ -296,12 +299,15 @@ struct TrackRow: View {
             .accessibilityAction(named: "Add to playlist") { model.choosePlaylist(for: track) }
     }
     private var leftSwipe: RowSwipeAction? {
+        if sharedPlaylist {
+            return removeSharedTrack.map { action in RowSwipeAction(title: "Remove", symbol: "minus", color: .pink, perform: action) }
+        }
         if let collection {
-            RowSwipeAction(title: "Remove", symbol: "minus", color: .pink) {
+            return RowSwipeAction(title: "Remove", symbol: "minus", color: .pink) {
                 model.requestRemoval(track, from: collection)
             }
         } else {
-            RowSwipeAction(title: "Archive", symbol: "archivebox", color: .orange) {
+            return RowSwipeAction(title: "Archive", symbol: "archivebox", color: .orange) {
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) { model.archive(track) }
             }
         }
