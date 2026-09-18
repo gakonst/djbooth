@@ -190,12 +190,6 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         case .collection, .group:
             let groupMode: LibraryBrowseMode?
             if case .group(let mode, _) = destination { groupMode = mode } else { groupMode = nil }
-            let back = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), primaryAction: UIAction { _ in
-                if let groupMode { model.browse(groupMode) } else { model.backFromCollection() }
-            })
-            back.accessibilityLabel = groupMode.map { "Back to \($0.rawValue.lowercased())" } ?? "Back to playlists"
-            back.accessibilityIdentifier = groupMode == nil ? "playlist.back" : "library.group.back"
-            navigationItem.leftBarButtonItem = back
             let label = UILabel()
             label.font = .preferredFont(forTextStyle: .headline)
             label.adjustsFontForContentSizeCategory = true

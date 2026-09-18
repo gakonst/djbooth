@@ -86,7 +86,7 @@ final class USBLibraryUITests: XCTestCase {
         }
     }
     private func returnToRoot(_ app: XCUIApplication) {
-        if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }
+        if app.navigationBars.buttons["BackButton"].exists { app.navigationBars.buttons["BackButton"].tap() }
         for _ in 0..<5 {
             if app.buttons["usb.open"].exists { return }
             if app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 3) { app.navigationBars.buttons["BackButton"].tap() }

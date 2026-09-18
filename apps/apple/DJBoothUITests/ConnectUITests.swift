@@ -101,7 +101,7 @@ import XCTest
         XCTAssertTrue(app.descendants(matching: .any)["music.playlist.loading"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Alice streaming track"].waitForExistence(timeout: 10))
         capture(app, "Spotify metadata without acquisition or analysis")
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         app.buttons["music.download.fixture-playlist"].tap()
         XCTAssertTrue(app.staticTexts["Local test import running"].waitForExistence(timeout: 10))
         capture(app, "Connected playlist in standard download pipeline")
@@ -200,7 +200,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["Acquired spotify recording"].waitForExistence(timeout: 40))
         XCTAssertFalse(app.staticTexts["Alice streaming track"].exists)
         app.terminate(); app.launch()
-        if app.buttons["playlist.back"].waitForExistence(timeout: 5) { app.buttons["playlist.back"].tap() }
+        if app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5) { app.navigationBars.buttons["BackButton"].tap() }
         if app.navigationBars.buttons["BackButton"].exists { app.navigationBars.buttons["BackButton"].tap() }
         for (provider, remoteID) in [("Spotify", "fixture-playlist"), ("SoundCloud", "soundcloud:playlists:123")] {
             XCTAssertTrue(app.buttons["music.source.\(provider)"].waitForExistence(timeout: 20))
@@ -218,7 +218,7 @@ import XCTest
             XCTAssertEqual(app.staticTexts["track.key.\(trackID)"].label, "8A")
             XCTAssertFalse(app.buttons["music.playlist.retry"].exists)
             capture(app, "\(provider) original playlist with acquired analysis")
-            app.buttons["playlist.back"].tap()
+            app.navigationBars.buttons["BackButton"].tap()
             app.navigationBars.buttons["BackButton"].tap()
         }
         openSettings(app)
@@ -227,7 +227,7 @@ import XCTest
 
     private func openSettings(_ app: XCUIApplication) {
         for _ in 0..<5 {
-            if app.buttons["playlist.back"].exists { app.buttons["playlist.back"].tap() }
+            if app.navigationBars.buttons["BackButton"].exists { app.navigationBars.buttons["BackButton"].tap() }
             else if app.navigationBars.buttons["BackButton"].exists { app.navigationBars.buttons["BackButton"].tap() }
             else { break }
         }

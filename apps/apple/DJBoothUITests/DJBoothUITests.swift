@@ -18,12 +18,13 @@ final class DJBoothUITests: XCTestCase {
         let initialBar = bar.frame
         for _ in 0..<3 {
             playlist.tap()
-            XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
             XCTAssertTrue(bar.isHittable, "Playlist headers use the same persistent native bar as the library")
+            XCTAssertEqual(bar.buttons.count, 3, "Only Back, library actions, and the assistant belong in the bar")
             XCTAssertEqual(bar.frame.minY, initialBar.minY, accuracy: 1)
             XCTAssertEqual(bar.frame.height, initialBar.height, accuracy: 1)
             XCTAssertTrue(bar.buttons["library.actions"].exists)
-            app.buttons["playlist.back"].tap()
+            app.navigationBars.buttons["BackButton"].tap()
             XCTAssertTrue(playlist.waitForExistence(timeout: 5))
             XCTAssertEqual(playlist.frame.minY, initialRowY, accuracy: 1)
             XCTAssertEqual(bar.frame.minY, initialBar.minY, accuracy: 1)
@@ -153,7 +154,7 @@ final class DJBoothUITests: XCTestCase {
         folder.tap()
         XCTAssertTrue(app.buttons["crew.playlist.crate-demo"].waitForExistence(timeout: 5))
         app.buttons["playlist.picker.cancel"].tap()
-        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["playlist.title"].label, "Slow mornings")
     }
 
@@ -385,11 +386,11 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(waveform.waitForExistence(timeout: 5))
         XCTAssertTrue(waveform.isHittable)
         XCTAssertEqual(playerTitle.label, "Nespole", "Undo preserves the selected player track")
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.buttons["playlist.row.demo-c2"].waitForExistence(timeout: 5))
     }
 
-    func testMinimalListsAndScrollingPlaylistTitle() throws {
+    func testMinimalListsAndPersistentPlaylistNavigation() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-long-playlist"]
         app.launch()
@@ -405,18 +406,20 @@ final class DJBoothUITests: XCTestCase {
         openPlaylist("demo-scroll", in: app)
         assertMinimalChrome(app)
         let title = app.staticTexts["playlist.title"]
-        let back = app.buttons["playlist.back"]
+        let back = app.navigationBars.buttons["BackButton"]
         let tracks = app.descendants(matching: .any)["library.tracks"].firstMatch
         let player = app.descendants(matching: .any)["nowPlaying.bottom"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertTrue(back.isHittable)
-        XCTAssertTrue(tracks.descendants(matching: .any)["playlist.title"].firstMatch.exists,
-                      "Playlist title belongs inside the track scroll view")
+        XCTAssertTrue(app.navigationBars.staticTexts["playlist.title"].exists,
+                      "Playlist title belongs in the persistent navigation bar")
+        XCTAssertEqual(app.navigationBars.buttons.matching(identifier: "BackButton").count, 1)
+        let titleY = title.frame.minY
         let playerY = player.frame.minY
         tracks.swipeUp()
-        expectation(for: NSPredicate(format: "hittable == false"), evaluatedWith: title)
-        waitForExpectations(timeout: 5)
-        XCTAssertFalse(back.isHittable, "Title and back control must scroll away together")
+        XCTAssertTrue(title.isHittable)
+        XCTAssertTrue(back.isHittable, "The native back button stays available while scrolling")
+        XCTAssertEqual(title.frame.minY, titleY, accuracy: 1)
         XCTAssertTrue(player.isHittable)
         XCTAssertEqual(player.frame.minY, playerY, accuracy: 1)
         capture(app, "Scrolled playlist with pinned footer")
@@ -462,7 +465,7 @@ final class DJBoothUITests: XCTestCase {
         let surface = player.descendants(matching: .any)["nowPlaying.surface"].firstMatch
         surface.tap()
         XCTAssertFalse(app.navigationBars["Now playing"].exists)
-        XCTAssertTrue(app.buttons["playlist.back"].exists, "Tapping the footer must not navigate to another screen")
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists, "Tapping the footer must not navigate to another screen")
         surface.swipeLeft()
         XCTAssertTrue(player.staticTexts["Two Thousand and Seventeen"].waitForExistence(timeout: 5))
         XCTAssertTrue(surface.isHittable)
@@ -471,7 +474,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(player.staticTexts["A Walk"].waitForExistence(timeout: 5))
         XCTAssertTrue(surface.isHittable)
         XCTAssertFalse(app.navigationBars["Now playing"].exists)
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.buttons["playlist.row.demo-c2"].waitForExistence(timeout: 5))
         XCTAssertTrue(queue.isHittable, "The queue stays visible while browsing playlists")
         let next = queue.buttons["nowPlaying.queue.track.demo-7"]
@@ -542,7 +545,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertEqual(footer.descendants(matching: .any)["nowPlaying.waveform"].firstMatch.frame.minY, waveformY, accuracy: 1)
         XCTAssertGreaterThanOrEqual(palette.frame.minX, app.frame.minX)
         XCTAssertLessThanOrEqual(palette.frame.maxX, app.frame.maxX)
-        XCTAssertTrue(app.buttons["playlist.back"].isHittable)
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].isHittable)
         capture(app, "Inline footer color palette")
         color.tap()
         XCTAssertFalse(palette.exists, "Tapping the swatch closes the inline palette")
@@ -618,7 +621,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertEqual(playlist.value as? String, "Pinned")
         capture(app, "Pinned playlist browser")
         playlist.tap()
-        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
         let track = app.descendants(matching: .any)["track.row.demo-5"].firstMatch
         XCTAssertTrue(track.waitForExistence(timeout: 5))
         let originalX = track.frame.minX
@@ -632,15 +635,15 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertFalse(app.buttons["playlist.picker.cancel"].exists, "Edge Back must not also trigger row right-add")
         playlist.tap()
         XCTAssertTrue(track.waitForExistence(timeout: 5), "Edge Back must preserve the recording")
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         app.terminate()
         app.launch()
         XCTAssertTrue(playlist.waitForExistence(timeout: 15))
         XCTAssertEqual(playlist.value as? String, "Pinned")
         playlist.tap()
-        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
         XCTAssertTrue(track.exists)
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
 
         let nestedPlaylist = app.buttons["playlist.row.demo-c4"]
         XCTAssertTrue(nestedPlaylist.waitForExistence(timeout: 5))
@@ -691,7 +694,7 @@ final class DJBoothUITests: XCTestCase {
         app.alerts.buttons["Create"].tap()
         XCTAssertTrue(app.staticTexts["playlist.title"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["playlist.title"].label, "Late night selections")
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
 
         openPlaylist("demo-c2", in: app)
         let track = app.descendants(matching: .any)["track.row.demo-5"].firstMatch
@@ -723,7 +726,7 @@ final class DJBoothUITests: XCTestCase {
         let created = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "playlist.row.", "Late night selections")).firstMatch
         XCTAssertTrue(created.isHittable)
         created.tap()
-        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["playlist.title"].label, "Slow mornings", "Right-add preserves the source playlist")
         XCTAssertTrue(track.exists)
         fullRowSwipe(in: app, through: track, right: false)
@@ -743,7 +746,7 @@ final class DJBoothUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         let undo = app.buttons["playlist.removal.undo"]
         XCTAssertTrue(undo.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["playlist.back"].exists, "Middle-row left swipe removes without navigating Back")
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].exists, "Middle-row left swipe removes without navigating Back")
         XCTAssertEqual(app.staticTexts["playlist.title"].label, "Slow mornings")
         assertPlaybackUnchanged()
         capture(app, "Removed playlist member with Undo")
@@ -762,14 +765,14 @@ final class DJBoothUITests: XCTestCase {
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: track)
         waitForExpectations(timeout: 5)
         assertPlaybackUnchanged()
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(created.waitForExistence(timeout: 5))
         created.tap()
         XCTAssertTrue(app.buttons["track.waveform.demo-5"].waitForExistence(timeout: 5), "Removing from source must preserve the added target membership")
         XCTAssertTrue(undo.isHittable, "Undo remains available after navigating to another playlist")
         undo.tap()
         XCTAssertEqual(app.staticTexts["playlist.title"].label, "Late night selections")
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         openPlaylist("demo-c2", in: app)
         assertOriginalOrder()
         assertPlaybackUnchanged()
@@ -788,7 +791,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
         confirmation.buttons["playlist.removal.confirm"].firstMatch.tap()
         XCTAssertFalse(first.exists)
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
 
         openPlaylist("demo-c3", in: app)
         let second = app.descendants(matching: .any)["track.row.demo-2"].firstMatch
@@ -796,7 +799,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
         confirmation.buttons["playlist.removal.confirm"].firstMatch.tap()
         XCTAssertFalse(second.exists)
-        app.buttons["playlist.back"].tap()
+        app.navigationBars.buttons["BackButton"].tap()
         let deletedPlaylist = app.buttons["playlist.row.demo-c3"]
         deletedPlaylist.press(forDuration: 0.7)
         app.buttons["Delete playlist"].tap()
@@ -1146,7 +1149,7 @@ final class DJBoothUITests: XCTestCase {
         }
         XCTAssertTrue(playlist.waitForExistence(timeout: 15))
         playlist.tap()
-        XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
     }
 
     private func assertMinimalChrome(_ app: XCUIApplication) {
