@@ -91,7 +91,7 @@ final class DJBoothUITests: XCTestCase {
         XCTAssertTrue(app.buttons["library.actions"].waitForExistence(timeout: 5))
         app.buttons["crew.playlist.crate-demo"].tap()
         XCTAssertTrue(app.navigationBars["Friday Warmup"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["crew.playlist.addTracks"].isHittable)
+        XCTAssertFalse(app.buttons["crew.playlist.addTracks"].exists)
         app.navigationBars.buttons["BackButton"].tap()
         XCTAssertTrue(app.buttons["library.actions"].waitForExistence(timeout: 5))
         app.navigationBars.buttons["BackButton"].tap()

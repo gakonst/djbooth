@@ -688,7 +688,6 @@ struct CrewPlaylistView: View {
     @Bindable var model: BoothModel
     let crewID: String
     let crateID: String
-    @State private var adding = false
     private var detail: CrewCrateDetail? { model.crewCrates[crateID] }
     private var canEdit: Bool { model.crewDetails[crewID]?.crew.role.canEdit == true }
 
@@ -696,8 +695,6 @@ struct CrewPlaylistView: View {
         List {
             if canEdit {
                 HStack {
-                    Button { adding = true } label: { Label("Add tracks", systemImage: "plus") }
-                        .accessibilityIdentifier("crew.playlist.addTracks")
                     Spacer()
                     EditButton()
                 }.buttonStyle(BoothRowButtonStyle()).boothFont(12, relativeTo: .caption)
@@ -705,7 +702,7 @@ struct CrewPlaylistView: View {
             }
             if let detail {
                 if detail.items.isEmpty {
-                    ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Add tracks from your library.")).boothLibraryCell()
+                    ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Swipe on a track to add it to this playlist.")).boothLibraryCell()
                 }
                 ForEach(detail.items) { item in
                     CrewTrackRow(model: model, crewID: crewID, item: item, canEdit: canEdit)
@@ -726,7 +723,6 @@ struct CrewPlaylistView: View {
         .boothLibraryList()
         .task(id: crateID) { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
         .refreshable { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
-        .sheet(isPresented: $adding) { CrewTrackPicker(model: model, crewID: crewID, crateID: crateID) }
     }
     private func move(_ source: IndexSet, _ destination: Int, items: [CrewCrateItem]) {
         guard canEdit, let from = source.first else { return }
@@ -798,42 +794,6 @@ struct CrewContributorBadge: View {
                     if name == nil { Text("Member details are unavailable.").font(.caption).foregroundStyle(.secondary) }
                 }.padding().presentationCompactAdaptation(.popover)
             }
-    }
-}
-
-private struct CrewTrackPicker: View {
-    @Bindable var model: BoothModel
-    let crewID: String
-    let crateID: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var adding = Set<String>()
-    private var tracks: [Track] {
-        let source = query.isEmpty ? model.tracks : model.tracks.filter { "\($0.title) \($0.artist ?? "")".localizedStandardContains(query) }
-        return Array(source.prefix(500))
-    }
-    var body: some View {
-        NavigationStack {
-            List(tracks) { track in
-                Button {
-                    guard !adding.contains(track.id) else { return }; adding.insert(track.id)
-                    Task { defer { adding.remove(track.id) }; do { try await model.addToCrew(track, crewID: crewID, crateID: crateID) }
-                           catch { model.crewError = error.localizedDescription } }
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(track.title).boothFont(14, relativeTo: .body, weight: .semibold).foregroundStyle(.primary)
-                            Text(track.artist ?? "Unknown artist").boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if adding.contains(track.id) { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "plus.circle").foregroundStyle(BoothStyle.accent) }
-                    }
-                }.buttonStyle(BoothRowButtonStyle()).padding(.vertical, 6).boothLibraryCell(horizontalInset: 12)
-            }.boothLibraryList().searchable(text: $query, prompt: "Find tracks")
-                .navigationTitle("Add tracks")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }.tint(BoothStyle.accent).preferredColorScheme(.dark)
     }
 }
 
