@@ -59,3 +59,13 @@ test("cloud action observations correlate job IDs without retaining receipt outp
     }),
   ).toBeNull();
 });
+
+test("invalid resolved state is distinguishable from internal runtime errors", () => {
+  expect(
+    failureKind(
+      new Error(
+        "resolve failed (INVALID_SOURCE): Invalid manifest at $.artifacts.analysis[0].mediaPath: must reference a downloaded recording",
+      ),
+    ),
+  ).toBe("validation");
+});

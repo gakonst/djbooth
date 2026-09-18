@@ -203,4 +203,30 @@ export function retainResolvedRecordings(
     entry.spotify = prior.spotify;
     entry.rekordbox = prior.rekordbox;
   }
+  // Aggregate checkpoints must describe only recordings retained by this resolution.
+  const retainedPaths = new Set(
+    next.entries.flatMap((entry) =>
+      entry.acquisition.status === "downloaded"
+        ? [entry.acquisition.download, ...(entry.acquisition.alternatives ?? [])].map(
+            (download) => download.mediaPath,
+          )
+        : [],
+    ),
+  );
+  if (next.artifacts.analysis)
+    next.artifacts.analysis = next.artifacts.analysis.filter((artifact) =>
+      retainedPaths.has(artifact.mediaPath),
+    );
+  if (
+    next.artifacts.rekordbox &&
+    next.entries.some(
+      (entry) =>
+        !(entry.acquisition.status === "skipped" && entry.rekordbox.status === "skipped") &&
+        (entry.rekordbox.status !== "imported" ||
+          entry.rekordbox.target !== "rekordbox-db" ||
+          (entry.rekordbox.artifact !== undefined &&
+            entry.rekordbox.artifact !== next.artifacts.rekordbox!.dbPath)),
+    )
+  )
+    delete next.artifacts.rekordbox;
 }

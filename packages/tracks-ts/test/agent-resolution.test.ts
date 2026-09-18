@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { needs1001Research, retainResolvedRecordings } from "../src/agent-resolution.js";
-import { createManifest } from "../src/manifest.js";
+import { createManifest, parseManifest } from "../src/manifest.js";
 
 const make = () =>
   createManifest({
@@ -77,3 +77,88 @@ test.each([
   expect(next.entries[0]!.acquisition.status).toBe("pending");
   expect(next.entries[0]!.rekordbox).toEqual(make().entries[0]!.rekordbox);
 });
+
+test.each([false, true])(
+  "refreshed analyzed recordings remain valid when identities change: %s",
+  (changed) => {
+    const old = make();
+    const next = make();
+    const paths = ["/tracks/first.flac", "/tracks/second.flac"];
+    for (const [index, entry] of old.entries.entries()) {
+      const mediaPath = paths[index]!;
+      entry.acquisition = {
+        status: "downloaded",
+        download: { backend: "slsk", kind: "individual", mediaPath, files: [mediaPath] },
+      };
+      entry.rekordbox = {
+        status: "imported",
+        target: "rekordbox-db",
+        artifact: "/tracks/master.db",
+        dbContentId: String(index + 1),
+        playlistMembershipId: String(index + 1),
+      };
+    }
+    const first = old.entries[0]!.acquisition;
+    if (first.status !== "downloaded") throw new Error("fixture must be downloaded");
+    first.alternatives = [
+      {
+        backend: "slsk",
+        kind: "individual",
+        mediaPath: "/tracks/alternate.flac",
+        files: ["/tracks/alternate.flac"],
+      },
+      {
+        backend: "local",
+        kind: "source-set-clip",
+        source: "https://youtu.be/set",
+        clip: {
+          sourceSetUrl: "https://youtu.be/set",
+          startSeconds: 0,
+          endSeconds: 120,
+          containsTransitions: true,
+          qualityNote: "Set extract",
+        },
+        mediaPath: "/tracks/clip.m4a",
+        files: ["/tracks/clip.m4a"],
+      },
+    ];
+    old.artifacts.analysis = [...paths, "/tracks/alternate.flac", "/tracks/clip.m4a"].map(
+      (mediaPath) => ({
+        mediaPath,
+        summaryPath: mediaPath + ".json",
+        backend: "rekordbox-dlopen-rehost",
+        tempoBpm: 128,
+        key: "Bm",
+        keySource: "rekordbox-notify-complete",
+        sourceMtimeMs: 1,
+        sourceSize: 1,
+      }),
+    );
+    old.artifacts.rekordbox = {
+      target: "rekordbox-db",
+      dbPath: "/tracks/master.db",
+      folderName: "Sets",
+      folderId: "1",
+      playlistName: "Set",
+      playlistId: "2",
+    };
+    expect(() => parseManifest(old)).not.toThrow();
+    const prior = structuredClone(old);
+    if (changed) {
+      next.entries[1]!.identity.title = "Corrected title";
+      next.entries[1]!.identity.searchQuery = "Artist - Corrected title";
+    }
+    retainResolvedRecordings(old, next);
+    expect(() => parseManifest(JSON.parse(JSON.stringify(next)))).not.toThrow();
+    expect(next.artifacts.analysis?.map((artifact) => artifact.mediaPath)).toEqual(
+      changed ? [paths[0], "/tracks/alternate.flac"] : [...paths, "/tracks/alternate.flac"],
+    );
+    expect(next.entries[0]!.acquisition).toMatchObject({
+      status: "downloaded",
+      alternatives: [{ mediaPath: "/tracks/alternate.flac" }],
+    });
+    expect(next.entries[1]!.acquisition.status).toBe(changed ? "pending" : "downloaded");
+    expect(next.artifacts.rekordbox).toEqual(changed ? undefined : prior.artifacts.rekordbox);
+    expect(old).toEqual(prior);
+  },
+);
