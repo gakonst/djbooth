@@ -396,10 +396,10 @@ struct TrackRow: View {
                 }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
                     .accessibilityIdentifier("track.waveform.\(track.id)")
                 mobileTrackTitle(activation: activation, selected: selected)
-                if !typeSize.isAccessibilitySize { mobileTrackDetails }
+                if !typeSize.isAccessibilitySize { mobileTrackMetadata }
             }
             if typeSize.isAccessibilitySize {
-                mobileTrackDetails.frame(maxWidth: .infinity, alignment: .trailing)
+                mobileTrackMetadata.frame(maxWidth: .infinity, alignment: .trailing)
             }
         }.padding(.horizontal, 4).padding(.vertical, 7)
             .background(selected ? BoothStyle.accent.opacity(contrast == .increased ? 0.24 : 0.12) : .clear)
@@ -430,18 +430,13 @@ struct TrackRow: View {
         }.buttonStyle(BoothRowButtonStyle()).accessibilityLabel("Play \(track.title)")
             .accessibilityValue("\(track.artist ?? "Unknown artist"), \(selected ? "Current track, " : "")\(model.offlineIDs.contains(track.id) ? "Available offline" : "Not on this device")")
     }
-    private var mobileTrackDetails: some View {
-        HStack(spacing: 6) {
-            #if os(iOS)
-            if let contributorItemID { CrewContributorBadge(member: contributor, itemID: contributorItemID) }
-            #endif
-            mobileTrackMetadata
-        }
-    }
     private var mobileTrackMetadata: some View {
         let color = model.annotation(for: track).color
         return VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 3) {
+                #if os(iOS)
+                if let contributorItemID { CrewContributorBadge(member: contributor, itemID: contributorItemID, compact: true) }
+                #endif
                 Text(track.bpm.map { String(format: "%.1f", $0) } ?? "—")
                     .boothFont(12, relativeTo: .caption, weight: .semibold, design: .monospaced)
                     .accessibilityIdentifier("track.bpm.\(track.id)")

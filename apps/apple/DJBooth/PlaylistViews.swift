@@ -798,6 +798,7 @@ private struct CrewTrackRow: View {
 struct CrewContributorBadge: View {
     let member: CrewMember?
     let itemID: String
+    var compact = false
     @State private var showingContributor = false
     private var name: String? {
         guard let name = member?.displayName.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return nil }
@@ -806,12 +807,12 @@ struct CrewContributorBadge: View {
     var body: some View {
         Button { showingContributor = true } label: {
             Group {
-                if let name { CrewMark(name: name, small: true) }
+                if let name { CrewMark(name: name, small: true, compact: compact) }
                 else {
-                    Image(systemName: "person.fill").foregroundStyle(.secondary)
-                        .frame(width: 38, height: 38).background(Circle().fill(Color.white.opacity(0.08)))
+                    Image(systemName: "person.fill").font(compact ? .system(size: 9) : .body).foregroundStyle(.secondary)
+                        .frame(width: compact ? 16 : 38, height: compact ? 16 : 38).background(Circle().fill(Color.white.opacity(0.08)))
                 }
-            }.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+            }.frame(minWidth: compact ? 16 : 44, minHeight: compact ? 16 : 44).contentShape(Rectangle())
         }.buttonStyle(.plain)
             .accessibilityLabel("Added by \(name ?? "unknown contributor")")
             .accessibilityIdentifier("crew.contributor.\(itemID)")
@@ -864,10 +865,11 @@ private struct CrewTrackPicker: View {
 private struct CrewMark: View {
     let name: String
     var small = false
+    var compact = false
     var body: some View {
         Text(name.split(whereSeparator: \.isWhitespace).prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
-            .boothFont(small ? 12 : 16, relativeTo: small ? .caption : .body, weight: .bold)
-            .frame(width: small ? 38 : 46, height: small ? 38 : 46)
+            .boothFont(compact ? 8 : small ? 12 : 16, relativeTo: small ? .caption : .body, weight: .bold)
+            .frame(width: compact ? 16 : small ? 38 : 46, height: compact ? 16 : small ? 38 : 46)
             .background(Circle().fill(BoothStyle.accent.opacity(0.18))).foregroundStyle(BoothStyle.accent)
     }
 }

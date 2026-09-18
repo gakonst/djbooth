@@ -29,6 +29,8 @@ final class DJBoothUITests: XCTestCase {
         let row = app.otherElements["track.row.crew:item-alex"]
         XCTAssertTrue(row.buttons["crew.contributor.item-alex"].exists)
         XCTAssertLessThanOrEqual(alex.frame.maxX, app.staticTexts["track.bpm.crew:item-alex"].frame.minX)
+        XCTAssertLessThanOrEqual(alex.frame.width, 18)
+        XCTAssertEqual(alex.frame.midY, app.staticTexts["track.bpm.crew:item-alex"].frame.midY, accuracy: 2)
         app.buttons["track.waveform.crew:item-alex"].tap()
         capture(app, "Shared playlist contributor initials")
         alex.tap()
