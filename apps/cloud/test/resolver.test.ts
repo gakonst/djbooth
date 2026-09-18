@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { evidencedRows, researchLinks, resolveTracklist } from "../src/resolver.js";
+import {
+  evidencedRows,
+  researchLinks,
+  resolveTracklist,
+  structuredRecordingNames,
+} from "../src/resolver.js";
 import type { Env } from "../src/index.js";
 
 describe("cloud tracklist evidence", () => {
@@ -103,7 +108,8 @@ test("uses a verified direct 1001 page without searching or replacing it with pu
     }),
     {
       BROWSER: {
-        quickAction: async (_: string, options: { url: string }) => {
+        quickAction: async (action: string, options: { url: string }) => {
+          if (action === "scrape") return Response.json({ success: true, result: [] });
           visited.push(options.url);
           return Response.json({
             success: true,
@@ -141,7 +147,8 @@ test("searches 1001 before fallback and keeps its match even when another site l
     }),
     {
       BROWSER: {
-        quickAction: async (_: string, options: { url: string }) => {
+        quickAction: async (action: string, options: { url: string }) => {
+          if (action === "scrape") return Response.json({ success: true, result: [] });
           visited.push(options.url);
           return Response.json({
             success: true,
@@ -182,7 +189,8 @@ function discoveryHarness(
   const pages: string[] = [];
   const env = {
     BROWSER: {
-      quickAction: async (_: string, options: { url: string }) => {
+      quickAction: async (action: string, options: { url: string }) => {
+        if (action === "scrape") return Response.json({ success: true, result: [] });
         const query = new URL(options.url).searchParams.get("q");
         if (query) {
           queries.push(query);
@@ -335,10 +343,16 @@ test("challenged 1001 and media-heavy results still discover all 34 grounded sec
     readFileSync(new URL("./fixtures/adam-ten-brunch-2026.json", import.meta.url), "utf8"),
   );
   const videoID = new URL(fixture.canonicalSource).searchParams.get("v");
-  const rows = fixture.tracks.map((row: any) => ({
-    ...row,
-    evidence: `${row.timestamp} ${row.artist ? row.artist + " - " : ""}${row.title}`,
-  }));
+  const rows = fixture.tracks
+    .map((row: any) => ({
+      ...row,
+      title:
+        row.title + (row.order === 4 ? "named by @davidimusic1" : row.order === 7 ? "SLAPPED" : ""),
+    }))
+    .map((row: any) => ({
+      ...row,
+      evidence: `${row.timestamp} ${row.artist ? row.artist + " - " : ""}${row.title}`,
+    }));
   const matchEvidence = `${fixture.title} ${fixture.canonicalSource}`;
   const markdown = `${matchEvidence}\n${rows.map((row: any) => row.evidence).join("\n")}`;
   const pages: string[] = [];
@@ -353,7 +367,31 @@ test("challenged 1001 and media-heavy results still discover all 34 grounded sec
     }),
     {
       BROWSER: {
-        quickAction: async (_: string, options: { url: string }) => {
+        quickAction: async (action: string, options: { url: string }) => {
+          if (action === "scrape")
+            return Response.json({
+              success: true,
+              result: [
+                {
+                  results: [
+                    {
+                      text: JSON.stringify({
+                        "@type": "MusicPlaylist",
+                        url: fixture.evidenceURL,
+                        numTracks: fixture.tracks.length,
+                        track: fixture.tracks
+                          .filter((row: any) => !row.isId)
+                          .map((row: any) => ({
+                            "@type": "MusicRecording",
+                            position: String(row.order),
+                            name: `${row.artist} - ${row.title}`,
+                          })),
+                      }),
+                    },
+                  ],
+                },
+              ],
+            });
           const query = new URL(options.url).searchParams.get("q");
           if (query) {
             queries.push(query);
@@ -445,4 +483,82 @@ test("a generated video-ID candidate cannot bypass evidence validation", async (
   const harness = discoveryHarness(() => "", new Set(), new Set([candidate, source]));
   expect((await harness.resolve(source)).status).toBe(422);
   expect(harness.pages).toEqual([candidate, source]);
+});
+
+test("structured names remove concatenated badges without supplying rows or timestamps", () => {
+  const url = "https://groovesmaxxing.com/tracklists/example";
+  const page =
+    "DJ Exact Festival Set\n01 00:00 Artist - Recordingnamed by @listener\n02 04:00 ID\n03 07:00 Other - SongSLAPPED";
+  const tracks = [
+    {
+      timestamp: "00:00",
+      artist: "Artist",
+      title: "Recordingnamed by @listener",
+      evidence: "01 00:00 Artist - Recordingnamed by @listener",
+    },
+    { timestamp: "04:00", title: "ID", isId: true, evidence: "02 04:00 ID" },
+    {
+      timestamp: "07:00",
+      artist: "Other",
+      title: "SongSLAPPED",
+      evidence: "03 07:00 Other - SongSLAPPED",
+    },
+  ];
+  const rows = evidencedRows(
+    { matched: true, matchEvidence: "DJ Exact Festival Set", tracks },
+    page,
+    600,
+  );
+  const playlist = {
+    "@type": "MusicPlaylist",
+    url,
+    numTracks: "3",
+    track: [
+      { "@type": "MusicRecording", position: "01", name: "Artist - Recording" },
+      { "@type": "MusicRecording", position: "03", name: "Other - Song" },
+    ],
+  };
+  const clean = (value: unknown) => structuredRecordingNames(rows, [JSON.stringify(value)], url);
+  expect(clean(playlist)).toEqual([
+    { startSeconds: 0, artist: "Artist", title: "Recording" },
+    { startSeconds: 240, title: "ID", isId: true },
+    { startSeconds: 420, artist: "Other", title: "Song" },
+  ]);
+  for (const patch of [
+    { url: url + "-other" },
+    { numTracks: 4 },
+    { track: [playlist.track[0], playlist.track[0]] },
+    { track: [{ ...playlist.track[0], position: "03" }] },
+    { track: [{ ...playlist.track[0], name: "Artist - Different" }] },
+    { track: [{ ...playlist.track[0], name: "Someone - Recording" }] },
+  ])
+    expect(clean({ ...playlist, ...patch })).toEqual(rows);
+  expect(structuredRecordingNames(rows, ["malformed"], url)).toEqual(rows);
+  expect(
+    structuredRecordingNames(rows, [JSON.stringify(playlist), JSON.stringify(playlist)], url),
+  ).toEqual(rows);
+});
+
+test.each([
+  "Recording (Edit)",
+  "Recording(Remix)",
+  "Recording (?)",
+  "Recording(?)",
+  "Recording (unreleased)",
+  "Recording(unreleased)",
+  "Recording Extended Mix",
+  "Recording - Another Version",
+  "Recording SLAPPED",
+  "Recording named by @listener",
+  "Recording\\(Edit)",
+])("structured base names preserve evidenced version or annotation: %s", (title) => {
+  const url = "https://groovesmaxxing.com/tracklists/example";
+  const rows = [{ startSeconds: 120, artist: "Artist", title }];
+  const document = JSON.stringify({
+    "@type": "MusicPlaylist",
+    url,
+    numTracks: 1,
+    track: [{ "@type": "MusicRecording", position: 1, name: "Artist - Recording" }],
+  });
+  expect(structuredRecordingNames(rows, [document], url)).toEqual(rows);
 });

@@ -165,6 +165,79 @@ export function evidencedRows(value: unknown, markdown: string, duration?: numbe
   return rows;
 }
 
+// Structured names supplement a verified full timeline; they never supply cues or
+// rows. Groovesmaxxing's rendered badges can run into the recording title.
+export function structuredRecordingNames(
+  rows: ReturnType<typeof evidencedRows>,
+  documents: string[],
+  url: string,
+): ReturnType<typeof evidencedRows> {
+  const playlists: Record<string, unknown>[] = [];
+  for (const document of documents) {
+    try {
+      const parsed = JSON.parse(document);
+      const nodes = Array.isArray(parsed) ? parsed : [parsed, ...(parsed?.["@graph"] ?? [])];
+      for (const node of nodes)
+        if (node?.["@type"] === "MusicPlaylist" && node.url === url) playlists.push(node);
+    } catch {
+      // Missing or malformed structured data leaves literal evidence unchanged.
+    }
+  }
+  if (playlists.length !== 1) return rows;
+  const playlist = playlists[0];
+  if (Number(playlist.numTracks) !== rows.length || !Array.isArray(playlist.track)) return rows;
+  const names = new Map<number, string>();
+  for (const track of playlist.track) {
+    const position = Number(track?.position);
+    if (
+      track?.["@type"] !== "MusicRecording" ||
+      typeof track.name !== "string" ||
+      !Number.isInteger(position) ||
+      position < 1 ||
+      position > rows.length ||
+      names.has(position)
+    )
+      return rows;
+    names.set(position, track.name);
+  }
+  return rows.map((row, index) => {
+    const name = names.get(index + 1);
+    if (row.isId || !row.artist || !name) return row;
+    const separator = name.indexOf(" - ");
+    if (separator < 1 || normalize(name.slice(0, separator)) !== normalize(row.artist)) return row;
+    const title = name.slice(separator + 3).trim();
+    // Require a directly concatenated alphabetic badge. A space or punctuation
+    // may introduce a real edit/remix, uncertainty, or unreleased annotation.
+    // Compare raw text so normalization cannot erase that boundary.
+    if (
+      !title ||
+      row.title.slice(0, title.length).toLowerCase() !== title.toLowerCase() ||
+      !/^\p{L}/u.test(row.title.slice(title.length))
+    )
+      return row;
+    return { ...row, title };
+  });
+}
+
+async function cleanRecordingNames(env: Env, url: string, rows: ReturnType<typeof evidencedRows>) {
+  if (!rows.length || !/^(?:www\.)?groovesmaxxing\.com$/.test(new URL(url).hostname)) return rows;
+  try {
+    const response = await env.BROWSER!.quickAction("scrape", {
+      url,
+      elements: [{ selector: 'script[type="application/ld+json"]' }],
+      gotoOptions: { waitUntil: "domcontentloaded", timeout: 30_000 },
+      rejectResourceTypes: ["image", "media", "font"],
+    });
+    if (!response.ok) return rows;
+    const body = await response.json<BrowserRunScrapeSuccessResponse>();
+    if (!body.success || !Array.isArray(body.result)) return rows;
+    const documents = body.result.flatMap((group) => group.results.map((item) => item.text));
+    return structuredRecordingNames(rows, documents, url);
+  } catch {
+    return rows;
+  }
+}
+
 async function readPage(env: Env, url: string): Promise<string> {
   if (!env.BROWSER) throw new Error("Cloud browser is not configured");
   const response = await env.BROWSER.quickAction("markdown", {
@@ -306,7 +379,7 @@ export async function resolveTracklist(
         );
         console.info("tracklist-rows", url, rows.length);
         if (rows.length > best.length) {
-          best = rows;
+          best = await cleanRecordingNames(env, url, rows);
           evidenceURL = url;
         }
         // Keep 1001 precedence. Among secondary sources, inspect the bounded set
