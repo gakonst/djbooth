@@ -117,6 +117,7 @@ test.each([false, true])(
             expect([account, job, instance]).toEqual(["account-a", id, row.workflow_id]);
             if (input.operation === "ready") return { status: "ready" };
             stages.push(input.stage);
+            expect(input.command_key).toBe(`${row.workflow_id}:${input.stage}`);
             expect(input.refresh_resolution === true).toBe(
               input.stage === "resolve" && refreshResolution,
             );

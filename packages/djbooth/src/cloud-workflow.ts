@@ -19,8 +19,9 @@ export function cloudWorkflow(options: {
   run?: CommandRunner;
 }) {
   type Receipt = { status: string; process_id: string; result?: unknown; error?: string };
-  let active: { receipt: Receipt; done: Promise<void> } | undefined;
-  const receipts = new Map<string, Receipt>();
+  type Process = { receipt: Receipt; intent: string; key: string | undefined; done: Promise<void> };
+  let active: Process | undefined;
+  const receipts = new Map<string, Pick<Process, "receipt" | "intent" | "key">>();
   const stages: NonNullable<ImportProgress["stages"]> = {};
   const run = options.run ?? runCloudCommand;
   const emit = (value: ImportProgress) => {
@@ -45,21 +46,64 @@ export function cloudWorkflow(options: {
       }
       return active?.receipt.process_id === id
         ? active.receipt
-        : (receipts.get(id) ?? { status: "unknown", process_id: id });
+        : (receipts.get(id)?.receipt ?? { status: "unknown", process_id: id });
     }
     if (
       input.operation !== "start" ||
       !["resolve", "import", "enrich", "publish"].includes(String(input.stage))
     )
       throw new Error("Invalid workflow stage");
-    if (receipts.has(id)) return receipts.get(id)!;
-    if (active) return active.receipt;
     const stage = String(input.stage);
+    const key = input.command_key;
+    if (key !== undefined && (typeof key !== "string" || !/^[a-z0-9_:-]{1,256}$/i.test(key)))
+      throw new Error("Invalid command key");
+    const canonical = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(canonical)
+        : value !== null && typeof value === "object"
+          ? Object.fromEntries(
+              Object.entries(value)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([k, v]) => [k, canonical(v)]),
+            )
+          : value;
+    const intent = JSON.stringify([
+      key ?? null,
+      stage,
+      stage === "resolve" && input.refresh_resolution === true,
+      stage === "publish" ? canonical(input.imported) : null,
+    ]);
+    const previous = receipts.get(id);
+    if (previous) {
+      if ((key !== undefined || previous.key !== undefined) && previous.intent !== intent)
+        throw new Error("Process ID belongs to a different command");
+      return previous.receipt;
+    }
+    if (active) {
+      if ((key !== undefined || active.key !== undefined) && active.intent !== intent)
+        throw new Error(
+          active.receipt.process_id === id
+            ? "Process ID belongs to a different command"
+            : "Another workflow command is running",
+        );
+      return active.receipt;
+    }
+    // Attempt IDs permit retrying failures; successful logical commands survive lost acknowledgments.
+    // Scan the bounded receipt history without adding an alias for each replay.
+    if (key !== undefined)
+      for (const previous of receipts.values())
+        if (previous.intent === intent && previous.receipt.status === "completed")
+          return previous.receipt;
     let finish!: () => void;
     const done = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const process = { receipt: { status: "running", process_id: id } as Receipt, done };
+    const process = {
+      receipt: { status: "running", process_id: id } as Receipt,
+      intent,
+      key,
+      done,
+    };
     active = process;
     const progress = importProgressTracker();
     const onLine = (line: string) => {
@@ -179,7 +223,7 @@ export function cloudWorkflow(options: {
           error: error instanceof Error ? error.message : "Processing failed",
         };
       } finally {
-        receipts.set(id, process.receipt);
+        receipts.set(id, { receipt: process.receipt, intent, key: process.key });
         if (receipts.size > 100) receipts.delete(receipts.keys().next().value!);
         active = undefined;
         finish();

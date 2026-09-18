@@ -166,3 +166,129 @@ test("explicit cloud refresh passes through to resolution without changing resum
   });
   expect(run.mock.calls[1]?.[0]).toContain("--refresh");
 });
+
+test("completed logical command survives lost acknowledgments across all retries", async () => {
+  const { create, run, save } = setup();
+  const exec = create();
+  const command = { stage: "resolve", command_key: "workflow-a:resolve" };
+  const first = await finish(exec, { ...command, process_id: "resolve-1" });
+  for (let attempt = 2; attempt <= 91; attempt++)
+    expect(await finish(exec, { ...command, process_id: `resolve-${attempt}` })).toEqual(first);
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(save).toHaveBeenCalledTimes(1);
+});
+
+test.each(["command", "snapshot"])("failed %s retries under a new attempt ID", async (failure) => {
+  const { create, run, save } = setup();
+  (failure === "command" ? run : save).mockRejectedValueOnce(new Error("temporary failure"));
+  const exec = create();
+  const command = { stage: "resolve", command_key: "workflow-a:resolve" };
+  expect(await finish(exec, { ...command, process_id: "resolve-1" })).toMatchObject({
+    status: "failed",
+  });
+  expect(await finish(exec, { ...command, process_id: "resolve-2" })).toMatchObject({
+    status: "completed",
+  });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(await exec({ operation: "poll", process_id: "resolve-1" })).toMatchObject({
+    status: "failed",
+  });
+});
+
+test("changed refresh intent and workflow identity never reuse completed resolution", async () => {
+  const { create, run } = setup();
+  const exec = create();
+  const command = { stage: "resolve", command_key: "workflow-a:resolve" };
+  await finish(exec, { ...command, process_id: "resolve-1" });
+  await expect(
+    finish(exec, { ...command, process_id: "resolve-1", refresh_resolution: true }),
+  ).rejects.toThrow("different command");
+  expect(
+    await finish(exec, { ...command, process_id: "resolve-2", refresh_resolution: true }),
+  ).toMatchObject({ result: { refreshed: true } });
+  expect(run.mock.calls[1]?.[0]).toContain("--refresh");
+  await finish(exec, { ...command, command_key: "workflow-b:resolve", process_id: "resolve-3" });
+  expect(run).toHaveBeenCalledTimes(3);
+});
+
+test("active command attaches only matching intent", async () => {
+  const { create, run, save } = setup();
+  let release!: () => void;
+  save.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const exec = create();
+  const command = { operation: "start", stage: "resolve", command_key: "workflow-a:resolve" };
+  const first = await exec({ ...command, process_id: "resolve-1" });
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(await exec({ ...command, process_id: "resolve-2" })).toEqual(first);
+  await expect(
+    exec({ ...command, process_id: "resolve-1", refresh_resolution: true }),
+  ).rejects.toThrow("different command");
+  await expect(
+    exec({ ...command, process_id: "resolve-3", refresh_resolution: true }),
+  ).rejects.toThrow("Another workflow command");
+  release();
+  expect(await exec({ operation: "poll", process_id: first.process_id })).toMatchObject({
+    status: "completed",
+  });
+  expect(await exec({ ...command, process_id: "resolve-4" })).toMatchObject({
+    status: "completed",
+    process_id: first.process_id,
+  });
+  expect(run).toHaveBeenCalledTimes(1);
+});
+
+test("publish fingerprint ignores object order but distinguishes imported results", async () => {
+  const { create, run, save } = setup();
+  const exec = create();
+  const command = { stage: "publish", command_key: "workflow-a:publish", imported };
+  const first = await finish(exec, { ...command, process_id: "publish-1" });
+  expect(first.status).toBe("completed");
+  expect(
+    await finish(exec, {
+      ...command,
+      process_id: "publish-2",
+      imported: Object.fromEntries(Object.entries(imported).reverse()),
+    }),
+  ).toEqual(first);
+  await expect(
+    finish(exec, {
+      ...command,
+      process_id: "publish-1",
+      imported: { ...imported, playlistId: "18" },
+    }),
+  ).rejects.toThrow("different command");
+  await finish(exec, {
+    ...command,
+    process_id: "publish-3",
+    imported: { ...imported, playlistId: "18" },
+  });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(save).toHaveBeenCalledTimes(2);
+});
+
+test("legacy commands retain process-ID replay and active attachment behavior", async () => {
+  const { create, run, save } = setup();
+  const exec = create();
+  let release!: () => void;
+  save.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const first = await exec({ operation: "start", stage: "resolve", process_id: "legacy-1" });
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(await exec({ operation: "start", stage: "enrich", process_id: "legacy-2" })).toEqual(
+    first,
+  );
+  release();
+  const completed = await exec({ operation: "poll", process_id: "legacy-1" });
+  expect(await finish(exec, { stage: "enrich", process_id: "legacy-1" })).toEqual(completed);
+  await finish(exec, { stage: "resolve", process_id: "legacy-3" });
+  expect(run).toHaveBeenCalledTimes(2);
+});

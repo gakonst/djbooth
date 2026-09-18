@@ -102,6 +102,7 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
             let receipt = (await container.workflowExecute(accountId, id, workflowId, {
               operation: "start",
               stage: name,
+              command_key: `${workflowId}:${name}`,
               ...(name === "resolve" && event.payload.refreshResolution
                 ? { refresh_resolution: true }
                 : {}),
