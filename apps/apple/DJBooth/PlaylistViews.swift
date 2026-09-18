@@ -220,10 +220,8 @@ struct PlaylistBrowserView: View {
                             else { row(collection, trackMap: trackMap) }
                         case .empty:
                             #if os(iOS)
-                            if path.isEmpty && !model.crews.isEmpty {
-                                Button("New playlist", systemImage: "plus") { model.showNewCollection = true }
-                                    .accessibilityIdentifier("playlist.empty.create")
-                            } else { emptyPlaylists }
+                            if path.isEmpty && !model.crews.isEmpty { EmptyView() }
+                            else { emptyPlaylists }
                             #else
                             emptyPlaylists
                             #endif
