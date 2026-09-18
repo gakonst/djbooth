@@ -170,3 +170,143 @@ test("searches 1001 before fallback and keeps its match even when another site l
   ).toBe(true);
   expect(((await response.json()) as { url: string }).url).toBe(page);
 });
+
+// Exercise orchestration through the public resolver, not just query helpers.
+function discoveryHarness(
+  searchResult: (query: string) => string,
+  blocked = new Set<string>(),
+  unmatched = new Set<string>(),
+) {
+  const queries: string[] = [];
+  const pages: string[] = [];
+  const env = {
+    BROWSER: {
+      quickAction: async (_: string, options: { url: string }) => {
+        const query = new URL(options.url).searchParams.get("q");
+        if (query) {
+          queries.push(query);
+          return Response.json({ success: true, result: searchResult(query) });
+        }
+        pages.push(options.url);
+        if (blocked.has(options.url)) return new Response("Challenge", { status: 403 });
+        return Response.json({
+          success: true,
+          result: "DJ Exact Festival Set\nArtist - Recording",
+        });
+      },
+    },
+    AI: {
+      run: async (_: string, input: { messages: Array<{ content: string }> }) => ({
+        response: {
+          matched: !unmatched.has(JSON.parse(input.messages[1].content).pageURL),
+          matchEvidence: "DJ Exact Festival Set",
+          tracks: [{ artist: "Artist", title: "Recording", evidence: "Artist - Recording" }],
+        },
+      }),
+    },
+  } as unknown as Env;
+  const resolve = (source: string, context: object = {}) =>
+    resolveTracklist(
+      new Request("https://internal/resolve", {
+        method: "POST",
+        body: JSON.stringify({ source, context }),
+      }),
+      env,
+    );
+  return { queries, pages, resolve };
+}
+
+const discoveryCandidate = "https://www.1001tracklists.com/tracklist/exact-performance.html";
+
+test.each([
+  "https://www.youtube.com/watch?v=abcdefghijk&list=RDabcdefghijk&start_radio=1",
+  "https://youtu.be/abcdefghijk?si=tracking&t=20",
+  "https://m.youtube.com/watch?v=abcdefghijk&feature=shared",
+  "https://www.youtube.com/live/abcdefghijk?si=tracking",
+])("searches canonical recording identity and normalized performance title: %s", async (source) => {
+  const harness = discoveryHarness((query) =>
+    query.startsWith('"https://www.youtube.com/watch?v=abcdefghijk"') ? discoveryCandidate : "",
+  );
+  const response = await harness.resolve(source, { title: "DJ Éxact @ Festival | FULL SET [4K]" });
+  expect(response.status).toBe(200);
+  expect(harness.queries).toEqual([
+    '"https://www.youtube.com/watch?v=abcdefghijk" site:1001tracklists.com/tracklist/',
+    "DJ Exact Festival site:1001tracklists.com/tracklist/",
+  ]);
+  expect(harness.pages).toEqual([discoveryCandidate]);
+  expect(await response.json()).toMatchObject({ source, url: discoveryCandidate });
+});
+
+test("video ID fallback finds a page missed by canonical URL and title queries", async () => {
+  const harness = discoveryHarness((query) =>
+    query === '"abcdefghijk" site:1001tracklists.com' ? discoveryCandidate : "",
+  );
+  const response = await harness.resolve("https://www.youtube.com/watch?v=abcdefghijk&list=radio", {
+    title: "DJ Exact Festival",
+  });
+  expect(response.status).toBe(200);
+  expect(harness.queries).toHaveLength(4);
+  expect(harness.pages).toEqual([discoveryCandidate]);
+  expect(await response.json()).toMatchObject({ url: discoveryCandidate });
+});
+
+test("general fallback still gives a verified 1001 candidate precedence", async () => {
+  const harness = discoveryHarness((query) =>
+    query.endsWith(" tracklist")
+      ? `https://set79.com/tracklist/secondary\n${discoveryCandidate}`
+      : "",
+  );
+  const response = await harness.resolve("https://www.youtube.com/watch?v=abcdefghijk", {
+    title: "DJ Exact Festival",
+  });
+  expect(response.status).toBe(200);
+  expect(harness.pages).toEqual([discoveryCandidate]);
+});
+
+test("supplied evidenceURL is read and verified before search", async () => {
+  const harness = discoveryHarness(() => "");
+  const response = await harness.resolve("https://www.youtube.com/watch?v=abcdefghijk", {
+    evidenceURL: discoveryCandidate,
+  });
+  expect(response.status).toBe(200);
+  expect(harness.queries).toEqual([]);
+  expect(harness.pages).toEqual([discoveryCandidate]);
+});
+
+test("failed supplied evidence is not accepted or retried, and page/search budgets span rounds", async () => {
+  const candidates = Array.from(
+    { length: 10 },
+    (_, i) => `https://www.1001tracklists.com/tracklist/candidate-${i}.html`,
+  );
+  const secondary = Array.from(
+    { length: 10 },
+    (_, i) => `https://set79.com/tracklist/candidate-${i}`,
+  );
+  const source = "https://www.youtube.com/watch?v=abcdefghijk";
+  const harness = discoveryHarness(
+    () => [...candidates, ...secondary].join("\n"),
+    new Set([...candidates, ...secondary, source]),
+  );
+  const response = await harness.resolve(source, {
+    title: "DJ Exact Festival",
+    evidenceURL: candidates[0],
+  });
+  expect(response.status).toBe(422);
+  expect(harness.queries).toHaveLength(4);
+  expect(harness.pages.filter((url) => url.includes("1001tracklists"))).toHaveLength(6);
+  expect(harness.pages.filter((url) => url.includes("set79"))).toHaveLength(6);
+  expect(new Set(harness.pages).size).toBe(harness.pages.length);
+});
+
+test("a readable supplied candidate still needs an exact performance match", async () => {
+  const unrelated = "https://www.1001tracklists.com/tracklist/unrelated.html";
+  const harness = discoveryHarness(() => discoveryCandidate, new Set(), new Set([unrelated]));
+  const response = await harness.resolve("https://www.youtube.com/watch?v=abcdefghijk", {
+    title: "DJ Exact Festival",
+    evidenceURL: unrelated,
+  });
+  expect(response.status).toBe(200);
+  expect(harness.pages).toEqual([unrelated, discoveryCandidate]);
+  expect(harness.queries).toHaveLength(2);
+  expect(await response.json()).toMatchObject({ url: discoveryCandidate });
+});

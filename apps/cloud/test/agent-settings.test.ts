@@ -14,7 +14,10 @@ const owner = {
   token: "nc1.grant-a.credential",
   origin: "https://library.test",
 };
-function setup(settings = { ...AGENT_SETTINGS, model: "gpt-6-astra", fast_mode: false }) {
+function setup(
+  settings: Record<string, unknown> = { ...AGENT_SETTINGS, model: "gpt-6-astra", fast_mode: false },
+  accepted_turns = 0,
+) {
   const fetch = vi.fn(async (request: Request) => {
     expect(request.headers.get("authorization")).toBe("Bearer credential");
     expect(request.headers.get("origin")).toBe(owner.origin);
@@ -22,11 +25,15 @@ function setup(settings = { ...AGENT_SETTINGS, model: "gpt-6-astra", fast_mode: 
       /^\/v1\/grants\/grant-a\/agents\/agent-a(?:\/settings)?$/,
     );
     if (request.method === "PATCH") {
-      expect(await request.json()).toEqual(AGENT_SETTINGS);
-      return Response.json({ settings: AGENT_SETTINGS });
+      const patch = (await request.clone().json()) as Record<string, unknown>;
+      if (accepted_turns > 0) {
+        expect(patch).not.toHaveProperty("model");
+        expect(patch).not.toHaveProperty("reasoning_mode");
+      }
+      return Response.json({ settings: { ...settings, ...patch } });
     }
     expect(request.method).toBe("POST"); // Connect's grant-bound read tunnel.
-    return Response.json({ settings });
+    return Response.json({ settings, accepted_turns });
   });
   return { fetch, env: { CONNECT_API_SERVICE: { fetch } } as unknown as Env };
 }
@@ -50,7 +57,22 @@ test("configuration errors and unconfirmed settings stop admission", async () =>
   fetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
   await expect(configureAgent(env, owner)).rejects.toMatchObject({ status: 403 });
   expect(fetch).toHaveBeenCalledTimes(1);
-  fetch.mockResolvedValueOnce(Response.json({ settings: {} }));
+  fetch.mockResolvedValueOnce(Response.json({ settings: {}, accepted_turns: 0 }));
   fetch.mockResolvedValueOnce(Response.json({ settings: { ...AGENT_SETTINGS, fast_mode: false } }));
   await expect(configureAgent(env, owner)).rejects.toMatchObject({ status: 502 });
+});
+
+test("used conversations repair mutable settings without resending locked fields", async () => {
+  const { env, fetch } = setup({ ...AGENT_SETTINGS, fast_mode: false }, 3);
+  await configureAgent(env, owner);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  const request = fetch.mock.calls[1]?.[0];
+  expect(await request?.clone().json()).toEqual({ fast_mode: true });
+});
+
+test("an established conversation keeps its immutable model while cloud tools reconnect", async () => {
+  const { env, fetch } = setup({ ...AGENT_SETTINGS, model: "gpt-6-astra", fast_mode: false }, 3);
+  await configureAgent(env, owner);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(await fetch.mock.calls[1]?.[0].clone().json()).toEqual({ fast_mode: true });
 });

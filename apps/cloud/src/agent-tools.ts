@@ -319,7 +319,46 @@ export class AgentTools extends DurableObject<Env> {
           // It must not stop this download or the owner's other downloads.
         }
       }
-      if (jobs.results.length || this.phone || this.queries.size) await this.initialize(owner);
+      // Workflow imports own their continuation; they still need this tool host.
+      // Only consider closing after checking all work scoped to this attachment.
+      let active = Boolean(jobs.results.length || this.phone || this.queries.size);
+      if (!active) {
+        active = Boolean(
+          await this.env.LIBRARY_DB.prepare(
+            "SELECT id FROM import_requests WHERE account_id=? AND agent_grant_id=? AND agent_id=? AND status IN ('queued','running') LIMIT 1",
+          )
+            .bind(owner.account.id, owner.account.grantId, owner.account.agentId)
+            .first<{ id: string }>(),
+        );
+      }
+      if (!active) {
+        const request = new Request(
+          `${CONNECT_API}/v1/grants/${owner.account.grantId}/agents/${owner.account.agentId}`,
+          {
+            method: "POST", // Connect's grant-bound agent read tunnel.
+            headers: {
+              authorization: `Bearer ${owner.token.split(".")[2]}`,
+              origin: owner.origin,
+              "x-nanocodex-app-id": CONNECT_APP_ID,
+            },
+            redirect: "manual",
+            signal: AbortSignal.timeout(20_000),
+          },
+        );
+        const response = await (this.env.CONNECT_API_SERVICE
+          ? this.env.CONNECT_API_SERVICE.fetch(request)
+          : fetch(request));
+        // Unknown status is not idle. The alarm catch retains the host and retries.
+        if (!response.ok) throw new Error("Could not read managed agent activity");
+        const value = await response.json<{ active_turns?: unknown }>();
+        if (
+          !Array.isArray(value?.active_turns) ||
+          !value.active_turns.every((id) => typeof id === "string")
+        )
+          throw new Error("Invalid managed agent activity");
+        active = value.active_turns.length > 0;
+      }
+      if (active) await this.initialize(owner);
       else {
         await this.runtime?.close();
         this.runtime = undefined;

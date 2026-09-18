@@ -19,6 +19,9 @@ const domains = [
   "mixid.fm",
   "set79.com",
   "nine71charts.com",
+  "dancefloor.fm",
+  "groovesmaxxing.com",
+  "whatstheid.com",
   "soundcloud.com",
   "youtube.com",
   "youtu.be",
@@ -29,6 +32,36 @@ const domains = [
 ];
 const normalize = (s: string) =>
   s.normalize("NFKC").replace(/\\/g, "").replace(/\s+/g, " ").toLowerCase().trim();
+
+// Search by recording identity, not playlist/radio/tracking parameters. Keep the
+// original source in the extraction request and result for provenance.
+function discoverySource(source: string) {
+  const url = new URL(source);
+  const youtube = /^(?:(?:www|m|music)\.)?youtube\.com$/.test(url.hostname);
+  const videoID = /^(?:www\.)?youtu\.be$/.test(url.hostname)
+    ? url.pathname.split("/")[1]
+    : youtube
+      ? (url.searchParams.get("v") ?? /^\/(?:embed|shorts|live)\/([^/]+)/.exec(url.pathname)?.[1])
+      : undefined;
+  if (videoID && /^[\w-]{11}$/.test(videoID))
+    return { canonical: `https://www.youtube.com/watch?v=${videoID}`, videoID };
+  url.hash = "";
+  // Snapshot keys before deletion so adjacent tracking parameters are not skipped.
+  const searchKeys = [...url.searchParams.keys()];
+  for (const key of searchKeys)
+    if (/^utm_|^(?:si|feature|fbclid)$/.test(key)) url.searchParams.delete(key);
+  return { canonical: url.href, videoID: undefined };
+}
+
+function discoveryTitle(title: string) {
+  return title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(?:official\s+(?:video|audio)|full\s+(?:dj\s+)?set|4k|1080p|2160p)\b/gi, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function researchLinks(markdown: string): string[] {
   const result = new Set<string>();
@@ -204,29 +237,53 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
   const is1001 = (url: string) =>
     /^(www\.)?1001tracklists\.com$/.test(new URL(url).hostname) &&
     new URL(url).pathname.startsWith("/tracklist/");
-  const urls = new Set(researchLinks(context.description ?? "").filter(is1001));
+  const source = discoverySource(body.source);
+  const searchTitle = discoveryTitle(context.title?.slice(0, 300) ?? "") || source.canonical;
+  const urls = new Set(
+    [
+      ...researchLinks(context.evidenceURL ?? ""),
+      ...researchLinks(context.description ?? ""),
+    ].filter(is1001),
+  );
   if (is1001(body.source)) urls.add(body.source);
   const failures: string[] = [];
+  const searched = new Set<string>();
   async function search(queries: string[]) {
     const found = await Promise.all(
-      queries.map(async (query) => {
-        try {
-          console.info("tracklist-search", query);
-          return researchLinks(
-            await readPage(env, `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`),
-          );
-        } catch (error) {
-          failures.push(`Search failed: ${String(error).slice(0, 200)}`);
-          return [];
-        }
-      }),
+      [...new Set(queries)]
+        .filter((query) => !searched.has(query))
+        .map(async (query) => {
+          searched.add(query);
+          try {
+            console.info("tracklist-search", query);
+            return researchLinks(
+              await readPage(
+                env,
+                `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+              ),
+            );
+          } catch (error) {
+            failures.push(`Search failed: ${String(error).slice(0, 200)}`);
+            return [];
+          }
+        }),
     );
     for (const links of found) for (const url of links) urls.add(url);
   }
   let best: ReturnType<typeof evidencedRows> = [];
   let evidenceURL = body.source;
-  async function inspect(candidates: string[]) {
-    for (const url of candidates.slice(0, 6)) {
+  const inspected = new Set<string>();
+  let primaryPages = 0;
+  let secondaryPages = 0;
+  async function inspect(candidates: string[], firstMatch = true) {
+    for (const url of candidates) {
+      if (inspected.has(url)) continue;
+      // The budgets span all search rounds, including supplied links. Failed or
+      // challenged pages consume a slot too; never retry them in another round.
+      if (is1001(url) ? primaryPages >= 6 : secondaryPages >= 6) continue;
+      inspected.add(url);
+      if (is1001(url)) primaryPages++;
+      else secondaryPages++;
       try {
         console.info("tracklist-page", url);
         const markdown = (await readPage(env, url)).replace(/\[([^\]]+)\]\([^\n)]+\)/g, "$1");
@@ -240,33 +297,44 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
           best = rows;
           evidenceURL = url;
         }
-        if (rows.length) return; // First verified exact performance; never replace 1001 with a longer secondary page.
+        // Keep 1001 precedence. Among secondary sources, inspect the bounded set
+        // before choosing a coherent timeline; a sparse first match is not coverage.
+        if (rows.length && firstMatch) return;
       } catch (error) {
         failures.push(`${url}: ${String(error).slice(0, 200)}`);
         console.warn("tracklist-page-failed", url, String(error).slice(0, 300));
       }
     }
   }
-  // Direct 1001 links need no search roundtrip. Otherwise search by media URL
-  // and performance title concurrently, before accepting any publisher rows.
+  // Direct supplied evidence is a candidate, not proof: it still passes the
+  // exact-performance and literal-row checks before it can skip discovery.
   await inspect([...urls]);
   if (!best.length) {
-    const seen = new Set(urls);
     await search([
-      `"${body.source}" site:1001tracklists.com/tracklist/`,
-      `${title} site:1001tracklists.com/tracklist/`,
+      `"${source.canonical}" site:1001tracklists.com/tracklist/`,
+      `${searchTitle} site:1001tracklists.com/tracklist/`,
     ]);
-    await inspect([...urls].filter((url) => is1001(url) && !seen.has(url)));
+    await inspect([...urls].filter(is1001));
+  }
+  if (!best.length) {
+    // A page can mention only the video ID or be missed by a path-restricted
+    // query. General title results may also surface a matching 1001 page.
+    await search([
+      ...(source.videoID ? [`"${source.videoID}" site:1001tracklists.com`] : []),
+      `${searchTitle} tracklist`,
+    ]);
+    await inspect([...urls].filter(is1001));
   }
   const verified1001 = best.length > 0;
   if (!verified1001) {
-    await search([`${title} tracklist`]);
+    for (const url of researchLinks(context.evidenceURL ?? "")) urls.add(url);
     urls.add(body.source);
     await inspect(
       [...urls].filter(
         (url) =>
           !is1001(url) && !/\/(artist|dj|track|explore|source)\//.test(new URL(url).pathname),
       ),
+      false,
     );
   }
   if (!best.length)

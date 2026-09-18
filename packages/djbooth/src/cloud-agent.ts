@@ -53,7 +53,7 @@ export function cloudAgent(options: {
         endpoint: options.endpoint ?? "http://djbooth.internal",
         namespace: `cloud:${options.id}`,
         guidance:
-          "If activeProcess is non-null, poll its process_id until terminal before starting anything. Reuse imported and recentReceipts to continue unfinished work across agent turns. Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
+          "This workspace belongs to the private DJ Booth container. Its /app and /data paths are not paths in the managed agent brain or an attached Hand. Run these commands through djbooth_exec, never exec_command. If activeProcess is non-null, poll its process_id until terminal before starting anything. Reuse imported and recentReceipts to continue unfinished work across agent turns. Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
           options.id +
           ". Poll the process until terminal; inspect errors and resume with the same CLI workflow. No phone connection is needed. Do not report success before publication is verified.",
       };
@@ -95,7 +95,14 @@ export function cloudAgent(options: {
       !Array.isArray(input.args) ||
       !input.args.length ||
       input.args.length > 100 ||
-      input.args.some((v) => typeof v !== "string" || v.length > 4096 || v.includes("\0"))
+      input.args.some(
+        (v, index, args) =>
+          typeof v !== "string" ||
+          v.includes("\0") ||
+          v.length > (args[index - 1] === "--agent-result-json" ? 48_000 : 4096),
+      ) ||
+      // Leave room for the operation/job envelope under the container's 64 KiB limit.
+      (Array.isArray(input.args) && JSON.stringify(input.args).length > 60_000)
     )
       throw new Error("Invalid CLI arguments");
     const args = input.args as string[];

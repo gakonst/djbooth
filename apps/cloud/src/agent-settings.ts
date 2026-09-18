@@ -10,7 +10,7 @@ export const AGENT_SETTINGS = {
   fast_mode: true,
 } as const;
 
-/** Configure the newly approved thread before accepting its first turn. */
+/** Apply app defaults while preserving immutable settings on resumed threads. */
 export async function configureAgent(
   env: Env,
   owner: { account: Account; token: string; origin: string },
@@ -46,23 +46,33 @@ export async function configureAgent(
         response.status >= 400 && response.status < 500 ? response.status : 503,
         "Could not configure the fast DJ Booth agent. Try again.",
       );
-    return response.json<{ settings?: Record<string, unknown> }>();
+    return response.json<{ settings?: Record<string, unknown>; accepted_turns?: number }>();
   };
-  const matches = (settings?: Record<string, unknown>) =>
-    settings !== undefined &&
-    Object.entries(AGENT_SETTINGS).every(([key, value]) => settings[key] === value);
-  // Model patches are forbidden after the first turn, even for an unchanged
-  // model. Read first so reconnects preserve the already configured agent.
   const current = await call("", "POST");
-  if (!matches(current.settings)) {
-    const updated = await call("/settings", "PATCH", AGENT_SETTINGS);
-    if (!matches(updated.settings))
+  if (!current.settings) throw new AuthError(502, "Nanocodex returned no agent settings.");
+  const expected: Record<string, unknown> = { ...AGENT_SETTINGS };
+  // Nanocodex2 rejects the presence of immutable fields after the first turn,
+  // even when their values are unchanged. Preserve an established conversation's
+  // model instead of breaking its tool attachment or changing conversation scope.
+  for (const key of ["model", "reasoning_mode"] as const) {
+    if (current.accepted_turns !== 0) {
+      if (typeof current.settings[key] !== "string")
+        throw new AuthError(502, "Nanocodex returned incomplete agent settings.");
+      expected[key] = current.settings[key];
+    }
+  }
+  const patch = Object.fromEntries(
+    Object.entries(expected).filter(([key, value]) => current.settings![key] !== value),
+  );
+  if (Object.keys(patch).length) {
+    const updated = await call("/settings", "PATCH", patch);
+    if (!Object.entries(expected).every(([key, value]) => updated.settings?.[key] === value))
       throw new AuthError(502, "Nanocodex did not apply the requested agent settings.");
   }
   telemetry("agent_settings_verified", {
     accountID: owner.account.id,
     agentID: owner.account.agentId,
-    model: AGENT_SETTINGS.model,
+    model: expected.model,
     thinking: AGENT_SETTINGS.thinking,
     fastMode: AGENT_SETTINGS.fast_mode,
   });
