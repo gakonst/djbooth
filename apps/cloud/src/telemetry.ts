@@ -73,6 +73,7 @@ export function failureKind(error: unknown): string {
   if (status === 401 || status === 403) return "authorization";
   if (status === 429) return "rate_limit";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (/invalid manifest|\binvalid_source\b/.test(message)) return "validation";
   if (/timeout|timed out/.test(message)) return "timeout";
   if (/cancel|superseded|abort/.test(message)) return "cancelled";
   if (/phone.*(open|reconnect)|open dj booth/.test(message)) return "phone_unavailable";

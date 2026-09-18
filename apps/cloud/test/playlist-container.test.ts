@@ -33,6 +33,7 @@ vi.mock("@cloudflare/containers", () => ({
   },
 }));
 import * as library from "../src/index.js";
+import * as resolver from "../src/resolver.js";
 import { PlaylistContainer, validProgress } from "../src/playlist-container.js";
 
 const id = "11111111-1111-1111-1111-111111111111";
@@ -456,4 +457,35 @@ test("a refreshed import cannot inherit the earlier workflow's failure timeline"
   expect((await runner.importTelemetry("account-a", id, "new-run"))?.events).toEqual([
     expect.objectContaining({ workflowID: "new-run", stage: "resolve" }),
   ]);
+});
+
+test("resolver receives only evidence saved for the authenticated container owner", async () => {
+  const handler = PlaylistContainer.outboundByHost!["djbooth.internal"]!;
+  const resolve = vi
+    .spyOn(resolver, "resolveTracklist")
+    .mockResolvedValue(Response.json({ status: "resolved" }));
+  const evidenceURL = "https://groovesmaxxing.com/tracklists/owned-set";
+  const first = vi.fn(async () => ({
+    account_id: "account-a",
+    id,
+    resolution_evidence_url: evidenceURL,
+  }));
+  const bind = vi.fn(() => ({ first }));
+  const env = { LIBRARY_DB: { prepare: () => ({ bind }) } } as any;
+  const context = { containerId: "container-a", className: "PlaylistContainer", params: undefined };
+  const request = new Request("http://djbooth.internal/resolve", {
+    method: "POST",
+    body: JSON.stringify({ evidenceURL: "https://groovesmaxxing.com/other" }),
+    headers: { "x-account-id": "other" },
+  });
+  try {
+    await handler(request, env, context);
+    expect(bind).toHaveBeenCalledWith("container-a");
+    expect(resolve).toHaveBeenCalledWith(request, env, evidenceURL);
+    first.mockResolvedValueOnce(null as any);
+    expect((await handler(request, env, context)).status).toBe(403);
+    expect(resolve).toHaveBeenCalledTimes(1);
+  } finally {
+    resolve.mockRestore();
+  }
 });

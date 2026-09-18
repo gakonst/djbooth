@@ -39,7 +39,7 @@ import {
 } from "./provider-playlist-manifest.js";
 import { prepareHostedImportSource, type ImportSourceKind } from "./import-source.js";
 import { CachedSpotifyClient } from "./integrations/spotify-cache.js";
-import { RekordboxPipelineStore } from "./pipeline-state.js";
+import { prepareWorkflowDatabase, RekordboxPipelineStore } from "./pipeline-state.js";
 import { SoulseekLibraryAcquirer } from "./integrations/slsk-library.js";
 import { getYtdlpTsCommand, inspectMediaMetadata } from "./integrations/ytdlp.js";
 import {
@@ -903,7 +903,10 @@ const setWorkflowOptions = z.object({
     .positive()
     .default(300_000)
     .describe("Per-track analyzer timeout in milliseconds"),
-  dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
+  dbPath: z
+    .string()
+    .optional()
+    .describe("master.db path; creates a managed library when explicitly supplied and missing"),
   dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
   folderName: z.string().optional().describe("Destination Rekordbox folder"),
   playlistName: z.string().optional().describe("Destination Rekordbox playlist"),
@@ -914,6 +917,9 @@ const completedSetWorkflowOutput = z.object({
   source: z.string(),
   sourceKind: z.enum(["dj-set", "soundcloud-playlist", "spotify-playlist"]),
   entries: z.number().int().nonnegative(),
+  acquired: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  imported: z.number().int().nonnegative().optional(),
   downloaded: z.number().int().nonnegative(),
   resumed: z.number().int().nonnegative(),
   spotifyCanonicalSelections: z.number().int().nonnegative(),
@@ -1016,6 +1022,7 @@ async function runSetWorkflowCommand(
     const workflowSource = context.options.wholeSet
       ? `djbooth:whole-set:${context.args.source}`
       : context.args.source;
+    prepareWorkflowDatabase(context.options.dbPath);
     stateStore = new RekordboxPipelineStore({
       source: workflowSource,
       outputDirectory,
@@ -1259,6 +1266,10 @@ async function runSetWorkflowCommand(
       source: context.args.source,
       sourceKind,
       entries: result.manifest.entries.length,
+      acquired: result.manifest.entries.filter((entry) => entry.acquisition.status === "downloaded")
+        .length,
+      skipped: result.manifest.entries.filter((entry) => entry.acquisition.status === "skipped")
+        .length,
       downloaded: result.acquisition.downloaded.length,
       resumed: result.acquisition.resumed.length,
       spotifyCanonicalSelections: result.performance.automation.spotifyCanonicalSelections,
@@ -1275,6 +1286,7 @@ async function runSetWorkflowCommand(
         : {}),
       ...(result.rekordbox
         ? {
+            imported: result.rekordbox.verification.playlistMembershipCount,
             dbPath: result.rekordbox.dbPath,
             folderId: result.rekordbox.folderId,
             playlistId: result.rekordbox.playlistId,
@@ -1341,7 +1353,10 @@ export const resolveCli = Cli.create("resolve", {
       .string()
       .optional()
       .describe("Canonical recording root; defaults to DJBOOTH_LIBRARY_ROOT"),
-    dbPath: z.string().optional().describe("Normal Rekordbox master.db override"),
+    dbPath: z
+      .string()
+      .optional()
+      .describe("master.db path; creates a managed library when explicitly supplied and missing"),
     dbDirectory: z.string().optional().describe("Rekordbox database directory override"),
     refresh: z.boolean().default(false).describe("Resolve the source again and replace its state"),
     agentResultJson: z
@@ -1372,6 +1387,7 @@ export const resolveCli = Cli.create("resolve", {
       const outputDirectory =
         context.options.outputDirectory ??
         defaultTrackLibraryRoot({ ...process.env, ...context.env });
+      prepareWorkflowDatabase(context.options.dbPath);
       const stateStore = new RekordboxPipelineStore({
         source: context.args.source,
         outputDirectory,

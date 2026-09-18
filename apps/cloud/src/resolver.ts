@@ -19,6 +19,9 @@ const domains = [
   "mixid.fm",
   "set79.com",
   "nine71charts.com",
+  "dancefloor.fm",
+  "groovesmaxxing.com",
+  "whatstheid.com",
   "soundcloud.com",
   "youtube.com",
   "youtu.be",
@@ -30,11 +33,46 @@ const domains = [
 const normalize = (s: string) =>
   s.normalize("NFKC").replace(/\\/g, "").replace(/\s+/g, " ").toLowerCase().trim();
 
+// Search by recording identity, not playlist/radio/tracking parameters. Keep the
+// original source in the extraction request and result for provenance.
+function discoverySource(source: string) {
+  const url = new URL(source);
+  const youtube = /^(?:(?:www|m|music)\.)?youtube\.com$/.test(url.hostname);
+  const videoID = /^(?:www\.)?youtu\.be$/.test(url.hostname)
+    ? url.pathname.split("/")[1]
+    : youtube
+      ? (url.searchParams.get("v") ?? /^\/(?:embed|shorts|live)\/([^/]+)/.exec(url.pathname)?.[1])
+      : undefined;
+  if (videoID && /^[\w-]{11}$/.test(videoID))
+    return { canonical: `https://www.youtube.com/watch?v=${videoID}`, videoID };
+  url.hash = "";
+  // Snapshot keys before deletion so adjacent tracking parameters are not skipped.
+  const searchKeys = [...url.searchParams.keys()];
+  for (const key of searchKeys)
+    if (/^utm_|^(?:si|feature|fbclid)$/.test(key)) url.searchParams.delete(key);
+  return { canonical: url.href, videoID: undefined };
+}
+
+function discoveryTitle(title: string) {
+  return title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\b(?:official\s+(?:video|audio)|full\s+(?:dj\s+)?set|4k|1080p|2160p)\b/gi, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const isMedia = (url: string) =>
+  /^(?:(?:www|m|music|on)\.)?(?:youtube\.com|youtu\.be|soundcloud\.com|mixcloud\.com)$/.test(
+    new URL(url).hostname,
+  );
+
 export function researchLinks(markdown: string): string[] {
   const result = new Set<string>();
   for (const match of markdown.matchAll(/https?:\/\/[^\s<>"\]]+/g)) {
     try {
-      let url = new URL(match[0].replace(/[).,]+$/, ""));
+      let url = new URL(match[0].replace(/\\/g, "").replace(/[).,]+$/, ""));
       if (url.hostname.endsWith("google.com") && url.pathname === "/url")
         url = new URL(url.searchParams.get("q") ?? url.searchParams.get("url") ?? "");
       if (url.hostname === "duckduckgo.com" && url.pathname === "/l/")
@@ -44,7 +82,7 @@ export function researchLinks(markdown: string): string[] {
         continue;
       if (url.pathname === "/" || /\/(search|login|signup|feed)(\/|$)/.test(url.pathname)) continue;
       url.hash = "";
-      result.add(url.href);
+      result.add(isMedia(url.href) ? discoverySource(url.href).canonical : url.href);
     } catch {
       /* not a source link */
     }
@@ -127,6 +165,79 @@ export function evidencedRows(value: unknown, markdown: string, duration?: numbe
   return rows;
 }
 
+// Structured names supplement a verified full timeline; they never supply cues or
+// rows. Groovesmaxxing's rendered badges can run into the recording title.
+export function structuredRecordingNames(
+  rows: ReturnType<typeof evidencedRows>,
+  documents: string[],
+  url: string,
+): ReturnType<typeof evidencedRows> {
+  const playlists: Record<string, unknown>[] = [];
+  for (const document of documents) {
+    try {
+      const parsed = JSON.parse(document);
+      const nodes = Array.isArray(parsed) ? parsed : [parsed, ...(parsed?.["@graph"] ?? [])];
+      for (const node of nodes)
+        if (node?.["@type"] === "MusicPlaylist" && node.url === url) playlists.push(node);
+    } catch {
+      // Missing or malformed structured data leaves literal evidence unchanged.
+    }
+  }
+  if (playlists.length !== 1) return rows;
+  const playlist = playlists[0];
+  if (Number(playlist.numTracks) !== rows.length || !Array.isArray(playlist.track)) return rows;
+  const names = new Map<number, string>();
+  for (const track of playlist.track) {
+    const position = Number(track?.position);
+    if (
+      track?.["@type"] !== "MusicRecording" ||
+      typeof track.name !== "string" ||
+      !Number.isInteger(position) ||
+      position < 1 ||
+      position > rows.length ||
+      names.has(position)
+    )
+      return rows;
+    names.set(position, track.name);
+  }
+  return rows.map((row, index) => {
+    const name = names.get(index + 1);
+    if (row.isId || !row.artist || !name) return row;
+    const separator = name.indexOf(" - ");
+    if (separator < 1 || normalize(name.slice(0, separator)) !== normalize(row.artist)) return row;
+    const title = name.slice(separator + 3).trim();
+    // Require a directly concatenated alphabetic badge. A space or punctuation
+    // may introduce a real edit/remix, uncertainty, or unreleased annotation.
+    // Compare raw text so normalization cannot erase that boundary.
+    if (
+      !title ||
+      row.title.slice(0, title.length).toLowerCase() !== title.toLowerCase() ||
+      !/^\p{L}/u.test(row.title.slice(title.length))
+    )
+      return row;
+    return { ...row, title };
+  });
+}
+
+async function cleanRecordingNames(env: Env, url: string, rows: ReturnType<typeof evidencedRows>) {
+  if (!rows.length || !/^(?:www\.)?groovesmaxxing\.com$/.test(new URL(url).hostname)) return rows;
+  try {
+    const response = await env.BROWSER!.quickAction("scrape", {
+      url,
+      elements: [{ selector: 'script[type="application/ld+json"]' }],
+      gotoOptions: { waitUntil: "domcontentloaded", timeout: 30_000 },
+      rejectResourceTypes: ["image", "media", "font"],
+    });
+    if (!response.ok) return rows;
+    const body = await response.json<BrowserRunScrapeSuccessResponse>();
+    if (!body.success || !Array.isArray(body.result)) return rows;
+    const documents = body.result.flatMap((group) => group.results.map((item) => item.text));
+    return structuredRecordingNames(rows, documents, url);
+  } catch {
+    return rows;
+  }
+}
+
 async function readPage(env: Env, url: string): Promise<string> {
   if (!env.BROWSER) throw new Error("Cloud browser is not configured");
   const response = await env.BROWSER.quickAction("markdown", {
@@ -143,7 +254,11 @@ async function readPage(env: Env, url: string): Promise<string> {
 }
 
 /** Called only through the container's private outbound binding. No browser credentials leave Workers. */
-export async function resolveTracklist(request: Request, env: Env): Promise<Response> {
+export async function resolveTracklist(
+  request: Request,
+  env: Env,
+  trustedEvidenceURL?: string,
+): Promise<Response> {
   if (request.method !== "POST") return new Response(null, { status: 405 });
   if (!env.AI || !env.BROWSER)
     return Response.json({ error: "Cloud tracklist research is not configured" }, { status: 503 });
@@ -152,7 +267,10 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
   const body = JSON.parse(raw) as { action?: string; source: string; context?: Context };
   if (typeof body.source !== "string" || !researchLinks(body.source).length)
     return Response.json({ error: "Unsupported research source" }, { status: 400 });
-  const context = body.context ?? {};
+  const context = {
+    ...body.context,
+    ...(trustedEvidenceURL ? { evidenceURL: trustedEvidenceURL } : {}),
+  };
   if (body.action === "source-recovery-required") {
     const evidence = context.evidenceURL;
     if (evidence && researchLinks(evidence).includes(evidence)) {
@@ -204,29 +322,53 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
   const is1001 = (url: string) =>
     /^(www\.)?1001tracklists\.com$/.test(new URL(url).hostname) &&
     new URL(url).pathname.startsWith("/tracklist/");
-  const urls = new Set(researchLinks(context.description ?? "").filter(is1001));
+  const source = discoverySource(body.source);
+  const searchTitle = discoveryTitle(context.title?.slice(0, 300) ?? "") || source.canonical;
+  const urls = new Set(
+    [
+      ...researchLinks(context.evidenceURL ?? ""),
+      ...researchLinks(context.description ?? ""),
+    ].filter(is1001),
+  );
   if (is1001(body.source)) urls.add(body.source);
   const failures: string[] = [];
+  const searched = new Set<string>();
   async function search(queries: string[]) {
     const found = await Promise.all(
-      queries.map(async (query) => {
-        try {
-          console.info("tracklist-search", query);
-          return researchLinks(
-            await readPage(env, `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`),
-          );
-        } catch (error) {
-          failures.push(`Search failed: ${String(error).slice(0, 200)}`);
-          return [];
-        }
-      }),
+      [...new Set(queries)]
+        .filter((query) => !searched.has(query))
+        .map(async (query) => {
+          searched.add(query);
+          try {
+            console.info("tracklist-search", query);
+            return researchLinks(
+              await readPage(
+                env,
+                `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+              ),
+            );
+          } catch (error) {
+            failures.push(`Search failed: ${String(error).slice(0, 200)}`);
+            return [];
+          }
+        }),
     );
     for (const links of found) for (const url of links) urls.add(url);
   }
   let best: ReturnType<typeof evidencedRows> = [];
   let evidenceURL = body.source;
-  async function inspect(candidates: string[]) {
-    for (const url of candidates.slice(0, 6)) {
+  const inspected = new Set<string>();
+  let primaryPages = 0;
+  let secondaryPages = 0;
+  async function inspect(candidates: string[], firstMatch = true) {
+    for (const url of candidates) {
+      if (inspected.has(url)) continue;
+      // The budgets span all search rounds, including supplied links. Failed or
+      // challenged pages consume a slot too; never retry them in another round.
+      if (is1001(url) ? primaryPages >= 6 : secondaryPages >= 6) continue;
+      inspected.add(url);
+      if (is1001(url)) primaryPages++;
+      else secondaryPages++;
       try {
         console.info("tracklist-page", url);
         const markdown = (await readPage(env, url)).replace(/\[([^\]]+)\]\([^\n)]+\)/g, "$1");
@@ -237,36 +379,75 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
         );
         console.info("tracklist-rows", url, rows.length);
         if (rows.length > best.length) {
-          best = rows;
+          best = await cleanRecordingNames(env, url, rows);
           evidenceURL = url;
         }
-        if (rows.length) return; // First verified exact performance; never replace 1001 with a longer secondary page.
+        // Keep 1001 precedence. Among secondary sources, inspect the bounded set
+        // before choosing a coherent timeline; a sparse first match is not coverage.
+        if (rows.length && firstMatch) return;
       } catch (error) {
         failures.push(`${url}: ${String(error).slice(0, 200)}`);
         console.warn("tracklist-page-failed", url, String(error).slice(0, 300));
       }
     }
   }
-  // Direct 1001 links need no search roundtrip. Otherwise search by media URL
-  // and performance title concurrently, before accepting any publisher rows.
+  // Direct supplied evidence is a candidate, not proof: it still passes the
+  // exact-performance and literal-row checks before it can skip discovery.
   await inspect([...urls]);
   if (!best.length) {
-    const seen = new Set(urls);
     await search([
-      `"${body.source}" site:1001tracklists.com/tracklist/`,
-      `${title} site:1001tracklists.com/tracklist/`,
+      `"${source.canonical}" site:1001tracklists.com/tracklist/`,
+      `${searchTitle} site:1001tracklists.com/tracklist/`,
     ]);
-    await inspect([...urls].filter((url) => is1001(url) && !seen.has(url)));
+    await inspect([...urls].filter(is1001));
+  }
+  if (!best.length) {
+    // A page can mention only the video ID or be missed by a path-restricted
+    // query. General title results may also surface a matching 1001 page.
+    await search([
+      ...(source.videoID ? [`"${source.videoID}" site:1001tracklists.com`] : []),
+      `${searchTitle} tracklist`,
+    ]);
+    await inspect([...urls].filter(is1001));
   }
   const verified1001 = best.length > 0;
   if (!verified1001) {
-    await search([`${title} tracklist`]);
-    urls.add(body.source);
+    // Broad search often returns media aliases before actual tracklists. Discover
+    // independent references before spending the shared six-page fallback budget.
+    await search(
+      ["groovesmaxxing.com/tracklists/", "dancefloor.fm"].flatMap((domain) => [
+        `${searchTitle} site:${domain}`,
+        `"${source.videoID ?? source.canonical}" site:${domain}`,
+      ]),
+    );
+    for (const url of researchLinks(`${context.evidenceURL ?? ""}\n${context.description ?? ""}`))
+      urls.add(url);
+    const suppliedEvidence = new Set(researchLinks(context.evidenceURL ?? ""));
+    // Public Dancefloor set routes use the recording's YouTube ID. This is a
+    // discovery candidate only: the same exact-performance/row checks apply.
+    if (source.videoID) urls.add(`https://dancefloor.fm/es/set/${source.videoID}`);
+    urls.add(source.canonical);
     await inspect(
-      [...urls].filter(
-        (url) =>
-          !is1001(url) && !/\/(artist|dj|track|explore|source)\//.test(new URL(url).pathname),
-      ),
+      [...urls]
+        .filter(
+          (url) =>
+            !is1001(url) &&
+            !/\/(artist|dj|track|explore|source|events?|magazine)(?:\/|$)/.test(
+              new URL(url).pathname,
+            ),
+        )
+        .sort((a, b) => {
+          const priority = (url: string) => {
+            if (suppliedEvidence.has(url)) return 0;
+            if (!isMedia(url))
+              return source.videoID && new URL(url).pathname.split("/").includes(source.videoID)
+                ? 1
+                : 2;
+            return url === source.canonical ? 3 : 4;
+          };
+          return priority(a) - priority(b);
+        }),
+      false,
     );
   }
   if (!best.length)

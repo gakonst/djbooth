@@ -249,6 +249,22 @@ before(async () => {
       .replace(/\n/g, " "),
   );
   await database.exec(
+    await readFile(
+      new URL("../migrations/0012_import_resolution_refresh.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  await database.exec(
+    (
+      await readFile(
+        new URL("../migrations/0013_import_resolution_evidence.sql", import.meta.url),
+        "utf8",
+      )
+    )
+      .replace(/^--.*$/gm, "")
+      .replace(/\n/g, " "),
+  );
+  await database.exec(
     "CREATE TABLE test_launches (account_id TEXT, id TEXT, source TEXT, PRIMARY KEY(account_id,id))",
   );
   await database.exec(

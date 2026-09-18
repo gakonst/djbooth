@@ -3,13 +3,19 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Env } from "./index.js";
 
-export type DownloadParams = { accountId: string; id: string; source: string };
+export type DownloadParams = {
+  accountId: string;
+  id: string;
+  source: string;
+  refreshResolution?: boolean;
+};
 type Receipt = {
   status: string;
   process_id: string;
   result?: {
     playlistId?: string;
     entries?: number;
+    refreshed?: boolean;
     dbPath?: string;
     sourceSetFallbacks?: number;
     collectionID?: string;
@@ -96,6 +102,10 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
             let receipt = (await container.workflowExecute(accountId, id, workflowId, {
               operation: "start",
               stage: name,
+              command_key: `${workflowId}:${name}`,
+              ...(name === "resolve" && event.payload.refreshResolution
+                ? { refresh_resolution: true }
+                : {}),
               process_id: `${name}-${context.attempt}`,
               imported,
             })) as Receipt;
@@ -114,6 +124,12 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
                   : "Waiting for saved work",
               );
             }
+            if (
+              name === "resolve" &&
+              event.payload.refreshResolution &&
+              receipt.result?.refreshed !== true
+            )
+              throw new Error("Waiting for a runtime that confirms refreshed resolution");
             return receipt.result ?? {};
           }),
       );

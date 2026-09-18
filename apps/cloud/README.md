@@ -74,6 +74,32 @@ page and stores its credential in a private file under `~/.config/djbooth/cloud`
 shared sync secret. Logout forgets the local session; revoke the grant in Nanocodex
 to revoke every copy of that grant.
 
+## Nanocodex2 cloud runtime
+
+`nanocodex2` is a client of the same managed durable agents used by Connect.
+DJ Booth keeps its grant-bound Connect transport: turns and hosted tools reach
+`nanocodex-durable-agent` through the Connect API. Installing the terminal client
+inside the playlist container is not required.
+
+New imports use the `DOWNLOAD_WORKFLOW` binding for durable execution. The agent
+submits and observes the job; the playlist container runs native acquisition and
+analysis. Browser research currently runs through the Worker's `BROWSER` and `AI`
+bindings, independently of the managed agent's web tools. Improving an agent prompt
+alone therefore does not change automatic set discovery.
+
+`/brain`, an attached Hand workspace, and the private playlist container's `/data`
+are separate workspaces. Legacy agent jobs use `djbooth_exec` for container CLI
+commands. Its bounded `--agent-result-json` argument can carry a complete set
+tracklist without shell interpolation. Workflow jobs expose status through that
+same tool but reject manual CLI execution. Phone actions still require the phone;
+cloud execution and status do not.
+
+The tool-host alarm must retain its attachment while authorized imports or managed
+turns remain active, including when the phone is closed. Reconnection patches only
+changed settings and preserves an established conversation's immutable model and
+reasoning mode. Local regression checks cover these contracts; they do not establish
+live 1001Tracklists accessibility or end-to-end acquisition/playback success.
+
 ## Upgrading the single-library deployment
 
 For the initial account-isolation rollout, back up D1, deploy the account-aware Worker first (private requests fail closed until the schema is ready), then immediately apply all migrations. Do not roll back to an unscoped Worker after migration. Migration `0004_accounts.sql` preserves old

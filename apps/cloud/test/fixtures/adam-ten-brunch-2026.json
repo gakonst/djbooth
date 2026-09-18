@@ -1,0 +1,241 @@
+{
+  "source": "https://www.youtube.com/watch?v=ubifmmR-Mf8&list=RDubifmmR-Mf8&start_radio=1",
+  "canonicalSource": "https://www.youtube.com/watch?v=ubifmmR-Mf8",
+  "title": "Adam Ten Sunset @ Brunch Electronik Barcelona 2026",
+  "durationSeconds": 7022,
+  "observedAt": "2026-09-17",
+  "evidenceURL": "https://groovesmaxxing.com/tracklists/adam-ten-sunset-brunch-electronik-barcelona-2026",
+  "secondaryEvidenceURL": "https://dancefloor.fm/es/set/ubifmmR-Mf8",
+  "supplied1001Candidate": {
+    "url": "https://www.1001tracklists.com/tracklist/2t37u0ck/adam-ten-brunch-electronik-barcelona-spain-2026-08-23.html",
+    "status": "user-supplied matching candidate; live rows and reupload timestamp alignment unverified",
+    "checkedAt": "2026-09-18",
+    "readOutcome": "Direct web-tool read reported inaccessible; no 1001 rows added to this fixture"
+  },
+  "complete": false,
+  "basis": "Community reference for this exact reupload; not independently audio-verified ground truth. Unknown rows and disputed versions remain unresolved. Timestamp accuracy is approximate.",
+  "baseline": {
+    "resolvedEntries": 6,
+    "downloadedReported": 6,
+    "analyzedReported": 6,
+    "publicationStatus": "failed",
+    "publishedTrackRowsWithMediaHash": 4
+  },
+  "tracks": [
+    {
+      "order": 1,
+      "timestamp": "0:30",
+      "title": "That Funk",
+      "artist": "DvirNuns",
+      "uncertain": true
+    },
+    {
+      "order": 2,
+      "timestamp": "4:00",
+      "title": "ID",
+      "isId": true
+    },
+    {
+      "order": 3,
+      "timestamp": "7:00",
+      "title": "Welcome To The Jungle",
+      "artist": "Nael & Nati",
+      "unreleased": true
+    },
+    {
+      "order": 4,
+      "timestamp": "9:55",
+      "title": "Ride",
+      "artist": "Davidi"
+    },
+    {
+      "order": 5,
+      "timestamp": "14:55",
+      "title": "Free Bird (Mich & Soda Edit)",
+      "artist": "Jimi Jules",
+      "uncertain": true
+    },
+    {
+      "order": 6,
+      "timestamp": "16:18",
+      "title": "On My Mind",
+      "artist": "Adam Ten & Josh Gigante",
+      "unreleased": true
+    },
+    {
+      "order": 7,
+      "timestamp": "19:00",
+      "title": "Baby",
+      "artist": "DUZA"
+    },
+    {
+      "order": 8,
+      "timestamp": "20:30",
+      "title": "Rolling",
+      "artist": "Verso & Davidi"
+    },
+    {
+      "order": 9,
+      "timestamp": "24:30",
+      "title": "ID",
+      "isId": true
+    },
+    {
+      "order": 10,
+      "timestamp": "28:30",
+      "title": "Let Me House U",
+      "artist": "N.O.Y & Jackie",
+      "unreleased": true
+    },
+    {
+      "order": 11,
+      "timestamp": "32:30",
+      "title": "Give Life Back to Music (ID Edit)",
+      "artist": "Daft Punk",
+      "uncertain": true
+    },
+    {
+      "order": 12,
+      "timestamp": "36:50",
+      "title": "Body Rock",
+      "artist": "The Gabe Concept & Kundo"
+    },
+    {
+      "order": 13,
+      "timestamp": "40:30",
+      "title": "ID",
+      "isId": true
+    },
+    {
+      "order": 14,
+      "timestamp": "45:30",
+      "title": "Justice",
+      "artist": "Adam Ten & Kino Todo"
+    },
+    {
+      "order": 15,
+      "timestamp": "48:45",
+      "title": "Werk",
+      "artist": "Jude & Frank & NIINE"
+    },
+    {
+      "order": 16,
+      "timestamp": "53:40",
+      "title": "These Things",
+      "artist": "CRNZO"
+    },
+    {
+      "order": 17,
+      "timestamp": "55:00",
+      "title": "Salsoul Rainbow (Dimitri From Paris Re-Edit)",
+      "artist": "The Salsoul Orchestra"
+    },
+    {
+      "order": 18,
+      "timestamp": "59:50",
+      "title": "Big Booty",
+      "artist": "Iglesias"
+    },
+    {
+      "order": 19,
+      "timestamp": "1:01:00",
+      "title": "I Got It From My Mama (Jackie & N.O.Y Remix)",
+      "artist": "will.i.am",
+      "unreleased": true
+    },
+    {
+      "order": 20,
+      "timestamp": "1:04:10",
+      "title": "Beat Goes On",
+      "artist": "Adam Ten & Rafael"
+    },
+    {
+      "order": 21,
+      "timestamp": "1:09:30",
+      "title": "Love Me",
+      "artist": "Verso & Michael"
+    },
+    {
+      "order": 22,
+      "timestamp": "1:12:25",
+      "title": "I Like That (NO STATIC Remix)",
+      "artist": "Richard Vission & Static Revenger ft. Luciana",
+      "unreleased": true
+    },
+    {
+      "order": 23,
+      "timestamp": "1:16:30",
+      "title": "Shout (Fancy Inc & ZARO Edit)",
+      "artist": "Tears For Fears"
+    },
+    {
+      "order": 24,
+      "timestamp": "1:21:00",
+      "title": "Whisper To Me (Assaf Michael & Reef Kopel Edit)",
+      "artist": "Jimi Jules & Modern Tales"
+    },
+    {
+      "order": 25,
+      "timestamp": "1:24:30",
+      "title": "Put It Down",
+      "artist": "Adam Ten & Viot",
+      "uncertain": true
+    },
+    {
+      "order": 26,
+      "timestamp": "1:29:00",
+      "title": "ID",
+      "isId": true
+    },
+    {
+      "order": 27,
+      "timestamp": "1:34:00",
+      "title": "Landlords Nightmare",
+      "artist": "CamelPhat"
+    },
+    {
+      "order": 28,
+      "timestamp": "1:37:30",
+      "title": "Feel Good Inc. (TRIPL FLY LYF Edit)",
+      "artist": "Gorillaz ft. De La Soul"
+    },
+    {
+      "order": 29,
+      "timestamp": "1:41:00",
+      "title": "UH HUH",
+      "artist": "Luch"
+    },
+    {
+      "order": 30,
+      "timestamp": "1:44:30",
+      "title": "A.D.D. S.U.V. (DEDRO Edit)",
+      "artist": "Uffie ft. Pharrell Williams"
+    },
+    {
+      "order": 31,
+      "timestamp": "1:48:17",
+      "title": "Limousine",
+      "artist": "Adam Ten & Darco",
+      "unreleased": true
+    },
+    {
+      "order": 32,
+      "timestamp": "1:51:30",
+      "title": "ID",
+      "isId": true
+    },
+    {
+      "order": 33,
+      "timestamp": "1:54:30",
+      "title": "Rock It (ID Edit)",
+      "artist": "Lipps, Inc.",
+      "uncertain": true
+    },
+    {
+      "order": 34,
+      "timestamp": "1:56:00",
+      "title": "ID",
+      "isId": true
+    }
+  ]
+}

@@ -7,7 +7,15 @@ const options = {
   namespace: "cloud:12345678-1234-1234-1234-123456789abc",
   outputDirectory: "/data/audio",
 };
-const imported = { playlistId: "17", dbPath: "/data/master.db", entries: 3, sourceSetFallbacks: 1 };
+const imported = {
+  playlistId: "17",
+  dbPath: "/data/master.db",
+  entries: 3,
+  acquired: 3,
+  skipped: 0,
+  imported: 3,
+  sourceSetFallbacks: 1,
+};
 const published = {
   tracks: 3,
   availableAudio: 3,
@@ -264,4 +272,46 @@ describe("playlist container pipeline", () => {
     expect(importProgress("[analysis] 20/10")).toBeUndefined();
     expect(importProgress("secret credentials")).toBeUndefined();
   });
+});
+
+test.each([4, 3, 5])(
+  "partial import requires exactly all four verified imported tracks (%i published)",
+  async (count) => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ...imported, entries: 6, acquired: 4, skipped: 2, imported: 4 })
+      .mockResolvedValueOnce({
+        ...published,
+        tracks: count,
+        availableAudio: count,
+        cdjReady: count,
+        playlists: [{ id: `${options.namespace}:playlist:17`, tracks: count }],
+      });
+    const result = await processCloudImport(
+      "https://youtu.be/example",
+      options,
+      new AbortController().signal,
+      vi.fn(),
+      run,
+    );
+    expect(result.status).toBe(count === 4 ? "complete" : "failed");
+    if (count === 4) {
+      expect(result).toMatchObject({ current: 4, total: 4 });
+      expect(result.message).toContain("6 resolved entries; 2 unavailable/skipped");
+    }
+  },
+);
+test("legacy import receipts without authoritative counts fail closed", async () => {
+  const { imported: _count, ...legacy } = imported;
+  const run = vi.fn().mockResolvedValueOnce(legacy);
+  await expect(
+    processCloudImport(
+      "https://youtu.be/example",
+      options,
+      new AbortController().signal,
+      vi.fn(),
+      run,
+    ),
+  ).rejects.toThrow();
+  expect(run).toHaveBeenCalledTimes(1);
 });

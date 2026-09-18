@@ -12,9 +12,9 @@ function setup() {
   db.exec(`CREATE TABLE import_requests(account_id TEXT, id TEXT, source TEXT, status TEXT, phase TEXT,
     current INTEGER, total INTEGER, message TEXT, stage_progress TEXT, collection_id TEXT,
     created_at INTEGER, updated_at INTEGER, workflow_id TEXT, analysis_repair INTEGER,
-    agent_grant_id TEXT, agent_id TEXT, agent_turn_id TEXT);
+    agent_grant_id TEXT, agent_id TEXT, agent_turn_id TEXT, refresh_resolution INTEGER DEFAULT 0, resolution_evidence_url TEXT);
     INSERT INTO import_requests VALUES('owner','${id}','https://youtu.be/set','complete','complete',2,2,'2 set extracts',
-    '{}','cloud:${id}:playlist:1',0,0,'old-workflow',1,'grant','agent',NULL);`);
+    '{}','cloud:${id}:playlist:1',0,0,'old-workflow',1,'grant','agent',NULL,0,NULL);`);
   const report = vi.fn(async () => ({
     total: 2,
     tracks: [{ order: 1, kind: "source-set-clip" }],
@@ -67,6 +67,13 @@ test("completed imports require explicit refresh, reuse the library and deduplic
       "complete",
     );
     expect(env.DOWNLOAD_WORKFLOW.create).toHaveBeenCalledTimes(1);
+    expect(env.DOWNLOAD_WORKFLOW.create).toHaveBeenCalledWith({
+      id: retryID,
+      params: { accountId: "owner", id, source: "https://youtu.be/set", refreshResolution: true },
+    });
+    expect(db.prepare("SELECT refresh_resolution FROM import_requests").get()).toMatchObject({
+      refresh_resolution: 1,
+    });
     expect(
       (await retry({ mode: "refresh", requestID: crypto.randomUUID() }, "stranger")).status,
     ).toBe(404);
@@ -109,6 +116,68 @@ test("unavailable diagnostics preserve status and prior-run reports are flagged"
       status: "complete",
       reportAvailable: false,
       reportCurrent: false,
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test.each([false, true])(
+  "failed retry clears old stage completion only for refresh=%s",
+  async (refresh) => {
+    const { db, retry } = setup();
+    try {
+      const previous = JSON.stringify({ resolve: { status: "complete", current: 6, total: 6 } });
+      db.prepare("UPDATE import_requests SET status='failed',stage_progress=?").run(previous);
+      const result = await retry({ mode: refresh ? "refresh" : "failed", requestID: retryID });
+      expect(result.status).toBe(200);
+      expect(
+        db.prepare("SELECT stage_progress,refresh_resolution FROM import_requests").get(),
+      ).toMatchObject({
+        stage_progress: refresh ? null : previous,
+        refresh_resolution: refresh ? 1 : 0,
+      });
+    } finally {
+      db.close();
+    }
+  },
+);
+
+test("evidence refresh persists the researched URL and protects idempotent receipts", async () => {
+  const { db, env, retry } = setup();
+  const evidenceURL = "https://groovesmaxxing.com/tracklists/adam-ten-set";
+  const changedEvidence = "https://groovesmaxxing.com/tracklists/other-set";
+  try {
+    expect((await retry({ evidenceURL, requestID: retryID })).status).toBe(409);
+    expect(db.prepare("SELECT resolution_evidence_url FROM import_requests").get()).toMatchObject({
+      resolution_evidence_url: null,
+    });
+    expect(
+      await (await retry({ mode: "refresh", requestID: retryID, evidenceURL })).json(),
+    ).toMatchObject({ status: "queued", evidenceURL });
+    expect(
+      db.prepare("SELECT resolution_evidence_url,refresh_resolution FROM import_requests").get(),
+    ).toMatchObject({ resolution_evidence_url: evidenceURL, refresh_resolution: 1 });
+    expect(await inspectImport(env, "owner", id)).toMatchObject({ evidenceURL });
+    db.exec("UPDATE import_requests SET status='complete'");
+    expect(
+      await (await retry({ mode: "refresh", requestID: retryID, evidenceURL })).json(),
+    ).toMatchObject({ status: "complete", evidenceURL });
+    expect(
+      (await retry({ mode: "refresh", requestID: retryID, evidenceURL: changedEvidence })).status,
+    ).toBe(409);
+    expect(env.DOWNLOAD_WORKFLOW.create).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await retry(
+          { mode: "refresh", requestID: crypto.randomUUID(), evidenceURL: changedEvidence },
+          "stranger",
+        )
+      ).status,
+    ).toBe(404);
+    db.exec("UPDATE import_requests SET status='failed'");
+    expect(await (await retry({ requestID: crypto.randomUUID() })).json()).toMatchObject({
+      evidenceURL,
     });
   } finally {
     db.close();

@@ -1,3 +1,4 @@
+import { publicationCounts } from "./cloud-worker.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { importProgressTracker, runCloudCommand, type ImportProgress } from "./cloud-worker.js";
@@ -20,7 +21,9 @@ export function cloudAgent(options: {
       }
     | undefined;
   const receipts = new Map<string, Record<string, unknown>>();
-  let imported: { playlistId: string; entries: number } | undefined;
+  let imported:
+    | { playlistId: string; entries: number; acquired: number; skipped: number; imported: number }
+    | undefined;
   const stages: NonNullable<ImportProgress["stages"]> = {};
   let latest: ImportProgress | undefined;
   const emit = (value: ImportProgress) => {
@@ -53,7 +56,7 @@ export function cloudAgent(options: {
         endpoint: options.endpoint ?? "http://djbooth.internal",
         namespace: `cloud:${options.id}`,
         guidance:
-          "If activeProcess is non-null, poll its process_id until terminal before starting anything. Reuse imported and recentReceipts to continue unfinished work across agent turns. Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
+          "This workspace belongs to the private DJ Booth container. Its /app and /data paths are not paths in the managed agent brain or an attached Hand. Run these commands through djbooth_exec, never exec_command. If activeProcess is non-null, poll its process_id until terminal before starting anything. Reuse imported and recentReceipts to continue unfinished work across agent turns. Call with operation=start, a unique process_id, and args for the djbooth CLI (omit the executable). Use import with --db-path /data/master.db --output-directory /data/audio --reference-ytdlp --analysis-concurrency 2 --analysis-threads 2. Add --provider-playlist-file /tmp/provider-playlist.json only when providerPlaylistFile is non-null. After successful import, cloud publish with --playlist <returned playlistId> --db-path /data/master.db --endpoint http://djbooth.internal --namespace cloud:" +
           options.id +
           ". Poll the process until terminal; inspect errors and resume with the same CLI workflow. No phone connection is needed. Do not report success before publication is verified.",
       };
@@ -95,7 +98,14 @@ export function cloudAgent(options: {
       !Array.isArray(input.args) ||
       !input.args.length ||
       input.args.length > 100 ||
-      input.args.some((v) => typeof v !== "string" || v.length > 4096 || v.includes("\0"))
+      input.args.some(
+        (v, index, args) =>
+          typeof v !== "string" ||
+          v.includes("\0") ||
+          v.length > (args[index - 1] === "--agent-result-json" ? 48_000 : 4096),
+      ) ||
+      // Leave room for the operation/job envelope under the container's 64 KiB limit.
+      (Array.isArray(input.args) && JSON.stringify(input.args).length > 60_000)
     )
       throw new Error("Invalid CLI arguments");
     const args = input.args as string[];
@@ -159,15 +169,21 @@ export function cloudAgent(options: {
           Number.isSafeInteger(value.entries) &&
           Number(value.entries) > 0
         ) {
-          imported = { playlistId: value.playlistId, entries: Number(value.entries) };
-          for (const phase of ["resolve", "download", "analyze"]) complete(phase, imported.entries);
+          imported = { playlistId: value.playlistId, ...publicationCounts.parse(value) };
+          complete("resolve", imported.entries);
+          for (const phase of ["download", "analyze"])
+            stages[phase] = {
+              status: "complete",
+              current: imported.acquired,
+              total: imported.entries,
+            };
           if (latest) {
             latest = { ...latest, stages: structuredClone(stages) };
             options.progress(latest);
           }
         }
         if (args[0] === "enrich" && imported) {
-          complete("enrich", imported.entries);
+          complete("enrich", imported.imported);
           if (latest) {
             latest = { ...latest, stages: structuredClone(stages) };
             options.progress(latest);
@@ -193,17 +209,17 @@ export function cloudAgent(options: {
             Number(value.tracks) > 0 &&
             value.availableAudio === value.tracks &&
             value.cdjReady === value.tracks &&
-            playlist?.tracks === imported.entries
+            playlist?.tracks === imported.imported
           ) {
-            complete("publish", imported.entries);
+            complete("publish", imported.imported);
             emit({
               status: "complete",
               phase: "complete",
-              current: imported.entries,
-              total: imported.entries,
+              current: imported.imported,
+              total: imported.imported,
               analysisVersion: 1,
               collectionID,
-              message: `Published ${imported.entries} tracks`,
+              message: `Published ${imported.imported} tracks from ${imported.entries} resolved entries; ${imported.skipped} unavailable/skipped.`,
             });
           }
         }

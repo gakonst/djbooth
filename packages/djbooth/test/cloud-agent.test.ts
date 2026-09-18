@@ -20,7 +20,7 @@ const publishArgs = [
   "--playlist",
   "playlist",
 ];
-const imported = { playlistId: "playlist", entries: 2 };
+const imported = { playlistId: "playlist", entries: 2, acquired: 2, skipped: 0, imported: 2 };
 const id = "11111111-1111-1111-1111-111111111111";
 const published = {
   tracks: 2,
@@ -174,4 +174,67 @@ test("a new agent turn discovers and polls the existing CLI process without rest
     download: { status: "complete" },
     analyze: { status: "complete" },
   });
+});
+
+test("managed agents can submit a full set tracklist as one literal CLI argument", async () => {
+  vi.mocked(runCloudCommand).mockReset().mockResolvedValue({ entries: [] });
+  const { exec } = setup();
+  const tracklist = JSON.stringify({
+    source,
+    provider: "agent",
+    complete: false,
+    tracks: Array.from({ length: 34 }, (_, index) => ({
+      order: index + 1,
+      artist: "An evidenced artist from the performance",
+      title: "An evidenced recording (Extended Unreleased Remix)",
+      startSeconds: index * 180,
+    })),
+  });
+  expect(tracklist.length).toBeGreaterThan(4096);
+  const args = ["resolve", source, "--agent-result-json", tracklist];
+  await exec({ operation: "start", process_id: "resolved-set", args });
+  expect(await finish(exec, "resolved-set")).toMatchObject({ status: "completed" });
+  expect(vi.mocked(runCloudCommand).mock.calls[0]?.[0]).toEqual(args);
+  const instructions = (await exec({ operation: "instructions" })) as { guidance: string };
+  expect(instructions.guidance).toContain("never exec_command");
+});
+
+test("large research payload allowance does not remove ordinary argument or transport bounds", async () => {
+  vi.mocked(runCloudCommand).mockReset();
+  for (const args of [
+    ["resolve", "x".repeat(4097)],
+    ["resolve", source, "--agent-result-json", "x".repeat(48_001)],
+    ["resolve", source, "--agent-result-json", "\\".repeat(40_000)],
+    ["resolve", source, "--agent-result-json", "invalid\0json"],
+  ]) {
+    const { exec } = setup();
+    await expect(exec({ operation: "start", process_id: "invalid", args })).rejects.toThrow(
+      "Invalid CLI arguments",
+    );
+  }
+  expect(runCloudCommand).not.toHaveBeenCalled();
+});
+
+test("partial agent imports preserve resolved counters and verify acquired publication", async () => {
+  vi.mocked(runCloudCommand)
+    .mockReset()
+    .mockResolvedValueOnce({ ...imported, entries: 6, acquired: 2, skipped: 4 })
+    .mockResolvedValueOnce(published);
+  const { exec, progress } = setup();
+  await exec({ operation: "start", process_id: "import", args: ["import", source] });
+  await finish(exec, "import");
+  await exec({ operation: "start", process_id: "publish", args: publishArgs });
+  await finish(exec, "publish");
+  expect(progress).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      status: "complete",
+      current: 2,
+      total: 2,
+      stages: expect.objectContaining({
+        resolve: { status: "complete", current: 6, total: 6 },
+        download: { status: "complete", current: 2, total: 6 },
+        analyze: { status: "complete", current: 2, total: 6 },
+      }),
+    }),
+  );
 });

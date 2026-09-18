@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { getConfig, MasterDatabase } from "@gakonst/rekordbox";
@@ -6,6 +7,19 @@ import { getConfig, MasterDatabase } from "@gakonst/rekordbox";
 import { parseManifest, type SetManifest } from "./manifest.js";
 
 const PIPELINE_TABLE = "djboothSetPipeline";
+
+/** Only an explicit new workflow path opts in to a managed, headless library. */
+export function prepareWorkflowDatabase(dbPath: string | undefined): void {
+  if (!dbPath) return;
+  try {
+    // lstat preserves dangling symlinks too: never treat an existing entry as new.
+    lstatSync(dbPath);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  MasterDatabase.createManaged(resolve(dbPath)).close();
+}
 
 /** Bounded diagnostics derived from master.db; never a second workflow ledger. */
 export function inspectImportDetails(database: MasterDatabase, source: string) {
@@ -166,7 +180,11 @@ export function resolveRekordboxPipelineLocation(
   const dbPath = resolve(configuredPath);
   return {
     dbPath,
-    dbDirectory: resolve(options.dbDirectory ?? configured?.dbDir ?? join(dbPath, "..")),
+    dbDirectory: resolve(
+      options.dbDirectory ??
+        (options.dbPath ? join(dbPath, "..") : configured?.dbDir) ??
+        join(dbPath, ".."),
+    ),
   };
 }
 

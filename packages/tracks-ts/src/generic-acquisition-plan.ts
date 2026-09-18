@@ -585,7 +585,6 @@ function localMatchScore(identity: RecordingIdentity, artifact: LocalArtifact): 
   if (identity.spotifyId && stem.includes(normalizeIdentity(identity.spotifyId))) return 300;
   if (identity.isrc && stem.includes(normalizeIdentity(identity.isrc))) return 250;
   const title = normalizeIdentity(identity.title);
-  const baseTitle = normalizeIdentity(identity.title.replace(/\s*[([][^\])]*[\])]\s*$/u, ""));
   const artists = identity.artists.map(normalizeIdentity).filter(Boolean);
   const artistTokens = new Set(
     artists.flatMap((artist) => artist.split(" ").filter((token) => token.length >= 3)),
@@ -599,7 +598,8 @@ function localMatchScore(identity: RecordingIdentity, artifact: LocalArtifact): 
       ? 200
       : 160;
   }
-  return baseTitle && baseTitle.length >= 4 && stem.includes(baseTitle) ? 120 : 0;
+  // A trailing mix/edit is part of recording identity, never optional for local adoption.
+  return 0;
 }
 
 function localMatchKind(

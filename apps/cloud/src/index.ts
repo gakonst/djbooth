@@ -735,13 +735,24 @@ export default {
         .bind(Date.now())
         .run();
       const jobs = await env.LIBRARY_DB.prepare(
-        "SELECT account_id, id, source, workflow_id FROM import_requests WHERE workflow_id IS NOT NULL AND status IN ('queued','running') ORDER BY created_at LIMIT 100",
-      ).all<{ account_id: string; id: string; source: string; workflow_id: string }>();
+        "SELECT account_id, id, source, workflow_id, refresh_resolution FROM import_requests WHERE workflow_id IS NOT NULL AND status IN ('queued','running') ORDER BY created_at LIMIT 100",
+      ).all<{
+        account_id: string;
+        id: string;
+        source: string;
+        workflow_id: string;
+        refresh_resolution: number;
+      }>();
       const submissions = await Promise.allSettled(
         jobs.results.map((job) =>
           ensureDownloadWorkflow(
             env,
-            { accountId: job.account_id, id: job.id, source: job.source },
+            {
+              accountId: job.account_id,
+              id: job.id,
+              source: job.source,
+              refreshResolution: job.refresh_resolution === 1,
+            },
             job.workflow_id,
           ),
         ),

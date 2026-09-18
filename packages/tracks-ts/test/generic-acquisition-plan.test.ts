@@ -249,8 +249,14 @@ describe("buildAcquisitionPlan", () => {
     await mkdir(duplicateDirectory, { recursive: true });
     await Promise.all([
       writeFile(join(localDirectory, "Artist One - Track One [match-1].flac"), "local"),
-      writeFile(join(localDirectory, "nested", "Artist Three - Track Three.mp3"), "local"),
-      writeFile(join(duplicateDirectory, "Artist Three - Track Three.mp3"), "duplicate"),
+      writeFile(
+        join(localDirectory, "nested", "Artist Three - Track Three (Unreleased Edit).mp3"),
+        "local",
+      ),
+      writeFile(
+        join(duplicateDirectory, "Artist Three - Track Three (Unreleased Edit).mp3"),
+        "duplicate",
+      ),
     ]);
     const value = manifest(join(directory, "set.mp3"));
     if (value.entries[2]!.identity.status !== "identified") throw new Error("test identity");
@@ -266,7 +272,11 @@ describe("buildAcquisitionPlan", () => {
     });
     expect(plan.recordings[0]!.variants[0]!.outputPath).toMatch(/\.flac$/u);
     expect(plan.recordings[2]!.variants[0]!.localArtifact).toMatchObject({
-      sourcePath: join(localDirectory, "nested", "Artist Three - Track Three.mp3"),
+      sourcePath: join(
+        localDirectory,
+        "nested",
+        "Artist Three - Track Three (Unreleased Edit).mp3",
+      ),
       matchedBy: "artist-title",
     });
     expect(plan.recordings[2]!.variants[0]!.outputPath).toMatch(/\.mp3$/u);
@@ -432,4 +442,29 @@ describe("buildAcquisitionPlan", () => {
       }),
     ).resolves.toMatchObject({ failures: [] });
   });
+});
+
+test.each([
+  ["Daft Punk", "Give Life Back to Music", "Edit", "Daft Punk - Give Life Back to Music.flac"],
+  [
+    "Uffie",
+    "Pop the Glock",
+    "Correct Edit",
+    "Uffie - Pop the Glock (Armand Van Helden Remix).flac",
+  ],
+])("does not adopt another mix for %s %s (%s)", async (artist, title, mix, wrongFile) => {
+  const directory = await mkdtemp(join(tmpdir(), "generic-wrong-mix-"));
+  await writeFile(join(directory, wrongFile), "local");
+  const value = createManifest({
+    source: "https://youtube.test/set",
+    provider: "agent",
+    complete: true,
+    tracks: [{ order: 1, artist, title, mix }],
+  });
+  const wrong = await buildAcquisitionPlan(value, { outputDirectory: directory });
+  expect(wrong.recordings[0]!.variants[0]!.localArtifact).toBeUndefined();
+  const correct = join(directory, `${artist} - ${title} (${mix}).flac`);
+  await writeFile(correct, "local");
+  const exact = await buildAcquisitionPlan(value, { outputDirectory: directory });
+  expect(exact.recordings[0]!.variants[0]!.localArtifact?.sourcePath).toBe(correct);
 });
