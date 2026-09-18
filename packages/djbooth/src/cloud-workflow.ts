@@ -118,7 +118,10 @@ export function cloudWorkflow(options: {
           }
           if (!Array.isArray(manifest.entries) || !manifest.entries.length)
             throw new Error("No verified tracks found for this source");
-          result = { entries: manifest.entries.length };
+          result = {
+            entries: manifest.entries.length,
+            refreshed: input.refresh_resolution === true,
+          };
           stages.resolve = {
             status: "complete",
             current: manifest.entries.length,

@@ -55,3 +55,25 @@ test("replacement identities preserve standalone downloads across ordering chang
     download: { kind: "individual", mediaPath: "/tracks/first.flac" },
   });
 });
+
+test.each([
+  [undefined, "Edit"],
+  ["Armand Van Helden Remix", "Correct Edit"],
+])("does not retain downloads when mix changes from %s to %s", (oldMix, newMix) => {
+  const old = make(),
+    next = make();
+  if (oldMix !== undefined) old.entries[0]!.identity.mix = oldMix;
+  next.entries[0]!.identity.mix = newMix;
+  old.entries[0]!.acquisition = {
+    status: "downloaded",
+    download: {
+      backend: "slsk",
+      kind: "individual",
+      mediaPath: "/tracks/wrong.flac",
+      files: ["/tracks/wrong.flac"],
+    },
+  };
+  retainResolvedRecordings(old, next);
+  expect(next.entries[0]!.acquisition.status).toBe("pending");
+  expect(next.entries[0]!.rekordbox).toEqual(make().entries[0]!.rekordbox);
+});

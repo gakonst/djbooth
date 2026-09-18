@@ -121,3 +121,24 @@ test("unavailable diagnostics preserve status and prior-run reports are flagged"
     db.close();
   }
 });
+
+test.each([false, true])(
+  "failed retry clears old stage completion only for refresh=%s",
+  async (refresh) => {
+    const { db, retry } = setup();
+    try {
+      const previous = JSON.stringify({ resolve: { status: "complete", current: 6, total: 6 } });
+      db.prepare("UPDATE import_requests SET status='failed',stage_progress=?").run(previous);
+      const result = await retry({ mode: refresh ? "refresh" : "failed", requestID: retryID });
+      expect(result.status).toBe(200);
+      expect(
+        db.prepare("SELECT stage_progress,refresh_resolution FROM import_requests").get(),
+      ).toMatchObject({
+        stage_progress: refresh ? null : previous,
+        refresh_resolution: refresh ? 1 : 0,
+      });
+    } finally {
+      db.close();
+    }
+  },
+);

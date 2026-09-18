@@ -15,6 +15,7 @@ type Receipt = {
   result?: {
     playlistId?: string;
     entries?: number;
+    refreshed?: boolean;
     dbPath?: string;
     sourceSetFallbacks?: number;
     collectionID?: string;
@@ -122,6 +123,12 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
                   : "Waiting for saved work",
               );
             }
+            if (
+              name === "resolve" &&
+              event.payload.refreshResolution &&
+              receipt.result?.refreshed !== true
+            )
+              throw new Error("Waiting for a runtime that confirms refreshed resolution");
             return receipt.result ?? {};
           }),
       );

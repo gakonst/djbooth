@@ -531,6 +531,193 @@ describe("cloud publishing", () => {
     },
   );
 
+  test.each([false, true])(
+    "retains phone collection preferences without a publication conflict (pinned=%s)",
+    async (isPinned) => {
+      const server = cloud();
+      const options = {
+        endpoint: "https://sync.example.com",
+        token: "test-token",
+        metadataOnly: true,
+      };
+      await publishCloudLibrary(library(), options, server.request);
+      const collection = server.changes.findLast((change) => change.kind === "collection")!;
+      const edited = {
+        ...collection,
+        sequence: server.changes.length + 1,
+        operationID: "phone-collection-edit",
+        payload: JSON.stringify({
+          ...JSON.parse(collection.payload!),
+          isPinned,
+          updatedAt: "2026-09-18T00:39:54Z",
+        }),
+      };
+      server.changes.push(edited);
+      const before = [...server.changes];
+      expect(await publishCloudLibrary(library(), options, server.request)).toMatchObject({
+        published: 0,
+        unchanged: 2,
+        conflicts: [],
+        failures: [],
+      });
+      expect(server.changes).toEqual(before);
+    },
+  );
+
+  test("advances refreshed membership across paginated history while preserving phone preferences", async () => {
+    const server = cloud();
+    const options = {
+      endpoint: "https://sync.example.com",
+      token: "test-token",
+      metadataOnly: true,
+    };
+    await publishCloudLibrary(library(), options, server.request);
+    const original = server.changes.findLast((change) => change.kind === "collection")!;
+    const preferences = {
+      isPinned: true,
+      updatedAt: "2026-09-18T00:39:54Z",
+      customPreference: "keep",
+    };
+    server.changes.push({
+      ...original,
+      sequence: server.changes.length + 1,
+      operationID: "phone-preferences",
+      payload: JSON.stringify({ ...JSON.parse(original.payload!), ...preferences }),
+    });
+    const request: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/v1/sync/changes" && (!init?.method || init.method === "GET")) {
+        const after = Number(url.searchParams.get("after"));
+        const remaining = server.changes.filter((change) => change.sequence > after);
+        const changes = remaining.slice(0, 1);
+        return Response.json({
+          changes,
+          cursor: changes.at(-1)?.sequence ?? after,
+          hasMore: remaining.length > 1,
+        });
+      }
+      return server.request(input, init);
+    };
+    for (const ids of [
+      ["123", "456"],
+      ["456", "789", "123"],
+    ]) {
+      const local = {
+        ...library(),
+        getTracks: () => ({
+          items: ids.map((id) => ({ ...track, id })),
+          count: ids.length,
+          offset: 0,
+          limit: 100,
+        }),
+      };
+      expect(await publishCloudLibrary(local, options, request)).toMatchObject({
+        conflicts: [],
+        failures: [],
+      });
+      const latest = server.changes.findLast((change) => change.kind === "collection")!;
+      expect(JSON.parse(latest.payload!)).toEqual({
+        ...JSON.parse(original.payload!),
+        ...preferences,
+        trackIDs: ids,
+      });
+      expect(latest.operationID).toMatch(/^rekordbox-publish:/);
+      expect(await publishCloudLibrary(local, options, request)).toMatchObject({
+        published: 0,
+        conflicts: [],
+      });
+    }
+  });
+
+  test.each(["missing-baseline", "concurrent-edit"])(
+    "does not replace collection with %s",
+    async (scenario) => {
+      const server = cloud();
+      const options = {
+        endpoint: "https://sync.example.com",
+        token: "test-token",
+        metadataOnly: true,
+      };
+      await publishCloudLibrary(library(), options, server.request);
+      const original = server.changes.findLast((change) => change.kind === "collection")!;
+      server.changes.push({
+        ...original,
+        sequence: server.changes.length + 1,
+        operationID: "phone-preferences",
+        payload: JSON.stringify({ ...JSON.parse(original.payload!), isPinned: true }),
+      });
+      const request: typeof fetch = async (input, init) => {
+        if (scenario === "missing-baseline" && (!init?.method || init.method === "GET"))
+          return Response.json({
+            changes: server.changes.filter((change) => change !== original),
+            cursor: server.changes.length,
+            hasMore: false,
+          });
+        if (scenario === "concurrent-edit" && init?.method === "POST") {
+          const operation = JSON.parse(String(init.body));
+          if (operation.kind === "collection") {
+            server.changes.push({
+              ...original,
+              sequence: server.changes.length + 1,
+              operationID: "phone-rename",
+              payload: JSON.stringify({ ...JSON.parse(original.payload!), name: "User rename" }),
+            });
+          }
+        }
+        return server.request(input, init);
+      };
+      const local = {
+        ...library(),
+        getTracks: () => ({ items: [], count: 0, offset: 0, limit: 100 }),
+      };
+      expect((await publishCloudLibrary(local, options, request)).conflicts).toEqual([
+        "collection:rekordbox:playlist",
+      ]);
+      expect(
+        server.changes.findLast((change) => change.kind === "collection")!.operationID,
+      ).toMatch(/^phone-/);
+    },
+  );
+
+  test.each(["name", "membership", "order", "deleted"])(
+    "preserves genuine phone collection %s conflicts",
+    async (edit) => {
+      const server = cloud();
+      const options = {
+        endpoint: "https://sync.example.com",
+        token: "test-token",
+        metadataOnly: true,
+      };
+      const local = {
+        ...library(),
+        getTracks: () => ({
+          items: [track, { ...track, id: "456" }],
+          count: 2,
+          offset: 0,
+          limit: 100,
+        }),
+      };
+      await publishCloudLibrary(local, options, server.request);
+      const collection = server.changes.findLast((change) => change.kind === "collection")!;
+      const payload = JSON.parse(collection.payload!);
+      if (edit === "name") payload.name = "My renamed playlist";
+      if (edit === "membership") payload.trackIDs = [];
+      if (edit === "order") payload.trackIDs.reverse();
+      server.changes.push({
+        ...collection,
+        sequence: server.changes.length + 1,
+        operationID: "phone-collection-edit",
+        payload: JSON.stringify(payload),
+        deleted: edit === "deleted",
+      });
+      const before = [...server.changes];
+      expect((await publishCloudLibrary(local, options, server.request)).conflicts).toEqual([
+        "collection:rekordbox:playlist",
+      ]);
+      expect(server.changes).toEqual(before);
+    },
+  );
+
   test("keeps differing mobile edits and does not upload their source audio", async () => {
     const server = cloud([
       {

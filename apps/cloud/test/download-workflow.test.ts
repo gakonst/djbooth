@@ -99,6 +99,7 @@ test.each([false, true])(
       await submit({ id, source });
       const row: any = db.prepare("SELECT * FROM import_requests").get();
       let fail = true;
+      let oldResolveReceipt = refreshResolution;
       const stages: string[] = [];
       const imported = {
         playlistId: "17",
@@ -119,6 +120,10 @@ test.each([false, true])(
             expect(input.refresh_resolution === true).toBe(
               input.stage === "resolve" && refreshResolution,
             );
+            if (input.stage === "resolve" && oldResolveReceipt) {
+              oldResolveReceipt = false;
+              return { status: "completed", process_id: input.process_id, result: { entries: 6 } };
+            }
             if (input.stage === "import" && fail) {
               fail = false;
               throw new Error("Connection closed: Durable Object restarted");
@@ -137,7 +142,9 @@ test.each([false, true])(
                   ? imported
                   : input.stage === "publish"
                     ? { collectionID }
-                    : {},
+                    : refreshResolution
+                      ? { refreshed: true }
+                      : {},
             };
           },
         ),
@@ -159,7 +166,14 @@ test.each([false, true])(
         instanceId: row.workflow_id,
       };
       expect(await workflow.run(event, step)).toEqual({ collectionID });
-      expect(stages).toEqual(["resolve", "import", "import", "enrich", "publish"]);
+      expect(stages).toEqual([
+        "resolve",
+        ...(refreshResolution ? ["resolve"] : []),
+        "import",
+        "import",
+        "enrich",
+        "publish",
+      ]);
       // An RPC stub stays broken after eviction; every retry needs a fresh stub.
       expect(env.PLAYLIST_CONTAINERS.getByName.mock.calls.length).toBeGreaterThanOrEqual(7);
       const events = container.recordImportEvent.mock.calls as unknown as [
@@ -173,6 +187,14 @@ test.each([false, true])(
           .filter(([, , name]) => name === "workflow_stage_failed")
           .map(([, , , fields]) => fields),
       ).toEqual([
+        ...(refreshResolution
+          ? [
+              expect.objectContaining({
+                stage: "resolve",
+                attempt: 1,
+              }),
+            ]
+          : []),
         expect.objectContaining({
           importID: id,
           workflowID: row.workflow_id,

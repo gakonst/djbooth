@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { evidencedRows, researchLinks, resolveTracklist } from "../src/resolver.js";
 import type { Env } from "../src/index.js";
@@ -292,7 +293,7 @@ test("failed supplied evidence is not accepted or retried, and page/search budge
     evidenceURL: candidates[0],
   });
   expect(response.status).toBe(422);
-  expect(harness.queries).toHaveLength(4);
+  expect(harness.queries).toHaveLength(8);
   expect(harness.pages.filter((url) => url.includes("1001tracklists"))).toHaveLength(6);
   expect(harness.pages.filter((url) => url.includes("set79"))).toHaveLength(6);
   expect(new Set(harness.pages).size).toBe(harness.pages.length);
@@ -309,4 +310,100 @@ test("a readable supplied candidate still needs an exact performance match", asy
   expect(harness.pages).toEqual([unrelated, discoveryCandidate]);
   expect(harness.queries).toHaveLength(2);
   expect(await response.json()).toMatchObject({ url: discoveryCandidate });
+});
+
+test("normalizes Markdown escapes and deduplicates media upload aliases", () => {
+  expect(
+    researchLinks(
+      [
+        "https://www.youtube.com/watch?v=abcdefghijk\\",
+        "https://music.youtube.com/watch?v=abcdefghijk",
+        "https://youtu.be/abcdefghijk?si=share",
+        "https://m.youtube.com/live/abcdefghijk",
+        "https://www.youtube.com/watch?v=abc\\_defghij&list=radio",
+      ].join("\n"),
+    ),
+  ).toEqual([
+    "https://www.youtube.com/watch?v=abcdefghijk",
+    "https://www.youtube.com/watch?v=abc_defghij",
+  ]);
+});
+
+test("challenged 1001 and media-heavy results still discover all 34 grounded secondary slots", async () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fixtures/adam-ten-brunch-2026.json", import.meta.url), "utf8"),
+  );
+  const videoID = new URL(fixture.canonicalSource).searchParams.get("v");
+  const rows = fixture.tracks.map((row: any) => ({
+    ...row,
+    evidence: `${row.timestamp} ${row.artist ? row.artist + " - " : ""}${row.title}`,
+  }));
+  const matchEvidence = `${fixture.title} ${fixture.canonicalSource}`;
+  const markdown = `${matchEvidence}\n${rows.map((row: any) => row.evidence).join("\n")}`;
+  const pages: string[] = [];
+  const queries: string[] = [];
+  const response = await resolveTracklist(
+    new Request("https://internal/resolve", {
+      method: "POST",
+      body: JSON.stringify({
+        source: fixture.source,
+        context: { title: fixture.title, durationSeconds: fixture.durationSeconds },
+      }),
+    }),
+    {
+      BROWSER: {
+        quickAction: async (_: string, options: { url: string }) => {
+          const query = new URL(options.url).searchParams.get("q");
+          if (query) {
+            queries.push(query);
+            const result = query.includes("site:1001tracklists.com")
+              ? fixture.supplied1001Candidate.url
+              : query === `"${videoID}" site:groovesmaxxing.com/tracklists/`
+                ? fixture.evidenceURL
+                : query === `"${videoID}" site:dancefloor.fm`
+                  ? fixture.secondaryEvidenceURL
+                  : [
+                      fixture.canonicalSource + "\\",
+                      `https://music.youtube.com/watch?v=${videoID}`,
+                      `https://youtu.be/${videoID}?si=share`,
+                      ...Array.from(
+                        { length: 7 },
+                        (_, i) => `https://www.youtube.com/watch?v=unrelated0${i}`,
+                      ),
+                      "https://soundcloud.com/publisher/other-set",
+                    ].join("\n");
+            return Response.json({ success: true, result });
+          }
+          pages.push(options.url);
+          return Response.json({
+            success: true,
+            result: options.url === fixture.evidenceURL ? markdown : "No verified rows",
+          });
+        },
+      },
+      AI: {
+        run: async (_: string, input: { messages: Array<{ content: string }> }) => ({
+          response:
+            JSON.parse(input.messages[1].content).pageURL === fixture.evidenceURL
+              ? { matched: true, matchEvidence, tracks: rows }
+              : { matched: false, tracks: [] },
+        }),
+      },
+    } as unknown as Env,
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    source: fixture.source,
+    url: fixture.evidenceURL,
+    tracks: fixture.tracks.map((row: any) => ({ order: row.order, title: row.title })),
+  });
+  expect(pages.slice(0, 3)).toEqual([
+    fixture.supplied1001Candidate.url,
+    fixture.evidenceURL,
+    fixture.secondaryEvidenceURL,
+  ]);
+  expect(pages.filter((url) => url === fixture.canonicalSource)).toHaveLength(1);
+  expect(pages.filter((url) => !url.includes("1001tracklists.com"))).toHaveLength(6);
+  expect(new Set(pages).size).toBe(pages.length);
+  expect(queries).toHaveLength(8);
 });

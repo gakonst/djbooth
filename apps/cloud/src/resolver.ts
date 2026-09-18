@@ -63,11 +63,16 @@ function discoveryTitle(title: string) {
     .trim();
 }
 
+const isMedia = (url: string) =>
+  /^(?:(?:www|m|music|on)\.)?(?:youtube\.com|youtu\.be|soundcloud\.com|mixcloud\.com)$/.test(
+    new URL(url).hostname,
+  );
+
 export function researchLinks(markdown: string): string[] {
   const result = new Set<string>();
   for (const match of markdown.matchAll(/https?:\/\/[^\s<>"\]]+/g)) {
     try {
-      let url = new URL(match[0].replace(/[).,]+$/, ""));
+      let url = new URL(match[0].replace(/\\/g, "").replace(/[).,]+$/, ""));
       if (url.hostname.endsWith("google.com") && url.pathname === "/url")
         url = new URL(url.searchParams.get("q") ?? url.searchParams.get("url") ?? "");
       if (url.hostname === "duckduckgo.com" && url.pathname === "/l/")
@@ -77,7 +82,7 @@ export function researchLinks(markdown: string): string[] {
         continue;
       if (url.pathname === "/" || /\/(search|login|signup|feed)(\/|$)/.test(url.pathname)) continue;
       url.hash = "";
-      result.add(url.href);
+      result.add(isMedia(url.href) ? discoverySource(url.href).canonical : url.href);
     } catch {
       /* not a source link */
     }
@@ -327,13 +332,27 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
   }
   const verified1001 = best.length > 0;
   if (!verified1001) {
-    for (const url of researchLinks(context.evidenceURL ?? "")) urls.add(url);
-    urls.add(body.source);
+    // Broad search often returns media aliases before actual tracklists. Discover
+    // independent references before spending the shared six-page fallback budget.
+    await search(
+      ["groovesmaxxing.com/tracklists/", "dancefloor.fm"].flatMap((domain) => [
+        `${searchTitle} site:${domain}`,
+        `"${source.videoID ?? source.canonical}" site:${domain}`,
+      ]),
+    );
+    for (const url of researchLinks(`${context.evidenceURL ?? ""}\n${context.description ?? ""}`))
+      urls.add(url);
+    urls.add(source.canonical);
     await inspect(
-      [...urls].filter(
-        (url) =>
-          !is1001(url) && !/\/(artist|dj|track|explore|source)\//.test(new URL(url).pathname),
-      ),
+      [...urls]
+        .filter(
+          (url) =>
+            !is1001(url) && !/\/(artist|dj|track|explore|source)\//.test(new URL(url).pathname),
+        )
+        .sort((a, b) => {
+          const priority = (url: string) => (!isMedia(url) ? 0 : url === source.canonical ? 1 : 2);
+          return priority(a) - priority(b);
+        }),
       false,
     );
   }

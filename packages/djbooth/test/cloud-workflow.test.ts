@@ -153,8 +153,16 @@ test("unverified tracklist research cannot advance the pipeline", async () => {
 test("explicit cloud refresh passes through to resolution without changing resume defaults", async () => {
   const { create, run } = setup();
   const exec = create();
-  await finish(exec, { stage: "resolve", process_id: "ordinary" });
+  expect(await finish(exec, { stage: "resolve", process_id: "ordinary" })).toMatchObject({
+    status: "completed",
+    result: { entries: 2, refreshed: false },
+  });
   expect(run.mock.calls[0]?.[0]).not.toContain("--refresh");
-  await finish(exec, { stage: "resolve", process_id: "refresh", refresh_resolution: true });
+  expect(
+    await finish(exec, { stage: "resolve", process_id: "refresh", refresh_resolution: true }),
+  ).toMatchObject({
+    status: "completed",
+    result: { entries: 2, refreshed: true },
+  });
   expect(run.mock.calls[1]?.[0]).toContain("--refresh");
 });

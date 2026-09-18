@@ -203,12 +203,17 @@ function entityKey(kind: string, id: string): string {
   return `${kind}:${id}`;
 }
 function samePayload(change: Change | undefined, value: unknown): boolean {
-  return (
-    !!change &&
-    !change.deleted &&
-    !!change.payload &&
-    isDeepStrictEqual(JSON.parse(change.payload), value)
-  );
+  if (!change || change.deleted || !change.payload) return false;
+  const previous = JSON.parse(change.payload);
+  // Phones add collection preferences and timestamps. If the published fields
+  // still match, acknowledge the existing row without replacing those edits.
+  // Membership, order, names and tombstones retain the normal conflict guard.
+  if (change.kind === "collection" && previous && typeof previous === "object")
+    return isDeepStrictEqual(
+      { id: previous.id, name: previous.name, trackIDs: previous.trackIDs },
+      value,
+    );
+  return isDeepStrictEqual(previous, value);
 }
 
 /** Publish a resumable mirror. master.db remains authoritative; the server is the resume cursor. */
@@ -291,6 +296,7 @@ export async function publishCloudLibrary(
     const endpoint = cloudEndpoint(options.endpoint);
     const headers = { Authorization: `Bearer ${options.token}` };
     const remote = new Map<string, Change>();
+    const publishedCollections = new Map<string, Change>();
     async function call(path: string, init: RequestInit = {}, timeout = 60_000): Promise<Response> {
       // JSON sync writes carry stable operation IDs. Audio streams must instead
       // resume through the outer workflow because their bodies cannot be replayed.
@@ -334,8 +340,12 @@ export async function publishCloudLibrary(
           hasMore: z.boolean(),
         })
         .parse(await response.json());
-      for (const change of page.changes)
-        remote.set(entityKey(change.kind, change.entityID), change);
+      for (const change of page.changes) {
+        const key = entityKey(change.kind, change.entityID);
+        remote.set(key, change);
+        if (change.kind === "collection" && change.operationID.startsWith(publisherPrefix))
+          publishedCollections.set(key, change);
+      }
       if (!page.hasMore) break;
       if (page.cursor <= cursor) throw new Error("Cloud returned a non-advancing sync cursor");
       cursor = page.cursor;
@@ -354,14 +364,32 @@ export async function publishCloudLibrary(
       }
       // A mobile edit is never silently replaced by a workstation snapshot.
       const mobileOwned = previous && !previous.operationID.startsWith(publisherPrefix);
-      if (mobileOwned && !artifactsOnly) {
+      // A phone preference update may follow our last publication. Only advance
+      // collection contents if its core still equals that published baseline.
+      const baseline = publishedCollections.get(key);
+      const baselineValue =
+        baseline?.payload && !baseline.deleted ? JSON.parse(baseline.payload) : undefined;
+      const collectionUnedited =
+        kind === "collection" &&
+        baselineValue &&
+        samePayload(previous, {
+          id: baselineValue.id,
+          name: baselineValue.name,
+          trackIDs: baselineValue.trackIDs,
+        });
+      if (mobileOwned && !artifactsOnly && !collectionUnedited) {
         result.conflicts.push(key);
         return false;
       }
-      const payload = JSON.stringify(value);
+      // Retain preferences on this update and subsequent publisher-owned updates.
+      const payload = JSON.stringify(
+        kind === "collection" && previous?.payload && !previous.deleted
+          ? { ...JSON.parse(previous.payload), ...value }
+          : value,
+      );
       const baseVersion = previous?.sequence ?? 0;
       const operationID =
-        (mobileOwned ? "cdj-analysis:" : publisherPrefix) +
+        (mobileOwned && artifactsOnly ? "cdj-analysis:" : publisherPrefix) +
         createHash("sha256")
           .update(JSON.stringify({ kind, entityID, baseVersion, payload }))
           .digest("hex");
@@ -377,6 +405,7 @@ export async function publishCloudLibrary(
       }
       const change = changeSchema.parse(await (await checked(response)).json());
       remote.set(key, change);
+      if (kind === "collection") publishedCollections.set(key, change);
       result.published++;
       return true;
     }
