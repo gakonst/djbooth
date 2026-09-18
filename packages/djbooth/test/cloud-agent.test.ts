@@ -20,7 +20,7 @@ const publishArgs = [
   "--playlist",
   "playlist",
 ];
-const imported = { playlistId: "playlist", entries: 2 };
+const imported = { playlistId: "playlist", entries: 2, acquired: 2, skipped: 0, imported: 2 };
 const id = "11111111-1111-1111-1111-111111111111";
 const published = {
   tracks: 2,
@@ -213,4 +213,28 @@ test("large research payload allowance does not remove ordinary argument or tran
     );
   }
   expect(runCloudCommand).not.toHaveBeenCalled();
+});
+
+test("partial agent imports preserve resolved counters and verify acquired publication", async () => {
+  vi.mocked(runCloudCommand)
+    .mockReset()
+    .mockResolvedValueOnce({ ...imported, entries: 6, acquired: 2, skipped: 4 })
+    .mockResolvedValueOnce(published);
+  const { exec, progress } = setup();
+  await exec({ operation: "start", process_id: "import", args: ["import", source] });
+  await finish(exec, "import");
+  await exec({ operation: "start", process_id: "publish", args: publishArgs });
+  await finish(exec, "publish");
+  expect(progress).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      status: "complete",
+      current: 2,
+      total: 2,
+      stages: expect.objectContaining({
+        resolve: { status: "complete", current: 6, total: 6 },
+        download: { status: "complete", current: 2, total: 6 },
+        analyze: { status: "complete", current: 2, total: 6 },
+      }),
+    }),
+  );
 });

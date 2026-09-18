@@ -914,6 +914,9 @@ const completedSetWorkflowOutput = z.object({
   source: z.string(),
   sourceKind: z.enum(["dj-set", "soundcloud-playlist", "spotify-playlist"]),
   entries: z.number().int().nonnegative(),
+  acquired: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  imported: z.number().int().nonnegative().optional(),
   downloaded: z.number().int().nonnegative(),
   resumed: z.number().int().nonnegative(),
   spotifyCanonicalSelections: z.number().int().nonnegative(),
@@ -1259,6 +1262,10 @@ async function runSetWorkflowCommand(
       source: context.args.source,
       sourceKind,
       entries: result.manifest.entries.length,
+      acquired: result.manifest.entries.filter((entry) => entry.acquisition.status === "downloaded")
+        .length,
+      skipped: result.manifest.entries.filter((entry) => entry.acquisition.status === "skipped")
+        .length,
       downloaded: result.acquisition.downloaded.length,
       resumed: result.acquisition.resumed.length,
       spotifyCanonicalSelections: result.performance.automation.spotifyCanonicalSelections,
@@ -1275,6 +1282,7 @@ async function runSetWorkflowCommand(
         : {}),
       ...(result.rekordbox
         ? {
+            imported: result.rekordbox.verification.playlistMembershipCount,
             dbPath: result.rekordbox.dbPath,
             folderId: result.rekordbox.folderId,
             playlistId: result.rekordbox.playlistId,

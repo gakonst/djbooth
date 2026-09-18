@@ -194,9 +194,10 @@ export async function imports(
     );
   const retryID = typeof body.requestID === "string" ? body.requestID : crypto.randomUUID();
   await env.LIBRARY_DB.prepare(
-    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Preparing download', analysis_repair=0, stage_progress=CASE WHEN status='complete' THEN NULL ELSE stage_progress END, agent_grant_id=?, agent_id=?, agent_turn_id=?, workflow_id=?, updated_at=? WHERE account_id=? AND id=? AND (status='failed' OR (?=1 AND status='complete')) AND (workflow_id IS NULL OR workflow_id<>?)",
+    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Preparing download', analysis_repair=0, refresh_resolution=?, stage_progress=CASE WHEN status='complete' THEN NULL ELSE stage_progress END, agent_grant_id=?, agent_id=?, agent_turn_id=?, workflow_id=?, updated_at=? WHERE account_id=? AND id=? AND (status='failed' OR (?=1 AND status='complete')) AND (workflow_id IS NULL OR workflow_id<>?)",
   )
     .bind(
+      refresh ? 1 : 0,
       account.grantId,
       account.agentId ?? null,
       env.DOWNLOAD_WORKFLOW ? null : crypto.randomUUID(),
@@ -236,12 +237,16 @@ async function startDownload(
   source: string,
 ) {
   const row = await env.LIBRARY_DB.prepare(
-    "SELECT workflow_id FROM import_requests WHERE account_id=? AND id=?",
+    "SELECT workflow_id, refresh_resolution FROM import_requests WHERE account_id=? AND id=?",
   )
     .bind(account.id, id)
-    .first<{ workflow_id: string | null }>();
+    .first<{ workflow_id: string | null; refresh_resolution: number }>();
   if (row?.workflow_id) {
-    await ensureDownloadWorkflow(env, { accountId: account.id, id, source }, row.workflow_id);
+    await ensureDownloadWorkflow(
+      env,
+      { accountId: account.id, id, source, refreshResolution: row.refresh_resolution === 1 },
+      row.workflow_id,
+    );
     return;
   }
   await env.PLAYLIST_CONTAINERS!.getByName(`${account.id}:${id}`).enqueue(account.id, id, source);

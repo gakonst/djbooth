@@ -100,6 +100,7 @@ export function cloudWorkflow(options: {
             "--output-directory",
             paths.outputDirectory,
           ];
+          if (input.refresh_resolution === true) args.push("--refresh");
           if (paths.providerPlaylistFile)
             args.push("--provider-playlist-file", paths.providerPlaylistFile);
           let manifest = (await run(args, signal, onLine)) as Record<string, any>;
@@ -133,7 +134,7 @@ export function cloudWorkflow(options: {
           for (const phase of ["resolve", "download", "analyze"])
             stages[phase] = {
               status: "complete",
-              current: imported.entries,
+              current: phase === "resolve" ? imported.entries : imported.acquired,
               total: imported.entries,
             };
         } else if (stage === "enrich") {

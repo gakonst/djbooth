@@ -1,3 +1,4 @@
+import { publicationCounts } from "./cloud-worker.js";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { importProgressTracker, runCloudCommand, type ImportProgress } from "./cloud-worker.js";
@@ -20,7 +21,9 @@ export function cloudAgent(options: {
       }
     | undefined;
   const receipts = new Map<string, Record<string, unknown>>();
-  let imported: { playlistId: string; entries: number } | undefined;
+  let imported:
+    | { playlistId: string; entries: number; acquired: number; skipped: number; imported: number }
+    | undefined;
   const stages: NonNullable<ImportProgress["stages"]> = {};
   let latest: ImportProgress | undefined;
   const emit = (value: ImportProgress) => {
@@ -166,15 +169,21 @@ export function cloudAgent(options: {
           Number.isSafeInteger(value.entries) &&
           Number(value.entries) > 0
         ) {
-          imported = { playlistId: value.playlistId, entries: Number(value.entries) };
-          for (const phase of ["resolve", "download", "analyze"]) complete(phase, imported.entries);
+          imported = { playlistId: value.playlistId, ...publicationCounts.parse(value) };
+          complete("resolve", imported.entries);
+          for (const phase of ["download", "analyze"])
+            stages[phase] = {
+              status: "complete",
+              current: imported.acquired,
+              total: imported.entries,
+            };
           if (latest) {
             latest = { ...latest, stages: structuredClone(stages) };
             options.progress(latest);
           }
         }
         if (args[0] === "enrich" && imported) {
-          complete("enrich", imported.entries);
+          complete("enrich", imported.imported);
           if (latest) {
             latest = { ...latest, stages: structuredClone(stages) };
             options.progress(latest);
@@ -200,17 +209,17 @@ export function cloudAgent(options: {
             Number(value.tracks) > 0 &&
             value.availableAudio === value.tracks &&
             value.cdjReady === value.tracks &&
-            playlist?.tracks === imported.entries
+            playlist?.tracks === imported.imported
           ) {
-            complete("publish", imported.entries);
+            complete("publish", imported.imported);
             emit({
               status: "complete",
               phase: "complete",
-              current: imported.entries,
-              total: imported.entries,
+              current: imported.imported,
+              total: imported.imported,
               analysisVersion: 1,
               collectionID,
-              message: `Published ${imported.entries} tracks`,
+              message: `Published ${imported.imported} tracks from ${imported.entries} resolved entries; ${imported.skipped} unavailable/skipped.`,
             });
           }
         }

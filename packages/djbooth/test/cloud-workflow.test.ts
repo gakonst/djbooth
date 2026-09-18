@@ -8,7 +8,15 @@ const paths = {
   token: "container-binding",
   namespace: "cloud:job",
 };
-const imported = { playlistId: "17", dbPath: paths.dbPath, entries: 2, sourceSetFallbacks: 0 };
+const imported = {
+  playlistId: "17",
+  dbPath: paths.dbPath,
+  entries: 2,
+  acquired: 2,
+  skipped: 0,
+  imported: 2,
+  sourceSetFallbacks: 0,
+};
 const published = {
   tracks: 2,
   availableAudio: 2,
@@ -140,4 +148,13 @@ test("unverified tracklist research cannot advance the pipeline", async () => {
     "failed",
   );
   expect(run).toHaveBeenCalledTimes(1);
+});
+
+test("explicit cloud refresh passes through to resolution without changing resume defaults", async () => {
+  const { create, run } = setup();
+  const exec = create();
+  await finish(exec, { stage: "resolve", process_id: "ordinary" });
+  expect(run.mock.calls[0]?.[0]).not.toContain("--refresh");
+  await finish(exec, { stage: "resolve", process_id: "refresh", refresh_resolution: true });
+  expect(run.mock.calls[1]?.[0]).toContain("--refresh");
 });

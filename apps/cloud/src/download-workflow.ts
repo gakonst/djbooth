@@ -3,7 +3,12 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { NonRetryableError } from "cloudflare:workflows";
 import type { Env } from "./index.js";
 
-export type DownloadParams = { accountId: string; id: string; source: string };
+export type DownloadParams = {
+  accountId: string;
+  id: string;
+  source: string;
+  refreshResolution?: boolean;
+};
 type Receipt = {
   status: string;
   process_id: string;
@@ -96,6 +101,9 @@ export class DownloadWorkflow extends WorkflowEntrypoint<Env, DownloadParams> {
             let receipt = (await container.workflowExecute(accountId, id, workflowId, {
               operation: "start",
               stage: name,
+              ...(name === "resolve" && event.payload.refreshResolution
+                ? { refresh_resolution: true }
+                : {}),
               process_id: `${name}-${context.attempt}`,
               imported,
             })) as Receipt;

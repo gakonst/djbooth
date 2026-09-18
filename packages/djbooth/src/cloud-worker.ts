@@ -25,8 +25,17 @@ const importResult = z.object({
   playlistId: z.string().min(1),
   dbPath: z.string().min(1),
   entries: z.number().int().positive(),
+  acquired: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+  imported: z.number().int().positive(),
   sourceSetFallbacks: z.number().int().nonnegative(),
 });
+export const publicationCounts = importResult
+  .pick({ entries: true, acquired: true, skipped: true, imported: true })
+  .refine(
+    (value) => value.acquired + value.skipped === value.entries && value.imported >= value.acquired,
+    "Import counts must account for every resolved entry",
+  );
 const publishResult = z.object({
   tracks: z.number().int().nonnegative(),
   availableAudio: z.number().int().nonnegative(),
@@ -347,6 +356,7 @@ export async function prepareCloudImport(
     imported = await runImport([...args, "--agent-result-json", JSON.stringify(tracklist)]);
   }
   const result = importResult.parse(imported);
+  publicationCounts.parse(result);
   if (options.checkpoint) {
     emit({
       status: "running",
@@ -368,13 +378,14 @@ export async function publishCloudImport(
   run: CommandRunner = runCloudCommand,
 ): Promise<ImportProgress> {
   const result = importResult.parse(imported);
+  publicationCounts.parse(result);
   const emit = progress;
   const collectionID = `${options.namespace}:playlist:${result.playlistId}`;
   emit({
     status: "running",
     phase: "publish",
     current: 0,
-    total: result.entries,
+    total: result.imported,
     message: "Uploading recordings",
     collectionID,
   });
@@ -416,7 +427,7 @@ export async function publishCloudImport(
     published.tracks === 0 ||
     published.availableAudio !== published.tracks ||
     published.cdjReady !== published.tracks ||
-    published.playlists.find((playlist) => playlist.id === collectionID)?.tracks !== result.entries
+    published.playlists.find((playlist) => playlist.id === collectionID)?.tracks !== result.imported
   )
     return {
       status: "failed",
@@ -430,11 +441,9 @@ export async function publishCloudImport(
     status: "complete",
     phase: "complete",
     analysisVersion: 1,
-    current: result.entries,
-    total: result.entries,
-    message: result.sourceSetFallbacks
-      ? `Published ${result.entries} tracks, including ${result.sourceSetFallbacks} set extracts. Extract identifications may be uncertain.`
-      : `Published ${result.entries} tracks`,
+    current: result.imported,
+    total: result.imported,
+    message: `Published ${result.imported} tracks from ${result.entries} resolved entries; ${result.skipped} unavailable/skipped.${result.sourceSetFallbacks ? ` Includes ${result.sourceSetFallbacks} set extracts. Extract identifications may be uncertain.` : ""}`,
     collectionID,
   };
 }

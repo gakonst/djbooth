@@ -12,9 +12,9 @@ function setup() {
   db.exec(`CREATE TABLE import_requests(account_id TEXT, id TEXT, source TEXT, status TEXT, phase TEXT,
     current INTEGER, total INTEGER, message TEXT, stage_progress TEXT, collection_id TEXT,
     created_at INTEGER, updated_at INTEGER, workflow_id TEXT, analysis_repair INTEGER,
-    agent_grant_id TEXT, agent_id TEXT, agent_turn_id TEXT);
+    agent_grant_id TEXT, agent_id TEXT, agent_turn_id TEXT, refresh_resolution INTEGER DEFAULT 0);
     INSERT INTO import_requests VALUES('owner','${id}','https://youtu.be/set','complete','complete',2,2,'2 set extracts',
-    '{}','cloud:${id}:playlist:1',0,0,'old-workflow',1,'grant','agent',NULL);`);
+    '{}','cloud:${id}:playlist:1',0,0,'old-workflow',1,'grant','agent',NULL,0);`);
   const report = vi.fn(async () => ({
     total: 2,
     tracks: [{ order: 1, kind: "source-set-clip" }],
@@ -67,6 +67,13 @@ test("completed imports require explicit refresh, reuse the library and deduplic
       "complete",
     );
     expect(env.DOWNLOAD_WORKFLOW.create).toHaveBeenCalledTimes(1);
+    expect(env.DOWNLOAD_WORKFLOW.create).toHaveBeenCalledWith({
+      id: retryID,
+      params: { accountId: "owner", id, source: "https://youtu.be/set", refreshResolution: true },
+    });
+    expect(db.prepare("SELECT refresh_resolution FROM import_requests").get()).toMatchObject({
+      refresh_resolution: 1,
+    });
     expect(
       (await retry({ mode: "refresh", requestID: crypto.randomUUID() }, "stranger")).status,
     ).toBe(404);

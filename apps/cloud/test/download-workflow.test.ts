@@ -91,91 +91,103 @@ test("mobile submission needs no agent catalog, deduplicates delivery, and isola
   }
 });
 
-test("workflow retries the interrupted stage and carries import evidence into publication", async () => {
-  const { db, env, id, source, submit } = setup();
-  try {
-    await submit({ id, source });
-    const row: any = db.prepare("SELECT * FROM import_requests").get();
-    let fail = true;
-    const stages: string[] = [];
-    const imported = {
-      playlistId: "17",
-      entries: 2,
-      dbPath: "/data/master.db",
-      sourceSetFallbacks: 0,
-    };
-    const collectionID = `cloud:${id}:playlist:17`;
-    const container = {
-      recordImportEvent: vi.fn(async () => {}),
-      enqueue: vi.fn(),
-      poll: vi.fn(),
-      workflowExecute: vi.fn(async (account: string, job: string, instance: string, input: any) => {
-        expect([account, job, instance]).toEqual(["account-a", id, row.workflow_id]);
-        if (input.operation === "ready") return { status: "ready" };
-        stages.push(input.stage);
-        if (input.stage === "import" && fail) {
-          fail = false;
-          throw new Error("Connection closed: Durable Object restarted");
-        }
-        if (input.stage === "publish") {
-          expect(input.imported).toEqual(imported);
-          db.prepare(
-            "UPDATE import_requests SET status='complete',collection_id=?,analysis_version=1",
-          ).run(collectionID);
-        }
-        return {
-          status: "completed",
-          process_id: input.process_id,
-          result:
-            input.stage === "import" ? imported : input.stage === "publish" ? { collectionID } : {},
-        };
-      }),
-    };
-    env.PLAYLIST_CONTAINERS.getByName.mockReturnValue(container);
-    const step: any = {
-      do: async (_name: string, config: any, fn?: any) => {
-        const callback = fn ?? config;
-        try {
-          return await callback({ attempt: 1 });
-        } catch {
-          return callback({ attempt: 2 });
-        }
-      },
-    };
-    const workflow = new DownloadWorkflow({} as any, env);
-    const event: any = {
-      payload: { accountId: "account-a", id, source },
-      instanceId: row.workflow_id,
-    };
-    expect(await workflow.run(event, step)).toEqual({ collectionID });
-    expect(stages).toEqual(["resolve", "import", "import", "enrich", "publish"]);
-    // An RPC stub stays broken after eviction; every retry needs a fresh stub.
-    expect(env.PLAYLIST_CONTAINERS.getByName.mock.calls.length).toBeGreaterThanOrEqual(7);
-    const events = container.recordImportEvent.mock.calls as unknown as [
-      string,
-      string,
-      string,
-      Record<string, unknown>,
-    ][];
-    expect(
-      events
-        .filter(([, , name]) => name === "workflow_stage_failed")
-        .map(([, , , fields]) => fields),
-    ).toEqual([
-      expect.objectContaining({
-        importID: id,
-        workflowID: row.workflow_id,
-        stage: "import",
-        attempt: 1,
-        failure: "transport",
-      }),
-    ]);
-    expect(events.at(-1)?.[2]).toBe("workflow_completed");
-    expect(events.every(([account, job]) => account === "account-a" && job === id)).toBe(true);
-  } finally {
-    db.close();
-  }
-});
+test.each([false, true])(
+  "workflow retries interrupted stages and carries resolution refresh=%s into the container",
+  async (refreshResolution) => {
+    const { db, env, id, source, submit } = setup();
+    try {
+      await submit({ id, source });
+      const row: any = db.prepare("SELECT * FROM import_requests").get();
+      let fail = true;
+      const stages: string[] = [];
+      const imported = {
+        playlistId: "17",
+        entries: 2,
+        dbPath: "/data/master.db",
+        sourceSetFallbacks: 0,
+      };
+      const collectionID = `cloud:${id}:playlist:17`;
+      const container = {
+        recordImportEvent: vi.fn(async () => {}),
+        enqueue: vi.fn(),
+        poll: vi.fn(),
+        workflowExecute: vi.fn(
+          async (account: string, job: string, instance: string, input: any) => {
+            expect([account, job, instance]).toEqual(["account-a", id, row.workflow_id]);
+            if (input.operation === "ready") return { status: "ready" };
+            stages.push(input.stage);
+            expect(input.refresh_resolution === true).toBe(
+              input.stage === "resolve" && refreshResolution,
+            );
+            if (input.stage === "import" && fail) {
+              fail = false;
+              throw new Error("Connection closed: Durable Object restarted");
+            }
+            if (input.stage === "publish") {
+              expect(input.imported).toEqual(imported);
+              db.prepare(
+                "UPDATE import_requests SET status='complete',collection_id=?,analysis_version=1",
+              ).run(collectionID);
+            }
+            return {
+              status: "completed",
+              process_id: input.process_id,
+              result:
+                input.stage === "import"
+                  ? imported
+                  : input.stage === "publish"
+                    ? { collectionID }
+                    : {},
+            };
+          },
+        ),
+      };
+      env.PLAYLIST_CONTAINERS.getByName.mockReturnValue(container);
+      const step: any = {
+        do: async (_name: string, config: any, fn?: any) => {
+          const callback = fn ?? config;
+          try {
+            return await callback({ attempt: 1 });
+          } catch {
+            return callback({ attempt: 2 });
+          }
+        },
+      };
+      const workflow = new DownloadWorkflow({} as any, env);
+      const event: any = {
+        payload: { accountId: "account-a", id, source, refreshResolution },
+        instanceId: row.workflow_id,
+      };
+      expect(await workflow.run(event, step)).toEqual({ collectionID });
+      expect(stages).toEqual(["resolve", "import", "import", "enrich", "publish"]);
+      // An RPC stub stays broken after eviction; every retry needs a fresh stub.
+      expect(env.PLAYLIST_CONTAINERS.getByName.mock.calls.length).toBeGreaterThanOrEqual(7);
+      const events = container.recordImportEvent.mock.calls as unknown as [
+        string,
+        string,
+        string,
+        Record<string, unknown>,
+      ][];
+      expect(
+        events
+          .filter(([, , name]) => name === "workflow_stage_failed")
+          .map(([, , , fields]) => fields),
+      ).toEqual([
+        expect.objectContaining({
+          importID: id,
+          workflowID: row.workflow_id,
+          stage: "import",
+          attempt: 1,
+          failure: "transport",
+        }),
+      ]);
+      expect(events.at(-1)?.[2]).toBe("workflow_completed");
+      expect(events.every(([account, job]) => account === "account-a" && job === id)).toBe(true);
+    } finally {
+      db.close();
+    }
+  },
+);
 
 test("submission uncertainty is retried by cron using the persisted ID", async () => {
   const { db, env, id, source } = setup();
