@@ -693,13 +693,6 @@ struct CrewPlaylistView: View {
 
     var body: some View {
         List {
-            if canEdit {
-                HStack {
-                    Spacer()
-                    EditButton()
-                }.buttonStyle(BoothRowButtonStyle()).boothFont(12, relativeTo: .caption)
-                    .frame(minHeight: 44).boothLibraryCell(horizontalInset: 12)
-            }
             if let detail {
                 if detail.items.isEmpty {
                     ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Swipe on a track to add it to this playlist.")).boothLibraryCell()
@@ -708,6 +701,7 @@ struct CrewPlaylistView: View {
                     CrewTrackRow(model: model, crewID: crewID, item: item, canEdit: canEdit)
                         .boothLibraryCell(horizontalInset: 8)
                         .moveDisabled(!canEdit)
+                        .accessibilityHint(canEdit ? "Touch and hold, then drag to reorder." : "")
                         .swipeActions(edge: .trailing) {
                             if canEdit {
                                 Button("Remove", systemImage: "trash", role: .destructive) {
@@ -729,6 +723,7 @@ struct CrewPlaylistView: View {
         var reordered = items
         let item = reordered.remove(at: from)
         let target = min(destination > from ? destination - 1 : destination, reordered.count)
+        guard target != from else { return }
         reordered.insert(item, at: target)
         model.crewCrates[crateID]?.items = reordered
         let after = target == 0 ? nil : reordered[target - 1].id

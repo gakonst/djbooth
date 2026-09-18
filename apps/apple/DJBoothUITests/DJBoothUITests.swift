@@ -7,6 +7,30 @@ final class DJBoothUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testSharedPlaylistHoldAndDragReordersWithoutEditing() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews", "--ui-test-crew-contributors"]
+        app.launch()
+        let folder = app.buttons["crew.folder.crew-demo"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 15)); folder.tap()
+        app.buttons["crew.playlist.crate-demo"].tap()
+        let first = app.buttons["crew.contributor.item-georgios"]
+        let last = app.buttons["crew.contributor.item-unknown"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Edit"].exists)
+        XCTAssertFalse(app.buttons["crew.playlist.addTracks"].exists)
+        XCTAssertLessThan(first.frame.midY, last.frame.midY)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: app.frame.width * 0.4, dy: first.frame.midY))
+        let end = origin.withOffset(CGVector(dx: app.frame.width * 0.4, dy: last.frame.maxY + 8))
+        start.press(forDuration: 0.8, thenDragTo: end)
+        let reordered = NSPredicate { _, _ in first.frame.midY > last.frame.midY }
+        expectation(for: reordered, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        XCTAssertFalse(app.buttons["Comment & color"].exists, "Holding the title starts dragging instead of opening options")
+        capture(app, "Shared playlist reordered by holding and dragging")
+    }
+
     func testSharedPlaylistContributorBadges() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews", "--ui-test-crew-contributors"]

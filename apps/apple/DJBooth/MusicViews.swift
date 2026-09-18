@@ -279,6 +279,7 @@ struct TrackRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    private var canReorderSharedTrack: Bool { sharedPlaylist && removeSharedTrack != nil }
     var body: some View {
         SwipeRow(left: leftSwipe, right: rightSwipe, identity: track.id) { activation in rowContent(activation: activation) }
             .task(id: track.id) {
@@ -286,20 +287,24 @@ struct TrackRow: View {
             }
             .sheet(isPresented: $editingAnnotation) { TrackAnnotationEditor(track: track, model: model) }
             .contextMenu {
-                if let removeSharedTrack { Button("Remove from shared playlist", role: .destructive, action: removeSharedTrack) }
-                Button("Comment & color") { editingAnnotation = true }
-                Button(model.favorites.contains(track.id) ? "Remove from favorites" : "Add to favorites") { model.favorite(track) }
-                Button("Add to playlist") { model.choosePlaylist(for: track) }
-                if let collection, let position = collection.trackIDs.firstIndex(of: track.id) {
-                    if position > 0 { Button("Move earlier") { model.move(track, in: collection, by: -1) } }
-                    if position < collection.trackIDs.count - 1 { Button("Move later") { model.move(track, in: collection, by: 1) } }
-                    Button("Remove from playlist", role: .destructive) { model.requestRemoval(track, from: collection) }
-                }
-                Button("Keep on this device") { Task { await model.keepOffline(track) } }
-                    .disabled(model.demo || model.offlineIDs.contains(track.id))
+                // Leave the row's hold gesture to native List reordering.
+                if !canReorderSharedTrack { trackContextActions }
             }
             .accessibilityAction(named: "Comment & color") { editingAnnotation = true }
             .accessibilityAction(named: "Add to playlist") { model.choosePlaylist(for: track) }
+    }
+    @ViewBuilder private var trackContextActions: some View {
+        if let removeSharedTrack { Button("Remove from shared playlist", role: .destructive, action: removeSharedTrack) }
+        Button("Comment & color") { editingAnnotation = true }
+        Button(model.favorites.contains(track.id) ? "Remove from favorites" : "Add to favorites") { model.favorite(track) }
+        Button("Add to playlist") { model.choosePlaylist(for: track) }
+        if let collection, let position = collection.trackIDs.firstIndex(of: track.id) {
+            if position > 0 { Button("Move earlier") { model.move(track, in: collection, by: -1) } }
+            if position < collection.trackIDs.count - 1 { Button("Move later") { model.move(track, in: collection, by: 1) } }
+            Button("Remove from playlist", role: .destructive) { model.requestRemoval(track, from: collection) }
+        }
+        Button("Keep on this device") { Task { await model.keepOffline(track) } }
+            .disabled(model.demo || model.offlineIDs.contains(track.id))
     }
     private var leftSwipe: RowSwipeAction? {
         if sharedPlaylist {
@@ -465,6 +470,7 @@ struct TrackRow: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
         }.fixedSize(horizontal: true, vertical: false)
+            .contextMenu { if canReorderSharedTrack { trackContextActions } }
     }
     private var artworkSize: CGFloat {
         #if os(macOS)

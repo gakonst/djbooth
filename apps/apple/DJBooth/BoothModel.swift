@@ -590,6 +590,11 @@ private struct BoothLaunchConfiguration: Sendable {
         await loadCrew(crewID)
     }
     func moveCrewItem(crewID: String, crateID: String, itemID: String, afterItemID: String?) async throws {
+        #if DEBUG
+        if demo, ProcessInfo.processInfo.arguments.contains("--ui-test-crews") {
+            persistCrewCache(); return
+        }
+        #endif
         guard let cloud else { throw ClientError.http(401, "Connect DJ Booth first") }
         crewCrates[crateID] = try await cloud.moveCrewTrack(crewID: crewID, crateID: crateID, itemID: itemID, afterItemID: afterItemID)
         persistCrewCache()
