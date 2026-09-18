@@ -93,6 +93,44 @@ private struct LibrarySidebar: View {
     }
 }
 
+/// One contextual menu for UIKit navigation bars and inline playlist headers.
+@MainActor private func libraryActionsMenu(model: BoothModel, crewID: String?) -> UIMenu {
+    UIMenu(children: [UIDeferredMenuElement.uncached { completion in
+        Task { @MainActor in
+            var actions: [UIMenuElement] = []
+            let canEdit = crewID.map { id in
+                model.crewDetails[id]?.crew.role.canEdit ?? model.crews.first(where: { $0.id == id })?.role.canEdit ?? false
+            } ?? true
+            if canEdit {
+                actions.append(UIAction(title: "New playlist", image: UIImage(systemName: "plus")) { _ in
+                    if crewID != nil { model.newCrewPlaylistPresented = true }
+                    else { model.showNewCollection = true }
+                })
+            }
+            if crewID != nil {
+                actions.append(UIAction(title: "Members", image: UIImage(systemName: "person.2")) { _ in model.crewMembersPresented = true })
+            }
+            completion(actions)
+        }
+    }])
+}
+
+struct LibraryActionsMenu: UIViewRepresentable {
+    let model: BoothModel
+    var crewID: String? = nil
+    func makeUIView(context: Context) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
+        button.showsMenuAsPrimaryAction = true
+        button.tintColor = UIColor(BoothStyle.accent)
+        button.accessibilityLabel = "Library actions"; button.accessibilityIdentifier = "library.actions"
+        return button
+    }
+    func updateUIView(_ button: UIButton, context: Context) {
+        button.menu = libraryActionsMenu(model: model, crewID: crewID)
+    }
+}
+
 private enum LibraryDestination: Hashable {
     case folder([String])
     case collection(String)
@@ -141,7 +179,14 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         agent.accessibilityLabel = "Your DJ Booth companion"
         agent.accessibilityIdentifier = "library.agent"
         agent.tintColor = UIColor(BoothStyle.accent)
-        navigationItem.rightBarButtonItem = agent
+        let crewID: String?
+        switch destination {
+        case .crewFolder(let id), .crewPlaylist(let id, _): crewID = id
+        default: crewID = nil
+        }
+        let actions = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: libraryActionsMenu(model: model, crewID: crewID))
+        actions.accessibilityLabel = "Library actions"; actions.accessibilityIdentifier = "library.actions"
+        navigationItem.rightBarButtonItems = [actions, agent]
         navigationItem.largeTitleDisplayMode = .never
         navigationItem.backButtonDisplayMode = .minimal
         let hasDrawer: Bool

@@ -189,6 +189,7 @@ struct MobileTrackList: View {
                     Text(title).font(.title3.weight(.bold)).lineLimit(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityIdentifier(groupMode == nil ? "playlist.title" : "library.group.title")
+                    LibraryActionsMenu(model: model).frame(width: 44, height: 44)
                 }.padding(.vertical, 12).padding(.trailing, 8)
                     .boothLibraryCell(horizontalInset: 8)
             }

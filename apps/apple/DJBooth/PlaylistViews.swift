@@ -406,36 +406,9 @@ struct PlaylistBrowserView: View {
         }
     }
     private func mobilePlaylistLabel(_ collection: Collection, duration: Double, lowerBPM: Double?, upperBPM: Double?) -> some View {
-        let layout = typeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-            : AnyLayout(HStackLayout(spacing: 12))
-        return HStack(spacing: 12) {
-            layout {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 5) {
-                        Text(collection.name).boothFont(14, relativeTo: .subheadline, weight: .semibold)
-                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
-                        if collection.isPinned == true {
-                            Image(systemName: "pin.fill").font(.caption).foregroundStyle(BoothStyle.accent).accessibilityHidden(true)
-                        }
-                    }
-                    let detail = [collection.mood ?? "", (collection.folderPath ?? []).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · ")
-                    if !detail.isEmpty {
-                        Text(detail).boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
-                            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
-                    Text(durationLabel(duration)).boothFont(12, relativeTo: .caption, design: .monospaced).foregroundStyle(.primary)
-                    if let lower = lowerBPM, let upper = upperBPM {
-                        Text(lower.rounded() == upper.rounded() ? "\(Int(lower.rounded())) BPM" : "\(Int(lower.rounded()))–\(Int(upper.rounded())) BPM")
-                            .boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
-                            .accessibilityIdentifier("playlist.bpm.\(collection.id)")
-                    }
-                }.fixedSize(horizontal: true, vertical: false)
-            }
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
-        }.frame(minHeight: 48).contentShape(Rectangle())
+        PlaylistRowLabel(id: collection.id, title: collection.name,
+            detail: [collection.mood ?? "", (collection.folderPath ?? []).joined(separator: " / ")].filter { !$0.isEmpty }.joined(separator: " · "),
+            pinned: collection.isPinned == true, summary: durationLabel(duration), lowerBPM: lowerBPM, upperBPM: upperBPM)
     }
     private func browserNavigationRow(title: String, detail: String, symbol: String) -> some View {
         HStack(spacing: 10) {
@@ -453,6 +426,49 @@ struct PlaylistBrowserView: View {
     private func durationLabel(_ seconds: Double) -> String {
         let minutes = Int(max(0, seconds.isFinite ? seconds : 0) / 60)
         return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+    }
+}
+
+private struct PlaylistRowLabel: View {
+    let id: String
+    let title: String
+    var detail = ""
+    var pinned = false
+    let summary: String
+    var lowerBPM: Double? = nil
+    var upperBPM: Double? = nil
+    var trailingSymbol = "chevron.right"
+    @Environment(\.dynamicTypeSize) private var typeSize
+    var body: some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
+        HStack(spacing: 12) {
+            layout {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                        if pinned {
+                            Image(systemName: "pin.fill").font(.caption).foregroundStyle(BoothStyle.accent).accessibilityHidden(true)
+                        }
+                    }
+                    if !detail.isEmpty {
+                        Text(detail).boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
+                            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
+                    Text(summary).boothFont(12, relativeTo: .caption, design: .monospaced).foregroundStyle(.primary)
+                    if let lower = lowerBPM, let upper = upperBPM {
+                        Text(lower.rounded() == upper.rounded() ? "\(Int(lower.rounded())) BPM" : "\(Int(lower.rounded()))–\(Int(upper.rounded())) BPM")
+                            .boothFont(11, relativeTo: .caption2, design: .monospaced).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("playlist.bpm.\(id)")
+                    }
+                }.fixedSize(horizontal: true, vertical: false)
+            }
+            Image(systemName: trailingSymbol).font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
+        }.frame(minHeight: 48).contentShape(Rectangle())
     }
 }
 
@@ -539,8 +555,12 @@ private struct SharedFolderActions: View {
             Button("New shared folder", systemImage: "folder.badge.plus") { creating = true }
             Button("Join shared folder", systemImage: "person.badge.plus") { joining = true }
         } label: {
-            Label("Shared folder", systemImage: "folder.badge.person.crop")
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+            HStack(spacing: 10) {
+                Image(systemName: "folder.badge.person.crop").font(.body).frame(width: 32)
+                Text("Shared folder").boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                Spacer()
+                Image(systemName: "plus").font(.caption.weight(.semibold))
+            }.frame(minHeight: 44).padding(.horizontal, 12).padding(.vertical, 5)
         }.disabled(actionRunning).accessibilityIdentifier("crew.folder.actions")
         .alert("New shared folder", isPresented: $creating) {
             TextField("Crew name", text: $crewName)
@@ -574,81 +594,41 @@ private struct SharedFolderActions: View {
 struct CrewFolderView: View {
     @Bindable var model: BoothModel
     let crewID: String
-    @State private var creating = false
-    @State private var playlistName = ""
-    @State private var showingMembers = false
     @State private var actionRunning = false
     private var detail: CrewDetail? { model.crewDetails[crewID] }
 
     var body: some View {
         List {
             if let detail {
-                Section {
-                    Button { showingMembers = true } label: {
-                        HStack {
-                            Label("Members", systemImage: "person.2")
-                            Spacer()
-                            Text("\(detail.members.count)").foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.accessibilityIdentifier("crew.members")
-                } footer: {
-                    Text("Every playlist in this folder is shared with these members.")
+                if model.pendingQuickAddTrackID != nil {
+                    Button("Cancel adding track", role: .cancel) { model.cancelQuickAdd() }
+                        .boothFont(14, relativeTo: .subheadline).frame(minHeight: 44)
+                        .boothLibraryCell(horizontalInset: 12).accessibilityIdentifier("playlist.picker.cancel")
                 }
-                Section("Playlists") {
-                    if model.pendingQuickAddTrackID != nil {
-                        Button("Cancel adding track", role: .cancel) { model.cancelQuickAdd() }
-                            .accessibilityIdentifier("playlist.picker.cancel")
-                    }
-                    if detail.crew.role.canEdit {
-                        Button("New playlist", systemImage: "plus") { creating = true }
-                            .accessibilityIdentifier("crew.playlist.create")
-                    }
-                    if detail.crates.isEmpty {
-                        Text("No playlists here yet").foregroundStyle(.secondary)
-                    }
-                    ForEach(detail.crates) { crate in
-                        LibraryNavigationButton {
-                            if model.pendingQuickAddTrackID != nil { addPending(to: crate.id) }
-                            else { model.openCrewPlaylist(crewID: crewID, crateID: crate.id) }
-                        } label: {
-                            HStack(spacing: 11) {
-                                Image(systemName: "music.note.list").foregroundStyle(BoothStyle.accent).frame(width: 28)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(crate.name).boothFont(14, relativeTo: .body, weight: .semibold).foregroundStyle(.primary)
-                                    Text("\(crate.itemCount ?? 0) tracks").boothFont(11, relativeTo: .caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: model.pendingQuickAddTrackID == nil ? "chevron.right" : "plus.circle")
-                                    .foregroundStyle(BoothStyle.accent)
-                            }.padding(.vertical, 3).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                            .disabled(actionRunning || (model.pendingQuickAddTrackID != nil && !detail.crew.role.canEdit))
-                            .accessibilityIdentifier("crew.playlist.\(crate.id)")
-                    }
+                if detail.crates.isEmpty {
+                    ContentUnavailableView("No playlists here", systemImage: "music.note.list")
+                        .boothLibraryCell()
+                }
+                ForEach(detail.crates) { crate in
+                    LibraryNavigationButton {
+                        if model.pendingQuickAddTrackID != nil { addPending(to: crate.id) }
+                        else { model.openCrewPlaylist(crewID: crewID, crateID: crate.id) }
+                    } label: {
+                        PlaylistRowLabel(id: crate.id, title: crate.name, summary: "\(crate.itemCount ?? 0) tracks",
+                            trailingSymbol: model.pendingQuickAddTrackID == nil ? "chevron.right" : "plus.circle")
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
+                    }.buttonStyle(BoothRowButtonStyle()).boothLibraryCell()
+                        .disabled(actionRunning || (model.pendingQuickAddTrackID != nil && !detail.crew.role.canEdit))
+                        .accessibilityIdentifier("crew.playlist.\(crate.id)")
                 }
             } else {
-                ProgressView("Loading shared folder").frame(maxWidth: .infinity)
+                ProgressView("Loading shared folder").frame(maxWidth: .infinity).boothLibraryCell()
             }
         }
         .boothLibraryList()
         .task(id: crewID) { await model.loadCrew(crewID) }
         .refreshable { await model.loadCrew(crewID) }
-        .alert("New playlist", isPresented: $creating) {
-            TextField("Playlist name", text: $playlistName)
-            Button("Cancel", role: .cancel) { playlistName = "" }
-            Button("Create") {
-                actionRunning = true
-                Task {
-                    defer { actionRunning = false }
-                    do { try await model.createCrewCrate(crewID: crewID, name: playlistName); playlistName = "" }
-                    catch { model.crewError = error.localizedDescription }
-                }
-            }.disabled(playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || actionRunning)
-        } message: {
-            Text("Everyone in this folder will have access.")
-        }
-        .sheet(isPresented: $showingMembers) { CrewMembersView(model: model, crewID: crewID) }
     }
     private func addPending(to crateID: String) {
         guard !actionRunning else { return }; actionRunning = true
@@ -657,7 +637,7 @@ struct CrewFolderView: View {
     }
 }
 
-private struct CrewMembersView: View {
+struct CrewMembersView: View {
     @Bindable var model: BoothModel
     let crewID: String
     @Environment(\.dismiss) private var dismiss
@@ -674,11 +654,13 @@ private struct CrewMembersView: View {
                         ForEach(detail.members) { member in
                             HStack(spacing: 12) {
                                 CrewMark(name: member.displayName, small: true)
-                                Text(member.displayName)
+                                Text(member.displayName).boothFont(14, relativeTo: .subheadline, weight: .semibold)
                                 Spacer()
                                 Text(member.role == .dj ? "Can edit" : member.role == .viewer ? "Can view" : member.role.rawValue.capitalized)
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                                    .boothFont(11, relativeTo: .caption2).foregroundStyle(.secondary)
+                            }.frame(minHeight: 56)
+                                .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
+                                .boothLibraryCell(horizontalInset: 12)
                         }
                     } header: { Text(detail.crew.name) } footer: {
                         Text("Members have access to every playlist in this folder.")
@@ -696,10 +678,11 @@ private struct CrewMembersView: View {
                                 Label("Add people", systemImage: "person.badge.plus")
                                 if inviting { Spacer(); ProgressView() }
                             }
-                        }.disabled(inviting).accessibilityIdentifier("crew.members.add")
+                        }.boothFont(14, relativeTo: .subheadline).frame(minHeight: 48)
+                            .boothLibraryCell(horizontalInset: 12).disabled(inviting).accessibilityIdentifier("crew.members.add")
                     }
                 }
-            }.boothLibraryList().navigationTitle("Members")
+            }.boothLibraryList().navigationTitle("Members").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
                 .sheet(isPresented: Binding(get: { invite != nil }, set: { if !$0 { invite = nil } })) {
                     if let invite { CrewInviteView(crewName: detail?.crew.name ?? "Shared folder", invite: invite, endpoint: model.crewInviteEndpoint) }
@@ -707,7 +690,7 @@ private struct CrewMembersView: View {
                 .alert("Could not invite", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                     Button("OK") { error = nil }
                 } message: { Text(error ?? "") }
-        }.preferredColorScheme(.dark)
+        }.tint(BoothStyle.accent).preferredColorScheme(.dark)
     }
 }
 
@@ -727,14 +710,16 @@ struct CrewPlaylistView: View {
                         .accessibilityIdentifier("crew.playlist.addTracks")
                     Spacer()
                     EditButton()
-                }.buttonStyle(.borderless)
+                }.buttonStyle(BoothRowButtonStyle()).boothFont(12, relativeTo: .caption)
+                    .frame(minHeight: 44).boothLibraryCell(horizontalInset: 12)
             }
             if let detail {
                 if detail.items.isEmpty {
-                    ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Add tracks from your library."))
+                    ContentUnavailableView("Empty playlist", systemImage: "music.note.list", description: Text("Add tracks from your library.")).boothLibraryCell()
                 }
                 ForEach(detail.items) { item in
                     CrewTrackRow(model: model, crewID: crewID, item: item, canEdit: canEdit)
+                        .boothLibraryCell(horizontalInset: 8)
                         .moveDisabled(!canEdit)
                         .swipeActions(edge: .trailing) {
                             if canEdit {
@@ -746,7 +731,7 @@ struct CrewPlaylistView: View {
                         }
                 }
                 .onMove { source, destination in move(source, destination, items: detail.items) }
-            } else { ProgressView("Loading playlist").frame(maxWidth: .infinity) }
+            } else { ProgressView("Loading playlist").frame(maxWidth: .infinity).boothLibraryCell() }
         }
         .boothLibraryList()
         .task(id: crateID) { await model.loadCrewCrate(crewID: crewID, crateID: crateID) }
@@ -854,11 +839,11 @@ private struct CrewTrackPicker: View {
                         if adding.contains(track.id) { ProgressView().controlSize(.small) }
                         else { Image(systemName: "plus.circle").foregroundStyle(BoothStyle.accent) }
                     }
-                }.buttonStyle(.plain)
+                }.buttonStyle(BoothRowButtonStyle()).padding(.vertical, 6).boothLibraryCell(horizontalInset: 12)
             }.boothLibraryList().searchable(text: $query, prompt: "Find tracks")
                 .navigationTitle("Add tracks")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }.preferredColorScheme(.dark)
+        }.tint(BoothStyle.accent).preferredColorScheme(.dark)
     }
 }
 

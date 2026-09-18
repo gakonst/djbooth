@@ -85,6 +85,7 @@ struct BoothRoot: View {
     @Bindable var model: BoothModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var collectionName = ""
+    @State private var creatingSharedPlaylist = false
     var body: some View {
         platformRoot
             .background(BoothStyle.background)
@@ -98,6 +99,22 @@ struct BoothRoot: View {
             }
             #if os(iOS)
             .sheet(item: $model.pendingCrewInvite) { invite in CrewJoinView(model: model, invite: invite) }
+            .sheet(isPresented: $model.crewMembersPresented) {
+                if let crewID = model.selectedCrewID { CrewMembersView(model: model, crewID: crewID) }
+            }
+            .alert("New playlist", isPresented: $model.newCrewPlaylistPresented) {
+                TextField("Playlist name", text: $collectionName)
+                Button("Cancel", role: .cancel) { collectionName = "" }
+                Button("Create") {
+                    guard let crewID = model.selectedCrewID else { return }
+                    let name = collectionName; collectionName = ""; creatingSharedPlaylist = true
+                    Task {
+                        defer { creatingSharedPlaylist = false }
+                        do { try await model.createCrewCrate(crewID: crewID, name: name) }
+                        catch { model.message = error.localizedDescription }
+                    }
+                }.disabled(collectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || creatingSharedPlaylist)
+            } message: { Text("Everyone in this folder will have access.") }
             .sheet(isPresented: $model.showDJLink) { DJLinkConnectionView(model: model) }
             .sheet(isPresented: $model.showSonosSettings) { SonosOutputSheet(model: model) }
             #endif
