@@ -1,4 +1,5 @@
 import { telemetry, failureKind, WORKFLOW_POLICY_VERSION } from "./telemetry.js";
+import { researchLinks } from "./resolver.js";
 import { ensureDownloadWorkflow } from "./download-workflow.js";
 import { ensureAgentTools } from "./agent-tools.js";
 import { agentRoute } from "./agent.js";
@@ -7,7 +8,7 @@ import type { Env } from "./index.js";
 
 const uuid = /^[a-f0-9-]{36}$/i;
 const columns =
-  "id, source, status, phase, current, total, message, stage_progress AS stageProgress, collection_id AS collectionID, created_at AS createdAt, updated_at AS updatedAt, workflow_id AS workflowID";
+  "id, source, status, phase, current, total, message, stage_progress AS stageProgress, collection_id AS collectionID, created_at AS createdAt, updated_at AS updatedAt, workflow_id AS workflowID, resolution_evidence_url AS evidenceURL";
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { "cache-control": "private, no-store" } });
 function present(row: Record<string, unknown>) {
@@ -129,6 +130,16 @@ export async function imports(
   if (!value || typeof value !== "object" || Array.isArray(value))
     return error("Invalid import request");
   const body = value as Record<string, unknown>;
+  const evidenceURL = body.evidenceURL;
+  if (
+    evidenceURL !== undefined &&
+    (typeof evidenceURL !== "string" ||
+      evidenceURL.length > 4096 ||
+      !researchLinks(evidenceURL).includes(evidenceURL))
+  )
+    return error("Use an exact public HTTPS evidence URL from a supported research site");
+  if (evidenceURL !== undefined && !env.DOWNLOAD_WORKFLOW)
+    return error("Resolution evidence requires the cloud workflow", 503);
   const now = Date.now();
   if (!env.DOWNLOAD_WORKFLOW) await ensureAgentTools(request, env, account);
   if (path === "/v1/imports") {
@@ -140,7 +151,7 @@ export async function imports(
     if (!env.PLAYLIST_CONTAINERS) return error("Playlist containers are not configured", 503);
     // Repeating an ID is idempotent, including after an uncertain network response.
     await env.LIBRARY_DB.prepare(
-      `INSERT INTO import_requests (account_id, id, container_id, source, created_at, updated_at, agent_grant_id, agent_id, agent_turn_id, workflow_id) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM import_requests WHERE account_id=? AND status IN ('queued','running')) < 100 ON CONFLICT DO NOTHING`,
+      `INSERT INTO import_requests (account_id, id, container_id, source, created_at, updated_at, agent_grant_id, agent_id, agent_turn_id, workflow_id, resolution_evidence_url) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT count(*) FROM import_requests WHERE account_id=? AND status IN ('queued','running')) < 100 ON CONFLICT DO NOTHING`,
     )
       .bind(
         account.id,
@@ -153,6 +164,7 @@ export async function imports(
         account.agentId ?? null,
         env.DOWNLOAD_WORKFLOW ? null : crypto.randomUUID(),
         env.DOWNLOAD_WORKFLOW ? crypto.randomUUID() : null,
+        evidenceURL ?? null,
         account.id,
       )
       .run();
@@ -163,6 +175,11 @@ export async function imports(
       .first();
     if (!row) return error("Import inbox is full; wait for pending imports", 429);
     if (row.source !== source) return error("Request ID already belongs to a different link", 409);
+    if (evidenceURL !== undefined && row.evidenceURL !== evidenceURL)
+      return error(
+        "Import already has different evidence; retry a failed import to update it",
+        409,
+      );
     if (row.status === "queued" || row.status === "running") {
       await startDownload(request, env, account, String(row.id), source);
     }
@@ -193,12 +210,14 @@ export async function imports(
       "Refreshing a completed import requires a stable requestID and the cloud workflow",
     );
   const retryID = typeof body.requestID === "string" ? body.requestID : crypto.randomUUID();
+  const refreshResolution = refresh || evidenceURL !== undefined;
   await env.LIBRARY_DB.prepare(
-    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Preparing download', analysis_repair=0, refresh_resolution=?, stage_progress=CASE WHEN ?=1 OR status='complete' THEN NULL ELSE stage_progress END, agent_grant_id=?, agent_id=?, agent_turn_id=?, workflow_id=?, updated_at=? WHERE account_id=? AND id=? AND (status='failed' OR (?=1 AND status='complete')) AND (workflow_id IS NULL OR workflow_id<>?)",
+    "UPDATE import_requests SET status='queued', phase='queued', current=0, total=1, message='Preparing download', analysis_repair=0, refresh_resolution=?, resolution_evidence_url=COALESCE(?, resolution_evidence_url), stage_progress=CASE WHEN ?=1 OR status='complete' THEN NULL ELSE stage_progress END, agent_grant_id=?, agent_id=?, agent_turn_id=?, workflow_id=?, updated_at=? WHERE account_id=? AND id=? AND (status='failed' OR (?=1 AND status='complete')) AND (workflow_id IS NULL OR workflow_id<>?)",
   )
     .bind(
-      refresh ? 1 : 0,
-      refresh ? 1 : 0,
+      refreshResolution ? 1 : 0,
+      evidenceURL ?? null,
+      refreshResolution ? 1 : 0,
       account.grantId,
       account.agentId ?? null,
       env.DOWNLOAD_WORKFLOW ? null : crypto.randomUUID(),
@@ -216,6 +235,8 @@ export async function imports(
     .bind(account.id, id)
     .first();
   if (!row) return error("Import not found", 404);
+  if (evidenceURL !== undefined && row.evidenceURL !== evidenceURL)
+    return error("Evidence can only change when starting an eligible retry", 409);
   if (row.status === "queued" || row.status === "running") {
     await startDownload(request, env, account, id, String(row.source));
   }

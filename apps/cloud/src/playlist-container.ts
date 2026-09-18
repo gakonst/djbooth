@@ -500,10 +500,10 @@ PlaylistContainer.outboundByHost = {
   "djbooth.internal": async (request, env: Env, ctx) => {
     const path = new URL(request.url).pathname;
     const owner = await env.LIBRARY_DB.prepare(
-      "SELECT account_id, id FROM import_requests WHERE container_id=?",
+      "SELECT account_id, id, resolution_evidence_url FROM import_requests WHERE container_id=?",
     )
       .bind(ctx.containerId)
-      .first<{ account_id: string; id: string }>();
+      .first<{ account_id: string; id: string; resolution_evidence_url: string | null }>();
     if (!owner) return new Response(null, { status: 403 });
     if (path === "/provider-playlist" && request.method === "GET") {
       const input = await env.MEDIA.get(`connected-playlists/${owner.account_id}/${owner.id}.json`);
@@ -512,7 +512,8 @@ PlaylistContainer.outboundByHost = {
         headers: { "content-type": "application/json" },
       });
     }
-    if (path === "/resolve") return resolveTracklist(request, env);
+    if (path === "/resolve")
+      return resolveTracklist(request, env, owner.resolution_evidence_url ?? undefined);
     if (path.startsWith("/snapshot/"))
       return snapshots(request, env.MEDIA, `${owner.account_id}/${ctx.containerId}`);
     if (path !== "/v1/sync/changes" && !/^\/v1\/media\/[a-f0-9]{64}(\/compose)?$/.test(path))

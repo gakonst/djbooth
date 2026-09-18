@@ -229,3 +229,71 @@ test("submission uncertainty is retried by cron using the persisted ID", async (
     db.close();
   }
 });
+
+test("import evidence persists on create and eligible retry, with idempotent deliveries", async () => {
+  const { db, id, source, submit, account, instances } = setup();
+  const first = "https://groovesmaxxing.com/tracklists/first-set";
+  const next = "https://groovesmaxxing.com/tracklists/corrected-set";
+  try {
+    expect(await (await submit({ id, source, evidenceURL: first })).json()).toMatchObject({
+      evidenceURL: first,
+    });
+    expect((await submit({ id, source, evidenceURL: first })).status).toBe(200);
+    expect(instances.size).toBe(1);
+    expect((await submit({ id, source, evidenceURL: next })).status).toBe(409);
+    expect((await submit({ evidenceURL: next }, account, `/v1/imports/${id}/retry`)).status).toBe(
+      409,
+    );
+    db.prepare("UPDATE import_requests SET status='failed'").run();
+    const requestID = "22222222-2222-2222-2222-222222222222";
+    expect(
+      await (
+        await submit({ requestID, evidenceURL: next }, account, `/v1/imports/${id}/retry`)
+      ).json(),
+    ).toMatchObject({ evidenceURL: next });
+    expect(
+      (await submit({ requestID, evidenceURL: next }, account, `/v1/imports/${id}/retry`)).status,
+    ).toBe(200);
+    expect(instances.size).toBe(2);
+    expect(instances.get(requestID)).toMatchObject({ refreshResolution: true });
+    db.prepare("UPDATE import_requests SET status='failed'").run();
+    expect(await (await submit({}, account, `/v1/imports/${id}/retry`)).json()).toMatchObject({
+      evidenceURL: next,
+    });
+    expect(db.prepare("SELECT resolution_evidence_url FROM import_requests").get()).toMatchObject({
+      resolution_evidence_url: next,
+    });
+    expect(
+      (await submit({ evidenceURL: first }, { ...account, id: "other" }, `/v1/imports/${id}/retry`))
+        .status,
+    ).toBe(404);
+  } finally {
+    db.close();
+  }
+});
+
+test.each([
+  null,
+  4,
+  "http://groovesmaxxing.com/set",
+  "https://127.0.0.1/set",
+  "https://groovesmaxxing.com.evil.test/set",
+  "https://user:pass@groovesmaxxing.com/set",
+  "https://groovesmaxxing.com:8443/set",
+  "https://groovesmaxxing.com/",
+  "https://groovesmaxxing.com/login",
+  "https://groovesmaxxing.com/set#fragment",
+  "See https://groovesmaxxing.com/set",
+])("rejects invalid import evidence %s before persistence", async (evidenceURL) => {
+  const { db, id, source, submit, account, instances } = setup();
+  try {
+    expect((await submit({ id, source, evidenceURL })).status).toBe(400);
+    expect((await submit({ evidenceURL }, account, `/v1/imports/${id}/retry`)).status).toBe(400);
+    expect(db.prepare("SELECT count(*) AS count FROM import_requests").get()).toMatchObject({
+      count: 0,
+    });
+    expect(instances.size).toBe(0);
+  } finally {
+    db.close();
+  }
+});

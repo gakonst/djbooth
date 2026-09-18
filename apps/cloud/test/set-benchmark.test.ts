@@ -91,7 +91,7 @@ test("a sparse first secondary result cannot truncate Barcelona to six tracks", 
           return {
             response: extraction(
               request.pageURL === sparse ? quotedRows.slice(0, 6) : quotedRows,
-              request.pageURL !== unrelated && request.pageURL !== benchmark.source,
+              [sparse, benchmark.evidenceURL].includes(request.pageURL),
             ),
           };
         },

@@ -206,13 +206,14 @@ function discoveryHarness(
       }),
     },
   } as unknown as Env;
-  const resolve = (source: string, context: object = {}) =>
+  const resolve = (source: string, context: object = {}, trustedEvidenceURL?: string) =>
     resolveTracklist(
       new Request("https://internal/resolve", {
         method: "POST",
         body: JSON.stringify({ source, context }),
       }),
       env,
+      trustedEvidenceURL,
     );
   return { queries, pages, resolve };
 }
@@ -286,7 +287,7 @@ test("failed supplied evidence is not accepted or retried, and page/search budge
   const source = "https://www.youtube.com/watch?v=abcdefghijk";
   const harness = discoveryHarness(
     () => [...candidates, ...secondary].join("\n"),
-    new Set([...candidates, ...secondary, source]),
+    new Set([...candidates, ...secondary, source, "https://dancefloor.fm/es/set/abcdefghijk"]),
   );
   const response = await harness.resolve(source, {
     title: "DJ Exact Festival",
@@ -295,7 +296,7 @@ test("failed supplied evidence is not accepted or retried, and page/search budge
   expect(response.status).toBe(422);
   expect(harness.queries).toHaveLength(8);
   expect(harness.pages.filter((url) => url.includes("1001tracklists"))).toHaveLength(6);
-  expect(harness.pages.filter((url) => url.includes("set79"))).toHaveLength(6);
+  expect(harness.pages.filter((url) => !url.includes("1001tracklists"))).toHaveLength(6);
   expect(new Set(harness.pages).size).toBe(harness.pages.length);
 });
 
@@ -399,11 +400,49 @@ test("challenged 1001 and media-heavy results still discover all 34 grounded sec
   });
   expect(pages.slice(0, 3)).toEqual([
     fixture.supplied1001Candidate.url,
-    fixture.evidenceURL,
     fixture.secondaryEvidenceURL,
+    fixture.evidenceURL,
   ]);
   expect(pages.filter((url) => url === fixture.canonicalSource)).toHaveLength(1);
   expect(pages.filter((url) => !url.includes("1001tracklists.com"))).toHaveLength(6);
   expect(new Set(pages).size).toBe(pages.length);
   expect(queries).toHaveLength(8);
+});
+
+test("supplied secondary evidence wins budget priority when search misses it", async () => {
+  const evidenceURL = "https://groovesmaxxing.com/tracklists/exact-upload";
+  const source = "https://www.youtube.com/watch?v=abcdefghijk";
+  const results = [
+    ...Array.from({ length: 8 }, (_, i) => `https://dancefloor.fm/es/event/event-${i}`),
+    "https://dancefloor.fm/magazine/article",
+    ...Array.from({ length: 8 }, (_, i) => `https://set79.com/tracklist/unrelated-${i}`),
+  ];
+  const harness = discoveryHarness(() => results.join("\n"), new Set(), new Set(results));
+  const response = await harness.resolve(
+    source,
+    {
+      title: "DJ Exact Festival",
+      evidenceURL: "https://set79.com/tracklist/stale-hint",
+    },
+    evidenceURL,
+  );
+  expect(response.status).toBe(200);
+  expect(
+    harness.queries.slice(0, 2).every((query) => query.includes("site:1001tracklists.com")),
+  ).toBe(true);
+  expect(harness.pages[0]).toBe(evidenceURL);
+  expect(harness.pages).not.toContain("https://set79.com/tracklist/stale-hint");
+  expect(harness.queries).toContain("DJ Exact Festival site:1001tracklists.com/tracklist/");
+  expect(harness.pages[1]).toBe("https://dancefloor.fm/es/set/abcdefghijk");
+  expect(harness.pages.some((url) => /\/(event|magazine)\//.test(url))).toBe(false);
+  expect(harness.pages).toHaveLength(6);
+  expect(await response.json()).toMatchObject({ url: evidenceURL });
+});
+
+test("a generated video-ID candidate cannot bypass evidence validation", async () => {
+  const candidate = "https://dancefloor.fm/es/set/abcdefghijk";
+  const source = "https://www.youtube.com/watch?v=abcdefghijk";
+  const harness = discoveryHarness(() => "", new Set(), new Set([candidate, source]));
+  expect((await harness.resolve(source)).status).toBe(422);
+  expect(harness.pages).toEqual([candidate, source]);
 });

@@ -181,7 +181,11 @@ async function readPage(env: Env, url: string): Promise<string> {
 }
 
 /** Called only through the container's private outbound binding. No browser credentials leave Workers. */
-export async function resolveTracklist(request: Request, env: Env): Promise<Response> {
+export async function resolveTracklist(
+  request: Request,
+  env: Env,
+  trustedEvidenceURL?: string,
+): Promise<Response> {
   if (request.method !== "POST") return new Response(null, { status: 405 });
   if (!env.AI || !env.BROWSER)
     return Response.json({ error: "Cloud tracklist research is not configured" }, { status: 503 });
@@ -190,7 +194,10 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
   const body = JSON.parse(raw) as { action?: string; source: string; context?: Context };
   if (typeof body.source !== "string" || !researchLinks(body.source).length)
     return Response.json({ error: "Unsupported research source" }, { status: 400 });
-  const context = body.context ?? {};
+  const context = {
+    ...body.context,
+    ...(trustedEvidenceURL ? { evidenceURL: trustedEvidenceURL } : {}),
+  };
   if (body.action === "source-recovery-required") {
     const evidence = context.evidenceURL;
     if (evidence && researchLinks(evidence).includes(evidence)) {
@@ -342,15 +349,29 @@ export async function resolveTracklist(request: Request, env: Env): Promise<Resp
     );
     for (const url of researchLinks(`${context.evidenceURL ?? ""}\n${context.description ?? ""}`))
       urls.add(url);
+    const suppliedEvidence = new Set(researchLinks(context.evidenceURL ?? ""));
+    // Public Dancefloor set routes use the recording's YouTube ID. This is a
+    // discovery candidate only: the same exact-performance/row checks apply.
+    if (source.videoID) urls.add(`https://dancefloor.fm/es/set/${source.videoID}`);
     urls.add(source.canonical);
     await inspect(
       [...urls]
         .filter(
           (url) =>
-            !is1001(url) && !/\/(artist|dj|track|explore|source)\//.test(new URL(url).pathname),
+            !is1001(url) &&
+            !/\/(artist|dj|track|explore|source|events?|magazine)(?:\/|$)/.test(
+              new URL(url).pathname,
+            ),
         )
         .sort((a, b) => {
-          const priority = (url: string) => (!isMedia(url) ? 0 : url === source.canonical ? 1 : 2);
+          const priority = (url: string) => {
+            if (suppliedEvidence.has(url)) return 0;
+            if (!isMedia(url))
+              return source.videoID && new URL(url).pathname.split("/").includes(source.videoID)
+                ? 1
+                : 2;
+            return url === source.canonical ? 3 : 4;
+          };
           return priority(a) - priority(b);
         }),
       false,
