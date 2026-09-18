@@ -174,25 +174,6 @@ struct MobileTrackList: View {
             groupName == nil || groupMode?.group(for: $0) == groupName
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         List {
-            if let title = selected?.name ?? groupName {
-                HStack(alignment: .center, spacing: 10) {
-                    Button {
-                        if let groupMode { model.browse(groupMode) }
-                        else { model.backFromCollection() }
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .font(.body.weight(.semibold)).frame(width: 44, height: 44)
-                            .contentShape(Rectangle())
-                    }.buttonStyle(BoothRowButtonStyle())
-                        .accessibilityLabel(groupMode.map { "Back to \($0.rawValue.lowercased())" } ?? "Back to playlists")
-                        .accessibilityIdentifier(groupMode == nil ? "playlist.back" : "library.group.back")
-                    Text(title).font(.title3.weight(.bold)).lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier(groupMode == nil ? "playlist.title" : "library.group.title")
-                    LibraryActionsMenu(model: model).frame(width: 44, height: 44)
-                }.padding(.vertical, 12).padding(.trailing, 8)
-                    .boothLibraryCell(horizontalInset: 8)
-            }
             if tracks.isEmpty, let selected, let item = model.connectedPlaylist(selected.id),
                model.musicCatalog.snapshots[item.id] == nil || model.musicPlaylistLoading.contains(item.id) || model.musicPlaylistErrors[item.id] != nil {
                 EmptyView()

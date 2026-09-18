@@ -93,7 +93,7 @@ private struct LibrarySidebar: View {
     }
 }
 
-/// One contextual menu for UIKit navigation bars and inline playlist headers.
+/// One contextual menu for every library navigation bar.
 @MainActor private func libraryActionsMenu(model: BoothModel, crewID: String?) -> UIMenu {
     UIMenu(children: [UIDeferredMenuElement.uncached { completion in
         Task { @MainActor in
@@ -119,22 +119,6 @@ private struct LibrarySidebar: View {
             completion(actions)
         }
     }])
-}
-
-struct LibraryActionsMenu: UIViewRepresentable {
-    let model: BoothModel
-    var crewID: String? = nil
-    func makeUIView(context: Context) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
-        button.showsMenuAsPrimaryAction = true
-        button.tintColor = .label
-        button.accessibilityLabel = "Library actions"; button.accessibilityIdentifier = "library.actions"
-        return button
-    }
-    func updateUIView(_ button: UIButton, context: Context) {
-        button.menu = libraryActionsMenu(model: model, crewID: crewID)
-    }
 }
 
 private enum LibraryDestination: Hashable {
@@ -172,14 +156,7 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         self.destination = destination
         super.init(rootView: LibraryPage(model: model, destination: destination))
         view.backgroundColor = UIColor(BoothStyle.background)
-        switch destination {
-        case .folder(let path): title = path.last ?? "Playlists"
-        case .browse(let mode): title = mode.rawValue
-        case .group(_, let name): title = name
-        case .collection: break
-        case .crewFolder(let id): title = model.crews.first { $0.id == id }?.name ?? "Shared folder"
-        case .crewPlaylist(let crewID, let crateID): title = model.crewDetails[crewID]?.crates.first { $0.id == crateID }?.name ?? "Playlist"
-        }
+        refreshTitle(model: model)
         let agent = UIBarButtonItem(image: UIImage(systemName: "wand.and.stars"),
                                     primaryAction: UIAction { _ in model.showAgent = true })
         agent.accessibilityLabel = "Your DJ Booth companion"
@@ -208,6 +185,40 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
             button.accessibilityLabel = "Show Sidebar"
             button.accessibilityIdentifier = "library.drawer.open"
             navigationItem.leftBarButtonItem = button
+        }
+        switch destination {
+        case .collection, .group:
+            let groupMode: LibraryBrowseMode?
+            if case .group(let mode, _) = destination { groupMode = mode } else { groupMode = nil }
+            let back = UIBarButtonItem(image: UIImage(systemName: "chevron.left"), primaryAction: UIAction { _ in
+                if let groupMode { model.browse(groupMode) } else { model.backFromCollection() }
+            })
+            back.accessibilityLabel = groupMode.map { "Back to \($0.rawValue.lowercased())" } ?? "Back to playlists"
+            back.accessibilityIdentifier = groupMode == nil ? "playlist.back" : "library.group.back"
+            navigationItem.leftBarButtonItem = back
+            let label = UILabel()
+            label.font = .preferredFont(forTextStyle: .headline)
+            label.adjustsFontForContentSizeCategory = true
+            label.textColor = .label
+            label.lineBreakMode = .byTruncatingTail
+            label.accessibilityIdentifier = groupMode == nil ? "playlist.title" : "library.group.title"
+            navigationItem.titleView = label
+            refreshTitle(model: model)
+        default: break
+        }
+    }
+    func refreshTitle(model: BoothModel) {
+        switch destination {
+        case .folder(let path): title = path.last ?? (model.pendingQuickAddTrackID == nil ? "Playlists" : "Add to playlist")
+        case .browse(let mode): title = mode.rawValue
+        case .group(_, let name): title = name
+        case .collection(let id): title = model.collections.first { $0.id == id }?.name ?? "Playlist"
+        case .crewFolder(let id): title = model.crews.first { $0.id == id }?.name ?? "Shared folder"
+        case .crewPlaylist(let crewID, let crateID): title = model.crewDetails[crewID]?.crates.first { $0.id == crateID }?.name ?? "Playlist"
+        }
+        if let label = navigationItem.titleView as? UILabel, label.text != title {
+            label.text = title
+            label.sizeToFit()
         }
     }
     @available(*, unavailable)
@@ -376,6 +387,7 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
                 return
             }
             let existing = navigation.viewControllers.compactMap { $0 as? LibraryPageController }
+            existing.forEach { $0.refreshTitle(model: model) }
             guard existing.map(\.destination) != desired else { return }
             let controllers = desired.enumerated().map { index, destination in
                 if index < existing.count, existing[index].destination == destination { return existing[index] }
@@ -396,17 +408,8 @@ private struct NativeLibraryStack: UIViewControllerRepresentable {
             return true
         }
         func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
-            if let page = viewController as? LibraryPageController {
-                let hidden: Bool
-                switch page.destination {
-                case .browse: hidden = false
-                case .folder(let path): hidden = path.isEmpty && model.pendingQuickAddTrackID != nil
-                case .collection, .group: hidden = true
-                case .crewFolder, .crewPlaylist: hidden = false
-                }
-                navigationController.setNavigationBarHidden(hidden, animated: animated)
-
-            }
+            // Every page keeps the same native bar and top safe area throughout
+            // pushes, back taps, and interactive pops; only its contents change.
             if !programmaticTransition, animated, interactiveStart == nil { interactiveStart = desired }
         }
         func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {

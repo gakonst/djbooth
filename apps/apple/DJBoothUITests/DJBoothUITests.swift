@@ -7,6 +7,30 @@ final class DJBoothUITests: XCTestCase {
     }
 
     #if os(iOS)
+    func testPlaylistBackKeepsNavigationBarAndLibraryPosition() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-test-library", UUID().uuidString]
+        app.launch()
+        let playlist = app.buttons["playlist.row.demo-c2"]
+        XCTAssertTrue(playlist.waitForExistence(timeout: 15))
+        let initialRowY = playlist.frame.minY
+        let bar = app.navigationBars.firstMatch
+        let initialBar = bar.frame
+        for _ in 0..<3 {
+            playlist.tap()
+            XCTAssertTrue(app.buttons["playlist.back"].waitForExistence(timeout: 5))
+            XCTAssertTrue(bar.isHittable, "Playlist headers use the same persistent native bar as the library")
+            XCTAssertEqual(bar.frame.minY, initialBar.minY, accuracy: 1)
+            XCTAssertEqual(bar.frame.height, initialBar.height, accuracy: 1)
+            XCTAssertTrue(bar.buttons["library.actions"].exists)
+            app.buttons["playlist.back"].tap()
+            XCTAssertTrue(playlist.waitForExistence(timeout: 5))
+            XCTAssertEqual(playlist.frame.minY, initialRowY, accuracy: 1)
+            XCTAssertEqual(bar.frame.minY, initialBar.minY, accuracy: 1)
+            XCTAssertEqual(bar.frame.height, initialBar.height, accuracy: 1)
+        }
+    }
+
     func testSharedPlaylistHoldAndDragReordersWithoutEditing() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-library", UUID().uuidString, "--ui-test-crews", "--ui-test-crew-contributors"]
