@@ -279,7 +279,6 @@ struct TrackRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
-    private var canReorderSharedTrack: Bool { sharedPlaylist && removeSharedTrack != nil }
     var body: some View {
         SwipeRow(left: leftSwipe, right: rightSwipe, identity: track.id) { activation in rowContent(activation: activation) }
             .task(id: track.id) {
@@ -288,7 +287,7 @@ struct TrackRow: View {
             .sheet(isPresented: $editingAnnotation) { TrackAnnotationEditor(track: track, model: model) }
             .contextMenu {
                 // Leave the row's hold gesture to native List reordering.
-                if !canReorderSharedTrack { trackContextActions }
+                if !sharedPlaylist { trackContextActions }
             }
             .accessibilityAction(named: "Comment & color") { editingAnnotation = true }
             .accessibilityAction(named: "Add to playlist") { model.choosePlaylist(for: track) }
@@ -470,7 +469,6 @@ struct TrackRow: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
         }.fixedSize(horizontal: true, vertical: false)
-            .contextMenu { if canReorderSharedTrack { trackContextActions } }
     }
     private var artworkSize: CGFloat {
         #if os(macOS)
