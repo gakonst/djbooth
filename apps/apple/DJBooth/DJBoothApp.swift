@@ -98,6 +98,7 @@ struct BoothRoot: View {
                 await model.observeAgentTurn()
             }
             #if os(iOS)
+            .modifier(SharedFolderPrompts(model: model))
             .sheet(item: $model.pendingCrewInvite) { invite in CrewJoinView(model: model, invite: invite) }
             .sheet(isPresented: $model.crewMembersPresented) {
                 if let crewID = model.selectedCrewID { CrewMembersView(model: model, crewID: crewID) }

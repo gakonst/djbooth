@@ -403,6 +403,8 @@ private struct BoothLaunchConfiguration: Sendable {
         showAgent = false
         pendingCrewInvite = invite
     }
+    var newSharedFolderPresented = false
+    var joinSharedFolderPresented = false
     var crewMembersPresented = false
     var newCrewPlaylistPresented = false
     var selectedCrewID: String?

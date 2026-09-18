@@ -138,7 +138,6 @@ struct PlaylistBrowserView: View {
                             .disabled(model.pendingQuickAddTrackID != nil && !crew.role.canEdit)
                             .accessibilityIdentifier("crew.folder.\(crew.id)")
                     }
-                    if model.hasCloudSession { SharedFolderActions(model: model).boothLibraryCell() }
                     if model.crewsLoading && model.crews.isEmpty { ProgressView("Loading shared folders").boothLibraryCell() }
                 }
                 if path.isEmpty, model.pendingQuickAddTrackID == nil, model.usbConnected, let device = model.usbDevice {
@@ -411,17 +410,22 @@ struct PlaylistBrowserView: View {
             pinned: collection.isPinned == true, summary: durationLabel(duration), lowerBPM: lowerBPM, upperBPM: upperBPM)
     }
     private func browserNavigationRow(title: String, detail: String, symbol: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol).font(.body).foregroundStyle(BoothStyle.accent).frame(width: 32, height: 44).accessibilityHidden(true)
+        let folder = symbol.hasPrefix("folder") || symbol == "externaldrive"
+        return HStack(spacing: 10) {
+            if !folder {
+                Image(systemName: symbol).font(.body).foregroundStyle(.secondary).frame(width: 32).accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold)
+                    .foregroundStyle(.primary).lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                 #if os(macOS)
                 Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
                 #endif
-            }
-            Spacer()
-            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary).accessibilityHidden(true)
-        }.padding(.horizontal, 12).padding(.vertical, 5).contentShape(Rectangle())
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: folder ? symbol : "chevron.right")
+                .font(.body).foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
+        }.frame(minHeight: 48).padding(.horizontal, 12).padding(.vertical, 6).contentShape(Rectangle())
+            .overlay(alignment: .bottom) { Rectangle().fill(contrast == .increased ? Color.secondary : BoothStyle.border).frame(height: 0.5) }
     }
     private func durationLabel(_ seconds: Double) -> String {
         let minutes = Int(max(0, seconds.isFinite ? seconds : 0) / 60)
@@ -448,7 +452,7 @@ private struct PlaylistRowLabel: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 5) {
                         Text(title).boothFont(14, relativeTo: .subheadline, weight: .semibold)
-                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                            .foregroundStyle(.primary).lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
                         if pinned {
                             Image(systemName: "pin.fill").font(.caption).foregroundStyle(BoothStyle.accent).accessibilityHidden(true)
                         }
@@ -541,28 +545,16 @@ struct LibrarySearchField: View {
 }
 
 #if os(iOS)
-private struct SharedFolderActions: View {
+struct SharedFolderPrompts: ViewModifier {
     @Bindable var model: BoothModel
-    @State private var creating = false
-    @State private var joining = false
     @State private var crewName = ""
     @State private var displayName = ""
     @State private var inviteCode = ""
     @State private var actionRunning = false
 
-    var body: some View {
-        Menu {
-            Button("New shared folder", systemImage: "folder.badge.plus") { creating = true }
-            Button("Join shared folder", systemImage: "person.badge.plus") { joining = true }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "folder.badge.person.crop").font(.body).frame(width: 32)
-                Text("Shared folder").boothFont(14, relativeTo: .subheadline, weight: .semibold)
-                Spacer()
-                Image(systemName: "plus").font(.caption.weight(.semibold))
-            }.frame(minHeight: 44).padding(.horizontal, 12).padding(.vertical, 5)
-        }.disabled(actionRunning).accessibilityIdentifier("crew.folder.actions")
-        .alert("New shared folder", isPresented: $creating) {
+    func body(content: Content) -> some View {
+        content
+        .alert("New shared folder", isPresented: $model.newSharedFolderPresented) {
             TextField("Crew name", text: $crewName)
             TextField("Your name", text: $displayName)
             Button("Cancel", role: .cancel) { crewName = "" }
@@ -576,7 +568,7 @@ private struct SharedFolderActions: View {
         } message: {
             Text("Every playlist in this folder is shared with your crew.")
         }
-        .alert("Join shared folder", isPresented: $joining) {
+        .alert("Join shared folder", isPresented: $model.joinSharedFolderPresented) {
             TextField("Invite link or code", text: $inviteCode)
             Button("Cancel", role: .cancel) { inviteCode = "" }
             Button("Continue") {
@@ -587,7 +579,7 @@ private struct SharedFolderActions: View {
     }
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {
         guard !actionRunning else { return }; actionRunning = true
-        Task { defer { actionRunning = false }; do { try await operation() } catch { model.crewError = error.localizedDescription } }
+        Task { defer { actionRunning = false }; do { try await operation() } catch { model.message = error.localizedDescription } }
     }
 }
 

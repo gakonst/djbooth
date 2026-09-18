@@ -110,6 +110,12 @@ private struct LibrarySidebar: View {
             if crewID != nil {
                 actions.append(UIAction(title: "Members", image: UIImage(systemName: "person.2")) { _ in model.crewMembersPresented = true })
             }
+            if model.hasCloudSession {
+                actions.append(UIMenu(title: "Shared folder", image: UIImage(systemName: "folder.badge.person.crop"), children: [
+                    UIAction(title: "New shared folder", image: UIImage(systemName: "folder.badge.plus")) { _ in model.newSharedFolderPresented = true },
+                    UIAction(title: "Join shared folder", image: UIImage(systemName: "person.badge.plus")) { _ in model.joinSharedFolderPresented = true }
+                ]))
+            }
             completion(actions)
         }
     }])
@@ -122,7 +128,7 @@ struct LibraryActionsMenu: UIViewRepresentable {
         let button = UIButton(type: .system)
         button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
         button.showsMenuAsPrimaryAction = true
-        button.tintColor = UIColor(BoothStyle.accent)
+        button.tintColor = .label
         button.accessibilityLabel = "Library actions"; button.accessibilityIdentifier = "library.actions"
         return button
     }
@@ -185,6 +191,7 @@ private final class LibraryPageController: UIHostingController<LibraryPage> {
         default: crewID = nil
         }
         let actions = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: libraryActionsMenu(model: model, crewID: crewID))
+        actions.tintColor = .label
         actions.accessibilityLabel = "Library actions"; actions.accessibilityIdentifier = "library.actions"
         navigationItem.rightBarButtonItems = [actions, agent]
         navigationItem.largeTitleDisplayMode = .never
