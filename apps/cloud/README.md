@@ -69,6 +69,21 @@ The local loopback workstation API still belongs to the Mac's library.
 For CLI publishing, run `pnpm djbooth cloud login --endpoint <worker-origin>`, then
 `pnpm djbooth cloud publish --endpoint <worker-origin>`. Login opens the same Connect
 page and stores its credential in a private file under `~/.config/djbooth/cloud`.
+On a Mac with the Rekordbox library, pull the latest `main`, run `pnpm install`, and
+publish several playlists in one resumable invocation:
+
+```sh
+pnpm djbooth cloud login --endpoint https://djbooth-library.gakonst.workers.dev
+pnpm djbooth cloud publish --endpoint https://djbooth-library.gakonst.workers.dev \
+  --playlist 'Folder/First playlist' --playlist 'Folder/Second playlist' \
+  --db-path /path/to/master.db --progress always --format json
+```
+
+Omit `--db-path` for normal Rekordbox discovery, or omit `--playlist` to publish
+all playlists. A selector accepts an ID, exact name, or full folder path; use a
+path or ID when names repeat. `--dry-run` checks the selection locally. Audio must
+be accessible from that Mac at the locations recorded in `master.db`. Inspect the
+returned failures and conflicts, then rerun the same publish command to resume.
 `cloud logout --endpoint <worker-origin>` removes that local login. Existing explicit
 `--token-file` / `DJBOOTH_CLOUD_TOKEN` overrides accept account credentials, not the old
 shared sync secret. Logout forgets the local session; revoke the grant in Nanocodex
