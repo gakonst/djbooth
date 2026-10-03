@@ -757,7 +757,7 @@ fn build_ethernet_arp_request_frame(
     frame
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn build_arp_reply_for(frame: &[u8], local_mac: [u8; 6], local_ip: Ipv4Addr) -> Option<Vec<u8>> {
     if frame.len() < 42
         || frame.get(12..14)? != 0x0806u16.to_be_bytes()
@@ -784,7 +784,7 @@ fn build_arp_reply_for(frame: &[u8], local_mac: [u8; 6], local_ip: Ipv4Addr) -> 
     Some(reply)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn parse_udp_for(frame: &[u8], local_mac: [u8; 6], local_ip: Ipv4Addr) -> Option<RawUdpReceived> {
     if frame.len() < 42
         || frame.get(0..6)? != local_mac
