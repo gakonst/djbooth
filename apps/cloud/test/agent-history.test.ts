@@ -9,7 +9,7 @@ const account: Account = {
   grantId: `0x${"1".repeat(64)}`,
   agentId: "only-this-agent",
   expiresAt: 9999999999,
-  capabilities: ["chatgpt", "agent.history.read", "agent.output.final"],
+  capabilities: ["nanocodex.agent", "agent.history.read", "agent.output.final"],
 };
 function setup(data: unknown[] = [], has_more = false, latest_cursor = "1000") {
   const fetch = vi.fn(async (_request: Request) =>
@@ -87,7 +87,7 @@ test.each([
 test("a global history permission does not substitute for the agent-specific grant", async () => {
   const { get, fetch } = setup();
   await expect(
-    get("", { ...account, capabilities: ["chatgpt", "history:read"] }),
+    get("", { ...account, capabilities: ["nanocodex.agent", "history:read"] }),
   ).rejects.toMatchObject({ status: 403 });
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -104,7 +104,9 @@ test("final messages require the final-output capability", async () => {
     { type: "turn_completed", turn_id: "a", cursor: "5", final_message: "private" },
   ]);
   expect(
-    await (await get("", { ...account, capabilities: ["chatgpt", "agent.history.read"] })).json(),
+    await (
+      await get("", { ...account, capabilities: ["nanocodex.agent", "agent.history.read"] })
+    ).json(),
   ).toMatchObject({ messages: [], nextBefore: null });
 });
 

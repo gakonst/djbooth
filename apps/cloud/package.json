@@ -24,7 +24,7 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
-    "nanocodex": "0.6.1"
+    "nanocodex": "0.6.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251117.0",

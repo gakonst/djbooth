@@ -24,7 +24,7 @@ export function agentHost(env: Env, account: Account) {
 export async function requireAgentTools(account: Account): Promise<void> {
   if (
     !account.agentId ||
-    !account.capabilities.includes("chatgpt") ||
+    !account.capabilities.includes("nanocodex.agent") ||
     account.appToolCatalogDigest !== (await phoneToolDigest())
   )
     throw new AuthError(

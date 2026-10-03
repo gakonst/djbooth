@@ -62,7 +62,6 @@ const wire = (who) => ({
       "agent.output.actions",
       "spotify",
       "soundcloud",
-      "chatgpt",
     ],
     mcp_connections: [],
     app_tool_catalog_digest: phoneDigest,

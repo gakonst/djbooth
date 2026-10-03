@@ -4,7 +4,7 @@ import { telemetry } from "./telemetry.js";
 import { FAST_AGENT_CONVERSATION_ID } from "./agent-permissions.js";
 
 export const AGENT_SETTINGS = {
-  model: "gpt-5.6-luna",
+  model: "gpt-6-luna",
   thinking: "low",
   reasoning_mode: "standard",
   fast_mode: true,

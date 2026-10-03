@@ -39,15 +39,18 @@ Open the Worker origin, or choose **Continue with Nanocodex**
 in the native app. The same flow as Nanocodex's `js/connect-playground` requests
 only the user's selected Spotify/SoundCloud connections, then opens a durable
 Connect agent. DJ Booth uses the SDK popup dialog because the Nanocodex account host
-restricts iframe embedding to its registered playground origins. Provider credentials stay with Nanocodex. The published SDK dependency
-is pinned, with `patches/nanocodex@0.6.1.patch` carrying the three music-connector
-allowlist/type additions from the supplied Nanocodex checkout. A sibling checkout is
-not required to build or deploy. Remove that patch after upgrading to an SDK release
-that includes both providers. The Nanocodex Connect API, dialog and managed runtime
-must also have that checkout's Spotify/SoundCloud support deployed. The companion
-`nanocodex-djbooth-connect` worktree registers `djbooth` at
-`https://djbooth-library.gakonst.workers.dev`; update the registration for a different
-production origin. Production dialogs reject HTTP loopback callers; test login from HTTPS.
+restricts iframe embedding to its registered playground origins. Provider credentials
+stay with Nanocodex. The published SDK dependency is pinned to `nanocodex@0.6.6`,
+which includes Spotify/SoundCloud support without a local patch. Nanocodex registers app ID
+`djbooth` at `https://djbooth-library.gakonst.workers.dev`; update the registration
+for a different production origin. Agent access requires the `nanocodex.agent`
+capability; ChatGPT is not requested or required. New fast-agent conversations
+use the supported `gpt-6-luna` model. Unused conversations with the retired model
+are updated in place. If a retired-model conversation already accepted turns,
+Nanocodex locks its model and returns HTTP 409; operator-assisted recovery is
+required. Reconnecting preserves the approved conversation rather than creating
+a replacement that would hide its history.
+Production dialogs reject HTTP loopback callers; test login from HTTPS.
 
 Phone sign-in does not request the ChatGPT connector or require a ChatGPT subscription.
 Spotify and SoundCloud are optional; users can leave both unselected.
