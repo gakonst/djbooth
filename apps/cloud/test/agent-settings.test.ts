@@ -32,6 +32,7 @@ function setup(settings = { ...AGENT_SETTINGS, model: "gpt-6-astra", fast_mode: 
 }
 test("new approved conversation gets Luna fast low before use", async () => {
   const { env, fetch } = setup();
+  expect(AGENT_SETTINGS.model).toBe("gpt-6-luna");
   await configureAgent(env, owner);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
@@ -39,6 +40,26 @@ test("reconnecting an already configured thread never patches its locked model",
   const { env, fetch } = setup(AGENT_SETTINGS);
   await configureAgent(env, owner);
   expect(fetch).toHaveBeenCalledTimes(1);
+});
+test("an unused conversation with the retired model is upgraded in place", async () => {
+  const { env, fetch } = setup({ ...AGENT_SETTINGS, model: "gpt-5.6-luna" });
+  await configureAgent(env, owner);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+test("a used retired-model conversation fails without replacing its approved thread", async () => {
+  const { env, fetch } = setup({ ...AGENT_SETTINGS, model: "gpt-5.6-luna" });
+  fetch.mockResolvedValueOnce(
+    Response.json({ settings: { ...AGENT_SETTINGS, model: "gpt-5.6-luna" } }),
+  );
+  fetch.mockResolvedValueOnce(
+    Response.json({ error: { code: "settings_locked" } }, { status: 409 }),
+  );
+  await expect(configureAgent(env, owner)).rejects.toMatchObject({ status: 409 });
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
+    "/v1/grants/grant-a/agents/agent-a",
+    "/v1/grants/grant-a/agents/agent-a/settings",
+  ]);
 });
 test("old conversations are left intact", async () => {
   const { env, fetch } = setup();

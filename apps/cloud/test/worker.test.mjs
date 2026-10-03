@@ -38,7 +38,7 @@ const phoneDigest = `0x${createHash("sha256")
   .update(`nanocodex-app-tool-catalog-v1\0${canonical(phoneCatalog)}`)
   .digest("hex")}`;
 let approvedPhoneDigest = phoneDigest;
-let capabilities = ["nanocodex.agent", "chatgpt", "spotify", "soundcloud", "agent.output.final"];
+let capabilities = ["nanocodex.agent", "spotify", "soundcloud", "agent.output.final"];
 async function connectIssuer(request) {
   assert.equal(request.headers.get("x-nanocodex-app-id"), "djbooth");
   assert.equal(request.headers.get("origin"), "https://library.test");
@@ -1395,9 +1395,17 @@ test("native agent rejects malformed prompts and enforces grant visibility and r
   assert.equal(agentRequests.length, before);
   const saved = capabilities;
   try {
-    capabilities = ["chatgpt"];
+    capabilities = ["nanocodex.agent"];
     const hidden = await request("/v1/agent/turns/native-turn");
     assert.equal((await hidden.json()).finalMessage, undefined);
+    capabilities = ["chatgpt"];
+    for (const [path, method] of [
+      ["/v1/agent/turns/native-turn", "GET"],
+      ["/v1/agent/history", "GET"],
+      ["/v1/agent/tool-host/ticket", "POST"],
+    ]) {
+      assert.equal((await request(path, { method })).status, 403);
+    }
     capabilities = [];
     assert.equal((await request("/v1/agent/turns/native-turn")).status, 403);
     revoked = true;

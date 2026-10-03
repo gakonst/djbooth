@@ -35,8 +35,8 @@ export async function agentRoute(
   account: Account,
   readJSON: (r: Request) => Promise<unknown>,
 ): Promise<Response> {
-  if (!account.agentId || !account.capabilities.includes("chatgpt"))
-    throw new AuthError(403, "Connect ChatGPT in Nanocodex to use your music agent.");
+  if (!account.agentId || !account.capabilities.includes("nanocodex.agent"))
+    throw new AuthError(403, "Sign in with Nanocodex to use your music agent.");
   const path = new URL(request.url).pathname;
   if (path === "/v1/agent/tool-host/ticket") {
     if (request.method !== "POST") throw new AuthError(405, "Method not allowed.");
