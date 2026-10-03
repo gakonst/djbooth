@@ -35,6 +35,8 @@ for (const path of [...appSources, ...testSources, "DJBooth/Info.iOS.plist", "DJ
   fileReferences.set(path, object(`file.${path}`, `isa = PBXFileReference; lastKnownFileType = ${type}; path = ${quote(path)}; sourceTree = SOURCE_ROOT;`));
 }
 const packageReference = object("package", "isa = XCLocalSwiftPackageReference; relativePath = DJBoothKit;");
+const embedReference = object("embedPackage", "isa = XCLocalSwiftPackageReference; relativePath = \"../../vendor/nanocodex/apple/NanocodexConnectEmbed\";");
+const embedNotices = object("embedNotices", "isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = \"../../vendor/nanocodex/apple/MOBILE_DEPENDENCY_NOTICES.md\"; sourceTree = SOURCE_ROOT;");
 const products = [];
 const targets = [];
 const team = "C3Q4NN5ZQ8";
@@ -56,9 +58,12 @@ for (const platform of ["macOS", "iOS"]) {
   const sourcePhase = object(`${targetName}.sources`, `isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ${array(sources)}; runOnlyForDeploymentPostprocessing = 0;`);
   const packageProduct = object(`${targetName}.package`, `isa = XCSwiftPackageProductDependency; package = ${packageReference}; productName = DJBoothKit;`);
   const packageBuild = object(`${targetName}.packageBuild`, `isa = PBXBuildFile; productRef = ${packageProduct};`);
-  const frameworks = object(`${targetName}.frameworks`, `isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (${packageBuild}); runOnlyForDeploymentPostprocessing = 0;`);
+  const embedProduct = object(`${targetName}.embedPackage`, `isa = XCSwiftPackageProductDependency; package = ${embedReference}; productName = NanocodexConnectEmbed;`);
+  const embedBuild = object(`${targetName}.embedBuild`, `isa = PBXBuildFile; productRef = ${embedProduct};`);
+  const frameworks = object(`${targetName}.frameworks`, `isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (${packageBuild}, ${embedBuild}); runOnlyForDeploymentPostprocessing = 0;`);
   const assetBuild = object(`${targetName}.assets`, `isa = PBXBuildFile; fileRef = ${fileReferences.get("DJBooth/Assets.xcassets")};`);
-  const resources = object(`${targetName}.resources`, `isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (${assetBuild}); runOnlyForDeploymentPostprocessing = 0;`);
+  const noticesBuild = object(`${targetName}.embedNotices`, `isa = PBXBuildFile; fileRef = ${embedNotices};`);
+  const resources = object(`${targetName}.resources`, `isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (${assetBuild}, ${noticesBuild}); runOnlyForDeploymentPostprocessing = 0;`);
   const linkPhase = platform === "iOS" ? object(`${targetName}.linkBuild`, `isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = (); outputPaths = (); alwaysOutOfDate = 1; runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = ${quote('export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nnode "$SRCROOT/scripts/build-link.mjs"')}; name = "Build embedded DJ Link";`) : null;
   const configuration = configurationList(targetName, {
     ...common, ...platformSettings, PRODUCT_NAME: "DJBooth", PRODUCT_MODULE_NAME: "DJBooth",
@@ -74,7 +79,7 @@ for (const platform of ["macOS", "iOS"]) {
       INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES", INFOPLIST_KEY_UILaunchScreen_Generation: "YES" } : { ENABLE_HARDENED_RUNTIME: "YES" }),
   }, { INFOPLIST_FILE: `DJBooth/Info.Debug.${platform}.plist`, DJBOOTH_OFFLINE_COLLECTION: "",
     ...(platform === "iOS" ? { DEBUG_INFORMATION_FORMAT: "dwarf-with-dsym" } : {}) });
-  targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${linkPhase ? `${linkPhase}, ` : ""}${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct});`));
+  targets.push(object(targetName, `isa = PBXNativeTarget; buildConfigurationList = ${configuration}; buildPhases = (${linkPhase ? `${linkPhase}, ` : ""}${sourcePhase}, ${frameworks}, ${resources}); buildRules = (); dependencies = (); name = ${quote(targetName)}; productName = DJBooth; productReference = ${product}; productType = "com.apple.product-type.application"; packageProductDependencies = (${packageProduct}, ${embedProduct});`));
   const testProduct = object(`${testTargetName}.product`, `isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = ${quote(`${testTargetName}.xctest`)}; sourceTree = BUILT_PRODUCTS_DIR;`);
   products.push(testProduct);
   const testBuildFiles = testSources.map((path) => object(`${testTargetName}.build.${path}`, `isa = PBXBuildFile; fileRef = ${fileReferences.get(path)};`));
@@ -105,9 +110,9 @@ for (const platform of ["macOS", "iOS"]) {
 const appGroup = object("appGroup", `isa = PBXGroup; name = DJBooth; children = ${array([...fileReferences].filter(([path]) => path.startsWith("DJBooth/")).map(([, reference]) => reference))}; sourceTree = "<group>";`);
 const testGroup = object("testGroup", `isa = PBXGroup; name = DJBoothUITests; children = ${array(testSources.map((path) => fileReferences.get(path)))}; sourceTree = "<group>";`);
 const productsGroup = object("products", `isa = PBXGroup; name = Products; children = ${array(products)}; sourceTree = "<group>";`);
-const mainGroup = object("main", `isa = PBXGroup; children = (${appGroup}, ${testGroup}, ${productsGroup}); sourceTree = "<group>";`);
+const mainGroup = object("main", `isa = PBXGroup; children = (${appGroup}, ${testGroup}, ${productsGroup}, ${embedNotices}); sourceTree = "<group>";`);
 const projectConfiguration = configurationList("project", { CLANG_ENABLE_OBJC_ARC: "YES", CLANG_WARN_DOCUMENTATION_COMMENTS: "YES", GCC_WARN_UNINITIALIZED_AUTOS: "YES_AGGRESSIVE" });
-object("project", `isa = PBXProject; attributes = { LastUpgradeCheck = 2660; BuildIndependentTargetsInParallel = YES; TargetAttributes = { ${["macOS", "iOS"].map((p) => `${id(`DJBoothUITests-${p}`)} = { TestTargetID = ${id(`DJBooth-${p}`)}; };`).join(" ")} }; }; buildConfigurationList = ${projectConfiguration}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = ${mainGroup}; productRefGroup = ${productsGroup}; projectDirPath = ""; projectRoot = ""; targets = ${array(targets)}; packageReferences = (${packageReference});`);
+object("project", `isa = PBXProject; attributes = { LastUpgradeCheck = 2660; BuildIndependentTargetsInParallel = YES; TargetAttributes = { ${["macOS", "iOS"].map((p) => `${id(`DJBoothUITests-${p}`)} = { TestTargetID = ${id(`DJBooth-${p}`)}; };`).join(" ")} }; }; buildConfigurationList = ${projectConfiguration}; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = ${mainGroup}; productRefGroup = ${productsGroup}; projectDirPath = ""; projectRoot = ""; targets = ${array(targets)}; packageReferences = (${packageReference}, ${embedReference});`);
 await mkdir(projectDirectory, { recursive: true });
 await writeFile(resolve(projectDirectory, "project.pbxproj"), `// !$*UTF8*$!\n// Generated by pnpm --filter @gakonst/djbooth-apple project.\n{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {\n${objects.join("\n")}\n}; rootObject = ${id("project")}; }\n`);
 console.log(`DJBooth.xcodeproj: ${appSources.length} app sources, ${testSources.length} UI test sources; macOS + iOS.`);

@@ -1,4 +1,5 @@
 import DJBoothKit
+import NanocodexConnectEmbed
 import SwiftUI
 
 /// The library's companion surface; the account-bound agent owns the conversation.
@@ -6,7 +7,15 @@ struct MusicAgentView: View {
     @Bindable var model: BoothModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @State private var composing = false
+    @State private var composerOverflows = false
+    @State private var nativeScroll = EmbedScrollProxy()
+    @State private var nativeScrolling = false
+    @State private var nativeNearLatest = true
+    #else
     @FocusState private var composing: Bool
+    #endif
     @State private var followingLatest = true
     @State private var didScrollInitially = false
 
@@ -56,43 +65,37 @@ struct MusicAgentView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
     }
 
-    private var conversation: some View {
+    @ViewBuilder private var conversation: some View {
+        #if os(iOS)
+        if #available(iOS 18.0, *) {
+            nativeConversation
+        } else {
+            scrollConversation
+        }
+        #else
+        scrollConversation
+        #endif
+    }
+
+    private var scrollConversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 24) {
-                    if model.agentNextBefore != nil {
-                        Button {
+                    if model.agentNextBefore != nil || model.agentHistoryError != nil {
+                        historyControls {
                             let anchor = model.agentMessages.first?.id
                             Task {
                                 await model.loadAgentHistory(earlier: true)
                                 if let anchor { proxy.scrollTo(anchor, anchor: .top) }
                             }
-                        } label: {
-                            Label("Earlier messages", systemImage: "arrow.up").font(.caption.weight(.medium))
-                                .frame(maxWidth: .infinity).padding(.vertical, 8)
-                        }.disabled(model.agentHistoryLoading).accessibilityIdentifier("agent.earlier")
-                    }
-                    if let error = model.agentHistoryError {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(error).font(.caption).foregroundStyle(.secondary)
-                            if model.agentHistoryNeedsConsent {
-                                Button("Allow this conversation", action: openSettings)
-                            } else {
-                                Button("Retry history") { Task { await model.loadAgentHistory() } }
-                            }
-                        }.font(.caption.weight(.medium)).padding(14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(BoothStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+                        }
                     }
                     if model.agentMessages.isEmpty && !model.agentHistoryLoading { welcome }
                     ForEach(model.agentMessages) { message in
                         messageRow(message).id(message.id)
                     }
                     if model.agentPendingID != nil {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text("Booth is working…").font(.subheadline).foregroundStyle(.secondary)
-                        }.padding(.vertical, 4).accessibilityIdentifier("agent.working")
+                        working
                     }
                     Color.clear.frame(height: 1).id("latest")
                         .onAppear { followingLatest = true }
@@ -114,14 +117,110 @@ struct MusicAgentView: View {
             }
             .overlay(alignment: .bottomTrailing) {
                 if !followingLatest && !model.agentMessages.isEmpty {
-                    Button { proxy.scrollTo("latest", anchor: .bottom) } label: {
-                        Label("Latest", systemImage: "arrow.down").font(.caption.weight(.semibold))
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .background(BoothStyle.raised, in: Capsule())
-                            .overlay(Capsule().stroke(BoothStyle.border))
-                    }.padding(16)
+                    latestButton { proxy.scrollTo("latest", anchor: .bottom) }.padding(16)
                 }
             }
+        }
+    }
+
+    // Transport, receipts, history paging, consent, and errors remain with BoothModel.
+    // The SDK owns row virtualization and reading-position restoration on iOS 18.
+    #if os(iOS)
+    @available(iOS 18.0, *)
+    private var nativeConversation: some View {
+        EmbedTranscript(rows: nativeRows, proxy: nativeScroll, followsLatest: followingLatest,
+                        layout: .init(maximumRowWidth: 720, horizontalPadding: 22,
+                                      rowSpacing: 24, verticalPadding: 24),
+                        onMetrics: { metrics in
+            let nearLatest = metrics.contentSize.height - metrics.contentOffset.y
+                - metrics.containerSize.height + metrics.contentInsets.bottom <= 24
+            nativeNearLatest = nearLatest
+            if !nativeScrolling && nearLatest { followingLatest = true }
+        }, onPhase: { _, phase in
+            nativeScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            if nativeScrolling { followingLatest = false }
+            else if nativeNearLatest { followingLatest = true }
+        })
+        .id(model.accountConnectionID)
+        .overlay(alignment: .bottomTrailing) {
+            if !followingLatest && !model.agentMessages.isEmpty {
+                latestButton {
+                    followingLatest = true
+                    nativeScroll.followLatest(animated: true)
+                }.padding(16)
+            }
+        }
+    }
+
+    @available(iOS 18.0, *)
+    private var nativeRows: [EmbedTranscript.Row] {
+        var rows: [EmbedTranscript.Row] = []
+        if model.agentNextBefore != nil || model.agentHistoryError != nil {
+            let historyRevision = [model.agentNextBefore ?? "", model.agentHistoryError ?? "",
+                                   String(model.agentHistoryLoading), String(model.agentHistoryNeedsConsent)]
+            rows.append(.init(id: "history", countsAsMessage: false, revision: historyRevision) {
+                historyControls {
+                    followingLatest = false
+                    let anchor = model.agentMessages.first?.id
+                    Task {
+                        await model.loadAgentHistory(earlier: true)
+                        if let anchor { nativeScroll.scrollTo("message:" + anchor) }
+                    }
+                }
+            })
+        }
+        if model.agentMessages.isEmpty && !model.agentHistoryLoading {
+            rows.append(.init(id: "welcome", countsAsMessage: false, revision: model.agentPendingID ?? "") { welcome })
+        }
+        for message in model.agentMessages {
+            rows.append(.init(id: "message:" + message.id, revision: [message.role, message.text]) {
+                messageRow(message)
+            })
+        }
+        if let pending = model.agentPendingID {
+            rows.append(.init(id: "working", countsAsMessage: false, revision: pending) { working })
+        }
+        rows.append(.init(id: "latest", countsAsMessage: false, revision: 0) { Color.clear.frame(height: 1) })
+        return rows
+    }
+    #endif
+
+    private func historyControls(loadEarlier: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            if model.agentNextBefore != nil {
+                Button(action: loadEarlier) {
+                    Label("Earlier messages", systemImage: "arrow.up").font(.caption.weight(.medium))
+                        .frame(maxWidth: .infinity).padding(.vertical, 8)
+                }.disabled(model.agentHistoryLoading).accessibilityIdentifier("agent.earlier")
+            }
+            if let error = model.agentHistoryError {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(error).font(.caption).foregroundStyle(.secondary)
+                    if model.agentHistoryNeedsConsent {
+                        Button("Allow this conversation", action: openSettings)
+                    } else {
+                        Button("Retry history") { Task { await model.loadAgentHistory() } }
+                    }
+                }.font(.caption.weight(.medium)).padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(BoothStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+    }
+
+    private var working: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Booth is working…").font(.subheadline).foregroundStyle(.secondary)
+        }.padding(.vertical, 4).accessibilityIdentifier("agent.working")
+    }
+
+    private func latestButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label("Latest", systemImage: "arrow.down").font(.caption.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(BoothStyle.raised, in: Capsule())
+                .overlay(Capsule().stroke(BoothStyle.border))
         }
     }
 
@@ -166,9 +265,13 @@ struct MusicAgentView: View {
             else if message.role != "Status" { avatar(size: 26) }
             VStack(alignment: .leading, spacing: 7) {
                 if message.role == "DJ Booth" { Text("Booth").font(.caption.weight(.semibold)).foregroundStyle(BoothStyle.accent) }
-                Text(.init(message.text)).font(message.role == "Status" ? .caption : .body)
-                    .foregroundStyle(message.role == "Status" ? .secondary : .primary)
-                    .lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                if message.role == "DJ Booth" {
+                    EmbedMarkdown(text: message.text, compact: true)
+                } else {
+                    Text(.init(message.text)).font(message.role == "Status" ? .caption : .body)
+                        .foregroundStyle(message.role == "Status" ? .secondary : .primary)
+                        .lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(message.role == "You" ? 14 : 0)
             .background(message.role == "You" ? BoothStyle.accent.opacity(0.13) : .clear,
@@ -186,9 +289,22 @@ struct MusicAgentView: View {
                 }
             }
             HStack(alignment: .bottom, spacing: 12) {
+                #if os(iOS)
+                EmbedComposerEditor(text: $model.agentDraft, focused: $composing,
+                                    overflowing: $composerOverflows, visibleLines: 6,
+                                    accessibilityLabel: "Ask Booth…")
+                    .padding(.vertical, 2).accessibilityIdentifier("agent.input")
+                    .overlay(alignment: .topLeading) {
+                        if model.agentDraft.isEmpty {
+                            Text("Ask Booth…").foregroundStyle(.secondary).padding(.vertical, 10)
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
+                    }
+                #else
                 TextField("Ask Booth…", text: $model.agentDraft, axis: .vertical)
                     .font(.body).lineLimit(1...6).textFieldStyle(.plain).focused($composing)
                     .padding(.vertical, 10).accessibilityIdentifier("agent.input")
+                #endif
                 if model.agentPendingID != nil {
                     Button { Task { await model.cancelAgentTurn() } } label: {
                         Image(systemName: "stop.fill").font(.system(size: 13, weight: .semibold)).frame(width: 38, height: 38)

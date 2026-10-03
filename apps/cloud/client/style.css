@@ -110,8 +110,9 @@ input[type="url"] {
 textarea {
   min-height: 110px;
 }
-#conversation p {
+.music-conversation [data-role] {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: #24282b;
   padding: 20px;
   border-radius: 8px;
@@ -125,4 +126,16 @@ textarea {
 }
 [hidden] {
   display: none !important;
+}
+
+.music-conversation strong {
+  display: block;
+  margin-bottom: 8px;
+}
+.music-conversation [data-role="error"] {
+  color: #ffb7ae;
+}
+.music-conversation [data-agent-part="actions"] {
+  display: flex;
+  gap: 8px;
 }

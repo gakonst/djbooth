@@ -2,6 +2,9 @@ import { conversationAccess, FAST_AGENT_CONVERSATION_ID } from "../src/agent-per
 import { Client, Dialog, Transport, type Connection } from "nanocodex/connect";
 import "./style.css";
 import { phoneTools } from "../src/phone-tools";
+import { createMusicAgent } from "./music-agent.js";
+import { mountConversation } from "./conversation.js";
+import type { Root } from "react-dom/client";
 
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
 const status = (message: string) => {
@@ -11,7 +14,7 @@ const fail = (error: unknown) => {
   el("error").textContent = error instanceof Error ? error.message : String(error);
 };
 async function main() {
-  async function api<T>(path: string, body?: unknown): Promise<T> {
+  async function api<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
     const headers = new Headers(body === undefined ? {} : { "content-type": "application/json" });
     // Each tab uses its own SDK grant, even if another tab changes the login cookie.
     if (path === "/v1/auth/session" || !path.startsWith("/v1/auth/")) {
@@ -27,6 +30,7 @@ async function main() {
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       credentials: "same-origin",
+      signal,
     });
     const value = await response.json();
     if (!response.ok) throw new Error(value.error?.message ?? "Request failed. Try again.");
@@ -49,8 +53,11 @@ async function main() {
     dialog: Dialog.popup({ host: config.dialog }),
     transport: Transport.http(config.api),
   });
-  let agent = false;
-  let active: Connection | undefined;
+  let conversation: Root | undefined;
+  function clearConversation() {
+    conversation?.unmount();
+    conversation = undefined;
+  }
   let generation = 0;
   let polling: ReturnType<typeof setInterval> | undefined;
   const params = new URLSearchParams(location.search);
@@ -99,7 +106,6 @@ async function main() {
       ...(native ? { challenge } : {}),
     });
     if (current !== generation) return;
-    active = connection;
     el("welcome").hidden = true;
     el("workspace").hidden = false;
     el("logout").hidden = false;
@@ -117,7 +123,14 @@ async function main() {
       return;
     }
     status("Opening your agent…");
-    agent = true;
+    clearConversation();
+    conversation = mountConversation(
+      el("conversation"),
+      createMusicAgent(async (path, body, signal) => {
+        if (current !== generation) throw new DOMException("Connection changed.", "AbortError");
+        return api(path, body, signal);
+      }, connection.grant.id),
+    );
     status("Ready. Ask about your music or import a playlist below.");
     await refreshImports();
     if (polling) clearInterval(polling);
@@ -130,9 +143,7 @@ async function main() {
     el<HTMLButtonElement>("connect").disabled = true;
     el<HTMLButtonElement>("manage").disabled = true;
     generation++;
-    agent = false;
-    active = undefined;
-    el("conversation").replaceChildren();
+    clearConversation();
     if (polling) clearInterval(polling);
     status("Waiting for Nanocodex…");
     try {
@@ -172,11 +183,9 @@ async function main() {
   };
   el("logout").onclick = async () => {
     generation++;
-    agent = false;
-    active = undefined;
+    clearConversation();
     if (polling) clearInterval(polling);
     sessionStorage.removeItem(key);
-    el("conversation").replaceChildren();
     el("imports").replaceChildren();
     el("workspace").hidden = true;
     el("welcome").hidden = false;
@@ -189,51 +198,6 @@ async function main() {
       fail(error);
     }
   };
-  el<HTMLFormElement>("prompt").onsubmit = async (event) => {
-    event.preventDefault();
-    if (!agent || !active) return;
-    const current = generation,
-      input = el<HTMLTextAreaElement>("message").value.trim();
-    if (!input) return;
-    el<HTMLButtonElement>("send").disabled = true;
-    el("error").textContent = "";
-    appendMessage("You", input);
-    el<HTMLTextAreaElement>("message").value = "";
-    status("Your agent is working…");
-    try {
-      // Checking the cookie account prevents another tab's login from coupling this
-      // agent's provider access to a different user's library session.
-      const session = await api<{ account: { grantId: string } }>("/v1/auth/session");
-      if (session.account.grantId !== active.grant.id)
-        throw new Error("Your account changed in another tab. Sign in again.");
-      let result = await api<{ id: string; status: string; finalMessage?: string; error?: string }>(
-        "/v1/agent/turns",
-        { id: crypto.randomUUID(), input },
-      );
-      while (result.status === "running" && current === generation) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        result = await api(`/v1/agent/turns/${result.id}`);
-      }
-      if (result.status !== "completed")
-        throw new Error(result.error ?? "Agent stopped before completing the request.");
-      if (current === generation) {
-        appendMessage("DJ Booth", result.finalMessage ?? "");
-        status("");
-      }
-    } catch (error) {
-      if (current === generation) {
-        status("");
-        fail(error);
-      }
-    } finally {
-      el<HTMLButtonElement>("send").disabled = false;
-    }
-  };
-  function appendMessage(who: string, message: string) {
-    const p = document.createElement("p");
-    p.textContent = `${who}\n${message}`;
-    el("conversation").append(p);
-  }
   async function refreshImports() {
     const current = generation;
     const result = await api<{

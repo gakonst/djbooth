@@ -5,6 +5,21 @@ workstation palette and dense library layout. Apple system glass is used for con
 content stays opaque. Waveforms display real Rekordbox analysis, including frequency colours.
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
 On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in and connection approval. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. **Ask DJ Booth** in the library opens the connected agent. Its read-only phone tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts, and imports, including unsynced edits. The phone must remain in the foreground; backgrounding, signing out, or switching accounts detaches its tools. Existing logins must reconnect once to approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same approval flow. Signing out returns to the welcome screen; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
+The native conversation consumes the vendored `NanocodexConnectEmbed` Swift product at
+`vendor/nanocodex/apple/NanocodexConnectEmbed`. Assistant Markdown uses the shared native
+renderer on both platforms, and the growing composer uses the shared UIKit editor on iOS.
+iOS 18+ also uses the SDK's virtualized transcript with stable message identities, history
+restoration, and follow/latest controls. iOS 17 and macOS retain their SwiftUI scroll container;
+macOS retains its native text field. Deployment targets remain iOS 17 and macOS 14.
+`BoothModel` continues to own the grant-bound transport, draft cache, submission receipts,
+history, consent, retry, and cancellation. No account-hand screen service is enabled by this
+integration. The Xcode generator links the same vendored public product into both app targets
+using a portable relative package path and bundles the native dependency notices;
+`DJBoothKit` remains independent of the UI SDK.
+Refresh the native and web source together with `pnpm vendor:nanocodex /path/to/nanocodex` and keep
+the vendor provenance manifest with the snapshot. Then regenerate Xcode using
+`pnpm --filter @gakonst/djbooth-apple project`.
+
 Crew folders share all their playlists with their members. **Members → Add people** presents a
 QR code, Copy link, and the native share sheet (including AirDrop and Messages). HTTPS invites
 show a preview without consuming the single-use invite; **Open in DJ Booth** opens the join
@@ -103,6 +118,16 @@ to build; deployment targets are macOS 14 and iOS 17. Mac and physical-device bu
 Apple Development signing certificate; stable Mac signing keeps saved credentials accessible
 across rebuilds. The simulator uses ad-hoc signing. The development team can be overridden with
 `DJBOOTH_APPLE_TEAM`.
+
+For the embed integration, run `pnpm native:check` on macOS to compile both targets.
+The existing native journey
+`pnpm --filter @gakonst/djbooth-apple test:ui --only-testing DJBoothUITests-iOS/DJLinkUITests/testAgentTakesOverLibraryAndRestoresDraft`
+checks entering the companion, editing a draft, returning to the library, reopening,
+and restoring the draft after relaunch. `ConnectUITests/testLoginAgentAccountSwitchAndSignOut`
+uses the local mobile Worker fixture for real submission, reply rendering, cancellation,
+and account isolation. Start `pnpm --filter @gakonst/djbooth-cloud test:mobile-server`
+before selecting that journey. Linux can regenerate the Xcode project but the native
+check command explicitly skips compilation; that result is not an Apple build pass.
 
 Each device has its own SwiftData/SQLite library and transactional sync outbox. Collections,
 favorites, comments, and colors work offline. Audio is saved in Application Support, addressed and
