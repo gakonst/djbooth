@@ -9,6 +9,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
       - name: Build ARM64 device app for Linux research guest
         run: |
           xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath output/arm64 -jobs 3 CODE_SIGNING_ALLOWED=NO build > output-device-build.log 2>&1
