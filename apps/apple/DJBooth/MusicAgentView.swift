@@ -265,13 +265,9 @@ struct MusicAgentView: View {
             else if message.role != "Status" { avatar(size: 26) }
             VStack(alignment: .leading, spacing: 7) {
                 if message.role == "DJ Booth" { Text("Booth").font(.caption.weight(.semibold)).foregroundStyle(BoothStyle.accent) }
-                if message.role == "DJ Booth" {
-                    EmbedMarkdown(text: message.text, compact: true)
-                } else {
-                    Text(.init(message.text)).font(message.role == "Status" ? .caption : .body)
-                        .foregroundStyle(message.role == "Status" ? .secondary : .primary)
-                        .lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                }
+                Text(.init(message.text)).font(message.role == "Status" ? .caption : .body)
+                    .foregroundStyle(message.role == "Status" ? .secondary : .primary)
+                    .lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
             .padding(message.role == "You" ? 14 : 0)
             .background(message.role == "You" ? BoothStyle.accent.opacity(0.13) : .clear,

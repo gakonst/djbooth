@@ -6,8 +6,8 @@ content stays opaque. Waveforms display real Rekordbox analysis, including frequ
 Mobile shows plain playlist and track lists, with inline notes, color, and the player pinned at the bottom.
 On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in and connection approval. The app saves the login in Keychain and isolates libraries, downloaded media, playback, and pending imports by account. **Ask DJ Booth** in the library opens the connected agent. Its read-only phone tool queries live tracks, playlists, favorites, notes, playback, queue, downloads, sync conflicts, and imports, including unsynced edits. The phone must remain in the foreground; backgrounding, signing out, or switching accounts detaches its tools. Existing logins must reconnect once to approve the phone tool catalog. Spotify and SoundCloud remain optional connections in the same approval flow. Signing out returns to the welcome screen; existing offline libraries remain separate. Use `djbooth cloud login` and `djbooth cloud publish` to publish your Mac library deliberately.
 The native conversation consumes the vendored `NanocodexConnectEmbed` Swift product at
-`vendor/nanocodex/apple/NanocodexConnectEmbed`. Assistant Markdown uses the shared native
-renderer on both platforms, and the growing composer uses the shared UIKit editor on iOS.
+`vendor/nanocodex/apple/NanocodexConnectEmbed`. Message rows retain DJ Booth's existing SwiftUI
+text rendering, typography, and spacing; the growing composer uses the shared UIKit editor on iOS.
 iOS 18+ also uses the SDK's virtualized transcript with stable message identities, history
 restoration, and follow/latest controls. iOS 17 and macOS retain their SwiftUI scroll container;
 macOS retains its native text field. Deployment targets remain iOS 17 and macOS 14.

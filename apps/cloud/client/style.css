@@ -128,14 +128,21 @@ textarea {
   display: none !important;
 }
 
-.music-conversation strong {
-  display: block;
-  margin-bottom: 8px;
-}
 .music-conversation [data-role="error"] {
   color: #ffb7ae;
 }
 .music-conversation [data-agent-part="actions"] {
   display: flex;
   gap: 8px;
+}
+
+/* Match the original prompt layout; cancellation appears only during a turn. */
+.music-conversation:not([data-running="true"]) [data-agent-part="actions"] button[type="button"] {
+  display: none;
+}
+.music-conversation [data-agent-part="status"] {
+  color: #def879;
+}
+.music-conversation [data-agent-part="status"] p {
+  color: inherit;
 }

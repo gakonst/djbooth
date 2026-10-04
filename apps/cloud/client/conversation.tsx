@@ -24,20 +24,26 @@ function MusicConversation() {
   const { controller } = useAgentEmbed();
   const [draft, setDraft] = useState("");
   return (
-    <div className="music-conversation">
+    <div className="music-conversation" data-running={controller.running}>
       <AgentMessages
         aria-label="Conversation with Booth"
-        empty={<p>Ask about your music, find a track, or plan your next set.</p>}
+        empty={null}
         renderEntry={(entry) => (
           <p data-role={entry.kind} key={entry.id}>
-            <strong>
-              {entry.kind === "user" ? "You" : entry.kind === "error" ? "Status" : "DJ Booth"}
-            </strong>
-            {"text" in entry ? entry.text : ""}
+            {`${entry.kind === "user" ? "You" : entry.kind === "error" ? "Status" : "DJ Booth"}
+${"text" in entry ? entry.text : ""}`}
           </p>
         )}
       />
-      <AgentStatus />
+      <AgentStatus>
+        {({ controller }) =>
+          controller.running ? (
+            <p>Your agent is working…</p>
+          ) : controller.status === "Cancelled" ? (
+            <p>Stopped.</p>
+          ) : null
+        }
+      </AgentStatus>
       <AgentComposer
         aria-label="Ask your agent"
         draft={draft}
