@@ -3,16 +3,6 @@ import SwiftUI
 import UIKit
 import ChatLayout
 
-private struct NativeTranscriptVisibilityKey: EnvironmentKey {
-    static let defaultValue = true
-}
-public extension EnvironmentValues {
-    /// Whether this transcript cell is mounted on screen. Use it to suspend media work.
-    var embedTranscriptVisible: Bool {
-        get { self[NativeTranscriptVisibilityKey.self] }
-        set { self[NativeTranscriptVisibilityKey.self] = newValue }
-    }
-}
 @Observable private final class NativeCellVisibility {
     var visible = false
 }
@@ -129,8 +119,7 @@ struct NativeConversationTranscript: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: TranscriptCollectionView, coordinator: Coordinator) {
-        coordinator.parent.proxy.scroll = nil
-        coordinator.parent.proxy.follow = nil
+        coordinator.invalidate()
         view.didLayout = nil
         view.delegate = nil
     }
@@ -176,6 +165,18 @@ struct NativeConversationTranscript: UIViewRepresentable {
         #endif
 
         init(_ parent: NativeConversationTranscript) { self.parent = parent }
+
+        func invalidate() {
+            parent.proxy.scroll = nil
+            parent.proxy.follow = nil
+            for case let cell as NativeTranscriptCell in view?.visibleCells ?? [] {
+                cell.visibility.visible = false
+            }
+            queuedUpdate = nil
+            // Deferred reports and snapshot completions cannot update a removed
+            // conversation or its host bindings after this boundary.
+            view = nil
+        }
 
         func install(_ view: TranscriptCollectionView) {
             self.view = view

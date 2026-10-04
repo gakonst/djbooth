@@ -4397,7 +4397,7 @@ packages:
     resolution: {integrity: sha512-z81GNO7nnYMEhrGh9LeymoE4+Yr0Wn5McHIZMK5cfQCl+NDX08sCZgUc9/6MHni9IWuFLm1Z3HTCXu2z9fN62Q==}
 
   nanocodex-connect-embed@file:vendor/nanocodex/nanocodex-connect-embed-0.1.0.tgz:
-    resolution: {integrity: sha512-E73bXzZF0DkUlo6mDPpCcJpm3/a47ypHeaoNO2tdgbtstXVxqKwetfwQx8AoeD5jvGhdE0Lx8YXhlsX8BbXj0Q==, tarball: file:vendor/nanocodex/nanocodex-connect-embed-0.1.0.tgz}
+    resolution: {integrity: sha512-nF3V+ML4RUB3KkDfjc87jnOG6f8X/+MJpBUOkwj8AGyPoJgvgyXAQCd6MVyMIkWbBqgwEG385oGyNtUynH3L/A==, tarball: file:vendor/nanocodex/nanocodex-connect-embed-0.1.0.tgz}
     version: 0.1.0
     engines: {node: '>=22.13.0'}
     peerDependencies:

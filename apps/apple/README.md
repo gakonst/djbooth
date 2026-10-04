@@ -8,9 +8,10 @@ On iPhone, the welcome screen starts **Continue with Nanocodex** for SMS sign-in
 The native conversation consumes the vendored `NanocodexConnectEmbed` Swift product at
 `vendor/nanocodex/apple/NanocodexConnectEmbed`. Message rows retain DJ Booth's existing SwiftUI
 text rendering, typography, and spacing; the growing composer uses the shared UIKit editor on iOS.
-iOS 18+ also uses the SDK's virtualized transcript with stable message identities, history
-restoration, and follow/latest controls. iOS 17 and macOS retain their SwiftUI scroll container;
-macOS retains its native text field. Deployment targets remain iOS 17 and macOS 14.
+The shared `EmbedConversation` assembly uses the SDK's virtualized transcript on iOS 18+ and
+its portable SwiftUI scroll container on iOS 17 and macOS, with stable message identities,
+history restoration, and follow/latest controls. macOS retains its native text field.
+Deployment targets remain iOS 17 and macOS 14.
 `BoothModel` continues to own the grant-bound transport, draft cache, submission receipts,
 history, consent, retry, and cancellation. No account-hand screen service is enabled by this
 integration. The Xcode generator links the same vendored public product into both app targets

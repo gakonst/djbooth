@@ -22,6 +22,7 @@ const nativePackages = ["NanocodexConnectEmbed", "NanocodexUI", "NanocodexRemote
 const inputPaths = [
   ...packages.map((name) => `js/${name}`),
   ...nativePackages.map((name) => `apple/${name}`),
+  "Package.swift",
   "LICENSE-APACHE",
   "LICENSE-MIT",
   "apple/MOBILE_DEPENDENCY_NOTICES.md",
@@ -126,7 +127,7 @@ for (const name of nativePackages) {
     nativeFiles.push({ file, sha256: createHash("sha256").update(bytes).digest("hex") });
   }
 }
-for (const file of ["LICENSE-APACHE", "LICENSE-MIT", "apple/MOBILE_DEPENDENCY_NOTICES.md"]) {
+for (const file of ["Package.swift", "LICENSE-APACHE", "LICENSE-MIT", "apple/MOBILE_DEPENDENCY_NOTICES.md"]) {
   const bytes = await readFile(join(source, file));
   await writeFile(join(destination, file), bytes);
   nativeFiles.push({ file, sha256: createHash("sha256").update(bytes).digest("hex") });

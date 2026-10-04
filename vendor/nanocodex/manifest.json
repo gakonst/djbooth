@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/gakonst/nanocodex",
-  "revision": "bb57e1217f599c066118ab1793a703bab52a0f1b",
+  "revision": "daf746dbe7c35471b1bc60c189d4ad0d873c4a5f",
   "dirty": false,
   "artifacts": [
     {
@@ -19,7 +19,7 @@
       "name": "nanocodex-connect-embed",
       "version": "0.1.0",
       "file": "nanocodex-connect-embed-0.1.0.tgz",
-      "sha256": "31c31b5afb627a931ec446815f8ebed1eedd1df0ad0bb7a060bff90be93bd9a7"
+      "sha256": "3167dbd9d65f18603548e6343ea08b9803b8158eec757fef66a88e3ed74b85f6"
     }
   ],
   "nativeFiles": [
@@ -28,24 +28,40 @@
       "sha256": "acc718146d21aae829cba1761475e05de39d73209d83af2ab8487a74843cead0"
     },
     {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/Consumer.swift",
+      "sha256": "ea58d572e80bf827a2042d1c0006d392d32324b676c3f353236a68c9853846b0"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/SDKConsumer.xcodeproj/project.pbxproj",
+      "sha256": "384329ae410512fcc1020701d5862aa9013122364450450f1da2bafec4e0f48e"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/SDKConsumer.xcodeproj/xcshareddata/xcschemes/SDKConsumer.xcscheme",
+      "sha256": "d19fa2b3fa88dfb7de8c839de5cd12d53f160d94ee19aa9bbbb24b12ae2fed3c"
+    },
+    {
       "file": "apple/NanocodexConnectEmbed/Package.swift",
       "sha256": "1575926a164dc59a10ca3c644e10e54c17f27ca3920b830e5aad96900f4687f1"
     },
     {
       "file": "apple/NanocodexConnectEmbed/README.md",
-      "sha256": "42b853d5fa45382a193e1cde77f36d6c363d9055326c77b1914797e046fab65c"
+      "sha256": "48962f863f6fa28b48db332613496ffc2a8d851286789c2528f4fb09aeeb7214"
     },
     {
       "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedComponents.swift",
       "sha256": "f6bba8687282231a73e7c28883dfa2ae5e81cb17eb6f4fa1b2af23d04052a715"
     },
     {
+      "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedConversation.swift",
+      "sha256": "28633a8425b8679410ffec531fe594fd034008ccd77c7fb355618b02432ebf61"
+    },
+    {
       "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedTranscript.swift",
-      "sha256": "12f1b0829eda412419d897a2d96a6eb728a98fd2e6dea224684c1211fdd92357"
+      "sha256": "46fb3dd010efdcc8bd1b9f4cc58c08379738769f11704cfe44f0ee9cef86029e"
     },
     {
       "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/NativeConversationTranscript.swift",
-      "sha256": "9db57dabb2adb3b6c5af883ad9ff182f27ee6c05b52da7eec5e8f92f89181f4f"
+      "sha256": "1a0515f20b963701f26b73eb20785325d45880ce4be0ea8c0984b65735c76884"
     },
     {
       "file": "apple/NanocodexUI/Package.resolved",
@@ -802,6 +818,10 @@
     {
       "file": "apple/InboxCore/Tests/InboxCoreTests/VideoAttachmentTests.swift",
       "sha256": "d46a099c992e85f4e5eeb55e5754abb2f1a32162f7123852b446e2c8804353f4"
+    },
+    {
+      "file": "Package.swift",
+      "sha256": "c7fd14cb9ee5536086ec5d20f31e5675cbc018376655ad79bb03f6c9c46c2237"
     },
     {
       "file": "LICENSE-APACHE",

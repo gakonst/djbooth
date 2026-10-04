@@ -2,22 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// Host-controlled geometry. Defaults add no chrome or fixed content width.
-public struct EmbedTranscriptLayout: Equatable {
-    public var maximumRowWidth: CGFloat?
-    public var horizontalPadding: CGFloat
-    public var rowSpacing: CGFloat
-    public var verticalPadding: CGFloat
-
-    public init(maximumRowWidth: CGFloat? = nil, horizontalPadding: CGFloat = 0,
-                rowSpacing: CGFloat = 0, verticalPadding: CGFloat = 0) {
-        self.maximumRowWidth = maximumRowWidth
-        self.horizontalPadding = horizontalPadding
-        self.rowSpacing = rowSpacing
-        self.verticalPadding = verticalPadding
-    }
-}
-
 /// A virtualized native conversation surface with host-owned rows and transport.
 ///
 /// Keep IDs stable and include every rendering input in the row revision. A text
@@ -27,20 +11,7 @@ public struct EmbedTranscriptLayout: Equatable {
 @available(iOS 18.0, *)
 @MainActor
 public struct EmbedTranscript: View {
-    public struct Row {
-        public let id: String
-        public let countsAsMessage: Bool
-        public let revision: AnyHashable
-        let content: () -> AnyView
-
-        public init<Content: View>(id: String, countsAsMessage: Bool = true,
-                                   revision: AnyHashable, @ViewBuilder content: @escaping () -> Content) {
-            self.id = id
-            self.countsAsMessage = countsAsMessage
-            self.revision = revision
-            self.content = { AnyView(content()) }
-        }
-    }
+    public typealias Row = EmbedConversationRow
 
     private let rows: [Row]
     private let proxy: EmbedScrollProxy

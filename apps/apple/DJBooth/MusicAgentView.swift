@@ -10,21 +10,16 @@ struct MusicAgentView: View {
     #if os(iOS)
     @State private var composing = false
     @State private var composerOverflows = false
-    @State private var nativeScroll = EmbedScrollProxy()
-    @State private var nativeScrolling = false
-    @State private var nativeNearLatest = true
     #else
     @FocusState private var composing: Bool
     #endif
     @State private var followingLatest = true
-    @State private var didScrollInitially = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if model.hasCloudSession || model.demo {
                 conversation
-                composer
             } else {
                 ContentUnavailableView("Your music companion", systemImage: "wand.and.stars",
                     description: Text("Connect Nanocodex to pick up your DJ Booth conversation."))
@@ -65,107 +60,30 @@ struct MusicAgentView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(BoothStyle.border).frame(height: 0.5) }
     }
 
-    @ViewBuilder private var conversation: some View {
-        #if os(iOS)
-        if #available(iOS 18.0, *) {
-            nativeConversation
-        } else {
-            scrollConversation
-        }
-        #else
-        scrollConversation
-        #endif
-    }
-
-    private var scrollConversation: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    if model.agentNextBefore != nil || model.agentHistoryError != nil {
-                        historyControls {
-                            let anchor = model.agentMessages.first?.id
-                            Task {
-                                await model.loadAgentHistory(earlier: true)
-                                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-                            }
-                        }
-                    }
-                    if model.agentMessages.isEmpty && !model.agentHistoryLoading { welcome }
-                    ForEach(model.agentMessages) { message in
-                        messageRow(message).id(message.id)
-                    }
-                    if model.agentPendingID != nil {
-                        working
-                    }
-                    Color.clear.frame(height: 1).id("latest")
-                        .onAppear { followingLatest = true }
-                        .onDisappear { followingLatest = false }
-                }
-                .frame(maxWidth: 720).frame(maxWidth: .infinity)
-                .padding(.horizontal, 22).padding(.vertical, 24)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .onChange(of: model.agentMessages.last?.id) { _, _ in
-                if followingLatest || !didScrollInitially {
-                    proxy.scrollTo("latest", anchor: .bottom); didScrollInitially = true
-                }
-            }
-            .onAppear {
-                if !model.agentMessages.isEmpty {
-                    proxy.scrollTo("latest", anchor: .bottom); didScrollInitially = true
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if !followingLatest && !model.agentMessages.isEmpty {
-                    latestButton { proxy.scrollTo("latest", anchor: .bottom) }.padding(16)
-                }
-            }
-        }
-    }
-
-    // Transport, receipts, history paging, consent, and errors remain with BoothModel.
-    // The SDK owns row virtualization and reading-position restoration on iOS 18.
-    #if os(iOS)
-    @available(iOS 18.0, *)
-    private var nativeConversation: some View {
-        EmbedTranscript(rows: nativeRows, proxy: nativeScroll, followsLatest: followingLatest,
-                        layout: .init(maximumRowWidth: 720, horizontalPadding: 22,
-                                      rowSpacing: 24, verticalPadding: 24),
-                        onMetrics: { metrics in
-            let nearLatest = metrics.contentSize.height - metrics.contentOffset.y
-                - metrics.containerSize.height + metrics.contentInsets.bottom <= 24
-            nativeNearLatest = nearLatest
-            if !nativeScrolling && nearLatest { followingLatest = true }
-        }, onPhase: { _, phase in
-            nativeScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
-            if nativeScrolling { followingLatest = false }
-            else if nativeNearLatest { followingLatest = true }
-        })
-        .id(model.accountConnectionID)
-        .overlay(alignment: .bottomTrailing) {
+    // The SDK owns scrolling and conversation identity on every Apple platform.
+    // BoothModel retains transport, receipts, history, consent, and errors.
+    private var conversation: some View {
+        EmbedConversation(conversationID: model.accountConnectionID.uuidString,
+                          rows: conversationRows, followsLatest: $followingLatest,
+                          layout: .init(maximumRowWidth: 720, horizontalPadding: 22,
+                                        rowSpacing: 24, verticalPadding: 24),
+                          transcriptOverlay: {
             if !followingLatest && !model.agentMessages.isEmpty {
-                latestButton {
-                    followingLatest = true
-                    nativeScroll.followLatest(animated: true)
-                }.padding(16)
+                latestButton { followingLatest = true }.padding(16)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
-        }
+        }, composer: { composer })
     }
 
-    @available(iOS 18.0, *)
-    private var nativeRows: [EmbedTranscript.Row] {
-        var rows: [EmbedTranscript.Row] = []
+    private var conversationRows: [EmbedConversationRow] {
+        var rows: [EmbedConversationRow] = []
         if model.agentNextBefore != nil || model.agentHistoryError != nil {
             let historyRevision = [model.agentNextBefore ?? "", model.agentHistoryError ?? "",
                                    String(model.agentHistoryLoading), String(model.agentHistoryNeedsConsent)]
             rows.append(.init(id: "history", countsAsMessage: false, revision: historyRevision) {
                 historyControls {
                     followingLatest = false
-                    let anchor = model.agentMessages.first?.id
-                    Task {
-                        await model.loadAgentHistory(earlier: true)
-                        if let anchor { nativeScroll.scrollTo("message:" + anchor) }
-                    }
+                    Task { await model.loadAgentHistory(earlier: true) }
                 }
             })
         }
@@ -183,7 +101,6 @@ struct MusicAgentView: View {
         rows.append(.init(id: "latest", countsAsMessage: false, revision: 0) { Color.clear.frame(height: 1) })
         return rows
     }
-    #endif
 
     private func historyControls(loadEarlier: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: 24) {
