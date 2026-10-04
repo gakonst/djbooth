@@ -1,45 +1,30 @@
-name: Main
-
+name: Linux virtual iPhone app build
 on:
-  push:
-    branches: [main]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  verify:
-    name: Verify
-    uses: ./.github/workflows/verify.yml
-    secrets: inherit
-
-  changesets:
-    name: Changesets
-    needs: verify
-    permissions:
-      contents: write
-      id-token: write
-      pull-requests: write
-    runs-on: macos-latest
-    timeout-minutes: 15
+  arm64:
+    runs-on: macos-26
+    timeout-minutes: 35
     steps:
-      - name: Clone repository
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        uses: ./.github/actions/install-dependencies
-
-      - name: Use npm 11 for trusted publishing
-        run: npm install --global npm@11
-
-      - name: PR or publish
-        id: changesets
-        uses: changesets/action@v1
+      - uses: actions/checkout@v6
+      - name: Build ARM64 device app for Linux research guest
+        run: |
+          xcodebuild -project apps/apple/DJBooth.xcodeproj -scheme DJBooth-iOS -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath output/arm64 -jobs 3 CODE_SIGNING_ALLOWED=NO build > output-device-build.log 2>&1
+          app=output/arm64/Build/Products/Debug-iphoneos/DJBooth.app
+          test -d "$app"
+          codesign --force --deep --sign - "$app"
+          mkdir -p output/package/Payload
+          cp -R "$app" output/package/Payload/
+          cd output/package
+          ditto -c -k --keepParent Payload DJBooth-research-arm64.ipa
+          shasum -a 256 DJBooth-research-arm64.ipa > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          title: "chore: version packages"
-          commit: "chore: version packages"
-          publish: pnpm run changeset:publish
-          version: pnpm run changeset:version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: linux-inferno-arm64-app
+          path: |
+            output/package/*.ipa
+            output/package/SHA256SUMS
+            output-device-build.log

@@ -1031,6 +1031,25 @@ private struct BoothLaunchConfiguration: Sendable {
         #endif
         restorePlaybackSession()
         restoreAgentConversation()
+        #if DEBUG && os(iOS)
+        // Recording-only synthetic data; MusicAgentView and the SDK own the UI.
+        // No account, remote agent, music service, or playback is exercised.
+        if demo, arguments.contains("--ui-test-sdk-recording"), agentMessages.isEmpty {
+            agentMessages = [MusicAgentMessage(id: "fixture-boundary", role: "Status",
+                text: "RESEARCH FIXTURE · Synthetic conversation · No connected account")]
+            let selections = ["Start with space", "Keep the groove light", "Build the rhythm", "Open the room", "Hold the mood", "Leave room for the next DJ"]
+            for (index, selection) in selections.enumerated() {
+                agentMessages.append(MusicAgentMessage(id: "fixture-user-\(index)", role: "You",
+                    text: "\(selection). What would you suggest for this part of the set?"))
+                agentMessages.append(MusicAgentMessage(id: "fixture-booth-\(index)", role: "DJ Booth",
+                    text: "**\(selection)**\n\nTry a warm, spacious selection and let the percussion lead. Keep the transition unhurried, with a little room between phrases.\n\nThis is sample conversation text for the native SDK recording."))
+            }
+            agentMessages.append(MusicAgentMessage(id: "fixture-last", role: "Status",
+                text: "End of sample conversation · Draft a follow-up below"))
+            persistAgentConversation()
+        }
+        if demo, arguments.contains("--ui-test-sdk-recording") { showAgent = true }
+        #endif
         #if DEBUG
         if !demo, let token = ProcessInfo.processInfo.environment["DJBOOTH_SYNC_TOKEN"], !token.isEmpty {
             // Development bootstrap still goes through issuer verification and
@@ -1045,7 +1064,7 @@ private struct BoothLaunchConfiguration: Sendable {
             player.prepare(track, url: nil, queue: tracks)
         }
         #endif
-        #if DEBUG && os(iOS) && targetEnvironment(simulator)
+        #if DEBUG && os(iOS)
         if demo, arguments.contains("--ui-test-decks") { try djLink.installPreviewDecks() }
         #endif
         try await prepareInitialWaveforms()
