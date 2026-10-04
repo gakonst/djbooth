@@ -24,10 +24,17 @@
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
-    "nanocodex": "0.6.6"
+    "@tanstack/react-query": "^5.101.4",
+    "nanocodex": "0.6.6",
+    "nanocodex-connect-embed": "file:../../vendor/nanocodex/nanocodex-connect-embed-0.1.0.tgz",
+    "nanocodex-react": "file:../../vendor/nanocodex/nanocodex-react-0.1.0.tgz",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251117.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "miniflare": "^4.20251117.0",
     "oxfmt": "^0.35.0",
     "oxlint": "^1.50.0",

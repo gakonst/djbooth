@@ -1,0 +1,839 @@
+{
+  "repository": "https://github.com/gakonst/nanocodex",
+  "revision": "daf746dbe7c35471b1bc60c189d4ad0d873c4a5f",
+  "dirty": false,
+  "artifacts": [
+    {
+      "name": "nanocodex-react",
+      "version": "0.1.0",
+      "file": "nanocodex-react-0.1.0.tgz",
+      "sha256": "35787429f1cbed35935e3e01ac55515dcff69e13eb6386e97accf4fbf89ea19d"
+    },
+    {
+      "name": "nanocodex-terminal",
+      "version": "0.1.0",
+      "file": "nanocodex-terminal-0.1.0.tgz",
+      "sha256": "f48e7b4a164bfd8ab12ee05547fe20f218c7c4a3163b4091b19afe300bfb44b1"
+    },
+    {
+      "name": "nanocodex-connect-embed",
+      "version": "0.1.0",
+      "file": "nanocodex-connect-embed-0.1.0.tgz",
+      "sha256": "3167dbd9d65f18603548e6343ea08b9803b8158eec757fef66a88e3ed74b85f6"
+    }
+  ],
+  "nativeFiles": [
+    {
+      "file": "apple/NanocodexConnectEmbed/.gitignore",
+      "sha256": "acc718146d21aae829cba1761475e05de39d73209d83af2ab8487a74843cead0"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/Consumer.swift",
+      "sha256": "ea58d572e80bf827a2042d1c0006d392d32324b676c3f353236a68c9853846b0"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/SDKConsumer.xcodeproj/project.pbxproj",
+      "sha256": "384329ae410512fcc1020701d5862aa9013122364450450f1da2bafec4e0f48e"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Examples/SDKConsumer/SDKConsumer.xcodeproj/xcshareddata/xcschemes/SDKConsumer.xcscheme",
+      "sha256": "d19fa2b3fa88dfb7de8c839de5cd12d53f160d94ee19aa9bbbb24b12ae2fed3c"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Package.swift",
+      "sha256": "1575926a164dc59a10ca3c644e10e54c17f27ca3920b830e5aad96900f4687f1"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/README.md",
+      "sha256": "48962f863f6fa28b48db332613496ffc2a8d851286789c2528f4fb09aeeb7214"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedComponents.swift",
+      "sha256": "f6bba8687282231a73e7c28883dfa2ae5e81cb17eb6f4fa1b2af23d04052a715"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedConversation.swift",
+      "sha256": "28633a8425b8679410ffec531fe594fd034008ccd77c7fb355618b02432ebf61"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/EmbedTranscript.swift",
+      "sha256": "46fb3dd010efdcc8bd1b9f4cc58c08379738769f11704cfe44f0ee9cef86029e"
+    },
+    {
+      "file": "apple/NanocodexConnectEmbed/Sources/NanocodexConnectEmbed/NativeConversationTranscript.swift",
+      "sha256": "1a0515f20b963701f26b73eb20785325d45880ce4be0ea8c0984b65735c76884"
+    },
+    {
+      "file": "apple/NanocodexUI/Package.resolved",
+      "sha256": "96799eadb92d16a9e4dfb85327907f54c1598e0519d4939d84cfc67a159408e4"
+    },
+    {
+      "file": "apple/NanocodexUI/Package.swift",
+      "sha256": "238bb9f92c69c7d591279564a715d4b03c95db0650ce5d2d562b69770d7a3206"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatCodePreview.swift",
+      "sha256": "8a6ffd86c3e1b1349e8ee02117347c16c305b22372b3a8746d6ca6f4c3499f37"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatCodeText.swift",
+      "sha256": "25cd544dc1f85c95cede24914512326db2a7ef9d73c40d82bd2916f1a57aacf5"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatComposerEditor.swift",
+      "sha256": "af0f9cb105141209e4659c0797b9d6a4a59d593dd3b2ce8be80b7a66bedccb8e"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatGeneratedOutput.swift",
+      "sha256": "d2880a160a07ec7b5f3e1ead572579efa03043878df4154b85e567f036318379"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatGeneratedOutputs.swift",
+      "sha256": "050d550acb56c5d99a1e2bc3e83740d9d0ee035de9adecb105c80e53d80b0d21"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatImagePipeline.swift",
+      "sha256": "82226402463439a3ecb07cb83ae7e4c42cf0a8fe81473dd3efa17d5f1638a708"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatLatestScreen.swift",
+      "sha256": "94c7905d0c57021c83bf1898301debc1086019230e59741afd15c7ee9404d48f"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatMarkdown.swift",
+      "sha256": "9309f85695eaac23444ba6d3eea724b7e43982c7000ba4b475e6c74463bbd093"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatMediaPreview.swift",
+      "sha256": "f455fda2b359a301e3bd06556b00e67877290b110e8b5baed560dfd39a8d00be"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ChatStyle.swift",
+      "sha256": "febe3112d534f7b5cd5ebd84925bfa2330c7dfa95c36dbe9133bbb15c620a35f"
+    },
+    {
+      "file": "apple/NanocodexUI/Sources/NanocodexUI/ClaudeConnectionSection.swift",
+      "sha256": "94af319aad23fcb01d303afbb83c52a6ed83253998c5ae39d99c94ac4a8277cd"
+    },
+    {
+      "file": "apple/NanocodexUI/Tests/NanocodexUITests/ChatCodeViewportTests.swift",
+      "sha256": "55c61d99baed19f9ef2e5398a9a9301c26af77eb84a8d053c4bbe5c9add9d136"
+    },
+    {
+      "file": "apple/NanocodexUI/Tests/NanocodexUITests/ChatComposerPasteTests.swift",
+      "sha256": "44dd63583c2f89c17191fdff3dcc0f92537d008122ba9c3bde769e36433393aa"
+    },
+    {
+      "file": "apple/NanocodexUI/Tests/NanocodexUITests/ChatGeneratedOutputTests.swift",
+      "sha256": "c76f867277cc332d8dc646bdf0efce4f70cb903e2be064a8e1d48cd82f5959bb"
+    },
+    {
+      "file": "apple/NanocodexUI/Tests/NanocodexUITests/ChatMarkdownTests.swift",
+      "sha256": "afd9e746c1c9ff7ea2f51ab339ce6c7b4ea0593bc8015b571ae42b00711e791e"
+    },
+    {
+      "file": "apple/NanocodexRemote/Package.resolved",
+      "sha256": "ce1ec857b9e967e3e4d04ebe2ff9001a54cbaa25edb764c85d5650e7fb184b46"
+    },
+    {
+      "file": "apple/NanocodexRemote/Package.swift",
+      "sha256": "d68ef274b03c7f4a612cfbfdb25ec3fd1f98eda25a0c9f2de9125a0de1bd12e4"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/MacScreen.swift",
+      "sha256": "03571176aed7bdfebc2eed0a967a5668a6c7ba29d6f4f71a5e5640abbc87657a"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/PhoneBridge.swift",
+      "sha256": "2dc870e568e9794b9e7aab4b27ca075f11feac7f9998a2b42ebf4920b58aec45"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/PhoneScreen.swift",
+      "sha256": "c7306256b6fb8ef98a85be6efcc8d83299f956c6cd266100e19126dc9164841d"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteAgent.swift",
+      "sha256": "5995312f3ca730e0af5e86184202876b3dcf763f8ff7163cbecdfe6688808cc8"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteBroadcast.swift",
+      "sha256": "b8f3c687e2869c9780a560897a9b6000e2ed168f87e1fb93cf2d4bad3c6f2ab3"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteCanvas.swift",
+      "sha256": "3c3e4a852f1527b887bb1156fcce7392c1fa877e94c031854f479df93df30d18"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteDashboard.swift",
+      "sha256": "3d327445e3fbd24a1ae9598ad96b8bf4898804369cb5f71c1310227af8bd699b"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteFrame.swift",
+      "sha256": "f765dbaad982f697db11954ca3c0f9c5368118342fe5cb1baa97b0c153a6320b"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteFramePublication.swift",
+      "sha256": "99275adf145b786c4079ed63982e0b179b568901e6d274e502987c285b04565f"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteGameControls.swift",
+      "sha256": "a2c89baf4775dbeea1091b70addaa60868c368edcb5388883bd75e5da555461e"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteICEPreparation.swift",
+      "sha256": "8bf7891367064c0215f701bdd408fecf2f35704de8cea52057155f7c562f6203"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteInputMailbox.swift",
+      "sha256": "2267078c4318a6dda4a7650a4123b7ba896378cd54da9b55b6b741edd5da7502"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteKey.swift",
+      "sha256": "684f132c2fba61a8d7e754fc17e6dbc299c623424ec2c98818b3b41b1a16f317"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemotePeer.swift",
+      "sha256": "17c2830c64201259fa28570dabf70e4637ab0339177bc11a52941475aab4f113"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemotePerformance.swift",
+      "sha256": "63fb9149591d1479cea511fe3e2ff95c8c815638d7aaccac432d62ff5a9a6d3d"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemotePerformanceView.swift",
+      "sha256": "8c47e5d7cc79b6364dd51016c11d5334872d7e78b7fd63ed4a8d5615f2b080c4"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteProtocol.swift",
+      "sha256": "1361ceade76621f77b0c28cbd815dcf1527413c8c242e8b3d987a5cb65bd786e"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteService.swift",
+      "sha256": "9377b5f39958963d42a7b956fc8ed75e91459933732c1aa7c40d97bc77164b35"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteSession.swift",
+      "sha256": "29509e5b837bbb9baf99d12e3b1ae42d9b391b3d06f794695e8974437ea1c260"
+    },
+    {
+      "file": "apple/NanocodexRemote/Sources/NanocodexRemote/RemoteThreadScreen.swift",
+      "sha256": "bd5a87d48af5ef2c9688d19750aebf43f65eec08e5548f64d219627d2f9f4a04"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/AccountFrameTests.swift",
+      "sha256": "d42a675e631831ba9eab5972efb17bd41506780399f9ed4e49a56656523a289c"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/AccountMacTests.swift",
+      "sha256": "18d944d5745bd898c6675e3ab93855196eb7409c41f78a05aea5e935468102b8"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/AccountPhoneAgentTests.swift",
+      "sha256": "c5c07fac968e076d11407cdd9c3d53edbd21e66287a307adadff74b896526bc9"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/AccountPhoneTests.swift",
+      "sha256": "4018bb713571dc89a953d09161dda13bcde99fc0c0468743a68b7d8a52cc5a2b"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/AccountVMTests.swift",
+      "sha256": "7874c0518ae4d642a1fead0ff0256eab90c20237f8cbf3bd51ad55a44491c5cb"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/PhoneBridgeTests.swift",
+      "sha256": "e866e069b836e0756c1c7178dce54e160725ab45040d76d927292de270c95de7"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/PhoneCaptureTests.swift",
+      "sha256": "163e1e7ba8b981e4fc0cb2d38246656fc94dda4ce5ae6d35ac84a4a2970971d0"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteAccessTests.swift",
+      "sha256": "9e9f4662b40afb293a5d7d7d8ce2a893ff52fe1ea8b3d95fa1bf421a90e57b51"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteBroadcastTests.swift",
+      "sha256": "38948da1bfa84d65a8f0cb0c5ac6f9903bdd8763648850823830976df08123f5"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteControlExchangeTests.swift",
+      "sha256": "d5ae77693eb4a0743a8ec7a92e11ab3a26e5932846d9e97196396393fb441cda"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteFrameTests.swift",
+      "sha256": "1b03957b54697cb4ad530aa1810b1c365a5de0f3581cfe98fd0c8de5a84ae1d8"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteGameInputStateTests.swift",
+      "sha256": "f51e241e782a045aa2778a278532ff3b603f5e9859992c3f4e6ca040e1d18d0c"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteHostIdentityTests.swift",
+      "sha256": "eea017c086b236334f0229d04f886d8b0afa4763dbe6daaea0c7aa641d53066f"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteHostRecoveryTests.swift",
+      "sha256": "2eaafb5b58f418f88cfaf3e501a31651f39135887e0f5fe7559eecafb1733bde"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteICEPreparationTests.swift",
+      "sha256": "cd9ff1e115fbd3bb69667d1e95855c396eb74e67e7a5283707cb355140574613"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteInputMailboxTests.swift",
+      "sha256": "90be4efab4c7dfcfce7fd771873dc1c6c8770b4f85d35f0eb178997464c6d3b1"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteMotionBatchingTests.swift",
+      "sha256": "82ff4e020fd83a1731879ba7c63dab3806c90e5a2cfd45d8264ee502f4590ef0"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteNativeGameInputStateTests.swift",
+      "sha256": "ad381b1b24b6667e5719a8c04c6ffb5e3474516b33964541a5afd8a274987474"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemotePeerTests.swift",
+      "sha256": "6ae8ae85206e96b9ce0854dad7d701971f56e5ec2bf34e1cbcfa27c9f5c24101"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemotePerformanceTests.swift",
+      "sha256": "b6b7187d80498975b427a77f47512b56c9c5c806a5b906be96d447b12d634c3c"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteProtocolTests.swift",
+      "sha256": "ab9a53446c1c953cb2dd4cd45be7057579764bc768d46f3d910feedb9aa09129"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteSignalingTests.swift",
+      "sha256": "bed9398b42d3a65ef5cb2f9ee96b70d8539df1ef6ec2b80f3876312bcf3fbdba"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteViewerTests.swift",
+      "sha256": "bfee6568800d28bd085f5c186ef7d0f1af55aa0599590a9aa054912708c2cc5a"
+    },
+    {
+      "file": "apple/NanocodexRemote/Tests/NanocodexRemoteTests/RemoteWireDecoderTests.swift",
+      "sha256": "958c40c3adf92b500e55caec7cb34219b4d7eaa82b7cb1d13740493b7b90b76e"
+    },
+    {
+      "file": "apple/InboxCore/Package.resolved",
+      "sha256": "6ecc7c04c2cafb1767a6916d46712e51e6476f7b4b54f4719a8c883d2b6ea341"
+    },
+    {
+      "file": "apple/InboxCore/Package.swift",
+      "sha256": "78518365d918b498e6664c0261b467e390eb762835481a5a00c046d66e9ab2e2"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/AgentActivity.swift",
+      "sha256": "90389f767b34bb7f8e1c2e01c6079644684a0b649c1e18296910372d90fd8881"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/AgentThreadNotification.swift",
+      "sha256": "ca18798beb8cfb98a2e48d9c0fded83a6ced5b40a3dea0ae43e9fc3d31d02b68"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/AppUpdate.swift",
+      "sha256": "6ad85a9bf59ae78fc3980025ab3e19928852d52f0bff2ce14b8ef23ee76a7ff6"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/AttachmentProviderImport.swift",
+      "sha256": "f4e6b769e428afbe1c9b40773da8c0792308885733fdaafd4464529cf6643ca8"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/BrowserSecureInput.swift",
+      "sha256": "787d27154440eb892b5f4ea8178fe47d427bfaa594eda6402f9440fd065a246c"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/Connectors.swift",
+      "sha256": "73ae2bc23e65f17e4ee4e26931b36bc85c140a37123385cd17b90b591aa5b24c"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ConversationItem.swift",
+      "sha256": "877f2bc3fffbb34866a4332121abbc191cf9ca441f112308804a54ed082e2c84"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/DecisionPreparation.swift",
+      "sha256": "6b1a115ca6fc6a1745cb8b0c59c2c5b178fec204579366100444d7706d914451"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/DownloadSnapshotCache.swift",
+      "sha256": "e2f233bf5150601ca6009bdd7f52b5f8814e59f8bc56b1bbd24bfe6a13e5a35d"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/FocusedCardCache.swift",
+      "sha256": "25ae5c5b22f63588e8d5d278cd6a97dcf980fbd82ba908fc2612ee75c7e458c8"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/GeneratedAppAgentJournal.swift",
+      "sha256": "1a1b48ded7d417e055a9e4ffac0c98b2ff31bac22da37fea1318c0f0868555bb"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/HandTaskProgress.swift",
+      "sha256": "87db7a7e7bd23a16cc8a37ebdc6e492cc36a7320c8c0779b868b677435064a70"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ImageAttachment.swift",
+      "sha256": "a1b3b61132f18eb850a423ae0ef85adad84020074cd0466ce46eebbd1be0c32c"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/InboxPolicy.swift",
+      "sha256": "65a032eb2b14eb008b7800205725d377e165e923de6f6924998b55c58a6dbcb5"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/InboxRosterProjection.swift",
+      "sha256": "87739bb670ad59cec7a243cd0464b32f68b6e334a3e3b663908a390ed70bb926"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/InboxSnoozeJournal.swift",
+      "sha256": "4f20f4679fcc71bb31c47fea9c7039f6eca51335fdaca3a72553fe3b431190ea"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/LockedVoiceActivity.swift",
+      "sha256": "bd50f3f3aebf0c60838ec606bd00ebbc7b4c0ee72ec543f6f40d0d5a673954e6"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/LockedVoiceCompletion.swift",
+      "sha256": "bada9392caf82ec42794559ffb8628a81a64b01876efb6dd9590675f2459b22e"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MacMeetingSaveJournal.swift",
+      "sha256": "295a2ad6b4de722daf87c727934394c8b6ac026f392c8b58e9fb8582a7389495"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ManagedAccess.swift",
+      "sha256": "d3970de7de4e39cd21388abb0a32cab86fe67a3f12761cfcfd5adfb43f307b6e"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ManagedClient+Meetings.swift",
+      "sha256": "87f63678b86891984766070333167e69c570a352614e6c530ddf024aeffb87c9"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ManagedClient.swift",
+      "sha256": "0c5b7e08e47377a4a62f5409a0b2d74ad945cb64f7e551336865d58c979cddf5"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingAudioStore.swift",
+      "sha256": "bbad6a4decbee3a251268df9ec2375e1ecf7f118a27656b56c782ee0fe87ec8f"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingAudioTranscriber.swift",
+      "sha256": "e68680c20b4f5e99fcdb974251548994ede05da03a94aa1cb6a9a2833fee8eb4"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingLibrary.swift",
+      "sha256": "9402f4a804bab6b847e28b59435fbba889872d7dcd4333ae5dd9ac2a46572a20"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingLockedActivity.swift",
+      "sha256": "23184505497a5f06d238709be88748be92d18715a3ab8e2d084f5426ce98954b"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingRecordingStore.swift",
+      "sha256": "e98102170d2586c076c276d7ea801c24055699c87d1f6654b9f413db8cee88d1"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MeetingSegmentPolicy.swift",
+      "sha256": "5a57091c8385d3d955542473d311b9f5b897636cfcd4f4f9d51bb85db09990d4"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MessageAttachment.swift",
+      "sha256": "895986557f2a01da0a7c3f778f163fb344339e72391dbd34dbd87376be4e9549"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MessageQueuePresentation.swift",
+      "sha256": "e672643a701d0f177cc6025f288aeec74e1896612724f18184b6bff24c52008d"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MessageQueueProjectionCache.swift",
+      "sha256": "48275bfee9659f035a59cbd50cc2d59f4794f72818203c4bfc26cb4e3c3d66c9"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/MobileOutboxStore.swift",
+      "sha256": "1fe0e90562cc91f4a10c8a78c65cd167efec8aa6ddfd1f774d12198a50e35cab"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ModelSelection.swift",
+      "sha256": "b3897977a82be65e66473cee66a00c5085727bab7142dd28fe9281fed3b611fe"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/NativeSecureInput.swift",
+      "sha256": "88f1329c057b2c42ab2b90369161af4797e4afff943b890f5931a8e07a2d93f5"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/PendingMessage.swift",
+      "sha256": "732aa639093ff2853183f506105382eb4f5fa3fd5bc7c1856f562766062f8c2b"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/PersistentReadCache.swift",
+      "sha256": "d3024550c3b2103304da07887f169c347fa9040f2c013dd78242067de79e21ff"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/PhoneSignInInput.swift",
+      "sha256": "22fcf04f2f562523b66f781dcbfe0cc30573cd90d69003ac9f38132471117b4b"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/Protocol.swift",
+      "sha256": "3ca16f883fb565885908bfa7541e06c57896ddb004645fa916e2ef3e060338b4"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/PublishedOutputLink.swift",
+      "sha256": "89a3b2b505a107a215c0609a70627345d5b314fecc298472491422445abbe7b1"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/QuickVoiceInput.swift",
+      "sha256": "4de2a279d8d1f169d2c71d872a51dede48df69a370ace48b170a9ec75e273043"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/RealtimeTranscript.swift",
+      "sha256": "b20532fd367206029cbd4f8978046887b9356b1b32cce429d0f547c61cf75c25"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/SMSAuth.swift",
+      "sha256": "892ba51a6efc767fe365ced8dff59118257529f082962f3128516e85305e7af1"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/SMSAuthTransport.swift",
+      "sha256": "c0a65dc8699b1e73c2e9204ad66980a8fc324f3169e13bb489858eb156dc7737"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ScheduledJob.swift",
+      "sha256": "de34106bf74ade30c0f6d7e856934b3293a04d17364d25483013399263db4d02"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ScheduledJobEditor.swift",
+      "sha256": "b4c9c1535380b59e14e91f00100d56d406b64d84ce20c97779113cecf07d467d"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/SecureInput.swift",
+      "sha256": "ee2d5b66ecf1cb7ec827e720c46ecafed23ef267d17e0b94c948457ec12c1a27"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/SpotifyLoopback.swift",
+      "sha256": "66818f385e1c1539b57f8c07d6db1429dc34f393cfb0f5822f4f9a39faf94423"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/SteeringTransfer.swift",
+      "sha256": "cdb8b83795a10676453de30a861d0c1d57e2d234980e26c19f20d4e84f3f4e9e"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TodoInbox.swift",
+      "sha256": "7484243c9bc46c960d3854bf17d29df37d3ef345d30b59c54a3932d175c8c8f6"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TodoMail.swift",
+      "sha256": "e981cd498f84dac56a3a32f47c43bb068023929489c0e97751c66b05c4b91723"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TodoMailSession.swift",
+      "sha256": "4f32a3efb663bb76e1b2a0d31cfc1a2de0b24e94ae24ff24a5faa99486c95e74"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TodoWorkspace.swift",
+      "sha256": "c06ca9d908f4b5b66b9a7bf7ee69d3e99d7564c6c03653762054735c27492d98"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/ToolPresentation.swift",
+      "sha256": "cfc9df3862eafa90e2c8655a4cee98039195af9e6f2a9d9d274c9eea010b94fe"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TranscriptPreparation.swift",
+      "sha256": "10615e8b04f035b5e8059ec112f1f059a5e06b66603ce5b1843380739dd9c426"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TranscriptPublicationPreparation.swift",
+      "sha256": "cc9c53e168a5df720f4c9e6b84b9fe5577839bdfb0f2b1082c3b4cbecaeb3ba4"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TranscriptRetention.swift",
+      "sha256": "74d80d5e402941d810359554e396567ba3cc3ef3e56068ad95cf4ba62017b0a5"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/TurnCancellation.swift",
+      "sha256": "1089675efcad8c0a26ae5ac55dfd007102ced043e285c1d113f2e1f5774d1f62"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/VaultIntake.swift",
+      "sha256": "ab9af28b904c0dd362a6e40e1be20566d47da3cc475175dc44dd301865a474f8"
+    },
+    {
+      "file": "apple/InboxCore/Sources/InboxCore/VideoAttachment.swift",
+      "sha256": "d6a9439e860ff39395492c5da6249f21c00f179221560fb6e3846d88838cf170"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AccountSnapshotTests.swift",
+      "sha256": "28fba91f9a875abb9b0862018cd843c1370460ee68f37273182f904cc7ce5805"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AgentActivityTests.swift",
+      "sha256": "9911bfb4f858d17c9be816ff4abb1165973e02ffbe1cfe376717d71545e5cba2"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AgentRefreshTests.swift",
+      "sha256": "9f5222758edbcfcec167ad504fb714f1549979ecde73c58d12ebc206a4fcbf04"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AgentThreadNotificationTests.swift",
+      "sha256": "5d7150978f4a868cfecf4a9306b43b7e839678fe3d666945deee827e44d2f4e3"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AppUpdateTests.swift",
+      "sha256": "60f0161267277d5ac0e8d3bd3336ff6eee76cb6fb554c8ea1e04ba9b8cdcaf03"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AttachmentIntegrationTests.swift",
+      "sha256": "3c344e14c33405237767d4339a4fd67eab3d2eec782eb9b8fbce5418badc26b0"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/AttachmentUploadTests.swift",
+      "sha256": "a1cfc8c663360507cef9f337cbe24021521b914447ab5f078820aa3554d1265f"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/BrowserLoginTests.swift",
+      "sha256": "5107a7d671030e06d14542149f45afb40b14ac67111579e2800fec29499a16c7"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/BrowserNativeFormTests.swift",
+      "sha256": "db662a48c94e8b78b8e1e6bace319c92446bcfd0d9330a258b2d6151ff446e13"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/BrowserSecureInputTests.swift",
+      "sha256": "6c17ed7eaa0890ff42dbaf122c42b1e50e0e73ba775c6355e831805caabbe7fa"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ConnectorsTests.swift",
+      "sha256": "3e3a2530073a57888de0f2568da3eddeb206e6986f58c3c59667726d2f5301d6"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ConversationItemTests.swift",
+      "sha256": "d779c8ed86a599dc26e553fb3c98eb31c098fc0701df89e31dd586e4562107fc"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ConversationLoadingTests.swift",
+      "sha256": "ca77882e21f79d708160710191364ec798b03df39fc2f7dc46ed493981ab538e"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/DecisionPreparationTests.swift",
+      "sha256": "cda5635ab513fccf43c0fa2067971d674a4a19d7b40c04b749ced4bdafb04c36"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/DownloadSnapshotCacheTests.swift",
+      "sha256": "a82ea131e1c71a9ec9a83ba06dd456dd40f7262187320752d522c576fee4f690"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/Fixtures/VideoAudioCheck.mp4",
+      "sha256": "5e9ac6c51375c596547b61d338fd72623e03f2b861a4c45b62f08bc1ef253ca1"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/Fixtures/VideoLongCheck.mp4",
+      "sha256": "ab1c660ff36eb6fbe75679968fefbf6d2b79852b3ff7f124fcf39dd7020f937f"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/GeneratedAppAgentJournalTests.swift",
+      "sha256": "eb5cb6151c91efc707892fd1ff72770ca081dfec806f7d1c8521886b86cb3749"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/HandTaskExecution.swift",
+      "sha256": "bdedea6170a5ce2144f1a13206a5f2ce9c717bb4fff0194188829ce0de0eb5c7"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/HandTaskExecutionTests.swift",
+      "sha256": "795aca723037c6c78f869efda69216c5853696e66c34f613bb29d443fdfc5cfc"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/HandTaskProgressTests.swift",
+      "sha256": "9f761f38bdedd9a798da68098e07fb41ff9054b6174c4b2c4e838d03e398bf55"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/HistoryCacheTests.swift",
+      "sha256": "a94ce5eb300a6b106313199bd73de7fa32c790706bc53e4133531dfab2e391f2"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/LiveTranscriptDeliveryTests.swift",
+      "sha256": "102d4f1c4ed764071c0d2f49e55cc4ccb305c5cab2923c7f33b2af521b74f536"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/LockedVoiceCompletionTests.swift",
+      "sha256": "7ea2ba3a68d89e93b3691a41927cbbf1c238fec4e8da97cc46214524eba7f89a"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MacMeetingSaveJournalTests.swift",
+      "sha256": "52634616be344240fcd09519264134249ea2b34d0ca306a3f662456e40feefea"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ManagedAccessTests.swift",
+      "sha256": "4be5a2f02e84d242ef38d620c48a83480d1a05e48b5e42a0c552d6200fc2f293"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MeetingAudioCaptureJourneyTests.swift",
+      "sha256": "1d513e4b7440c10721c7e3cb342a1d58817329fbb5c73123edc70066c5674035"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MeetingLibraryJourneyTests.swift",
+      "sha256": "a5c738b7bea51c7dd0a5d86c306da4ff3c752ad85bb17e7a11edeca46c191318"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MeetingPreviewTransportTests.swift",
+      "sha256": "11f5f49f57c77d155bb8ec893e2b29728c941fde12ca45661b7dcbc37c09a167"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MeetingSegmentPolicyTests.swift",
+      "sha256": "892ddc1bc7c8b99b21b58e912a2066f136afb179c78398c10777e026bc52a11a"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MessageAttachmentTests.swift",
+      "sha256": "ad2a94c747b63c8b05524344cdd43a89f3b90f852cd9472090371958ec05b95a"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MessageQueuePresentationTests.swift",
+      "sha256": "6957db3e1de60877a403977477981d9ee2e895d010d10c55821771e1df50faac"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MessageQueueProjectionCacheTests.swift",
+      "sha256": "03d6ed8967919fb1d68f20a233a700a12091a8736ac5d6a893079b9518297e80"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/MobileOutboxStoreTests.swift",
+      "sha256": "49a23944e108b2d7c41f677f5719cc4515b1bf25e5ea046338e1bad8bcd6c89d"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ModelSelectionJourneyTests.swift",
+      "sha256": "e57521a3a6804f3830f81357219bde1b38081586e458eb525314a5972ca83813"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ModelSelectionTests.swift",
+      "sha256": "3437bd97d8fab36523c2f8db8336f9326d11e187bd2a36be3acbc03884a00909"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/NativeSecureInputAuthorizationTests.swift",
+      "sha256": "c7ed0fc9ffa447d0a2c2fe77fc95ec45a2e0cbf1bd8e18663962a3509cfd0ffd"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/NativeSecureInputTests.swift",
+      "sha256": "fedf5827a5858edaa8198681782b54e86bc66066baf21e80b2d0a74050c76ddb"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/PendingMessageTests.swift",
+      "sha256": "bc2f88ea60945ab2735e7ed47fbb0c050583dc899f6d18eeb20f3536ab1c5a95"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/PhoneSignInInputTests.swift",
+      "sha256": "ae56af484a628db374ba92f1dc91ce389f7355487a37c4ccc76be590e8e3e6f4"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ProtocolTests.swift",
+      "sha256": "477082e932884ebcbabc563e6dfafcd7ab4bd5fec2ea9873369a72c260c482fe"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/PublishedOutputDownloadTests.swift",
+      "sha256": "ba651213b3fed3d056a88903d54498a16aee3484f2529db384f0d0c39e5784df"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/PublishedOutputLinkTests.swift",
+      "sha256": "b6d11417548889c6d48eb16b291329147df6d499907a1f44695367149b3e4c40"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/QuickVoiceInputTests.swift",
+      "sha256": "8c37e7fddf6c211d464265513b6d8a776d11268674f1adba5ade722bab61b85f"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/RealtimeTranscriptTests.swift",
+      "sha256": "a3e9b5a705658f1ff9bc09a953d5dfc91561d93d0a88617dbb755cc6df9f0fba"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SMSHTTPFixture.swift",
+      "sha256": "79f69bcdd52c94e21936f18287bb13899d15046a7c95b6a8b78dfaef63e8a618"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SMSProtocolTests.swift",
+      "sha256": "e25224a6f02c43728c5c88c6cf8e95b43ea18aee3e9de81ef0368e2591732f94"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ScheduledJobTests.swift",
+      "sha256": "0fee0fdae07aabc290b48a36c649195a6466cb308301f4f40827c87a42b962cb"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SecureInputTests.swift",
+      "sha256": "2f9b9ffc8c447b1bf700d6a75188851e6668a8819263b9cc864d8f7ef96adc30"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SessionDoneTransportTests.swift",
+      "sha256": "63f395e229b0371c2ad0354805b8e3e5fffc62b1e8f7e5ebb2ff82a12262df4f"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SidebarPresentationTests.swift",
+      "sha256": "3cae00b7b641915d4a12f1e066f13d7060426fa265fda317c07218144828a453"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SpotifyLoopbackTests.swift",
+      "sha256": "b94f0a31041587c2932eb335a2fed4b5e46f2b0ba41b57035d426d8312092b69"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/SteeringTransferTests.swift",
+      "sha256": "16390d189387ed1e85e09299380dc969a0ad2d9e76ccff226a36c536bfe28583"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/StreamRecoveryTests.swift",
+      "sha256": "e5abd5a10ee0af322a1fccdeb0984a9b00b3900e4886ab04e93b49ba5d7ae062"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TodoInboxTests.swift",
+      "sha256": "ad67ef1c40ea2f4b805603c94f540592f9fb5491fa3475553356aa0283613d8d"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TodoMailRetainedReadingTests.swift",
+      "sha256": "45723f8eac19b60c9d193af1ebc275c3e069a81778353be910dd8e4872760913"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TodoSnapshotMutationTests.swift",
+      "sha256": "2d057dac275aca753e1717c01586e2db45f4318a1a7ff2ff165ded978a7d5dd3"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/ToolPresentationTests.swift",
+      "sha256": "2d3adfd5ec32bfc4972fc054514cae8d1ee26620768ca6616a5e9b6476db0643"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TranscriptMediaTests.swift",
+      "sha256": "36a7daa5ed8acf8a62bb1f90ab332700502798b0b881ea82dcc9ab4193ab6b90"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TranscriptPreparationTests.swift",
+      "sha256": "2b2481d1c129e5ce3b904f59d104a790035553ec2a329a20f19cf785ef72c3f5"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TranscriptStreamProjectionTests.swift",
+      "sha256": "627028ef0d89b3dfd4f24b2f46f7203090ad2b90800012f82d58921d6202c40a"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TurnCancellationTests.swift",
+      "sha256": "8d18410c5f96c915a3221033d326425ed30bd92ff91044f373d09a4099bcf199"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/TurnControlIntegrationTests.swift",
+      "sha256": "1da9d40bf17200678242f5d338fd985bf1eccc9c5b51141c76afb6d5cbbd8ce6"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/VaultIntakeTests.swift",
+      "sha256": "dcb29e13d1f4359755cd260723dd1e335e9672cdc91456fa933c35b5d1890cf0"
+    },
+    {
+      "file": "apple/InboxCore/Tests/InboxCoreTests/VideoAttachmentTests.swift",
+      "sha256": "d46a099c992e85f4e5eeb55e5754abb2f1a32162f7123852b446e2c8804353f4"
+    },
+    {
+      "file": "Package.swift",
+      "sha256": "c7fd14cb9ee5536086ec5d20f31e5675cbc018376655ad79bb03f6c9c46c2237"
+    },
+    {
+      "file": "LICENSE-APACHE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "file": "LICENSE-MIT",
+      "sha256": "c9e95fd0bbc34918afab8059045c32e0e776ef45ea95b70f632bedf376dd86ab"
+    },
+    {
+      "file": "apple/MOBILE_DEPENDENCY_NOTICES.md",
+      "sha256": "21814d500d28c4ca29907471abc20b336bb15933984f200ad398d7994cc5b8c0"
+    }
+  ]
+}

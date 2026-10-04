@@ -24,6 +24,18 @@ fixture uses the same reverse MCP path: start
 Connect UI tests. `test/app-mcp.test.ts` verifies that consent and the real SDK
 reverse attachment sign the exact same catalog.
 
+The cloud agent page renders the public `nanocodex-connect-embed/primitives`
+components (`AgentProvider`, `AgentMessages`, `AgentStatus`, and `AgentComposer`).
+DJBooth supplies its own CSS and message labels; it does not import the SDK's
+optional themes. `client/music-agent.ts` adapts the existing grant-bound broker
+to the SDK's normalized Agent contract, including cancellation and disposal.
+The SDK owns transcript and composer state. Connect login, signed phone tools,
+DJ-specific instructions, playlist imports, and native/CLI login handoffs stay
+with DJBooth. A disconnected page stops polling without cancelling cloud work.
+
+The public SDK packages are pinned as repository-relative npm archives under
+`vendor/nanocodex`; see that directory's manifest and refresh instructions.
+
 The Cloudflare Worker hosts the Nanocodex Connect login, music-agent page, and
 account-scoped D1/R2 API. Native chat uses the narrow `/v1/agent/turns` adapter to
 the same Connect grant-bound managed API. The verified issuer response selects the

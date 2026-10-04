@@ -54,7 +54,8 @@
     "typecheck": "pnpm build && pnpm -r --workspace-concurrency=2 run typecheck",
     "usb": "pnpm --filter @gakonst/cdj-usb cli",
     "validate": "pnpm plugin:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
-    "ytdlp": "pnpm --filter @gakonst/ytdlp-ts dev"
+    "ytdlp": "pnpm --filter @gakonst/ytdlp-ts dev",
+    "vendor:nanocodex": "node scripts/vendor-nanocodex.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "latest"
@@ -69,6 +70,11 @@
     ],
     "patchedDependencies": {
       "incur@0.4.13": "patches/incur@0.4.13.patch"
+    },
+    "overrides": {
+      "nanocodex-react": "file:vendor/nanocodex/nanocodex-react-0.1.0.tgz",
+      "nanocodex-terminal": "file:vendor/nanocodex/nanocodex-terminal-0.1.0.tgz",
+      "nanocodex-connect-embed": "file:vendor/nanocodex/nanocodex-connect-embed-0.1.0.tgz"
     }
   }
 }
