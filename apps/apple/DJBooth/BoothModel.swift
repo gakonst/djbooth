@@ -1064,7 +1064,7 @@ private struct BoothLaunchConfiguration: Sendable {
             player.prepare(track, url: nil, queue: tracks)
         }
         #endif
-        #if DEBUG && os(iOS)
+        #if DEBUG && os(iOS) && targetEnvironment(simulator)
         if demo, arguments.contains("--ui-test-decks") { try djLink.installPreviewDecks() }
         #endif
         try await prepareInitialWaveforms()
