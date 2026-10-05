@@ -179,7 +179,6 @@ export class LegacyDevicePdbWriter {
   private readonly pageSize: number;
   private readonly originalSlots = new Map<number, number>();
   private readonly appendedSlots = new Map<number, number>();
-  private readonly newGenerations = new Map<number, number>();
   private readonly touchedPages = new Map<number, Set<number>>();
   private readonly artistIds = new Map<string, number>();
   private readonly albumIds = new Map<string, number>();
@@ -449,13 +448,12 @@ export class LegacyDevicePdbWriter {
   /** Finalize page generations and return a private copy of `export.pdb`. */
   build(): Buffer {
     if (!this.finalized) {
-      for (const [table, pages] of this.touchedPages) {
-        const generation = this.newGenerations.get(table);
-        if (generation === undefined)
-          throw new Error(`Missing generation for table ${String(table)}`);
-        for (const page of pages) this.putU32(page * this.pageSize + 0x10, generation);
+      if (this.touchedPages.size) {
+        const sequence = this.u32(0x14);
+        for (const pages of this.touchedPages.values())
+          for (const page of pages) this.putU32(page * this.pageSize + 0x10, sequence);
+        this.putU32(0x14, sequence + 1);
       }
-      if (this.touchedPages.size) this.putU32(0x14, this.u32(0x14) + 1);
       this.finalized = true;
     }
     return Buffer.from(this.data);
@@ -709,22 +707,6 @@ export class LegacyDevicePdbWriter {
   }
 
   private markTableTouched(table: number, pageIndex: number): void {
-    if (!this.newGenerations.has(table)) {
-      const tableOffset = this.tableEntryOffset(table);
-      let page = this.u32(tableOffset + 8);
-      const last = this.u32(tableOffset + 12);
-      let generation = 0;
-      const visited = new Set<number>();
-      while (true) {
-        if (visited.has(page))
-          throw new TypeError(`DeviceSQL table ${String(table)} contains a page cycle`);
-        visited.add(page);
-        generation = Math.max(generation, this.u32(page * this.pageSize + 0x10));
-        if (page === last) break;
-        page = this.u32(page * this.pageSize + 0x0c);
-      }
-      this.newGenerations.set(table, generation + 1);
-    }
     const pages = this.touchedPages.get(table) ?? new Set<number>();
     pages.add(pageIndex);
     this.touchedPages.set(table, pages);
@@ -788,6 +770,70 @@ export class LegacyDevicePdbWriter {
   private putU32(offset: number, value: number): void {
     this.data.writeUInt32LE(requireUnsigned("u32", value, 4), offset);
   }
+}
+
+/**
+ * Record one metadata-only DeviceSQL transaction touching every present data row.
+ *
+ * This repairs exports produced with table-local page sequences without changing
+ * any logical row bytes. The returned buffer is a private copy.
+ */
+export function repairLegacyDevicePdbSequences(data: Buffer): Buffer {
+  if (data.length < 4096) throw new TypeError("Truncated DeviceSQL database");
+  const output = Buffer.from(data);
+  const pageSize = output.readUInt32LE(4);
+  if (pageSize !== 4096 || output.length % pageSize)
+    throw new TypeError(`Unsupported DeviceSQL page size ${String(pageSize)}`);
+  const sequence = output.readUInt32LE(0x14);
+  if (sequence === 0xffff_ffff) throw new RangeError("DeviceSQL sequence is exhausted");
+
+  const tables = output.readUInt32LE(8);
+  const touched = new Set<number>();
+  for (let index = 0; index < tables; index++) {
+    const tableOffset = 0x1c + index * 16;
+    const table = output.readUInt32LE(tableOffset);
+    const last = output.readUInt32LE(tableOffset + 12);
+    const visited = new Set<number>();
+    let page = output.readUInt32LE(tableOffset + 8);
+    while (true) {
+      if (visited.has(page))
+        throw new TypeError(`DeviceSQL table ${String(table)} contains a page cycle`);
+      visited.add(page);
+      const pageOffset = page * pageSize;
+      if (pageOffset + pageSize > output.length)
+        throw new RangeError(`DeviceSQL page ${String(page)} is outside the database`);
+      if (!(output[pageOffset + 0x1b]! & 0x40)) {
+        const slots = output[pageOffset + 0x18]! + 0x100 * (output[pageOffset + 0x19]! & 1);
+        let first = -1;
+        let present = 0;
+        for (let group = 0; group < Math.ceil(slots / 16); group++) {
+          const groupBase = pageOffset + pageSize - group * 0x24;
+          const count = Math.min(16, slots - group * 16);
+          const validMask = count === 16 ? 0xffff : (1 << count) - 1;
+          const presence = output.readUInt16LE(groupBase - 4) & validMask;
+          output.writeUInt16LE(presence, groupBase - 2);
+          present += bitCount(presence);
+          if (first < 0 && presence)
+            for (let bit = 0; bit < count; bit++)
+              if (presence & (1 << bit)) {
+                first = group * 16 + bit;
+                break;
+              }
+        }
+        if (present) {
+          output.writeUInt32LE(sequence, pageOffset + 0x10);
+          output.writeUInt16LE(present, pageOffset + 0x20);
+          output.writeUInt16LE(first, pageOffset + 0x22);
+          touched.add(page);
+        }
+      }
+      if (page === last) break;
+      page = output.readUInt32LE(pageOffset + 0x0c);
+    }
+  }
+  if (!touched.size) throw new TypeError("DeviceSQL database contains no present rows");
+  output.writeUInt32LE(sequence + 1, 0x14);
+  return output;
 }
 
 function u32Buffer(value: number): Buffer {

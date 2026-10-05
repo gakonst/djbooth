@@ -14,6 +14,7 @@ import {
   legacyUsbAnalysisPath,
   LegacyDevicePdbWriter,
   readLegacyDeviceExportMarker,
+  repairLegacyDevicePdbSequences,
   syncLegacyDeviceLibrary,
   syncLegacyDevicePlaylist,
   syncLegacyDevicePlaylistFolder,
@@ -198,6 +199,57 @@ describe("legacy Device Library PDB", () => {
       expect.objectContaining({ id: newFolder, name: "DJ Sets I Like", folder: true }),
       expect.objectContaining({ id: newPlaylist, name: "Lee Burridge", trackIds: [41] }),
     ]);
+  });
+
+  it("uses the database-wide edit sequence for every page touched by a transaction", () => {
+    const initial = new LegacyDevicePdbWriter();
+    const beforeSequence = initial.build().readUInt32LE(0x14);
+    const writer = new LegacyDevicePdbWriter();
+    const track = writer.addTrack({
+      title: "Global sequence",
+      artist: "Artist",
+      key: "8A",
+      filePath: "/Contents/global-sequence.mp3",
+    });
+    const playlist = writer.createPlaylist("Sequence test");
+    writer.addToPlaylist(playlist, track);
+    const output = writer.build();
+
+    expect(output.readUInt32LE(0x14)).toBe(beforeSequence + 1);
+    const touchedSequences = new Set<number>();
+    const touchedTables = new Set([0, 2, 5, 7, 8]);
+    for (let page = 1; page * 4096 < output.length; page++) {
+      const offset = page * 4096;
+      if (
+        touchedTables.has(output.readUInt32LE(offset + 8)) &&
+        !(output[offset + 0x1b]! & 0x40) &&
+        output.readUInt16LE(offset + 0x20)
+      )
+        touchedSequences.add(output.readUInt32LE(offset + 0x10));
+    }
+    expect(touchedSequences).toEqual(new Set([beforeSequence]));
+  });
+
+  it("repairs page sequences without changing logical rows", () => {
+    const writer = new LegacyDevicePdbWriter();
+    const track = writer.addTrack({
+      title: "Repair me",
+      artist: "Artist",
+      filePath: "/Contents/repair-me.mp3",
+    });
+    const playlist = writer.createPlaylist("Repair test");
+    writer.addToPlaylist(playlist, track);
+    const before = writer.build();
+    const sequence = before.readUInt32LE(0x14);
+    const repaired = repairLegacyDevicePdbSequences(before);
+
+    expect(inspectLegacyDevicePdb(repaired)).toEqual(inspectLegacyDevicePdb(before));
+    expect(repaired.readUInt32LE(0x14)).toBe(sequence + 1);
+    for (let page = 1; page * 4096 < repaired.length; page++) {
+      const offset = page * 4096;
+      if (!(repaired[offset + 0x1b]! & 0x40) && repaired.readUInt16LE(offset + 0x20))
+        expect(repaired.readUInt32LE(offset + 0x10)).toBe(sequence);
+    }
   });
 
   it("writes tracks, lookup metadata, folders, and ordered playlists", () => {
@@ -629,6 +681,47 @@ describe("master.db to legacy Device Library export", () => {
     expect(inspection.tracks.find(({ filePath }) => filePath.endsWith("/one.mp3"))?.title).toBe(
       "one.mp3",
     );
+  });
+
+  it("uses the published FAT-safe filename in both device libraries", async () => {
+    const fixture = exportFixture();
+    const connection = new Database(fixture.databasePath);
+    connection
+      .prepare("UPDATE djmdContent SET FileNameL = ? WHERE ID = ?")
+      .run("What The F*** Is That.mp3", "1");
+    connection.close();
+    mkdirSync(fixture.output);
+
+    await syncLegacyDevicePlaylistFolder({
+      databasePath: fixture.databasePath,
+      databaseUnlock: false,
+      folderName: "Gigs",
+      fresh: true,
+      targetDirectory: fixture.output,
+    });
+
+    const inspection = inspectLegacyDevicePdb(
+      readFileSync(join(fixture.output, "PIONEER", "rekordbox", "export.pdb")),
+    );
+    const legacy = inspection.tracks.find(({ filename }) => filename.startsWith("What The F"));
+    expect(legacy).toMatchObject({
+      filename: "What The F___ Is That.mp3",
+      filePath: "/Contents/music-ts/00000002/What The F___ Is That.mp3",
+    });
+
+    const oneLibrary = new DeviceLibraryPlus(
+      join(fixture.output, "PIONEER", "rekordbox", "exportLibrary.db"),
+    );
+    oneLibrary.open();
+    expect(
+      oneLibrary.executeSql("SELECT fileName, path FROM content WHERE fileName LIKE 'What The F%'"),
+    ).toEqual([
+      {
+        fileName: "What The F___ Is That.mp3",
+        path: "/Contents/music-ts/00000002/What The F___ Is That.mp3",
+      },
+    ]);
+    oneLibrary.close();
   });
 
   it("keeps SQLite authoritative and emits audio, rewritten ANLZ, playlists, and export.pdb", async () => {

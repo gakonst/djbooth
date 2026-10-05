@@ -980,7 +980,10 @@ function oneLibraryTrack(
   usbAudioPath: string,
   usbAnalysisPath: string,
 ): OneLibraryExportTrack {
-  const filename = stringValue(content.get("FileNameL")) ?? basename(usbAudioPath);
+  // The FAT-safe published basename is authoritative. Keeping FileNameL from
+  // master.db here can make OneLibrary disagree with both the legacy database
+  // and the actual file whenever the source name contains characters such as *.
+  const filename = basename(usbAudioPath);
   return {
     masterDbId: stringValue(content.get("MasterDBID")),
     masterContentId: track.contentId,
