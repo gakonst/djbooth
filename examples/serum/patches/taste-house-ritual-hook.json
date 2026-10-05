@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "name": "Taste model ritual hook",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "tutorial": {
+    "title": "How To Make Indie Dance Like Mita Gami & Adam Ten (Maccabi House)",
+    "url": "https://www.youtube.com/watch?v=ktPQjgMMBP4",
+    "section": "repeat the rhythmic cell while varying pitch, octave, and timbre"
+  },
+  "masterVolumePercent": 56,
+  "portamentoMs": 46,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 74,
+    "octave": 0,
+    "unison": 5,
+    "detunePercent": 8,
+    "blendPercent": 76,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 9,
+    "warp": { "mode": "Bend +", "amountPercent": 18 }
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 28,
+    "octave": 1,
+    "semitones": 7,
+    "unison": 2,
+    "detunePercent": 4,
+    "blendPercent": 83,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 90,
+    "randomPhasePercent": 5
+  },
+  "noise": {
+    "sample": "Analog/ARP 2600 Click.wav",
+    "levelPercent": 11,
+    "pitchPercent": 50,
+    "finePercent": 0,
+    "pan": 0,
+    "phasePercent": 0,
+    "randomPhasePercent": 12
+  },
+  "ampEnvelope": {
+    "attackMs": 3,
+    "holdMs": 0,
+    "decayMs": 310,
+    "sustainPercent": 22,
+    "releaseMs": 185
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 1580,
+    "resonancePercent": 23,
+    "drivePercent": 35,
+    "fatPercent": 21,
+    "mixPercent": 100,
+    "stereoPercent": 24,
+    "route": ["oscillatorA", "oscillatorB", "noise"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 31,
+      "mixPercent": 38,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 330,
+      "lowQPercent": 63,
+      "lowGainDb": -6,
+      "highType": "Shelf",
+      "highFrequencyHz": 4200,
+      "highQPercent": 44,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -26,
+      "ratio": "4:1",
+      "attackMs": 17,
+      "releaseMs": 118,
+      "gainDb": 0,
+      "multiband": true
+    }
+  },
+  "lfos": {
+    "pluck": {
+      "mode": "envelope",
+      "rateHz": 4.8,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 16, "valuePercent": 72 },
+        { "positionPercent": 54, "valuePercent": 20 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "spark": {
+      "mode": "envelope",
+      "rateHz": 12,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 9, "valuePercent": 52 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pluck",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 1580, "maximum": 6800 }
+    },
+    {
+      "source": "pluck",
+      "destination": "oscillatorB.level",
+      "range": { "unit": "percent", "minimum": 12, "maximum": 34 }
+    },
+    {
+      "source": "spark",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 1 }
+    }
+  ],
+  "designNotes": [
+    "The foreground hook has a fixed rhythmic fingerprint but room for octave and answer-note changes.",
+    "Dry foreground and Ableton-processed depth duplicates are arranged separately in the production graph."
+  ]
+}

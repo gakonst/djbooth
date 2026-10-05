@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-counter",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 2
+  },
+  "tracks": [
+    {
+      "id": "counter",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/smalltown-neon-lead.json",
+      "gainDb": -4,
+      "notes": [
+        {
+          "beat": 0,
+          "durationBeats": 1.78,
+          "note": 75,
+          "velocity": 80
+        },
+        {
+          "beat": 2,
+          "durationBeats": 1.7,
+          "note": 74,
+          "velocity": 76
+        },
+        {
+          "beat": 4,
+          "durationBeats": 1.78,
+          "note": 72,
+          "velocity": 82
+        },
+        {
+          "beat": 6,
+          "durationBeats": 1.7,
+          "note": 70,
+          "velocity": 76
+        },
+        {
+          "beat": 8,
+          "durationBeats": 1.78,
+          "note": 68,
+          "velocity": 81
+        },
+        {
+          "beat": 10,
+          "durationBeats": 1.7,
+          "note": 72,
+          "velocity": 77
+        },
+        {
+          "beat": 12,
+          "durationBeats": 1.78,
+          "note": 70,
+          "velocity": 82
+        },
+        {
+          "beat": 14,
+          "durationBeats": 1.7,
+          "note": 67,
+          "velocity": 78
+        },
+        {
+          "beat": 16,
+          "durationBeats": 1.78,
+          "note": 72,
+          "velocity": 82
+        },
+        {
+          "beat": 18,
+          "durationBeats": 1.7,
+          "note": 75,
+          "velocity": 79
+        },
+        {
+          "beat": 20,
+          "durationBeats": 1.78,
+          "note": 74,
+          "velocity": 83
+        },
+        {
+          "beat": 22,
+          "durationBeats": 1.7,
+          "note": 70,
+          "velocity": 78
+        },
+        {
+          "beat": 24,
+          "durationBeats": 1.78,
+          "note": 68,
+          "velocity": 81
+        },
+        {
+          "beat": 26,
+          "durationBeats": 1.7,
+          "note": 67,
+          "velocity": 77
+        },
+        {
+          "beat": 28,
+          "durationBeats": 0.72,
+          "note": 63,
+          "velocity": 82
+        },
+        {
+          "beat": 29,
+          "durationBeats": 0.72,
+          "note": 67,
+          "velocity": 84
+        },
+        {
+          "beat": 30,
+          "durationBeats": 1.72,
+          "note": 70,
+          "velocity": 87
+        }
+      ]
+    }
+  ]
+}

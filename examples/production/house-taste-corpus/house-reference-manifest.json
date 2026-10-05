@@ -1,0 +1,1674 @@
+{
+  "schemaVersion": 1,
+  "name": "Personal house production language and hook-lineage references",
+  "generatedAt": "2026-08-09T21:50:57.816Z",
+  "source": "Weighted Spotify playlists resolved to local Rekordbox audio",
+  "productionLanguageTracks": 48,
+  "hookLineageTracks": 10,
+  "tracks": [
+    {
+      "id": "loofy-last-night",
+      "title": "Last Night",
+      "artists": [
+        "Loofy"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/tsita-collab/Loofy - Last Night.mp3",
+      "role": "production-language",
+      "tasteScore": 39.52,
+      "selectionScore": 117.873,
+      "spotifyId": "5mF7p5mwgaPZyIykUhO3PN",
+      "playlists": [
+        "tektek25",
+        "Botzi Dance",
+        "Botzi kala",
+        "Dance 2025",
+        "summer24 shazams"
+      ],
+      "genres": [
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 129,
+        "key": "2A",
+        "rating": 4,
+        "playCount": 3
+      }
+    },
+    {
+      "id": "adam-ten-rivers-and-homes-retake",
+      "title": "Rivers and Homes Retake",
+      "artists": [
+        "Adam Ten",
+        "J.Views"
+      ],
+      "year": 2026,
+      "audio": "/Users/gakonst/Music/tracks-ts/adam-ten-burning-man-2025-v2/tracks/024 - Adam Ten, J.Views - Rivers and Homes Retake [spotify-27yxfXtOHaPkytNz0P2HoL].m4a",
+      "role": "production-language",
+      "tasteScore": 25.240000000000002,
+      "selectionScore": 111.48,
+      "spotifyId": "27yxfXtOHaPkytNz0P2HoL",
+      "playlists": [
+        "ADAM TEN - TRACK ID'S",
+        "pre summer",
+        "late night"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 127,
+        "key": "3B",
+        "rating": 0,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "whomadewho-silence-secrets-adriatique-remix",
+      "title": "Silence & Secrets - Adriatique Remix",
+      "artists": [
+        "WhoMadeWho",
+        "Adriatique"
+      ],
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/WhoMadeWho, Adriatique - Silence & Secrets - Adriatique Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 26.24,
+      "selectionScore": 105.547,
+      "spotifyId": "5twGTwrfKmxSc21cTGNPNn",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance",
+        "Opener Dance"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "afro house",
+        "techno"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "6A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "ugo-banchi-chase-the-80-s",
+      "title": "Chase The 80's",
+      "artists": [
+        "Ugo Banchi"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Ugo Banchi - Chase The 80's.mp3",
+      "role": "production-language",
+      "tasteScore": 32.16,
+      "selectionScore": 102.08,
+      "spotifyId": "47RSRxsYj3DNZKiq76DA5O",
+      "playlists": [
+        "Julya Karma audio",
+        "late night",
+        "Botzi Electronic",
+        "Botzi kala"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "8A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "adam-ten-spring-girl",
+      "title": "Spring Girl",
+      "artists": [
+        "Adam Ten",
+        "Maori"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/afro-later/Adam Ten, Maori - Spring Girl.mp3",
+      "role": "production-language",
+      "tasteScore": 18.28,
+      "selectionScore": 97.56,
+      "spotifyId": "03mX4WEpvZPkHmEsd2ZoV8",
+      "playlists": [
+        "my-own-usb",
+        "Madarae Feb 2025"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 126,
+        "key": "6A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "parallelle-renegade-adam-ten-mita-gami-remix",
+      "title": "Renegade - Adam Ten & Mita Gami Remix",
+      "artists": [
+        "Parallelle",
+        "Nicolas Masseyeff",
+        "Adam Ten",
+        "Mita Gami"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Botes/Parallelle, Nicolas Masseyeff - Renegade - Adam Ten & Mita Gami Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 17.8,
+      "selectionScore": 96.6,
+      "spotifyId": "1DdpxHPTsrivn3X0KumOQz",
+      "playlists": [
+        "my-own-usb",
+        "Madarae Feb 2025"
+      ],
+      "genres": [
+        "organic house",
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 123,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "highlite-crew",
+      "title": "Crew",
+      "artists": [
+        "HIGHLITE"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/myusb/HIGHLITE - Crew.mp3",
+      "role": "production-language",
+      "tasteScore": 25.68,
+      "selectionScore": 94.173,
+      "spotifyId": "3f6YkXdCnCqs9vlUjUCwFo",
+      "playlists": [
+        "tektek25",
+        "my-own-usb",
+        "late night"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 126,
+        "key": "6A",
+        "rating": 2,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "echonomist-secret-places-club-version",
+      "title": "Secret Places - Club Version",
+      "artists": [
+        "Echonomist",
+        "Avangart Tabldot",
+        "Alexandros Miaris"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/soundcloud-recordings/innervisions/Echonomist, Avangart Tabldot, Alexandros Miaris - Secret Places - Club Version.mp3",
+      "role": "production-language",
+      "tasteScore": 17.56,
+      "selectionScore": 92.633,
+      "spotifyId": "6wFMuwk68ucO68swNiFZbI",
+      "playlists": [
+        "new echo inspo",
+        "exploration"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house",
+        "afro house"
+      ],
+      "rekordbox": {
+        "bpm": 121,
+        "key": "9A",
+        "rating": 2,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "omri-selector",
+      "title": "Selector",
+      "artists": [
+        "OMRI.",
+        "Yamagucci"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/myusb/OMRI., Yamagucci - Selector.mp3",
+      "role": "production-language",
+      "tasteScore": 18.48,
+      "selectionScore": 90.787,
+      "spotifyId": "1JjWnKKn1lh0xTtmBjeGfy",
+      "playlists": [
+        "Julya Karma audio",
+        "my-own-usb"
+      ],
+      "genres": [
+        "indie dance",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "6A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "gotye-somebody-2024",
+      "title": "Somebody (2024)",
+      "artists": [
+        "Gotye",
+        "FISHER",
+        "Chris Lake",
+        "Kimbra",
+        "Sante Sansone"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Freddy Recs/Gotye, FISHER, Chris Lake, Kimbra, Sante Sansone - Somebody (2024).mp3",
+      "role": "production-language",
+      "tasteScore": 25.12,
+      "selectionScore": 89.393,
+      "spotifyId": "0agQ9vIV7NP4dntGKLcCXO",
+      "playlists": [
+        "tektek25",
+        "2024 House Vibes",
+        "Dance 2025"
+      ],
+      "genres": [
+        "tech house",
+        "house",
+        "bass house"
+      ],
+      "rekordbox": {
+        "bpm": 130,
+        "key": "7A",
+        "rating": 4,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "dj-t-funk-on-you-emanuel-satie-remix",
+      "title": "Funk On You - Emanuel Satie Remix",
+      "artists": [
+        "DJ T.",
+        "Emanuel Satie"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/fall-2025/public/DJ T., Emanuel Satie - Funk On You - Emanuel Satie Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 16.32,
+      "selectionScore": 85.753,
+      "spotifyId": "37VCY2VTg98X5zSvY7FVfJ",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "4A",
+        "rating": 2,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "rafael-naughty-extended",
+      "title": "Naughty - Extended",
+      "artists": [
+        "Rafael",
+        "Mishell"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/myusb/Rafael, Mishell - Naughty - Extended.mp3",
+      "role": "production-language",
+      "tasteScore": 16.84,
+      "selectionScore": 85.68,
+      "spotifyId": "3JnwpSdRT1B2xgN5lVXbx8",
+      "playlists": [
+        "tektek25",
+        "my-own-usb"
+      ],
+      "genres": [
+        "indie dance",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 127,
+        "key": "4A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "emanuel-satie-hotline-edit",
+      "title": "Hotline - Edit",
+      "artists": [
+        "Emanuel Satie",
+        "Maga",
+        "Sean Doron",
+        "Tim Engelhardt"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/myusb/Emanuel Satie, Maga, Sean Doron, Tim Engelhardt - Hotline - Edit.mp3",
+      "role": "production-language",
+      "tasteScore": 16.92,
+      "selectionScore": 84.953,
+      "spotifyId": "29U2ADbo8pVNOjsLw0ClDJ",
+      "playlists": [
+        "my-own-usb",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic house",
+        "tech house",
+        "organic house",
+        "afro house",
+        "melodic techno",
+        "indie dance",
+        "progressive house"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "trikk-luxo",
+      "title": "Luxo",
+      "artists": [
+        "Trikk"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Trikk - Luxo.mp3",
+      "role": "production-language",
+      "tasteScore": 17.32,
+      "selectionScore": 84.7,
+      "spotifyId": "6gn7rTpP0DkB0qoeqYjbg1",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "3A",
+        "rating": 2,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "mita-gami-what-is-luv",
+      "title": "What Is Luv",
+      "artists": [
+        "Mita Gami",
+        "Rafael"
+      ],
+      "year": 2026,
+      "audio": "/Users/gakonst/Music/2026/Rafael Brunello Raw Cuts Santa Monica Pier/Mita Gami & Rafael - What Is Luv.mp3",
+      "role": "production-language",
+      "tasteScore": 15.8,
+      "selectionScore": 83.84,
+      "spotifyId": "6cbUxwLzwFKxHRrkKocDno",
+      "playlists": [
+        "ADAM TEN - TRACK ID'S",
+        "late night"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "1A",
+        "rating": 0,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "maga-feeling-it",
+      "title": "Feeling It",
+      "artists": [
+        "Maga",
+        "Sean Doron",
+        "Tim Engelhardt"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Maga, Sean Doron, Tim Engelhardt - Feeling It.mp3",
+      "role": "production-language",
+      "tasteScore": 17.08,
+      "selectionScore": 83.447,
+      "spotifyId": "1zz4GSOFhmxjkicfBFfsIG",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic house",
+        "organic house",
+        "afro house",
+        "melodic techno",
+        "indie dance",
+        "progressive house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "2B",
+        "rating": 2,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "loofy-last-night-anyma-x-layton-giordani-remix",
+      "title": "Last Night - Anyma x Layton Giordani Remix",
+      "artists": [
+        "Loofy",
+        "Anyma",
+        "Layton Giordani"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Freddy Recs/Loofy, Anyma, Layton Giordani - Last Night - Anyma x Layton Giordani Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 22.48,
+      "selectionScore": 83.293,
+      "spotifyId": "22hOKPKTAegLoLJKM33K4a",
+      "playlists": [
+        "tektek25",
+        "summer24 shazams",
+        "summer24 likes"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno",
+        "stutter house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 129,
+        "key": "2A",
+        "rating": 4,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "luke-alessi-scuze-me",
+      "title": "Scuze Me",
+      "artists": [
+        "Luke Alessi"
+      ],
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/fall-2025/tektek25/Luke Alessi - Scuze Me.mp3",
+      "role": "production-language",
+      "tasteScore": 18.24,
+      "selectionScore": 79.847,
+      "spotifyId": "0QCyJWhbJJg3w4AAvx5KRG",
+      "playlists": [
+        "new echo inspo",
+        "tektek25"
+      ],
+      "genres": [
+        "house"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "11A",
+        "rating": 2,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "rufus-du-sol-on-my-knees-cassian-remix",
+      "title": "On My Knees - Cassian Remix",
+      "artists": [
+        "RÜFÜS DU SOL",
+        "Cassian"
+      ],
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/RÜFÜS DU SOL, Cassian - On My Knees - Cassian Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 17.64,
+      "selectionScore": 79.747,
+      "spotifyId": "1CSpqWhM6rbOvA268uT9jh",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "progressive house"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "sabb-one-of-us-dennis-ferrer-remix",
+      "title": "One of Us - Dennis Ferrer Remix",
+      "artists": [
+        "Sabb",
+        "Forrest",
+        "Dennis Ferrer"
+      ],
+      "year": 2015,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Sabb, Forrest, Dennis Ferrer - One of Us - Dennis Ferrer Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 17.88,
+      "selectionScore": 79.273,
+      "spotifyId": "2Q2R8rbJ1WW3OmHrxEYJ17",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "tech house",
+        "uk funky",
+        "deep house",
+        "funky house",
+        "house",
+        "afro house"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "rem-siman-face-the-music",
+      "title": "Face The Music",
+      "artists": [
+        "Rem Siman"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/myusb/Rem Siman - Face The Music.mp3",
+      "role": "production-language",
+      "tasteScore": 16.84,
+      "selectionScore": 78.467,
+      "spotifyId": "1VxY2ryDkVsakCrlfTYO4j",
+      "playlists": [
+        "my-own-usb",
+        "gak dance"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "9A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "yet-more-erotic-trip",
+      "title": "Erotic Trip",
+      "artists": [
+        "Yet More"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/music2025/dixon-radio/Yet More - Erotic Trip.mp3",
+      "role": "production-language",
+      "tasteScore": 17.4,
+      "selectionScore": 77.887,
+      "spotifyId": "7LHfYT7JpqNz8uFFYPj8WR",
+      "playlists": [
+        "new echo inspo",
+        "gak dance"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "melodic techno",
+        "afro house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "9A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "chris-lorenzo-appetite",
+      "title": "Appetite",
+      "artists": [
+        "Chris Lorenzo"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/opener/Chris Lorenzo - Appetite.mp3",
+      "role": "production-language",
+      "tasteScore": 17.68,
+      "selectionScore": 77.06,
+      "spotifyId": "6zldvnVMC25b4uliSKO9Lz",
+      "playlists": [
+        "tektek25",
+        "Opener Dance"
+      ],
+      "genres": [
+        "bass house",
+        "bassline",
+        "house",
+        "tech house",
+        "g-house"
+      ],
+      "rekordbox": {
+        "bpm": 132,
+        "key": "4A",
+        "rating": 4,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "frankey-sandrino-love-complete",
+      "title": "Love Complete",
+      "artists": [
+        "Frankey & Sandrino",
+        "Charlotte Riby"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Frankey & Sandrino, Charlotte Riby - Love Complete.mp3",
+      "role": "production-language",
+      "tasteScore": 17.52,
+      "selectionScore": 76.88,
+      "spotifyId": "2IFQ0hkOo9t0Gf8JoOIdpA",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic house",
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 123,
+        "key": "9A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "discip-mind-games",
+      "title": "Mind Games",
+      "artists": [
+        "Discip"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/myusb/Discip - Mind Games.mp3",
+      "role": "production-language",
+      "tasteScore": 18.04,
+      "selectionScore": 76.427,
+      "spotifyId": "0eKOn3pMNfyrG2FvJNkbcc",
+      "playlists": [
+        "tektek25",
+        "my-own-usb"
+      ],
+      "genres": [
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 128,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "monkey-safari-palomar",
+      "title": "Palomar",
+      "artists": [
+        "Monkey Safari"
+      ],
+      "year": 2020,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Monkey Safari - Palomar.mp3",
+      "role": "production-language",
+      "tasteScore": 17.64,
+      "selectionScore": 76.22,
+      "spotifyId": "2QDU5CyoeAU1PQuQXSQIas",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic house",
+        "organic house",
+        "afro house",
+        "deep house",
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "6A",
+        "rating": 2,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "musumeci-the-party-ft-a-i",
+      "title": "The Party ft A.I.",
+      "artists": [
+        "Musumeci",
+        "Dodi Palese"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Musumeci, Dodi Palese - The Party feat. A.I..mp3",
+      "role": "production-language",
+      "tasteScore": 17,
+      "selectionScore": 76.08,
+      "spotifyId": "2LJ94j3V0jFUKrgKug0dws",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "minimal techno",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 123,
+        "key": "6A",
+        "rating": 2,
+        "playCount": 3
+      }
+    },
+    {
+      "id": "fideles-no-human-interaction",
+      "title": "No Human Interaction",
+      "artists": [
+        "Fideles"
+      ],
+      "year": 2022,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Fideles - No Human Interaction.mp3",
+      "role": "production-language",
+      "tasteScore": 16.84,
+      "selectionScore": 75.653,
+      "spotifyId": "0LXZcxnmswUA9FUc7TsrEH",
+      "playlists": [
+        "Julya Karma audio",
+        "gak dance"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "5A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "westend-get-this-party-started",
+      "title": "Get This Party Started",
+      "artists": [
+        "Westend"
+      ],
+      "year": 2021,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Sunset/Westend - Get This Party Started.mp3",
+      "role": "production-language",
+      "tasteScore": 17.2,
+      "selectionScore": 74.593,
+      "spotifyId": "3aBNMuz8S7wZguV8xuwLem",
+      "playlists": [
+        "tektek25",
+        "Opener Dance"
+      ],
+      "genres": [
+        "tech house",
+        "latin house",
+        "house"
+      ],
+      "rekordbox": {
+        "bpm": 126,
+        "key": "1B",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "trikk-raiva",
+      "title": "Raiva",
+      "artists": [
+        "Trikk",
+        "MEUTE"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Trikk, MEUTE - Raiva.mp3",
+      "role": "production-language",
+      "tasteScore": 16.16,
+      "selectionScore": 74.38,
+      "spotifyId": "77ejm2NZIATDQnZW0wi2Pn",
+      "playlists": [
+        "Julya Karma audio",
+        "Dance 2025"
+      ],
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance",
+        "brass band"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "2A",
+        "rating": 3,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "war-low-rider-kyle-watson-remix",
+      "title": "Low Rider - Kyle Watson Remix",
+      "artists": [
+        "War",
+        "Kyle Watson"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Sunset/War, Kyle Watson - Low Rider - Kyle Watson Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 17.28,
+      "selectionScore": 73.44,
+      "spotifyId": "5JA85EYInaPr1SehlXtMXG",
+      "playlists": [
+        "tektek25",
+        "Opener Dance"
+      ],
+      "genres": [
+        "tech house",
+        "bass house",
+        "house",
+        "g-house"
+      ],
+      "rekordbox": {
+        "bpm": 129,
+        "key": "6A",
+        "rating": 4,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "tal-fussman-persona",
+      "title": "Persona",
+      "artists": [
+        "Tal Fussman"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/Shazam/Tal Fussman - Persona.mp3",
+      "role": "production-language",
+      "tasteScore": 18.68,
+      "selectionScore": 73.313,
+      "spotifyId": "033gWXBGVVmWxS8bULKY9j",
+      "playlists": [
+        "gak track ids",
+        "new echo inspo"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 126,
+        "key": "10A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "adam-ten-sweet-boy",
+      "title": "Sweet Boy",
+      "artists": [
+        "Adam Ten",
+        "Rafael"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/fall-2025/audio-liva/Adam Ten, Rafael - Sweet Boy.mp3",
+      "role": "production-language",
+      "tasteScore": 8.6,
+      "selectionScore": 72.2,
+      "spotifyId": "1SB3vBA3V37paKqQ4BfLVn",
+      "playlists": [
+        "Lee Burridge b2b Patricio — Lightning in a Bottle 2026"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "9A",
+        "rating": 3,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "omri-nothing-wrong-love-mix",
+      "title": "Nothing Wrong - Love Mix",
+      "artists": [
+        "OMRI."
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/fall-2025/audio-liva/OMRI. - Nothing Wrong - Love Mix.mp3",
+      "role": "production-language",
+      "tasteScore": 14.96,
+      "selectionScore": 71.247,
+      "spotifyId": "7iplrJUdhVjYgAjZGINro8",
+      "playlists": [
+        "pre summer",
+        "late night"
+      ],
+      "genres": [
+        "indie dance",
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "7A",
+        "rating": 3,
+        "playCount": 4
+      }
+    },
+    {
+      "id": "green-velvet-percolator-chris-lake-remix",
+      "title": "Percolator - Chris Lake Remix",
+      "artists": [
+        "Green Velvet",
+        "Chris Lake"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/music2025/tech-spot-25/Green Velvet, Chris Lake - Percolator - Chris Lake Remix.mp3",
+      "role": "production-language",
+      "tasteScore": 15.8,
+      "selectionScore": 70.753,
+      "spotifyId": "3Nkv2tNDDCn6Do1qVfE6tq",
+      "playlists": [
+        "tektek25",
+        "Dance 2025"
+      ],
+      "genres": [
+        "tech house",
+        "chicago house",
+        "techno",
+        "house",
+        "bass house"
+      ],
+      "rekordbox": {
+        "bpm": 128,
+        "key": "12A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "bryan-kessler-can-t-stop-the-future",
+      "title": "Can't Stop the Future",
+      "artists": [
+        "Bryan Kessler"
+      ],
+      "year": 2019,
+      "audio": "/Users/gakonst/Music/Shazam/Bryan Kessler - Can't Stop the Future.mp3",
+      "role": "production-language",
+      "tasteScore": 18.68,
+      "selectionScore": 70.473,
+      "spotifyId": "32Rhgz5G2fuNZUyzX8A6u1",
+      "playlists": [
+        "gak track ids",
+        "new echo inspo"
+      ],
+      "genres": [
+        "indie dance"
+      ],
+      "rekordbox": {
+        "bpm": 120,
+        "key": "4A",
+        "rating": 2,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "brunello-science-fiction",
+      "title": "Science Fiction",
+      "artists": [
+        "Brunello"
+      ],
+      "year": 2026,
+      "audio": "/Users/gakonst/Music/2026/Rafael Brunello Raw Cuts Santa Monica Pier/Brunello - Science Fiction.mp3",
+      "role": "production-language",
+      "tasteScore": 15.28,
+      "selectionScore": 69.453,
+      "spotifyId": "6FTveMyq8szPAloptdZ17g",
+      "playlists": [
+        "pre summer",
+        "late night"
+      ],
+      "genres": [
+        "indie dance"
+      ],
+      "rekordbox": {
+        "bpm": 127,
+        "key": "10B",
+        "rating": 0,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "alex-wann-my-love-2024",
+      "title": "My Love (2024)",
+      "artists": [
+        "Alex Wann",
+        "Route 94",
+        "Jess Glynne"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/music2025/madarae-feb-25/Alex Wann, Route 94, Jess Glynne - My Love (2024).mp3",
+      "role": "production-language",
+      "tasteScore": 17,
+      "selectionScore": 67.94,
+      "spotifyId": "2nljjiWhzVIugb5vgEMQQk",
+      "playlists": [
+        "Madarae Feb 2025",
+        "2024 House Vibes"
+      ],
+      "genres": [
+        "afro house",
+        "melodic house",
+        "afro tech",
+        "house"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "4A",
+        "rating": 4,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "echonomist-panic-attack",
+      "title": "Panic Attack",
+      "artists": [
+        "Echonomist",
+        "Jenia Tarsol"
+      ],
+      "year": 2021,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Freddy Recs/Echonomist, Jenia Tarsol - Panic Attack.mp3",
+      "role": "production-language",
+      "tasteScore": 8.24,
+      "selectionScore": 65.993,
+      "spotifyId": "4ZIMJvY5y0OAxuNTBgSGbE",
+      "playlists": [
+        "new echo inspo"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 120,
+        "key": "5A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "brunello-melted",
+      "title": "Melted",
+      "artists": [
+        "Brunello"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/tracks-ts/brunello-lightning-in-a-bottle-2026/tracks/14 - Brunello - Melted [spotify-2S6Yp0oUifZH2vWkVoRDHJ].m4a",
+      "role": "production-language",
+      "tasteScore": 14.92,
+      "selectionScore": 65.733,
+      "spotifyId": "2S6Yp0oUifZH2vWkVoRDHJ",
+      "playlists": [
+        "pre summer",
+        "late night"
+      ],
+      "genres": [
+        "indie dance"
+      ],
+      "rekordbox": {
+        "bpm": 127,
+        "key": "2A",
+        "rating": 0,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "mita-gami-sun",
+      "title": "Sun",
+      "artists": [
+        "Mita Gami"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/cleaned-up-music/frontier-early/Mita Gami - Sun.mp3",
+      "role": "production-language",
+      "tasteScore": 7,
+      "selectionScore": 65.24,
+      "spotifyId": "6FZEmS1Yvqo9xur5UZvsxx",
+      "playlists": [
+        "gak track ids"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "11A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "moojo-secret-id",
+      "title": "Secret ID",
+      "artists": [
+        "Moojo",
+        "Da Capo"
+      ],
+      "year": 2023,
+      "audio": "/Users/gakonst/Music/summer-heavy/Moojo, Da Capo - Secret ID.mp3",
+      "role": "production-language",
+      "tasteScore": 15.2,
+      "selectionScore": 63.28,
+      "spotifyId": "3DFuT29Zjg3UR2mXmim5Y9",
+      "playlists": [
+        "Madarae Feb 2025",
+        "summer24 shazams"
+      ],
+      "genres": [
+        "afro house",
+        "afro tech",
+        "latin house",
+        "tribal house",
+        "3 step",
+        "deep house"
+      ],
+      "rekordbox": {
+        "bpm": 120,
+        "key": "12A",
+        "rating": 3,
+        "playCount": 4
+      }
+    },
+    {
+      "id": "kasango-like-that",
+      "title": "Like That",
+      "artists": [
+        "Kasango",
+        "Chris Arna",
+        "Voodoochild"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/music2025/madarae-feb-25/Kasango, Chris Arna, Voodoochild - Like That.mp3",
+      "role": "production-language",
+      "tasteScore": 15.68,
+      "selectionScore": 63.1,
+      "spotifyId": "6BMQJGldPH49ZsdyEnTuBs",
+      "playlists": [
+        "Madarae Feb 2025",
+        "Banger Opening Set Without Tech House"
+      ],
+      "genres": [
+        "afro house",
+        "afro tech"
+      ],
+      "rekordbox": {
+        "bpm": 122,
+        "key": "4A",
+        "rating": 3,
+        "playCount": 4
+      }
+    },
+    {
+      "id": "echonomist-the-harbour",
+      "title": "The Harbour",
+      "artists": [
+        "Echonomist",
+        "Jenia Tarsol",
+        "Throws"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/may-releases/Echonomist, Jenia Tarsol, Throws - The Harbour.mp3",
+      "role": "production-language",
+      "tasteScore": 5.88,
+      "selectionScore": 57.273,
+      "spotifyId": "3ntivoa9Fgr2BBdpZNXgva",
+      "playlists": [
+        "exploration"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 121,
+        "key": "10A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "yamagucci-first-choice",
+      "title": "First Choice",
+      "artists": [
+        "Yamagucci",
+        "DvirNuns"
+      ],
+      "year": 2024,
+      "audio": "/Users/gakonst/Music/2026-friends/freddy/disco-funk/Yamagucci, DvirNuns - First Choice.mp3",
+      "role": "production-language",
+      "tasteScore": 14.52,
+      "selectionScore": 56.147,
+      "spotifyId": "6XNa1DEreWtRZz456Kfeeb",
+      "playlists": [
+        "pre summer",
+        "late night"
+      ],
+      "genres": [
+        "indie dance"
+      ],
+      "rekordbox": {
+        "bpm": 123,
+        "key": "5A",
+        "rating": 1,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "rafael-say-that",
+      "title": "Say That",
+      "artists": [
+        "Rafael",
+        "Millero"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/myusb/Rafael, Millero - Say That.mp3",
+      "role": "production-language",
+      "tasteScore": 6.72,
+      "selectionScore": 55.94,
+      "spotifyId": "26BOjvrFDJHxD6HQUQqIcn",
+      "playlists": [
+        "pre summer"
+      ],
+      "genres": [
+        "indie dance",
+        "tech house",
+        "melodic techno"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "7A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "supernova-the-bloom",
+      "title": "The Bloom",
+      "artists": [
+        "Supernova"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/Music/2026-friends/freddy/n2h/Supernova - The Bloom.mp3",
+      "role": "production-language",
+      "tasteScore": 15.84,
+      "selectionScore": 55.673,
+      "spotifyId": "4ebVgdtzdumVVrdSWZkGap",
+      "playlists": [
+        "ADAM TEN - TRACK ID'S",
+        "late night"
+      ],
+      "genres": [
+        "tech house"
+      ],
+      "rekordbox": {
+        "bpm": 130,
+        "key": "4A",
+        "rating": 1,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "mita-gami-terracotta",
+      "title": "Terracotta",
+      "artists": [
+        "Mita Gami",
+        "Garden City Movement"
+      ],
+      "year": 2025,
+      "audio": "/Users/gakonst/.djtools/tracks/Mita Gami/Untouchable EP/Terracotta - Mita Gami, Garden City Movement.flac",
+      "role": "production-language",
+      "tasteScore": 7,
+      "selectionScore": 55.24,
+      "spotifyId": "5mEh85W2TOrf2ieHkIA0JE",
+      "playlists": [
+        "ADAM TEN - TRACK ID'S"
+      ],
+      "genres": [
+        "indie dance",
+        "melodic house"
+      ],
+      "rekordbox": {
+        "bpm": 124,
+        "key": "8A",
+        "rating": 0,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "bronski-beat-smalltown-boy",
+      "title": "Smalltown Boy",
+      "artists": [
+        "Bronski Beat"
+      ],
+      "year": 1984,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Bronski Beat - Smalltown Boy.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 25.36,
+      "selectionScore": 70.947,
+      "spotifyId": "5vmRQ3zELMLUQPo2FLQ76x",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "synthpop",
+        "hi-nrg"
+      ],
+      "rekordbox": {
+        "bpm": 134.58,
+        "key": "5A",
+        "rating": 5,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "electric-light-orchestra-last-train-to-london",
+      "title": "Last Train to London",
+      "artists": [
+        "Electric Light Orchestra"
+      ],
+      "year": 1979,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Electric Light Orchestra - Last Train to London.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 25.32,
+      "selectionScore": 70.86,
+      "spotifyId": "6xE6ZWzK1YDDSYzqOCoQlz",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "art rock",
+        "soft rock"
+      ],
+      "rekordbox": {
+        "bpm": 121.46,
+        "key": "9B",
+        "rating": 4,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "soulsearcher-can-t-get-enough-vocal-club-mix",
+      "title": "Can't Get Enough! - Vocal Club Mix",
+      "artists": [
+        "Soulsearcher"
+      ],
+      "year": 1998,
+      "audio": "/Users/gakonst/Music/myusb/Soulsearcher - Can't Get Enough! - Vocal Club Mix.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 16.36,
+      "selectionScore": 64.993,
+      "spotifyId": "2zstesKHgTCPmyOb229PDJ",
+      "playlists": [
+        "my-own-usb",
+        "Botzi Dance"
+      ],
+      "genres": [
+        "disco house",
+        "funky house"
+      ],
+      "rekordbox": {
+        "bpm": 128.14,
+        "key": "1A",
+        "rating": 3,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "earth-wind-fire-september",
+      "title": "September",
+      "artists": [
+        "Earth, Wind & Fire"
+      ],
+      "year": 1978,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Earth, Wind & Fire - September.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 15.44,
+      "selectionScore": 52.007,
+      "spotifyId": "3kXoKlD84c6OmIcOLfrfEs",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "funk",
+        "disco"
+      ],
+      "rekordbox": {
+        "bpm": 126.45,
+        "key": "11B",
+        "rating": 5,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "earth-wind-fire-boogie-wonderland-with-the-emotions",
+      "title": "Boogie Wonderland (with The Emotions)",
+      "artists": [
+        "Earth, Wind & Fire",
+        "The Emotions"
+      ],
+      "year": 1979,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Earth, Wind & Fire, The Emotions - Boogie Wonderland.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 15.32,
+      "selectionScore": 51.767,
+      "spotifyId": "6ztstiyZL6FXzh4aG46ZPD",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "funk",
+        "disco",
+        "motown"
+      ],
+      "rekordbox": {
+        "bpm": 131.78,
+        "key": "7A",
+        "rating": 5,
+        "playCount": 6
+      }
+    },
+    {
+      "id": "pryda-animal",
+      "title": "Animal",
+      "artists": [
+        "Pryda"
+      ],
+      "year": 2009,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Pryda - Animal.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 8.16,
+      "selectionScore": 50.56,
+      "spotifyId": "2mClbbA0qUS6vEfILvI6py",
+      "playlists": [
+        "Julya Karma audio"
+      ],
+      "genres": [
+        "progressive house"
+      ],
+      "rekordbox": {
+        "bpm": 126,
+        "key": "5A",
+        "rating": 2,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "michael-jackson-don-t-stop-til-you-get-enough",
+      "title": "Don't Stop 'Til You Get Enough",
+      "artists": [
+        "Michael Jackson"
+      ],
+      "year": 1979,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Michael Jackson - Don't Stop 'Til You Get Enough.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 15.68,
+      "selectionScore": 49.973,
+      "spotifyId": "46eu3SBuFCXWsPT39Yg3tJ",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [],
+      "rekordbox": {
+        "bpm": 118.91,
+        "key": "1B",
+        "rating": 5,
+        "playCount": 0
+      }
+    },
+    {
+      "id": "supermode-tell-me-why-radio-edit",
+      "title": "Tell Me Why - Radio Edit",
+      "artists": [
+        "Supermode",
+        "Axwell",
+        "Steve Angello"
+      ],
+      "year": 2006,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Freddy Recs/Supermode, Axwell, Steve Angello - Tell Me Why - Radio Edit.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 15.04,
+      "selectionScore": 49.733,
+      "spotifyId": "4yhGkvdYU5bi4950r80FRo",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "hypertechno",
+        "edm",
+        "progressive house"
+      ],
+      "rekordbox": {
+        "bpm": 129,
+        "key": "10A",
+        "rating": 4,
+        "playCount": 2
+      }
+    },
+    {
+      "id": "eurythmics-sweet-dreams-are-made-of-this-2005-remaster",
+      "title": "Sweet Dreams (Are Made of This) - 2005 Remaster",
+      "artists": [
+        "Eurythmics",
+        "Annie Lennox",
+        "Dave Stewart"
+      ],
+      "year": 1983,
+      "audio": "/Users/gakonst/Music/Botzi 2025/Botzi-Dance/Eurythmics, Annie Lennox, Dave Stewart - Sweet Dreams (Are Made of This) - 2005 Remaster.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 15.48,
+      "selectionScore": 49.54,
+      "spotifyId": "1TfqLAPs4K3s2rJMoCokcS",
+      "playlists": [
+        "Botzi Dance",
+        "Botzi kala"
+      ],
+      "genres": [
+        "new wave",
+        "synthpop"
+      ],
+      "rekordbox": {
+        "bpm": 125.21,
+        "key": "5A",
+        "rating": 5,
+        "playCount": 1
+      }
+    },
+    {
+      "id": "morgan-page-the-longest-road-deadmau5-vocal-remix",
+      "title": "The Longest Road - Deadmau5 Vocal Remix",
+      "artists": [
+        "Morgan Page",
+        "Lissie"
+      ],
+      "year": 2008,
+      "audio": "/Users/gakonst/Music/Antiparos 2025/Karma/Morgan Page, Lissie - The Longest Road - Deadmau5 Vocal Remix.mp3",
+      "role": "hook-lineage",
+      "tasteScore": 8.04,
+      "selectionScore": 47.92,
+      "spotifyId": "2OPXYIz5aTSO831TsYdxhz",
+      "playlists": [
+        "Julya Karma audio"
+      ],
+      "genres": [],
+      "rekordbox": {
+        "bpm": 125,
+        "key": "2A",
+        "rating": 2,
+        "playCount": 0
+      }
+    }
+  ]
+}

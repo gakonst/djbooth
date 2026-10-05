@@ -1,0 +1,116 @@
+# Knowledge and Execution Gaps
+
+## Knowledge (26)
+
+- **Amp:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **AudioBranchMixerDevice:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **AutoFilter2:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **AutoPan2:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Cabinet:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Chorus:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Delay:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **FilterEQ3:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Flanger:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiArpeggiator:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiBranchMixerDevice:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiChord:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiEffectGroupDevice:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiNoteLength:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiPitcher:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiRandom:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiScale:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MidiVelocity:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MxDeviceAudioEffect:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MxDeviceInstrument:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **MxDeviceMidiEffect:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Phaser:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Redux:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Spectral:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **SpectrumAnalyzer:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+- **Transmute:** No ingested tutorial currently names this capability family. Next: Collect a device-specific official/manual tutorial and one practical sound-design example.
+
+## Execution (63)
+
+- **AudioBranchMixerDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AudioEffectGroupDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AutoFilter:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AutoFilter2:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AutoPan:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AutoPan2:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **AutoShift:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **ChannelEq:** standalone object rendering is proven; composite rack differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Chorus:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Chorus2:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Compressor2:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Delay:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Drift:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **DrumBuss:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **DrumCell:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **DrumGroupDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Echo:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Eq8:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Erosion:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **FilterDelay:** all three native bands and the dry branch execute; tempo automation differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **FilterEQ3:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Flanger:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **FrequencyShifter:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Gate:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **GlueCompressor:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **GrainDelay:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **InstrumentGroupDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **InstrumentImpulse:** special companion, voice, sidechain, or graph state is still required for native audio rendering Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **InstrumentMeld:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **InstrumentVector:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Limiter:** standalone object rendering is proven; composite rack differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Looper:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiArpeggiator:** special companion, voice, sidechain, or graph state is still required for native audio rendering Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiBranchMixerDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiChord:** native MIDI rack-chain and nested scheduler differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiEffectGroupDevice:** native execution of parallel chains, sends, selectors, and nested mixer routing is not complete Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiNoteLength:** special companion, voice, sidechain, or graph state is still required for native audio rendering Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiPitcher:** native MIDI rack-chain and nested scheduler differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiRandom:** native MIDI rack-chain and nested scheduler differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiScale:** native MIDI rack-chain and nested scheduler differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MidiVelocity:** native MIDI rack-chain and nested scheduler differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MultibandDynamics:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MxDeviceAudioEffect:** embedded AMXD and exposed saved parameters execute; Live API-only behavior remains device-specific Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MxDeviceInstrument:** each AMXD still requires dependency and non-UI render verification Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **MxDeviceMidiEffect:** each AMXD still requires dependency and non-UI render verification Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Operator:** special companion, voice, sidechain, or graph state is still required for native audio rendering Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Overdrive:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Pedal:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Phaser:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **PhaserNew:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Redux:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Redux2:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Resonator:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Reverb:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Roar:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Saturator:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Shifter:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Spectral:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **StereoGain:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Transmute:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Tube:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Vinyl:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+- **Vocoder:** all installed ADV presets render finitely; composite rack/sidechain differentials remain Next: Add an audible native-engine fixture for the missing preset, routing, automation, or state behavior.
+
+## Source (17)
+
+- **HknJKtbBHeQ:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **6d-i_2milho:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **hlMw5uOFyaU:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **d6_4eWh89jY:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **BHup81lEjqo:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **H8MTS4F0xXE:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **umHaMtruSos:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **tQMIDEhfTQ0:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **YVaWtJy9_-Q:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **7xEZa1IlW5Q:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **JOdCdjFvyXo:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **Jf3MhQmx6-w:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **FBUsEYyWDpQ:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **fqAEvoN6Ukw:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **QGsqxGy_P10:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **fyAIs58l064:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.
+- **hRMKYveATq4:** No usable English caption track. Next: Run local ASR, then regenerate action windows and evidence rankings.

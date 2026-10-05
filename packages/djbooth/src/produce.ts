@@ -603,7 +603,8 @@ const abletonGraphRenderOutput = z.object({
   manifest: z.string(),
   title: z.string(),
   output: z.string(),
-  stemsDir: z.string(),
+  cacheDir: z.string(),
+  stemsDir: z.string().nullable(),
   tracks: z.number().int().positive(),
   nativeTracks: z.number().int().nonnegative(),
   sampleTracks: z.number().int().nonnegative(),
@@ -728,17 +729,28 @@ abletonCli.command("probe-engine", {
     binary: z.string().optional().describe("Native x86_64 djbooth-rs helper override"),
     engine: z.string().optional().describe("Ableton Live Engine executable override"),
     processor: z.string().optional().describe("Exact internal processor name to verify"),
+    schemaQuery: z
+      .string()
+      .optional()
+      .describe("Limit recovered processor schemas to one exact registry name"),
     construct: z.boolean().default(false).describe("Construct the selected Ableton processor"),
     parameter: z
       .array(z.string().min(3))
       .default([])
       .describe("Native float event input as NAME=VALUE; repeat for multiple parameters"),
     note: z.number().int().min(0).max(127).optional().describe("Native MIDI note to render"),
-    sequence: z.string().optional().describe("JSON note sequence for the native InMidi port"),
+    sequence: z
+      .string()
+      .optional()
+      .describe("JSON note sequence for the recovered native MIDI or voice-event graph"),
     velocity: z.number().int().min(1).max(127).default(100),
     gateSeconds: z.number().positive().finite().default(0.5),
     renderFrames: z.number().int().positive().optional().describe("Optional audit render limit"),
     input: z.string().optional().describe("Stereo 44.1 kHz WAV to process"),
+    sidechain: z
+      .string()
+      .optional()
+      .describe("Stereo 44.1 kHz WAV routed to recovered sidechain input ports"),
     sample: z.string().optional().describe("WAV to bind to native Ableton Drum Sampler"),
     preset: z.string().optional().describe("Ableton ADV preset to apply through native ports"),
     presetDeviceOffset: z
@@ -759,6 +771,7 @@ abletonCli.command("probe-engine", {
         ? ["--engine", resolveInvocationPath(context.options.engine)]
         : []),
       ...(context.options.processor ? ["--processor", context.options.processor] : []),
+      ...(context.options.schemaQuery ? ["--schema-query", context.options.schemaQuery] : []),
       ...(context.options.construct ? ["--construct"] : []),
       ...context.options.parameter.flatMap((parameter) => ["--parameter", parameter]),
       ...(context.options.note === undefined ? [] : ["--note", String(context.options.note)]),
@@ -773,6 +786,9 @@ abletonCli.command("probe-engine", {
         ? []
         : ["--render-frames", String(context.options.renderFrames)]),
       ...(context.options.input ? ["--input", resolveInvocationPath(context.options.input)] : []),
+      ...(context.options.sidechain
+        ? ["--sidechain", resolveInvocationPath(context.options.sidechain)]
+        : []),
       ...(context.options.sample
         ? ["--sample", resolveInvocationPath(context.options.sample)]
         : []),
@@ -935,6 +951,10 @@ abletonCli.command("audit-presets", {
     coreLibrary: z.string().optional().describe("Ableton Core Library root override"),
     engine: z.string().optional().describe("Ableton Live Engine executable override"),
     jobs: z.number().int().positive().max(32).default(8),
+    family: z
+      .string()
+      .optional()
+      .describe("Limit the audit to one exact Ableton device-family name"),
     all: z.boolean().default(false).describe("Test every eligible installed ADV preset"),
   }),
   output: presetAuditOutput,
@@ -944,6 +964,7 @@ abletonCli.command("audit-presets", {
       "audit-presets",
       "--jobs",
       String(context.options.jobs),
+      ...(context.options.family ? ["--family", context.options.family] : []),
       ...(context.options.all ? ["--all"] : []),
       ...(context.options.coreLibrary
         ? ["--core-library", resolveInvocationPath(context.options.coreLibrary)]
@@ -1006,7 +1027,15 @@ abletonCli.command("render-graph", {
     output: z.string().min(1).describe("Destination stereo WAV"),
   }),
   options: z.object({
-    stemsDir: z.string().optional().describe("Destination directory for per-track stems"),
+    cacheDir: z.string().optional().describe("Reusable short source and normalized-sample cache"),
+    deviceHost: z
+      .string()
+      .optional()
+      .describe("x86_64 helper used only for cold native-device cache misses"),
+    stemsDir: z
+      .string()
+      .optional()
+      .describe("Export full-arrangement per-track stems; omit for a master-only render"),
     binary: z.string().optional().describe("Native x86_64 djbooth-rs helper override"),
     devicesRoot: z.string().optional().describe("Ableton standalone device bundles override"),
     maxContents: z.string().optional().describe("Ableton bundled Max.app Contents override"),
@@ -1014,11 +1043,20 @@ abletonCli.command("render-graph", {
   }),
   output: abletonGraphRenderOutput,
   async run(context) {
+    const binary = resolveGraphMixerBinary(context.options.binary);
+    const deviceHost = context.options.deviceHost
+      ? resolveProducerBinary(context.options.deviceHost)
+      : resolveProducerBinary();
     const args = [
       "ableton",
       "render-graph",
       resolveInvocationPath(context.args.manifest),
       resolveInvocationPath(context.args.output),
+      ...(context.options.cacheDir
+        ? ["--cache-dir", resolveInvocationPath(context.options.cacheDir)]
+        : []),
+      "--device-host",
+      deviceHost,
       ...(context.options.stemsDir
         ? ["--stems-dir", resolveInvocationPath(context.options.stemsDir)]
         : []),
@@ -1030,9 +1068,7 @@ abletonCli.command("render-graph", {
         : []),
       ...(context.options.play ? ["--play"] : []),
     ];
-    return abletonGraphRenderOutput.parse(
-      await runNative(resolveProducerBinary(context.options.binary), args),
-    );
+    return abletonGraphRenderOutput.parse(await runNative(binary, args));
   },
 });
 
@@ -1360,6 +1396,19 @@ export function resolveProducerBinary(override?: string): string {
   throw new Error(
     "x86_64 djbooth-rs producer is missing; build it with `cargo build --manifest-path rust/Cargo.toml --target x86_64-apple-darwin -p djbooth-rs`",
   );
+}
+
+function resolveGraphMixerBinary(override?: string): string {
+  if (override || process.arch !== "arm64") return resolveProducerBinary(override);
+  const candidates = [
+    process.env.DJBOOTH_GRAPH_BIN,
+    resolve(import.meta.dirname, "../../../rust/target/release/djbooth-rs"),
+    resolve(import.meta.dirname, "../../../rust/target/debug/djbooth-rs"),
+  ]
+    .filter((candidate): candidate is string => Boolean(candidate))
+    .filter((candidate) => existsSync(candidate))
+    .sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs);
+  return candidates[0] ?? resolveProducerBinary();
 }
 
 function resolveMuscriptorProject(override?: string): string {

@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use clap::{Parser, Subcommand};
+use djbooth_analyzer::decode_audio_file_with_channels;
 use flate2::read::GzDecoder;
 use fs2::FileExt as _;
 use roxmltree::{Document, Node};
@@ -212,6 +213,13 @@ enum AbletonCommand {
     RenderGraph {
         manifest: PathBuf,
         output: PathBuf,
+        /// Reusable short source and normalized-sample cache.
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// x86_64 helper used only for cold native-device cache misses.
+        #[arg(long)]
+        device_host: Option<PathBuf>,
+        /// Export full-arrangement per-track stems. Omit for a master-only render.
         #[arg(long)]
         stems_dir: Option<PathBuf>,
         #[arg(long, default_value = DEFAULT_NATIVE_DEVICES)]
@@ -259,12 +267,18 @@ enum AbletonCommand {
         /// Look up a processor by its Ableton engine registry name.
         #[arg(long)]
         processor: Option<String>,
+        /// Limit the recovered processor schema list to one exact registry name.
+        #[arg(long)]
+        schema_query: Option<String>,
         /// Construct the selected processor through Ableton's own registered factory.
         #[arg(long)]
         construct: bool,
         /// Optional stereo WAV to process through the constructed processor.
         #[arg(long)]
         input: Option<PathBuf>,
+        /// Optional stereo WAV routed to the processor's recovered sidechain input ports.
+        #[arg(long)]
+        sidechain: Option<PathBuf>,
         /// Sample WAV to bind to Ableton Drum Sampler's native sample holder.
         #[arg(long)]
         sample: Option<PathBuf>,
@@ -280,10 +294,10 @@ enum AbletonCommand {
         /// Float event input as NAME=VALUE; repeat to set multiple native parameters.
         #[arg(long = "parameter")]
         parameters: Vec<String>,
-        /// MIDI note to send through a native InMidi port while rendering.
+        /// MIDI note to send through the recovered native MIDI or voice-event graph.
         #[arg(long)]
         note: Option<u8>,
-        /// JSON note sequence to schedule through the native InMidi port.
+        /// JSON note sequence to schedule through the recovered native MIDI or voice-event graph.
         #[arg(long)]
         sequence: Option<PathBuf>,
         /// MIDI note velocity in the range 1..127.
@@ -340,6 +354,9 @@ enum AbletonCommand {
         engine: PathBuf,
         #[arg(long, default_value_t = 8)]
         jobs: usize,
+        /// Limit the audit to one exact Ableton device-family name.
+        #[arg(long)]
+        family: Option<String>,
         /// Test every eligible preset instead of one representative per family.
         #[arg(long)]
         all: bool,
@@ -956,6 +973,12 @@ struct LiveEngineProbeReport {
     processor_render_delta: f32,
     processor_render_frames: usize,
     processor_render_output: Option<PathBuf>,
+    native_user_wavetable_peaks: Vec<f32>,
+    native_user_wavetable_gains: Vec<f32>,
+    native_user_wavetable_table_counts: Vec<usize>,
+    native_user_wavetable_handoffs: Vec<String>,
+    native_operator_table_peaks: Vec<f32>,
+    native_operator_table_gains: Vec<f32>,
     registered_processors: Vec<String>,
     registered_ports: usize,
     processor_schemas: Vec<LiveEngineProcessorSchema>,
@@ -976,6 +999,14 @@ struct LiveEnginePresetParameter {
     name: String,
     value: f32,
     normalized_value: Option<f32>,
+}
+
+#[derive(Clone, Debug)]
+struct OperatorUserHarmonics {
+    amplitudes: Vec<f32>,
+    expansion_mode: i32,
+    num_harmonics: i32,
+    normalize: bool,
 }
 
 #[derive(Debug)]
@@ -1016,8 +1047,10 @@ struct LiveEngineProbeRequest<'a> {
     engine: &'a Path,
     bootstrap: bool,
     processor: Option<&'a str>,
+    schema_query: Option<&'a str>,
     construct: bool,
     input: Option<&'a Path>,
+    sidechain: Option<&'a Path>,
     sample: Option<&'a Path>,
     preset: Option<&'a Path>,
     preset_device_offset: Option<usize>,
@@ -1329,6 +1362,8 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
         AbletonCommand::RenderGraph {
             manifest,
             output,
+            cache_dir,
+            device_host,
             stems_dir,
             devices_root,
             max_contents,
@@ -1336,6 +1371,8 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
         } => crate::ableton_graph::render(
             &manifest,
             &output,
+            cache_dir.as_deref(),
+            device_host.as_deref(),
             stems_dir.as_deref(),
             &devices_root,
             &max_contents,
@@ -1368,8 +1405,10 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             engine,
             bootstrap,
             processor,
+            schema_query,
             construct,
             input,
+            sidechain,
             sample,
             preset,
             preset_device_offset,
@@ -1384,8 +1423,10 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             engine: &engine,
             bootstrap,
             processor: processor.as_deref(),
+            schema_query: schema_query.as_deref(),
             construct,
             input: input.as_deref(),
+            sidechain: sidechain.as_deref(),
             sample: sample.as_deref(),
             preset: preset.as_deref(),
             preset_device_offset,
@@ -1430,8 +1471,9 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<()> {
             core_library,
             engine,
             jobs,
+            family,
             all,
-        } => audit_presets(&core_library, &engine, jobs, all),
+        } => audit_presets(&core_library, &engine, jobs, family.as_deref(), all),
         AbletonCommand::InspectClip { clip } => {
             let xml = read_ableton_xml(&clip)?;
             let report = parse_clip(&clip, &xml)?;
@@ -2589,60 +2631,62 @@ fn tension_native_parameters(controls: &[NativePresetControl]) -> Result<Vec<Nat
             .with_context(|| format!("Tension preset is missing {name}"))
     };
     let mut parameters = Vec::with_capacity(130);
-    let mut direct = |id, name| -> Result<()> {
-        parameters.push(NativeParameter {
-            id,
-            value: value(name)?,
-        });
-        Ok(())
-    };
+    {
+        let mut direct = |id, name| -> Result<()> {
+            parameters.push(NativeParameter {
+                id,
+                value: value(name)?,
+            });
+            Ok(())
+        };
 
-    for (id, name) in [
-        (0, "Polyphony"),
-        (1, "PitchBendRange"),
-        (3, "Octave"),
-        (4, "Transpose"),
-        (5, "KeyboardFineTune"),
-        (6, "KeyboardPriority"),
-        (7, "KeyboardUnisonToggle"),
-        (8, "KeyboardUnison"),
-        (9, "KeyboardDetune"),
-        (10, "KeyboardUnisonDelay"),
-        (11, "KeyboardStretch"),
-        (12, "KeyboardError"),
-        (13, "VibratoToggle"),
-        (14, "VibratoSpeed"),
-        (15, "VibratoFadeIn"),
-        (16, "VibratoAmount"),
-        (17, "VibratoError"),
-        (18, "VibratoDelay"),
-        (19, "VibratoModWheel"),
-        (20, "PortamentoToggle"),
-        (21, "PortamentoTime"),
-        (22, "PortamentoProportional"),
-        (23, "PortamentoLegato"),
-        (24, "GeoExcitatorPosition"),
-        (25, "GeoExcitatorAbsolute"),
-    ] {
-        direct(id, name)?;
+        for (id, name) in [
+            (0, "Polyphony"),
+            (1, "PitchBendRange"),
+            (3, "Octave"),
+            (4, "Transpose"),
+            (5, "KeyboardFineTune"),
+            (6, "KeyboardPriority"),
+            (7, "KeyboardUnisonToggle"),
+            (8, "KeyboardUnison"),
+            (9, "KeyboardDetune"),
+            (10, "KeyboardUnisonDelay"),
+            (11, "KeyboardStretch"),
+            (12, "KeyboardError"),
+            (13, "VibratoToggle"),
+            (14, "VibratoSpeed"),
+            (15, "VibratoFadeIn"),
+            (16, "VibratoAmount"),
+            (17, "VibratoError"),
+            (18, "VibratoDelay"),
+            (19, "VibratoModWheel"),
+            (20, "PortamentoToggle"),
+            (21, "PortamentoTime"),
+            (22, "PortamentoProportional"),
+            (23, "PortamentoLegato"),
+            (24, "GeoExcitatorPosition"),
+            (25, "GeoExcitatorAbsolute"),
+        ] {
+            direct(id, name)?;
+        }
     }
-    drop(direct);
 
-    let mut bipolar = |amount_id, invert_id, name| -> Result<()> {
-        let value = value(name)?;
-        parameters.push(NativeParameter {
-            id: amount_id,
-            value: value.abs(),
-        });
-        parameters.push(NativeParameter {
-            id: invert_id,
-            value: f32::from(u8::from(value < 0.0)),
-        });
-        Ok(())
-    };
-    bipolar(26, 27, "GeoExcitatorKbdModulation")?;
-    bipolar(28, 29, "GeoExcitatorVelModulation")?;
-    drop(bipolar);
+    {
+        let mut bipolar = |amount_id, invert_id, name| -> Result<()> {
+            let value = value(name)?;
+            parameters.push(NativeParameter {
+                id: amount_id,
+                value: value.abs(),
+            });
+            parameters.push(NativeParameter {
+                id: invert_id,
+                value: f32::from(u8::from(value < 0.0)),
+            });
+            Ok(())
+        };
+        bipolar(26, 27, "GeoExcitatorKbdModulation")?;
+        bipolar(28, 29, "GeoExcitatorVelModulation")?;
+    }
 
     let direct_and_bipolar = [
         (30, None, "GeoDamperPosition"),
@@ -3695,6 +3739,13 @@ fn device_capability(
     }
 }
 
+pub(crate) fn live_engine_processor_for_family(family: &str) -> Option<&'static str> {
+    let (mechanism, _, _, _, implementation, _) = device_capability(family);
+    (mechanism == "liveEngineBundle")
+        .then_some(implementation)
+        .flatten()
+}
+
 #[allow(clippy::type_complexity)]
 fn live_engine_device_capability(
     processor: &'static str,
@@ -3706,8 +3757,29 @@ fn live_engine_device_capability(
     Option<&'static str>,
     Option<&'static str>,
 ) {
+    if processor == "InstrumentOperator" {
+        return (
+            "liveEngineBundle",
+            "nativeInstrumentVoiceRenderProven",
+            "factoryAdvPolyphonicSpreadOscillatorEnvelopeVoiceWavetableLfoFilterAndShaperGraphRecovered",
+            "partial",
+            Some(processor),
+            Some("exhaustive installed-preset and nested rack differentials remain"),
+        );
+    }
+    if processor == "InstrumentImpulse" {
+        return (
+            "liveEngineBundle",
+            "nativeInstrumentVoiceRenderProven",
+            "factoryAdvEightSlotSampleStretchFilterDecayAndPolyphonicVoiceGraphRecovered",
+            "partial",
+            Some(processor),
+            Some("exhaustive installed-kit and nested rack differentials remain"),
+        );
+    }
     if [
         "MidiChord",
+        "MidiNoteLength",
         "MidiPitcher",
         "MidiRandom",
         "MidiScale",
@@ -4274,6 +4346,263 @@ fn beat_repeat_parameter_port(
     control_port.map(|port| (BeatRepeatParameterTarget::Control, port))
 }
 
+fn operator_adsr_parameter_port(parameter: &str) -> Option<(usize, &str)> {
+    let oscillator = parameter.strip_prefix("Osc")?;
+    let (oscillator, port) = oscillator.split_once("Envelope.")?;
+    let oscillator = oscillator.parse::<usize>().ok()?;
+    (1..=4)
+        .contains(&oscillator)
+        .then_some((oscillator - 1, port))
+}
+
+fn operator_voice_parameter_port(parameter: &str) -> Option<(usize, &str)> {
+    let oscillator = parameter.strip_prefix("Osc")?;
+    let (oscillator, port) = oscillator.split_once("Voice.")?;
+    let oscillator = oscillator.parse::<usize>().ok()?;
+    (1..=4)
+        .contains(&oscillator)
+        .then_some((oscillator - 1, port))
+}
+
+fn operator_wavetable_parameter_port(parameter: &str) -> Option<(usize, &'static str)> {
+    let oscillator = parameter
+        .strip_prefix("Osc")?
+        .strip_suffix("WaveFormBank")?
+        .parse::<usize>()
+        .ok()?;
+    (1..=4)
+        .contains(&oscillator)
+        .then_some((oscillator - 1, "Waveform"))
+}
+
+#[derive(Clone, Copy)]
+enum OperatorGlobalParameterTarget {
+    Management,
+    Voice,
+    LfoFrequency,
+    LfoEnvelope,
+    Filter,
+    FilterMod,
+    FilterEnvelope,
+}
+
+#[derive(Clone, Copy)]
+enum ImpulseParameterTarget {
+    Start,
+    Filter,
+    Decay,
+    Volume,
+}
+
+fn impulse_slot_parameter_port(
+    parameter: &str,
+) -> Option<(usize, ImpulseParameterTarget, &'static str)> {
+    let (name, slot) = parameter.rsplit_once('.')?;
+    let slot = slot.parse::<usize>().ok()?;
+    if slot >= 8 {
+        return None;
+    }
+    let (target, port) = match name {
+        "StartStart" => (ImpulseParameterTarget::Start, "Start"),
+        "StartTune" => (ImpulseParameterTarget::Start, "Tune"),
+        "StartRandom" => (ImpulseParameterTarget::Start, "Random"),
+        "StartVelocity" => (ImpulseParameterTarget::Start, "Velocity"),
+        "StartReverse" => (ImpulseParameterTarget::Start, "Reverse"),
+        "StartSoft" => (ImpulseParameterTarget::Start, "Soft"),
+        "StartStretch" => (ImpulseParameterTarget::Start, "Stretch"),
+        "StartStretchVel" => (ImpulseParameterTarget::Start, "StretchVel"),
+        "StartStretchType" => (ImpulseParameterTarget::Start, "StretchMode"),
+        "FilterFreq" => (ImpulseParameterTarget::Filter, "Freq"),
+        "FilterQ" => (ImpulseParameterTarget::Filter, "Q"),
+        "FilterRandom" => (ImpulseParameterTarget::Filter, "Random"),
+        "FilterVelocity" => (ImpulseParameterTarget::Filter, "Velocity"),
+        "FilterType" => (ImpulseParameterTarget::Filter, "Type"),
+        "FilterOn" => (ImpulseParameterTarget::Filter, "On"),
+        "DecaySatOn" => (ImpulseParameterTarget::Decay, "SatOn"),
+        "DecayDrive" => (ImpulseParameterTarget::Decay, "Drive"),
+        "DecayDecay" => (ImpulseParameterTarget::Decay, "Decay"),
+        "DecayDecayType" => (ImpulseParameterTarget::Decay, "DecayMode"),
+        "VolumePan" => (ImpulseParameterTarget::Volume, "Pan"),
+        "VolumePanVel" => (ImpulseParameterTarget::Volume, "PanVel"),
+        "VolumePanRand" => (ImpulseParameterTarget::Volume, "PanRand"),
+        "VolumeVolume" => (ImpulseParameterTarget::Volume, "Volume"),
+        "VolumeVolumeVel" => (ImpulseParameterTarget::Volume, "VolumeVel"),
+        "VolumeMute" => (ImpulseParameterTarget::Volume, "Mute"),
+        "VolumeSolo" => (ImpulseParameterTarget::Volume, "Solo"),
+        _ => return None,
+    };
+    Some((slot, target, port))
+}
+
+const OPERATOR_MAX_LOGICAL_VOICES: usize = 32;
+// Live's AOperatorUnit::OnNumVoicesChanged reads the serialized chooser index
+// and calls the lookup at Live 12.3.1 x86_64 image+0x20c0d20. The shared table
+// also contains 48 for other polyphonic devices, but Operator itself caps the
+// result at 32 voices.
+const OPERATOR_SERIALIZED_VOICE_COUNTS: [usize; 16] =
+    [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 32, 48];
+const OPERATOR_VOICE_ALLOCATOR_BANK_OFFSET: usize = 0x10;
+const OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE: usize = 0x78;
+const OPERATOR_VOICE_COMBINER_BANK_OFFSET: usize = 0x18;
+const OPERATOR_VOICE_COMBINER_BANK_STRIDE: usize = 0x10;
+const IMPULSE_VOICE_COUNT: usize = 64;
+
+type LiveEngineProcessor = (*const u8, *mut u8);
+
+#[derive(Clone)]
+struct OperatorVoiceLane {
+    operator: LiveEngineProcessor,
+    global_voice: LiveEngineProcessor,
+    midi_to_hertz: LiveEngineProcessor,
+    lfo_frequency: LiveEngineProcessor,
+    lfo_envelope: LiveEngineProcessor,
+    filter: LiveEngineProcessor,
+    filter_mod: LiveEngineProcessor,
+    filter_envelope: LiveEngineProcessor,
+    filter_envelope_event: LiveEngineProcessor,
+    voice_deallocator: LiveEngineProcessor,
+    adsr_serializers: [LiveEngineProcessor; 4],
+    wavetable_processors: [LiveEngineProcessor; 4],
+    oscillator_voice_processors: [LiveEngineProcessor; 4],
+}
+
+#[derive(Clone)]
+struct ImpulseVoiceLane {
+    voice_info_fanout: LiveEngineProcessor,
+    player_parameter: LiveEngineProcessor,
+    stretching_player: LiveEngineProcessor,
+    filter_sat_decay: LiveEngineProcessor,
+    voice_deallocator: LiveEngineProcessor,
+}
+
+impl ImpulseVoiceLane {
+    fn processors(&self) -> [LiveEngineProcessor; 5] {
+        [
+            self.voice_info_fanout,
+            self.player_parameter,
+            self.stretching_player,
+            self.filter_sat_decay,
+            self.voice_deallocator,
+        ]
+    }
+}
+
+#[derive(Clone)]
+struct ImpulseSlotLane {
+    tab_serializer: LiveEngineProcessor,
+    start_serializer: LiveEngineProcessor,
+    filter_serializer: LiveEngineProcessor,
+    decay_serializer: LiveEngineProcessor,
+    volume_serializer: LiveEngineProcessor,
+    voice_allocator: LiveEngineProcessor,
+    voice_combiner: LiveEngineProcessor,
+    voices: Vec<ImpulseVoiceLane>,
+}
+
+impl ImpulseSlotLane {
+    fn processors(&self) -> Vec<LiveEngineProcessor> {
+        let mut processors = vec![
+            self.tab_serializer,
+            self.start_serializer,
+            self.filter_serializer,
+            self.decay_serializer,
+            self.volume_serializer,
+            self.voice_allocator,
+            self.voice_combiner,
+        ];
+        processors.extend(self.voices.iter().flat_map(ImpulseVoiceLane::processors));
+        processors
+    }
+}
+
+struct NativeChunkedSample {
+    object: *mut u8,
+}
+
+#[derive(Debug)]
+struct ImpulseSampleSlot {
+    path: PathBuf,
+    alpha: f64,
+    omega: f64,
+}
+
+fn operator_voice_count_from_serialized_value(value: f32) -> Option<usize> {
+    (value.is_finite() && value.fract() == 0.0 && value >= 0.0)
+        .then(|| value as usize)
+        .and_then(|index| OPERATOR_SERIALIZED_VOICE_COUNTS.get(index).copied())
+        .filter(|count| *count <= OPERATOR_MAX_LOGICAL_VOICES)
+}
+
+fn operator_harmonic_count_from_serialized_value(value: i32) -> Option<i32> {
+    // Operator's NumHarmonics model field is a chooser index, not the literal
+    // partial count consumed by OInternalHarmonics. Live exposes the complete
+    // 16/32/64 harmonic selector as serialized values 0/1/2.
+    [16, 32, 64].get(usize::try_from(value).ok()?).copied()
+}
+
+impl OperatorVoiceLane {
+    fn processors(&self) -> Vec<LiveEngineProcessor> {
+        [
+            self.global_voice,
+            self.midi_to_hertz,
+            self.lfo_frequency,
+            self.lfo_envelope,
+            self.filter,
+            self.filter_mod,
+            self.filter_envelope,
+            self.filter_envelope_event,
+            self.voice_deallocator,
+        ]
+        .into_iter()
+        .chain(self.adsr_serializers)
+        .chain(self.wavetable_processors)
+        .chain(self.oscillator_voice_processors)
+        .chain(std::iter::once(self.operator))
+        .collect()
+    }
+}
+
+fn operator_global_parameter_port(
+    parameter: &str,
+) -> Option<(OperatorGlobalParameterTarget, &str)> {
+    if parameter == "On/Off" {
+        return Some((OperatorGlobalParameterTarget::Management, "On/Off"));
+    }
+    parameter
+        .strip_prefix("OperatorManagement.")
+        .map(|port| (OperatorGlobalParameterTarget::Management, port))
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorGlobalVoice.")
+                .map(|port| (OperatorGlobalParameterTarget::Voice, port))
+        })
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorLfoFrequency.")
+                .map(|port| (OperatorGlobalParameterTarget::LfoFrequency, port))
+        })
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorLfoEnvelope.")
+                .map(|port| (OperatorGlobalParameterTarget::LfoEnvelope, port))
+        })
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorFilter.")
+                .map(|port| (OperatorGlobalParameterTarget::Filter, port))
+        })
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorFilterMod.")
+                .map(|port| (OperatorGlobalParameterTarget::FilterMod, port))
+        })
+        .or_else(|| {
+            parameter
+                .strip_prefix("OperatorFilterEnvelope.")
+                .map(|port| (OperatorGlobalParameterTarget::FilterEnvelope, port))
+        })
+}
+
 fn live_engine_standalone_render_skip(processor: &str) -> Option<&'static str> {
     match processor {
         "DeviceHelper" => Some("internal device-routing companion, not a standalone effect"),
@@ -4503,8 +4832,10 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         engine,
         bootstrap,
         processor,
+        schema_query,
         construct,
         input,
+        sidechain,
         sample,
         preset,
         preset_device_offset,
@@ -4525,8 +4856,13 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         "--construct requires --processor"
     );
     ensure!(
-        construct || (input.is_none() && sample.is_none() && preset.is_none() && output.is_none()),
-        "--input, --sample, --preset and --output require --construct"
+        construct
+            || (input.is_none()
+                && sidechain.is_none()
+                && sample.is_none()
+                && preset.is_none()
+                && output.is_none()),
+        "--input, --sidechain, --sample, --preset and --output require --construct"
     );
     ensure!(
         construct || parameters.is_empty(),
@@ -4563,6 +4899,57 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         .map(|path| live_engine_preset_parameters(path, preset_device_offset))
         .transpose()?
         .unwrap_or_default();
+    let operator_logical_voice_count = if processor == Some("InstrumentOperator") {
+        let explicit_value = parameters.iter().find_map(|assignment| {
+            assignment
+                .strip_prefix("OperatorGraph.NumVoices=")
+                .and_then(|value| value.parse::<f32>().ok())
+        });
+        let count = if let Some(value) = explicit_value {
+            ensure!(
+                value.is_finite() && value.fract() == 0.0 && value >= 1.0,
+                "explicit Ableton Operator NumVoices must be a positive integer"
+            );
+            value as usize
+        } else {
+            let serialized_value = preset_parameters
+                .iter()
+                .find(|parameter| parameter.name == "OperatorGraph.NumVoices")
+                .map_or(0.0, |parameter| parameter.value);
+            operator_voice_count_from_serialized_value(serialized_value).with_context(|| {
+                format!("Ableton Operator serialized NumVoices index {serialized_value} is invalid")
+            })?
+        };
+        ensure!(
+            count <= OPERATOR_MAX_LOGICAL_VOICES,
+            "Ableton Operator NumVoices exceeds the native 32-voice limit"
+        );
+        count
+    } else {
+        1
+    };
+    // Operator's management processor always addresses two equal native
+    // banks. The upper bank is dormant at zero spread, but Live still builds
+    // it so SpreadAmount can be automated without rebuilding the graph.
+    let operator_physical_voice_count = operator_logical_voice_count * 2;
+    let operator_user_harmonics = if processor == Some("InstrumentOperator") {
+        processor_preset
+            .as_deref()
+            .map(|path| live_engine_operator_user_harmonics(path, preset_device_offset))
+            .transpose()?
+            .unwrap_or_else(|| vec![None; 4])
+    } else {
+        vec![None; 4]
+    };
+    let impulse_sample_slots = if processor == Some("InstrumentImpulse") {
+        processor_preset
+            .as_deref()
+            .map(|path| live_engine_impulse_sample_slots(path, preset_device_offset))
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let hybrid_impulse_response = if processor == Some("OHybridProcessor") {
         processor_preset
             .as_deref()
@@ -4688,7 +5075,14 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
     let mut processor_render_delta = 0.0_f32;
     let mut processor_render_frames = 0_usize;
     let mut processor_render_output = None;
+    let mut native_user_wavetable_peaks = Vec::new();
+    let mut native_user_wavetable_gains = Vec::new();
+    let mut native_user_wavetable_table_counts = Vec::new();
+    let mut native_user_wavetable_handoffs = Vec::new();
+    let mut native_operator_table_peaks = Vec::new();
+    let mut native_operator_table_gains = Vec::new();
     let mut drum_sample_storage: Option<Vec<f32>> = None;
+    let mut impulse_chunked_samples: Vec<NativeChunkedSample> = Vec::new();
     let mut registered_processors = Vec::new();
     let mut registered_ports = 0_usize;
     let mut processor_schemas = Vec::new();
@@ -4705,6 +5099,28 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
     let mut vocoder_band_level_values: Option<[f32; 40]> = None;
     let mut beat_repeat_control: Option<(*const u8, *mut u8)> = None;
     let mut beat_repeat_ring_buffer: Option<(*const u8, *mut u8)> = None;
+    let mut operator_adsr_serializers: Vec<(*const u8, *mut u8)> = Vec::new();
+    let mut operator_wavetable_processors: Vec<(*const u8, *mut u8)> = Vec::new();
+    let mut operator_voice_processors: Vec<(*const u8, *mut u8)> = Vec::new();
+    let mut operator_event_fanouts: Vec<(*const u8, *mut u8)> = Vec::new();
+    let mut operator_additional_voice_lanes: Vec<OperatorVoiceLane> = Vec::new();
+    let mut operator_voice_management: Option<(*const u8, *mut u8)> = None;
+    let mut operator_voice_allocator: Option<(*const u8, *mut u8)> = None;
+    let mut operator_global_voice: Option<(*const u8, *mut u8)> = None;
+    let mut operator_midi_to_hertz: Option<(*const u8, *mut u8)> = None;
+    let mut operator_lfo_frequency: Option<(*const u8, *mut u8)> = None;
+    let mut operator_lfo_envelope: Option<(*const u8, *mut u8)> = None;
+    let mut operator_sample_interval_trigger: Option<(*const u8, *mut u8)> = None;
+    let mut operator_filter: Option<(*const u8, *mut u8)> = None;
+    let mut operator_filter_mod: Option<(*const u8, *mut u8)> = None;
+    let mut operator_filter_envelope: Option<(*const u8, *mut u8)> = None;
+    let mut operator_filter_envelope_event: Option<(*const u8, *mut u8)> = None;
+    let mut operator_voice_deallocator: Option<(*const u8, *mut u8)> = None;
+    let mut operator_voice_combiner: Option<(*const u8, *mut u8)> = None;
+    let mut operator_midi_input: Option<(usize, *mut u8)> = None;
+    let mut impulse_slot_lanes: Vec<ImpulseSlotLane> = Vec::new();
+    let mut impulse_voice_combiner: Option<LiveEngineProcessor> = None;
+    let mut impulse_midi_input: Option<(usize, *mut u8)> = None;
     if bootstrap {
         ensure!(
             std::env::consts::ARCH == "x86_64",
@@ -4728,6 +5144,11 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         );
         type ProcessorByName = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
         type RegisterProcessor = unsafe extern "C" fn(i32);
+        type ConstructRegisterThreadMessage =
+            unsafe extern "C" fn(*mut u8, *const libc::c_char, usize);
+        type DeclareProcessorCreateParameters = unsafe extern "C" fn(*mut u8);
+        type RegisterMessage = unsafe extern "C" fn(*mut u8, *mut u8);
+        type RegisterNamedProcessor = unsafe extern "C" fn(*const libc::c_char, usize, *const u8);
         type AllocateHandle = unsafe extern "C" fn() -> u64;
         type AllocateObject = unsafe extern "C" fn(usize) -> *mut u8;
         type ConstructScheduler = unsafe extern "C" fn(*mut u8);
@@ -4740,6 +5161,9 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         type CreateBuffer = unsafe extern "C" fn(i32) -> *mut u8;
         type ConstructAudioBufferAllocator = unsafe extern "C" fn(*mut u8, u64, i32, i32, i32);
         type SetAudioBufferAllocator = unsafe extern "C" fn(*mut c_void, u64);
+        type CurrentThreadId = unsafe extern "C" fn() -> i32;
+        type ConstructThreadMasquerade = unsafe extern "C" fn(*mut u8, i32, i32);
+        type DestructThreadMasquerade = unsafe extern "C" fn(*mut u8);
         type ProcessorFactory = unsafe extern "C" fn(*mut u8);
         let register_gui_thread: NoArgs = unsafe { std::mem::transmute(image_base + 0x62190) };
         let runtime_init: RuntimeInit = unsafe { std::mem::transmute(image_base + 0xcae00) };
@@ -4758,6 +5182,16 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
             unsafe { std::mem::transmute(image_base + 0xb6e90) };
         let destruct_register_message: DestructRegisterMessage =
             unsafe { std::mem::transmute(image_base + 0xb6e60) };
+        let construct_register_thread_message: ConstructRegisterThreadMessage =
+            unsafe { std::mem::transmute(image_base + 0xb57a0) };
+        let destruct_register_thread_message: DestructRegisterMessage =
+            unsafe { std::mem::transmute(image_base + 0xb57b0) };
+        let declare_processor_create_parameters: DeclareProcessorCreateParameters =
+            unsafe { std::mem::transmute(image_base + 0xb0b30) };
+        let register_message: RegisterMessage =
+            unsafe { std::mem::transmute(image_base + 0xb6da0) };
+        let register_named_processor: RegisterNamedProcessor =
+            unsafe { std::mem::transmute(image_base + 0xb0320) };
         let engine_new: EngineNew = unsafe { std::mem::transmute(image_base + 0x866a0) };
         let configure_engine: ConfigureEngine =
             unsafe { std::mem::transmute(image_base + 0x87a60) };
@@ -4789,6 +5223,12 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
             unsafe { std::mem::transmute(image_base + 0x96510) };
         let set_audio_buffer_allocator: SetAudioBufferAllocator =
             unsafe { std::mem::transmute(image_base + 0x87520) };
+        let current_thread_id: CurrentThreadId =
+            unsafe { std::mem::transmute(image_base + 0x62270) };
+        let construct_thread_masquerade: ConstructThreadMasquerade =
+            unsafe { std::mem::transmute(image_base + 0x62470) };
+        let destruct_thread_masquerade: DestructThreadMasquerade =
+            unsafe { std::mem::transmute(image_base + 0x624e0) };
         unsafe {
             eprintln!("probe-live-engine: registering Ableton GUI thread");
             register_gui_thread();
@@ -4807,6 +5247,38 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                 init_node = *init_node.add(4) as *const usize;
             }
             init_a();
+            // The standalone Ocean module does not enqueue the two native
+            // sample-player registrations used by Live's Impulse poly unit,
+            // although both complete implementations ship in this bundle.
+            // Reproduce their generated registration wrappers before the O
+            // phase commits the registry. Their create messages contain only
+            // OProcessorCreateManager's shared fields.
+            let mut native_processor_names = Vec::new();
+            for (name, enable_offset, create_callback_offset) in [
+                ("StretchingPlayer", 0xa1d900_usize, 0xa3a090_usize),
+                ("ImpulsePlayerParameter", 0x9f4dc0_usize, 0xa3a230_usize),
+            ] {
+                native_processor_names.push(CString::new(name)?);
+                let processor_name = native_processor_names
+                    .last()
+                    .context("Ableton native processor name storage disappeared")?;
+                let create_message_name = CString::new(format!("{name}.Create"))?;
+                let mut registration = [0_u64; 8];
+                let mut message_id = [0_u8; 8];
+                construct_register_thread_message(
+                    registration.as_mut_ptr().cast(),
+                    create_message_name.as_ptr(),
+                    image_base + create_callback_offset,
+                );
+                declare_processor_create_parameters(registration.as_mut_ptr().cast());
+                register_message(message_id.as_mut_ptr(), registration.as_mut_ptr().cast());
+                destruct_register_thread_message(registration.as_mut_ptr().cast());
+                register_named_processor(
+                    processor_name.as_ptr(),
+                    image_base + enable_offset,
+                    message_id.as_ptr(),
+                );
+            }
             // ODeviceProcessor owns the native processing-latency messages used
             // by device NewRate callbacks. The standalone Live Engine bundle's
             // Ocean bootstrap does not enqueue this higher-level Live module,
@@ -4868,6 +5340,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
             register_drum_sampler(1);
             eprintln!("probe-live-engine: committing Ableton processor registry");
             init_o();
+            drop(native_processor_names);
             registry_initialized = true;
             let registry = *(image_base.wrapping_add(0x175e6d0) as *const *const usize);
             let message_factory = *(image_base.wrapping_add(0x16ffe00) as *const *const u8);
@@ -4955,6 +5428,13 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                         .collect();
                     let port_count = *(record.wrapping_add(0x17c) as *const u32) as usize;
                     let mut ports = Vec::with_capacity(port_count);
+                    let format_port_word = |value: u64| {
+                        if (image_base..image_base + 0x0200_0000).contains(&(value as usize)) {
+                            format!("image+0x{:x}", value as usize - image_base)
+                        } else {
+                            format!("0x{value:016x}")
+                        }
+                    };
                     for port_index in 0..port_count {
                         let port = record + 0x180 + port_index * 0x120;
                         let port_name = CStr::from_ptr(port as *const libc::c_char)
@@ -4967,14 +5447,8 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             kind_id,
                             raw_u32_a: *(port.wrapping_add(0x104) as *const u32),
                             raw_u32_b: *(port.wrapping_add(0x108) as *const u32),
-                            raw_u64_a: format!(
-                                "0x{:016x}",
-                                *(port.wrapping_add(0x110) as *const u64)
-                            ),
-                            raw_u64_b: format!(
-                                "0x{:016x}",
-                                *(port.wrapping_add(0x118) as *const u64)
-                            ),
+                            raw_u64_a: format_port_word(*(port.wrapping_add(0x110) as *const u64)),
+                            raw_u64_b: format_port_word(*(port.wrapping_add(0x118) as *const u64)),
                         });
                     }
                     registered_ports += ports.len();
@@ -5197,6 +5671,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             "CurrentNumVoices" => {
                                 std::ptr::write_unaligned(destination as *mut i32, 1)
                             }
+                            "CurrentVoice" => std::ptr::write_unaligned(destination as *mut i32, 0),
                             "Scheduler" => {
                                 std::ptr::write_unaligned(destination as *mut u64, scheduler as u64)
                             }
@@ -5336,96 +5811,134 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                         !processor_object.is_null(),
                         "Ableton {processor} holder returned no processor"
                     );
-                    if processor == "BeatRepeatMixer" {
-                        let construct_companion = |name: &str| -> Result<(*const u8, *mut u8)> {
-                            let name = CString::new(name)?;
-                            let record = processor_by_name(name.as_ptr()) as *const u8;
-                            ensure!(!record.is_null(), "Ableton Beat Repeat companion is absent");
-                            let message_id = *(record.add(0x100) as *const u32) as usize;
-                            ensure!(
-                                message_id < message_factory_entries,
-                                "Ableton Beat Repeat create-message ID is invalid"
-                            );
-                            let entry = message_factory
-                                .add(message_factory_table_offset + message_id * 0x18);
-                            let factory_address = *(entry.add(0x10) as *const usize);
-                            ensure!(
-                                factory_address >= image_base,
-                                "Ableton Beat Repeat companion factory is invalid"
-                            );
-                            let handle = allocate_processor_handle();
-                            ensure!(handle != 0, "Ableton Beat Repeat companion has no handle");
-                            let mut companion_message = [0_u8; 512];
-                            companion_message[..2]
-                                .copy_from_slice(&(message_id as u16).to_ne_bytes());
-                            let count = *(entry.add(4) as *const u32) as usize;
-                            let table_offset = *(entry.add(8) as *const u32) as usize;
-                            let mut companion_stream_offset = 0_usize;
-                            for index in 0..count {
-                                let member = message_factory.add(table_offset + index * 0x10);
-                                let member_name_offset =
-                                    std::ptr::read_unaligned(member as *const u32) as usize;
-                                let member_name =
-                                    CStr::from_ptr(message_factory.add(member_name_offset)
-                                        as *const libc::c_char)
-                                    .to_string_lossy();
-                                let type_id = std::ptr::read_unaligned(member.add(4) as *const u32);
-                                let array_count =
-                                    std::ptr::read_unaligned(member.add(8) as *const u32) as usize;
-                                let destination = companion_message
-                                    .as_mut_ptr()
-                                    .add(4 + companion_stream_offset);
-                                match member_name.as_ref() {
-                                    "CurrentSampleRate" => std::ptr::write_unaligned(
+                    let construct_companion = |name: &str,
+                                               num_voices: usize,
+                                               current_voice: usize|
+                     -> Result<LiveEngineProcessor> {
+                        let companion_name = CString::new(name)?;
+                        let record = processor_by_name(companion_name.as_ptr()) as *const u8;
+                        ensure!(!record.is_null(), "Ableton {name} companion is absent");
+                        let message_id = *(record.add(0x100) as *const u32) as usize;
+                        ensure!(
+                            message_id < message_factory_entries,
+                            "Ableton {name} create-message ID is invalid"
+                        );
+                        let entry =
+                            message_factory.add(message_factory_table_offset + message_id * 0x18);
+                        let factory_address = *(entry.add(0x10) as *const usize);
+                        ensure!(
+                            factory_address >= image_base,
+                            "Ableton {name} companion factory is invalid"
+                        );
+                        let handle = allocate_processor_handle();
+                        ensure!(handle != 0, "Ableton {name} companion has no handle");
+                        // Most graph companions fit in a few dozen bytes, but
+                        // per-voice duplication also constructs a full
+                        // InstrumentOperator through this path. Its registered
+                        // create message is substantially larger than 512
+                        // bytes, so use the same safe capacity as the primary
+                        // processor factory.
+                        let mut companion_message = [0_u8; 4096];
+                        companion_message[..2].copy_from_slice(&(message_id as u16).to_ne_bytes());
+                        let count = *(entry.add(4) as *const u32) as usize;
+                        let table_offset = *(entry.add(8) as *const u32) as usize;
+                        let mut companion_stream_offset = 0_usize;
+                        for index in 0..count {
+                            let member = message_factory.add(table_offset + index * 0x10);
+                            let member_name_offset =
+                                std::ptr::read_unaligned(member as *const u32) as usize;
+                            let member_name = CStr::from_ptr(
+                                message_factory.add(member_name_offset) as *const libc::c_char,
+                            )
+                            .to_string_lossy();
+                            let type_id = std::ptr::read_unaligned(member.add(4) as *const u32);
+                            let array_count =
+                                std::ptr::read_unaligned(member.add(8) as *const u32) as usize;
+                            let destination = companion_message
+                                .as_mut_ptr()
+                                .add(4 + companion_stream_offset);
+                            match member_name.as_ref() {
+                                "CurrentSampleRate" => std::ptr::write_unaligned(
+                                    destination as *mut i32,
+                                    DEFAULT_SAMPLE_RATE as i32,
+                                ),
+                                "CurrentNumVoices" => std::ptr::write_unaligned(
+                                    destination as *mut i32,
+                                    i32::try_from(num_voices)?,
+                                ),
+                                "CurrentVoice" => std::ptr::write_unaligned(
+                                    destination as *mut i32,
+                                    i32::try_from(current_voice)?,
+                                ),
+                                "SlotIndex" => std::ptr::write_unaligned(
+                                    destination as *mut i32,
+                                    i32::try_from(current_voice)?,
+                                ),
+                                "AdditionalBytes" => {
+                                    // Type-2 and type-3 processors place their
+                                    // repeated voice banks in a flexible tail.
+                                    // The registered factory's base allocation
+                                    // includes voice zero; Live's graph planner
+                                    // requests storage for every extra bank via
+                                    // this create-message field.
+                                    let stride = match *record.add(0x16d) {
+                                        2 => OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE,
+                                        3 => OPERATOR_VOICE_COMBINER_BANK_STRIDE,
+                                        _ => 0,
+                                    };
+                                    let additional_bytes = num_voices
+                                        .saturating_sub(1)
+                                        .checked_mul(stride)
+                                        .context("Ableton companion tail size overflow")?;
+                                    std::ptr::write_unaligned(
                                         destination as *mut i32,
-                                        DEFAULT_SAMPLE_RATE as i32,
-                                    ),
-                                    "CurrentNumVoices" => {
-                                        std::ptr::write_unaligned(destination as *mut i32, 1)
-                                    }
-                                    "Scheduler" => std::ptr::write_unaligned(
-                                        destination as *mut u64,
-                                        scheduler as u64,
-                                    ),
-                                    "EventBufferingManagerHandle" => std::ptr::write_unaligned(
-                                        destination as *mut u64,
-                                        event_buffering_manager_handle,
-                                    ),
-                                    "ProcessorHandle" => {
-                                        std::ptr::write_unaligned(destination as *mut u64, handle)
-                                    }
-                                    "ProcessorAudioRate" => {
-                                        std::ptr::write_unaligned(destination, 0_u8)
-                                    }
-                                    _ => {}
+                                        i32::try_from(additional_bytes)?,
+                                    );
                                 }
-                                let element_size = match type_id {
-                                    0 | 1 => 1,
-                                    2 | 5 | 14 => 4,
-                                    4 | 6 | 11 | 13 => 8,
-                                    _ => bail!(
-                                        "unsupported Ableton companion create-message member type {type_id}"
-                                    ),
-                                };
-                                companion_stream_offset += element_size * array_count;
+                                "Scheduler" => std::ptr::write_unaligned(
+                                    destination as *mut u64,
+                                    scheduler as u64,
+                                ),
+                                "EventBufferingManagerHandle" => std::ptr::write_unaligned(
+                                    destination as *mut u64,
+                                    event_buffering_manager_handle,
+                                ),
+                                "ProcessorHandle" => {
+                                    std::ptr::write_unaligned(destination as *mut u64, handle)
+                                }
+                                "ProcessorAudioRate" => {
+                                    std::ptr::write_unaligned(destination, 0_u8)
+                                }
+                                _ => {}
                             }
-                            let factory: ProcessorFactory = std::mem::transmute(factory_address);
-                            factory(companion_message.as_mut_ptr());
-                            let companion_holder = *(handle as *const *mut u8);
-                            ensure!(
-                                !companion_holder.is_null(),
-                                "Ableton Beat Repeat companion factory returned no holder"
-                            );
-                            let object = *(companion_holder.add(0x18) as *const *mut u8);
-                            ensure!(
-                                !object.is_null(),
-                                "Ableton Beat Repeat companion holder returned no processor"
-                            );
-                            Ok((record, object))
-                        };
-                        beat_repeat_control = Some(construct_companion("BeatRepeatControl")?);
+                            let element_size = match type_id {
+                                0 | 1 => 1,
+                                2 | 5 | 14 => 4,
+                                4 | 6 | 11 | 13 => 8,
+                                _ => bail!(
+                                    "unsupported Ableton companion create-message member type {type_id}"
+                                ),
+                            };
+                            companion_stream_offset += element_size * array_count;
+                        }
+                        let factory: ProcessorFactory = std::mem::transmute(factory_address);
+                        factory(companion_message.as_mut_ptr());
+                        let companion_holder = *(handle as *const *mut u8);
+                        ensure!(
+                            !companion_holder.is_null(),
+                            "Ableton {name} companion factory returned no holder"
+                        );
+                        let object = *(companion_holder.add(0x18) as *const *mut u8);
+                        ensure!(
+                            !object.is_null(),
+                            "Ableton {name} companion holder returned no processor"
+                        );
+                        Ok((record, object))
+                    };
+                    if processor == "BeatRepeatMixer" {
+                        beat_repeat_control = Some(construct_companion("BeatRepeatControl", 1, 0)?);
                         beat_repeat_ring_buffer =
-                            Some(construct_companion("BeatRepeatRingBuffer")?);
+                            Some(construct_companion("BeatRepeatRingBuffer", 1, 0)?);
 
                         let (control_record, control_object) = beat_repeat_control.unwrap();
                         let (ring_record, ring_object) = beat_repeat_ring_buffer.unwrap();
@@ -5486,6 +5999,1477 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 }
                             }
                         }
+                    }
+                    if processor == "InstrumentOperator" {
+                        let input_callback = |record: *const u8,
+                                              name: &str,
+                                              kind: u32|
+                         -> Result<usize> {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            (0..count)
+                                .find_map(|index| {
+                                    let port = record.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    (*(port.add(0x100) as *const u32) == kind && port_name == name)
+                                        .then(|| *(port.add(0x110) as *const usize))
+                                })
+                                .with_context(|| format!("Ableton {name} has no kind-{kind} input"))
+                        };
+                        let output_offset_for_voice = |record: *const u8,
+                                                       name: &str,
+                                                       kind: u32,
+                                                       current_voice: usize|
+                         -> Result<usize> {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            (0..count)
+                                .find_map(|index| {
+                                    let port = record.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let port_kind = *(port.add(0x100) as *const u32);
+                                    let offset = *(port.add(0x104) as *const u32);
+                                    (port_kind == kind && offset != u32::MAX && port_name == name)
+                                        .then_some(
+                                            offset as usize
+                                                + if *record.add(0x16d) == 2 {
+                                                    // Voice-indexed event
+                                                    // processors reserve one
+                                                    // 16-byte base header and
+                                                    // repeat their output bank
+                                                    // per CurrentVoice.
+                                                    OPERATOR_VOICE_ALLOCATOR_BANK_OFFSET
+                                                        + current_voice
+                                                            * OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE
+                                                } else {
+                                                    0
+                                                },
+                                        )
+                                })
+                                .with_context(|| {
+                                    format!("Ableton {name} has no kind-{kind} output")
+                                })
+                        };
+                        let output_offset = |record: *const u8, name: &str, kind: u32| {
+                            output_offset_for_voice(record, name, kind, 0)
+                        };
+                        let audio_offset_for_voice = |record: *const u8,
+                                                      name: &str,
+                                                      kind: u32,
+                                                      current_voice: usize|
+                         -> Result<usize> {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            (0..count)
+                                .find_map(|index| {
+                                    let port = record.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let port_kind = *(port.add(0x100) as *const u32);
+                                    let offset = *(port.add(0x104) as *const u32);
+                                    (port_kind == kind && offset != u32::MAX && port_name == name)
+                                        .then_some(
+                                            offset as usize
+                                                + if *record.add(0x16d) == 3 && kind == 1 {
+                                                    // VoiceCombiner input offsets
+                                                    // are relative to its
+                                                    // per-voice bank at +0x18;
+                                                    // final output offsets are
+                                                    // already absolute.
+                                                    OPERATOR_VOICE_COMBINER_BANK_OFFSET
+                                                        + current_voice
+                                                            * OPERATOR_VOICE_COMBINER_BANK_STRIDE
+                                                } else {
+                                                    0
+                                                },
+                                        )
+                                })
+                                .with_context(|| {
+                                    format!("Ableton {name} has no kind-{kind} audio port")
+                                })
+                        };
+                        let audio_offset = |record: *const u8, name: &str, kind: u32| {
+                            audio_offset_for_voice(record, name, kind, 0)
+                        };
+                        let connect_output_for_voice = |source_record: *const u8,
+                                                        source_object: *mut u8,
+                                                        source_name: &str,
+                                                        source_kind: u32,
+                                                        source_voice: usize,
+                                                        target_record: *const u8,
+                                                        target_object: *mut u8,
+                                                        target_name: &str,
+                                                        target_kind: u32|
+                         -> Result<()> {
+                            let callback = input_callback(target_record, target_name, target_kind)?;
+                            let offset = output_offset_for_voice(
+                                source_record,
+                                source_name,
+                                source_kind,
+                                source_voice,
+                            )?;
+                            *(source_object.add(offset) as *mut usize) = callback;
+                            *(source_object.add(offset + 8) as *mut *mut u8) = target_object;
+                            Ok(())
+                        };
+                        let connect_output = |source_record: *const u8,
+                                              source_object: *mut u8,
+                                              source_name: &str,
+                                              source_kind: u32,
+                                              target_record: *const u8,
+                                              target_object: *mut u8,
+                                              target_name: &str,
+                                              target_kind: u32|
+                         -> Result<()> {
+                            connect_output_for_voice(
+                                source_record,
+                                source_object,
+                                source_name,
+                                source_kind,
+                                0,
+                                target_record,
+                                target_object,
+                                target_name,
+                                target_kind,
+                            )
+                        };
+
+                        // Live does not send OMidiNote directly to Operator's
+                        // per-voice processors. Its dedicated voice-management
+                        // processor turns MIDI into OVoiceAllocatorProcessor
+                        // messages, and VoiceAllocator specializes those into
+                        // the TVoiceInfoMsg/TNoteMsg ABI consumed by the voice.
+                        let management = construct_companion(
+                            "OperatorVoiceManagementProcessor",
+                            operator_physical_voice_count,
+                            0,
+                        )?;
+                        let allocator = construct_companion(
+                            "VoiceAllocator",
+                            operator_physical_voice_count,
+                            0,
+                        )?;
+                        let global_voice = construct_companion("InstrumentOperatorVoice", 1, 0)?;
+                        let midi_to_hertz = construct_companion("MidiToHerz", 1, 0)?;
+                        let lfo_frequency = construct_companion("InstrumentOperatorLfoFreq", 1, 0)?;
+                        let lfo_envelope = construct_companion("AdsrSerializer", 1, 0)?;
+                        let sample_interval_trigger =
+                            construct_companion("SampleIntervalTriggerProcessor", 1, 0)?;
+                        let filter = construct_companion("InstrumentOperatorFilter", 1, 0)?;
+                        let filter_mod = construct_companion("InstrumentOperatorFilterMod", 1, 0)?;
+                        let filter_envelope = construct_companion("AdsrSerializer", 1, 0)?;
+                        let filter_envelope_event =
+                            construct_companion("AdsrEventProcessor", 1, 0)?;
+                        let voice_deallocator = construct_companion("VoiceDeallocator", 1, 0)?;
+                        let voice_combiner =
+                            construct_companion("VoiceCombiner", operator_physical_voice_count, 0)?;
+                        // Live's graph planner sends SOnSetTrigger after
+                        // construction. Operator owns three native
+                        // OSampleIntervalProcess instances (LFO, pitch envelope,
+                        // and envelope status); all three share this trigger.
+                        // Invoke the exact native setter that SOnSetTrigger
+                        // dispatches after resolving the two processor handles.
+                        type SetSampleIntervalTrigger = unsafe extern "C" fn(*mut u8, *mut u8);
+                        let set_sample_interval_trigger: SetSampleIntervalTrigger =
+                            std::mem::transmute(image_base + 0x70ac20);
+                        for offset in [0x828, 0x848, 0x868] {
+                            set_sample_interval_trigger(
+                                processor_object.add(offset),
+                                sample_interval_trigger.1,
+                            );
+                        }
+                        set_sample_interval_trigger(
+                            filter_mod.1.add(0x8),
+                            sample_interval_trigger.1,
+                        );
+                        set_sample_interval_trigger(
+                            filter_envelope_event.1.add(0x8),
+                            sample_interval_trigger.1,
+                        );
+                        // Operator is mono per voice. Its native filter applies
+                        // the global voice volume/pan and emits an inverse
+                        // stereo pair into Ableton's VoiceDeallocator, whose
+                        // ordinary stereo outputs become this one-voice graph's
+                        // render tap.
+                        *(filter.1.add(audio_offset(filter.0, "In", 1)?) as *mut *const f32) =
+                            processor_object
+                                .add(audio_offset(processor_record, "Out", 2)?)
+                                .cast_const()
+                                .cast();
+                        *(filter.1.add(audio_offset(filter.0, "OutL", 4)?) as *mut *mut f32) =
+                            voice_deallocator
+                                .1
+                                .add(audio_offset(voice_deallocator.0, "InL", 3)?)
+                                .cast();
+                        *(filter.1.add(audio_offset(filter.0, "OutR", 4)?) as *mut *mut f32) =
+                            voice_deallocator
+                                .1
+                                .add(audio_offset(voice_deallocator.0, "InR", 3)?)
+                                .cast();
+                        *(voice_combiner
+                            .1
+                            .add(audio_offset(voice_combiner.0, "InL", 1)?)
+                            as *mut *const f32) = voice_deallocator
+                            .1
+                            .add(audio_offset(voice_deallocator.0, "OutL", 2)?)
+                            .cast_const()
+                            .cast();
+                        *(voice_combiner
+                            .1
+                            .add(audio_offset(voice_combiner.0, "InR", 1)?)
+                            as *mut *const f32) = voice_deallocator
+                            .1
+                            .add(audio_offset(voice_deallocator.0, "OutR", 2)?)
+                            .cast_const()
+                            .cast();
+                        connect_output(
+                            management.0,
+                            management.1,
+                            "VoiceInfo",
+                            10,
+                            allocator.0,
+                            allocator.1,
+                            "VoiceInfoIn",
+                            9,
+                        )?;
+                        connect_output(
+                            management.0,
+                            management.1,
+                            "StealVoice",
+                            8,
+                            allocator.0,
+                            allocator.1,
+                            "StealVoiceIn",
+                            7,
+                        )?;
+                        connect_output(
+                            global_voice.0,
+                            global_voice.1,
+                            "MidiNote",
+                            8,
+                            midi_to_hertz.0,
+                            midi_to_hertz.1,
+                            "MidiNote",
+                            7,
+                        )?;
+                        connect_output(
+                            midi_to_hertz.0,
+                            midi_to_hertz.1,
+                            "Frequency",
+                            8,
+                            processor_record,
+                            processor_object,
+                            "Frequency",
+                            7,
+                        )?;
+                        for (source_name, target_name, target_kind) in [
+                            ("Freq", "LfoFreq", 9),
+                            ("AmountGlobal", "LfoAmountGlobal", 7),
+                            ("AmountA", "LfoAmountA", 7),
+                            ("AmountModulation", "LfoAmountModulation", 7),
+                        ] {
+                            connect_output(
+                                lfo_frequency.0,
+                                lfo_frequency.1,
+                                source_name,
+                                if target_kind == 9 { 10 } else { 8 },
+                                processor_record,
+                                processor_object,
+                                target_name,
+                                target_kind,
+                            )?;
+                        }
+                        connect_output(
+                            lfo_envelope.0,
+                            lfo_envelope.1,
+                            "EnvelopeData",
+                            10,
+                            processor_record,
+                            processor_object,
+                            "LfoEnv",
+                            9,
+                        )?;
+                        for (source_name, target_name, source_kind, target_kind) in
+                            [("Vol", "Vol", 10, 9), ("VolX", "VolX", 8, 7)]
+                        {
+                            connect_output(
+                                global_voice.0,
+                                global_voice.1,
+                                source_name,
+                                source_kind,
+                                filter.0,
+                                filter.1,
+                                target_name,
+                                target_kind,
+                            )?;
+                        }
+                        for (source_name, target_name) in
+                            [("Out", "FilterFreq"), ("X", "FilterFreqX")]
+                        {
+                            connect_output(
+                                filter_mod.0,
+                                filter_mod.1,
+                                source_name,
+                                8,
+                                filter.0,
+                                filter.1,
+                                target_name,
+                                7,
+                            )?;
+                        }
+                        for (source_name, target_name) in [("LfoToFilter", "Lfo"), ("LfoX", "LfoX")]
+                        {
+                            connect_output(
+                                processor_record,
+                                processor_object,
+                                source_name,
+                                8,
+                                filter_mod.0,
+                                filter_mod.1,
+                                target_name,
+                                7,
+                            )?;
+                        }
+                        connect_output(
+                            lfo_frequency.0,
+                            lfo_frequency.1,
+                            "ModLpFreq",
+                            8,
+                            filter_mod.0,
+                            filter_mod.1,
+                            "LfoLpFreq",
+                            7,
+                        )?;
+                        connect_output(
+                            filter_envelope.0,
+                            filter_envelope.1,
+                            "EnvelopeData",
+                            10,
+                            filter_envelope_event.0,
+                            filter_envelope_event.1,
+                            "EnvParams",
+                            9,
+                        )?;
+                        for (source_name, target_name) in [("Env", "Adsr"), ("X", "AdsrX")] {
+                            connect_output(
+                                filter_envelope_event.0,
+                                filter_envelope_event.1,
+                                source_name,
+                                8,
+                                filter_mod.0,
+                                filter_mod.1,
+                                target_name,
+                                7,
+                            )?;
+                        }
+                        connect_output(
+                            filter.0,
+                            filter.1,
+                            "OutXAndVoice",
+                            10,
+                            voice_deallocator.0,
+                            voice_deallocator.1,
+                            "InXAndVoice",
+                            9,
+                        )?;
+                        for (source_name, target_name) in [
+                            ("RequestSteal", "RequestSteal"),
+                            ("VoiceOff", "VoiceWentOff"),
+                        ] {
+                            connect_output(
+                                voice_deallocator.0,
+                                voice_deallocator.1,
+                                source_name,
+                                8,
+                                management.0,
+                                management.1,
+                                target_name,
+                                7,
+                            )?;
+                        }
+                        operator_midi_input =
+                            Some((input_callback(management.0, "InMidi", 9)?, management.1));
+                        operator_voice_management = Some(management);
+                        operator_voice_allocator = Some(allocator);
+                        operator_global_voice = Some(global_voice);
+                        operator_midi_to_hertz = Some(midi_to_hertz);
+                        operator_lfo_frequency = Some(lfo_frequency);
+                        operator_lfo_envelope = Some(lfo_envelope);
+                        operator_sample_interval_trigger = Some(sample_interval_trigger);
+                        operator_filter = Some(filter);
+                        operator_filter_mod = Some(filter_mod);
+                        operator_filter_envelope = Some(filter_envelope);
+                        operator_filter_envelope_event = Some(filter_envelope_event);
+                        operator_voice_deallocator = Some(voice_deallocator);
+                        operator_voice_combiner = Some(voice_combiner);
+
+                        for oscillator in 1..=4 {
+                            let (record, object) = construct_companion("AdsrSerializer", 1, 0)?;
+                            let adsr_port = format!("Osc{oscillator}Adsr");
+                            let operator_callback =
+                                input_callback(processor_record, &adsr_port, 9)?;
+                            let envelope_offset = output_offset(record, "EnvelopeData", 10)?;
+                            *(object.add(envelope_offset) as *mut usize) = operator_callback;
+                            *(object.add(envelope_offset + 8) as *mut *mut u8) = processor_object;
+                            operator_adsr_serializers.push((record, object));
+
+                            let (record, object) =
+                                construct_companion("InstrumentOperatorWavetable", 1, 0)?;
+                            let waveform_port = format!("Osc{oscillator}WaveForm");
+                            let operator_callback =
+                                input_callback(processor_record, &waveform_port, 9)?;
+                            let bank_offset = output_offset(record, "Bank", 10)?;
+                            *(object.add(bank_offset) as *mut usize) = operator_callback;
+                            *(object.add(bank_offset + 8) as *mut *mut u8) = processor_object;
+                            operator_wavetable_processors.push((record, object));
+
+                            let (record, object) =
+                                construct_companion("InstrumentOperatorOpVoice", 1, 0)?;
+                            for (voice_output, operator_input) in [
+                                ("Tune", format!("Osc{oscillator}Tune")),
+                                ("Volume", format!("Osc{oscillator}Amp")),
+                                (
+                                    "FixedFrequencyOn",
+                                    format!("Osc{oscillator}FixedFrequencyOn"),
+                                ),
+                                ("Feedback", format!("Osc{oscillator}Feedback")),
+                            ] {
+                                let operator_callback =
+                                    input_callback(processor_record, &operator_input, 7)?;
+                                let event_offset = output_offset(record, voice_output, 8)?;
+                                *(object.add(event_offset) as *mut usize) = operator_callback;
+                                *(object.add(event_offset + 8) as *mut *mut u8) = processor_object;
+                            }
+                            operator_voice_processors.push((record, object));
+                        }
+
+                        // A registry output stores one callback/context pair.
+                        // Live fans VoiceInfo out through native SeqPointer2
+                        // processors; reproduce that exact event graph instead
+                        // of using a host callback with a guessed payload ABI.
+                        let voice_info_targets = std::iter::once((
+                            processor_record,
+                            processor_object,
+                            "VoiceInfo".to_owned(),
+                        ))
+                        .chain(std::iter::once((
+                            global_voice.0,
+                            global_voice.1,
+                            "VoiceInfo".to_owned(),
+                        )))
+                        .chain(
+                            operator_voice_processors
+                                .iter()
+                                .map(|(record, object)| (*record, *object, "VoiceInfo".to_owned())),
+                        )
+                        .chain(
+                            operator_adsr_serializers
+                                .iter()
+                                .map(|(record, object)| (*record, *object, "VoiceInfo".to_owned())),
+                        )
+                        .chain(std::iter::once((
+                            lfo_frequency.0,
+                            lfo_frequency.1,
+                            "VoiceInfo".to_owned(),
+                        )))
+                        .chain(std::iter::once((
+                            lfo_envelope.0,
+                            lfo_envelope.1,
+                            "VoiceInfo".to_owned(),
+                        )))
+                        .chain(std::iter::once((
+                            filter.0,
+                            filter.1,
+                            "VoiceInfo".to_owned(),
+                        )))
+                        .chain(std::iter::once((
+                            filter_mod.0,
+                            filter_mod.1,
+                            "VoiceInfo".to_owned(),
+                        )))
+                        .collect::<Vec<_>>();
+                        ensure!(
+                            voice_info_targets.len() >= 2,
+                            "Ableton Operator voice graph needs at least two VoiceInfo consumers"
+                        );
+                        let mut fanout_source = allocator;
+                        let mut fanout_output = "VoiceInfoOut";
+                        for (index, target) in voice_info_targets.iter().enumerate() {
+                            let remaining = voice_info_targets.len() - index;
+                            if remaining == 1 {
+                                connect_output(
+                                    fanout_source.0,
+                                    fanout_source.1,
+                                    fanout_output,
+                                    10,
+                                    target.0,
+                                    target.1,
+                                    &target.2,
+                                    9,
+                                )?;
+                                break;
+                            }
+                            let fanout = construct_companion("SeqPointer2", 1, 0)?;
+                            connect_output(
+                                fanout_source.0,
+                                fanout_source.1,
+                                fanout_output,
+                                10,
+                                fanout.0,
+                                fanout.1,
+                                "In",
+                                9,
+                            )?;
+                            connect_output(
+                                fanout.0, fanout.1, "Out0", 10, target.0, target.1, &target.2, 9,
+                            )?;
+                            operator_event_fanouts.push(fanout);
+                            fanout_source = fanout;
+                            fanout_output = "Out1";
+                        }
+                        for (source_name, targets) in [
+                            (
+                                "NoteOn",
+                                [
+                                    (processor_record, processor_object, "NoteOn"),
+                                    (filter.0, filter.1, "NoteOn"),
+                                    (filter_envelope_event.0, filter_envelope_event.1, "NoteOn"),
+                                ],
+                            ),
+                            (
+                                "NoteOff",
+                                [
+                                    (processor_record, processor_object, "NoteOff"),
+                                    (filter.0, filter.1, "NoteOff"),
+                                    (filter_envelope_event.0, filter_envelope_event.1, "NoteOff"),
+                                ],
+                            ),
+                        ] {
+                            let first_fanout = construct_companion("SeqPointer2", 1, 0)?;
+                            connect_output(
+                                allocator.0,
+                                allocator.1,
+                                source_name,
+                                10,
+                                first_fanout.0,
+                                first_fanout.1,
+                                "In",
+                                9,
+                            )?;
+                            connect_output(
+                                first_fanout.0,
+                                first_fanout.1,
+                                "Out0",
+                                10,
+                                targets[0].0,
+                                targets[0].1,
+                                targets[0].2,
+                                9,
+                            )?;
+                            let second_fanout = construct_companion("SeqPointer2", 1, 0)?;
+                            connect_output(
+                                first_fanout.0,
+                                first_fanout.1,
+                                "Out1",
+                                10,
+                                second_fanout.0,
+                                second_fanout.1,
+                                "In",
+                                9,
+                            )?;
+                            for (output_name, target) in
+                                [("Out0", targets[1]), ("Out1", targets[2])]
+                            {
+                                connect_output(
+                                    second_fanout.0,
+                                    second_fanout.1,
+                                    output_name,
+                                    10,
+                                    target.0,
+                                    target.1,
+                                    target.2,
+                                    9,
+                                )?;
+                            }
+                            operator_event_fanouts.extend([first_fanout, second_fanout]);
+                        }
+                        connect_output(
+                            allocator.0,
+                            allocator.1,
+                            "StealVoiceOut",
+                            8,
+                            processor_record,
+                            processor_object,
+                            "Steal",
+                            7,
+                        )?;
+
+                        for current_voice in 1..operator_physical_voice_count {
+                            let lane_operator =
+                                construct_companion("InstrumentOperator", 1, current_voice)?;
+                            let lane_global_voice =
+                                construct_companion("InstrumentOperatorVoice", 1, current_voice)?;
+                            let lane_midi_to_hertz =
+                                construct_companion("MidiToHerz", 1, current_voice)?;
+                            let lane_lfo_frequency =
+                                construct_companion("InstrumentOperatorLfoFreq", 1, current_voice)?;
+                            let lane_lfo_envelope =
+                                construct_companion("AdsrSerializer", 1, current_voice)?;
+                            let lane_filter =
+                                construct_companion("InstrumentOperatorFilter", 1, current_voice)?;
+                            let lane_filter_mod = construct_companion(
+                                "InstrumentOperatorFilterMod",
+                                1,
+                                current_voice,
+                            )?;
+                            let lane_filter_envelope =
+                                construct_companion("AdsrSerializer", 1, current_voice)?;
+                            let lane_filter_envelope_event =
+                                construct_companion("AdsrEventProcessor", 1, current_voice)?;
+                            let lane_voice_deallocator =
+                                construct_companion("VoiceDeallocator", 1, current_voice)?;
+
+                            for offset in [0x828, 0x848, 0x868] {
+                                set_sample_interval_trigger(
+                                    lane_operator.1.add(offset),
+                                    sample_interval_trigger.1,
+                                );
+                            }
+                            set_sample_interval_trigger(
+                                lane_filter_mod.1.add(0x8),
+                                sample_interval_trigger.1,
+                            );
+                            set_sample_interval_trigger(
+                                lane_filter_envelope_event.1.add(0x8),
+                                sample_interval_trigger.1,
+                            );
+
+                            *(lane_filter.1.add(audio_offset(lane_filter.0, "In", 1)?)
+                                as *mut *const f32) = lane_operator
+                                .1
+                                .add(audio_offset(lane_operator.0, "Out", 2)?)
+                                .cast_const()
+                                .cast();
+                            *(lane_filter.1.add(audio_offset(lane_filter.0, "OutL", 4)?)
+                                as *mut *mut f32) = lane_voice_deallocator
+                                .1
+                                .add(audio_offset(lane_voice_deallocator.0, "InL", 3)?)
+                                .cast();
+                            *(lane_filter.1.add(audio_offset(lane_filter.0, "OutR", 4)?)
+                                as *mut *mut f32) = lane_voice_deallocator
+                                .1
+                                .add(audio_offset(lane_voice_deallocator.0, "InR", 3)?)
+                                .cast();
+                            *(voice_combiner.1.add(audio_offset_for_voice(
+                                voice_combiner.0,
+                                "InL",
+                                1,
+                                current_voice,
+                            )?) as *mut *const f32) = lane_voice_deallocator
+                                .1
+                                .add(audio_offset(lane_voice_deallocator.0, "OutL", 2)?)
+                                .cast_const()
+                                .cast();
+                            *(voice_combiner.1.add(audio_offset_for_voice(
+                                voice_combiner.0,
+                                "InR",
+                                1,
+                                current_voice,
+                            )?) as *mut *const f32) = lane_voice_deallocator
+                                .1
+                                .add(audio_offset(lane_voice_deallocator.0, "OutR", 2)?)
+                                .cast_const()
+                                .cast();
+
+                            connect_output_for_voice(
+                                lane_global_voice.0,
+                                lane_global_voice.1,
+                                "MidiNote",
+                                8,
+                                current_voice,
+                                lane_midi_to_hertz.0,
+                                lane_midi_to_hertz.1,
+                                "MidiNote",
+                                7,
+                            )?;
+                            connect_output_for_voice(
+                                lane_midi_to_hertz.0,
+                                lane_midi_to_hertz.1,
+                                "Frequency",
+                                8,
+                                current_voice,
+                                lane_operator.0,
+                                lane_operator.1,
+                                "Frequency",
+                                7,
+                            )?;
+                            for (source_name, target_name, target_kind) in [
+                                ("Freq", "LfoFreq", 9),
+                                ("AmountGlobal", "LfoAmountGlobal", 7),
+                                ("AmountA", "LfoAmountA", 7),
+                                ("AmountModulation", "LfoAmountModulation", 7),
+                            ] {
+                                connect_output_for_voice(
+                                    lane_lfo_frequency.0,
+                                    lane_lfo_frequency.1,
+                                    source_name,
+                                    if target_kind == 9 { 10 } else { 8 },
+                                    current_voice,
+                                    lane_operator.0,
+                                    lane_operator.1,
+                                    target_name,
+                                    target_kind,
+                                )?;
+                            }
+                            connect_output_for_voice(
+                                lane_lfo_envelope.0,
+                                lane_lfo_envelope.1,
+                                "EnvelopeData",
+                                10,
+                                current_voice,
+                                lane_operator.0,
+                                lane_operator.1,
+                                "LfoEnv",
+                                9,
+                            )?;
+                            for (source_name, target_name, source_kind, target_kind) in
+                                [("Vol", "Vol", 10, 9), ("VolX", "VolX", 8, 7)]
+                            {
+                                connect_output_for_voice(
+                                    lane_global_voice.0,
+                                    lane_global_voice.1,
+                                    source_name,
+                                    source_kind,
+                                    current_voice,
+                                    lane_filter.0,
+                                    lane_filter.1,
+                                    target_name,
+                                    target_kind,
+                                )?;
+                            }
+                            for (source_name, target_name) in
+                                [("Out", "FilterFreq"), ("X", "FilterFreqX")]
+                            {
+                                connect_output_for_voice(
+                                    lane_filter_mod.0,
+                                    lane_filter_mod.1,
+                                    source_name,
+                                    8,
+                                    current_voice,
+                                    lane_filter.0,
+                                    lane_filter.1,
+                                    target_name,
+                                    7,
+                                )?;
+                            }
+                            for (source_name, target_name) in
+                                [("LfoToFilter", "Lfo"), ("LfoX", "LfoX")]
+                            {
+                                connect_output_for_voice(
+                                    lane_operator.0,
+                                    lane_operator.1,
+                                    source_name,
+                                    8,
+                                    current_voice,
+                                    lane_filter_mod.0,
+                                    lane_filter_mod.1,
+                                    target_name,
+                                    7,
+                                )?;
+                            }
+                            connect_output_for_voice(
+                                lane_lfo_frequency.0,
+                                lane_lfo_frequency.1,
+                                "ModLpFreq",
+                                8,
+                                current_voice,
+                                lane_filter_mod.0,
+                                lane_filter_mod.1,
+                                "LfoLpFreq",
+                                7,
+                            )?;
+                            connect_output_for_voice(
+                                lane_filter_envelope.0,
+                                lane_filter_envelope.1,
+                                "EnvelopeData",
+                                10,
+                                current_voice,
+                                lane_filter_envelope_event.0,
+                                lane_filter_envelope_event.1,
+                                "EnvParams",
+                                9,
+                            )?;
+                            for (source_name, target_name) in [("Env", "Adsr"), ("X", "AdsrX")] {
+                                connect_output_for_voice(
+                                    lane_filter_envelope_event.0,
+                                    lane_filter_envelope_event.1,
+                                    source_name,
+                                    8,
+                                    current_voice,
+                                    lane_filter_mod.0,
+                                    lane_filter_mod.1,
+                                    target_name,
+                                    7,
+                                )?;
+                            }
+                            connect_output_for_voice(
+                                lane_filter.0,
+                                lane_filter.1,
+                                "OutXAndVoice",
+                                10,
+                                current_voice,
+                                lane_voice_deallocator.0,
+                                lane_voice_deallocator.1,
+                                "InXAndVoice",
+                                9,
+                            )?;
+                            for (source_name, target_name) in [
+                                ("RequestSteal", "RequestSteal"),
+                                ("VoiceOff", "VoiceWentOff"),
+                            ] {
+                                connect_output_for_voice(
+                                    lane_voice_deallocator.0,
+                                    lane_voice_deallocator.1,
+                                    source_name,
+                                    8,
+                                    current_voice,
+                                    management.0,
+                                    management.1,
+                                    target_name,
+                                    7,
+                                )?;
+                            }
+
+                            let mut adsr_serializers = Vec::with_capacity(4);
+                            let mut wavetable_processors = Vec::with_capacity(4);
+                            let mut oscillator_voice_processors = Vec::with_capacity(4);
+                            for oscillator in 1..=4 {
+                                let serializer =
+                                    construct_companion("AdsrSerializer", 1, current_voice)?;
+                                let callback = input_callback(
+                                    lane_operator.0,
+                                    &format!("Osc{oscillator}Adsr"),
+                                    9,
+                                )?;
+                                let offset = output_offset_for_voice(
+                                    serializer.0,
+                                    "EnvelopeData",
+                                    10,
+                                    current_voice,
+                                )?;
+                                *(serializer.1.add(offset) as *mut usize) = callback;
+                                *(serializer.1.add(offset + 8) as *mut *mut u8) = lane_operator.1;
+                                adsr_serializers.push(serializer);
+
+                                let wavetable = construct_companion(
+                                    "InstrumentOperatorWavetable",
+                                    1,
+                                    current_voice,
+                                )?;
+                                let callback = input_callback(
+                                    lane_operator.0,
+                                    &format!("Osc{oscillator}WaveForm"),
+                                    9,
+                                )?;
+                                let offset = output_offset_for_voice(
+                                    wavetable.0,
+                                    "Bank",
+                                    10,
+                                    current_voice,
+                                )?;
+                                *(wavetable.1.add(offset) as *mut usize) = callback;
+                                *(wavetable.1.add(offset + 8) as *mut *mut u8) = lane_operator.1;
+                                wavetable_processors.push(wavetable);
+
+                                let oscillator_voice = construct_companion(
+                                    "InstrumentOperatorOpVoice",
+                                    1,
+                                    current_voice,
+                                )?;
+                                for (voice_output, operator_input) in [
+                                    ("Tune", format!("Osc{oscillator}Tune")),
+                                    ("Volume", format!("Osc{oscillator}Amp")),
+                                    (
+                                        "FixedFrequencyOn",
+                                        format!("Osc{oscillator}FixedFrequencyOn"),
+                                    ),
+                                    ("Feedback", format!("Osc{oscillator}Feedback")),
+                                ] {
+                                    let callback =
+                                        input_callback(lane_operator.0, &operator_input, 7)?;
+                                    let offset = output_offset_for_voice(
+                                        oscillator_voice.0,
+                                        voice_output,
+                                        8,
+                                        current_voice,
+                                    )?;
+                                    *(oscillator_voice.1.add(offset) as *mut usize) = callback;
+                                    *(oscillator_voice.1.add(offset + 8) as *mut *mut u8) =
+                                        lane_operator.1;
+                                }
+                                oscillator_voice_processors.push(oscillator_voice);
+                            }
+                            let adsr_serializers: [LiveEngineProcessor; 4] = adsr_serializers
+                                .try_into()
+                                .map_err(|_| anyhow!("Ableton Operator ADSR lane is incomplete"))?;
+                            let wavetable_processors: [LiveEngineProcessor; 4] =
+                                wavetable_processors.try_into().map_err(|_| {
+                                    anyhow!("Ableton Operator wavetable lane is incomplete")
+                                })?;
+                            let oscillator_voice_processors: [LiveEngineProcessor; 4] =
+                                oscillator_voice_processors.try_into().map_err(|_| {
+                                    anyhow!("Ableton Operator oscillator lane is incomplete")
+                                })?;
+
+                            let voice_info_targets = std::iter::once((
+                                lane_operator.0,
+                                lane_operator.1,
+                                "VoiceInfo".to_owned(),
+                            ))
+                            .chain(std::iter::once((
+                                lane_global_voice.0,
+                                lane_global_voice.1,
+                                "VoiceInfo".to_owned(),
+                            )))
+                            .chain(oscillator_voice_processors.iter().map(|processor| {
+                                (processor.0, processor.1, "VoiceInfo".to_owned())
+                            }))
+                            .chain(adsr_serializers.iter().map(|processor| {
+                                (processor.0, processor.1, "VoiceInfo".to_owned())
+                            }))
+                            .chain([
+                                (
+                                    lane_lfo_frequency.0,
+                                    lane_lfo_frequency.1,
+                                    "VoiceInfo".to_owned(),
+                                ),
+                                (
+                                    lane_lfo_envelope.0,
+                                    lane_lfo_envelope.1,
+                                    "VoiceInfo".to_owned(),
+                                ),
+                                (lane_filter.0, lane_filter.1, "VoiceInfo".to_owned()),
+                                (lane_filter_mod.0, lane_filter_mod.1, "VoiceInfo".to_owned()),
+                            ])
+                            .collect::<Vec<_>>();
+                            let mut fanout_source = allocator;
+                            let mut fanout_output = "VoiceInfoOut";
+                            for (index, target) in voice_info_targets.iter().enumerate() {
+                                if index + 1 == voice_info_targets.len() {
+                                    connect_output_for_voice(
+                                        fanout_source.0,
+                                        fanout_source.1,
+                                        fanout_output,
+                                        10,
+                                        current_voice,
+                                        target.0,
+                                        target.1,
+                                        &target.2,
+                                        9,
+                                    )?;
+                                    break;
+                                }
+                                let fanout = construct_companion("SeqPointer2", 1, current_voice)?;
+                                connect_output_for_voice(
+                                    fanout_source.0,
+                                    fanout_source.1,
+                                    fanout_output,
+                                    10,
+                                    current_voice,
+                                    fanout.0,
+                                    fanout.1,
+                                    "In",
+                                    9,
+                                )?;
+                                connect_output_for_voice(
+                                    fanout.0,
+                                    fanout.1,
+                                    "Out0",
+                                    10,
+                                    current_voice,
+                                    target.0,
+                                    target.1,
+                                    &target.2,
+                                    9,
+                                )?;
+                                operator_event_fanouts.push(fanout);
+                                fanout_source = fanout;
+                                fanout_output = "Out1";
+                            }
+                            for (source_name, targets) in [
+                                (
+                                    "NoteOn",
+                                    [
+                                        (lane_operator.0, lane_operator.1, "NoteOn"),
+                                        (lane_filter.0, lane_filter.1, "NoteOn"),
+                                        (
+                                            lane_filter_envelope_event.0,
+                                            lane_filter_envelope_event.1,
+                                            "NoteOn",
+                                        ),
+                                    ],
+                                ),
+                                (
+                                    "NoteOff",
+                                    [
+                                        (lane_operator.0, lane_operator.1, "NoteOff"),
+                                        (lane_filter.0, lane_filter.1, "NoteOff"),
+                                        (
+                                            lane_filter_envelope_event.0,
+                                            lane_filter_envelope_event.1,
+                                            "NoteOff",
+                                        ),
+                                    ],
+                                ),
+                            ] {
+                                let first_fanout =
+                                    construct_companion("SeqPointer2", 1, current_voice)?;
+                                connect_output_for_voice(
+                                    allocator.0,
+                                    allocator.1,
+                                    source_name,
+                                    10,
+                                    current_voice,
+                                    first_fanout.0,
+                                    first_fanout.1,
+                                    "In",
+                                    9,
+                                )?;
+                                connect_output_for_voice(
+                                    first_fanout.0,
+                                    first_fanout.1,
+                                    "Out0",
+                                    10,
+                                    current_voice,
+                                    targets[0].0,
+                                    targets[0].1,
+                                    targets[0].2,
+                                    9,
+                                )?;
+                                let second_fanout =
+                                    construct_companion("SeqPointer2", 1, current_voice)?;
+                                connect_output_for_voice(
+                                    first_fanout.0,
+                                    first_fanout.1,
+                                    "Out1",
+                                    10,
+                                    current_voice,
+                                    second_fanout.0,
+                                    second_fanout.1,
+                                    "In",
+                                    9,
+                                )?;
+                                for (output_name, target) in
+                                    [("Out0", targets[1]), ("Out1", targets[2])]
+                                {
+                                    connect_output_for_voice(
+                                        second_fanout.0,
+                                        second_fanout.1,
+                                        output_name,
+                                        10,
+                                        current_voice,
+                                        target.0,
+                                        target.1,
+                                        target.2,
+                                        9,
+                                    )?;
+                                }
+                                operator_event_fanouts.extend([first_fanout, second_fanout]);
+                            }
+                            connect_output_for_voice(
+                                allocator.0,
+                                allocator.1,
+                                "StealVoiceOut",
+                                8,
+                                current_voice,
+                                lane_operator.0,
+                                lane_operator.1,
+                                "Steal",
+                                7,
+                            )?;
+
+                            operator_additional_voice_lanes.push(OperatorVoiceLane {
+                                operator: lane_operator,
+                                global_voice: lane_global_voice,
+                                midi_to_hertz: lane_midi_to_hertz,
+                                lfo_frequency: lane_lfo_frequency,
+                                lfo_envelope: lane_lfo_envelope,
+                                filter: lane_filter,
+                                filter_mod: lane_filter_mod,
+                                filter_envelope: lane_filter_envelope,
+                                filter_envelope_event: lane_filter_envelope_event,
+                                voice_deallocator: lane_voice_deallocator,
+                                adsr_serializers,
+                                wavetable_processors,
+                                oscillator_voice_processors,
+                            });
+                        }
+                    }
+                    if processor == "InstrumentImpulse" {
+                        let port_value = |record: *const u8,
+                                          name: &str,
+                                          kind: u32,
+                                          field_offset: usize|
+                         -> Result<usize> {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            (0..count)
+                                .find_map(|index| {
+                                    let port = record.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    (*(port.add(0x100) as *const u32) == kind && port_name == name)
+                                        .then(|| {
+                                            if field_offset == 0x104 {
+                                                *(port.add(field_offset) as *const u32) as usize
+                                            } else {
+                                                *(port.add(field_offset) as *const usize)
+                                            }
+                                        })
+                                })
+                                .with_context(|| {
+                                    format!(
+                                        "Ableton Impulse processor has no {name} kind-{kind} port"
+                                    )
+                                })
+                        };
+                        let event_input = |record: *const u8, name: &str, kind: u32| {
+                            port_value(record, name, kind, 0x110)
+                        };
+                        let output_offset = |record: *const u8, name: &str, kind: u32| {
+                            let offset = port_value(record, name, kind, 0x104)?;
+                            ensure!(
+                                offset != u32::MAX as usize,
+                                "Ableton Impulse {name} output has no object offset"
+                            );
+                            Ok(offset
+                                + if *record.add(0x16d) == 2 {
+                                    OPERATOR_VOICE_ALLOCATOR_BANK_OFFSET
+                                } else {
+                                    0
+                                })
+                        };
+                        let connect_event = |source: LiveEngineProcessor,
+                                             source_name: &str,
+                                             source_kind: u32,
+                                             target: LiveEngineProcessor,
+                                             target_name: &str,
+                                             target_kind: u32|
+                         -> Result<()> {
+                            let source_offset = output_offset(source.0, source_name, source_kind)?;
+                            *(source.1.add(source_offset) as *mut usize) =
+                                event_input(target.0, target_name, target_kind)?;
+                            *(source.1.add(source_offset + 8) as *mut *mut u8) = target.1;
+                            Ok(())
+                        };
+                        let connect_event_from_voice = |source: LiveEngineProcessor,
+                                                        source_name: &str,
+                                                        source_kind: u32,
+                                                        voice: usize,
+                                                        target: LiveEngineProcessor,
+                                                        target_name: &str,
+                                                        target_kind: u32|
+                         -> Result<()> {
+                            let mut source_offset =
+                                output_offset(source.0, source_name, source_kind)?;
+                            if *source.0.add(0x16d) == 2 {
+                                source_offset += voice * OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE;
+                            }
+                            *(source.1.add(source_offset) as *mut usize) =
+                                event_input(target.0, target_name, target_kind)?;
+                            *(source.1.add(source_offset + 8) as *mut *mut u8) = target.1;
+                            Ok(())
+                        };
+                        let audio_offset = |record: *const u8, name: &str, kind: u32| {
+                            output_offset(record, name, kind)
+                        };
+                        let voice_combiner = construct_companion("VoiceCombiner", 8, 0)?;
+                        for slot_index in 0..8 {
+                            let tab_serializer = construct_companion(
+                                "InstrumentImpulseTabSerializer",
+                                1,
+                                slot_index,
+                            )?;
+                            let start_serializer = construct_companion(
+                                "InstrumentImpulseStartSerializer",
+                                1,
+                                slot_index,
+                            )?;
+                            let filter_serializer = construct_companion(
+                                "InstrumentImpulseFilterSerializer",
+                                1,
+                                slot_index,
+                            )?;
+                            let decay_serializer = construct_companion(
+                                "InstrumentImpulseDecaySerializer",
+                                1,
+                                slot_index,
+                            )?;
+                            let volume_serializer = construct_companion(
+                                "InstrumentImpulseVolumeSerializer",
+                                1,
+                                slot_index,
+                            )?;
+                            for (serializer, target_name) in [
+                                (tab_serializer, "Tab"),
+                                (start_serializer, "Start"),
+                                (filter_serializer, "Filter"),
+                                (decay_serializer, "Decay"),
+                                (volume_serializer, "Volume"),
+                            ] {
+                                connect_event(
+                                    serializer,
+                                    "Info",
+                                    10,
+                                    (processor_record, processor_object),
+                                    target_name,
+                                    9,
+                                )?;
+                            }
+
+                            let voice_allocator =
+                                construct_companion("VoiceAllocator", IMPULSE_VOICE_COUNT, 0)?;
+                            let slot_voice_combiner =
+                                construct_companion("VoiceCombiner", IMPULSE_VOICE_COUNT, 0)?;
+
+                            connect_event(
+                                (processor_record, processor_object),
+                                &format!("VoiceInfo_{slot_index}"),
+                                10,
+                                voice_allocator,
+                                "VoiceInfoIn",
+                                9,
+                            )?;
+                            connect_event(
+                                (processor_record, processor_object),
+                                &format!("StealVoice_{slot_index}"),
+                                8,
+                                voice_allocator,
+                                "StealVoiceIn",
+                                7,
+                            )?;
+                            let mut voices = Vec::with_capacity(IMPULSE_VOICE_COUNT);
+                            for voice_index in 0..IMPULSE_VOICE_COUNT {
+                                let voice_info_fanout = construct_companion(
+                                    "SeqPointer2",
+                                    IMPULSE_VOICE_COUNT,
+                                    voice_index,
+                                )?;
+                                let player_parameter = construct_companion(
+                                    "ImpulsePlayerParameter",
+                                    IMPULSE_VOICE_COUNT,
+                                    voice_index,
+                                )?;
+                                let stretching_player = construct_companion(
+                                    "StretchingPlayer",
+                                    IMPULSE_VOICE_COUNT,
+                                    voice_index,
+                                )?;
+                                let filter_sat_decay = construct_companion(
+                                    "FilterSatDecay",
+                                    IMPULSE_VOICE_COUNT,
+                                    voice_index,
+                                )?;
+                                let voice_deallocator = construct_companion(
+                                    "VoiceDeallocator",
+                                    IMPULSE_VOICE_COUNT,
+                                    voice_index,
+                                )?;
+
+                                connect_event_from_voice(
+                                    voice_allocator,
+                                    "VoiceInfoOut",
+                                    10,
+                                    voice_index,
+                                    voice_info_fanout,
+                                    "In",
+                                    9,
+                                )?;
+                                connect_event(
+                                    voice_info_fanout,
+                                    "Out0",
+                                    10,
+                                    player_parameter,
+                                    "Info",
+                                    9,
+                                )?;
+                                connect_event(
+                                    voice_info_fanout,
+                                    "Out1",
+                                    10,
+                                    filter_sat_decay,
+                                    "VoiceInfo",
+                                    9,
+                                )?;
+                                for (source_name, target_name) in
+                                    [("NoteOn", "NoteOn"), ("NoteOff", "NoteOff")]
+                                {
+                                    connect_event_from_voice(
+                                        voice_allocator,
+                                        source_name,
+                                        10,
+                                        voice_index,
+                                        filter_sat_decay,
+                                        target_name,
+                                        9,
+                                    )?;
+                                }
+                                connect_event_from_voice(
+                                    voice_allocator,
+                                    "StealVoiceOut",
+                                    8,
+                                    voice_index,
+                                    filter_sat_decay,
+                                    "Steal",
+                                    7,
+                                )?;
+                                for (source_name, source_kind, target_name, target_kind) in [
+                                    ("Pitch", 8, "SamplePitch", 7),
+                                    ("Start", 10, "SampleStart", 9),
+                                    ("End", 10, "SampleEnd", 9),
+                                    ("Stretch", 8, "Stretch", 7),
+                                    ("Fade", 10, "SampleFade", 9),
+                                    ("Mode", 8, "Mode", 7),
+                                    ("Sample", 10, "Sample", 9),
+                                    ("DoStart", 10, "StartEvent", 9),
+                                ] {
+                                    connect_event(
+                                        player_parameter,
+                                        source_name,
+                                        source_kind,
+                                        stretching_player,
+                                        target_name,
+                                        target_kind,
+                                    )?;
+                                }
+                                connect_event(
+                                    stretching_player,
+                                    "OutX",
+                                    8,
+                                    filter_sat_decay,
+                                    "InX",
+                                    7,
+                                )?;
+                                connect_event(
+                                    stretching_player,
+                                    "ChannelInfo",
+                                    8,
+                                    filter_sat_decay,
+                                    "ChannelInfo",
+                                    7,
+                                )?;
+                                connect_event(
+                                    filter_sat_decay,
+                                    "OutStop",
+                                    8,
+                                    stretching_player,
+                                    "StopEvent",
+                                    7,
+                                )?;
+                                connect_event(
+                                    filter_sat_decay,
+                                    "OutXAndVoice",
+                                    10,
+                                    voice_deallocator,
+                                    "InXAndVoice",
+                                    9,
+                                )?;
+                                connect_event(
+                                    voice_deallocator,
+                                    "VoiceOff",
+                                    8,
+                                    (processor_record, processor_object),
+                                    "VoiceWentOff",
+                                    7,
+                                )?;
+
+                                for channel in ["L", "R"] {
+                                    *(filter_sat_decay.1.add(audio_offset(
+                                        filter_sat_decay.0,
+                                        &format!("In{channel}"),
+                                        1,
+                                    )?) as *mut *const f32) = stretching_player
+                                        .1
+                                        .add(audio_offset(
+                                            stretching_player.0,
+                                            &format!("Out{channel}"),
+                                            2,
+                                        )?)
+                                        .cast_const()
+                                        .cast();
+                                    *(filter_sat_decay.1.add(audio_offset(
+                                        filter_sat_decay.0,
+                                        &format!("Out{channel}"),
+                                        4,
+                                    )?) as *mut *mut f32) = voice_deallocator
+                                        .1
+                                        .add(audio_offset(
+                                            voice_deallocator.0,
+                                            &format!("In{channel}"),
+                                            3,
+                                        )?)
+                                        .cast();
+                                    let combiner_base = audio_offset(
+                                        slot_voice_combiner.0,
+                                        &format!("In{channel}"),
+                                        1,
+                                    )?;
+                                    let combiner_offset = OPERATOR_VOICE_COMBINER_BANK_OFFSET
+                                        + voice_index * OPERATOR_VOICE_COMBINER_BANK_STRIDE
+                                        + combiner_base;
+                                    *(slot_voice_combiner.1.add(combiner_offset)
+                                        as *mut *const f32) = voice_deallocator
+                                        .1
+                                        .add(audio_offset(
+                                            voice_deallocator.0,
+                                            &format!("Out{channel}"),
+                                            2,
+                                        )?)
+                                        .cast_const()
+                                        .cast();
+                                }
+
+                                voices.push(ImpulseVoiceLane {
+                                    voice_info_fanout,
+                                    player_parameter,
+                                    stretching_player,
+                                    filter_sat_decay,
+                                    voice_deallocator,
+                                });
+                            }
+
+                            for channel in ["L", "R"] {
+                                let master_base =
+                                    audio_offset(voice_combiner.0, &format!("In{channel}"), 1)?;
+                                let master_offset = OPERATOR_VOICE_COMBINER_BANK_OFFSET
+                                    + slot_index * OPERATOR_VOICE_COMBINER_BANK_STRIDE
+                                    + master_base;
+                                *(voice_combiner.1.add(master_offset) as *mut *const f32) =
+                                    slot_voice_combiner
+                                        .1
+                                        .add(audio_offset(
+                                            slot_voice_combiner.0,
+                                            &format!("Out{channel}"),
+                                            2,
+                                        )?)
+                                        .cast_const()
+                                        .cast();
+                            }
+
+                            impulse_slot_lanes.push(ImpulseSlotLane {
+                                tab_serializer,
+                                start_serializer,
+                                filter_serializer,
+                                decay_serializer,
+                                volume_serializer,
+                                voice_allocator,
+                                voice_combiner: slot_voice_combiner,
+                                voices,
+                            });
+                        }
+                        impulse_midi_input = Some((
+                            event_input(processor_record, "InMidi", 9)?,
+                            processor_object,
+                        ));
+                        impulse_voice_combiner = Some(voice_combiner);
                     }
                     if processor == "FilterEQ3" {
                         // Live's AudioStateDeviceProcessor.SetAudioStateId
@@ -5612,11 +7596,130 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 std::ptr::null_mut();
                         }
                     }
+                    if processor == "InstrumentOperator" {
+                        let companions = operator_voice_management
+                            .into_iter()
+                            .chain(operator_voice_allocator)
+                            .chain(operator_global_voice)
+                            .chain(operator_midi_to_hertz)
+                            .chain(operator_lfo_frequency)
+                            .chain(operator_lfo_envelope)
+                            .chain(operator_sample_interval_trigger)
+                            .chain(operator_filter)
+                            .chain(operator_filter_mod)
+                            .chain(operator_filter_envelope)
+                            .chain(operator_filter_envelope_event)
+                            .chain(operator_voice_deallocator)
+                            .chain(operator_voice_combiner)
+                            .chain(operator_event_fanouts.iter().copied())
+                            .chain(operator_adsr_serializers.iter().copied())
+                            .chain(operator_wavetable_processors.iter().copied())
+                            .chain(operator_voice_processors.iter().copied())
+                            .chain(
+                                operator_additional_voice_lanes
+                                    .iter()
+                                    .flat_map(OperatorVoiceLane::processors),
+                            );
+                        for (record, object) in companions {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            for index in 0..count {
+                                let port = record.add(0x180 + index * 0x120);
+                                let kind = *(port.add(0x100) as *const u32);
+                                let offset = *(port.add(0x104) as *const u32);
+                                if !matches!(kind, 8 | 10) || offset == u32::MAX {
+                                    continue;
+                                }
+                                let bank_count = if *record.add(0x16d) == 2 {
+                                    operator_physical_voice_count
+                                } else {
+                                    1
+                                };
+                                for voice in 0..bank_count {
+                                    let effective_offset = offset as usize
+                                        + if *record.add(0x16d) == 2 {
+                                            OPERATOR_VOICE_ALLOCATOR_BANK_OFFSET
+                                                + voice * OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE
+                                        } else {
+                                            0
+                                        };
+                                    let callback = object.add(effective_offset) as *mut usize;
+                                    if *callback == 0 {
+                                        *callback = if kind == 8 {
+                                            discard_live_engine_float_event as usize
+                                        } else {
+                                            discard_live_engine_pointer_event as usize
+                                        };
+                                        *(object.add(effective_offset + 8) as *mut *mut u8) =
+                                            std::ptr::null_mut();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if processor == "InstrumentImpulse" {
+                        let companions = impulse_slot_lanes
+                            .iter()
+                            .flat_map(ImpulseSlotLane::processors)
+                            .chain(impulse_voice_combiner);
+                        for (record, object) in companions {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            for index in 0..count {
+                                let port = record.add(0x180 + index * 0x120);
+                                let kind = *(port.add(0x100) as *const u32);
+                                let offset = *(port.add(0x104) as *const u32);
+                                if !matches!(kind, 8 | 10) || offset == u32::MAX {
+                                    continue;
+                                }
+                                let bank_count = if *record.add(0x16d) == 2 {
+                                    IMPULSE_VOICE_COUNT
+                                } else {
+                                    1
+                                };
+                                for voice in 0..bank_count {
+                                    let effective_offset = offset as usize
+                                        + if *record.add(0x16d) == 2 {
+                                            OPERATOR_VOICE_ALLOCATOR_BANK_OFFSET
+                                                + voice * OPERATOR_VOICE_ALLOCATOR_BANK_STRIDE
+                                        } else {
+                                            0
+                                        };
+                                    let callback = object.add(effective_offset) as *mut usize;
+                                    if *callback == 0 {
+                                        *callback = if kind == 8 {
+                                            discard_live_engine_float_event as usize
+                                        } else {
+                                            discard_live_engine_pointer_event as usize
+                                        };
+                                        *(object.add(effective_offset + 8) as *mut *mut u8) =
+                                            std::ptr::null_mut();
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Live binds graph ports before lifecycle reset, then sends
                     // the controller parameter/event batch. Several legacy
                     // processors inspect their input from Reset, so keep a
                     // valid silent frame attached during graph activation.
                     let lifecycle_input_samples = [0.0_f32; 4];
+                    if processor == "InstrumentOperator" {
+                        // AVecFmOperator owns eight optional per-sample modulation
+                        // lanes at +0x1b0..+0x1e8. Live's graph planner binds
+                        // unconnected lanes to its shared zero signal. The
+                        // standalone one-voice graph must install the same
+                        // bindings before the selected native calc dereferences
+                        // them on its first active sample.
+                        for operator_object in std::iter::once(processor_object).chain(
+                            operator_additional_voice_lanes
+                                .iter()
+                                .map(|lane| lane.operator.1),
+                        ) {
+                            for offset in (0x3c0..=0x3f8).step_by(8) {
+                                *(operator_object.add(offset) as *mut *const f32) =
+                                    &lifecycle_input_samples[0];
+                            }
+                        }
+                    }
                     // The factory only constructs the processor object. Live's
                     // graph planner dispatches the lifecycle callbacks stored in
                     // the registry record separately. In particular, delay-based
@@ -5721,7 +7824,174 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                         );
                         calc_function = *((image_base + 0x17c2780) as *const usize).add(calc_index);
                     }
-                    if processor == "BeatRepeatMixer" {
+                    if processor == "InstrumentOperator" {
+                        let filter =
+                            operator_filter.context("Ableton Operator native filter is absent")?;
+                        let voice_deallocator = operator_voice_deallocator
+                            .context("Ableton Operator voice deallocator is absent")?;
+                        let voice_combiner = operator_voice_combiner
+                            .context("Ableton Operator voice combiner is absent")?;
+                        let mut entries = vec![
+                            (processor_record, processor_object),
+                            filter,
+                            voice_deallocator,
+                        ];
+                        for lane in &operator_additional_voice_lanes {
+                            entries.extend([lane.operator, lane.filter, lane.voice_deallocator]);
+                        }
+                        entries.push(voice_combiner);
+                        let construct_chain: ConstructCalcChain =
+                            std::mem::transmute(image_base + 0x7a510);
+                        let add_entry: AddSampleChainEntry =
+                            std::mem::transmute(image_base + 0x82e70);
+                        let end_chain: ChainOperation = std::mem::transmute(image_base + 0x82fc0);
+                        let enter_chain: ChainOperation = std::mem::transmute(image_base + 0x830c0);
+                        let chain_handle = allocate_handle();
+                        ensure!(chain_handle != 0, "Ableton Operator chain has no handle");
+                        let chain = allocate_object2(0x40);
+                        ensure!(!chain.is_null(), "Ableton Operator chain allocation failed");
+                        construct_chain(chain, chain_handle, entries.len() as i32, 1);
+                        let working_chain = *(chain.add(0x28) as *const *mut u8);
+                        ensure!(
+                            !working_chain.is_null(),
+                            "Ableton Operator chain returned no working chain"
+                        );
+                        let no_op = *(image_base.wrapping_add(0x16a98e0) as *const usize);
+                        let raw_entries = *(chain.add(0x18) as *const *mut u8);
+                        ensure!(
+                            !raw_entries.is_null(),
+                            "Ableton Operator chain entry array is null"
+                        );
+                        let mut active_count = 0_i32;
+                        for (index, (record, object)) in entries.iter().copied().enumerate() {
+                            let calc = std::ptr::read_unaligned(record.add(0x158) as *const usize);
+                            ensure!(calc >= image_base, "Ableton Operator chain calc is invalid");
+                            add_entry(
+                                working_chain,
+                                object,
+                                std::mem::transmute::<usize, SampleCalc>(calc),
+                            );
+                            let raw_entry = raw_entries.add(index * 0x18);
+                            let active_calc = (calc != no_op).then_some(calc);
+                            *(raw_entry as *mut *mut u8) = object;
+                            *(raw_entry.add(8) as *mut usize) = active_calc.unwrap_or(0);
+                            *(raw_entry.add(0x10) as *mut i32) = i32::try_from(index)?;
+                            active_count += i32::from(active_calc.is_some());
+                            let change_offset =
+                                std::ptr::read_unaligned(record.add(0x168) as *const i32);
+                            if change_offset >= 0 {
+                                let change_data = allocate_object(0x18);
+                                ensure!(
+                                    !change_data.is_null(),
+                                    "Ableton Operator change-audio allocation failed"
+                                );
+                                *(change_data as *mut usize) = active_calc.unwrap_or(0);
+                                *(change_data.add(8) as *mut *mut u8) = chain;
+                                *(change_data.add(0x10) as *mut i32) = i32::try_from(index)?;
+                                *(object.add(change_offset as usize) as *mut *mut u8) = change_data;
+                            }
+                        }
+                        end_chain(working_chain);
+                        *(chain.add(0x34) as *mut i32) = active_count;
+                        *(chain.add(0x38) as *mut i32) = i32::try_from(entries.len())?;
+                        enter_chain(working_chain);
+                        update_engine_domain(engine_domain, 0, 0, chain_handle, 0, 0);
+                        processor_graph = Some(format!(
+                            "{} native Operator voice lanes + VoiceCombiner",
+                            operator_physical_voice_count
+                        ));
+                        processor_graph_attached = true;
+                        processor_graph_entries = entries.len();
+                        processor_graph_execution_function = Some(format!(
+                            "0x{:016x}",
+                            *(working_chain.add(0x18) as *const usize)
+                        ));
+                    } else if processor == "InstrumentImpulse" {
+                        let voice_combiner = impulse_voice_combiner
+                            .context("Ableton Impulse voice combiner is absent")?;
+                        let mut entries = Vec::with_capacity(8 * (IMPULSE_VOICE_COUNT * 3 + 1) + 1);
+                        for slot in &impulse_slot_lanes {
+                            for voice in &slot.voices {
+                                entries.extend([
+                                    voice.stretching_player,
+                                    voice.filter_sat_decay,
+                                    voice.voice_deallocator,
+                                ]);
+                            }
+                            entries.push(slot.voice_combiner);
+                        }
+                        entries.push(voice_combiner);
+                        let construct_chain: ConstructCalcChain =
+                            std::mem::transmute(image_base + 0x7a510);
+                        let add_entry: AddSampleChainEntry =
+                            std::mem::transmute(image_base + 0x82e70);
+                        let end_chain: ChainOperation = std::mem::transmute(image_base + 0x82fc0);
+                        let enter_chain: ChainOperation = std::mem::transmute(image_base + 0x830c0);
+                        let chain_handle = allocate_handle();
+                        ensure!(chain_handle != 0, "Ableton Impulse chain has no handle");
+                        let chain = allocate_object2(0x40);
+                        ensure!(!chain.is_null(), "Ableton Impulse chain allocation failed");
+                        // This graph is substantially larger than Live's JIT
+                        // OChain code buffer. Use Ableton's native interpreted
+                        // OChain implementation for the complete 512-voice
+                        // Impulse topology; every entry still executes its
+                        // original native Calc callback.
+                        construct_chain(chain, chain_handle, entries.len() as i32, 0);
+                        let working_chain = *(chain.add(0x28) as *const *mut u8);
+                        ensure!(
+                            !working_chain.is_null(),
+                            "Ableton Impulse chain returned no working chain"
+                        );
+                        let no_op = *(image_base.wrapping_add(0x16a98e0) as *const usize);
+                        let raw_entries = *(chain.add(0x18) as *const *mut u8);
+                        ensure!(
+                            !raw_entries.is_null(),
+                            "Ableton Impulse chain entry array is null"
+                        );
+                        let mut active_count = 0_i32;
+                        for (index, (record, object)) in entries.iter().copied().enumerate() {
+                            let calc = std::ptr::read_unaligned(record.add(0x158) as *const usize);
+                            ensure!(calc >= image_base, "Ableton Impulse chain calc is invalid");
+                            add_entry(
+                                working_chain,
+                                object,
+                                std::mem::transmute::<usize, SampleCalc>(calc),
+                            );
+                            let raw_entry = raw_entries.add(index * 0x18);
+                            let active_calc = (calc != no_op).then_some(calc);
+                            *(raw_entry as *mut *mut u8) = object;
+                            *(raw_entry.add(8) as *mut usize) = active_calc.unwrap_or(0);
+                            *(raw_entry.add(0x10) as *mut i32) = i32::try_from(index)?;
+                            active_count += i32::from(active_calc.is_some());
+                            let change_offset =
+                                std::ptr::read_unaligned(record.add(0x168) as *const i32);
+                            if change_offset >= 0 {
+                                let change_data = allocate_object(0x18);
+                                ensure!(
+                                    !change_data.is_null(),
+                                    "Ableton Impulse change-audio allocation failed"
+                                );
+                                *(change_data as *mut usize) = active_calc.unwrap_or(0);
+                                *(change_data.add(8) as *mut *mut u8) = chain;
+                                *(change_data.add(0x10) as *mut i32) = i32::try_from(index)?;
+                                *(object.add(change_offset as usize) as *mut *mut u8) = change_data;
+                            }
+                        }
+                        end_chain(working_chain);
+                        *(chain.add(0x34) as *mut i32) = active_count;
+                        *(chain.add(0x38) as *mut i32) = i32::try_from(entries.len())?;
+                        enter_chain(working_chain);
+                        update_engine_domain(engine_domain, 0, 0, chain_handle, 0, 0);
+                        processor_graph = Some(format!(
+                            "8 x {IMPULSE_VOICE_COUNT} native Impulse voice lanes + 8 slot combiners + master VoiceCombiner"
+                        ));
+                        processor_graph_attached = true;
+                        processor_graph_entries = entries.len();
+                        processor_graph_execution_function = Some(format!(
+                            "0x{:016x}",
+                            *(working_chain.add(0x18) as *const usize)
+                        ));
+                    } else if processor == "BeatRepeatMixer" {
                         let (ring_record, ring_object) = beat_repeat_ring_buffer
                             .context("Ableton Beat Repeat ring-buffer companion is absent")?;
                         let ring_calc =
@@ -5977,6 +8247,83 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 }
                             }
                         }
+                        if processor == "InstrumentOperator" {
+                            let companions = operator_voice_management
+                                .into_iter()
+                                .chain(operator_voice_allocator)
+                                .chain(operator_global_voice)
+                                .chain(operator_midi_to_hertz)
+                                .chain(operator_lfo_frequency)
+                                .chain(operator_lfo_envelope)
+                                .chain(operator_sample_interval_trigger)
+                                .chain(operator_filter)
+                                .chain(operator_filter_mod)
+                                .chain(operator_filter_envelope)
+                                .chain(operator_filter_envelope_event)
+                                .chain(operator_voice_deallocator)
+                                .chain(operator_voice_combiner)
+                                .chain(operator_event_fanouts.iter().copied())
+                                .chain(operator_adsr_serializers.iter().copied())
+                                .chain(operator_wavetable_processors.iter().copied())
+                                .chain(operator_voice_processors.iter().copied())
+                                .chain(
+                                    operator_additional_voice_lanes
+                                        .iter()
+                                        .flat_map(OperatorVoiceLane::processors),
+                                );
+                            for (record, object) in companions {
+                                let init =
+                                    std::ptr::read_unaligned(record.add(0x110) as *const usize);
+                                if init != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8, *mut u8) =
+                                        std::mem::transmute(init);
+                                    callback(object, scheduler);
+                                }
+                                let new_rate =
+                                    std::ptr::read_unaligned(record.add(0x130) as *const usize);
+                                if new_rate != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8, i32, i32) =
+                                        std::mem::transmute(new_rate);
+                                    callback(object, 1, DEFAULT_SAMPLE_RATE as i32);
+                                }
+                                let reset =
+                                    std::ptr::read_unaligned(record.add(0x128) as *const usize);
+                                if reset != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8) =
+                                        std::mem::transmute(reset);
+                                    callback(object);
+                                }
+                            }
+                        }
+                        if processor == "InstrumentImpulse" {
+                            let companions = impulse_slot_lanes
+                                .iter()
+                                .flat_map(ImpulseSlotLane::processors)
+                                .chain(impulse_voice_combiner);
+                            for (record, object) in companions {
+                                let init =
+                                    std::ptr::read_unaligned(record.add(0x110) as *const usize);
+                                if init != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8, *mut u8) =
+                                        std::mem::transmute(init);
+                                    callback(object, scheduler);
+                                }
+                                let new_rate =
+                                    std::ptr::read_unaligned(record.add(0x130) as *const usize);
+                                if new_rate != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8, i32, i32) =
+                                        std::mem::transmute(new_rate);
+                                    callback(object, 1, DEFAULT_SAMPLE_RATE as i32);
+                                }
+                                let reset =
+                                    std::ptr::read_unaligned(record.add(0x128) as *const usize);
+                                if reset != 0 {
+                                    let callback: unsafe extern "C" fn(*mut u8) =
+                                        std::mem::transmute(reset);
+                                    callback(object);
+                                }
+                            }
+                        }
                         if processor_init_callback != 0 {
                             type ProcessorInit = unsafe extern "C" fn(*mut u8, *mut u8);
                             let initialize: ProcessorInit =
@@ -6053,7 +8400,228 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                         }
                     }
                     let port_count = *(processor_record.add(0x17c) as *const u32) as usize;
+                    if processor == "InstrumentOperator" {
+                        // Operator's lifecycle callbacks clear graph-owned
+                        // modulation bindings. Restore Live's shared zero-signal
+                        // connections after Reset, before controller events select
+                        // an active algorithm-specific calc function.
+                        for offset in (0x3c0..=0x3f8).step_by(8) {
+                            *(processor_object.add(offset) as *mut *const f32) =
+                                &lifecycle_input_samples[0];
+                        }
+                        type InitializeFmWavePool = unsafe extern "C" fn();
+                        type FmWavePoolInstance = unsafe extern "C" fn() -> *mut u8;
+                        let mut wave_pool = *(image_base.wrapping_add(0x17003a0) as *const *mut u8);
+                        if wave_pool.is_null() {
+                            let initialize: InitializeFmWavePool =
+                                std::mem::transmute(image_base + 0x230d40);
+                            initialize();
+                            let instance: FmWavePoolInstance =
+                                std::mem::transmute(image_base + 0x22ff40);
+                            wave_pool = instance();
+                        }
+                        ensure!(
+                            !wave_pool.is_null(),
+                            "Ableton Operator FM wavetable pool initialization failed"
+                        );
+                        type OperatorWaveformCount = unsafe extern "C" fn() -> i32;
+                        type ConstructInternalHarmonics =
+                            unsafe extern "C" fn(*mut u8, i32, *const f32, i32, i32);
+                        type ConstructWavetable = unsafe extern "C" fn(*mut u8, *mut u8);
+                        type NormalizeWavetable = unsafe extern "C" fn(*mut u8, bool);
+                        type ConstructWavetableBank = unsafe extern "C" fn(*mut u8, i32, *mut u8);
+                        type DestroyInternalHarmonics = unsafe extern "C" fn(*mut u8);
+                        let waveform_count: OperatorWaveformCount =
+                            std::mem::transmute(image_base + 0x265890);
+                        let user_waveform = waveform_count() - 1;
+                        for oscillator in 1..=4 {
+                            let preset_name = format!("Osc{oscillator}WaveFormBank");
+                            let waveform = preset_parameters
+                                .iter()
+                                .find(|parameter| parameter.name == preset_name)
+                                .map_or(0.0, |parameter| parameter.value);
+                            let wavetable_targets =
+                                std::iter::once(operator_wavetable_processors[oscillator - 1])
+                                    .chain(
+                                        operator_additional_voice_lanes
+                                            .iter()
+                                            .map(|lane| lane.wavetable_processors[oscillator - 1]),
+                                    );
+                            for (record, object) in wavetable_targets {
+                                if waveform.round() as i32 == user_waveform
+                                    && let Some(harmonics) =
+                                        &operator_user_harmonics[oscillator - 1]
+                                {
+                                    // This is Ableton's own GenerateUserBankIdle path,
+                                    // executed synchronously because the headless host
+                                    // has no controller idle thread. The same native
+                                    // OInternalHarmonics, OWavetable and OWavetableBank
+                                    // constructors build the user bank from ADV data.
+                                    let mut internal_harmonics = [0_u64; 4];
+                                    let construct_internal: ConstructInternalHarmonics =
+                                        // Exact complete-object constructor used by
+                                        // SOnGenerateUserBankIdle.
+                                        std::mem::transmute(image_base + 0x22f7f0);
+                                    construct_internal(
+                                        internal_harmonics.as_mut_ptr().cast(),
+                                        4096,
+                                        harmonics.amplitudes.as_ptr(),
+                                        harmonics.expansion_mode,
+                                        harmonics.num_harmonics,
+                                    );
+                                    let wavetable = allocate_object2(0x48);
+                                    ensure!(
+                                        !wavetable.is_null(),
+                                        "Ableton Operator user wavetable allocation failed"
+                                    );
+                                    let construct_wavetable: ConstructWavetable =
+                                        // Exact complete-object constructor used by
+                                        // SOnGenerateUserBankIdle.
+                                        std::mem::transmute(image_base + 0x2304e0);
+                                    construct_wavetable(
+                                        wavetable,
+                                        internal_harmonics.as_mut_ptr().cast(),
+                                    );
+                                    if harmonics.normalize {
+                                        let normalize: NormalizeWavetable =
+                                            std::mem::transmute(image_base + 0x2305b0);
+                                        normalize(wavetable, false);
+                                    }
+                                    let wavetable_samples =
+                                        *(wavetable.add(0x10) as *const *const f32);
+                                    let wavetable_sample_count =
+                                        *(wavetable.add(0x18) as *const i32);
+                                    ensure!(
+                                        !wavetable_samples.is_null() && wavetable_sample_count > 0,
+                                        "Ableton Operator user wavetable has no native samples"
+                                    );
+                                    native_user_wavetable_peaks.push(
+                                        std::slice::from_raw_parts(
+                                            wavetable_samples,
+                                            usize::try_from(wavetable_sample_count)?,
+                                        )
+                                        .iter()
+                                        .fold(0.0_f32, |peak, sample| peak.max(sample.abs())),
+                                    );
+                                    let bank = allocate_object2(0x38);
+                                    ensure!(
+                                        !bank.is_null(),
+                                        "Ableton Operator user wavetable-bank allocation failed"
+                                    );
+                                    let construct_bank: ConstructWavetableBank =
+                                        // Exact complete-object constructor used by
+                                        // SOnGenerateUserBankIdle.
+                                        std::mem::transmute(image_base + 0x230c60);
+                                    construct_bank(bank, user_waveform, wavetable);
+                                    type WavetableBankGain = unsafe extern "C" fn(*mut u8) -> f32;
+                                    type WavetableBankTableCount =
+                                        unsafe extern "C" fn(*mut u8) -> usize;
+                                    let bank_gain: WavetableBankGain =
+                                        std::mem::transmute(image_base + 0x230c80);
+                                    let bank_table_count: WavetableBankTableCount =
+                                        std::mem::transmute(image_base + 0x230d20);
+                                    native_user_wavetable_gains.push(bank_gain(bank));
+                                    native_user_wavetable_table_counts.push(bank_table_count(bank));
+                                    // Every native wavetable processor owns one
+                                    // reference and releases it from Exit.
+                                    *(bank.add(8) as *mut u64) += 1;
+                                    *(object.add(0x10) as *mut *mut u8) = bank;
+                                    let destroy_internal: DestroyInternalHarmonics =
+                                        std::mem::transmute(image_base + 0x2306e0);
+                                    destroy_internal(internal_harmonics.as_mut_ptr().cast());
+                                }
+                                let output_callback = *(object.add(0x18) as *const usize);
+                                native_user_wavetable_handoffs.push(
+                                    if output_callback >= image_base {
+                                        format!("image+0x{:x}", output_callback - image_base)
+                                    } else {
+                                        format!("host+0x{output_callback:x}")
+                                    },
+                                );
+                                let count = *(record.add(0x17c) as *const u32) as usize;
+                                let callback_address = (0..count)
+                                    .find_map(|port_index| {
+                                        let port = record.add(0x180 + port_index * 0x120);
+                                        let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                            .to_string_lossy();
+                                        let kind_id = *(port.add(0x100) as *const u32);
+                                        (kind_id == 7 && port_name == "Waveform")
+                                            .then(|| *(port.add(0x110) as *const usize))
+                                    })
+                                    .context("Ableton Operator wavetable has no Waveform input")?;
+                                type FloatEventCallback = unsafe extern "C" fn(*mut u8, f32);
+                                let callback: FloatEventCallback =
+                                    std::mem::transmute(callback_address);
+                                callback(object, waveform);
+                                applied_parameters.push(LiveEngineAppliedParameter {
+                                    name: preset_name.clone(),
+                                    value: waveform,
+                                    callback: format!(
+                                        "image+0x{:x}",
+                                        callback_address - image_base
+                                    ),
+                                });
+                            }
+                        }
+                    }
                     let resolve_parameter_target = |parameter_name: &str| {
+                        if processor == "InstrumentOperator"
+                            && let Some((oscillator, port_name)) =
+                                operator_adsr_parameter_port(parameter_name)
+                        {
+                            let (record, object) = operator_adsr_serializers[oscillator];
+                            return Some((record, object, port_name.to_owned()));
+                        }
+                        if processor == "InstrumentOperator"
+                            && let Some((oscillator, port_name)) =
+                                operator_voice_parameter_port(parameter_name)
+                        {
+                            let (record, object) = operator_voice_processors[oscillator];
+                            return Some((record, object, port_name.to_owned()));
+                        }
+                        if processor == "InstrumentOperator"
+                            && let Some((oscillator, port_name)) =
+                                operator_wavetable_parameter_port(parameter_name)
+                        {
+                            let (record, object) = operator_wavetable_processors[oscillator];
+                            return Some((record, object, port_name.to_owned()));
+                        }
+                        if processor == "InstrumentOperator"
+                            && let Some((target, port_name)) =
+                                operator_global_parameter_port(parameter_name)
+                        {
+                            let (record, object) = match target {
+                                OperatorGlobalParameterTarget::Management => {
+                                    operator_voice_management?
+                                }
+                                OperatorGlobalParameterTarget::Voice => operator_global_voice?,
+                                OperatorGlobalParameterTarget::LfoFrequency => {
+                                    operator_lfo_frequency?
+                                }
+                                OperatorGlobalParameterTarget::LfoEnvelope => {
+                                    operator_lfo_envelope?
+                                }
+                                OperatorGlobalParameterTarget::Filter => operator_filter?,
+                                OperatorGlobalParameterTarget::FilterMod => operator_filter_mod?,
+                                OperatorGlobalParameterTarget::FilterEnvelope => {
+                                    operator_filter_envelope?
+                                }
+                            };
+                            return Some((record, object, port_name.to_owned()));
+                        }
+                        if processor == "InstrumentImpulse"
+                            && let Some((slot, target, port_name)) =
+                                impulse_slot_parameter_port(parameter_name)
+                        {
+                            let lane = impulse_slot_lanes.get(slot)?;
+                            let (record, object) = match target {
+                                ImpulseParameterTarget::Start => lane.start_serializer,
+                                ImpulseParameterTarget::Filter => lane.filter_serializer,
+                                ImpulseParameterTarget::Decay => lane.decay_serializer,
+                                ImpulseParameterTarget::Volume => lane.volume_serializer,
+                            };
+                            return Some((record, object, port_name.to_owned()));
+                        }
                         if processor == "BeatRepeatMixer"
                             && let Some((target, port_name)) =
                                 beat_repeat_parameter_port(parameter_name)
@@ -6082,6 +8650,59 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 )
                             })
                     };
+                    let resolve_additional_operator_target =
+                        |lane: &OperatorVoiceLane, parameter_name: &str| {
+                            if let Some((oscillator, port_name)) =
+                                operator_adsr_parameter_port(parameter_name)
+                            {
+                                let (record, object) = lane.adsr_serializers[oscillator];
+                                return Some((record, object, port_name.to_owned()));
+                            }
+                            if let Some((oscillator, port_name)) =
+                                operator_voice_parameter_port(parameter_name)
+                            {
+                                let (record, object) = lane.oscillator_voice_processors[oscillator];
+                                return Some((record, object, port_name.to_owned()));
+                            }
+                            if let Some((oscillator, port_name)) =
+                                operator_wavetable_parameter_port(parameter_name)
+                            {
+                                let (record, object) = lane.wavetable_processors[oscillator];
+                                return Some((record, object, port_name.to_owned()));
+                            }
+                            if let Some((target, port_name)) =
+                                operator_global_parameter_port(parameter_name)
+                            {
+                                let (record, object) = match target {
+                                    // Management is one shared graph processor,
+                                    // so the primary target already applied it.
+                                    OperatorGlobalParameterTarget::Management => return None,
+                                    OperatorGlobalParameterTarget::Voice => lane.global_voice,
+                                    OperatorGlobalParameterTarget::LfoFrequency => {
+                                        lane.lfo_frequency
+                                    }
+                                    OperatorGlobalParameterTarget::LfoEnvelope => lane.lfo_envelope,
+                                    OperatorGlobalParameterTarget::Filter => lane.filter,
+                                    OperatorGlobalParameterTarget::FilterMod => lane.filter_mod,
+                                    OperatorGlobalParameterTarget::FilterEnvelope => {
+                                        lane.filter_envelope
+                                    }
+                                };
+                                return Some((record, object, port_name.to_owned()));
+                            }
+                            let count = *(lane.operator.0.add(0x17c) as *const u32) as usize;
+                            (0..count)
+                                .any(|index| {
+                                    let port = lane.operator.0.add(0x180 + index * 0x120);
+                                    let name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let kind = *(port.add(0x100) as *const u32);
+                                    matches!(kind, 7 | 9) && name == parameter_name
+                                })
+                                .then(|| {
+                                    (lane.operator.0, lane.operator.1, parameter_name.to_owned())
+                                })
+                        };
                     let mut parameter_values = preset_parameters
                         .iter()
                         .filter(|parameter| {
@@ -6100,6 +8721,13 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             format!("invalid Ableton parameter value: {assignment}")
                         })?;
                         ensure!(value.is_finite(), "Ableton parameter must be finite");
+                        if processor == "InstrumentOperator"
+                            && parameter_name == "OperatorGraph.NumVoices"
+                        {
+                            // This property was consumed before factory
+                            // construction and has no realtime event port.
+                            continue;
+                        }
                         ensure!(
                             resolve_parameter_target(parameter_name).is_some(),
                             "Ableton {processor} has no float-compatible event input named {parameter_name}"
@@ -6124,27 +8752,6 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                         .map(|parameter| parameter.value);
                     parameter_values.retain(|parameter| parameter.name != "On/Off");
                     for parameter in &parameter_values {
-                        let (target_record, target_object, target_port_name) =
-                            resolve_parameter_target(&parameter.name)
-                                .context("validated Ableton parameter target disappeared")?;
-                        let target_port_count = *(target_record.add(0x17c) as *const u32) as usize;
-                        let mut callback = None;
-                        for port_index in 0..target_port_count {
-                            let port = target_record.add(0x180 + port_index * 0x120);
-                            let port_name =
-                                CStr::from_ptr(port as *const libc::c_char).to_string_lossy();
-                            let kind_id = *(port.add(0x100) as *const u32);
-                            if matches!(kind_id, 7 | 9) && port_name == target_port_name {
-                                callback = Some((*(port.add(0x110) as *const usize), kind_id));
-                                break;
-                            }
-                        }
-                        let (callback_address, kind_id) =
-                            callback.context("validated Ableton parameter port disappeared")?;
-                        ensure!(
-                            callback_address >= image_base,
-                            "Ableton parameter callback is outside the engine image"
-                        );
                         let controller_value =
                             if processor == "Compressor2" && parameter.name == "Ratio" {
                                 // Compressor's model stores a display ratio in ADV,
@@ -6160,35 +8767,536 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             } else {
                                 parameter.value
                             };
-                        if kind_id == 7 {
+                        let mut targets = vec![
+                            resolve_parameter_target(&parameter.name)
+                                .context("validated Ableton parameter target disappeared")?,
+                        ];
+                        if processor == "InstrumentOperator" {
+                            targets.extend(operator_additional_voice_lanes.iter().filter_map(
+                                |lane| resolve_additional_operator_target(lane, &parameter.name),
+                            ));
+                        }
+                        for (target_record, target_object, target_port_name) in targets {
+                            let target_port_count =
+                                *(target_record.add(0x17c) as *const u32) as usize;
+                            let mut callback = None;
+                            for port_index in 0..target_port_count {
+                                let port = target_record.add(0x180 + port_index * 0x120);
+                                let port_name =
+                                    CStr::from_ptr(port as *const libc::c_char).to_string_lossy();
+                                let kind_id = *(port.add(0x100) as *const u32);
+                                if matches!(kind_id, 7 | 9) && port_name == target_port_name {
+                                    callback = Some((*(port.add(0x110) as *const usize), kind_id));
+                                    break;
+                                }
+                            }
+                            let (callback_address, kind_id) =
+                                callback.context("validated Ableton parameter port disappeared")?;
+                            ensure!(
+                                callback_address >= image_base,
+                                "Ableton parameter callback is outside the engine image"
+                            );
+                            if kind_id == 7 {
+                                type FloatEventCallback = unsafe extern "C" fn(*mut u8, f32);
+                                let callback: FloatEventCallback =
+                                    std::mem::transmute(callback_address);
+                                callback(target_object, controller_value);
+                            } else {
+                                type PointerFloatEventCallback =
+                                    unsafe extern "C" fn(*mut u8, *const u32);
+                                let callback: PointerFloatEventCallback =
+                                    std::mem::transmute(callback_address);
+                                // The second word is Live's zero-duration
+                                // scheduler ramp at the current buffer.
+                                let event = [controller_value.to_bits(), 0];
+                                callback(target_object, event.as_ptr());
+                            }
+                            applied_parameters.push(LiveEngineAppliedParameter {
+                                name: parameter.name.clone(),
+                                value: parameter.value,
+                                callback: format!("image+0x{:x}", callback_address - image_base),
+                            });
+                        }
+                    }
+                    if processor == "InstrumentOperator" {
+                        let operator_preset_value = |name: &str, fallback: f32| {
+                            parameter_values
+                                .iter()
+                                .find(|parameter| parameter.name == name)
+                                .map(|parameter| parameter.value)
+                                .or_else(|| {
+                                    preset_parameters
+                                        .iter()
+                                        .find(|parameter| parameter.name == name)
+                                        .map(|parameter| parameter.value)
+                                })
+                                .unwrap_or(fallback)
+                        };
+                        let mut apply_operator_float = |record: *const u8,
+                                                        object: *mut u8,
+                                                        name: &str,
+                                                        value: f32|
+                         -> Result<()> {
+                            let count = *(record.add(0x17c) as *const u32) as usize;
+                            let callback_address = (0..count)
+                                .find_map(|index| {
+                                    let port = record.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let kind = *(port.add(0x100) as *const u32);
+                                    (kind == 7 && port_name == name)
+                                        .then(|| *(port.add(0x110) as *const usize))
+                                })
+                                .with_context(|| {
+                                    format!("Ableton Operator companion has no {name} input")
+                                })?;
                             type FloatEventCallback = unsafe extern "C" fn(*mut u8, f32);
                             let callback: FloatEventCallback =
                                 std::mem::transmute(callback_address);
-                            callback(target_object, controller_value);
-                        } else {
-                            type PointerFloatEventCallback =
-                                unsafe extern "C" fn(*mut u8, *const u32);
-                            let callback: PointerFloatEventCallback =
-                                std::mem::transmute(callback_address);
-                            // Ableton processor event inputs consume normalized
-                            // automation values. DeviceKit's native model
-                            // companion applies the property's range transform
-                            // at the pre-buffer boundary. ADV Manual values are
-                            // stored in display units, so feeding them directly
-                            // applies that transform twice (for example
-                            // BaseDrive uses normalized * 72 - 36 inside
-                            // Saturator, while Auto Shift's synced LFO rate maps
-                            // normalized values to its 0..21 rate-index range).
-                            let event_value = controller_value;
-                            // The second word is a zero-duration scheduler ramp,
-                            // which applies the target at the current buffer.
-                            let event = [event_value.to_bits(), 0];
-                            callback(target_object, event.as_ptr());
+                            callback(object, value);
+                            applied_parameters.push(LiveEngineAppliedParameter {
+                                name: format!("OperatorVoiceGraph.{name}"),
+                                value,
+                                callback: format!("image+0x{:x}", callback_address - image_base),
+                            });
+                            Ok(())
+                        };
+                        let (management_record, management_object) = operator_voice_management
+                            .context("Ableton Operator voice management is absent")?;
+                        for (name, value) in [
+                            ("On/Off", operator_preset_value("On/Off", 1.0)),
+                            (
+                                "RetriggerMode",
+                                operator_preset_value("OperatorManagement.RetriggerMode", 0.0),
+                            ),
+                            (
+                                "SpreadAmount",
+                                operator_preset_value("OperatorManagement.SpreadAmount", 0.0),
+                            ),
+                            (
+                                "PortamentoOn",
+                                operator_preset_value("OperatorManagement.PortamentoOn", 0.0),
+                            ),
+                            (
+                                "PortamentoTime",
+                                operator_preset_value("OperatorManagement.PortamentoTime", 0.0),
+                            ),
+                        ] {
+                            apply_operator_float(
+                                management_record,
+                                management_object,
+                                name,
+                                value,
+                            )?;
                         }
+                        let (voice_record, voice_object) = operator_global_voice
+                            .context("Ableton Operator global voice is absent")?;
+                        for (name, value) in [
+                            (
+                                "Transpose",
+                                operator_preset_value("OperatorGlobalVoice.Transpose", 0.0),
+                            ),
+                            ("PitchBend", 0.0),
+                            (
+                                "PitchBendRange",
+                                operator_preset_value("OperatorGlobalVoice.PitchBendRange", 12.0),
+                            ),
+                            (
+                                "PerNotePitchBendOn",
+                                operator_preset_value(
+                                    "OperatorGlobalVoice.PerNotePitchBendOn",
+                                    0.0,
+                                ),
+                            ),
+                            ("PerNotePitchBendUsesTuning", 0.0),
+                            (
+                                "Volume",
+                                operator_preset_value("OperatorGlobalVoice.Volume", 1.0),
+                            ),
+                            (
+                                "Panorama",
+                                operator_preset_value("OperatorGlobalVoice.Panorama", 0.0),
+                            ),
+                            (
+                                "KeyPan",
+                                operator_preset_value("OperatorGlobalVoice.KeyPan", 0.0),
+                            ),
+                            (
+                                "RndPan",
+                                operator_preset_value("OperatorGlobalVoice.RndPan", 0.0),
+                            ),
+                            (
+                                "PortamentoTime",
+                                operator_preset_value("OperatorGlobalVoice.PortamentoTime", 0.0),
+                            ),
+                        ] {
+                            apply_operator_float(voice_record, voice_object, name, value)?;
+                            for lane in &operator_additional_voice_lanes {
+                                apply_operator_float(
+                                    lane.global_voice.0,
+                                    lane.global_voice.1,
+                                    name,
+                                    value,
+                                )?;
+                            }
+                        }
+                        let filter_on = operator_preset_value("OperatorFilter.FilterOnOff", 0.0);
+                        let resolution = operator_preset_value("Resolution", 2.0);
+                        let (filter_record, filter_object) =
+                            operator_filter.context("Ableton Operator native filter is absent")?;
+                        for (name, value) in [
+                            ("InX", 1.0),
+                            ("VolX", 1.0),
+                            ("Resolution", resolution),
+                            ("FilterOnOff", filter_on),
+                        ] {
+                            apply_operator_float(filter_record, filter_object, name, value)?;
+                            for lane in &operator_additional_voice_lanes {
+                                apply_operator_float(lane.filter.0, lane.filter.1, name, value)?;
+                            }
+                        }
+                        let (filter_mod_record, filter_mod_object) = operator_filter_mod
+                            .context("Ableton Operator filter modulation is absent")?;
+                        for (name, value) in [
+                            ("Resolution", resolution),
+                            ("IsOn", filter_on),
+                            ("LfoX", 1.0),
+                            ("AdsrX", 1.0),
+                            ("ModX", 1.0),
+                        ] {
+                            apply_operator_float(
+                                filter_mod_record,
+                                filter_mod_object,
+                                name,
+                                value,
+                            )?;
+                            for lane in &operator_additional_voice_lanes {
+                                apply_operator_float(
+                                    lane.filter_mod.0,
+                                    lane.filter_mod.1,
+                                    name,
+                                    value,
+                                )?;
+                            }
+                        }
+                        let (envelope_event_record, envelope_event_object) =
+                            operator_filter_envelope_event
+                                .context("Ableton Operator filter envelope event is absent")?;
+                        for (name, value) in [("IsOn", filter_on), ("Resolution", resolution)] {
+                            apply_operator_float(
+                                envelope_event_record,
+                                envelope_event_object,
+                                name,
+                                value,
+                            )?;
+                            for lane in &operator_additional_voice_lanes {
+                                apply_operator_float(
+                                    lane.filter_envelope_event.0,
+                                    lane.filter_envelope_event.1,
+                                    name,
+                                    value,
+                                )?;
+                            }
+                        }
+                        for oscillator in 0..4 {
+                            let table = *(processor_object.add(0x310 + oscillator * 8)
+                                as *const *const f32);
+                            let table_length =
+                                *(processor_object.add(0x2f0 + oscillator * 4) as *const i32);
+                            ensure!(
+                                !table.is_null() && table_length > 0,
+                                "Ableton Operator oscillator table is absent"
+                            );
+                            native_operator_table_peaks.push(
+                                std::slice::from_raw_parts(
+                                    table,
+                                    usize::try_from(table_length)? + 1,
+                                )
+                                .iter()
+                                .fold(0.0_f32, |peak, sample| peak.max(sample.abs())),
+                            );
+                            native_operator_table_gains.push(
+                                *(processor_object.add(0x400 + oscillator * 4) as *const f32),
+                            );
+                        }
+                    }
+                    if processor == "InstrumentImpulse" {
+                        let apply_float = |target: LiveEngineProcessor,
+                                           name: &str,
+                                           value: f32|
+                         -> Result<usize> {
+                            let count = *(target.0.add(0x17c) as *const u32) as usize;
+                            let callback_address = (0..count)
+                                .find_map(|index| {
+                                    let port = target.0.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let kind = *(port.add(0x100) as *const u32);
+                                    (kind == 7 && port_name == name)
+                                        .then(|| *(port.add(0x110) as *const usize))
+                                })
+                                .with_context(|| {
+                                    format!("Ableton Impulse processor has no {name} float input")
+                                })?;
+                            ensure!(
+                                callback_address >= image_base,
+                                "Ableton Impulse {name} callback is outside the engine image"
+                            );
+                            let callback: unsafe extern "C" fn(*mut u8, f32) =
+                                std::mem::transmute(callback_address);
+                            callback(target.1, value);
+                            Ok(callback_address)
+                        };
+                        let apply_pointer = |target: LiveEngineProcessor,
+                                             name: &str,
+                                             value: *const u8|
+                         -> Result<usize> {
+                            let count = *(target.0.add(0x17c) as *const u32) as usize;
+                            let callback_address = (0..count)
+                                .find_map(|index| {
+                                    let port = target.0.add(0x180 + index * 0x120);
+                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
+                                        .to_string_lossy();
+                                    let kind = *(port.add(0x100) as *const u32);
+                                    (kind == 9 && port_name == name)
+                                        .then(|| *(port.add(0x110) as *const usize))
+                                })
+                                .with_context(|| {
+                                    format!("Ableton Impulse processor has no {name} pointer input")
+                                })?;
+                            ensure!(
+                                callback_address >= image_base,
+                                "Ableton Impulse {name} callback is outside the engine image"
+                            );
+                            let callback: unsafe extern "C" fn(*mut u8, *const u8) =
+                                std::mem::transmute(callback_address);
+                            callback(target.1, value);
+                            Ok(callback_address)
+                        };
+                        let preset_value = |name: &str, fallback: f32| {
+                            preset_parameters
+                                .iter()
+                                .find(|parameter| parameter.name == name)
+                                .map_or(fallback, |parameter| parameter.value)
+                        };
+                        let main = (processor_record, processor_object);
+                        apply_float(main, "LinkSlot7and8", 0.0)?;
+                        // Live's graph controller tells InstrumentImpulse which
+                        // of its eight per-slot voice chains are connected. The
+                        // standalone engine does not create that controller, so
+                        // publish the same slot-index/connected messages after
+                        // constructing the native chains above. Without these,
+                        // ProcessNoteOn deliberately routes VoiceInfo through
+                        // its unconnected fallback output instead of VoiceInfo_N.
+                        for slot_index in 0..impulse_slot_lanes.len() {
+                            let mut connection = [0_u8; 8];
+                            connection[..4]
+                                .copy_from_slice(&i32::try_from(slot_index)?.to_ne_bytes());
+                            connection[4] = 1;
+                            apply_pointer(main, "IsConnectedInfo", connection.as_ptr())?;
+                        }
+                        let global_volume = preset_value("GlobalVolume", 0.0);
+                        let global_time = preset_value("GlobalTime", 0.0);
+                        let global_pitch = preset_value("GlobalPitch", 0.0);
+                        for slot in &impulse_slot_lanes {
+                            for voice in &slot.voices {
+                                apply_float(voice.player_parameter, "GlobalTime", global_time)?;
+                                apply_float(voice.player_parameter, "GlobalPitch", global_pitch)?;
+                                apply_float(voice.filter_sat_decay, "GlobalVolume", global_volume)?;
+                                apply_float(voice.filter_sat_decay, "GlobalTime", global_time)?;
+                                apply_float(voice.filter_sat_decay, "InX", 1.0)?;
+                            }
+                        }
+
+                        type ConstructChunkedSample = unsafe extern "C" fn(*mut u8, i32, i32);
+                        type ChunkLengthInFrames = unsafe extern "C" fn(*const u8) -> i32;
+                        type SetRecordingLength = unsafe extern "C" fn(*mut u8, i32, i32, bool);
+                        type FitChunkCapacity = unsafe extern "C" fn(*mut u8, bool);
+                        type AllocateRecordingChunk =
+                            unsafe extern "C" fn(*mut u8, *mut *mut c_void) -> *mut u8;
+                        type SetSampleChunkIndex = unsafe extern "C" fn(*mut u8, i32);
+                        type RequestSampleChunk =
+                            unsafe extern "C" fn(*mut u8, i32, *mut u8, bool, bool, bool);
+                        type ChunkNowAvailable = unsafe extern "C" fn(*mut u8, i32);
+                        type ProvideChunk = unsafe extern "C" fn(*mut u8);
+                        type SetSegmentSize = unsafe extern "C" fn(*mut u8, i32);
+                        type SetSegment = unsafe extern "C" fn(*mut u8, i32, i32);
+                        let construct_chunked_sample: ConstructChunkedSample =
+                            std::mem::transmute(image_base + 0x94a910);
+                        let chunk_length_in_frames: ChunkLengthInFrames =
+                            std::mem::transmute(image_base + 0x93e960);
+                        let set_recording_length: SetRecordingLength =
+                            std::mem::transmute(image_base + 0x9497c0);
+                        let fit_chunk_capacity: FitChunkCapacity =
+                            std::mem::transmute(image_base + 0x948900);
+                        let allocate_recording_chunk: AllocateRecordingChunk =
+                            std::mem::transmute(image_base + 0x93e9a0);
+                        let set_sample_chunk_index: SetSampleChunkIndex =
+                            std::mem::transmute(image_base + 0xa17390);
+                        let request_sample_chunk: RequestSampleChunk =
+                            std::mem::transmute(image_base + 0x946110);
+                        let chunk_now_available: ChunkNowAvailable =
+                            std::mem::transmute(image_base + 0x9487b0);
+                        let provide_chunk: ProvideChunk = std::mem::transmute(image_base + 0x43700);
+                        let set_segment_size: SetSegmentSize =
+                            std::mem::transmute(image_base + 0x94b5a0);
+                        let set_segment: SetSegment = std::mem::transmute(image_base + 0x94b600);
+                        for (slot_index, sample_slot) in impulse_sample_slots.iter().enumerate() {
+                            let lane = impulse_slot_lanes.get(slot_index).with_context(|| {
+                                format!("Ableton Impulse slot {slot_index} graph is absent")
+                            })?;
+                            let decoded = decode_audio_file_with_channels(&sample_slot.path)
+                                .with_context(|| {
+                                    format!(
+                                        "failed to decode Ableton Impulse sample {}",
+                                        sample_slot.path.display()
+                                    )
+                                })?;
+                            let samples = decoded.mono().samples();
+                            ensure!(
+                                !samples.is_empty(),
+                                "Ableton Impulse sample is empty: {}",
+                                sample_slot.path.display()
+                            );
+                            let frame_count = i32::try_from(samples.len()).with_context(|| {
+                                format!(
+                                    "Ableton Impulse sample is too long: {}",
+                                    sample_slot.path.display()
+                                )
+                            })?;
+                            let sample_rate = i32::try_from(decoded.source().sample_rate())?;
+                            let object = allocate_object2(0x30);
+                            ensure!(
+                                !object.is_null(),
+                                "Ableton Impulse sample-object allocation failed"
+                            );
+                            construct_chunked_sample(object, 0, sample_rate);
+                            // Live's file-loader controller normally publishes
+                            // the OChunkedSample segment boundary table used by
+                            // StretchingPlayer. Build the native fallback grid
+                            // at its 100 ms average segment interval so stretch
+                            // modes never receive a null SegmentArray.
+                            let average_segment_frames = (sample_rate / 10).max(1);
+                            let segment_count =
+                                (frame_count + average_segment_frames - 1) / average_segment_frames;
+                            let boundary_count = segment_count + 1;
+                            set_segment_size(object, boundary_count);
+                            for boundary in 0..boundary_count {
+                                set_segment(
+                                    object,
+                                    boundary,
+                                    (boundary * average_segment_frames).min(frame_count),
+                                );
+                            }
+                            let chunk_array = *(object.add(0x18) as *const *mut u8);
+                            ensure!(
+                                !chunk_array.is_null(),
+                                "Ableton Impulse sample has no native chunk array"
+                            );
+                            let chunk_frames = chunk_length_in_frames(object);
+                            ensure!(
+                                chunk_frames > 0,
+                                "Ableton Impulse native sample chunk size is invalid"
+                            );
+                            let chunk_count = (frame_count + chunk_frames - 1) / chunk_frames;
+                            // OBuffer's native reallocator can trim a block but
+                            // cannot grow a zero-sized payload. Allocate the
+                            // complete 24-byte-per-entry OChunkArray table up
+                            // front; otherwise FitCapacity leaves a tiny block
+                            // in place and the first entry write corrupts Live's
+                            // object allocator before the next sample is made.
+                            let chunk_table_bytes =
+                                i32::try_from(usize::try_from(chunk_count)? * 0x18)?;
+                            let chunk_table = create_buffer(chunk_table_bytes);
+                            ensure!(
+                                !chunk_table.is_null(),
+                                "Ableton Impulse chunk-table allocation failed"
+                            );
+                            *(chunk_array.add(0x10) as *mut *mut u8) = chunk_table;
+                            // Live's controller reserves the OChunkArray slot
+                            // table before the first recording-length event.
+                            // Use the same native capacity method synchronously
+                            // because this process has no controller thread.
+                            *(chunk_array.add(0x38) as *mut i32) = chunk_count;
+                            fit_chunk_capacity(chunk_array, false);
+                            // OBuffer growth preserves existing bytes but does
+                            // not initialize the new OChunkArray entries. Live's
+                            // controller clears these records before publishing
+                            // the recording length; otherwise their chunk state
+                            // and resource-arbiter words contain allocator data.
+                            std::ptr::write_bytes(
+                                *(chunk_array.add(0x10) as *const *mut u8),
+                                0,
+                                usize::try_from(chunk_count)? * 0x18,
+                            );
+                            *(chunk_array.add(0x38) as *mut i32) = 0;
+                            set_recording_length(chunk_array, frame_count, chunk_count, false);
+                            for chunk_index in 0..chunk_count {
+                                let mut channels = [std::ptr::null_mut::<c_void>(); 2];
+                                let chunk = allocate_recording_chunk(object, channels.as_mut_ptr());
+                                ensure!(
+                                    !chunk.is_null() && !channels[0].is_null(),
+                                    "Ableton Impulse native sample chunk allocation failed"
+                                );
+                                let start = usize::try_from(chunk_index * chunk_frames)?;
+                                let remaining = samples.len() - start;
+                                let copied = remaining.min(usize::try_from(chunk_frames)?);
+                                std::ptr::write_bytes(
+                                    channels[0].cast::<f32>(),
+                                    0,
+                                    usize::try_from(chunk_frames)?,
+                                );
+                                std::ptr::copy_nonoverlapping(
+                                    samples.as_ptr().add(start),
+                                    channels[0].cast::<f32>(),
+                                    copied,
+                                );
+                                set_sample_chunk_index(chunk, chunk_index);
+                                request_sample_chunk(
+                                    chunk_array,
+                                    chunk_index,
+                                    chunk,
+                                    true,
+                                    true,
+                                    false,
+                                );
+                                // DoAudioRecordSampleChunk normally performs
+                                // this availability transition and then queues
+                                // an OFile write. The headless in-memory sample
+                                // has no backing file, so retain its native
+                                // chunk and perform the same pre-write state
+                                // transition without invoking file I/O.
+                                let chunk_table = *(chunk_array.add(0x10) as *const *mut u8);
+                                let entry = chunk_table.add(usize::try_from(chunk_index)? * 0x18);
+                                let state = *(entry.add(0xc) as *const u32);
+                                *(entry.add(0xc) as *mut u32) = (state & 0x100) | 4;
+                                chunk_now_available(chunk_array, chunk_index);
+                                *(chunk_array.add(0x40) as *mut i32) += 1;
+                                *(chunk_array.add(0x44) as *mut i32) += 1;
+                                provide_chunk(entry.add(0x10));
+                            }
+                            let alpha = sample_slot.alpha;
+                            let omega = sample_slot.omega.min(f64::from(frame_count));
+                            apply_pointer(
+                                lane.tab_serializer,
+                                "Alpha",
+                                std::ptr::from_ref(&alpha).cast(),
+                            )?;
+                            apply_pointer(
+                                lane.tab_serializer,
+                                "Omega",
+                                std::ptr::from_ref(&omega).cast(),
+                            )?;
+                            apply_pointer(lane.tab_serializer, "Sample", object.cast_const())?;
+                            apply_float(lane.tab_serializer, "Play", 1.0)?;
+                            impulse_chunked_samples.push(NativeChunkedSample { object });
+                        }
+                        let activation = activation_on_value.unwrap_or(1.0);
+                        let callback = apply_float(main, "On/Off", activation)?;
                         applied_parameters.push(LiveEngineAppliedParameter {
-                            name: parameter.name.clone(),
-                            value: parameter.value,
-                            callback: format!("image+0x{:x}", callback_address - image_base),
+                            name: "On/Off".to_owned(),
+                            value: activation,
+                            callback: format!("image+0x{:x}", callback - image_base),
                         });
                     }
                     let render_requested = processor == "AutoFilter"
@@ -6285,6 +9393,12 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 });
                             }
                         }
+                        if processor == "InstrumentImpulse" {
+                            ensure!(
+                                *processor_object.add(0x15d4) == 1,
+                                "Ableton Impulse remained inactive after its native On/Off event"
+                            );
+                        }
                         if let (Some(levels), Some(values)) =
                             (&mut vocoder_band_levels, vocoder_band_level_values)
                         {
@@ -6353,37 +9467,88 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             callback: format!("image+0x{:x}", callback_address - image_base),
                         });
                     }
-                    let midi_callback_address = if scheduled_midi.is_empty() {
-                        None
+                    let (
+                        midi_callback_address,
+                        voice_info_callback_address,
+                        frequency_callback_address,
+                        note_on_callback_address,
+                        note_off_callback_address,
+                    ) = if scheduled_midi.is_empty() {
+                        (None, None, None, None, None)
+                    } else if let Some((callback, _)) = operator_midi_input {
+                        (Some(callback), None, None, None, None)
+                    } else if let Some((callback, _)) = impulse_midi_input {
+                        (Some(callback), None, None, None, None)
                     } else {
                         let port_count = *(processor_record.add(0x17c) as *const u32) as usize;
-                        Some(
-                            (0..port_count)
-                                .find_map(|port_index| {
-                                    let port = processor_record.add(0x180 + port_index * 0x120);
-                                    let port_name = CStr::from_ptr(port as *const libc::c_char)
-                                        .to_string_lossy();
-                                    let kind_id = *(port.add(0x100) as *const u32);
-                                    (kind_id == 9 && port_name == "InMidi")
-                                        .then(|| *(port.add(0x110) as *const usize))
-                                })
-                                .with_context(|| {
-                                    format!("Ableton {processor} has no native InMidi port")
-                                })?,
-                        )
+                        let find_pointer_input = |wanted: &str| {
+                            (0..port_count).find_map(|port_index| {
+                                let port = processor_record.add(0x180 + port_index * 0x120);
+                                let port_name =
+                                    CStr::from_ptr(port as *const libc::c_char).to_string_lossy();
+                                let kind_id = *(port.add(0x100) as *const u32);
+                                (kind_id == 9 && port_name == wanted)
+                                    .then(|| *(port.add(0x110) as *const usize))
+                            })
+                        };
+                        let find_float_input = |wanted: &str| {
+                            (0..port_count).find_map(|port_index| {
+                                let port = processor_record.add(0x180 + port_index * 0x120);
+                                let port_name =
+                                    CStr::from_ptr(port as *const libc::c_char).to_string_lossy();
+                                let kind_id = *(port.add(0x100) as *const u32);
+                                (kind_id == 7 && port_name == wanted)
+                                    .then(|| *(port.add(0x110) as *const usize))
+                            })
+                        };
+                        let callbacks = (
+                            find_pointer_input("InMidi"),
+                            find_pointer_input("VoiceInfo"),
+                            find_float_input("Frequency"),
+                            find_pointer_input("NoteOn"),
+                            find_pointer_input("NoteOff"),
+                        );
+                        ensure!(
+                            callbacks.0.is_some()
+                                || (callbacks.3.is_some() && callbacks.4.is_some()),
+                            "Ableton {processor} has neither a native InMidi port nor native NoteOn/NoteOff ports"
+                        );
+                        for callback in [
+                            callbacks.0,
+                            callbacks.1,
+                            callbacks.2,
+                            callbacks.3,
+                            callbacks.4,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            ensure!(
+                                callback >= image_base,
+                                "Ableton MIDI callback is outside the engine image"
+                            );
+                        }
+                        callbacks
                     };
+                    let midi_callback_object = operator_midi_input
+                        .filter(|(callback, _)| Some(*callback) == midi_callback_address)
+                        .or_else(|| {
+                            impulse_midi_input
+                                .filter(|(callback, _)| Some(*callback) == midi_callback_address)
+                        })
+                        .map_or(processor_object, |(_, object)| object);
                     if render_requested {
                         let analysis_tap =
                             matches!(processor, "SpectrumAnalyzer" | "TunerProcessor");
-                        if processor_rate == 1 && !scheduled_midi.is_empty() {
-                            let callback_address = midi_callback_address
-                                .context("Ableton MIDI event graph has no input callback")?;
+                        if processor_rate == 1
+                            && processor != "InstrumentImpulse"
+                            && !scheduled_midi.is_empty()
+                        {
                             type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
                             type ConstructNoteOn =
                                 unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
                             type ConstructNoteOff =
                                 unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
-                            let callback: MidiCallback = std::mem::transmute(callback_address);
                             let mut next_midi_event = 0_usize;
                             let total_frames = render_frames.unwrap_or(midi_total_frames);
                             ensure!(
@@ -6409,6 +9574,17 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                     let event_offset = scheduled.frame - sample_offset;
                                     *(engine_domain.add(0x48) as *mut i32) =
                                         i32::try_from(event_offset)?;
+                                    let callback_address = midi_callback_address
+                                        .or(if scheduled.note_on {
+                                            note_on_callback_address
+                                        } else {
+                                            note_off_callback_address
+                                        })
+                                        .context(
+                                            "Ableton MIDI event graph has no input callback",
+                                        )?;
+                                    let callback: MidiCallback =
+                                        std::mem::transmute(callback_address);
                                     let mut event = LiveEngineMidiEvent([0; 0x30]);
                                     if scheduled.note_on {
                                         let construct: ConstructNoteOn =
@@ -6425,6 +9601,31 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                             scheduled.note_id,
                                             0,
                                         );
+                                        if midi_callback_address.is_none() {
+                                            if let Some(frequency_address) =
+                                                frequency_callback_address
+                                            {
+                                                let frequency_callback: unsafe extern "C" fn(
+                                                    *mut u8,
+                                                    f32,
+                                                ) = std::mem::transmute(frequency_address);
+                                                let frequency = 440.0
+                                                    * 2.0_f32.powf(
+                                                        (f32::from(scheduled.note) - 69.0) / 12.0,
+                                                    );
+                                                frequency_callback(processor_object, frequency);
+                                            }
+                                            if let Some(voice_info_address) =
+                                                voice_info_callback_address
+                                            {
+                                                let voice_info_callback: MidiCallback =
+                                                    std::mem::transmute(voice_info_address);
+                                                voice_info_callback(
+                                                    processor_object,
+                                                    event.0.as_mut_ptr(),
+                                                );
+                                            }
+                                        }
                                     } else {
                                         let construct: ConstructNoteOff =
                                             std::mem::transmute(image_base + 0x177340);
@@ -6436,7 +9637,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                             scheduled.note_id,
                                         );
                                     }
-                                    callback(processor_object, event.0.as_mut_ptr());
+                                    callback(midi_callback_object, event.0.as_mut_ptr());
                                     applied_midi_events.push(LiveEngineAppliedMidiEvent {
                                         kind: if scheduled.note_on {
                                             "noteOn"
@@ -6454,7 +9655,15 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                     });
                                     next_midi_event += 1;
                                 }
-                                calc_engine_domain(engine_domain, 0, i32::try_from(chunk_frames)?);
+                                let calc_frames = i32::try_from(chunk_frames)?;
+                                let mut audio_thread_scope = [0_u8; 8];
+                                construct_thread_masquerade(
+                                    audio_thread_scope.as_mut_ptr(),
+                                    current_thread_id(),
+                                    0x10100,
+                                );
+                                calc_engine_domain(engine_domain, 0, calc_frames);
+                                destruct_thread_masquerade(audio_thread_scope.as_mut_ptr());
                                 sample_offset = chunk_end;
                             }
                             ensure!(
@@ -6468,8 +9677,8 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                             processor_render_frames = total_frames;
                         } else {
                             ensure!(
-                                audio_processor
-                                    && matches!(processor_rate, 2 | 3)
+                                (audio_processor && matches!(processor_rate, 2 | 3)
+                                    || processor == "InstrumentImpulse")
                                     && processor_graph_attached,
                                 "audio rendering is not available for {processor}"
                             );
@@ -6490,8 +9699,22 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                     })
                                     .collect()
                             };
+                            let mut sidechain_frames = sidechain
+                                .map(|path| read_wav_stereo(path, DEFAULT_SAMPLE_RATE))
+                                .transpose()?;
+                            if let Some(sidechain_frames) = &sidechain_frames {
+                                ensure!(
+                                    sidechain_frames.len() == source_frames.len(),
+                                    "Ableton sidechain input has {} frames but the main input has {}",
+                                    sidechain_frames.len(),
+                                    source_frames.len()
+                                );
+                            }
                             if let Some(render_frames) = render_frames {
                                 source_frames.truncate(render_frames);
+                                if let Some(sidechain_frames) = &mut sidechain_frames {
+                                    sidechain_frames.truncate(render_frames);
+                                }
                                 ensure!(
                                     scheduled_midi
                                         .last()
@@ -6500,7 +9723,7 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 );
                             }
                             let mut rendered_frames = Vec::with_capacity(source_frames.len());
-                            if processor_rate == 3 {
+                            if processor_rate == 3 || processor == "InstrumentImpulse" {
                                 let mut audio_input_offsets = Vec::new();
                                 let mut audio_output_offsets = Vec::new();
                                 for port_index in 0..port_count {
@@ -6516,12 +9739,52 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                         _ => {}
                                     }
                                 }
+                                let (render_audio_object, render_audio_output_offsets) =
+                                    if processor == "InstrumentOperator" {
+                                        let (record, object) = operator_voice_combiner
+                                            .context("Ableton Operator voice combiner is absent")?;
+                                        let count = *(record.add(0x17c) as *const u32) as usize;
+                                        let outputs = (0..count)
+                                            .filter_map(|index| {
+                                                let port = record.add(0x180 + index * 0x120);
+                                                let kind = *(port.add(0x100) as *const u32);
+                                                let offset = *(port.add(0x104) as *const u32);
+                                                (kind == 2 && offset != u32::MAX)
+                                                    .then_some(offset as usize)
+                                            })
+                                            .collect::<Vec<_>>();
+                                        ensure!(
+                                            outputs.len() == 2,
+                                            "Ableton Operator voice combiner is not stereo"
+                                        );
+                                        (object, outputs)
+                                    } else if processor == "InstrumentImpulse" {
+                                        let (record, object) = impulse_voice_combiner
+                                            .context("Ableton Impulse voice combiner is absent")?;
+                                        let count = *(record.add(0x17c) as *const u32) as usize;
+                                        let outputs = (0..count)
+                                            .filter_map(|index| {
+                                                let port = record.add(0x180 + index * 0x120);
+                                                let kind = *(port.add(0x100) as *const u32);
+                                                let offset = *(port.add(0x104) as *const u32);
+                                                (kind == 2 && offset != u32::MAX)
+                                                    .then_some(offset as usize)
+                                            })
+                                            .collect::<Vec<_>>();
+                                        ensure!(
+                                            outputs.len() == 2,
+                                            "Ableton Impulse voice combiner is not stereo"
+                                        );
+                                        (object, outputs)
+                                    } else {
+                                        (processor_object, audio_output_offsets.clone())
+                                    };
                                 ensure!(
-                                    !audio_input_offsets.is_empty(),
-                                    "Ableton {processor} has no sample-rate audio input"
+                                    !audio_input_offsets.is_empty() || !scheduled_midi.is_empty(),
+                                    "Ableton {processor} has neither a sample-rate audio input nor scheduled MIDI"
                                 );
                                 ensure!(
-                                    analysis_tap || !audio_output_offsets.is_empty(),
+                                    analysis_tap || !render_audio_output_offsets.is_empty(),
                                     "Ableton {processor} has no sample-rate audio output"
                                 );
                                 let beat_repeat_audio = if processor == "BeatRepeatMixer" {
@@ -6561,9 +9824,121 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                             image_base + 0x1cb8d0,
                                         )
                                     });
-                                for source in &source_frames {
-                                    let input_samples =
-                                        [source[0], source[1], source[0], source[1]];
+                                let mut next_midi_event = 0_usize;
+                                for (frame_index, source) in source_frames.iter().enumerate() {
+                                    while let Some(scheduled) =
+                                        scheduled_midi.get(next_midi_event).copied()
+                                    {
+                                        if scheduled.frame != frame_index {
+                                            break;
+                                        }
+                                        type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
+                                        type ConstructNoteOn =
+                                            unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
+                                        type ConstructNoteOff =
+                                            unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
+                                        let callback_address = midi_callback_address
+                                            .or(if scheduled.note_on {
+                                                note_on_callback_address
+                                            } else {
+                                                note_off_callback_address
+                                            })
+                                            .context(
+                                                "Ableton instrument graph has no note callback",
+                                            )?;
+                                        let callback: MidiCallback =
+                                            std::mem::transmute(callback_address);
+                                        let mut event = LiveEngineMidiEvent([0; 0x30]);
+                                        // MIDI reaches processors from Live's
+                                        // audio-calc thread. We render on the
+                                        // registered GUI thread, so temporarily
+                                        // publish the native audio thread ID for
+                                        // event dispatch. Sample players use it
+                                        // to request retained real-time chunks
+                                        // instead of queuing GUI allocations.
+                                        let mut audio_thread_scope = [0_u8; 8];
+                                        construct_thread_masquerade(
+                                            audio_thread_scope.as_mut_ptr(),
+                                            current_thread_id(),
+                                            0x10100,
+                                        );
+                                        if scheduled.note_on {
+                                            let construct: ConstructNoteOn =
+                                                std::mem::transmute(image_base + 0x1772a0);
+                                            construct(
+                                                event.0.as_mut_ptr(),
+                                                i32::from(scheduled.note),
+                                                f32::from(scheduled.velocity),
+                                                0,
+                                                scheduled.note_id,
+                                                0,
+                                            );
+                                            if midi_callback_address.is_none() {
+                                                if let Some(frequency_address) =
+                                                    frequency_callback_address
+                                                {
+                                                    let frequency_callback: unsafe extern "C" fn(
+                                                        *mut u8,
+                                                        f32,
+                                                    ) = std::mem::transmute(frequency_address);
+                                                    let frequency = 440.0
+                                                        * 2.0_f32.powf(
+                                                            (f32::from(scheduled.note) - 69.0)
+                                                                / 12.0,
+                                                        );
+                                                    frequency_callback(processor_object, frequency);
+                                                }
+                                                if let Some(voice_info_address) =
+                                                    voice_info_callback_address
+                                                {
+                                                    let voice_info_callback: MidiCallback =
+                                                        std::mem::transmute(voice_info_address);
+                                                    voice_info_callback(
+                                                        processor_object,
+                                                        event.0.as_mut_ptr(),
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            let construct: ConstructNoteOff =
+                                                std::mem::transmute(image_base + 0x177340);
+                                            construct(
+                                                event.0.as_mut_ptr(),
+                                                i32::from(scheduled.note),
+                                                0.0,
+                                                0,
+                                                scheduled.note_id,
+                                            );
+                                        }
+                                        callback(midi_callback_object, event.0.as_mut_ptr());
+                                        destruct_thread_masquerade(audio_thread_scope.as_mut_ptr());
+                                        applied_midi_events.push(LiveEngineAppliedMidiEvent {
+                                            kind: if scheduled.note_on {
+                                                "noteOn"
+                                            } else {
+                                                "noteOff"
+                                            },
+                                            note: scheduled.note,
+                                            velocity: scheduled.velocity,
+                                            note_id: scheduled.note_id,
+                                            sample_offset: scheduled.frame,
+                                            callback: format!(
+                                                "image+0x{:x}",
+                                                callback_address - image_base
+                                            ),
+                                        });
+                                        next_midi_event += 1;
+                                    }
+                                    *(engine_domain.add(0x48) as *mut i32) = 0;
+                                    let sidechain_source = sidechain_frames
+                                        .as_ref()
+                                        .map_or(*source, |frames| frames[frame_index]);
+                                    let input_samples = [
+                                        source[0],
+                                        source[1],
+                                        sidechain_source[0],
+                                        sidechain_source[1],
+                                    ];
                                     if let Some((ring_object, ring_inputs, ring_outputs)) =
                                         &beat_repeat_audio
                                     {
@@ -6610,7 +9985,14 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                     if let Some(update) = update_before_calc {
                                         update(processor_object);
                                     }
+                                    let mut audio_thread_scope = [0_u8; 8];
+                                    construct_thread_masquerade(
+                                        audio_thread_scope.as_mut_ptr(),
+                                        current_thread_id(),
+                                        0x10100,
+                                    );
                                     calc_engine_domain(engine_domain, 0, 1);
+                                    destruct_thread_masquerade(audio_thread_scope.as_mut_ptr());
                                     if analysis_tap {
                                         processor_render_peak = processor_render_peak
                                             .max(source[0].abs())
@@ -6618,11 +10000,11 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                         rendered_frames.push(*source);
                                         continue;
                                     }
-                                    let output_left = *(processor_object
-                                        .add(audio_output_offsets[0])
+                                    let output_left = *(render_audio_object
+                                        .add(render_audio_output_offsets[0])
                                         as *const f32);
-                                    let output_right = if audio_output_offsets.len() > 1 {
-                                        *(processor_object.add(audio_output_offsets[1])
+                                    let output_right = if render_audio_output_offsets.len() > 1 {
+                                        *(render_audio_object.add(render_audio_output_offsets[1])
                                             as *const f32)
                                     } else {
                                         output_left
@@ -6640,6 +10022,10 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                         .max((output_right - source[1]).abs());
                                     rendered_frames.push([output_left, output_right]);
                                 }
+                                ensure!(
+                                    next_midi_event == scheduled_midi.len(),
+                                    "native MIDI scheduler did not dispatch every event"
+                                );
                             } else {
                                 let mut buffer_input_offsets = Vec::new();
                                 let mut buffer_output_offsets = Vec::new();
@@ -6677,14 +10063,17 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                 for chunk in source_frames.chunks(512) {
                                     let sample_offset = rendered_frames.len();
                                     let chunk_end = sample_offset + chunk.len();
-                                    if let Some(callback_address) = midi_callback_address {
+                                    let sidechain_chunk = sidechain_frames
+                                        .as_ref()
+                                        .map(|frames| &frames[sample_offset..chunk_end]);
+                                    if midi_callback_address.is_some()
+                                        || note_on_callback_address.is_some()
+                                    {
                                         type MidiCallback = unsafe extern "C" fn(*mut u8, *mut u8);
                                         type ConstructNoteOn =
                                             unsafe extern "C" fn(*mut u8, i32, f32, i32, u64, i32);
                                         type ConstructNoteOff =
                                             unsafe extern "C" fn(*mut u8, i32, f32, i32, u64);
-                                        let callback: MidiCallback =
-                                            std::mem::transmute(callback_address);
                                         while let Some(scheduled) =
                                             scheduled_midi.get(next_midi_event).copied()
                                         {
@@ -6698,7 +10087,24 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                             let event_offset = scheduled.frame - sample_offset;
                                             *(engine_domain.add(0x48) as *mut i32) =
                                                 i32::try_from(event_offset)?;
+                                            let callback_address = midi_callback_address
+                                                .or(if scheduled.note_on {
+                                                    note_on_callback_address
+                                                } else {
+                                                    note_off_callback_address
+                                                })
+                                                .context(
+                                                    "Ableton MIDI event graph has no input callback",
+                                                )?;
+                                            let callback: MidiCallback =
+                                                std::mem::transmute(callback_address);
                                             let mut event = LiveEngineMidiEvent([0; 0x30]);
+                                            let mut audio_thread_scope = [0_u8; 8];
+                                            construct_thread_masquerade(
+                                                audio_thread_scope.as_mut_ptr(),
+                                                current_thread_id(),
+                                                0x10100,
+                                            );
                                             if scheduled.note_on {
                                                 let construct: ConstructNoteOn =
                                                     std::mem::transmute(image_base + 0x1772a0);
@@ -6710,6 +10116,35 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                                     scheduled.note_id,
                                                     0,
                                                 );
+                                                if midi_callback_address.is_none() {
+                                                    if let Some(frequency_address) =
+                                                        frequency_callback_address
+                                                    {
+                                                        let frequency_callback: unsafe extern "C" fn(
+                                                            *mut u8,
+                                                            f32,
+                                                        ) = std::mem::transmute(frequency_address);
+                                                        let frequency = 440.0
+                                                            * 2.0_f32.powf(
+                                                                (f32::from(scheduled.note) - 69.0)
+                                                                    / 12.0,
+                                                            );
+                                                        frequency_callback(
+                                                            processor_object,
+                                                            frequency,
+                                                        );
+                                                    }
+                                                    if let Some(voice_info_address) =
+                                                        voice_info_callback_address
+                                                    {
+                                                        let voice_info_callback: MidiCallback =
+                                                            std::mem::transmute(voice_info_address);
+                                                        voice_info_callback(
+                                                            processor_object,
+                                                            event.0.as_mut_ptr(),
+                                                        );
+                                                    }
+                                                }
                                             } else {
                                                 let construct: ConstructNoteOff =
                                                     std::mem::transmute(image_base + 0x177340);
@@ -6722,6 +10157,9 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                                 );
                                             }
                                             callback(processor_object, event.0.as_mut_ptr());
+                                            destruct_thread_masquerade(
+                                                audio_thread_scope.as_mut_ptr(),
+                                            );
                                             applied_midi_events.push(LiveEngineAppliedMidiEvent {
                                                 kind: if scheduled.note_on {
                                                     "noteOn"
@@ -6766,10 +10204,14 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                         let left_samples = buffer.add(0x10) as *mut f32;
                                         let right_samples = right.add(0x10) as *mut f32;
                                         for (frame, source) in chunk.iter().enumerate() {
-                                            *left_samples.add(frame) =
-                                                if input_index == 0 { source[0] } else { 0.0 };
-                                            *right_samples.add(frame) =
-                                                if input_index == 0 { source[1] } else { 0.0 };
+                                            let routed = if input_index == 0 {
+                                                *source
+                                            } else {
+                                                sidechain_chunk
+                                                    .map_or([0.0, 0.0], |frames| frames[frame])
+                                            };
+                                            *left_samples.add(frame) = routed[0];
+                                            *right_samples.add(frame) = routed[1];
                                         }
                                         let mut slot = Box::new(buffer);
                                         *(processor_object.add(*offset) as *mut *mut *mut u8) =
@@ -6782,7 +10224,15 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
                                             std::ptr::null_mut();
                                         *(processor_object.add(*offset + 8) as *mut i32) = 1;
                                     }
-                                    calc_engine_domain(engine_domain, 0, chunk.len() as i32);
+                                    let calc_frames = i32::try_from(chunk.len())?;
+                                    let mut audio_thread_scope = [0_u8; 8];
+                                    construct_thread_masquerade(
+                                        audio_thread_scope.as_mut_ptr(),
+                                        current_thread_id(),
+                                        0x10100,
+                                    );
+                                    calc_engine_domain(engine_domain, 0, calc_frames);
+                                    destruct_thread_masquerade(audio_thread_scope.as_mut_ptr());
                                     if analysis_tap {
                                         for source in chunk {
                                             processor_render_peak = processor_render_peak
@@ -6856,6 +10306,13 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
             "Ableton Live Engine constructor returned null"
         );
     }
+    if let Some(query) = schema_query {
+        processor_schemas.retain(|schema| schema.name == query);
+        ensure!(
+            !bootstrap || !processor_schemas.is_empty(),
+            "Ableton processor schema '{query}' is not registered"
+        );
+    }
     let report = serde_json::to_string_pretty(&LiveEngineProbeReport {
         engine,
         engine_sha256,
@@ -6890,6 +10347,12 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         processor_render_delta,
         processor_render_frames,
         processor_render_output,
+        native_user_wavetable_peaks,
+        native_user_wavetable_gains,
+        native_user_wavetable_table_counts,
+        native_user_wavetable_handoffs,
+        native_operator_table_peaks,
+        native_operator_table_gains,
         registered_processors,
         registered_ports,
         processor_schemas,
@@ -6897,6 +10360,12 @@ fn probe_live_engine(request: LiveEngineProbeRequest<'_>) -> Result<()> {
         custom_dsp: false,
     })?;
     std::hint::black_box(&drum_sample_storage);
+    std::hint::black_box(
+        impulse_chunked_samples
+            .iter()
+            .map(|sample| sample.object)
+            .collect::<Vec<_>>(),
+    );
     std::hint::black_box(&filter_eq3_audio_state_values);
     std::hint::black_box(&filter_eq3_audio_state_entries);
     std::hint::black_box(&glue_shared_vu_meter);
@@ -7046,6 +10515,268 @@ fn live_engine_preset_parameters(
             normalized_value,
         });
     }
+    if device.has_tag_name("InstrumentImpulse") {
+        // Impulse stores its boolean slot switches as direct Value attributes,
+        // while continuously variable controls use the Manual wrapper handled
+        // above. Both forms feed the same native serializer ports.
+        for control in device.children().filter(Node::is_element) {
+            let name = control.tag_name().name();
+            if impulse_slot_parameter_port(name).is_none()
+                || control
+                    .children()
+                    .any(|child| child.is_element() && child.has_tag_name("Manual"))
+            {
+                continue;
+            }
+            let Some(raw_value) = control.attribute("Value") else {
+                continue;
+            };
+            let value = match raw_value {
+                "true" => 1.0,
+                "false" => 0.0,
+                value => match value.parse::<f32>() {
+                    Ok(value) if value.is_finite() => value,
+                    _ => continue,
+                },
+            };
+            parameters.push(LiveEnginePresetParameter {
+                name: name.to_owned(),
+                value,
+                normalized_value: None,
+            });
+        }
+    }
+    if device.has_tag_name("Operator") {
+        for oscillator_index in 0..4 {
+            let oscillator_name = format!("Operator.{oscillator_index}");
+            let oscillator = direct_child(device, &oscillator_name).with_context(|| {
+                format!(
+                    "Ableton Operator preset has no {oscillator_name}: {}",
+                    path.display()
+                )
+            })?;
+            let oscillator_number = oscillator_index + 1;
+            if let Some(envelope) = direct_child(oscillator, "Envelope") {
+                for control in envelope.children().filter(Node::is_element) {
+                    let port_name = control.tag_name().name();
+                    if let Some(parameter) = live_engine_parameter_from_control(
+                        control,
+                        &format!("Osc{oscillator_number}Envelope.{port_name}"),
+                    ) {
+                        parameters.push(parameter);
+                    }
+                }
+            }
+            for (source, target) in [
+                ("IsOn", "OperatorOn"),
+                ("Retrigger", "Retrigger"),
+                ("Phase", "Phase"),
+                ("LfoOn", "LfoOn"),
+                ("PitchEnvOn", "PitchEnvOn"),
+            ] {
+                if let Some(control) = direct_child(oscillator, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(
+                        control,
+                        &format!("Osc{oscillator_number}{target}"),
+                    )
+                {
+                    parameters.push(parameter);
+                }
+            }
+            for source in ["Volume", "VelScale", "KeyScale", "Feedback"] {
+                if let Some(control) = direct_child(oscillator, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(
+                        control,
+                        &format!("Osc{oscillator_number}Voice.{source}"),
+                    )
+                {
+                    parameters.push(parameter);
+                }
+            }
+            if let Some(tune) = direct_child(oscillator, "Tune") {
+                for source in [
+                    "Coarse",
+                    "Fine",
+                    "VelCoarseScale",
+                    "VelCoarseScaleQuantized",
+                    "FixedFrequencyOn",
+                    "FixedFrequency",
+                    "FixedFrequencyMulti",
+                ] {
+                    if let Some(control) = direct_child(tune, source)
+                        && let Some(parameter) = live_engine_parameter_from_control(
+                            control,
+                            &format!("Osc{oscillator_number}Voice.{source}"),
+                        )
+                    {
+                        parameters.push(parameter);
+                    }
+                }
+            }
+            if let Some(waveform) = direct_child(oscillator, "WaveForm")
+                && let Some(mut parameter) = live_engine_parameter_from_control(
+                    waveform,
+                    &format!("Osc{oscillator_number}WaveFormBank"),
+                )
+            {
+                parameter.normalized_value = None;
+                parameters.push(parameter);
+            }
+        }
+        if let Some(globals) = direct_child(device, "Globals") {
+            if let Some(value) = optional_child_number(globals, "NumVoices") {
+                parameters.push(LiveEnginePresetParameter {
+                    // NumVoices is a graph-construction property rather than
+                    // an event input. Keep it in the recovered parameter set
+                    // so the headless planner can instantiate Live's exact
+                    // logical-voice count before any factories run.
+                    name: "OperatorGraph.NumVoices".to_owned(),
+                    value: value as f32,
+                    normalized_value: None,
+                });
+            }
+            if let Some(control) = direct_child(globals, "Algorithm")
+                && let Some(parameter) = live_engine_parameter_from_control(control, "Algorithm")
+            {
+                parameters.push(parameter);
+            }
+            if let Some(value) = optional_child_number(globals, "ModulationResolution") {
+                parameters.push(LiveEnginePresetParameter {
+                    name: "Resolution".to_owned(),
+                    value: value as f32,
+                    normalized_value: None,
+                });
+            }
+            for (source, target) in [
+                ("Interpolation", "UseLinearInterpolation"),
+                ("AntiAlias", "AntiAlias"),
+                ("LegacyMode", "OperatorFilter.FilterLegacyMode"),
+            ] {
+                if let Some(value) = optional_child_bool(globals, source) {
+                    parameters.push(LiveEnginePresetParameter {
+                        name: target.to_owned(),
+                        value: f32::from(value),
+                        normalized_value: None,
+                    });
+                }
+            }
+            for (source, target) in [
+                ("Tone", "Tone"),
+                ("Transpose", "OperatorGlobalVoice.Transpose"),
+                ("PitchBendRange", "OperatorGlobalVoice.PitchBendRange"),
+                ("Volume", "OperatorGlobalVoice.Volume"),
+                ("Panorama", "OperatorGlobalVoice.Panorama"),
+                ("PanoramaKeyScale", "OperatorGlobalVoice.KeyPan"),
+                ("PanoramaRndScale", "OperatorGlobalVoice.RndPan"),
+                ("PortamentoOn", "OperatorManagement.PortamentoOn"),
+                ("PortamentoTime", "OperatorManagement.PortamentoTime"),
+                ("PortamentoTime", "OperatorGlobalVoice.PortamentoTime"),
+                ("SpreadAmount", "OperatorManagement.SpreadAmount"),
+            ] {
+                if let Some(control) = direct_child(globals, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(control, target)
+                {
+                    parameters.push(parameter);
+                }
+            }
+            for (source, target) in [
+                ("RetriggerMode", "OperatorManagement.RetriggerMode"),
+                (
+                    "PerNotePitchBendOn",
+                    "OperatorGlobalVoice.PerNotePitchBendOn",
+                ),
+            ] {
+                if let Some(value) = optional_child_bool(globals, source) {
+                    parameters.push(LiveEnginePresetParameter {
+                        name: target.to_owned(),
+                        value: f32::from(value),
+                        normalized_value: None,
+                    });
+                }
+            }
+        }
+        if let Some(lfo) = direct_child(device, "Lfo") {
+            for (source, target) in [
+                ("LfoOn", "LfoOn"),
+                ("LfoType", "LfoType"),
+                ("LfoRange", "OperatorLfoFrequency.Range"),
+                ("LfoRate", "OperatorLfoFrequency.Rate"),
+                ("LfoRateSynced", "OperatorLfoFrequency.RateSynced"),
+                ("LfoRateKeyScale", "OperatorLfoFrequency.RateKeyScale"),
+                ("LfoRetrigger", "LfoRetrigger"),
+                ("LfoAmount", "OperatorLfoFrequency.AmountGlobal"),
+                ("LfoAmountA", "OperatorLfoFrequency.AmountA"),
+                ("LfoAmountVelScale", "OperatorLfoFrequency.AmountVelScale"),
+                ("LfoPitchEnvOn", "LfoPitchEnvOn"),
+            ] {
+                if let Some(control) = direct_child(lfo, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(control, target)
+                {
+                    parameters.push(parameter);
+                }
+            }
+            if let Some(envelope) = direct_child(lfo, "LfoEnv") {
+                for control in envelope.children().filter(Node::is_element) {
+                    let port_name = control.tag_name().name();
+                    if let Some(parameter) = live_engine_parameter_from_control(
+                        control,
+                        &format!("OperatorLfoEnvelope.{port_name}"),
+                    ) {
+                        parameters.push(parameter);
+                    }
+                }
+            }
+        }
+        if let Some(filter) = direct_child(device, "Filter") {
+            for (source, target) in [
+                ("OnOff", "OperatorFilter.FilterOnOff"),
+                ("LegacyType", "OperatorFilter.FilterLegacyType"),
+                ("Type", "OperatorFilter.FilterType"),
+                ("CircuitLpHp", "OperatorFilter.CircuitLpHp"),
+                ("CircuitBpNoMo", "OperatorFilter.CircuitBpNoMo"),
+                ("Slope", "OperatorFilter.FilterSlope"),
+                ("Frequency", "OperatorFilterMod.Frequency"),
+                ("LegacyQ", "OperatorFilter.FilterLegacyQ"),
+                ("Resonance", "OperatorFilter.FilterRes"),
+                ("Morph", "OperatorFilter.FilterMorph"),
+                ("Drive", "OperatorFilter.FilterDrive"),
+                ("FrequencyVelScale", "OperatorFilterMod.VelScale"),
+                ("FrequencyKeyScale", "OperatorFilterMod.KeyScale"),
+                ("EnvelopeAmount", "OperatorFilterMod.AdsrAmt"),
+                ("LfoOn", "OperatorFilterMod.LfoOn"),
+            ] {
+                if let Some(control) = direct_child(filter, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(control, target)
+                {
+                    parameters.push(parameter);
+                }
+            }
+            if let Some(envelope) = direct_child(filter, "Envelope") {
+                for control in envelope.children().filter(Node::is_element) {
+                    let port_name = control.tag_name().name();
+                    if let Some(parameter) = live_engine_parameter_from_control(
+                        control,
+                        &format!("OperatorFilterEnvelope.{port_name}"),
+                    ) {
+                        parameters.push(parameter);
+                    }
+                }
+            }
+        }
+        if let Some(shaper) = direct_child(device, "Shaper") {
+            for (source, target) in [
+                ("Type", "OperatorFilter.ShaperType"),
+                ("DryWet", "OperatorFilter.ShaperDryWet"),
+                ("Drive", "OperatorFilter.ShaperDrive"),
+            ] {
+                if let Some(control) = direct_child(shaper, source)
+                    && let Some(parameter) = live_engine_parameter_from_control(control, target)
+                {
+                    parameters.push(parameter);
+                }
+            }
+        }
+    }
     if device.has_tag_name("Vocoder")
         && let Some(filter_bank) = direct_child(device, "FilterBank")
         && let Some(value) = optional_child_number(filter_bank, "BandCount")
@@ -7094,6 +10825,76 @@ fn live_engine_preset_parameters(
         path.display()
     );
     Ok(parameters)
+}
+
+fn live_engine_impulse_sample_slots(
+    path: &Path,
+    preset_device_offset: Option<usize>,
+) -> Result<Vec<ImpulseSampleSlot>> {
+    let xml = read_ableton_xml(path)?;
+    let document = Document::parse(&xml)
+        .with_context(|| format!("failed to parse Ableton preset {}", path.display()))?;
+    let device = if let Some(offset) = preset_device_offset {
+        document
+            .descendants()
+            .find(|node| node.is_element() && node.range().start == offset)
+            .with_context(|| {
+                format!(
+                    "Ableton preset has no device at byte offset {offset}: {}",
+                    path.display()
+                )
+            })?
+    } else {
+        document
+            .root_element()
+            .children()
+            .find(Node::is_element)
+            .with_context(|| format!("Ableton preset has no device: {}", path.display()))?
+    };
+    ensure!(
+        device.has_tag_name("InstrumentImpulse"),
+        "Ableton preset is not an Impulse device: {}",
+        path.display()
+    );
+    let mut slots = Vec::new();
+    for slot in 0..8 {
+        let sample_name = format!("TabSample.{slot}");
+        let Some(sample_control) = direct_child(device, &sample_name) else {
+            continue;
+        };
+        let Some(file_ref) = sample_control
+            .descendants()
+            .find(|node| node.is_element() && node.has_tag_name("FileRef"))
+        else {
+            continue;
+        };
+        let relative = child_value_string(file_ref, "RelativePath")
+            .with_context(|| format!("Ableton Impulse slot {slot} has no RelativePath"))?;
+        let stored_path = child_value_string(file_ref, "Path").map(PathBuf::from);
+        let sample_path = [
+            Some(PathBuf::from(DEFAULT_CORE_LIBRARY).join(&relative)),
+            path.parent().map(|parent| parent.join(&relative)),
+            stored_path,
+        ]
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate.is_file())
+        .with_context(|| {
+            format!(
+                "Ableton Impulse slot {slot} sample is missing: {relative} (preset {})",
+                path.display()
+            )
+        })?;
+        let alpha = optional_child_number(device, &format!("TabAlpha.{slot}")).unwrap_or(0.0);
+        let omega = optional_child_number(device, &format!("TabOmega.{slot}"))
+            .with_context(|| format!("Ableton Impulse slot {slot} has no TabOmega value"))?;
+        slots.push(ImpulseSampleSlot {
+            path: sample_path,
+            alpha,
+            omega,
+        });
+    }
+    Ok(slots)
 }
 
 fn live_engine_hybrid_impulse_response(
@@ -7363,6 +11164,81 @@ fn decode_aiff_extended(bytes: &[u8]) -> Result<u32> {
         "non-integral AIFF sample rate {value}"
     );
     Ok(rounded as u32)
+}
+
+fn live_engine_operator_user_harmonics(
+    path: &Path,
+    preset_device_offset: Option<usize>,
+) -> Result<Vec<Option<OperatorUserHarmonics>>> {
+    let xml = read_ableton_xml(path)?;
+    let document = Document::parse(&xml)
+        .with_context(|| format!("failed to parse Ableton preset {}", path.display()))?;
+    let device = if let Some(offset) = preset_device_offset {
+        document
+            .descendants()
+            .find(|node| node.is_element() && node.range().start == offset)
+            .with_context(|| {
+                format!(
+                    "Ableton preset has no device at byte offset {offset}: {}",
+                    path.display()
+                )
+            })?
+    } else {
+        document
+            .root_element()
+            .children()
+            .find(Node::is_element)
+            .with_context(|| format!("Ableton preset has no device: {}", path.display()))?
+    };
+    ensure!(
+        device.has_tag_name("Operator"),
+        "Ableton preset is not Operator: {}",
+        path.display()
+    );
+    let mut oscillators = Vec::with_capacity(4);
+    for oscillator_index in 0..4 {
+        let oscillator_name = format!("Operator.{oscillator_index}");
+        let oscillator = direct_child(device, &oscillator_name).with_context(|| {
+            format!(
+                "Ableton Operator preset has no {oscillator_name}: {}",
+                path.display()
+            )
+        })?;
+        let Some(user_harmonics) = direct_child(oscillator, "UserHarmonics") else {
+            oscillators.push(None);
+            continue;
+        };
+        let serialized_num_harmonics =
+            optional_child_i32(user_harmonics, "NumHarmonics").unwrap_or(1);
+        let num_harmonics = operator_harmonic_count_from_serialized_value(
+            serialized_num_harmonics,
+        )
+        .with_context(|| {
+            format!(
+                "Ableton Operator serialized NumHarmonics index {serialized_num_harmonics} is invalid"
+            )
+        })?;
+        let expansion_mode = optional_child_i32(user_harmonics, "ExpansionMode").unwrap_or(0);
+        let normalize = optional_child_bool(user_harmonics, "Normalize").unwrap_or(false);
+        let mut amplitudes = vec![0.0_f32; 4096];
+        for (harmonic, amplitude) in amplitudes.iter_mut().enumerate().take(64) {
+            let name = format!("Harmonics.{harmonic}");
+            if let Some(value) = optional_child_number(user_harmonics, &name) {
+                ensure!(
+                    value.is_finite(),
+                    "Ableton Operator harmonic {harmonic} is non-finite"
+                );
+                *amplitude = value as f32;
+            }
+        }
+        oscillators.push(Some(OperatorUserHarmonics {
+            amplitudes,
+            expansion_mode,
+            num_harmonics,
+            normalize,
+        }));
+    }
+    Ok(oscillators)
 }
 
 fn live_engine_parameter_from_control(
@@ -8672,7 +12548,13 @@ fn audit_device_graphs(core_library: &Path) -> Result<()> {
     Ok(())
 }
 
-fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> Result<()> {
+fn audit_presets(
+    core_library: &Path,
+    engine: &Path,
+    jobs: usize,
+    family_filter: Option<&str>,
+    all: bool,
+) -> Result<()> {
     ensure!(jobs > 0, "--jobs must be greater than zero");
     ensure!(
         std::env::consts::ARCH == "x86_64",
@@ -8711,6 +12593,13 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
             .to_owned();
         by_family.entry(family).or_default().push(preset);
     }
+    if let Some(family_filter) = family_filter {
+        ensure!(
+            by_family.contains_key(family_filter),
+            "no installed Ableton ADV presets found for family '{family_filter}'"
+        );
+        by_family.retain(|family, _| family == family_filter);
+    }
     let mut eligible_presets = 0;
     let mut skipped_families = Vec::new();
     let mut audit_jobs = Vec::new();
@@ -8729,7 +12618,11 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                 preset_status,
                 "representativeAdvEventRenderProven" | "exhaustiveAdvEventRenderProven"
             );
+        let composite_instrument = matches!(family.as_str(), "Operator" | "InstrumentImpulse")
+            && mechanism == "liveEngineBundle"
+            && engine_status == "nativeInstrumentVoiceRenderProven";
         let processor = (event_only
+            || composite_instrument
             || (mechanism == "liveEngineBundle"
                 && engine_status == "nativeAudioRenderProven"
                 && matches!(
@@ -8767,10 +12660,13 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                 midi: matches!(
                     family.as_str(),
                     "Drift"
+                        | "Operator"
+                        | "InstrumentImpulse"
                         | "InstrumentMeld"
                         | "InstrumentVector"
                         | "DrumCell"
                         | "MidiChord"
+                        | "MidiNoteLength"
                         | "MidiPitcher"
                         | "MidiRandom"
                         | "MidiScale"
@@ -8827,6 +12723,25 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
             ],
         })?,
     )?;
+    let impulse_sequence = directory.path().join("impulse-audit.json");
+    fs::write(
+        &impulse_sequence,
+        serde_json::to_vec(&Sequence {
+            bpm: 600.0,
+            bars: 1,
+            beats_per_bar: 4,
+            notes: [60_u8, 62, 64, 65, 67, 69, 71, 72]
+                .into_iter()
+                .enumerate()
+                .map(|(index, note)| crate::plugin::SequenceNote {
+                    beat: index as f64 * 0.25,
+                    duration_beats: 0.1,
+                    note,
+                    velocity: 100,
+                })
+                .collect(),
+        })?,
+    )?;
     std::thread::scope(|scope| {
         for _ in 0..jobs.min(tested_presets.max(1)) {
             let queue = std::sync::Arc::clone(&queue);
@@ -8834,6 +12749,7 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
             let failures = std::sync::Arc::clone(&failures);
             let directory = directory.path();
             let midi_event_sequence = &midi_event_sequence;
+            let impulse_sequence = &impulse_sequence;
             let executable = &executable;
             let engine = &engine;
             scope.spawn(move || loop {
@@ -8842,7 +12758,11 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                     break;
                 };
                 let output_path = directory.join(format!("{}.wav", job.index));
-                let expected_frames = if job.midi { 8192 } else { 44_100 };
+                // MIDI effects need only enough frames to flush their event
+                // scheduler. Instruments need a full second: the former
+                // 8,192-frame/50 ms fixture incorrectly classified factory
+                // pads and evolving sounds with slow attacks as silent.
+                let expected_frames = if job.event_only { 8192 } else { 44_100 };
                 let mut command = Command::new(executable);
                 command
                     .args(["ableton", "probe-live-engine", "--bootstrap", "--engine"])
@@ -8857,8 +12777,10 @@ fn audit_presets(core_library: &Path, engine: &Path, jobs: usize, all: bool) -> 
                     .arg(expected_frames.to_string());
                 if job.event_only {
                     command.arg("--sequence").arg(midi_event_sequence);
+                } else if job.family == "InstrumentImpulse" {
+                    command.arg("--sequence").arg(impulse_sequence);
                 } else if job.midi {
-                    command.args(["--note", "48", "--gate-seconds", "0.05"]);
+                    command.args(["--note", "48", "--gate-seconds", "0.5"]);
                 }
                 if let Some(sample) = &job.sample {
                     command.arg("--sample").arg(sample);
@@ -10785,6 +14707,79 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn extracts_operator_native_companion_parameters() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let preset = directory.path().join("operator.adv");
+        let oscillator = |index| {
+            format!(
+                r#"<Operator.{index}><Envelope><AttackTime><Manual Value="12.5"/></AttackTime></Envelope><Tune><Coarse><Manual Value="2"/></Coarse><Fine><Manual Value="250"/></Fine><FixedFrequencyOn><Manual Value="false"/></FixedFrequencyOn></Tune><Volume><Manual Value="0.75"/></Volume><IsOn><Manual Value="true"/></IsOn><WaveForm><Manual Value="{index}"/></WaveForm><UserHarmonics><Harmonics.0 Value="1"/><Harmonics.1 Value="0.5"/><NumHarmonics Value="0"/><ExpansionMode Value="1"/><Normalize Value="true"/></UserHarmonics></Operator.{index}>"#
+            )
+        };
+        let xml = format!(
+            r#"<Ableton><Operator><On><Manual Value="true"/></On>{}<Globals><NumVoices Value="5"/><ModulationResolution Value="2"/><Algorithm><Manual Value="8"/></Algorithm><Interpolation Value="true"/><AntiAlias Value="false"/><LegacyMode Value="true"/><Tone><Manual Value="0.625"/></Tone><SpreadAmount><Manual Value="0.42"/></SpreadAmount></Globals><Lfo><LfoOn><Manual Value="true"/></LfoOn><LfoRate><Manual Value="4.5"/></LfoRate><LfoEnv><AttackTime><Manual Value="9"/></AttackTime></LfoEnv></Lfo><Filter><OnOff><Manual Value="true"/></OnOff><Frequency><Manual Value="1200"/></Frequency><Envelope><DecayTime><Manual Value="300"/></DecayTime></Envelope></Filter><Shaper><Type><Manual Value="3"/></Type><Drive><Manual Value="6"/></Drive></Shaper></Operator></Ableton>"#,
+            (0..4).map(oscillator).collect::<String>()
+        );
+        fs::write(&preset, xml).expect("Operator preset fixture");
+        let parameters = live_engine_preset_parameters(&preset, None).expect("Operator parameters");
+        let value = |name: &str| {
+            parameters
+                .iter()
+                .find(|parameter| parameter.name == name)
+                .map(|parameter| parameter.value)
+        };
+        assert_eq!(value("Osc1Envelope.AttackTime"), Some(12.5));
+        assert_eq!(value("Osc1Voice.Coarse"), Some(2.0));
+        assert_eq!(value("Osc1Voice.Fine"), Some(250.0));
+        assert_eq!(value("Osc1Voice.Volume"), Some(0.75));
+        assert_eq!(value("Osc4WaveFormBank"), Some(3.0));
+        assert_eq!(value("Algorithm"), Some(8.0));
+        assert_eq!(value("OperatorGraph.NumVoices"), Some(5.0));
+        assert_eq!(value("OperatorManagement.SpreadAmount"), Some(0.42));
+        assert_eq!(value("Tone"), Some(0.625));
+        assert_eq!(value("Resolution"), Some(2.0));
+        assert_eq!(value("UseLinearInterpolation"), Some(1.0));
+        assert_eq!(value("AntiAlias"), Some(0.0));
+        assert_eq!(value("OperatorLfoFrequency.Rate"), Some(4.5));
+        assert_eq!(value("OperatorLfoEnvelope.AttackTime"), Some(9.0));
+        assert_eq!(value("OperatorFilter.FilterOnOff"), Some(1.0));
+        assert_eq!(value("OperatorFilter.FilterLegacyMode"), Some(1.0));
+        assert_eq!(value("OperatorFilterMod.Frequency"), Some(1200.0));
+        assert_eq!(value("OperatorFilterEnvelope.DecayTime"), Some(300.0));
+        assert_eq!(value("OperatorFilter.ShaperType"), Some(3.0));
+        assert_eq!(value("OperatorFilter.ShaperDrive"), Some(6.0));
+        let harmonics =
+            live_engine_operator_user_harmonics(&preset, None).expect("Operator user harmonics");
+        let oscillator = harmonics[0].as_ref().expect("oscillator harmonics");
+        assert_eq!(&oscillator.amplitudes[..3], &[1.0, 0.5, 0.0]);
+        assert_eq!(oscillator.num_harmonics, 16);
+        assert_eq!(oscillator.expansion_mode, 1);
+        assert!(oscillator.normalize);
+    }
+
+    #[test]
+    fn maps_operator_serialized_voice_chooser_through_live_table() {
+        let expected = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 32];
+        for (serialized, voices) in expected.into_iter().enumerate() {
+            assert_eq!(
+                operator_voice_count_from_serialized_value(serialized as f32),
+                Some(voices)
+            );
+        }
+        assert_eq!(operator_voice_count_from_serialized_value(15.0), None);
+        assert_eq!(operator_voice_count_from_serialized_value(-1.0), None);
+        assert_eq!(operator_voice_count_from_serialized_value(1.5), None);
+    }
+
+    #[test]
+    fn maps_operator_serialized_harmonic_count_enum() {
+        assert_eq!(operator_harmonic_count_from_serialized_value(0), Some(16));
+        assert_eq!(operator_harmonic_count_from_serialized_value(1), Some(32));
+        assert_eq!(operator_harmonic_count_from_serialized_value(2), Some(64));
+        assert_eq!(operator_harmonic_count_from_serialized_value(3), None);
+        assert_eq!(operator_harmonic_count_from_serialized_value(-1), None);
     }
 
     #[test]

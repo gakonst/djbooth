@@ -1,0 +1,15 @@
+{
+  "bpm": 120,
+  "bars": 2,
+  "beatsPerBar": 4,
+  "notes": [
+    { "beat": 0, "durationBeats": 0.25, "note": 60, "velocity": 120 },
+    { "beat": 1, "durationBeats": 0.25, "note": 62, "velocity": 112 },
+    { "beat": 2, "durationBeats": 0.25, "note": 64, "velocity": 108 },
+    { "beat": 3, "durationBeats": 0.25, "note": 65, "velocity": 104 },
+    { "beat": 4, "durationBeats": 0.25, "note": 67, "velocity": 116 },
+    { "beat": 5, "durationBeats": 0.25, "note": 69, "velocity": 108 },
+    { "beat": 6, "durationBeats": 0.25, "note": 71, "velocity": 104 },
+    { "beat": 7, "durationBeats": 0.25, "note": 72, "velocity": 112 }
+  ]
+}

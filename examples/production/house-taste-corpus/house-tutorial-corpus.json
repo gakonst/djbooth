@@ -1,0 +1,6464 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-09T21:55:10.009Z",
+  "focus": "house-production",
+  "tasteAnchors": [
+    {
+      "name": "Adam Ten",
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ],
+      "tasteScore": 178.84
+    },
+    {
+      "name": "Mita Gami",
+      "genres": [
+        "indie dance",
+        "melodic house"
+      ],
+      "tasteScore": 127.44
+    },
+    {
+      "name": "Echonomist",
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "tasteScore": 117.08
+    },
+    {
+      "name": "Argy",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno"
+      ],
+      "tasteScore": 109.72
+    },
+    {
+      "name": "Rafael",
+      "genres": [
+        "indie dance",
+        "tech house"
+      ],
+      "tasteScore": 96
+    },
+    {
+      "name": "OMRI.",
+      "genres": [
+        "indie dance",
+        "tech house"
+      ],
+      "tasteScore": 91.96
+    },
+    {
+      "name": "Emanuel Satie",
+      "genres": [
+        "melodic house",
+        "tech house"
+      ],
+      "tasteScore": 90.68
+    },
+    {
+      "name": "Max Styler",
+      "genres": [
+        "tech house"
+      ],
+      "tasteScore": 74.44
+    },
+    {
+      "name": "Trikk",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ],
+      "tasteScore": 72.36
+    },
+    {
+      "name": "Maga",
+      "genres": [
+        "melodic house",
+        "organic house",
+        "afro house",
+        "melodic techno"
+      ],
+      "tasteScore": 67.72
+    },
+    {
+      "name": "Chris Lake",
+      "genres": [
+        "tech house",
+        "house",
+        "bass house"
+      ],
+      "tasteScore": 66.92
+    },
+    {
+      "name": "Loofy",
+      "genres": [
+        "melodic techno"
+      ],
+      "tasteScore": 62
+    },
+    {
+      "name": "Layton Giordani",
+      "genres": [
+        "techno",
+        "melodic techno",
+        "tech house"
+      ],
+      "tasteScore": 61.04
+    },
+    {
+      "name": "Sean Doron",
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "indie dance",
+        "afro house"
+      ],
+      "tasteScore": 60.68
+    },
+    {
+      "name": "Brunello",
+      "genres": [
+        "indie dance"
+      ],
+      "tasteScore": 59.36
+    },
+    {
+      "name": "Yamagucci",
+      "genres": [
+        "indie dance"
+      ],
+      "tasteScore": 54.64
+    },
+    {
+      "name": "Henri Bergmann",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ],
+      "tasteScore": 53.52
+    },
+    {
+      "name": "Tim Engelhardt",
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "organic house",
+        "progressive house"
+      ],
+      "tasteScore": 53.4
+    },
+    {
+      "name": "Rem Siman",
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ],
+      "tasteScore": 52.72
+    },
+    {
+      "name": "Purple Disco Machine",
+      "genres": [
+        "disco house",
+        "nu disco",
+        "funky house",
+        "house"
+      ],
+      "tasteScore": 51.24
+    },
+    {
+      "name": "Solomun",
+      "genres": [
+        "melodic techno",
+        "minimal techno",
+        "techno",
+        "melodic house"
+      ],
+      "tasteScore": 47
+    },
+    {
+      "name": "Ugo Banchi",
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ],
+      "tasteScore": 46.56
+    },
+    {
+      "name": "Jenia Tarsol",
+      "genres": [
+        "melodic techno",
+        "indie dance"
+      ],
+      "tasteScore": 42.64
+    },
+    {
+      "name": "Auggië",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ],
+      "tasteScore": 42.48
+    },
+    {
+      "name": "Adriatique",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "afro house",
+        "techno"
+      ],
+      "tasteScore": 42.4
+    },
+    {
+      "name": "BLOND:ISH",
+      "genres": [
+        "afro house",
+        "techengue",
+        "latin house"
+      ],
+      "tasteScore": 42.28
+    },
+    {
+      "name": "Yuvèe",
+      "genres": [
+        "indie dance"
+      ],
+      "tasteScore": 41.2
+    },
+    {
+      "name": "HIGHLITE",
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ],
+      "tasteScore": 40.88
+    },
+    {
+      "name": "Notre Dame",
+      "genres": [
+        "afro house",
+        "afro tech",
+        "melodic house",
+        "indie dance",
+        "organic house"
+      ],
+      "tasteScore": 39.48
+    },
+    {
+      "name": "FISHER",
+      "genres": [
+        "tech house",
+        "house"
+      ],
+      "tasteScore": 38.84
+    },
+    {
+      "name": "RÜFÜS DU SOL",
+      "genres": [],
+      "tasteScore": 38.8
+    },
+    {
+      "name": "HUGEL",
+      "genres": [
+        "latin house",
+        "afro house",
+        "techengue",
+        "house"
+      ],
+      "tasteScore": 37.64
+    },
+    {
+      "name": "Ivory (IT)",
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "indie dance"
+      ],
+      "tasteScore": 37.64
+    },
+    {
+      "name": "Âme",
+      "genres": [
+        "minimal techno",
+        "melodic house",
+        "melodic techno"
+      ],
+      "tasteScore": 37.52
+    },
+    {
+      "name": "Rodriguez Jr.",
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "minimal techno",
+        "deep house"
+      ],
+      "tasteScore": 37.16
+    },
+    {
+      "name": "WhoMadeWho",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "afro house"
+      ],
+      "tasteScore": 36.84
+    },
+    {
+      "name": "ARTBAT",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno",
+        "progressive house"
+      ],
+      "tasteScore": 36.68
+    },
+    {
+      "name": "Anyma",
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno",
+        "stutter house"
+      ],
+      "tasteScore": 36.24
+    },
+    {
+      "name": "DvirNuns",
+      "genres": [
+        "indie dance"
+      ],
+      "tasteScore": 35.92
+    },
+    {
+      "name": "Vintage Culture",
+      "genres": [
+        "brazilian bass",
+        "electronic",
+        "electro"
+      ],
+      "tasteScore": 35.92
+    }
+  ],
+  "collectionPolicy": {
+    "retained": "public metadata, source links, available captions, timestamped action windows, and sparse UI frames",
+    "ephemeral": "source video is deleted after frame extraction",
+    "synthesis": "store evidence-addressable paraphrases and production recipes, not copied narration"
+  },
+  "counts": {
+    "queries": 40,
+    "uniqueResults": 415,
+    "eligibleResults": 357,
+    "searchFailures": 0
+  },
+  "sources": {
+    "youtubeQueries": [
+      "Adam Ten Mita Gami indie dance production tutorial Ableton",
+      "OMRI Rafael indie dance production tutorial Ableton",
+      "Echonomist production tutorial track breakdown Ableton",
+      "Trikk indie dance production tutorial Ableton",
+      "Maz Antdot afro house production tutorial Ableton",
+      "Keinemusik afro house start to finish Ableton",
+      "indie dance full track start to finish Ableton",
+      "indie dance bass sound design Ableton Serum",
+      "indie dance percussion groove Ableton tutorial",
+      "indie dance synth lead pluck sound design Serum",
+      "afro house full track start to finish Ableton",
+      "afro house percussion groove polyrhythm Ableton",
+      "afro house bassline sound design Ableton Serum",
+      "afro house vocal processing Ableton tutorial",
+      "afro house organic instruments texture Ableton",
+      "melodic house full track start to finish Ableton",
+      "melodic house chord voicing harmony Ableton tutorial",
+      "melodic house arrangement tension release Ableton",
+      "melodic house atmospheric texture sound design Ableton",
+      "melodic techno professional track breakdown Ableton",
+      "tech house full track start to finish Ableton professional",
+      "tech house groove swing bass relationship Ableton",
+      "tech house drum processing professional Ableton",
+      "tech house bass sound design Serum tutorial",
+      "Chris Lake track from scratch production breakdown",
+      "Max Styler production tutorial Ableton",
+      "house music sample flip disco new wave Ableton",
+      "house vocal chop hook processing Ableton",
+      "house arrangement transitions ear candy Ableton",
+      "house kick bass low end mixing professional Ableton",
+      "house parallel processing sends depth Ableton tutorial",
+      "house saturation clipping loudness Ableton professional",
+      "house stereo depth reverb delay Ableton professional",
+      "house percussion humanization groove pool Ableton",
+      "house track deconstruction producer masterclass",
+      "FaderPro house producer masterclass Ableton",
+      "Production Music Live house track from scratch Ableton",
+      "Bound to Divide house start to finish Ableton",
+      "Dilby house production tutorial Ableton",
+      "Audioreakt house production Ableton tutorial"
+    ]
+  },
+  "prioritizedOfficial": [],
+  "youtubeTutorialCandidates": [
+    {
+      "id": "NTuFR7OTRls",
+      "title": "How to Make an Electro Indie Dance Beat in Minutes!",
+      "url": "https://www.youtube.com/watch?v=NTuFR7OTRls",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 1075,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton",
+        "indie dance bass sound design Ableton Serum",
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 92
+    },
+    {
+      "id": "ktPQjgMMBP4",
+      "title": "How To Make Indie Dance Like Mita Gami & Adam Ten (Maccabi House)",
+      "url": "https://www.youtube.com/watch?v=ktPQjgMMBP4",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 981,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "OMRI Rafael indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton",
+        "indie dance bass sound design Ableton Serum",
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 92
+    },
+    {
+      "id": "NcXxvJdmg5w",
+      "title": "(Indie Dance) Damon Jee 🇫🇷 Ableton Live Tutorial (English)",
+      "url": "https://www.youtube.com/watch?v=NcXxvJdmg5w",
+      "uploader": "Rhodes Studio in English",
+      "uploaderId": "UCH0rXWfHUGrZ3mc4VuC3dmA",
+      "durationSeconds": 1212,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton",
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 84
+    },
+    {
+      "id": "O1MlQiNTSko",
+      "title": "Making an AFRO HOUSE Track From START TO FINISH  +Samples + Project [ABLETON]",
+      "url": "https://www.youtube.com/watch?v=O1MlQiNTSko",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 4897,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton",
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 76
+    },
+    {
+      "id": "o214fCl8_AY",
+      "title": "Jonas Saalbach | Track from Start to Finish | Ableton & Analog Synths | Deep House",
+      "url": "https://www.youtube.com/watch?v=o214fCl8_AY",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 2674,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "tech house full track start to finish Ableton professional",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 74
+    },
+    {
+      "id": "FfFod94d5gw",
+      "title": "The Secret To Making Tech House Like The PROS",
+      "url": "https://www.youtube.com/watch?v=FfFod94d5gw",
+      "uploader": "Ethan Davis",
+      "uploaderId": "UCEPmQTKm969uU06pdSLifUg",
+      "durationSeconds": 1478,
+      "queries": [
+        "melodic techno professional track breakdown Ableton",
+        "tech house full track start to finish Ableton professional",
+        "tech house drum processing professional Ableton",
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 74
+    },
+    {
+      "id": "i7q3qi4DTFs",
+      "title": "Make INDIE DANCE Like Damon Jee + Rafael Cerato",
+      "url": "https://www.youtube.com/watch?v=i7q3qi4DTFs",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1672,
+      "queries": [
+        "indie dance full track start to finish Ableton",
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 72
+    },
+    {
+      "id": "m5XIfEscGd8",
+      "title": "How To Make PROFESSIONAL Indie Dance! (And Get Signed)",
+      "url": "https://www.youtube.com/watch?v=m5XIfEscGd8",
+      "uploader": "Odd Frequency and JaKuna",
+      "uploaderId": "N/A",
+      "durationSeconds": 576,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton",
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 70
+    },
+    {
+      "id": "48ZdD-YhKv8",
+      "title": "Building an Indie Dance Track in Ableton Live — Part 1",
+      "url": "https://www.youtube.com/watch?v=48ZdD-YhKv8",
+      "uploader": "Heath Holme",
+      "uploaderId": "UCtYUA8HvAVEMp1tYdF4Wjow",
+      "durationSeconds": 8141,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 68
+    },
+    {
+      "id": "fvKfCZLwszE",
+      "title": "How To Make Afro-House Like Hugel [FROM SCRATCH] - Samples, Presets and Project Ableton",
+      "url": "https://www.youtube.com/watch?v=fvKfCZLwszE",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 4778,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 68
+    },
+    {
+      "id": "HU56q2BWME8",
+      "title": "How To Make Hugel Style [FROM SCRATCH] - Samples, Presets and Project Ableton",
+      "url": "https://www.youtube.com/watch?v=HU56q2BWME8",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 3006,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 68
+    },
+    {
+      "id": "K9OTOiD6fVA",
+      "title": "How to produce Indie Dance intuitively with Ableton",
+      "url": "https://www.youtube.com/watch?v=K9OTOiD6fVA",
+      "uploader": "HOVR",
+      "uploaderId": "UCt4Y_Anv8HrQ96JcH8Ll9hQ",
+      "durationSeconds": 3119,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 68
+    },
+    {
+      "id": "CcuLTbzzKEI",
+      "title": "I produced a SICK(?) Indie Dance track in 20 minutes (part 1)",
+      "url": "https://www.youtube.com/watch?v=CcuLTbzzKEI",
+      "uploader": "Best Friends Club",
+      "uploaderId": "UCuleYyPBOQA23E_k9r-8sZw",
+      "durationSeconds": 1061,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton",
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 68
+    },
+    {
+      "id": "KurB8B73CEk",
+      "title": "I SPENT 3 MONTHS PRODUCING AFRO HOUSE | Here's What I Learned",
+      "url": "https://www.youtube.com/watch?v=KurB8B73CEk",
+      "uploader": "badhabit",
+      "uploaderId": "UC7fDOHAGLBv0BIOka-AIXng",
+      "durationSeconds": 1485,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton",
+        "afro house full track start to finish Ableton",
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 66
+    },
+    {
+      "id": "5aK9Mc2ZEck",
+      "title": "Afro House Tutorial in Ableton Live | Produce from Scratch in the Style of Black Coffee, Zerb, Maz",
+      "url": "https://www.youtube.com/watch?v=5aK9Mc2ZEck",
+      "uploader": "Budemberg",
+      "uploaderId": "UCM3wnbdw_Tg3ISaMOZNd5Rg",
+      "durationSeconds": 1186,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 64
+    },
+    {
+      "id": "jnXdjJcu1wA",
+      "title": "How To Make Afro House  [FROM SCRATCH]",
+      "url": "https://www.youtube.com/watch?v=jnXdjJcu1wA",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 2923,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 64
+    },
+    {
+      "id": "rCnQiZ0iDPA",
+      "title": "Developing a STRONG GROOVY BASS & VOCAL CHOPS for Melodic House | Start to Finish Part 2",
+      "url": "https://www.youtube.com/watch?v=rCnQiZ0iDPA",
+      "uploader": "Abstrakt Music Lab",
+      "uploaderId": "UCK2GetBHqWxUTDSTVHGcBVQ",
+      "durationSeconds": 4358,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "bass",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 62
+    },
+    {
+      "id": "La5h9Zl6g_8",
+      "title": "Making a complete Track Start to Finish Ableton Live Melodic House Tutorial Beginners",
+      "url": "https://www.youtube.com/watch?v=La5h9Zl6g_8",
+      "uploader": "Production Music Live and Ableton Tips by PML",
+      "uploaderId": "N/A",
+      "durationSeconds": 3688,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 62
+    },
+    {
+      "id": "1OioDYGJDTo",
+      "title": "MELODIC House From Scratch in 30 Minutes | Ableton Tutorial | Yannek Maunz",
+      "url": "https://www.youtube.com/watch?v=1OioDYGJDTo",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1858,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 62
+    },
+    {
+      "id": "brRQdQbcmE0",
+      "title": "Start to Finish with Jonas Saalbach | FULL TRACK in 99 Minutes | Ableton | Deep House",
+      "url": "https://www.youtube.com/watch?v=brRQdQbcmE0",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 6398,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 62
+    },
+    {
+      "id": "6eCK7wwSGxY",
+      "title": "How To Make Tech House Like The Pros",
+      "url": "https://www.youtube.com/watch?v=6eCK7wwSGxY",
+      "uploader": "John Summit",
+      "uploaderId": "UCsIVrho83JfwUieSs_UKCmA",
+      "durationSeconds": 261,
+      "queries": [
+        "tech house full track start to finish Ableton professional",
+        "tech house drum processing professional Ableton",
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 60
+    },
+    {
+      "id": "pT5c96ho2eY",
+      "title": "Keinemusik Tutorial & Ableton Project File - afro house start to finish in 3 hours",
+      "url": "https://www.youtube.com/watch?v=pT5c96ho2eY",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 11027,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton",
+        "afro house full track start to finish Ableton",
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 60
+    },
+    {
+      "id": "NKV-cThrfm8",
+      "title": "Making an AFRO HOUSE Track From START TO FINISH | Ableton Live | Free Download",
+      "url": "https://www.youtube.com/watch?v=NKV-cThrfm8",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 15081,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton",
+        "afro house full track start to finish Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 60
+    },
+    {
+      "id": "PBHSUdb6hCs",
+      "title": "\"Move\" Style, Afro House, Adam Port, Keinemusik | Ableton | Producer Notes 017",
+      "url": "https://www.youtube.com/watch?v=PBHSUdb6hCs",
+      "uploader": "PRODUCER NOTES by François",
+      "uploaderId": "UCZ-btSSOY89DPgdNoqAUQVQ",
+      "durationSeconds": 2178,
+      "queries": [
+        "afro house full track start to finish Ableton",
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "XmVV7S9dVfE",
+      "title": "🚀 Tech House Track from Scratch w/ Fab Massimo | Ableton only",
+      "url": "https://www.youtube.com/watch?v=XmVV7S9dVfE",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1970,
+      "queries": [
+        "tech house full track start to finish Ableton professional",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "pcAbSi7DOb0",
+      "title": "Afro House Start To Finish (Ableton Live 12)",
+      "url": "https://www.youtube.com/watch?v=pcAbSi7DOb0",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 7993,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton",
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "BLvk4yIbxCw",
+      "title": "Chris Lake Makes A Tech-House Track From Scratch",
+      "url": "https://www.youtube.com/watch?v=BLvk4yIbxCw",
+      "uploader": "DJ Mag",
+      "uploaderId": "UCJEKlziKdxoos1qbptjGgLg",
+      "durationSeconds": 1335,
+      "queries": [
+        "tech house full track start to finish Ableton professional",
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "baHC0bp-Bv4",
+      "title": "How to Make Melodic House (Like Eli & Fur) – FREE Ableton Project & Samples!",
+      "url": "https://www.youtube.com/watch?v=baHC0bp-Bv4",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 3004,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "GtJCwe53Lfs",
+      "title": "JIMI JULES (Innervisions) Workflow & Production | Ableton Live, on the Road from Milan to Zurich",
+      "url": "https://www.youtube.com/watch?v=GtJCwe53Lfs",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 516,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton",
+        "Trikk indie dance production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "UYtqkIIHxgw",
+      "title": "Make TECH HOUSE Like MAX STYLER (Full Masterclass)",
+      "url": "https://www.youtube.com/watch?v=UYtqkIIHxgw",
+      "uploader": "ZERMELO",
+      "uploaderId": "UCwagS434ieZhHv1dCzaR4MA",
+      "durationSeconds": 10106,
+      "queries": [
+        "tech house full track start to finish Ableton professional",
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "ZHl7FOFsd1Q",
+      "title": "Melodic Techno / Progressive House in Ableton – Full Session Breakdown (+ Free Sample Pack)",
+      "url": "https://www.youtube.com/watch?v=ZHl7FOFsd1Q",
+      "uploader": "Vertical Circles",
+      "uploaderId": "UCrzxv2HsYEqNyE3BFDJCnsA",
+      "durationSeconds": 1965,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "80TEdum3GjE",
+      "title": "Start-to-Finish: Indie Dance Bass from Scratch in Serum",
+      "url": "https://www.youtube.com/watch?v=80TEdum3GjE",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 4695,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "b2FTt6Rhr4Q",
+      "title": "Stephan Bodzin Analog Melodic Techno Style with Ableton Live",
+      "url": "https://www.youtube.com/watch?v=b2FTt6Rhr4Q",
+      "uploader": "PRODUCER NOTES by François",
+      "uploaderId": "UCZ-btSSOY89DPgdNoqAUQVQ",
+      "durationSeconds": 353,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 58
+    },
+    {
+      "id": "axLAIw6Iw7A",
+      "title": "Arrangement Hacks for MELODIC TECHNO | Jonas Saalbach | Ableton Live",
+      "url": "https://www.youtube.com/watch?v=axLAIw6Iw7A",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 710,
+      "queries": [
+        "melodic house arrangement tension release Ableton",
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "Sm4MI6aQ2uo",
+      "title": "How To Make A Diynamic Style Track (Solomun/Max Styler)",
+      "url": "https://www.youtube.com/watch?v=Sm4MI6aQ2uo",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 1641,
+      "queries": [
+        "OMRI Rafael indie dance production tutorial Ableton",
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "uCRhNrwlgwU",
+      "title": "How to make Breakbeats (Sasha - Anjunadeep) + Logic X Template | Live Electronic Music Tutorial #211",
+      "url": "https://www.youtube.com/watch?v=uCRhNrwlgwU",
+      "uploader": "We Make Dance Music",
+      "uploaderId": "UCdmlujHI6Qx5BhXGan6Y_NA",
+      "durationSeconds": 2035,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "rQyS6gcB5Kk",
+      "title": "lane 8 tutorial - melodic house start to finish in 4 hours",
+      "url": "https://www.youtube.com/watch?v=rQyS6gcB5Kk",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 14094,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "uqsXhPBpxAg",
+      "title": "Making A Track From START TO FINISH | Progressive House | Ableton Live, Diva",
+      "url": "https://www.youtube.com/watch?v=uqsXhPBpxAg",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 11094,
+      "queries": [
+        "melodic house full track start to finish Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "jxlOQoVMWhA",
+      "title": "The Power of Saying No | Tim Engelhardt | Finish More Music",
+      "url": "https://www.youtube.com/watch?v=jxlOQoVMWhA",
+      "uploader": "Finish More Music",
+      "uploaderId": "UCZkROKrw8jiTXbt6I3CRA8Q",
+      "durationSeconds": 3029,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "LHY-oarzk-g",
+      "title": "The Secret Behind Adam Ten & Mita Gami's Maccabi House Sound",
+      "url": "https://www.youtube.com/watch?v=LHY-oarzk-g",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 1454,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "BiqQfA26wXQ",
+      "title": "The Secret To Sound Like ADAM TEN and MITA GAMI",
+      "url": "https://www.youtube.com/watch?v=BiqQfA26wXQ",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1723,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 56
+    },
+    {
+      "id": "Yj8CHs1UrMc",
+      "title": "4 LEVELS of AFRO HOUSE CHORDS | Keinemusik Style",
+      "url": "https://www.youtube.com/watch?v=Yj8CHs1UrMc",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 2257,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "tOY35nO37A8",
+      "title": "Chris Avantgarde Makes A Melodic Techno Track From Scratch",
+      "url": "https://www.youtube.com/watch?v=tOY35nO37A8",
+      "uploader": "DJ Mag and Chris Avantgarde",
+      "uploaderId": "N/A",
+      "durationSeconds": 2513,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "_uiAfDgmTgE",
+      "title": "FROM SCRATCH: Melodic House in 30 Minutes | Ableton Tutorial | Pølaroit",
+      "url": "https://www.youtube.com/watch?v=_uiAfDgmTgE",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 2013,
+      "queries": [
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "ZBsFusLwuCk",
+      "title": "How To Make Melodic House & Techno Using Only Ableton Stock Plugins",
+      "url": "https://www.youtube.com/watch?v=ZBsFusLwuCk",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 3323,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "OWmF284ryX8",
+      "title": "Making A Melodic House Track From Start To Finish | Ableton only",
+      "url": "https://www.youtube.com/watch?v=OWmF284ryX8",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 4227,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "wzEbqA7znCE",
+      "title": "Making A Track From START TO FINISH | Melodic Techno | Ableton only | Afterlife, Tale of Us",
+      "url": "https://www.youtube.com/watch?v=wzEbqA7znCE",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 8613,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "0pAUdGiHWSo",
+      "title": "Making melodic house like im about to DJ in Tulum - Start to Finish in 2 hours 23 minutes",
+      "url": "https://www.youtube.com/watch?v=0pAUdGiHWSo",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 8588,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "hNeuf1IqDv4",
+      "title": "Melodic House Tutorial: Ben Böhmer Beat in Ableton Live 12",
+      "url": "https://www.youtube.com/watch?v=hNeuf1IqDv4",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 1380,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "EMZZLA-O78I",
+      "title": "MELODIC TECHNO From Scratch in 30 Minutes | Ableton Tutorial | Style of Afterlife",
+      "url": "https://www.youtube.com/watch?v=EMZZLA-O78I",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 2052,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "nXexHctTY4M",
+      "title": "Melodic Techno From Start To Finish - Ableton Live 10 Tutorial (Episode 4) FINAL",
+      "url": "https://www.youtube.com/watch?v=nXexHctTY4M",
+      "uploader": "Julian Gray Media",
+      "uploaderId": "UCdL5OemMau4OQB8t6Z4Eujg",
+      "durationSeconds": 2268,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "MlcFHPgqkd8",
+      "title": "Part 1 | Full Course | Creating a Melodic Techno Track from Start to Finish | Ableton 12 | 2024",
+      "url": "https://www.youtube.com/watch?v=MlcFHPgqkd8",
+      "uploader": "Rudra Kush",
+      "uploaderId": "UCKHGMmb4YmRjfSyuAlkjzuA",
+      "durationSeconds": 8151,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "54x3gdC59WY",
+      "title": "Producer Masterclass - Jacky - Part 1 of 2",
+      "url": "https://www.youtube.com/watch?v=54x3gdC59WY",
+      "uploader": "Computer Music",
+      "uploaderId": "UCzNleyBTjCeygAL3NaWwRig",
+      "durationSeconds": 1117,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "-0n4QiQJ3CM",
+      "title": "Production Tutorial: Anyma Melodic Techno | From Start To Finish (Ableton)",
+      "url": "https://www.youtube.com/watch?v=-0n4QiQJ3CM",
+      "uploader": "Van Múrten",
+      "uploaderId": "UCSVLGQnrA5tGZ9lA4aQALgA",
+      "durationSeconds": 3391,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "wRvtWWLFlhQ",
+      "title": "Production Tutorial: Lane 8 Melodic House | From Start To Finish (Ableton) @Lane8",
+      "url": "https://www.youtube.com/watch?v=wRvtWWLFlhQ",
+      "uploader": "Van Múrten",
+      "uploaderId": "UCSVLGQnrA5tGZ9lA4aQALgA",
+      "durationSeconds": 3667,
+      "queries": [
+        "melodic house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 54
+    },
+    {
+      "id": "ti3AqpOr0_0",
+      "title": "How To Create An Afro House Beat like \"Move\" Adam Port, Keinemusik in Ableton 12",
+      "url": "https://www.youtube.com/watch?v=ti3AqpOr0_0",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 744,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton",
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 52
+    },
+    {
+      "id": "_eSMfJp1dXM",
+      "title": "Tech House in 15 Minutes (Ableton)",
+      "url": "https://www.youtube.com/watch?v=_eSMfJp1dXM",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 844,
+      "queries": [
+        "tech house full track start to finish Ableton professional",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 52
+    },
+    {
+      "id": "QI0Ix5Eog1g",
+      "title": "¿Cómo lo hacen?: MITA GAMI 🇮🇱 Ableton Tutorial",
+      "url": "https://www.youtube.com/watch?v=QI0Ix5Eog1g",
+      "uploader": "Rhodes Studios",
+      "uploaderId": "UCRTyZl-VhXkzj9QBx-Fy3zA",
+      "durationSeconds": 654,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton",
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "6-pFPIlaSMw",
+      "title": "(Indie Dance) ¿Cómo lo hacen?: Damon Jee 🇫🇷 Ableton Live Tutorial",
+      "url": "https://www.youtube.com/watch?v=6-pFPIlaSMw",
+      "uploader": "Rhodes Studios",
+      "uploaderId": "UCRTyZl-VhXkzj9QBx-Fy3zA",
+      "durationSeconds": 1232,
+      "queries": [
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "C1eSAJKGOoA",
+      "title": "2026 House Production Secrets | HUGEL's Formula Explained",
+      "url": "https://www.youtube.com/watch?v=C1eSAJKGOoA",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 2358,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "9jf7ASg0lqo",
+      "title": "AFRO HOUSE like MEERA (NO), Keinemusik, Tripolism | Ableton | Producer Notes 034 | Free Download",
+      "url": "https://www.youtube.com/watch?v=9jf7ASg0lqo",
+      "uploader": "PRODUCER NOTES by François",
+      "uploaderId": "UCZ-btSSOY89DPgdNoqAUQVQ",
+      "durationSeconds": 2966,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "PRIo4IHgjWA",
+      "title": "Afro House Music Production For Beginners (Step by Step Masterclass)",
+      "url": "https://www.youtube.com/watch?v=PRIo4IHgjWA",
+      "uploader": "Ethan Davis",
+      "uploaderId": "UCEPmQTKm969uU06pdSLifUg",
+      "durationSeconds": 1924,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "p8eIONHa5xk",
+      "title": "Ask the Artist - Q&A with Nandu - Innervisions",
+      "url": "https://www.youtube.com/watch?v=p8eIONHa5xk",
+      "uploader": "Innervisions",
+      "uploaderId": "UCC7eKMxcVk1LZwzJlBdsVuQ",
+      "durationSeconds": 348,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "0sUAjsQdBR4",
+      "title": "Charlotte de Witte - Studio Session |@beatport",
+      "url": "https://www.youtube.com/watch?v=0sUAjsQdBR4",
+      "uploader": "Beatport",
+      "uploaderId": "UCyEMqKQPGdj8wKVKt2-agbQ",
+      "durationSeconds": 582,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "awXT1BQSkJ4",
+      "title": "Cómo producir AFROHOUSE | Keinemusik",
+      "url": "https://www.youtube.com/watch?v=awXT1BQSkJ4",
+      "uploader": "Producción Online",
+      "uploaderId": "UCSgWpvO4lFhyE6Nbrta722Q",
+      "durationSeconds": 1373,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "1WrgwnV-XWI",
+      "title": "Hardt Antoine - Dreamstate Track Breakdown",
+      "url": "https://www.youtube.com/watch?v=1WrgwnV-XWI",
+      "uploader": "crosstownrebels",
+      "uploaderId": "UCiv_kvaMssSr4UTM8IngW_Q",
+      "durationSeconds": 589,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "QlrJn_4jbUQ",
+      "title": "How to make Afro House Start To Finish Ableton Live 12",
+      "url": "https://www.youtube.com/watch?v=QlrJn_4jbUQ",
+      "uploader": "XDizzle",
+      "uploaderId": "UCc5Imrd9ys8Gyb8DNFwwXFA",
+      "durationSeconds": 1737,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "OEWKCZqB6kY",
+      "title": "How to Make an Indie Dance Bass [Maccabi House, Adam Ten, Rafael]",
+      "url": "https://www.youtube.com/watch?v=OEWKCZqB6kY",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 605,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "Pb5Gweyy74U",
+      "title": "How to Make Banging Melodic Techno",
+      "url": "https://www.youtube.com/watch?v=Pb5Gweyy74U",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1511,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "6heaRpJ6pMc",
+      "title": "How to Make Indie Dance — From Scratch Part 1 | Ableton Live",
+      "url": "https://www.youtube.com/watch?v=6heaRpJ6pMc",
+      "uploader": "Heath Holme",
+      "uploaderId": "UCtYUA8HvAVEMp1tYdF4Wjow",
+      "durationSeconds": 6785,
+      "queries": [
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "AN779nnRgfw",
+      "title": "How to Make Indie Dance — From Scratch Part 2 | Ableton Live",
+      "url": "https://www.youtube.com/watch?v=AN779nnRgfw",
+      "uploader": "Heath Holme",
+      "uploaderId": "UCtYUA8HvAVEMp1tYdF4Wjow",
+      "durationSeconds": 8214,
+      "queries": [
+        "indie dance full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "sq1LsvPfhsY",
+      "title": "How to Make Melodic Techno (Like ANYMA, MISS MONIQUE & ARTBAT) – FREE Ableton Project",
+      "url": "https://www.youtube.com/watch?v=sq1LsvPfhsY",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 3489,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "yLhBXEcX9e0",
+      "title": "How To Make Tech House Like Chris Lake",
+      "url": "https://www.youtube.com/watch?v=yLhBXEcX9e0",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 943,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "Olqbu5-nXTU",
+      "title": "How to make Tech House like Max Styler FROM SCRATCH",
+      "url": "https://www.youtube.com/watch?v=Olqbu5-nXTU",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 5704,
+      "queries": [
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "Ppuv2PRL0MY",
+      "title": "How to really make Afro House like a pro (groove , feel, flow)",
+      "url": "https://www.youtube.com/watch?v=Ppuv2PRL0MY",
+      "uploader": "Alice Efe - Mercurial Tones Academy",
+      "uploaderId": "UCl9pDani4v5V-sSLXVtFqqw",
+      "durationSeconds": 1159,
+      "queries": [
+        "afro house vocal processing Ableton tutorial",
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "f1Ws5bH_Tpk",
+      "title": "Keinemusik Afro House Tutorial in Ableton - Thandaza From Scratch in 1 hour",
+      "url": "https://www.youtube.com/watch?v=f1Ws5bH_Tpk",
+      "uploader": "Charlie Holmes",
+      "uploaderId": "UC1oEftHX-_BRTrDPciS-CFQ",
+      "durationSeconds": 3103,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "RVU1BKJDw1I",
+      "title": "Magnifik Style Afro House Track [From Scratch]",
+      "url": "https://www.youtube.com/watch?v=RVU1BKJDw1I",
+      "uploader": "Dulus Musica",
+      "uploaderId": "UCLyxpqg8DazWR7IiOYrqCGQ",
+      "durationSeconds": 9930,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "4bQXhdysBZA",
+      "title": "Make AFRO HOUSE Like KEINEMUSIK",
+      "url": "https://www.youtube.com/watch?v=4bQXhdysBZA",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2393,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "sbT9ULyTUnU",
+      "title": "Making A Complete Track From START TO FINISH | Organic Percussive House | Ableton, Serum 2",
+      "url": "https://www.youtube.com/watch?v=sbT9ULyTUnU",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 10519,
+      "queries": [
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "arrangement",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "y6RjUljdfZ8",
+      "title": "Making A Tech House Track From Scratch In 1 Hour (Full Process)",
+      "url": "https://www.youtube.com/watch?v=y6RjUljdfZ8",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 3392,
+      "queries": [
+        "tech house full track start to finish Ableton professional"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "Yl_ZB2mYa34",
+      "title": "Making An Afro House Track in 1 HOUR (Full Process)",
+      "url": "https://www.youtube.com/watch?v=Yl_ZB2mYa34",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 3816,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "1I3ArZveexA",
+      "title": "Producing a Tech-House Song From SCRATCH! | Ableton 12 Tutorial 🎧🔥",
+      "url": "https://www.youtube.com/watch?v=1I3ArZveexA",
+      "uploader": "KARRA",
+      "uploaderId": "UCLwDLGL3Ejqu-xJp57CptRg",
+      "durationSeconds": 1260,
+      "queries": [
+        "tech house full track start to finish Ableton professional"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "QUvhTT_h6MU",
+      "title": "Production Tutorial: Max Styler Tech House | From Start To Finish (Ableton)",
+      "url": "https://www.youtube.com/watch?v=QUvhTT_h6MU",
+      "uploader": "Van Múrten",
+      "uploaderId": "UCSVLGQnrA5tGZ9lA4aQALgA",
+      "durationSeconds": 2036,
+      "queries": [
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "XjiWwbR-P2g",
+      "title": "START to FINISH Tech House in ABLETON (1 Hour) ⏱️",
+      "url": "https://www.youtube.com/watch?v=XjiWwbR-P2g",
+      "uploader": "Westend",
+      "uploaderId": "UCgrA524q825FtGsF3mYyw1g",
+      "durationSeconds": 3811,
+      "queries": [
+        "tech house full track start to finish Ableton professional"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "CQv9hPUEbvg",
+      "title": "THE 10 AFRO HOUSE SOUNDS BEHIND EVERY HIT (I REMADE THEM ALL)",
+      "url": "https://www.youtube.com/watch?v=CQv9hPUEbvg",
+      "uploader": "badhabit",
+      "uploaderId": "UC7fDOHAGLBv0BIOka-AIXng",
+      "durationSeconds": 1739,
+      "queries": [
+        "afro house bassline sound design Ableton Serum",
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "MFwVCqdaPHQ",
+      "title": "Thomas Schumacher & Victor Ruiz - Beatport Studio Sessions",
+      "url": "https://www.youtube.com/watch?v=MFwVCqdaPHQ",
+      "uploader": "Beatport",
+      "uploaderId": "UCyEMqKQPGdj8wKVKt2-agbQ",
+      "durationSeconds": 799,
+      "queries": [
+        "Echonomist production tutorial track breakdown Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "JOAKpAJCi0c",
+      "title": "WESTEND - Full TECH HOUSE Track in Ableton (1 Hour) 🔥",
+      "url": "https://www.youtube.com/watch?v=JOAKpAJCi0c",
+      "uploader": "Westend",
+      "uploaderId": "UCgrA524q825FtGsF3mYyw1g",
+      "durationSeconds": 3635,
+      "queries": [
+        "tech house full track start to finish Ableton professional"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 50
+    },
+    {
+      "id": "ET8HFGwLRnM",
+      "title": "Adam Ten B2B Mita Gami - Maccabi House - Ronit Farm",
+      "url": "https://www.youtube.com/watch?v=ET8HFGwLRnM",
+      "uploader": "Maccabi House",
+      "uploaderId": "UC_-XxIzD51PbfWKV95q-bBQ",
+      "durationSeconds": 8705,
+      "queries": [
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "jAn-5MSWhI0",
+      "title": "Afro House like MAZ, Antdot \"Run\", keinemusik | Ableton Live | Producer Notes 020",
+      "url": "https://www.youtube.com/watch?v=jAn-5MSWhI0",
+      "uploader": "PRODUCER NOTES by François",
+      "uploaderId": "UCZ-btSSOY89DPgdNoqAUQVQ",
+      "durationSeconds": 2690,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "84Q631QtlNM",
+      "title": "First 14 Minutes In Ableton",
+      "url": "https://www.youtube.com/watch?v=84Q631QtlNM",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 848,
+      "queries": [
+        "house music sample flip disco new wave Ableton",
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "QK5IlM5xyas",
+      "title": "How to Do a Trendy Indie Dance in Maccabi House Style",
+      "url": "https://www.youtube.com/watch?v=QK5IlM5xyas",
+      "uploader": "THE LAPS ACADEMY",
+      "uploaderId": "UC-FG9MFFeDnYfD7aZtjfffA",
+      "durationSeconds": 1574,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "tRqwQ--GiEw",
+      "title": "How To INNERVISIONS STYLE  Like  TRIKK #innervisions   #tutorial #flstudio",
+      "url": "https://www.youtube.com/watch?v=tRqwQ--GiEw",
+      "uploader": "BADFORYOU",
+      "uploaderId": "UCGWm_lPWLs-CpWyThIXkwDg",
+      "durationSeconds": 1415,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "5Aj2rsl1YSE",
+      "title": "How to make afro house like Maz (BR)",
+      "url": "https://www.youtube.com/watch?v=5Aj2rsl1YSE",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 1703,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "WvcX66e4d10",
+      "title": "How To Make House Music like Adam Ten & Mita Gami (Maccabi House)",
+      "url": "https://www.youtube.com/watch?v=WvcX66e4d10",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 991,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "MFWRwb2Dogs",
+      "title": "How to Make House Music Like Brunello",
+      "url": "https://www.youtube.com/watch?v=MFWRwb2Dogs",
+      "uploader": "project bass",
+      "uploaderId": "UCg42ZEwbjRRTfwjlNEf-3gw",
+      "durationSeconds": 5702,
+      "queries": [
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "pk5UZCITh5w",
+      "title": "How To Make HUGEL – Movin' To The Sun (Remake Ableton)",
+      "url": "https://www.youtube.com/watch?v=pk5UZCITh5w",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 3858,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "f-7N6B172V4",
+      "title": "How to Make Tech House Drums from Scratch | Tech House Production Tutorial",
+      "url": "https://www.youtube.com/watch?v=f-7N6B172V4",
+      "uploader": "Tomorrowland Academy",
+      "uploaderId": "UCQIIaFFWfJ_AKN2fW8pGNdw",
+      "durationSeconds": 455,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "oxZWcllfedo",
+      "title": "How to Produce Indie Dance in Ableton Live (Maccabi House, Rafael, Mita Gami)",
+      "url": "https://www.youtube.com/watch?v=oxZWcllfedo",
+      "uploader": "Sonic Art",
+      "uploaderId": "UCRTidIvv5e1JXhE0O5Mfl7Q",
+      "durationSeconds": 1171,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "ZNjqc_XdmXU",
+      "title": "I Made an Adam Ten Style Track (Every Decision Explained)",
+      "url": "https://www.youtube.com/watch?v=ZNjqc_XdmXU",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 2460,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "EbJ3oW1WuIs",
+      "title": "Lush, Nostalgic Melodic House Chord Progression from Scratch in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=EbJ3oW1WuIs",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 401,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "beOIlwzI320",
+      "title": "The Ultimate Indie Dance Sounds | Brunello, Mita Gami, Adam Ten & More",
+      "url": "https://www.youtube.com/watch?v=beOIlwzI320",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 1235,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "QA5xMw7P50Y",
+      "title": "איך הפיקו את LEGO ? של Adam Ten & Mita Gami",
+      "url": "https://www.youtube.com/watch?v=QA5xMw7P50Y",
+      "uploader": "Vibe live",
+      "uploaderId": "UCuwqBnd0k3wt75joosMYJhw",
+      "durationSeconds": 2290,
+      "queries": [
+        "Adam Ten Mita Gami indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 48
+    },
+    {
+      "id": "FWsjSa7TUSI",
+      "title": "Ableton Push 2 : Creating a Full Track from Scratch (Start to Finish)",
+      "url": "https://www.youtube.com/watch?v=FWsjSa7TUSI",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 3486,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "aoaQqqwyxdc",
+      "title": "Ableton Push 2 : Creating a Full Track from Scratch (Start to Finish)",
+      "url": "https://www.youtube.com/watch?v=aoaQqqwyxdc",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2338,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "-8Sz0V9eoiQ",
+      "title": "Ableton Track Deconstruction - How I Made \"In My Soul\"",
+      "url": "https://www.youtube.com/watch?v=-8Sz0V9eoiQ",
+      "uploader": "Dirty Secretz",
+      "uploaderId": "UC4hFG5GsRJK-gnOUYxe4CUw",
+      "durationSeconds": 2163,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "xtRS4Yh-aT4",
+      "title": "Crafting Hypnotic Deep Progressive House in 1h 45min (Sudbeat, Mango Alley)",
+      "url": "https://www.youtube.com/watch?v=xtRS4Yh-aT4",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 6332,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "5C2IekPMnaQ",
+      "title": "Full Hypnotic Techno track from Scratch (free project) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=5C2IekPMnaQ",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2955,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "74tjKQxemJE",
+      "title": "Full Industrial Techno track from Scratch (free project) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=74tjKQxemJE",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2023,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "ox3ds591Ezs",
+      "title": "Full Peak Time Techno Track from Scratch (Free Template) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=ox3ds591Ezs",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2655,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "z_6BcW2olJQ",
+      "title": "Full Techno Arrangement from Scratch (free template) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=z_6BcW2olJQ",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 1940,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "qN6gIwD5E9Q",
+      "title": "House Drums - A Different Kind Of Tutorial",
+      "url": "https://www.youtube.com/watch?v=qN6gIwD5E9Q",
+      "uploader": "Bthelick",
+      "uploaderId": "UCaMje122pGSvLfvuLylin8g",
+      "durationSeconds": 1448,
+      "queries": [
+        "indie dance percussion groove Ableton tutorial",
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "rRfcWaNQIgs",
+      "title": "How To Make Afro-house [ Black Coffee, Maz, Keinemusik, Antdot] +Samples + Project [ABLETON]",
+      "url": "https://www.youtube.com/watch?v=rRfcWaNQIgs",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 571,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "ON_Q7TomDds",
+      "title": "How to Mix Vocals | Ableton Stock Effects Only | Melodic House",
+      "url": "https://www.youtube.com/watch?v=ON_Q7TomDds",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 1114,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "fx-mix",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "8KRhdoaESCU",
+      "title": "Making REAL deep progressive house - Start to Finish in 2 Hours + Project File",
+      "url": "https://www.youtube.com/watch?v=8KRhdoaESCU",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 9102,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "AAyuo7Yx_Hw",
+      "title": "Producing a selected style deep house track in 2 hours (Chace NuAspect MK Gorgon City)",
+      "url": "https://www.youtube.com/watch?v=AAyuo7Yx_Hw",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 7415,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "rzDJDlMkDyE",
+      "title": "start to finish deep progressive house",
+      "url": "https://www.youtube.com/watch?v=rzDJDlMkDyE",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 8817,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "Ylm3f4QlBX4",
+      "title": "Techno Arrangement from Scratch (free template) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=Ylm3f4QlBX4",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 1696,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 46
+    },
+    {
+      "id": "50QAf9gYgtg",
+      "title": "5 Deep House Basses You Need to Know [Serum Sound Design Tutorial]",
+      "url": "https://www.youtube.com/watch?v=50QAf9gYgtg",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 881,
+      "queries": [
+        "afro house bassline sound design Ableton Serum",
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "f3Tv5x_uSc0",
+      "title": "5 Steps to PRO Melodic House Tracks (+ Free Ableton Project)",
+      "url": "https://www.youtube.com/watch?v=f3Tv5x_uSc0",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 596,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "gq3KxrZe7kY",
+      "title": "7 advanced ABLETON TIPS in 400 seconds!",
+      "url": "https://www.youtube.com/watch?v=gq3KxrZe7kY",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 382,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "Y3IHvWksrLE",
+      "title": "7 Serum Tips That Will Make You a Sound Design Genius",
+      "url": "https://www.youtube.com/watch?v=Y3IHvWksrLE",
+      "uploader": "Akayo",
+      "uploaderId": "UCUuNNaDn9ZKN5kuBdacFeDQ",
+      "durationSeconds": 513,
+      "queries": [
+        "indie dance bass sound design Ableton Serum",
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "0TE6jZm-ld4",
+      "title": "Afro House Start to Finish (5 Tracks in 5 Days - Day 1)",
+      "url": "https://www.youtube.com/watch?v=0TE6jZm-ld4",
+      "uploader": "Fade n Flow",
+      "uploaderId": "UCV2YDKKZ5AQyBE1mlCz-g-Q",
+      "durationSeconds": 11063,
+      "queries": [
+        "afro house full track start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "o5dyFRLdUqc",
+      "title": "How to make Afro House in the Style of Keinemusik | Full Production Tutorial",
+      "url": "https://www.youtube.com/watch?v=o5dyFRLdUqc",
+      "uploader": "Tuniwave Sounds",
+      "uploaderId": "UCmkSlcaRk2j7Jvj79XULEgA",
+      "durationSeconds": 405,
+      "queries": [
+        "Keinemusik afro house start to finish Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "VRgPQMSVCP0",
+      "title": "How to make BREAKDOWNS & BUILD UPS like a PRO",
+      "url": "https://www.youtube.com/watch?v=VRgPQMSVCP0",
+      "uploader": "Abstrakt Music Lab",
+      "uploaderId": "UCK2GetBHqWxUTDSTVHGcBVQ",
+      "durationSeconds": 804,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "7p9HUMXhWNQ",
+      "title": "HOW TO MELODIC TECHNO IN 5 MINUTES (FLP / ALS)",
+      "url": "https://www.youtube.com/watch?v=7p9HUMXhWNQ",
+      "uploader": "IMMU Music",
+      "uploaderId": "UCkRF3HDPzm-t10VFnfebgWg",
+      "durationSeconds": 358,
+      "queries": [
+        "melodic techno professional track breakdown Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "hapiK289wp0",
+      "title": "TOOLROOM TECH HOUSE - FUNKAGENDA MAKES TRACK FROM SCRATCH",
+      "url": "https://www.youtube.com/watch?v=hapiK289wp0",
+      "uploader": "FaderPro",
+      "uploaderId": "UCyJJYPXQ_vV4Y9NBT2uaCTQ",
+      "durationSeconds": 770,
+      "queries": [
+        "FaderPro house producer masterclass Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 44
+    },
+    {
+      "id": "4e09eRkEY98",
+      "title": "5 Indie Dance Sounds Every Producer Needs in Serum 2",
+      "url": "https://www.youtube.com/watch?v=4e09eRkEY98",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 1649,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "COCMFofCt_M",
+      "title": "Afro House Ableton Template \"Amara\" [Maz, Antdot Style]",
+      "url": "https://www.youtube.com/watch?v=COCMFofCt_M",
+      "uploader": "abletunes",
+      "uploaderId": "UChseprunFxBDFzmT_ZSbtvg",
+      "durationSeconds": 248,
+      "queries": [
+        "Maz Antdot afro house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "j4nHoXGXF8A",
+      "title": "Arrangement HACKS for YOUR Music",
+      "url": "https://www.youtube.com/watch?v=j4nHoXGXF8A",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 938,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "wsPTy6FqZvk",
+      "title": "Arranging A Melodic House Track with Ableton Certified Trainer Max Wild | Selway's Techno Saturdays",
+      "url": "https://www.youtube.com/watch?v=wsPTy6FqZvk",
+      "uploader": "343 Labs",
+      "uploaderId": "UC4x8XyyOBeyrb9ht164QlCw",
+      "durationSeconds": 4191,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "bmRrFuRr7v0",
+      "title": "Create Dub Chords & Atmospheric Textures in Ableton Live 12",
+      "url": "https://www.youtube.com/watch?v=bmRrFuRr7v0",
+      "uploader": "MORDIO",
+      "uploaderId": "UCY7_e5Fp_UwX3qa8CFfNy5A",
+      "durationSeconds": 1984,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "NSihZI2iJ5A",
+      "title": "DEEP HOUSE MASTERCLASS - How To Make Deep House 2023",
+      "url": "https://www.youtube.com/watch?v=NSihZI2iJ5A",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2833,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "2VSuZIZ4CPc",
+      "title": "ELECTRONIC & INDIE DANCE ABLETON TEMPLATE // ÂMAGO",
+      "url": "https://www.youtube.com/watch?v=2VSuZIZ4CPc",
+      "uploader": "Presetground",
+      "uploaderId": "UChVO30RKXr9PocbiQPwXXQA",
+      "durationSeconds": 472,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "m7Dh49qFmOM",
+      "title": "How to Build Melodic Techno Drums (5 Pro Set-Ups)",
+      "url": "https://www.youtube.com/watch?v=m7Dh49qFmOM",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1069,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "DIz67iurpXQ",
+      "title": "How To Create Amazing Transition Effects In Ableton",
+      "url": "https://www.youtube.com/watch?v=DIz67iurpXQ",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 828,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "6nqgL4svR1o",
+      "title": "How To Create Build Ups & Tension In Your Tracks - UNDERGROUND HOUSE",
+      "url": "https://www.youtube.com/watch?v=6nqgL4svR1o",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 1941,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "47cFNZ0OOOg",
+      "title": "How to Create Tension and Release in Music | Music Production for Beginners 2023",
+      "url": "https://www.youtube.com/watch?v=47cFNZ0OOOg",
+      "uploader": "Fluxeon",
+      "uploaderId": "UC2ecRbDEZQ2TNNaQX8YVJoQ",
+      "durationSeconds": 1374,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "q64KwJ1lBB8",
+      "title": "HOW TO Indie Dance Like BRUNELLO (Easy Techniques)",
+      "url": "https://www.youtube.com/watch?v=q64KwJ1lBB8",
+      "uploader": "Rhythm HQ",
+      "uploaderId": "UCgctzdtoZXNkJCwI_LoSOOw",
+      "durationSeconds": 821,
+      "queries": [
+        "Trikk indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "SOVlITvUUq8",
+      "title": "How To Make House Music like Prospa",
+      "url": "https://www.youtube.com/watch?v=SOVlITvUUq8",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 918,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "FC7HzZPANXM",
+      "title": "How to Make Melodic House Part 1 (Sound Design & Composition) [Ableton Tutorial]",
+      "url": "https://www.youtube.com/watch?v=FC7HzZPANXM",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 1642,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "lsNwWcuOygg",
+      "title": "How to make track like Omri.",
+      "url": "https://www.youtube.com/watch?v=lsNwWcuOygg",
+      "uploader": "Learning Projects",
+      "uploaderId": "UCMCE3aZozW5CRCwfFtiKkeQ",
+      "durationSeconds": 286,
+      "queries": [
+        "OMRI Rafael indie dance production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "XAKxsc_uE2Y",
+      "title": "How To Mix Vocals Like A PRO",
+      "url": "https://www.youtube.com/watch?v=XAKxsc_uE2Y",
+      "uploader": "Ethan Davis",
+      "uploaderId": "UCEPmQTKm969uU06pdSLifUg",
+      "durationSeconds": 969,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "fx-mix",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "gIVUpqVRf-w",
+      "title": "How to Structure Melodic House Tracks Like a Pro",
+      "url": "https://www.youtube.com/watch?v=gIVUpqVRf-w",
+      "uploader": "Marksman's Producer Academy",
+      "uploaderId": "UCUgv89O1KqNCD8uU6dJD_WA",
+      "durationSeconds": 2569,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "zF8mE7ShE5k",
+      "title": "How to use syncopation for better rhythms",
+      "url": "https://www.youtube.com/watch?v=zF8mE7ShE5k",
+      "uploader": "GIUDA Music",
+      "uploaderId": "UC8Qw7sQ7oQDBwfoOX8mslgQ",
+      "durationSeconds": 973,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "N1hOUsDID2Y",
+      "title": "How To: Organic House Drum Groove in Ableton | Woodlands Sounds",
+      "url": "https://www.youtube.com/watch?v=N1hOUsDID2Y",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1290,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "6e5peNP6BBc",
+      "title": "Indie Rock Music Production For Beginners (Step By Step Masterclass)",
+      "url": "https://www.youtube.com/watch?v=6e5peNP6BBc",
+      "uploader": "Ethan Davis",
+      "uploaderId": "UCEPmQTKm969uU06pdSLifUg",
+      "durationSeconds": 1196,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "v9TBQ53KAyI",
+      "title": "Kick & Bass - The Secret To A Hard Hitting House Groove",
+      "url": "https://www.youtube.com/watch?v=v9TBQ53KAyI",
+      "uploader": "D Ramirez",
+      "uploaderId": "UCb0t-2VuGaNwt87FDjAfeqg",
+      "durationSeconds": 999,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "3UgTaeN6kqE",
+      "title": "Live at the Hub - FXIT (House / Tech House)",
+      "url": "https://www.youtube.com/watch?v=3UgTaeN6kqE",
+      "uploader": "pointblank music school",
+      "uploaderId": "UCIWNozFjO8yVdJFsGKVmPgg",
+      "durationSeconds": 3694,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "yP1IqR1_uHg",
+      "title": "Matthew Dear: Ableton Live Production Masterclass - U.S. CNTRL Tour 2015",
+      "url": "https://www.youtube.com/watch?v=yP1IqR1_uHg",
+      "uploader": "pointblank music school",
+      "uploaderId": "UCIWNozFjO8yVdJFsGKVmPgg",
+      "durationSeconds": 2022,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "cpoSy4Z63Vc",
+      "title": "Organic minimal house drums in ableton",
+      "url": "https://www.youtube.com/watch?v=cpoSy4Z63Vc",
+      "uploader": "Durosai",
+      "uploaderId": "UCpAMj2udHqlvc7HEL80w4KQ",
+      "durationSeconds": 1013,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "xtAiJz6c1DU",
+      "title": "Samm & Ajna’s Afro House Sound EXPLAINED (Step-By-Step) 🔥",
+      "url": "https://www.youtube.com/watch?v=xtAiJz6c1DU",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 1135,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "ZCd4QnAo4Cs",
+      "title": "Stefano Ritteri (Defected, Dirtybird): Take Note Ableton Live Masterclass",
+      "url": "https://www.youtube.com/watch?v=ZCd4QnAo4Cs",
+      "uploader": "pointblank music school",
+      "uploaderId": "UCIWNozFjO8yVdJFsGKVmPgg",
+      "durationSeconds": 1672,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "FjCurKEI0II",
+      "title": "Stop Using Splice — Make Pro-Sounding Tech House Vocals With Your Own Voice (No AI)",
+      "url": "https://www.youtube.com/watch?v=FjCurKEI0II",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 1742,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "LYzTCPQfb4I",
+      "title": "Tech House Track Fix in Ableton Live | Fix My Track: EP.8",
+      "url": "https://www.youtube.com/watch?v=LYzTCPQfb4I",
+      "uploader": "ProDJ International Music School",
+      "uploaderId": "UC1LTPwwg44fLTW8116uCUlw",
+      "durationSeconds": 1631,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "i1MsCivRwKQ",
+      "title": "The Secret To Mixing Like The Pros (In Ableton)",
+      "url": "https://www.youtube.com/watch?v=i1MsCivRwKQ",
+      "uploader": "Ethan Davis",
+      "uploaderId": "UCEPmQTKm969uU06pdSLifUg",
+      "durationSeconds": 1611,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "fx-mix",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "hwn1TAGCYME",
+      "title": "Top Tech House Vocal Techniques Used by the Pros",
+      "url": "https://www.youtube.com/watch?v=hwn1TAGCYME",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 949,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 42
+    },
+    {
+      "id": "lDBHoBKqTks",
+      "title": "\"New Wave feat. DJ Thick\" - Logic Pro Session Breakdown",
+      "url": "https://www.youtube.com/watch?v=lDBHoBKqTks",
+      "uploader": "Yaahn Hunter Jr.",
+      "uploaderId": "UC3-u62U9PcK49Uw2GBKAj6A",
+      "durationSeconds": 655,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "6vPoAfLw44o",
+      "title": "3 Steps to Make Stunning Afro House Grooves",
+      "url": "https://www.youtube.com/watch?v=6vPoAfLw44o",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 757,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton",
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "hXlOr67oI3U",
+      "title": "4 Bass Patterns That Every Producer Must Know (for Afro & Melodic House)",
+      "url": "https://www.youtube.com/watch?v=hXlOr67oI3U",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 463,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "c1GczL0Liz8",
+      "title": "Al Riley's Ambient Vocal FX Textures In Ableton Live",
+      "url": "https://www.youtube.com/watch?v=c1GczL0Liz8",
+      "uploader": "Garnish Music",
+      "uploaderId": "UC0KiCULFbgNULoRvef0WkYA",
+      "durationSeconds": 872,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sampling-vocals",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "KSI6yN4XxXg",
+      "title": "Cristoph tutorial - driving progressive house start to finish in 3h 13 min",
+      "url": "https://www.youtube.com/watch?v=KSI6yN4XxXg",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 11626,
+      "queries": [
+        "Bound to Divide house start to finish Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "ElXwbJJ9i8I",
+      "title": "Funkagenda Vocal House Masterclass Tutorial  | Toolroom Academy FaderPro",
+      "url": "https://www.youtube.com/watch?v=ElXwbJJ9i8I",
+      "uploader": "FaderPro",
+      "uploaderId": "UCyJJYPXQ_vV4Y9NBT2uaCTQ",
+      "durationSeconds": 603,
+      "queries": [
+        "FaderPro house producer masterclass Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "lS65SKZpZKs",
+      "title": "How I Chop Vocals for House Music (Tech House / Bass House) 🎤",
+      "url": "https://www.youtube.com/watch?v=lS65SKZpZKs",
+      "uploader": "Sounds Good",
+      "uploaderId": "UC59OROOyK1T7xM3BdXuf5_Q",
+      "durationSeconds": 366,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "FY2eq0BtZsk",
+      "title": "HOW TO FILL OUT YOUR MIXES || MAKING ATMOSPHERIC PADS in ABLETON",
+      "url": "https://www.youtube.com/watch?v=FY2eq0BtZsk",
+      "uploader": "MTCHLR",
+      "uploaderId": "UC2hXemJGEJe_3seyofpNVUw",
+      "durationSeconds": 307,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "fx-mix",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "oQSm1CoHiiA",
+      "title": "How to Write a Drum 'n Bass Groove - Samplesound Academy with Ben Murphy",
+      "url": "https://www.youtube.com/watch?v=oQSm1CoHiiA",
+      "uploader": "Samplesound Music",
+      "uploaderId": "UCOz_OtTtyEQJ1tvXTJ2rjag",
+      "durationSeconds": 311,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "BuQ-gjYiMU8",
+      "title": "Making A Track From START TO FINISH | Organic Deep House | Ableton Live, Diva | Like All Day I Dream",
+      "url": "https://www.youtube.com/watch?v=BuQ-gjYiMU8",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 11363,
+      "queries": [
+        "Production Music Live house track from scratch Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "3aAv0CIQb68",
+      "title": "Making Classic House w/ Josh Butler in Ableton Live - Percussion Part II",
+      "url": "https://www.youtube.com/watch?v=3aAv0CIQb68",
+      "uploader": "FaderPro",
+      "uploaderId": "UCyJJYPXQ_vV4Y9NBT2uaCTQ",
+      "durationSeconds": 596,
+      "queries": [
+        "FaderPro house producer masterclass Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "a3sqk15xhW4",
+      "title": "Making Lush, Ambient Pads with Ableton Live Sampler",
+      "url": "https://www.youtube.com/watch?v=a3sqk15xhW4",
+      "uploader": "Tunelab",
+      "uploaderId": "UCvzrFFSMwpjhpWO36EVbqnw",
+      "durationSeconds": 382,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sampling-vocals",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "4nKSsD2E7t4",
+      "title": "SERUM 2 Tutorial | Bass Stabs, Melodic Techno | Massano, Anyma",
+      "url": "https://www.youtube.com/watch?v=4nKSsD2E7t4",
+      "uploader": "The Sound Design Channel",
+      "uploaderId": "UCgianjBWzgqqTfwOvVWWoyg",
+      "durationSeconds": 677,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "VINNcdpX0g0",
+      "title": "SERUM 2 Tutorial | Deep LFO Bass | Afro & Melodic House",
+      "url": "https://www.youtube.com/watch?v=VINNcdpX0g0",
+      "uploader": "The Sound Design Channel",
+      "uploaderId": "UCgianjBWzgqqTfwOvVWWoyg",
+      "durationSeconds": 605,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "CtQJlzuAZoc",
+      "title": "Vintage Culture & Chemical Disco Bass with Serum",
+      "url": "https://www.youtube.com/watch?v=CtQJlzuAZoc",
+      "uploader": "Sound Design Tutorials",
+      "uploaderId": "UCTg7w8A4ThLkhFxNi2CQmBA",
+      "durationSeconds": 759,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sampling-vocals",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 40
+    },
+    {
+      "id": "kGnAddREy0c",
+      "title": "4 simple to use Ableton built-in tools to add complexity to your rominimal & micro house tracks",
+      "url": "https://www.youtube.com/watch?v=kGnAddREy0c",
+      "uploader": "Ruffin Studio",
+      "uploaderId": "UC5o0gydWlV3TOCdpFh4aEvQ",
+      "durationSeconds": 1006,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "B98dyb7S88E",
+      "title": "5 Simple Steps To PRO Drums in Ableton (Stock Plugins ONLY)",
+      "url": "https://www.youtube.com/watch?v=B98dyb7S88E",
+      "uploader": "Zdrewe",
+      "uploaderId": "UCjcAOtz7G3xvcoVcpJQKcqA",
+      "durationSeconds": 930,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "-4hlGjjRZ1w",
+      "title": "6 African House Music Rhythmic Patterns for #afrohouse Groove #musicproduction",
+      "url": "https://www.youtube.com/watch?v=-4hlGjjRZ1w",
+      "uploader": "African Electronic",
+      "uploaderId": "UCnH2PYAgDl0cnwHKFaEjpZA",
+      "durationSeconds": 947,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "nGC0FFJ0RZY",
+      "title": "Afro House Track Fix in Ableton 12 | Fix My Track EP.6",
+      "url": "https://www.youtube.com/watch?v=nGC0FFJ0RZY",
+      "uploader": "ProDJ International Music School",
+      "uploaderId": "UC1LTPwwg44fLTW8116uCUlw",
+      "durationSeconds": 1501,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "h1wj4jaNpzY",
+      "title": "Afro House Track Fix in Ableton 12 | Fix My Track EP.7",
+      "url": "https://www.youtube.com/watch?v=h1wj4jaNpzY",
+      "uploader": "ProDJ International Music School",
+      "uploaderId": "UC1LTPwwg44fLTW8116uCUlw",
+      "durationSeconds": 1193,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "vZGr-jFd65s",
+      "title": "Become a Master at Tech House Drums in 20 Minutes",
+      "url": "https://www.youtube.com/watch?v=vZGr-jFd65s",
+      "uploader": "Fluxeon",
+      "uploaderId": "UC2ecRbDEZQ2TNNaQX8YVJoQ",
+      "durationSeconds": 1121,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "NSsW-lgPD9g",
+      "title": "Chords for Melodic House | RÜFÜS DU SOL Style",
+      "url": "https://www.youtube.com/watch?v=NSsW-lgPD9g",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1614,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "J4JdsqS-gMo",
+      "title": "Chords Writing and Voicing #5 - Uplifting Summer House Chords in C#-Minor (EDX Style, Nora En Pure)",
+      "url": "https://www.youtube.com/watch?v=J4JdsqS-gMo",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1282,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "og0EY6likFk",
+      "title": "Creating a EDM Chord Progression and Melody / House, Progressive, Trance, Electro",
+      "url": "https://www.youtube.com/watch?v=og0EY6likFk",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 1354,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "ml5B79roLm0",
+      "title": "Everything about REVERB explained very FAST - Sound Design Theory",
+      "url": "https://www.youtube.com/watch?v=ml5B79roLm0",
+      "uploader": "Woochia - Charly Sauret",
+      "uploaderId": "UCJOCpu1282vdE_RcFcq7Ldw",
+      "durationSeconds": 1091,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "JgqQ9GjytoU",
+      "title": "House Music Drum Essentials",
+      "url": "https://www.youtube.com/watch?v=JgqQ9GjytoU",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 1058,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "7GvROZ0UZQg",
+      "title": "How To \"ALWAYS\" Create Catchy Vocal Chops!",
+      "url": "https://www.youtube.com/watch?v=7GvROZ0UZQg",
+      "uploader": "Stickz",
+      "uploaderId": "UCh3rIO0ebZFyl-5XCT-baNg",
+      "durationSeconds": 972,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "XydOu15KnKU",
+      "title": "How To Develop Your Own Electronic Music Style in Ableton Live 11 - House Basslines Part 3b",
+      "url": "https://www.youtube.com/watch?v=XydOu15KnKU",
+      "uploader": "Elite EDM Stars",
+      "uploaderId": "UCQ8ENLY2MLv2ZMo9cDnFKlQ",
+      "durationSeconds": 4490,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "bass",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "xtGR3A-jsK8",
+      "title": "How to Organic Afro House (like Black Coffee, Keinemusik)",
+      "url": "https://www.youtube.com/watch?v=xtGR3A-jsK8",
+      "uploader": "Zahand / LotusTunes",
+      "uploaderId": "UCrKBjz9fBktmZp82Y5w74cA",
+      "durationSeconds": 4917,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "-gHvQTGi5bk",
+      "title": "Make Chords That Vibe Using The Wormhole Method",
+      "url": "https://www.youtube.com/watch?v=-gHvQTGi5bk",
+      "uploader": "Jaron Lopez",
+      "uploaderId": "UC8Xl4UIbcz3IncdJSjvjfSQ",
+      "durationSeconds": 1094,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "jQhlm9D85_8",
+      "title": "Mix Kick and  Bass LIKE A PRO!",
+      "url": "https://www.youtube.com/watch?v=jQhlm9D85_8",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 961,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "VxMuJGJQQ5k",
+      "title": "Omnisphere's Most Overlooked Feature (insane for pads)",
+      "url": "https://www.youtube.com/watch?v=VxMuJGJQQ5k",
+      "uploader": "Zahand / LotusTunes",
+      "uploaderId": "UCrKBjz9fBktmZp82Y5w74cA",
+      "durationSeconds": 1193,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "tf3F707pdNM",
+      "title": "Polyrhythms and Polymeters – NEVER make a boring loop again!",
+      "url": "https://www.youtube.com/watch?v=tf3F707pdNM",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 906,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "G6Avj9gySpw",
+      "title": "Tech House Drum Bus Processing in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=G6Avj9gySpw",
+      "uploader": "Durosai",
+      "uploaderId": "UCpAMj2udHqlvc7HEL80w4KQ",
+      "durationSeconds": 1325,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "OZMjUz1k2vc",
+      "title": "this is a must have for afro house",
+      "url": "https://www.youtube.com/watch?v=OZMjUz1k2vc",
+      "uploader": "Zahand / LotusTunes",
+      "uploaderId": "UCrKBjz9fBktmZp82Y5w74cA",
+      "durationSeconds": 960,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "QoGOXdjoO-I",
+      "title": "Why Some Indie Dance Tracks Feel Expensive (And Others Don’t)",
+      "url": "https://www.youtube.com/watch?v=QoGOXdjoO-I",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 2154,
+      "queries": [
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 38
+    },
+    {
+      "id": "V-lAhjCUmlA",
+      "title": "🔴 5 TECHNIQUES TO BRING TENSION IN A BREAK (PART 1) | ABLETON LIVE",
+      "url": "https://www.youtube.com/watch?v=V-lAhjCUmlA",
+      "uploader": "Da Fresh",
+      "uploaderId": "UCw-e_2UD9FzGF1lY4XM3WJQ",
+      "durationSeconds": 600,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "vDcVrGFmk7s",
+      "title": "3 Arrangement Tips for Melodic Techno Drops | Ableton Tutorial",
+      "url": "https://www.youtube.com/watch?v=vDcVrGFmk7s",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 556,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "x7nGjon3OBY",
+      "title": "3 Bass Sounds of Afro House",
+      "url": "https://www.youtube.com/watch?v=x7nGjon3OBY",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 664,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "YTDN-tks0uk",
+      "title": "3 Essential Deep House Basses You Should Know - Sound Design",
+      "url": "https://www.youtube.com/watch?v=YTDN-tks0uk",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 805,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "17n1Dp4QT68",
+      "title": "5 Incredible Afro House Presets in Serum 2 (Sound Design Tutorial)",
+      "url": "https://www.youtube.com/watch?v=17n1Dp4QT68",
+      "uploader": "Retrohandz Official",
+      "uploaderId": "UCqsgn5s3iUk17KXk94OznBA",
+      "durationSeconds": 860,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "MgFrm3Re6Vo",
+      "title": "Ableton Arrangement Tutorial - Building Melodic Tension",
+      "url": "https://www.youtube.com/watch?v=MgFrm3Re6Vo",
+      "uploader": "Finish More Music",
+      "uploaderId": "UCZkROKrw8jiTXbt6I3CRA8Q",
+      "durationSeconds": 355,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "DHcODGY7DOA",
+      "title": "Ableton Workflow Tutorial - Enhancing Grooves with Call & Response",
+      "url": "https://www.youtube.com/watch?v=DHcODGY7DOA",
+      "uploader": "Finish More Music",
+      "uploaderId": "UCZkROKrw8jiTXbt6I3CRA8Q",
+      "durationSeconds": 336,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "GV3NxR_w-88",
+      "title": "Buildups 101 - Westend",
+      "url": "https://www.youtube.com/watch?v=GV3NxR_w-88",
+      "uploader": "Kick & Bass",
+      "uploaderId": "UC6VS8SkjHnIccw3WYjK6Q3A",
+      "durationSeconds": 759,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "_jJjY4XOR_E",
+      "title": "Create Atmospheric Textures for Your House & Techno Track in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=_jJjY4XOR_E",
+      "uploader": "Zahand",
+      "uploaderId": "UCMhLxPNglM46la2aXPIF9VA",
+      "durationSeconds": 428,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "bCRe6zNd2LA",
+      "title": "How to Chop and Flip Samples into Boom Bap Bangers | Ableton Live Tutorial",
+      "url": "https://www.youtube.com/watch?v=bCRe6zNd2LA",
+      "uploader": "K. Hart",
+      "uploaderId": "UCx6d_Cc-C_5nIKChemn_ggw",
+      "durationSeconds": 673,
+      "queries": [
+        "house music sample flip disco new wave Ableton",
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "hYCVv3udyKU",
+      "title": "How to Make Brunello \"Ghost Dance\" Bass & Main Synth",
+      "url": "https://www.youtube.com/watch?v=hYCVv3udyKU",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 281,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "TTIon9_pRHQ",
+      "title": "How to Make Organic House Bass Warm & Wide  (All Day I Dream style)",
+      "url": "https://www.youtube.com/watch?v=TTIon9_pRHQ",
+      "uploader": "Dowden Production Academy",
+      "uploaderId": "UC5f7KSjKAUbFYRNpAI0QKXg",
+      "durationSeconds": 720,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "2ykDKH9jnQI",
+      "title": "How To Make Pro Atmosphere For House Music!",
+      "url": "https://www.youtube.com/watch?v=2ykDKH9jnQI",
+      "uploader": "Big Z",
+      "uploaderId": "UCgXmRIt_2Jwr0bwPTmocRsA",
+      "durationSeconds": 367,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "D2DwnJTXFUY",
+      "title": "How to Make Slayyyter \"Dance...\" Bass in Serum 2 [Sound Design Tutorial]",
+      "url": "https://www.youtube.com/watch?v=D2DwnJTXFUY",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 626,
+      "queries": [
+        "indie dance bass sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "uGuHow_z_Og",
+      "title": "How To Use Atmosphere in Hypnotic Techno  (6 Powerful Techniques)",
+      "url": "https://www.youtube.com/watch?v=uGuHow_z_Og",
+      "uploader": "Hypnotic Techno Production",
+      "uploaderId": "UCXAl9s40lBSkGbg830JT4DQ",
+      "durationSeconds": 734,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "Fo02aMK95s0",
+      "title": "How to Write an Afro House Groove - Samplesound Academy with  Ben Murphy",
+      "url": "https://www.youtube.com/watch?v=Fo02aMK95s0",
+      "uploader": "Samplesound Music",
+      "uploaderId": "UCOz_OtTtyEQJ1tvXTJ2rjag",
+      "durationSeconds": 292,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "4KAuN40VDJE",
+      "title": "How to: Selected-Style Deep House Basses for Vital [Sound Design Tutorial]",
+      "url": "https://www.youtube.com/watch?v=4KAuN40VDJE",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 851,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "JZXT6eeRxWE",
+      "title": "I Mixed a Subscriber AFRO HOUSE Song 🥁",
+      "url": "https://www.youtube.com/watch?v=JZXT6eeRxWE",
+      "uploader": "Wildcrow Studio",
+      "uploaderId": "UCpRvgMQsyKzGxNdLYmevGdA",
+      "durationSeconds": 618,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "fx-mix",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "drQEkSDGWZo",
+      "title": "In The Studio w/ Hauswerks Teaching Production Process of \"The Illusionist\"",
+      "url": "https://www.youtube.com/watch?v=drQEkSDGWZo",
+      "uploader": "FaderPro",
+      "uploaderId": "UCyJJYPXQ_vV4Y9NBT2uaCTQ",
+      "durationSeconds": 822,
+      "queries": [
+        "FaderPro house producer masterclass Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "-2TSxE5d9p8",
+      "title": "Make Evolving Atmospheric Music w/ White Noise & Ableton Live 11",
+      "url": "https://www.youtube.com/watch?v=-2TSxE5d9p8",
+      "uploader": "Jemeneye",
+      "uploaderId": "UCx778nGkfWOAFbcoyg3kzJw",
+      "durationSeconds": 607,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "BfIvIRn3Eew",
+      "title": "Recreating &ME - Garden Bassline in Serum2 (Ableton, Afro House Tutorial, Keinemusik, #afrohouse )",
+      "url": "https://www.youtube.com/watch?v=BfIvIRn3Eew",
+      "uploader": "Cats in Ableton / Uros Bosnjak",
+      "uploaderId": "UCUMBeQXtXNgJdkqKwrZp-zg",
+      "durationSeconds": 309,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "py9VBJ7NWUY",
+      "title": "Tension and Release Tutorial - BUILD UPS like the PROS!",
+      "url": "https://www.youtube.com/watch?v=py9VBJ7NWUY",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 807,
+      "queries": [
+        "melodic house arrangement tension release Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "U1t3ELd1LDI",
+      "title": "The Secret to Endless Ambient Textures in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=U1t3ELd1LDI",
+      "uploader": "Tom Casey Music",
+      "uploaderId": "UCfk_OxCPbh_RZ20Fz-y-6ng",
+      "durationSeconds": 748,
+      "queries": [
+        "melodic house atmospheric texture sound design Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "5isoBHZw8n8",
+      "title": "Top 5 BASS Presets for AFRO TECH 🔥 Serum Tutorial",
+      "url": "https://www.youtube.com/watch?v=5isoBHZw8n8",
+      "uploader": "Retrohandz Official",
+      "uploaderId": "UCqsgn5s3iUk17KXk94OznBA",
+      "durationSeconds": 680,
+      "queries": [
+        "afro house bassline sound design Ableton Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "Qi4GBdaVsCI",
+      "title": "Tuning Kicks: Why & When | Techno House Deep Dance Music",
+      "url": "https://www.youtube.com/watch?v=Qi4GBdaVsCI",
+      "uploader": "Bthelick",
+      "uploaderId": "UCaMje122pGSvLfvuLylin8g",
+      "durationSeconds": 490,
+      "queries": [
+        "tech house groove swing bass relationship Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 36
+    },
+    {
+      "id": "6qCnUMPRcRo",
+      "title": "A Reverb Guide For House Producers",
+      "url": "https://www.youtube.com/watch?v=6qCnUMPRcRo",
+      "uploader": "Olean's House",
+      "uploaderId": "UCMGomvcg8meJhusCqi_cIYw",
+      "durationSeconds": 1267,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "Urimnh4j2BI",
+      "title": "Absurdly LOUD Mixes and How The Pros Actually Do It",
+      "url": "https://www.youtube.com/watch?v=Urimnh4j2BI",
+      "uploader": "Alex Emrich | Audio Edges",
+      "uploaderId": "UCOh7Vzn5xbOdX3G2yyGp45w",
+      "durationSeconds": 1066,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "2q2cmwjxink",
+      "title": "Every Technique of Sampling Music You NEED to Know (A Complete Guide)",
+      "url": "https://www.youtube.com/watch?v=2q2cmwjxink",
+      "uploader": "Will Hatton",
+      "uploaderId": "UCmuwwGMbX5mowRw_GBjc6HA",
+      "durationSeconds": 1243,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "j7iVAXR-fR0",
+      "title": "Everything You Need to Know About GROOVES in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=j7iVAXR-fR0",
+      "uploader": "Matt Tinkler",
+      "uploaderId": "UCjz4A33i9DuTnVmUv55c2fw",
+      "durationSeconds": 1274,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "n6ew5mMN2pQ",
+      "title": "Everything you need to know about Saturation - Audio Engineering",
+      "url": "https://www.youtube.com/watch?v=n6ew5mMN2pQ",
+      "uploader": "In The Mix",
+      "uploaderId": "UCIcCXe3iWo6lq-iWKV40Oug",
+      "durationSeconds": 964,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "yvDnJGM5DnQ",
+      "title": "How to Make (Fast) Dub Techno Part 1 (Sound Design & Composition) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=yvDnJGM5DnQ",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2215,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "wt9NDrEHHHY",
+      "title": "How to Make Acid Techno Part 1 (Sound Design & Composition) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=wt9NDrEHHHY",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 1887,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "qCJP2Y-8UKU",
+      "title": "How to Make Raw Hypnotic Techno Part 1 (Sound Design / Composition) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=qCJP2Y-8UKU",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 2252,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "KLmEUy5El4g",
+      "title": "How to Make Raw Techno Part 1 (Sound design & Composition) [Ableton Techno Tutorial]",
+      "url": "https://www.youtube.com/watch?v=KLmEUy5El4g",
+      "uploader": "Audioreakt",
+      "uploaderId": "UCK7cWGWuiVwcUPQLW-vhslw",
+      "durationSeconds": 1683,
+      "queries": [
+        "Audioreakt house production Ableton tutorial"
+      ],
+      "categories": [
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "5WhFH4qmjLI",
+      "title": "How To Mix Loud Without KILLING Your Mix",
+      "url": "https://www.youtube.com/watch?v=5WhFH4qmjLI",
+      "uploader": "Subtone Studios",
+      "uploaderId": "UChhqBRAtzSs-3CguWXMgVEw",
+      "durationSeconds": 1930,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "Ald2gpQafyk",
+      "title": "Serial vs Parallel Processing and Send and Return Channels EXPLAINED",
+      "url": "https://www.youtube.com/watch?v=Ald2gpQafyk",
+      "uploader": "Collective Intelligence",
+      "uploaderId": "UCAccdtAWZmwxpBSZLPe2AtQ",
+      "durationSeconds": 1289,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "mw3NViLpA0Q",
+      "title": "TECH HOUSE BREAKDOWN - \"Into The Yuma\" - Chris Lake, Aatig (2022)",
+      "url": "https://www.youtube.com/watch?v=mw3NViLpA0Q",
+      "uploader": "ZERMELO - Breakdowns",
+      "uploaderId": "UCJlTZxfNv5bWF6uZl7Oix2g",
+      "durationSeconds": 3496,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "Urc7OC9sBVM",
+      "title": "Ultimate Guide to CHRIS LAKE's Funky Tech House",
+      "url": "https://www.youtube.com/watch?v=Urc7OC9sBVM",
+      "uploader": "Best Friends Club",
+      "uploaderId": "UCuleYyPBOQA23E_k9r-8sZw",
+      "durationSeconds": 3388,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "NpuGHeGSH3U",
+      "title": "Ultimate Guide to Make TECH HOUSE Like HOT CREATIONS",
+      "url": "https://www.youtube.com/watch?v=NpuGHeGSH3U",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1859,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "dIZH3J1iE2E",
+      "title": "Workflow for Loud Mixes with Ableton Live",
+      "url": "https://www.youtube.com/watch?v=dIZH3J1iE2E",
+      "uploader": "Seed To Stage",
+      "uploaderId": "UCzWQWZ-CNtAiDTkBW5mfeuQ",
+      "durationSeconds": 2248,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 34
+    },
+    {
+      "id": "ie6ovVLXqro",
+      "title": "08 How To Make Trap in Ableton with Diskord - Vocal chop processing",
+      "url": "https://www.youtube.com/watch?v=ie6ovVLXqro",
+      "uploader": "Sonic Academy",
+      "uploaderId": "UCS972vXt4jnzkMlvHngalEg",
+      "durationSeconds": 854,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "cKcxnpIgJQE",
+      "title": "5 Basslines Every Producer Should Know | Max Styler | Serum 2",
+      "url": "https://www.youtube.com/watch?v=cKcxnpIgJQE",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 749,
+      "queries": [
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "9xNStSpHp5U",
+      "title": "5 Mix-Sweetening Tips For Custom Ear Candy | Mixing Tutorial",
+      "url": "https://www.youtube.com/watch?v=9xNStSpHp5U",
+      "uploader": "Computer Music",
+      "uploaderId": "UCzNleyBTjCeygAL3NaWwRig",
+      "durationSeconds": 313,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "m7nmT5L3ULY",
+      "title": "Ableton Chord Tool – Create Rich Harmony Fast",
+      "url": "https://www.youtube.com/watch?v=m7nmT5L3ULY",
+      "uploader": "Cook Music",
+      "uploaderId": "UCnawmifu5UqB89bGpWqTVIw",
+      "durationSeconds": 692,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "MK5trk8FeV4",
+      "title": "Ableton Live 10 - Drum Buss Overview & Parallel Processing",
+      "url": "https://www.youtube.com/watch?v=MK5trk8FeV4",
+      "uploader": "SadowickProduction",
+      "uploaderId": "UCj0-W75RL3AS_psDlWBqu1w",
+      "durationSeconds": 423,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "mQE1VkPgpg0",
+      "title": "Ableton tutorial - house drums",
+      "url": "https://www.youtube.com/watch?v=mQE1VkPgpg0",
+      "uploader": "JackTheFunk",
+      "uploaderId": "UCRzcKPLs5rh5dsov3k4Uhxw",
+      "durationSeconds": 782,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "5IBw0DkUkYI",
+      "title": "Beats Warp Mode Percussion Grooves - Ableton Live 10 Tutorial",
+      "url": "https://www.youtube.com/watch?v=5IBw0DkUkYI",
+      "uploader": "4over3",
+      "uploaderId": "UCgiECZnuYzev0I3h1sM37VA",
+      "durationSeconds": 384,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "xfqCnOYjRNY",
+      "title": "Disclosure: Loudness The SMART Way (Don't Smash Your Drums)",
+      "url": "https://www.youtube.com/watch?v=xfqCnOYjRNY",
+      "uploader": "Sol State",
+      "uploaderId": "UCFLxR6JLrClUXS1pnao0NAw",
+      "durationSeconds": 259,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "dHZ6yUN7ZdE",
+      "title": "Dos and Don'ts by RRACOS🚦🎵 70's groove sample flip song",
+      "url": "https://www.youtube.com/watch?v=dHZ6yUN7ZdE",
+      "uploader": "Rracos Beats",
+      "uploaderId": "UCLj7d-mgADN4mn27M6FavoQ",
+      "durationSeconds": 280,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "drums-groove",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "pPq1rrLbgRM",
+      "title": "Easy Polyrhythms In Ableton Live",
+      "url": "https://www.youtube.com/watch?v=pPq1rrLbgRM",
+      "uploader": "Catalyze Music Academy",
+      "uploaderId": "UC_nRHsbhDIj3FId2bCwus8Q",
+      "durationSeconds": 281,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "vaWt-FqOe-Y",
+      "title": "Funky Mix  (1980) remake in Ableton Live",
+      "url": "https://www.youtube.com/watch?v=vaWt-FqOe-Y",
+      "uploader": "Leon Hartog",
+      "uploaderId": "UCiPDGmbb56gqFXS65NprP_g",
+      "durationSeconds": 436,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "fx-mix",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "e-PrNMS7dpY",
+      "title": "Get PRO DRUMS in HOUSE and TECHNO tracks",
+      "url": "https://www.youtube.com/watch?v=e-PrNMS7dpY",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 822,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "BJljjVYrzyE",
+      "title": "Groovy Percussion Tutorial for Electronic Dance Music",
+      "url": "https://www.youtube.com/watch?v=BJljjVYrzyE",
+      "uploader": "Collective Intelligence",
+      "uploaderId": "UCAccdtAWZmwxpBSZLPe2AtQ",
+      "durationSeconds": 730,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "BcN5L5y6RC8",
+      "title": "How to Afro House like Keinemusik, Shimza, and Adriatique using Vocalfy!",
+      "url": "https://www.youtube.com/watch?v=BcN5L5y6RC8",
+      "uploader": "LevelUp FLP",
+      "uploaderId": "UCtlZNGMlPIHkfUXTtV0adcw",
+      "durationSeconds": 503,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "Oz9C0wSKi6g",
+      "title": "How To Dominate Vocal Chops Like The Pro's",
+      "url": "https://www.youtube.com/watch?v=Oz9C0wSKi6g",
+      "uploader": "Alex Rome",
+      "uploaderId": "UCh1MtJ4rx4n4PQGYNYK_UXA",
+      "durationSeconds": 472,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "S-RlgPmPJhY",
+      "title": "How To Indie Dance!",
+      "url": "https://www.youtube.com/watch?v=S-RlgPmPJhY",
+      "uploader": "DropSchoolTv",
+      "uploaderId": "UCAwbn3MrBjnaYQFQ16gFZbA",
+      "durationSeconds": 562,
+      "queries": [
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "U3gHX-qvqrs",
+      "title": "How to make AFRO HOUSE style KEINEMUSIK in Ableton Live (Groove Tutorial)",
+      "url": "https://www.youtube.com/watch?v=U3gHX-qvqrs",
+      "uploader": "Sonic Art",
+      "uploaderId": "UCRTidIvv5e1JXhE0O5Mfl7Q",
+      "durationSeconds": 537,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "O_ZZSBSsP6s",
+      "title": "How to Make EPIC Melodic House Chord Progressions (RÜFÜS DU SOL Style)",
+      "url": "https://www.youtube.com/watch?v=O_ZZSBSsP6s",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 703,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "E5XbYviMCuE",
+      "title": "How To Make Organic House Like Lee Burridge (All Day I Dream)",
+      "url": "https://www.youtube.com/watch?v=E5XbYviMCuE",
+      "uploader": "Hollow Ground Productions",
+      "uploaderId": "UCWbrhbbsXLehhYPb16cfM0Q",
+      "durationSeconds": 447,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "rvMDBor0678",
+      "title": "How To Make Tech House Like Max Styler [ Samples +Presets ]",
+      "url": "https://www.youtube.com/watch?v=rvMDBor0678",
+      "uploader": "Sidechain Music",
+      "uploaderId": "UCtHpZC5SxngjiPFEdyN2H5w",
+      "durationSeconds": 443,
+      "queries": [
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "3zIBi_PEkDA",
+      "title": "How To Make Tech House Percussion",
+      "url": "https://www.youtube.com/watch?v=3zIBi_PEkDA",
+      "uploader": "John Summit",
+      "uploaderId": "UCsIVrho83JfwUieSs_UKCmA",
+      "durationSeconds": 261,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "T4pS-1WzqUA",
+      "title": "How to Mix Kick and Bass EASILY | Ableton",
+      "url": "https://www.youtube.com/watch?v=T4pS-1WzqUA",
+      "uploader": "AZARYC",
+      "uploaderId": "UC1T1zGRbT-BYl4wfPX4P9eQ",
+      "durationSeconds": 248,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "TMM0UfTMwks",
+      "title": "How to mix perfect kick & bass in 6 mins (works in any genre)",
+      "url": "https://www.youtube.com/watch?v=TMM0UfTMwks",
+      "uploader": "Alice Efe - Mercurial Tones Academy",
+      "uploaderId": "UCl9pDani4v5V-sSLXVtFqqw",
+      "durationSeconds": 375,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "23qiThX93bE",
+      "title": "How To Program Drum Grooves",
+      "url": "https://www.youtube.com/watch?v=23qiThX93bE",
+      "uploader": "Rick Beato",
+      "uploaderId": "UCJquYOG5EL82sKTfH9aMA9Q",
+      "durationSeconds": 632,
+      "queries": [
+        "indie dance percussion groove Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "JOLlIBJNRts",
+      "title": "HOW TO TECH HOUSE | THE DRUMS (Mau P, Chris Lake, Odd Mob)",
+      "url": "https://www.youtube.com/watch?v=JOLlIBJNRts",
+      "uploader": "MOONBOY",
+      "uploaderId": "UCACSN28q1DAo6qxd5xmHjiw",
+      "durationSeconds": 487,
+      "queries": [
+        "tech house drum processing professional Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "nXidIgF-LVc",
+      "title": "How to Write Chords in Ableton: Tropical / Deep House, Beginner Level | Tutorial",
+      "url": "https://www.youtube.com/watch?v=nXidIgF-LVc",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 746,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "9K4EpKt-_9g",
+      "title": "I Made My Drums Punch Harder With This Free Rack",
+      "url": "https://www.youtube.com/watch?v=9K4EpKt-_9g",
+      "uploader": "AZARYC",
+      "uploaderId": "UC1T1zGRbT-BYl4wfPX4P9eQ",
+      "durationSeconds": 345,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "HtAlNLg5Bk8",
+      "title": "Is this the best tool for pads & textures?",
+      "url": "https://www.youtube.com/watch?v=HtAlNLg5Bk8",
+      "uploader": "Zahand / LotusTunes",
+      "uploaderId": "UCrKBjz9fBktmZp82Y5w74cA",
+      "durationSeconds": 704,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "1_mezMzhnIo",
+      "title": "Killer Basslines for Dance Music (ABLETON)",
+      "url": "https://www.youtube.com/watch?v=1_mezMzhnIo",
+      "uploader": "SYNTHO",
+      "uploaderId": "UChvrP62xaOkaN4DJPR64JFg",
+      "durationSeconds": 669,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "D2NNm9UCF4c",
+      "title": "My Overly Complex Yet Reliable Method For Making Catchy Melodies",
+      "url": "https://www.youtube.com/watch?v=D2NNm9UCF4c",
+      "uploader": "Alex Rome",
+      "uploaderId": "UCh1MtJ4rx4n4PQGYNYK_UXA",
+      "durationSeconds": 821,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "Tj-rkXNbL2c",
+      "title": "New DISCO FUNK SAMPLING BY GEE SAVELLI MIX",
+      "url": "https://www.youtube.com/watch?v=Tj-rkXNbL2c",
+      "uploader": "EgidioSavelli",
+      "uploaderId": "UC8Hlv5MzEJSsdYG7QYmvCKg",
+      "durationSeconds": 437,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "fx-mix",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "TZiZk0dLywY",
+      "title": "PERFECT LOW END: How To Mix Kick & Bass (Mixing Basics Part 1)",
+      "url": "https://www.youtube.com/watch?v=TZiZk0dLywY",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 715,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "RzwHCTPzj94",
+      "title": "StandardClip-ing Drums for Loudness in Ableton - Work Faster: Ep 7",
+      "url": "https://www.youtube.com/watch?v=RzwHCTPzj94",
+      "uploader": "Fox'd",
+      "uploaderId": "UCc_u0_Va49AGzzEdsdY3rrg",
+      "durationSeconds": 247,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "drums-groove",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "Z3juRfokorQ",
+      "title": "Tech Vocals Bundle By Chop Shop",
+      "url": "https://www.youtube.com/watch?v=Z3juRfokorQ",
+      "uploader": "Black Octopus Sound",
+      "uploaderId": "UC6VR1iiKzL4zIqJZyDu0mBg",
+      "durationSeconds": 372,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "tCFRrplNEjs",
+      "title": "The LIKELY Reason Why Your Kick & Bass STILL Don’t Compare To The Pros",
+      "url": "https://www.youtube.com/watch?v=tCFRrplNEjs",
+      "uploader": "TheCosmicAcademy",
+      "uploaderId": "UCzT-P_JvW6qx2t8VskE04Hg",
+      "durationSeconds": 393,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "hNftnTn7TY8",
+      "title": "The Only Afro House Drums Tutorial You’ll Ever Need",
+      "url": "https://www.youtube.com/watch?v=hNftnTn7TY8",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 659,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "tDNr50UUaIk",
+      "title": "The Secret to Balancing Kick & Bass in Any Mix",
+      "url": "https://www.youtube.com/watch?v=tDNr50UUaIk",
+      "uploader": "Joe Gilder • Home Studio Corner",
+      "uploaderId": "UCYDzeYIkNPD7_6adQZ3oX8g",
+      "durationSeconds": 481,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "gpFKvkosesM",
+      "title": "The Secret to Deep Emotional Vibes in Organic House & Techno",
+      "url": "https://www.youtube.com/watch?v=gpFKvkosesM",
+      "uploader": "Marksman's Producer Academy",
+      "uploaderId": "UCUgv89O1KqNCD8uU6dJD_WA",
+      "durationSeconds": 881,
+      "queries": [
+        "afro house organic instruments texture Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "4p3egprA91Q",
+      "title": "this is the BEST professional vocal processing chain I use in Ableton (stock)",
+      "url": "https://www.youtube.com/watch?v=4p3egprA91Q",
+      "uploader": "Ash // From Bedroom 2 Banger",
+      "uploaderId": "UC5UOAres3braI0TSfKcvERQ",
+      "durationSeconds": 530,
+      "queries": [
+        "afro house vocal processing Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "UrpnB5YlGL8",
+      "title": "This Will Change How You Mix Kick And Bass FOREVER",
+      "url": "https://www.youtube.com/watch?v=UrpnB5YlGL8",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 808,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "dhOHGAn57KE",
+      "title": "Three essential processed vocal hooks - 16 of 21",
+      "url": "https://www.youtube.com/watch?v=dhOHGAn57KE",
+      "uploader": "Computer Music",
+      "uploaderId": "UCzNleyBTjCeygAL3NaWwRig",
+      "durationSeconds": 318,
+      "queries": [
+        "house vocal chop hook processing Ableton"
+      ],
+      "categories": [
+        "harmony-melody",
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "FeT1Ng9IxHs",
+      "title": "Unlocking African Rhythms: A Guide for Modern Music Producers",
+      "url": "https://www.youtube.com/watch?v=FeT1Ng9IxHs",
+      "uploader": "Africa: Rhythms & Roots",
+      "uploaderId": "UCCXjVpMlFWFVqcmuBUq8R1g",
+      "durationSeconds": 270,
+      "queries": [
+        "afro house percussion groove polyrhythm Ableton"
+      ],
+      "categories": [
+        "style-language",
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "cbIQ7AknXts",
+      "title": "Unveiling the Secrets to a Fat Bass: Mastering the Low-End",
+      "url": "https://www.youtube.com/watch?v=cbIQ7AknXts",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 559,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "MsT_yjp5kpI",
+      "title": "Why your low end sounds amateur (maybe)",
+      "url": "https://www.youtube.com/watch?v=MsT_yjp5kpI",
+      "uploader": "Underdog Electronic Music School",
+      "uploaderId": "UC1sxbxdkwQKWV5YUzDVftcA",
+      "durationSeconds": 529,
+      "queries": [
+        "house kick bass low end mixing professional Ableton"
+      ],
+      "categories": [
+        "bass",
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "Vyw2STL5VAI",
+      "title": "Writing Melodic House Chord Progressions in Ableton 12",
+      "url": "https://www.youtube.com/watch?v=Vyw2STL5VAI",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 832,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "_asHEoK9oN4",
+      "title": "Writing Melodic Techno Chords - Dark, Melancholic | Ableton Live Tutorial",
+      "url": "https://www.youtube.com/watch?v=_asHEoK9oN4",
+      "uploader": "Ableton Tips by PML",
+      "uploaderId": "UCcC6jZR2Lr4s_os4GoAhEog",
+      "durationSeconds": 368,
+      "queries": [
+        "melodic house chord voicing harmony Ableton tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody"
+      ],
+      "devices": [],
+      "priority": 32
+    },
+    {
+      "id": "jg9UEIiPrD8",
+      "title": "Custom Ableton Template That Actually Saves You Time",
+      "url": "https://www.youtube.com/watch?v=jg9UEIiPrD8",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1667,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "5JopkZ8_ZJ8",
+      "title": "Deep House Production Secrets: Full Step-By-Step Formula",
+      "url": "https://www.youtube.com/watch?v=5JopkZ8_ZJ8",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1377,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "xC7qzpMtAWg",
+      "title": "HOUSE MUSIC MASTER CLASS - How To Make UNDERGROUND House 2024",
+      "url": "https://www.youtube.com/watch?v=xC7qzpMtAWg",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2309,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "sjHIrmEog0k",
+      "title": "HOW I MADE a BEATPORT TOP 100 House Track : Ableton Tutorial",
+      "url": "https://www.youtube.com/watch?v=sjHIrmEog0k",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 3072,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "vmwSg8aoy4Y",
+      "title": "How I Start Every Track in Ableton Live (Pro Workflow)",
+      "url": "https://www.youtube.com/watch?v=vmwSg8aoy4Y",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1829,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "Jei0KTJYtzY",
+      "title": "How To Make House Music Like PROSPA",
+      "url": "https://www.youtube.com/watch?v=Jei0KTJYtzY",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2655,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "U0K-5Jl_04g",
+      "title": "How To Make Progressive House Like Sudbeat",
+      "url": "https://www.youtube.com/watch?v=U0K-5Jl_04g",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2352,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "UWGIxWz3oL4",
+      "title": "How To Make Progressive House That Labels Actually Want",
+      "url": "https://www.youtube.com/watch?v=UWGIxWz3oL4",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1600,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "yoJrSSlQ8pY",
+      "title": "Pro Secrets Revealed: DEEP HOUSE Full Track!",
+      "url": "https://www.youtube.com/watch?v=yoJrSSlQ8pY",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 2837,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "7ILMXlbWKGw",
+      "title": "Save Time and Finish More Tracks - Download My Ableton Template",
+      "url": "https://www.youtube.com/watch?v=7ILMXlbWKGw",
+      "uploader": "Dilby",
+      "uploaderId": "UCFDg3MJ_rbqJSNGbwQdcUeg",
+      "durationSeconds": 1184,
+      "queries": [
+        "Dilby house production tutorial Ableton"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "usk77BpDBXM",
+      "title": "Studio Sessions: The Making Of 'I Cannot' With Chris Lorenzo | Chris Lake",
+      "url": "https://www.youtube.com/watch?v=usk77BpDBXM",
+      "uploader": "Chris Lake and Anti Up",
+      "uploaderId": "N/A",
+      "durationSeconds": 1264,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "AZDrRlfLI40",
+      "title": "Studio Sessions: The Making Of 'Make You Fight' With ATRIP | Chris Lake",
+      "url": "https://www.youtube.com/watch?v=AZDrRlfLI40",
+      "uploader": "Chris Lake and ATRIP",
+      "uploaderId": "N/A",
+      "durationSeconds": 1336,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "oiimvslQ3Ik",
+      "title": "Studio Sessions: The Making Of Maximum | Chris Lake",
+      "url": "https://www.youtube.com/watch?v=oiimvslQ3Ik",
+      "uploader": "Chris Lake",
+      "uploaderId": "UC8XtHReHyGzgyYVTAhaWwzg",
+      "durationSeconds": 1260,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "cZ3eq6xqzQg",
+      "title": "Why Chris Lake’s Tracks Are So Addictive",
+      "url": "https://www.youtube.com/watch?v=cZ3eq6xqzQg",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 2655,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 30
+    },
+    {
+      "id": "umHaMtruSos",
+      "title": "🔴 3 REVERBS FOR BETTER MIX | ABLETON LIVE",
+      "url": "https://www.youtube.com/watch?v=umHaMtruSos",
+      "uploader": "Da Fresh",
+      "uploaderId": "UCw-e_2UD9FzGF1lY4XM3WJQ",
+      "durationSeconds": 303,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "URVjbd-H1w0",
+      "title": "5 Ways To Make Transitions Sound PROFESSIONAL!",
+      "url": "https://www.youtube.com/watch?v=URVjbd-H1w0",
+      "uploader": "Big Z",
+      "uploaderId": "UCgXmRIt_2Jwr0bwPTmocRsA",
+      "durationSeconds": 519,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "L6H0xDfn0Ik",
+      "title": "7 Mixing Tips I WISH I Knew Sooner as a Music Producer",
+      "url": "https://www.youtube.com/watch?v=L6H0xDfn0Ik",
+      "uploader": "musicbychi",
+      "uploaderId": "UCV30XU2a9CQYutZOtaKAuXA",
+      "durationSeconds": 381,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "OlvJLYNMsZo",
+      "title": "7 TRANSITIONS TIPS to make your tracks FLOW better (EAR CANDY for Transitions)",
+      "url": "https://www.youtube.com/watch?v=OlvJLYNMsZo",
+      "uploader": "Abstrakt Music Lab",
+      "uploaderId": "UCK2GetBHqWxUTDSTVHGcBVQ",
+      "durationSeconds": 556,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "6BBGzPf2wic",
+      "title": "Ableton Drums & Groove Tutorial - Humanising Drums",
+      "url": "https://www.youtube.com/watch?v=6BBGzPf2wic",
+      "uploader": "Finish More Music",
+      "uploaderId": "UCZkROKrw8jiTXbt6I3CRA8Q",
+      "durationSeconds": 465,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "47P023yntNI",
+      "title": "Ableton Groove Pool Tutorial | How To Use Groove Pool (THE RIGHT WAY)",
+      "url": "https://www.youtube.com/watch?v=47P023yntNI",
+      "uploader": "Fearless Beatz",
+      "uploaderId": "UCt5xUzBaL6uykDGBkICg-ZQ",
+      "durationSeconds": 300,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "sBEJxLMVHHM",
+      "title": "Ableton Live 9 - Creating a Reverb Intro Tail",
+      "url": "https://www.youtube.com/watch?v=sBEJxLMVHHM",
+      "uploader": "Raphael Valentino",
+      "uploaderId": "UCvz2zbc8AvZSDF2zAe4oBlw",
+      "durationSeconds": 276,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "npNdBwZXwaI",
+      "title": "Ableton Live 9 Grooves And The Groove Pool",
+      "url": "https://www.youtube.com/watch?v=npNdBwZXwaI",
+      "uploader": "Supreme Beatz",
+      "uploaderId": "UCxBn6xrcxn7YJ735EcvvMGA",
+      "durationSeconds": 597,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "0XYa71bDL2o",
+      "title": "Ableton Live Tutorial: Humanise hi-hats and drum grooves with LFOs",
+      "url": "https://www.youtube.com/watch?v=0XYa71bDL2o",
+      "uploader": "Liveschool Music Training",
+      "uploaderId": "UC0_MRIcjqu5LDh7A6--hOWQ",
+      "durationSeconds": 287,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "blvM6PHQnWo",
+      "title": "Ableton Live Tutorials: Using The Groove Pool",
+      "url": "https://www.youtube.com/watch?v=blvM6PHQnWo",
+      "uploader": "MusicTech",
+      "uploaderId": "UCt6HRY_oRIMLbtqOjsQj55A",
+      "durationSeconds": 895,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "1X5lcPFivWE",
+      "title": "Ableton Quick Tip Series #2 | Parallel Processing",
+      "url": "https://www.youtube.com/watch?v=1X5lcPFivWE",
+      "uploader": "Almost Home",
+      "uploaderId": "UC8dyXS5ETSRHzzAyWZ8qTUQ",
+      "durationSeconds": 440,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "te3vCWNzptE",
+      "title": "ABLETON TUTORIAL: Extracting A Groove From Any Song in Ableton Live / Quintuplet Swing / Groove Pool",
+      "url": "https://www.youtube.com/watch?v=te3vCWNzptE",
+      "uploader": "BADMATHSYDNEY",
+      "uploaderId": "UCiuuJ3Bi33MSbs-xVCg21AQ",
+      "durationSeconds": 374,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "ehY4Yr0jom0",
+      "title": "Advanced Mixing - Parallel Processing",
+      "url": "https://www.youtube.com/watch?v=ehY4Yr0jom0",
+      "uploader": "In The Mix",
+      "uploaderId": "UCIcCXe3iWo6lq-iWKV40Oug",
+      "durationSeconds": 754,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "Po5t5GOCYLs",
+      "title": "Advanced Mixing - Parallel Processing (POWERFUL Mixes!) 🤯",
+      "url": "https://www.youtube.com/watch?v=Po5t5GOCYLs",
+      "uploader": "EDM Tips",
+      "uploaderId": "UC2vitamJHo7kSiiuA598u-g",
+      "durationSeconds": 553,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "btdKJoxnpIM",
+      "title": "Being Creative with Reverb and Delay | Mixing Ableton Live 10",
+      "url": "https://www.youtube.com/watch?v=btdKJoxnpIM",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 847,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "-SRAwKjC1to",
+      "title": "Building A Track From A Sample | Music Production Tutorials",
+      "url": "https://www.youtube.com/watch?v=-SRAwKjC1to",
+      "uploader": "thewavemusic",
+      "uploaderId": "UCYERY4TiLuZynTkESDglLnQ",
+      "durationSeconds": 554,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "-SYw2eD8RsU",
+      "title": "Creating Space In Ableton With Reverb: EQ + Reverb",
+      "url": "https://www.youtube.com/watch?v=-SYw2eD8RsU",
+      "uploader": "xaqary",
+      "uploaderId": "UCKrc7s5UVB1nR57O-Prde3Q",
+      "durationSeconds": 672,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "rqMI1w8i3OA",
+      "title": "Depth Tricks They All Use (Why Your Mix Sounds Flat)",
+      "url": "https://www.youtube.com/watch?v=rqMI1w8i3OA",
+      "uploader": "Streaky",
+      "uploaderId": "UCSvxjA3B1UURjGrdAJX_Yjg",
+      "durationSeconds": 531,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "vWYWi8Wrbxs",
+      "title": "Don't start mixing in Ableton Live without THIS!",
+      "url": "https://www.youtube.com/watch?v=vWYWi8Wrbxs",
+      "uploader": "Zdrewe",
+      "uploaderId": "UCjcAOtz7G3xvcoVcpJQKcqA",
+      "durationSeconds": 382,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "ILHYMtfOADQ",
+      "title": "Ear Candy for Minimal House Using Cinematic FX",
+      "url": "https://www.youtube.com/watch?v=ILHYMtfOADQ",
+      "uploader": "Durosai",
+      "uploaderId": "UCpAMj2udHqlvc7HEL80w4KQ",
+      "durationSeconds": 628,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "Ci-7i25fdEM",
+      "title": "EAR CANDY tricks that will make a HUGE DIFFERENCE in your song",
+      "url": "https://www.youtube.com/watch?v=Ci-7i25fdEM",
+      "uploader": "Abstrakt Music Lab",
+      "uploaderId": "UCK2GetBHqWxUTDSTVHGcBVQ",
+      "durationSeconds": 698,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "MqqKtwdHAGw",
+      "title": "every trick to EAR CANDY",
+      "url": "https://www.youtube.com/watch?v=MqqKtwdHAGw",
+      "uploader": "Synthet",
+      "uploaderId": "UCdbetV_5wxUnBTdb_d51qoA",
+      "durationSeconds": 505,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "n0xETQrS5dg",
+      "title": "How I Use Ear Candy to Keep Repetitive Music Interesting",
+      "url": "https://www.youtube.com/watch?v=n0xETQrS5dg",
+      "uploader": "SVCOB",
+      "uploaderId": "UCXmLoY3Pgx7HFJ-loB4NTRw",
+      "durationSeconds": 746,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "4RMIgKGF2Zg",
+      "title": "How Skrillex Uses Limiters and Clippers for Maximum Loudness",
+      "url": "https://www.youtube.com/watch?v=4RMIgKGF2Zg",
+      "uploader": "Matthew Vere",
+      "uploaderId": "UCG2OAIXM-fbQMw9MbZtmE7g",
+      "durationSeconds": 419,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "ym9CVpMY65Q",
+      "title": "How To Add EAR CANDY To Your Tracks",
+      "url": "https://www.youtube.com/watch?v=ym9CVpMY65Q",
+      "uploader": "Big Z",
+      "uploaderId": "UCgXmRIt_2Jwr0bwPTmocRsA",
+      "durationSeconds": 868,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "XGSytDiGJl0",
+      "title": "How to Create Depth and Width with Reverb and Delay",
+      "url": "https://www.youtube.com/watch?v=XGSytDiGJl0",
+      "uploader": "Sage Audio",
+      "uploaderId": "UCA0fF9GUBL2Er_skkHKHzkQ",
+      "durationSeconds": 609,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "JNHcR4j_7IE",
+      "title": "How To Create Depth In Your Mix: The 3-Reverb System To Create Depth",
+      "url": "https://www.youtube.com/watch?v=JNHcR4j_7IE",
+      "uploader": "Bedroom Producer",
+      "uploaderId": "UCBSoCzbAnLeKBU1vsZ-001Q",
+      "durationSeconds": 700,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "uk8kvcqDaAM",
+      "title": "How to Create Depth with Reverb, Delay, and EQ",
+      "url": "https://www.youtube.com/watch?v=uk8kvcqDaAM",
+      "uploader": "SONIC315 Studios",
+      "uploaderId": "UC1KKeSGWEQuWx60SToCIyVQ",
+      "durationSeconds": 651,
+      "queries": [
+        "house stereo depth reverb delay Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "4kyZstUeO_8",
+      "title": "How to Get Professional Loudness: My Full Mastering Workflow",
+      "url": "https://www.youtube.com/watch?v=4kyZstUeO_8",
+      "uploader": "Lazaro Casanova",
+      "uploaderId": "UCBRi0Xz6dA4Lsnh0dshKfgQ",
+      "durationSeconds": 805,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "h2AY2hdUoBY",
+      "title": "How To Make Disco House In Ableton 11 [Loods, Mall Grab, Dance System Style] +Samples",
+      "url": "https://www.youtube.com/watch?v=h2AY2hdUoBY",
+      "uploader": "Julien Earle",
+      "uploaderId": "UCTNAGAxqqanthoCgmrbHbBA",
+      "durationSeconds": 551,
+      "queries": [
+        "house music sample flip disco new wave Ableton"
+      ],
+      "categories": [
+        "sampling-vocals"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "TYHZ5MkY2cw",
+      "title": "How to make Tech House like Max Styler",
+      "url": "https://www.youtube.com/watch?v=TYHZ5MkY2cw",
+      "uploader": "The Producer School",
+      "uploaderId": "UCqPdU0C6sIx_kkEoAcW9hSQ",
+      "durationSeconds": 671,
+      "queries": [
+        "Max Styler production tutorial Ableton"
+      ],
+      "categories": [
+        "style-language"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "_4qJSUFao50",
+      "title": "HOW TO TECH HOUSE (John Summit, Dom Dolla, Chris Lake,)",
+      "url": "https://www.youtube.com/watch?v=_4qJSUFao50",
+      "uploader": "MOONBOY",
+      "uploaderId": "UCACSN28q1DAo6qxd5xmHjiw",
+      "durationSeconds": 518,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "style-language",
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "eS-G6dzUz8Y",
+      "title": "Mix Busses with Ableton for Bus FX and Quick Stems",
+      "url": "https://www.youtube.com/watch?v=eS-G6dzUz8Y",
+      "uploader": "Seed To Stage",
+      "uploaderId": "UCzWQWZ-CNtAiDTkBW5mfeuQ",
+      "durationSeconds": 806,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "rnkHGxQO_Fw",
+      "title": "Mixing tip: how to use saturation to reduce peaks and gain loudness | distilled noise",
+      "url": "https://www.youtube.com/watch?v=rnkHGxQO_Fw",
+      "uploader": "distilled noise",
+      "uploaderId": "UCm_74Rl49ZpWgxduBo9yKCw",
+      "durationSeconds": 456,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "MjjTfQxgp3U",
+      "title": "Parallel Processing with Patcher | Avoid Bus Channels",
+      "url": "https://www.youtube.com/watch?v=MjjTfQxgp3U",
+      "uploader": "LukiZ Music",
+      "uploaderId": "UCnX2WpXafnOi7hOX3VVXpVg",
+      "durationSeconds": 604,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "W07hontET90",
+      "title": "Signal Flow 101 In Ableton Live",
+      "url": "https://www.youtube.com/watch?v=W07hontET90",
+      "uploader": "Ableton Podcast",
+      "uploaderId": "UC_8QRMI6onBRBysh_7lA2xQ",
+      "durationSeconds": 587,
+      "queries": [
+        "house parallel processing sends depth Ableton tutorial"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "koziIXvQvUk",
+      "title": "Techno That Flows: 3 Essential Arrangement Techniques",
+      "url": "https://www.youtube.com/watch?v=koziIXvQvUk",
+      "uploader": "Booker Audio",
+      "uploaderId": "UCtZyxFY8RcomVsDKWxxz8Ug",
+      "durationSeconds": 368,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "9HfUXL5OCjU",
+      "title": "The Recipe For Incredible Transitions",
+      "url": "https://www.youtube.com/watch?v=9HfUXL5OCjU",
+      "uploader": "Bound to Divide",
+      "uploaderId": "UCf-vkEWu0vkp3OxckYdTCcw",
+      "durationSeconds": 361,
+      "queries": [
+        "house arrangement transitions ear candy Ableton"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "Kq1Q1-qxT1w",
+      "title": "Unlocking Groove Magic in Ableton: Bring Your Tracks to Life! How to use the groove pool in Ableton",
+      "url": "https://www.youtube.com/watch?v=Kq1Q1-qxT1w",
+      "uploader": "BassGorilla",
+      "uploaderId": "UCvbbElA9o8S2SCWKjqfl-zg",
+      "durationSeconds": 329,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "R0OtbSrGnGU",
+      "title": "Using Grooves in Ableton - adding human touch to your drum sounds",
+      "url": "https://www.youtube.com/watch?v=R0OtbSrGnGU",
+      "uploader": "Production Music Live",
+      "uploaderId": "UCkL_BZn7BoVGDa_OBi16hIw",
+      "durationSeconds": 270,
+      "queries": [
+        "house percussion humanization groove pool Ableton"
+      ],
+      "categories": [
+        "drums-groove"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "2P_Opp4a6iY",
+      "title": "Why your mixes sound thin and weak (probably)",
+      "url": "https://www.youtube.com/watch?v=2P_Opp4a6iY",
+      "uploader": "Underdog Electronic Music School",
+      "uploaderId": "UC1sxbxdkwQKWV5YUzDVftcA",
+      "durationSeconds": 397,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "eAgy6SLhjlk",
+      "title": "You’re Mixing Wrong: Loud + Clean Happens Before Mastering",
+      "url": "https://www.youtube.com/watch?v=eAgy6SLhjlk",
+      "uploader": "TheCosmicAcademy",
+      "uploaderId": "UCzT-P_JvW6qx2t8VskE04Hg",
+      "durationSeconds": 561,
+      "queries": [
+        "house saturation clipping loudness Ableton professional"
+      ],
+      "categories": [
+        "fx-mix"
+      ],
+      "devices": [],
+      "priority": 28
+    },
+    {
+      "id": "Wrw7I6szi1Y",
+      "title": "26 Tech House Basses in 18 minutes [Epic Sound Design Tutorial Supercut]",
+      "url": "https://www.youtube.com/watch?v=Wrw7I6szi1Y",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 1081,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "oW4C7txJEgM",
+      "title": "Beautiful Pads with Serum 2",
+      "url": "https://www.youtube.com/watch?v=oW4C7txJEgM",
+      "uploader": "Virtual Riot",
+      "uploaderId": "UCVtJOq_ziepf5MpjsTWxJeg",
+      "durationSeconds": 928,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "VotQgzP6Uxg",
+      "title": "Build a house track with Freemasons - Part 1 of 2",
+      "url": "https://www.youtube.com/watch?v=VotQgzP6Uxg",
+      "uploader": "Computer Music",
+      "uploaderId": "UCzNleyBTjCeygAL3NaWwRig",
+      "durationSeconds": 2391,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "MA5ecepdrQw",
+      "title": "Calvin Harris feat. Dua Lipa - One Kiss Deconstruction @ IMS Malta",
+      "url": "https://www.youtube.com/watch?v=MA5ecepdrQw",
+      "uploader": "pointblank music school",
+      "uploaderId": "UCIWNozFjO8yVdJFsGKVmPgg",
+      "durationSeconds": 2069,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "A53HaqaMGCw",
+      "title": "Making some chill synths with Serum.",
+      "url": "https://www.youtube.com/watch?v=A53HaqaMGCw",
+      "uploader": "Furcloud",
+      "uploaderId": "UCiV6q1ZSPHNx7PZy9ZEi67w",
+      "durationSeconds": 1366,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "ZCfn8P2kBXM",
+      "title": "Rusko - Producer Masterclass - Computer Music magazine 2008",
+      "url": "https://www.youtube.com/watch?v=ZCfn8P2kBXM",
+      "uploader": "Computer Music and MusicRadar Tech",
+      "uploaderId": "N/A",
+      "durationSeconds": 2107,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "LgfpAzcRGj0",
+      "title": "Track Deconstruction Masterclass with Carl Bee - 'Pacer'",
+      "url": "https://www.youtube.com/watch?v=LgfpAzcRGj0",
+      "uploader": "International Music Summit",
+      "uploaderId": "UC8ojBFfpmt8f2TbGL6dZVjg",
+      "durationSeconds": 1802,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 26
+    },
+    {
+      "id": "mu3KbUnNTqg",
+      "title": "How to make a Chris Lake / Fisher style track in 10-minutes",
+      "url": "https://www.youtube.com/watch?v=mu3KbUnNTqg",
+      "uploader": "TheCosmicAcademy",
+      "uploaderId": "UCzT-P_JvW6qx2t8VskE04Hg",
+      "durationSeconds": 645,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 24
+    },
+    {
+      "id": "LdvdlzBGlnk",
+      "title": "SERUM 2 Tutorial | Easy Rolling Bass for Melodic House & Techno | Anyma Style",
+      "url": "https://www.youtube.com/watch?v=LdvdlzBGlnk",
+      "uploader": "The Sound Design Channel",
+      "uploaderId": "UCgianjBWzgqqTfwOvVWWoyg",
+      "durationSeconds": 407,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 24
+    },
+    {
+      "id": "FK-OOdqsOJs",
+      "title": "Serum Tutorial - Bass House Pluck!",
+      "url": "https://www.youtube.com/watch?v=FK-OOdqsOJs",
+      "uploader": "Shugrin",
+      "uploaderId": "UCbX9s1ukZKAJ3NTsW2tM_cg",
+      "durationSeconds": 339,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 24
+    },
+    {
+      "id": "PIqBvzWop1M",
+      "title": "Serum Tutorial - Justice Style Nu Disco Pad",
+      "url": "https://www.youtube.com/watch?v=PIqBvzWop1M",
+      "uploader": "SynthHacker",
+      "uploaderId": "UCuPgdLBPVvhNt2o7m_HFQDw",
+      "durationSeconds": 555,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sampling-vocals",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 24
+    },
+    {
+      "id": "xUYyjnIOg44",
+      "title": "The Chris Lake Arrangement Hack You're NOT Using",
+      "url": "https://www.youtube.com/watch?v=xUYyjnIOg44",
+      "uploader": "Zen World - EvoSounds",
+      "uploaderId": "UCNRD06rR7bR0Xwd-7gAKDEA",
+      "durationSeconds": 603,
+      "queries": [
+        "Chris Lake track from scratch production breakdown"
+      ],
+      "categories": [
+        "arrangement"
+      ],
+      "devices": [],
+      "priority": 24
+    },
+    {
+      "id": "LarNK_x6wwI",
+      "title": "5 Sounds Every Producer Should Know How To Make (Synth Tutorial)",
+      "url": "https://www.youtube.com/watch?v=LarNK_x6wwI",
+      "uploader": "Alex Rome",
+      "uploaderId": "UCh1MtJ4rx4n4PQGYNYK_UXA",
+      "durationSeconds": 804,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "llXSRqZQxH0",
+      "title": "5 Tech House Basses You Need to Know [Serum Sound Design Tutorial]",
+      "url": "https://www.youtube.com/watch?v=llXSRqZQxH0",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 834,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "ZjQtx4nwdUw",
+      "title": "How to Create A Pluck Styled Preset in Serum",
+      "url": "https://www.youtube.com/watch?v=ZjQtx4nwdUw",
+      "uploader": "The New Division",
+      "uploaderId": "UCboaQiuakgLsaHfkchx8pnQ",
+      "durationSeconds": 761,
+      "queries": [
+        "indie dance synth lead pluck sound design Serum"
+      ],
+      "categories": [
+        "style-language",
+        "harmony-melody",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "c_Y2MnnoNMQ",
+      "title": "HOW TO MAKE BASSLINES FOR TECH HOUSE (Mau P, Chris Lake, Odd Mob)",
+      "url": "https://www.youtube.com/watch?v=c_Y2MnnoNMQ",
+      "uploader": "MOONBOY",
+      "uploaderId": "UCACSN28q1DAo6qxd5xmHjiw",
+      "durationSeconds": 544,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "kzNHw39Tuy8",
+      "title": "How To Make Tech House like ODD MOB",
+      "url": "https://www.youtube.com/watch?v=kzNHw39Tuy8",
+      "uploader": "Ekko",
+      "uploaderId": "UCiiF0Sb4GTF_mao39j6sqKQ",
+      "durationSeconds": 374,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "t45LxAPvsD4",
+      "title": "John Summit - 'Shiver' Featuring HAYLA | Behind the Song",
+      "url": "https://www.youtube.com/watch?v=t45LxAPvsD4",
+      "uploader": "Variety",
+      "uploaderId": "UCgRQHK8Ttr1j9xCEpCAlgbQ",
+      "durationSeconds": 534,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "sG4887QYQIY",
+      "title": "Kettama's Production Secrets Are Mind Blowing!",
+      "url": "https://www.youtube.com/watch?v=sG4887QYQIY",
+      "uploader": "Ocean",
+      "uploaderId": "UCXrDJIpt-3giDMdwiBJvPvg",
+      "durationSeconds": 821,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "r72Qv0PH5kI",
+      "title": "Made This Bass for Chris Lake and Odd Mob [Sound Design Tutorial]",
+      "url": "https://www.youtube.com/watch?v=r72Qv0PH5kI",
+      "uploader": "Sam Smyers",
+      "uploaderId": "UCXbivlvSlSWfTHLqq1b_E1w",
+      "durationSeconds": 622,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "xM6HueMz7_U",
+      "title": "making house music with serum 2 (it's too easy)",
+      "url": "https://www.youtube.com/watch?v=xM6HueMz7_U",
+      "uploader": "Tim Hox",
+      "uploaderId": "UCf4cy5NvTj4YMxlfhq_I90w",
+      "durationSeconds": 321,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "6koLzVjcX1I",
+      "title": "Tech House Bass - Serum Tutorial",
+      "url": "https://www.youtube.com/watch?v=6koLzVjcX1I",
+      "uploader": "Matt Flanc",
+      "uploaderId": "UCpOn5LENchwZerj3qFsv-ZQ",
+      "durationSeconds": 322,
+      "queries": [
+        "tech house bass sound design Serum tutorial"
+      ],
+      "categories": [
+        "style-language",
+        "bass",
+        "sound-design"
+      ],
+      "devices": [],
+      "priority": 20
+    },
+    {
+      "id": "kSXHTJJ7D34",
+      "title": "The Simplest Strategy for Building House Songs (it's like cheating)",
+      "url": "https://www.youtube.com/watch?v=kSXHTJJ7D34",
+      "uploader": "Alex Rome",
+      "uploaderId": "UCh1MtJ4rx4n4PQGYNYK_UXA",
+      "durationSeconds": 730,
+      "queries": [
+        "house track deconstruction producer masterclass"
+      ],
+      "categories": [],
+      "devices": [],
+      "priority": 20
+    }
+  ],
+  "searchFailures": []
+}

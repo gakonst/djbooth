@@ -1,0 +1,604 @@
+{
+  "schemaVersion": 1,
+  "title": "Canopy Focus — Ableton percussion and Serum identity",
+  "bpm": 123,
+  "bars": 96,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 5,
+  "master": {
+    "inputGainDb": -4.5,
+    "outputGainDb": 0,
+    "effects": []
+  },
+  "provenance": {
+    "arrangement": "Reference-informed original C# minor Afro/Brazilian house arrangement",
+    "abletonSources": [
+      "909 Core Kit — 909 Core Kit House 127 bpm",
+      "808 Core Kit — 808 Core Kit House 130 bpm",
+      "Percussion Spirit Kit — Spirit Percussion 104 bpm"
+    ],
+    "serumPatches": [
+      "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-bass.json",
+      "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-pluck.json",
+      "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-air.json"
+    ],
+    "customAudioDsp": false
+  },
+  "tracks": [
+    {
+      "id": "core909-36-bass-drum",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/Multisamples/Drum Machines/909/Kick 909 Tune11.wav",
+      "velocityAmount": 0.5,
+      "gainDb": -5.16,
+      "pan": 0,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 99
+        },
+        {
+          "beat": 1,
+          "velocity": 99
+        },
+        {
+          "beat": 2,
+          "velocity": 99
+        },
+        {
+          "beat": 3,
+          "velocity": 99
+        },
+        {
+          "beat": 4,
+          "velocity": 99
+        },
+        {
+          "beat": 5,
+          "velocity": 99
+        },
+        {
+          "beat": 6,
+          "velocity": 99
+        },
+        {
+          "beat": 7,
+          "velocity": 99
+        },
+        {
+          "beat": 7.5,
+          "velocity": 99
+        }
+      ]
+    },
+    {
+      "id": "core909-39-hand-clap",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Clap/Clap 909.aif",
+      "velocityAmount": 0.5,
+      "gainDb": -10.359055000000001,
+      "pan": 0.03,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 320
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 1,
+          "velocity": 85
+        },
+        {
+          "beat": 3,
+          "velocity": 85
+        },
+        {
+          "beat": 5,
+          "velocity": 85
+        },
+        {
+          "beat": 7,
+          "velocity": 85
+        }
+      ]
+    },
+    {
+      "id": "core808-42-closed-hi-hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Closed 808.aif",
+      "velocityAmount": 0.5,
+      "gainDb": -16.8,
+      "pan": -0.13,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 66
+        },
+        {
+          "beat": 0.25,
+          "velocity": 59
+        },
+        {
+          "beat": 0.5,
+          "velocity": 66
+        },
+        {
+          "beat": 0.75,
+          "velocity": 59
+        },
+        {
+          "beat": 1,
+          "velocity": 66
+        },
+        {
+          "beat": 1.25,
+          "velocity": 59
+        },
+        {
+          "beat": 1.5,
+          "velocity": 66
+        },
+        {
+          "beat": 1.75,
+          "velocity": 59
+        },
+        {
+          "beat": 2,
+          "velocity": 66
+        },
+        {
+          "beat": 2.25,
+          "velocity": 59
+        },
+        {
+          "beat": 2.5,
+          "velocity": 66
+        },
+        {
+          "beat": 2.75,
+          "velocity": 59
+        },
+        {
+          "beat": 3,
+          "velocity": 66
+        },
+        {
+          "beat": 3.25,
+          "velocity": 59
+        },
+        {
+          "beat": 3.5,
+          "velocity": 66
+        },
+        {
+          "beat": 3.75,
+          "velocity": 59
+        },
+        {
+          "beat": 4,
+          "velocity": 66
+        },
+        {
+          "beat": 4.25,
+          "velocity": 59
+        },
+        {
+          "beat": 4.5,
+          "velocity": 66
+        },
+        {
+          "beat": 4.75,
+          "velocity": 59
+        },
+        {
+          "beat": 5,
+          "velocity": 66
+        },
+        {
+          "beat": 5.25,
+          "velocity": 59
+        },
+        {
+          "beat": 5.5,
+          "velocity": 66
+        },
+        {
+          "beat": 5.75,
+          "velocity": 59
+        },
+        {
+          "beat": 6,
+          "velocity": 66
+        },
+        {
+          "beat": 6.25,
+          "velocity": 59
+        },
+        {
+          "beat": 6.5,
+          "velocity": 66
+        },
+        {
+          "beat": 6.75,
+          "velocity": 59
+        },
+        {
+          "beat": 7,
+          "velocity": 66
+        },
+        {
+          "beat": 7.25,
+          "velocity": 59
+        },
+        {
+          "beat": 7.5,
+          "velocity": 66
+        },
+        {
+          "beat": 7.75,
+          "velocity": 59
+        }
+      ]
+    },
+    {
+      "id": "core808-44-maracas",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Shaker/Maracas 808.wav",
+      "velocityAmount": 0.5,
+      "gainDb": -15.6,
+      "pan": 0.18,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 48,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 320
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.25,
+          "velocity": 82
+        },
+        {
+          "beat": 3.75,
+          "velocity": 82
+        },
+        {
+          "beat": 4.25,
+          "velocity": 82
+        },
+        {
+          "beat": 7.25,
+          "velocity": 40
+        },
+        {
+          "beat": 7.75,
+          "velocity": 82
+        }
+      ]
+    },
+    {
+      "id": "spirit-low-36-drum-voice",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Conga/Conga Low Slap 1.aif",
+      "velocityAmount": 0.5546875,
+      "gainDb": -15.900000000000002,
+      "pan": -0.18,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 160,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.0078083374958374955,
+          "velocity": 47
+        },
+        {
+          "beat": 0.7704873251748252,
+          "velocity": 33
+        },
+        {
+          "beat": 1.5139914772727272,
+          "velocity": 55
+        },
+        {
+          "beat": 4.004409132534133,
+          "velocity": 55
+        },
+        {
+          "beat": 4.510454389360639,
+          "velocity": 3
+        },
+        {
+          "beat": 4.764536765318016,
+          "velocity": 31
+        },
+        {
+          "beat": 5.5060866217116216,
+          "velocity": 37
+        },
+        {
+          "beat": 6.7622609161671665,
+          "velocity": 38
+        },
+        {
+          "beat": 7.5160110722610725,
+          "velocity": 32
+        }
+      ]
+    },
+    {
+      "id": "spirit-high-43-drum-voice",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Bongo/Bongo High Open Hard.aif",
+      "velocityAmount": 0.5546875,
+      "gainDb": -16.3,
+      "pan": 0.21,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 320
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.00267623001998002,
+          "velocity": 77
+        },
+        {
+          "beat": 1.512912348068598,
+          "velocity": 65
+        },
+        {
+          "beat": 2.012620972777223,
+          "velocity": 77
+        },
+        {
+          "beat": 3.511953151015651,
+          "velocity": 67
+        },
+        {
+          "beat": 4.00267623001998,
+          "velocity": 77
+        },
+        {
+          "beat": 5.512912348068598,
+          "velocity": 65
+        },
+        {
+          "beat": 6.012620972777222,
+          "velocity": 77
+        },
+        {
+          "beat": 7.511953151015651,
+          "velocity": 67
+        }
+      ]
+    },
+    {
+      "id": "spirit-cabasa-50-drum-voice",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Shaker/Cabasa Filtered Chekov.aif",
+      "velocityAmount": 0.5546875,
+      "gainDb": -17.11,
+      "pan": 0.3,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 160,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 76
+        },
+        {
+          "beat": 0.9905711476023976,
+          "velocity": 51
+        },
+        {
+          "beat": 2.4960958312520813,
+          "velocity": 46
+        },
+        {
+          "beat": 2.979428123959374,
+          "velocity": 55
+        },
+        {
+          "beat": 4,
+          "velocity": 76
+        },
+        {
+          "beat": 4.990571147602398,
+          "velocity": 51
+        },
+        {
+          "beat": 6.496095831252081,
+          "velocity": 46
+        },
+        {
+          "beat": 6.979428123959374,
+          "velocity": 55
+        }
+      ]
+    },
+    {
+      "id": "serum-pulse-bass",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/maz-serum-focused/maz-focused-bass.wav",
+      "velocityAmount": 0,
+      "gainDb": 7,
+      "pan": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ]
+    },
+    {
+      "id": "serum-glasswood-hook",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/maz-serum-focused/maz-focused-pluck.wav",
+      "velocityAmount": 0,
+      "gainDb": 11,
+      "pan": 0.08,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 96,
+          "endBeat": 128
+        },
+        {
+          "startBeat": 160,
+          "endBeat": 192
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 320
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ]
+    },
+    {
+      "id": "serum-air-bed",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/maz-serum-focused/maz-focused-air.wav",
+      "velocityAmount": 0,
+      "gainDb": 7,
+      "pan": -0.04,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 64
+        },
+        {
+          "startBeat": 128,
+          "endBeat": 192
+        },
+        {
+          "startBeat": 320,
+          "endBeat": 384
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ]
+    },
+    {
+      "id": "ableton-riser",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/FX/Riser Whoosh Up.wav",
+      "velocityAmount": 0.35,
+      "gainDb": -15,
+      "pan": 0,
+      "triggers": [
+        {
+          "beat": 125.1,
+          "velocity": 104
+        },
+        {
+          "beat": 189.1,
+          "velocity": 104
+        },
+        {
+          "beat": 317.1,
+          "velocity": 104
+        }
+      ]
+    },
+    {
+      "id": "ableton-impact",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/FX/Impact Current.wav",
+      "velocityAmount": 0.35,
+      "gainDb": -15.5,
+      "pan": -0.05,
+      "triggers": [
+        {
+          "beat": 128,
+          "velocity": 108
+        },
+        {
+          "beat": 192,
+          "velocity": 108
+        },
+        {
+          "beat": 320,
+          "velocity": 108
+        }
+      ]
+    }
+  ]
+}

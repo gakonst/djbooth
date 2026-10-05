@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-hook-a",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 2
+  },
+  "tracks": [
+    {
+      "id": "hook-a",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/smalltown-neon-lead.json",
+      "gainDb": -1,
+      "notes": [
+        {
+          "beat": 0.5,
+          "durationBeats": 0.38,
+          "note": 67,
+          "velocity": 92
+        },
+        {
+          "beat": 1,
+          "durationBeats": 0.38,
+          "note": 72,
+          "velocity": 101
+        },
+        {
+          "beat": 1.5,
+          "durationBeats": 0.38,
+          "note": 75,
+          "velocity": 105
+        },
+        {
+          "beat": 2,
+          "durationBeats": 1.22,
+          "note": 79,
+          "velocity": 112
+        },
+        {
+          "beat": 3.5,
+          "durationBeats": 0.38,
+          "note": 75,
+          "velocity": 91
+        },
+        {
+          "beat": 4.5,
+          "durationBeats": 0.62,
+          "note": 77,
+          "velocity": 105
+        },
+        {
+          "beat": 5.25,
+          "durationBeats": 0.62,
+          "note": 74,
+          "velocity": 98
+        },
+        {
+          "beat": 6,
+          "durationBeats": 1.42,
+          "note": 70,
+          "velocity": 109
+        },
+        {
+          "beat": 8.5,
+          "durationBeats": 0.38,
+          "note": 68,
+          "velocity": 91
+        },
+        {
+          "beat": 9,
+          "durationBeats": 0.38,
+          "note": 72,
+          "velocity": 99
+        },
+        {
+          "beat": 9.5,
+          "durationBeats": 0.72,
+          "note": 77,
+          "velocity": 109
+        },
+        {
+          "beat": 10.5,
+          "durationBeats": 0.38,
+          "note": 75,
+          "velocity": 96
+        },
+        {
+          "beat": 11,
+          "durationBeats": 0.78,
+          "note": 72,
+          "velocity": 103
+        },
+        {
+          "beat": 12.5,
+          "durationBeats": 0.38,
+          "note": 67,
+          "velocity": 90
+        },
+        {
+          "beat": 13,
+          "durationBeats": 0.38,
+          "note": 70,
+          "velocity": 98
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.72,
+          "note": 75,
+          "velocity": 108
+        },
+        {
+          "beat": 14.5,
+          "durationBeats": 0.38,
+          "note": 74,
+          "velocity": 95
+        },
+        {
+          "beat": 15,
+          "durationBeats": 0.78,
+          "note": 70,
+          "velocity": 102
+        },
+        {
+          "beat": 16.5,
+          "durationBeats": 0.38,
+          "note": 72,
+          "velocity": 98
+        },
+        {
+          "beat": 17,
+          "durationBeats": 0.38,
+          "note": 75,
+          "velocity": 105
+        },
+        {
+          "beat": 17.5,
+          "durationBeats": 0.38,
+          "note": 79,
+          "velocity": 111
+        },
+        {
+          "beat": 18,
+          "durationBeats": 1.22,
+          "note": 84,
+          "velocity": 116
+        },
+        {
+          "beat": 19.5,
+          "durationBeats": 0.38,
+          "note": 79,
+          "velocity": 97
+        },
+        {
+          "beat": 20.5,
+          "durationBeats": 0.62,
+          "note": 82,
+          "velocity": 109
+        },
+        {
+          "beat": 21.25,
+          "durationBeats": 0.62,
+          "note": 77,
+          "velocity": 101
+        },
+        {
+          "beat": 22,
+          "durationBeats": 1.42,
+          "note": 74,
+          "velocity": 111
+        },
+        {
+          "beat": 24.5,
+          "durationBeats": 0.38,
+          "note": 72,
+          "velocity": 94
+        },
+        {
+          "beat": 25,
+          "durationBeats": 0.38,
+          "note": 77,
+          "velocity": 102
+        },
+        {
+          "beat": 25.5,
+          "durationBeats": 0.72,
+          "note": 80,
+          "velocity": 112
+        },
+        {
+          "beat": 26.5,
+          "durationBeats": 0.38,
+          "note": 79,
+          "velocity": 100
+        },
+        {
+          "beat": 27,
+          "durationBeats": 0.78,
+          "note": 77,
+          "velocity": 106
+        },
+        {
+          "beat": 28.5,
+          "durationBeats": 0.38,
+          "note": 75,
+          "velocity": 104
+        },
+        {
+          "beat": 29,
+          "durationBeats": 0.38,
+          "note": 74,
+          "velocity": 100
+        },
+        {
+          "beat": 29.5,
+          "durationBeats": 0.38,
+          "note": 72,
+          "velocity": 97
+        },
+        {
+          "beat": 30,
+          "durationBeats": 0.38,
+          "note": 70,
+          "velocity": 94
+        },
+        {
+          "beat": 30.5,
+          "durationBeats": 0.38,
+          "note": 67,
+          "velocity": 91
+        },
+        {
+          "beat": 31,
+          "durationBeats": 0.82,
+          "note": 63,
+          "velocity": 108
+        }
+      ]
+    }
+  ]
+}

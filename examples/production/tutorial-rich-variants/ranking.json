@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-09T18:59:21.755Z",
+  "reference": "/Users/gakonst/Music/old/Bronski Beat - Smalltown Boy.mp3",
+  "winner": "02-warm-density",
+  "winnerAudio": "/Users/gakonst/Music/djbooth-candidates/tutorial-rich/02-warm-density.wav",
+  "candidates": [
+    {
+      "name": "02-warm-density",
+      "audio": "/Users/gakonst/Music/djbooth-candidates/tutorial-rich/02-warm-density.wav",
+      "overallScore": 90.79562304358939,
+      "categories": {
+        "arrangement": 82.3167825617065,
+        "dynamics": 74.2417553822211,
+        "groove": 99.27597141312181,
+        "stereo": 97.82764822364122,
+        "timbre": 91.83611189694045
+      },
+      "peakDb": -1.639233102915326,
+      "rmsDb": -19.051284689989643,
+      "crestFactorDb": 17.41205158707432,
+      "transientDensityPerSecond": 1.3244369570105565,
+      "stereoCorrelation": 0.8841637978515743,
+      "stereoWidthDb": -12.108462902462138,
+      "lowBandRatio": 0.3383773108028779,
+      "midBandRatio": 0.6028100311137866,
+      "highBandRatio": 0.05881265808333532,
+      "syncopationRatio": 0.6576046247020985
+    },
+    {
+      "name": "03-dimensional-detail",
+      "audio": "/Users/gakonst/Music/djbooth-candidates/tutorial-rich/03-dimensional-detail.wav",
+      "overallScore": 83.2525968893026,
+      "categories": {
+        "arrangement": 77.5614520042086,
+        "dynamics": 94.4494145371917,
+        "groove": 99.50887037018744,
+        "stereo": 36.2570640141762,
+        "timbre": 95.75161957179441
+      },
+      "peakDb": -1.6344249847411065,
+      "rmsDb": -16.988339090666077,
+      "crestFactorDb": 15.353914105924973,
+      "transientDensityPerSecond": 1.4671564566884183,
+      "stereoCorrelation": 0.3369291617091251,
+      "stereoWidthDb": -3.0405712728720875,
+      "lowBandRatio": 0.3381282880690297,
+      "midBandRatio": 0.6469670400944506,
+      "highBandRatio": 0.01490467183651972,
+      "syncopationRatio": 0.6101100318352185
+    },
+    {
+      "name": "01-focused-depth",
+      "audio": "/Users/gakonst/Music/djbooth-candidates/tutorial-rich/01-focused-depth.wav",
+      "overallScore": 73.53010986446098,
+      "categories": {
+        "arrangement": 88.68441186829472,
+        "dynamics": 50.6063563480347,
+        "groove": 99.31950300742255,
+        "stereo": 21.723007366915553,
+        "timbre": 95.17577597094095
+      },
+      "peakDb": -1.660960926394211,
+      "rmsDb": -21.126458537128556,
+      "crestFactorDb": 19.46549761073435,
+      "transientDensityPerSecond": 1.792556915953943,
+      "stereoCorrelation": 0.13615277801506015,
+      "stereoWidthDb": -1.1771057881239275,
+      "lowBandRatio": 0.2813997459803137,
+      "midBandRatio": 0.7061422687482319,
+      "highBandRatio": 0.012457985271454362,
+      "syncopationRatio": 0.6669012466811535
+    }
+  ],
+  "learnedConstraints": [
+    {
+      "finding": "Centered nonlinear bass outperformed chorus-heavy low-end width.",
+      "evidence": "warm-density stereo correlation remained close to the reference while preserving high timbre similarity",
+      "nextAction": "Keep sub and bass-center recipes mono-compatible; create width above the bass layer."
+    },
+    {
+      "finding": "Dark bounded ambience added depth more reliably than maximum width.",
+      "evidence": "focused-depth and dimensional-detail achieved strong timbre but lost substantial stereo-fit score",
+      "nextAction": "Use dark rooms and plates on selected layers; reserve wide echoes for sparse phrases."
+    },
+    {
+      "finding": "More processing stages did not imply a better result.",
+      "evidence": "the 18-stage warm-density variant beat the 21-stage dimensional-detail variant",
+      "nextAction": "Promote recipes by measured A/B outcome, not chain length."
+    },
+    {
+      "finding": "Factory mastering presets must demonstrate a dynamics improvement before retention.",
+      "evidence": "Glue Make It Loud changed level by only 0.25 dB and left crest factor effectively unchanged",
+      "nextAction": "Reject no-op mastering stages and solve loudness with a separately tested real Ableton chain."
+    }
+  ]
+}

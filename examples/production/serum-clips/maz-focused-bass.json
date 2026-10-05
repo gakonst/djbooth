@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "title": "serum-pulse-bass",
+  "bpm": 123,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "serum-pulse-bass",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-bass.json",
+      "gainDb": 0,
+      "notes": [
+        {
+          "beat": 0.52,
+          "durationBeats": 0.28,
+          "note": 37,
+          "velocity": 113
+        },
+        {
+          "beat": 1.76,
+          "durationBeats": 0.22,
+          "note": 37,
+          "velocity": 91
+        },
+        {
+          "beat": 2.72,
+          "durationBeats": 0.34,
+          "note": 37,
+          "velocity": 118
+        },
+        {
+          "beat": 4.28,
+          "durationBeats": 0.18,
+          "note": 37,
+          "velocity": 82
+        },
+        {
+          "beat": 5.5,
+          "durationBeats": 0.32,
+          "note": 37,
+          "velocity": 111
+        },
+        {
+          "beat": 7.48,
+          "durationBeats": 0.26,
+          "note": 37,
+          "velocity": 103
+        },
+        {
+          "beat": 8.52,
+          "durationBeats": 0.28,
+          "note": 33,
+          "velocity": 113
+        },
+        {
+          "beat": 9.76,
+          "durationBeats": 0.22,
+          "note": 33,
+          "velocity": 91
+        },
+        {
+          "beat": 10.72,
+          "durationBeats": 0.34,
+          "note": 33,
+          "velocity": 118
+        },
+        {
+          "beat": 12.28,
+          "durationBeats": 0.18,
+          "note": 33,
+          "velocity": 82
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.32,
+          "note": 33,
+          "velocity": 111
+        },
+        {
+          "beat": 15.48,
+          "durationBeats": 0.26,
+          "note": 33,
+          "velocity": 103
+        },
+        {
+          "beat": 16.52,
+          "durationBeats": 0.28,
+          "note": 40,
+          "velocity": 113
+        },
+        {
+          "beat": 17.76,
+          "durationBeats": 0.22,
+          "note": 40,
+          "velocity": 91
+        },
+        {
+          "beat": 18.72,
+          "durationBeats": 0.34,
+          "note": 40,
+          "velocity": 118
+        },
+        {
+          "beat": 20.28,
+          "durationBeats": 0.18,
+          "note": 40,
+          "velocity": 82
+        },
+        {
+          "beat": 21.5,
+          "durationBeats": 0.32,
+          "note": 40,
+          "velocity": 111
+        },
+        {
+          "beat": 23.48,
+          "durationBeats": 0.26,
+          "note": 40,
+          "velocity": 103
+        },
+        {
+          "beat": 24.52,
+          "durationBeats": 0.28,
+          "note": 35,
+          "velocity": 113
+        },
+        {
+          "beat": 25.76,
+          "durationBeats": 0.22,
+          "note": 35,
+          "velocity": 91
+        },
+        {
+          "beat": 26.72,
+          "durationBeats": 0.34,
+          "note": 35,
+          "velocity": 118
+        },
+        {
+          "beat": 28.28,
+          "durationBeats": 0.18,
+          "note": 35,
+          "velocity": 82
+        },
+        {
+          "beat": 29.5,
+          "durationBeats": 0.32,
+          "note": 35,
+          "velocity": 111
+        },
+        {
+          "beat": 31.48,
+          "durationBeats": 0.26,
+          "note": 42,
+          "velocity": 103
+        }
+      ]
+    }
+  ]
+}

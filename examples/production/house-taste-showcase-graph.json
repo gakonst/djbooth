@@ -1,0 +1,3887 @@
+{
+  "schemaVersion": 1,
+  "title": "Ritual Current — personal house taste model v1",
+  "bpm": 126,
+  "bars": 112,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 4,
+  "master": {
+    "inputGainDb": 0,
+    "outputGainDb": 0,
+    "effects": []
+  },
+  "provenance": {
+    "productionBrief": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/production/house-taste-corpus/production-brief.json",
+    "knowledgeBase": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/production/house-taste-corpus/knowledge-base/taste-model.json",
+    "groove": {
+      "source": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Grooves/Swing/Basic/Swing 16ths 57.agr",
+      "oddSixteenthDelayBeats": 0.03499989593739594
+    },
+    "referenceRoles": {
+      "groove": "Ugo Banchi — Chase The 80's",
+      "arrangementContrast": "Adam Ten, Maori — Spring Girl",
+      "spatialDepth": "Adam Ten, J.Views — Rivers and Homes Retake",
+      "lowEndHierarchy": "Echonomist — Secret Places",
+      "melodicVocabulary": "personal Spotify/Rekordbox corpus plus Maz corpus"
+    },
+    "serumLanguage": [
+      "taste-house-sub-foundation.json",
+      "taste-house-sub-foundation.json",
+      "taste-house-acid-identity.json",
+      "taste-house-acid-identity.json",
+      "taste-house-acid-identity.json",
+      "taste-house-ritual-hook.json",
+      "taste-house-ritual-hook.json",
+      "taste-house-air-ghost.json"
+    ],
+    "audioRuntime": "Serum VST2, Ableton Live Engine instruments/effects, shipped abl.*~ master processors, and Core Library samples",
+    "customAudioDsp": false,
+    "mixCalibration": {
+      "method": "measure post-Ableton-chain source peaks, then alter graph gain only",
+      "constantPowerCenterPanDb": -3.01,
+      "targets": {
+        "sub-a": -8,
+        "sub-b": -8,
+        "acid-a": -13,
+        "acid-b": -13,
+        "drive-sequence": -15,
+        "hook-a-dry": -8,
+        "hook-a-depth": -17,
+        "hook-b-dry": -8,
+        "hook-b-depth": -17,
+        "air-ghost": -20,
+        "analog-rear-pad": -15,
+        "electric-syncopated-chords": -13,
+        "collision-chord-body": -12,
+        "collision-balafon": -13,
+        "tension-muted-answer": -15,
+        "collision-bell-signals": -19,
+        "kick-main": -1,
+        "kick-final": -1,
+        "kick-click": -14,
+        "clap-body": -7,
+        "clap-ghost": -16,
+        "offbeat-hat": -11,
+        "closed-hat-grid": -13,
+        "live-shaker": -15,
+        "conga-low": -14,
+        "conga-high": -16,
+        "rim-interlock": -15,
+        "tom-phrase-fills": -12,
+        "section-crashes": -14,
+        "transition-risers": -16,
+        "water-transition-detail": -20
+      },
+      "customAudioDsp": false
+    }
+  },
+  "tracks": [
+    {
+      "id": "sub-a",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/sub-a.wav",
+      "gainDb": 30.2,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 352,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Bass Fattener.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        }
+      ]
+    },
+    {
+      "id": "sub-b",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/sub-b.wav",
+      "gainDb": 29.8,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 288,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Bass Fattener.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        }
+      ]
+    },
+    {
+      "id": "acid-a",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/acid-a.wav",
+      "gainDb": 15.5,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 352,
+          "endBeat": 416
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Bass.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        }
+      ]
+    },
+    {
+      "id": "acid-b",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/acid-b.wav",
+      "gainDb": 15.4,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 288,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 384,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Bass.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        }
+      ]
+    },
+    {
+      "id": "drive-sequence",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/drive.wav",
+      "gainDb": 20,
+      "pan": -0.04,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 96,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 320,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 384,
+          "endBeat": 416
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    {
+      "id": "hook-a-dry",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/hook-a.wav",
+      "gainDb": 16.7,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 112,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 208,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 368,
+          "endBeat": 416
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": []
+    },
+    {
+      "id": "hook-a-depth",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/hook-a.wav",
+      "gainDb": 26.4,
+      "pan": 0.1,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 112,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 208,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 368,
+          "endBeat": 416
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Echo",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Echo/Clean Delay/Ping Pong Wide.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Short Ambience.adv"
+        }
+      ]
+    },
+    {
+      "id": "hook-b-dry",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/hook-b.wav",
+      "gainDb": 17.1,
+      "pan": 0,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 304,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 400,
+          "endBeat": 432
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": []
+    },
+    {
+      "id": "hook-b-depth",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/hook-b.wav",
+      "gainDb": 11.8,
+      "pan": -0.1,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 304,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 400,
+          "endBeat": 432
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    {
+      "id": "air-ghost",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/air-ghost.wav",
+      "gainDb": 64.3,
+      "pan": 0.17,
+      "velocityAmount": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 144,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 240,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 336,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 432,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Bubbles.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix Mid Side Enhance.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Space/Filtered Dub Tech.adv"
+        }
+      ]
+    },
+    {
+      "id": "analog-rear-pad",
+      "kind": "native",
+      "device": "Analog",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Analog/Synth Pad/Thick Chord Pad.adv",
+      "gainDb": 6.8,
+      "pan": -0.04,
+      "clips": [
+        {
+          "id": "pad-a",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 0,
+              "endBeat": 32
+            },
+            {
+              "startBeat": 160,
+              "endBeat": 192
+            },
+            {
+              "startBeat": 256,
+              "endBeat": 288
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0,
+              "durationBeats": 7.35,
+              "note": 57,
+              "velocity": 37
+            },
+            {
+              "beat": 0.012,
+              "durationBeats": 7.35,
+              "note": 60,
+              "velocity": 41
+            },
+            {
+              "beat": 0.024,
+              "durationBeats": 7.35,
+              "note": 64,
+              "velocity": 45
+            },
+            {
+              "beat": 0.036,
+              "durationBeats": 7.35,
+              "note": 71,
+              "velocity": 49
+            },
+            {
+              "beat": 8,
+              "durationBeats": 7.35,
+              "note": 53,
+              "velocity": 37
+            },
+            {
+              "beat": 8.012,
+              "durationBeats": 7.35,
+              "note": 57,
+              "velocity": 41
+            },
+            {
+              "beat": 8.024,
+              "durationBeats": 7.35,
+              "note": 60,
+              "velocity": 45
+            },
+            {
+              "beat": 8.036,
+              "durationBeats": 7.35,
+              "note": 66,
+              "velocity": 49
+            },
+            {
+              "beat": 16,
+              "durationBeats": 7.35,
+              "note": 55,
+              "velocity": 37
+            },
+            {
+              "beat": 16.012,
+              "durationBeats": 7.35,
+              "note": 60,
+              "velocity": 41
+            },
+            {
+              "beat": 16.024,
+              "durationBeats": 7.35,
+              "note": 64,
+              "velocity": 45
+            },
+            {
+              "beat": 16.036,
+              "durationBeats": 7.35,
+              "note": 69,
+              "velocity": 49
+            },
+            {
+              "beat": 24,
+              "durationBeats": 7.35,
+              "note": 55,
+              "velocity": 37
+            },
+            {
+              "beat": 24.012,
+              "durationBeats": 7.35,
+              "note": 57,
+              "velocity": 41
+            },
+            {
+              "beat": 24.024,
+              "durationBeats": 7.35,
+              "note": 62,
+              "velocity": 45
+            },
+            {
+              "beat": 24.036,
+              "durationBeats": 7.35,
+              "note": 64,
+              "velocity": 49
+            }
+          ]
+        },
+        {
+          "id": "pad-b",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 320,
+              "endBeat": 352
+            },
+            {
+              "startBeat": 416,
+              "endBeat": 448
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0,
+              "durationBeats": 7.35,
+              "note": 57,
+              "velocity": 37
+            },
+            {
+              "beat": 0.012,
+              "durationBeats": 7.35,
+              "note": 62,
+              "velocity": 41
+            },
+            {
+              "beat": 0.024,
+              "durationBeats": 7.35,
+              "note": 65,
+              "velocity": 45
+            },
+            {
+              "beat": 0.036,
+              "durationBeats": 7.35,
+              "note": 72,
+              "velocity": 49
+            },
+            {
+              "beat": 8,
+              "durationBeats": 7.35,
+              "note": 53,
+              "velocity": 37
+            },
+            {
+              "beat": 8.012,
+              "durationBeats": 7.35,
+              "note": 57,
+              "velocity": 41
+            },
+            {
+              "beat": 8.024,
+              "durationBeats": 7.35,
+              "note": 60,
+              "velocity": 45
+            },
+            {
+              "beat": 8.036,
+              "durationBeats": 7.35,
+              "note": 64,
+              "velocity": 49
+            },
+            {
+              "beat": 16,
+              "durationBeats": 7.35,
+              "note": 58,
+              "velocity": 37
+            },
+            {
+              "beat": 16.012,
+              "durationBeats": 7.35,
+              "note": 62,
+              "velocity": 41
+            },
+            {
+              "beat": 16.024,
+              "durationBeats": 7.35,
+              "note": 65,
+              "velocity": 45
+            },
+            {
+              "beat": 16.036,
+              "durationBeats": 7.35,
+              "note": 69,
+              "velocity": 49
+            },
+            {
+              "beat": 24,
+              "durationBeats": 7.35,
+              "note": 56,
+              "velocity": 37
+            },
+            {
+              "beat": 24.012,
+              "durationBeats": 7.35,
+              "note": 59,
+              "velocity": 41
+            },
+            {
+              "beat": 24.024,
+              "durationBeats": 7.35,
+              "note": 62,
+              "velocity": 45
+            },
+            {
+              "beat": 24.036,
+              "durationBeats": 7.35,
+              "note": 69,
+              "velocity": 49
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Compressor2",
+          "preset": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/presets/Taste Sidechain Pump.adv",
+          "sidechain": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/kick-sidechain.wav"
+        }
+      ]
+    },
+    {
+      "id": "electric-syncopated-chords",
+      "kind": "native",
+      "device": "Electric",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Electric/Piano & Keys/E-Piano MKI Dirty.adv",
+      "gainDb": 15.9,
+      "pan": 0.08,
+      "clips": [
+        {
+          "id": "ep-a",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 32,
+              "endBeat": 96
+            },
+            {
+              "startBeat": 192,
+              "endBeat": 224
+            },
+            {
+              "startBeat": 352,
+              "endBeat": 384
+            }
+          ],
+          "notes": [
+            {
+              "beat": 1.5,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 48
+            },
+            {
+              "beat": 1.508,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 51
+            },
+            {
+              "beat": 1.516,
+              "durationBeats": 0.34,
+              "note": 83,
+              "velocity": 54
+            },
+            {
+              "beat": 3.2738,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 58
+            },
+            {
+              "beat": 3.2818,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 61
+            },
+            {
+              "beat": 3.2898,
+              "durationBeats": 0.34,
+              "note": 83,
+              "velocity": 64
+            },
+            {
+              "beat": 5.5,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 48
+            },
+            {
+              "beat": 5.508,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 51
+            },
+            {
+              "beat": 5.516,
+              "durationBeats": 0.34,
+              "note": 83,
+              "velocity": 54
+            },
+            {
+              "beat": 7.2738,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 58
+            },
+            {
+              "beat": 7.2818,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 61
+            },
+            {
+              "beat": 7.2898,
+              "durationBeats": 0.34,
+              "note": 83,
+              "velocity": 64
+            },
+            {
+              "beat": 9.5,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 48
+            },
+            {
+              "beat": 9.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 9.516,
+              "durationBeats": 0.34,
+              "note": 78,
+              "velocity": 54
+            },
+            {
+              "beat": 11.2738,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 58
+            },
+            {
+              "beat": 11.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 11.2898,
+              "durationBeats": 0.34,
+              "note": 78,
+              "velocity": 64
+            },
+            {
+              "beat": 13.5,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 48
+            },
+            {
+              "beat": 13.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 13.516,
+              "durationBeats": 0.34,
+              "note": 78,
+              "velocity": 54
+            },
+            {
+              "beat": 15.2738,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 58
+            },
+            {
+              "beat": 15.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 15.2898,
+              "durationBeats": 0.34,
+              "note": 78,
+              "velocity": 64
+            },
+            {
+              "beat": 17.5,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 48
+            },
+            {
+              "beat": 17.508,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 51
+            },
+            {
+              "beat": 17.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 19.2738,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 58
+            },
+            {
+              "beat": 19.2818,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 61
+            },
+            {
+              "beat": 19.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            },
+            {
+              "beat": 21.5,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 48
+            },
+            {
+              "beat": 21.508,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 51
+            },
+            {
+              "beat": 21.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 23.2738,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 58
+            },
+            {
+              "beat": 23.2818,
+              "durationBeats": 0.34,
+              "note": 72,
+              "velocity": 61
+            },
+            {
+              "beat": 23.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            },
+            {
+              "beat": 25.5,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 48
+            },
+            {
+              "beat": 25.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 25.516,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 27.2738,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 58
+            },
+            {
+              "beat": 27.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 27.2898,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 64
+            },
+            {
+              "beat": 29.5,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 48
+            },
+            {
+              "beat": 29.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 29.516,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 31.2738,
+              "durationBeats": 0.34,
+              "note": 67,
+              "velocity": 58
+            },
+            {
+              "beat": 31.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 31.2898,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 64
+            }
+          ]
+        },
+        {
+          "id": "ep-b",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 288,
+              "endBeat": 320
+            },
+            {
+              "startBeat": 416,
+              "endBeat": 448
+            }
+          ],
+          "notes": [
+            {
+              "beat": 1.5,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 48
+            },
+            {
+              "beat": 1.508,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 51
+            },
+            {
+              "beat": 1.516,
+              "durationBeats": 0.34,
+              "note": 84,
+              "velocity": 54
+            },
+            {
+              "beat": 3.2738,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 58
+            },
+            {
+              "beat": 3.2818,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 61
+            },
+            {
+              "beat": 3.2898,
+              "durationBeats": 0.34,
+              "note": 84,
+              "velocity": 64
+            },
+            {
+              "beat": 5.5,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 48
+            },
+            {
+              "beat": 5.508,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 51
+            },
+            {
+              "beat": 5.516,
+              "durationBeats": 0.34,
+              "note": 84,
+              "velocity": 54
+            },
+            {
+              "beat": 7.2738,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 58
+            },
+            {
+              "beat": 7.2818,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 61
+            },
+            {
+              "beat": 7.2898,
+              "durationBeats": 0.34,
+              "note": 84,
+              "velocity": 64
+            },
+            {
+              "beat": 9.5,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 48
+            },
+            {
+              "beat": 9.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 9.516,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 11.2738,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 58
+            },
+            {
+              "beat": 11.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 11.2898,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 64
+            },
+            {
+              "beat": 13.5,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 48
+            },
+            {
+              "beat": 13.508,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 51
+            },
+            {
+              "beat": 13.516,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 15.2738,
+              "durationBeats": 0.34,
+              "note": 65,
+              "velocity": 58
+            },
+            {
+              "beat": 15.2818,
+              "durationBeats": 0.34,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 15.2898,
+              "durationBeats": 0.34,
+              "note": 76,
+              "velocity": 64
+            },
+            {
+              "beat": 17.5,
+              "durationBeats": 0.34,
+              "note": 70,
+              "velocity": 48
+            },
+            {
+              "beat": 17.508,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 51
+            },
+            {
+              "beat": 17.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 19.2738,
+              "durationBeats": 0.34,
+              "note": 70,
+              "velocity": 58
+            },
+            {
+              "beat": 19.2818,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 61
+            },
+            {
+              "beat": 19.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            },
+            {
+              "beat": 21.5,
+              "durationBeats": 0.34,
+              "note": 70,
+              "velocity": 48
+            },
+            {
+              "beat": 21.508,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 51
+            },
+            {
+              "beat": 21.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 23.2738,
+              "durationBeats": 0.34,
+              "note": 70,
+              "velocity": 58
+            },
+            {
+              "beat": 23.2818,
+              "durationBeats": 0.34,
+              "note": 74,
+              "velocity": 61
+            },
+            {
+              "beat": 23.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            },
+            {
+              "beat": 25.5,
+              "durationBeats": 0.34,
+              "note": 68,
+              "velocity": 48
+            },
+            {
+              "beat": 25.508,
+              "durationBeats": 0.34,
+              "note": 71,
+              "velocity": 51
+            },
+            {
+              "beat": 25.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 27.2738,
+              "durationBeats": 0.34,
+              "note": 68,
+              "velocity": 58
+            },
+            {
+              "beat": 27.2818,
+              "durationBeats": 0.34,
+              "note": 71,
+              "velocity": 61
+            },
+            {
+              "beat": 27.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            },
+            {
+              "beat": 29.5,
+              "durationBeats": 0.34,
+              "note": 68,
+              "velocity": 48
+            },
+            {
+              "beat": 29.508,
+              "durationBeats": 0.34,
+              "note": 71,
+              "velocity": 51
+            },
+            {
+              "beat": 29.516,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 31.2738,
+              "durationBeats": 0.34,
+              "note": 68,
+              "velocity": 58
+            },
+            {
+              "beat": 31.2818,
+              "durationBeats": 0.34,
+              "note": 71,
+              "velocity": 61
+            },
+            {
+              "beat": 31.2898,
+              "durationBeats": 0.34,
+              "note": 81,
+              "velocity": 64
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix Fat Tape.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Compressor2",
+          "preset": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/presets/Taste Sidechain Pump.adv",
+          "sidechain": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/kick-sidechain.wav"
+        }
+      ]
+    },
+    {
+      "id": "collision-chord-body",
+      "kind": "native",
+      "device": "Collision",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Collision/Guitar & Plucked/Acoustic String.adv",
+      "gainDb": -8.5,
+      "pan": -0.12,
+      "clips": [
+        {
+          "id": "stab-a",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 64,
+              "endBeat": 128
+            },
+            {
+              "startBeat": 192,
+              "endBeat": 256
+            },
+            {
+              "startBeat": 352,
+              "endBeat": 416
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 57
+            },
+            {
+              "beat": 0.7833,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 55
+            },
+            {
+              "beat": 0.7893,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 53
+            },
+            {
+              "beat": 0.7953,
+              "durationBeats": 0.31,
+              "note": 83,
+              "velocity": 51
+            },
+            {
+              "beat": 2.7773,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 65
+            },
+            {
+              "beat": 2.7833,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 63
+            },
+            {
+              "beat": 2.7893,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 61
+            },
+            {
+              "beat": 2.7953,
+              "durationBeats": 0.22,
+              "note": 83,
+              "velocity": 59
+            },
+            {
+              "beat": 4.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 62
+            },
+            {
+              "beat": 4.7833,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 60
+            },
+            {
+              "beat": 4.7893,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 58
+            },
+            {
+              "beat": 4.7953,
+              "durationBeats": 0.31,
+              "note": 83,
+              "velocity": 56
+            },
+            {
+              "beat": 6.7773,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 70
+            },
+            {
+              "beat": 6.7833,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 68
+            },
+            {
+              "beat": 6.7893,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 66
+            },
+            {
+              "beat": 6.7953,
+              "durationBeats": 0.22,
+              "note": 83,
+              "velocity": 64
+            },
+            {
+              "beat": 8.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 59
+            },
+            {
+              "beat": 8.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 57
+            },
+            {
+              "beat": 8.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 55
+            },
+            {
+              "beat": 8.7953,
+              "durationBeats": 0.31,
+              "note": 78,
+              "velocity": 53
+            },
+            {
+              "beat": 10.7773,
+              "durationBeats": 0.22,
+              "note": 65,
+              "velocity": 67
+            },
+            {
+              "beat": 10.7833,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 65
+            },
+            {
+              "beat": 10.7893,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 63
+            },
+            {
+              "beat": 10.7953,
+              "durationBeats": 0.22,
+              "note": 78,
+              "velocity": 61
+            },
+            {
+              "beat": 12.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 64
+            },
+            {
+              "beat": 12.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 62
+            },
+            {
+              "beat": 12.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 60
+            },
+            {
+              "beat": 12.7953,
+              "durationBeats": 0.31,
+              "note": 78,
+              "velocity": 58
+            },
+            {
+              "beat": 14.7773,
+              "durationBeats": 0.22,
+              "note": 65,
+              "velocity": 72
+            },
+            {
+              "beat": 14.7833,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 70
+            },
+            {
+              "beat": 14.7893,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 68
+            },
+            {
+              "beat": 14.7953,
+              "durationBeats": 0.22,
+              "note": 78,
+              "velocity": 66
+            },
+            {
+              "beat": 16.7773,
+              "durationBeats": 0.31,
+              "note": 67,
+              "velocity": 61
+            },
+            {
+              "beat": 16.7833,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 59
+            },
+            {
+              "beat": 16.7893,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 57
+            },
+            {
+              "beat": 16.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 55
+            },
+            {
+              "beat": 18.7773,
+              "durationBeats": 0.22,
+              "note": 67,
+              "velocity": 69
+            },
+            {
+              "beat": 18.7833,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 67
+            },
+            {
+              "beat": 18.7893,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 65
+            },
+            {
+              "beat": 18.7953,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 63
+            },
+            {
+              "beat": 20.7773,
+              "durationBeats": 0.31,
+              "note": 67,
+              "velocity": 58
+            },
+            {
+              "beat": 20.7833,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 56
+            },
+            {
+              "beat": 20.7893,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 20.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 52
+            },
+            {
+              "beat": 22.7773,
+              "durationBeats": 0.22,
+              "note": 67,
+              "velocity": 66
+            },
+            {
+              "beat": 22.7833,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 64
+            },
+            {
+              "beat": 22.7893,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 62
+            },
+            {
+              "beat": 22.7953,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 60
+            },
+            {
+              "beat": 24.7773,
+              "durationBeats": 0.31,
+              "note": 67,
+              "velocity": 63
+            },
+            {
+              "beat": 24.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 24.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 59
+            },
+            {
+              "beat": 24.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 57
+            },
+            {
+              "beat": 26.7773,
+              "durationBeats": 0.22,
+              "note": 67,
+              "velocity": 71
+            },
+            {
+              "beat": 26.7833,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 69
+            },
+            {
+              "beat": 26.7893,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 67
+            },
+            {
+              "beat": 26.7953,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 65
+            },
+            {
+              "beat": 28.7773,
+              "durationBeats": 0.31,
+              "note": 67,
+              "velocity": 60
+            },
+            {
+              "beat": 28.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 58
+            },
+            {
+              "beat": 28.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 56
+            },
+            {
+              "beat": 28.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 54
+            },
+            {
+              "beat": 30.7773,
+              "durationBeats": 0.22,
+              "note": 67,
+              "velocity": 68
+            },
+            {
+              "beat": 30.7833,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 66
+            },
+            {
+              "beat": 30.7893,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 64
+            },
+            {
+              "beat": 30.7953,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 62
+            }
+          ]
+        },
+        {
+          "id": "stab-b",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 288,
+              "endBeat": 352
+            },
+            {
+              "startBeat": 384,
+              "endBeat": 448
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 57
+            },
+            {
+              "beat": 0.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 55
+            },
+            {
+              "beat": 0.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 53
+            },
+            {
+              "beat": 0.7953,
+              "durationBeats": 0.31,
+              "note": 84,
+              "velocity": 51
+            },
+            {
+              "beat": 2.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 65
+            },
+            {
+              "beat": 2.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 63
+            },
+            {
+              "beat": 2.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 61
+            },
+            {
+              "beat": 2.7953,
+              "durationBeats": 0.31,
+              "note": 84,
+              "velocity": 59
+            },
+            {
+              "beat": 3.5,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 73
+            },
+            {
+              "beat": 3.506,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 71
+            },
+            {
+              "beat": 3.512,
+              "durationBeats": 0.22,
+              "note": 77,
+              "velocity": 69
+            },
+            {
+              "beat": 3.518,
+              "durationBeats": 0.22,
+              "note": 84,
+              "velocity": 67
+            },
+            {
+              "beat": 4.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 62
+            },
+            {
+              "beat": 4.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 60
+            },
+            {
+              "beat": 4.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 58
+            },
+            {
+              "beat": 4.7953,
+              "durationBeats": 0.31,
+              "note": 84,
+              "velocity": 56
+            },
+            {
+              "beat": 6.7773,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 70
+            },
+            {
+              "beat": 6.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 68
+            },
+            {
+              "beat": 6.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 66
+            },
+            {
+              "beat": 6.7953,
+              "durationBeats": 0.31,
+              "note": 84,
+              "velocity": 64
+            },
+            {
+              "beat": 7.5,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 78
+            },
+            {
+              "beat": 7.506,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 76
+            },
+            {
+              "beat": 7.512,
+              "durationBeats": 0.22,
+              "note": 77,
+              "velocity": 74
+            },
+            {
+              "beat": 7.518,
+              "durationBeats": 0.22,
+              "note": 84,
+              "velocity": 72
+            },
+            {
+              "beat": 8.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 59
+            },
+            {
+              "beat": 8.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 57
+            },
+            {
+              "beat": 8.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 55
+            },
+            {
+              "beat": 8.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 53
+            },
+            {
+              "beat": 10.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 67
+            },
+            {
+              "beat": 10.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 65
+            },
+            {
+              "beat": 10.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 63
+            },
+            {
+              "beat": 10.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 61
+            },
+            {
+              "beat": 11.5,
+              "durationBeats": 0.22,
+              "note": 65,
+              "velocity": 75
+            },
+            {
+              "beat": 11.506,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 73
+            },
+            {
+              "beat": 11.512,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 71
+            },
+            {
+              "beat": 11.518,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 69
+            },
+            {
+              "beat": 12.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 64
+            },
+            {
+              "beat": 12.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 62
+            },
+            {
+              "beat": 12.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 60
+            },
+            {
+              "beat": 12.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 58
+            },
+            {
+              "beat": 14.7773,
+              "durationBeats": 0.31,
+              "note": 65,
+              "velocity": 72
+            },
+            {
+              "beat": 14.7833,
+              "durationBeats": 0.31,
+              "note": 69,
+              "velocity": 70
+            },
+            {
+              "beat": 14.7893,
+              "durationBeats": 0.31,
+              "note": 72,
+              "velocity": 68
+            },
+            {
+              "beat": 14.7953,
+              "durationBeats": 0.31,
+              "note": 76,
+              "velocity": 66
+            },
+            {
+              "beat": 15.5,
+              "durationBeats": 0.22,
+              "note": 65,
+              "velocity": 80
+            },
+            {
+              "beat": 15.506,
+              "durationBeats": 0.22,
+              "note": 69,
+              "velocity": 78
+            },
+            {
+              "beat": 15.512,
+              "durationBeats": 0.22,
+              "note": 72,
+              "velocity": 76
+            },
+            {
+              "beat": 15.518,
+              "durationBeats": 0.22,
+              "note": 76,
+              "velocity": 74
+            },
+            {
+              "beat": 16.7773,
+              "durationBeats": 0.31,
+              "note": 70,
+              "velocity": 61
+            },
+            {
+              "beat": 16.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 59
+            },
+            {
+              "beat": 16.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 57
+            },
+            {
+              "beat": 16.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 55
+            },
+            {
+              "beat": 18.7773,
+              "durationBeats": 0.31,
+              "note": 70,
+              "velocity": 69
+            },
+            {
+              "beat": 18.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 67
+            },
+            {
+              "beat": 18.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 65
+            },
+            {
+              "beat": 18.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 63
+            },
+            {
+              "beat": 19.5,
+              "durationBeats": 0.22,
+              "note": 70,
+              "velocity": 77
+            },
+            {
+              "beat": 19.506,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 75
+            },
+            {
+              "beat": 19.512,
+              "durationBeats": 0.22,
+              "note": 77,
+              "velocity": 73
+            },
+            {
+              "beat": 19.518,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 71
+            },
+            {
+              "beat": 20.7773,
+              "durationBeats": 0.31,
+              "note": 70,
+              "velocity": 58
+            },
+            {
+              "beat": 20.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 56
+            },
+            {
+              "beat": 20.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 54
+            },
+            {
+              "beat": 20.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 52
+            },
+            {
+              "beat": 22.7773,
+              "durationBeats": 0.31,
+              "note": 70,
+              "velocity": 66
+            },
+            {
+              "beat": 22.7833,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 64
+            },
+            {
+              "beat": 22.7893,
+              "durationBeats": 0.31,
+              "note": 77,
+              "velocity": 62
+            },
+            {
+              "beat": 22.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 60
+            },
+            {
+              "beat": 23.5,
+              "durationBeats": 0.22,
+              "note": 70,
+              "velocity": 74
+            },
+            {
+              "beat": 23.506,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 72
+            },
+            {
+              "beat": 23.512,
+              "durationBeats": 0.22,
+              "note": 77,
+              "velocity": 70
+            },
+            {
+              "beat": 23.518,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 68
+            },
+            {
+              "beat": 24.7773,
+              "durationBeats": 0.31,
+              "note": 68,
+              "velocity": 63
+            },
+            {
+              "beat": 24.7833,
+              "durationBeats": 0.31,
+              "note": 71,
+              "velocity": 61
+            },
+            {
+              "beat": 24.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 59
+            },
+            {
+              "beat": 24.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 57
+            },
+            {
+              "beat": 26.7773,
+              "durationBeats": 0.31,
+              "note": 68,
+              "velocity": 71
+            },
+            {
+              "beat": 26.7833,
+              "durationBeats": 0.31,
+              "note": 71,
+              "velocity": 69
+            },
+            {
+              "beat": 26.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 67
+            },
+            {
+              "beat": 26.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 65
+            },
+            {
+              "beat": 27.5,
+              "durationBeats": 0.22,
+              "note": 68,
+              "velocity": 79
+            },
+            {
+              "beat": 27.506,
+              "durationBeats": 0.22,
+              "note": 71,
+              "velocity": 77
+            },
+            {
+              "beat": 27.512,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 75
+            },
+            {
+              "beat": 27.518,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 73
+            },
+            {
+              "beat": 28.7773,
+              "durationBeats": 0.31,
+              "note": 68,
+              "velocity": 60
+            },
+            {
+              "beat": 28.7833,
+              "durationBeats": 0.31,
+              "note": 71,
+              "velocity": 58
+            },
+            {
+              "beat": 28.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 56
+            },
+            {
+              "beat": 28.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 54
+            },
+            {
+              "beat": 30.7773,
+              "durationBeats": 0.31,
+              "note": 68,
+              "velocity": 68
+            },
+            {
+              "beat": 30.7833,
+              "durationBeats": 0.31,
+              "note": 71,
+              "velocity": 66
+            },
+            {
+              "beat": 30.7893,
+              "durationBeats": 0.31,
+              "note": 74,
+              "velocity": 64
+            },
+            {
+              "beat": 30.7953,
+              "durationBeats": 0.31,
+              "note": 81,
+              "velocity": 62
+            },
+            {
+              "beat": 31.5,
+              "durationBeats": 0.22,
+              "note": 68,
+              "velocity": 76
+            },
+            {
+              "beat": 31.506,
+              "durationBeats": 0.22,
+              "note": 71,
+              "velocity": 74
+            },
+            {
+              "beat": 31.512,
+              "durationBeats": 0.22,
+              "note": 74,
+              "velocity": 72
+            },
+            {
+              "beat": 31.518,
+              "durationBeats": 0.22,
+              "note": 81,
+              "velocity": 70
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Compressor2",
+          "preset": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/presets/Taste Sidechain Pump.adv",
+          "sidechain": "/Users/gakonst/Library/Caches/djbooth/house-taste-showcase/kick-sidechain.wav"
+        }
+      ]
+    },
+    {
+      "id": "collision-balafon",
+      "kind": "native",
+      "device": "Collision",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Collision/Mallets/Balafon Brushed.adv",
+      "gainDb": -5.1,
+      "pan": 0.21,
+      "clips": [
+        {
+          "id": "balafon-a",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 32,
+              "endBeat": 96
+            },
+            {
+              "startBeat": 192,
+              "endBeat": 224
+            },
+            {
+              "startBeat": 352,
+              "endBeat": 384
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0.781053,
+              "durationBeats": 0.18,
+              "note": 69,
+              "velocity": 62
+            },
+            {
+              "beat": 1.496499,
+              "durationBeats": 0.25,
+              "note": 72,
+              "velocity": 70
+            },
+            {
+              "beat": 2.782244,
+              "durationBeats": 0.18,
+              "note": 76,
+              "velocity": 78
+            },
+            {
+              "beat": 4.785226,
+              "durationBeats": 0.18,
+              "note": 72,
+              "velocity": 73
+            },
+            {
+              "beat": 5.495159,
+              "durationBeats": 0.25,
+              "note": 76,
+              "velocity": 81
+            },
+            {
+              "beat": 6.779116,
+              "durationBeats": 0.18,
+              "note": 83,
+              "velocity": 89
+            },
+            {
+              "beat": 8.785599,
+              "durationBeats": 0.18,
+              "note": 72,
+              "velocity": 84
+            },
+            {
+              "beat": 9.501494,
+              "durationBeats": 0.25,
+              "note": 78,
+              "velocity": 63
+            },
+            {
+              "beat": 10.777662,
+              "durationBeats": 0.18,
+              "note": 65,
+              "velocity": 71
+            },
+            {
+              "beat": 12.778627,
+              "durationBeats": 0.18,
+              "note": 78,
+              "velocity": 66
+            },
+            {
+              "beat": 13.502718,
+              "durationBeats": 0.25,
+              "note": 65,
+              "velocity": 74
+            },
+            {
+              "beat": 14.780238,
+              "durationBeats": 0.18,
+              "note": 69,
+              "velocity": 82
+            },
+            {
+              "beat": 16.778533,
+              "durationBeats": 0.18,
+              "note": 67,
+              "velocity": 77
+            },
+            {
+              "beat": 17.498717,
+              "durationBeats": 0.25,
+              "note": 72,
+              "velocity": 85
+            },
+            {
+              "beat": 18.783431,
+              "durationBeats": 0.18,
+              "note": 76,
+              "velocity": 64
+            },
+            {
+              "beat": 20.785538,
+              "durationBeats": 0.18,
+              "note": 72,
+              "velocity": 88
+            },
+            {
+              "beat": 21.501618,
+              "durationBeats": 0.25,
+              "note": 76,
+              "velocity": 67
+            },
+            {
+              "beat": 22.783661,
+              "durationBeats": 0.18,
+              "note": 81,
+              "velocity": 75
+            },
+            {
+              "beat": 24.785815,
+              "durationBeats": 0.18,
+              "note": 74,
+              "velocity": 70
+            },
+            {
+              "beat": 25.495324,
+              "durationBeats": 0.25,
+              "note": 76,
+              "velocity": 78
+            },
+            {
+              "beat": 26.785938,
+              "durationBeats": 0.18,
+              "note": 67,
+              "velocity": 86
+            },
+            {
+              "beat": 28.779173,
+              "durationBeats": 0.18,
+              "note": 76,
+              "velocity": 81
+            },
+            {
+              "beat": 29.504533,
+              "durationBeats": 0.25,
+              "note": 67,
+              "velocity": 89
+            },
+            {
+              "beat": 30.778146,
+              "durationBeats": 0.18,
+              "note": 69,
+              "velocity": 68
+            }
+          ]
+        },
+        {
+          "id": "balafon-b",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 288,
+              "endBeat": 352
+            },
+            {
+              "startBeat": 384,
+              "endBeat": 416
+            }
+          ],
+          "notes": [
+            {
+              "beat": 0.503878,
+              "durationBeats": 0.18,
+              "note": 81,
+              "velocity": 62
+            },
+            {
+              "beat": 1.784501,
+              "durationBeats": 0.25,
+              "note": 86,
+              "velocity": 70
+            },
+            {
+              "beat": 2.498258,
+              "durationBeats": 0.18,
+              "note": 89,
+              "velocity": 78
+            },
+            {
+              "beat": 3.77819,
+              "durationBeats": 0.15,
+              "note": 96,
+              "velocity": 86
+            },
+            {
+              "beat": 4.501768,
+              "durationBeats": 0.18,
+              "note": 86,
+              "velocity": 73
+            },
+            {
+              "beat": 5.784816,
+              "durationBeats": 0.25,
+              "note": 89,
+              "velocity": 81
+            },
+            {
+              "beat": 6.496419,
+              "durationBeats": 0.18,
+              "note": 96,
+              "velocity": 89
+            },
+            {
+              "beat": 7.77759,
+              "durationBeats": 0.15,
+              "note": 81,
+              "velocity": 68
+            },
+            {
+              "beat": 8.502127,
+              "durationBeats": 0.18,
+              "note": 84,
+              "velocity": 84
+            },
+            {
+              "beat": 9.783861,
+              "durationBeats": 0.25,
+              "note": 88,
+              "velocity": 63
+            },
+            {
+              "beat": 10.498443,
+              "durationBeats": 0.18,
+              "note": 77,
+              "velocity": 71
+            },
+            {
+              "beat": 11.782913,
+              "durationBeats": 0.15,
+              "note": 81,
+              "velocity": 79
+            },
+            {
+              "beat": 12.500922,
+              "durationBeats": 0.18,
+              "note": 88,
+              "velocity": 66
+            },
+            {
+              "beat": 13.77804,
+              "durationBeats": 0.25,
+              "note": 77,
+              "velocity": 74
+            },
+            {
+              "beat": 14.49625,
+              "durationBeats": 0.18,
+              "note": 81,
+              "velocity": 82
+            },
+            {
+              "beat": 15.783903,
+              "durationBeats": 0.15,
+              "note": 84,
+              "velocity": 90
+            },
+            {
+              "beat": 16.502021,
+              "durationBeats": 0.18,
+              "note": 82,
+              "velocity": 77
+            },
+            {
+              "beat": 17.785132,
+              "durationBeats": 0.25,
+              "note": 86,
+              "velocity": 85
+            },
+            {
+              "beat": 18.497486,
+              "durationBeats": 0.18,
+              "note": 89,
+              "velocity": 64
+            },
+            {
+              "beat": 19.779567,
+              "durationBeats": 0.15,
+              "note": 93,
+              "velocity": 72
+            },
+            {
+              "beat": 20.497154,
+              "durationBeats": 0.18,
+              "note": 86,
+              "velocity": 88
+            },
+            {
+              "beat": 21.785214,
+              "durationBeats": 0.25,
+              "note": 89,
+              "velocity": 67
+            },
+            {
+              "beat": 22.495398,
+              "durationBeats": 0.18,
+              "note": 93,
+              "velocity": 75
+            },
+            {
+              "beat": 23.785922,
+              "durationBeats": 0.15,
+              "note": 82,
+              "velocity": 83
+            },
+            {
+              "beat": 24.50195,
+              "durationBeats": 0.18,
+              "note": 86,
+              "velocity": 70
+            },
+            {
+              "beat": 25.785629,
+              "durationBeats": 0.25,
+              "note": 93,
+              "velocity": 78
+            },
+            {
+              "beat": 26.496877,
+              "durationBeats": 0.18,
+              "note": 80,
+              "velocity": 86
+            },
+            {
+              "beat": 27.781435,
+              "durationBeats": 0.15,
+              "note": 83,
+              "velocity": 65
+            },
+            {
+              "beat": 28.50222,
+              "durationBeats": 0.18,
+              "note": 93,
+              "velocity": 81
+            },
+            {
+              "beat": 29.782791,
+              "durationBeats": 0.25,
+              "note": 80,
+              "velocity": 89
+            },
+            {
+              "beat": 30.497257,
+              "durationBeats": 0.18,
+              "note": 83,
+              "velocity": 68
+            },
+            {
+              "beat": 31.783618,
+              "durationBeats": 0.15,
+              "note": 86,
+              "velocity": 76
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        }
+      ]
+    },
+    {
+      "id": "tension-muted-answer",
+      "kind": "native",
+      "device": "Tension",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Tension/Guitar & Plucked/Strat Muted Guitar.adv",
+      "gainDb": -11,
+      "pan": -0.22,
+      "clips": [
+        {
+          "id": "muted-answer",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 96,
+              "endBeat": 160
+            },
+            {
+              "startBeat": 224,
+              "endBeat": 256
+            },
+            {
+              "startBeat": 320,
+              "endBeat": 352
+            },
+            {
+              "startBeat": 384,
+              "endBeat": 448
+            }
+          ],
+          "notes": [
+            {
+              "beat": 1.781101,
+              "durationBeats": 0.21,
+              "note": 69,
+              "velocity": 61
+            },
+            {
+              "beat": 3.280706,
+              "durationBeats": 0.21,
+              "note": 72,
+              "velocity": 68
+            },
+            {
+              "beat": 5.496128,
+              "durationBeats": 0.21,
+              "note": 76,
+              "velocity": 75
+            },
+            {
+              "beat": 7.775572,
+              "durationBeats": 0.21,
+              "note": 69,
+              "velocity": 82
+            },
+            {
+              "beat": 9.780589,
+              "durationBeats": 0.21,
+              "note": 65,
+              "velocity": 61
+            },
+            {
+              "beat": 11.281179,
+              "durationBeats": 0.21,
+              "note": 69,
+              "velocity": 68
+            },
+            {
+              "beat": 13.502175,
+              "durationBeats": 0.21,
+              "note": 72,
+              "velocity": 75
+            },
+            {
+              "beat": 15.780622,
+              "durationBeats": 0.21,
+              "note": 65,
+              "velocity": 82
+            },
+            {
+              "beat": 17.781605,
+              "durationBeats": 0.21,
+              "note": 67,
+              "velocity": 61
+            },
+            {
+              "beat": 19.275117,
+              "durationBeats": 0.21,
+              "note": 72,
+              "velocity": 68
+            },
+            {
+              "beat": 21.501294,
+              "durationBeats": 0.21,
+              "note": 76,
+              "velocity": 75
+            },
+            {
+              "beat": 23.782238,
+              "durationBeats": 0.21,
+              "note": 67,
+              "velocity": 82
+            },
+            {
+              "beat": 25.782003,
+              "durationBeats": 0.21,
+              "note": 67,
+              "velocity": 61
+            },
+            {
+              "beat": 27.27526,
+              "durationBeats": 0.21,
+              "note": 71,
+              "velocity": 68
+            },
+            {
+              "beat": 29.503626,
+              "durationBeats": 0.21,
+              "note": 74,
+              "velocity": 75
+            },
+            {
+              "beat": 31.780394,
+              "durationBeats": 0.21,
+              "note": 67,
+              "velocity": 82
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Amp",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Amp/Clean.adv"
+        }
+      ]
+    },
+    {
+      "id": "collision-bell-signals",
+      "kind": "native",
+      "device": "Collision",
+      "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Instruments/Collision/Mallets/Bells Random.adv",
+      "gainDb": 26.8,
+      "pan": 0.28,
+      "clips": [
+        {
+          "id": "bell-signal",
+          "loopBeats": 32,
+          "placements": [
+            {
+              "startBeat": 128,
+              "endBeat": 160
+            },
+            {
+              "startBeat": 160,
+              "endBeat": 192
+            },
+            {
+              "startBeat": 256,
+              "endBeat": 288
+            },
+            {
+              "startBeat": 320,
+              "endBeat": 352
+            },
+            {
+              "startBeat": 416,
+              "endBeat": 448
+            }
+          ],
+          "notes": [
+            {
+              "beat": 3.75,
+              "durationBeats": 1.6,
+              "note": 81,
+              "velocity": 52
+            },
+            {
+              "beat": 11.5,
+              "durationBeats": 1.4,
+              "note": 84,
+              "velocity": 46
+            },
+            {
+              "beat": 19.75,
+              "durationBeats": 1.8,
+              "note": 79,
+              "velocity": 49
+            },
+            {
+              "beat": 27.5,
+              "durationBeats": 2.1,
+              "note": 86,
+              "velocity": 55
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    {
+      "id": "kick-main",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 909 DMX 2.wav",
+      "gainDb": 46.1,
+      "pan": 0,
+      "velocityAmount": 0.24,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 352
+        },
+        {
+          "startBeat": 416,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 124
+        },
+        {
+          "beat": 1,
+          "velocity": 116
+        },
+        {
+          "beat": 2,
+          "velocity": 116
+        },
+        {
+          "beat": 3,
+          "velocity": 116
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Kick EQ 3.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Kick Me.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Transient Shaping Enhance.adv"
+        }
+      ]
+    },
+    {
+      "id": "kick-final",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 909 DMX 2.wav",
+      "gainDb": 46.2,
+      "pan": 0,
+      "velocityAmount": 0.27,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 352,
+          "endBeat": 416
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 118
+        },
+        {
+          "beat": 1,
+          "velocity": 118
+        },
+        {
+          "beat": 2,
+          "velocity": 118
+        },
+        {
+          "beat": 3,
+          "velocity": 118
+        },
+        {
+          "beat": 3.75,
+          "velocity": 67
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Kick EQ 3.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Kick Me.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Transient Shaping Enhance.adv"
+        }
+      ]
+    },
+    {
+      "id": "kick-click",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick 909 Click Layer.wav",
+      "gainDb": -13.9,
+      "pan": 0,
+      "velocityAmount": 0.2,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 96,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 208,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 320,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 124
+        },
+        {
+          "beat": 1,
+          "velocity": 116
+        },
+        {
+          "beat": 2,
+          "velocity": 116
+        },
+        {
+          "beat": 3,
+          "velocity": 116
+        }
+      ],
+      "effects": []
+    },
+    {
+      "id": "clap-body",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Clap/Clap 707.wav",
+      "gainDb": 17.4,
+      "pan": 0.03,
+      "velocityAmount": 0.31,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 1,
+          "velocity": 107
+        },
+        {
+          "beat": 3,
+          "velocity": 112
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Clap Hybrid.adv"
+        }
+      ]
+    },
+    {
+      "id": "clap-ghost",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Rim/Rim Clap ER.wav",
+      "gainDb": 15.7,
+      "pan": -0.07,
+      "velocityAmount": 0.52,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 96,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 320,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.75,
+          "velocity": 43
+        },
+        {
+          "beat": 1,
+          "velocity": 108
+        },
+        {
+          "beat": 2.75,
+          "velocity": 43
+        },
+        {
+          "beat": 3,
+          "velocity": 108
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Snare EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Dark Snare Room.adv"
+        }
+      ]
+    },
+    {
+      "id": "offbeat-hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Open Vinyl DLG.wav",
+      "gainDb": -2.9,
+      "pan": 0.11,
+      "velocityAmount": 0.42,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.5,
+          "velocity": 82
+        },
+        {
+          "beat": 1.5,
+          "velocity": 85
+        },
+        {
+          "beat": 2.5,
+          "velocity": 88
+        },
+        {
+          "beat": 3.5,
+          "velocity": 91
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Hat EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix High End Sparkler.adv"
+        }
+      ]
+    },
+    {
+      "id": "closed-hat-grid",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Closed Acoustic Fast.aif",
+      "gainDb": -0.4,
+      "pan": -0.09,
+      "velocityAmount": 0.72,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.00167,
+          "velocity": 43
+        },
+        {
+          "beat": 0.287093,
+          "velocity": 56
+        },
+        {
+          "beat": 0.503102,
+          "velocity": 92
+        },
+        {
+          "beat": 0.784643,
+          "velocity": 51
+        },
+        {
+          "beat": 0.998409,
+          "velocity": 64
+        },
+        {
+          "beat": 1.28603,
+          "velocity": 46
+        },
+        {
+          "beat": 1.497199,
+          "velocity": 92
+        },
+        {
+          "beat": 1.787401,
+          "velocity": 72
+        },
+        {
+          "beat": 1.998414,
+          "velocity": 54
+        },
+        {
+          "beat": 2.2819,
+          "velocity": 67
+        },
+        {
+          "beat": 2.498606,
+          "velocity": 92
+        },
+        {
+          "beat": 2.785595,
+          "velocity": 62
+        },
+        {
+          "beat": 3.002085,
+          "velocity": 44
+        },
+        {
+          "beat": 3.287006,
+          "velocity": 57
+        },
+        {
+          "beat": 3.500165,
+          "velocity": 92
+        },
+        {
+          "beat": 3.782352,
+          "velocity": 52
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Hat EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix High End Sparkler.adv"
+        }
+      ]
+    },
+    {
+      "id": "live-shaker",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Shaker/Shaker Live Vinyl.wav",
+      "gainDb": 65.8,
+      "pan": 0.16,
+      "velocityAmount": 0.78,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 160,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 272,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.00334,
+          "velocity": 46
+        },
+        {
+          "beat": 0.284986,
+          "velocity": 63
+        },
+        {
+          "beat": 0.506205,
+          "velocity": 80
+        },
+        {
+          "beat": 0.780085,
+          "velocity": 89
+        },
+        {
+          "beat": 0.996818,
+          "velocity": 79
+        },
+        {
+          "beat": 1.282859,
+          "velocity": 61
+        },
+        {
+          "beat": 1.494398,
+          "velocity": 78
+        },
+        {
+          "beat": 1.785602,
+          "velocity": 89
+        },
+        {
+          "beat": 1.996828,
+          "velocity": 77
+        },
+        {
+          "beat": 2.2746,
+          "velocity": 59
+        },
+        {
+          "beat": 2.497213,
+          "velocity": 76
+        },
+        {
+          "beat": 2.781991,
+          "velocity": 89
+        },
+        {
+          "beat": 3.004169,
+          "velocity": 75
+        },
+        {
+          "beat": 3.284812,
+          "velocity": 57
+        },
+        {
+          "beat": 3.500329,
+          "velocity": 74
+        },
+        {
+          "beat": 3.775505,
+          "velocity": 89
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Drum Kit Enhancer.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Punchy Driven .adv"
+        }
+      ]
+    },
+    {
+      "id": "conga-low",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Tom/Tom Floor Dry Funk 1.wav",
+      "gainDb": 6.8,
+      "pan": -0.18,
+      "velocityAmount": 0.56,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.782364,
+          "velocity": 68
+        },
+        {
+          "beat": 1.786502,
+          "velocity": 74
+        },
+        {
+          "beat": 2.497909,
+          "velocity": 80
+        },
+        {
+          "beat": 3.778929,
+          "velocity": 86
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Drum Electrifier.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Short Bliss.adv"
+        }
+      ]
+    },
+    {
+      "id": "conga-high",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Tom/Tom Hi Taka School.wav",
+      "gainDb": -2.8,
+      "pan": 0.19,
+      "velocityAmount": 0.64,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 208,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 304,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.287616,
+          "velocity": 59
+        },
+        {
+          "beat": 1.286287,
+          "velocity": 70
+        },
+        {
+          "beat": 2.785744,
+          "velocity": 81
+        },
+        {
+          "beat": 3.287507,
+          "velocity": 67
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Drum Electrifier.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Short Bliss.adv"
+        }
+      ]
+    },
+    {
+      "id": "rim-interlock",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Rim/Rim Taka Natural 1.wav",
+      "gainDb": 10.3,
+      "pan": -0.23,
+      "velocityAmount": 0.61,
+      "loopBeats": 4,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 96
+        },
+        {
+          "startBeat": 128,
+          "endBeat": 192
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 320
+        },
+        {
+          "startBeat": 352,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.779743,
+          "velocity": 58
+        },
+        {
+          "beat": 1.782501,
+          "velocity": 66
+        },
+        {
+          "beat": 2.780695,
+          "velocity": 74
+        },
+        {
+          "beat": 3.500165,
+          "velocity": 82
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Drum Electrifier.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Short Bliss.adv"
+        }
+      ]
+    },
+    {
+      "id": "tom-phrase-fills",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Tom/Tom DMX Fatso 2.wav",
+      "gainDb": 61.4,
+      "pan": -0.06,
+      "velocityAmount": 0.52,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 448
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 29.5,
+          "velocity": 69
+        },
+        {
+          "beat": 30.25,
+          "velocity": 77
+        },
+        {
+          "beat": 30.75,
+          "velocity": 85
+        },
+        {
+          "beat": 31.25,
+          "velocity": 93
+        },
+        {
+          "beat": 31.5,
+          "velocity": 101
+        },
+        {
+          "beat": 31.75,
+          "velocity": 109
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Drum Kit Enhancer.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Punchy Driven .adv"
+        }
+      ]
+    },
+    {
+      "id": "section-crashes",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Cymbal/Crash DMX.wav",
+      "gainDb": 1.1,
+      "pan": 0.08,
+      "velocityAmount": 0.2,
+      "triggers": [
+        {
+          "beat": 32,
+          "velocity": 111
+        },
+        {
+          "beat": 64,
+          "velocity": 106
+        },
+        {
+          "beat": 96,
+          "velocity": 101
+        },
+        {
+          "beat": 160,
+          "velocity": 106
+        },
+        {
+          "beat": 192,
+          "velocity": 101
+        },
+        {
+          "beat": 256,
+          "velocity": 106
+        },
+        {
+          "beat": 288,
+          "velocity": 101
+        },
+        {
+          "beat": 320,
+          "velocity": 111
+        },
+        {
+          "beat": 352,
+          "velocity": 106
+        },
+        {
+          "beat": 416,
+          "velocity": 111
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    {
+      "id": "transition-risers",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/FX/Riser Whoosh Up.wav",
+      "gainDb": -8.5,
+      "pan": -0.1,
+      "velocityAmount": 0.2,
+      "triggers": [
+        {
+          "beat": 60,
+          "velocity": 108
+        },
+        {
+          "beat": 92,
+          "velocity": 108
+        },
+        {
+          "beat": 156,
+          "velocity": 108
+        },
+        {
+          "beat": 188,
+          "velocity": 108
+        },
+        {
+          "beat": 252,
+          "velocity": 108
+        },
+        {
+          "beat": 284,
+          "velocity": 108
+        },
+        {
+          "beat": 316,
+          "velocity": 108
+        },
+        {
+          "beat": 348,
+          "velocity": 108
+        },
+        {
+          "beat": 412,
+          "velocity": 108
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    {
+      "id": "water-transition-detail",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/FX/Blip Water.wav",
+      "gainDb": 6.8,
+      "pan": 0.24,
+      "velocityAmount": 0.35,
+      "triggers": [
+        {
+          "beat": 143.5,
+          "velocity": 76
+        },
+        {
+          "beat": 174.75,
+          "velocity": 80
+        },
+        {
+          "beat": 239.5,
+          "velocity": 84
+        },
+        {
+          "beat": 270.75,
+          "velocity": 88
+        },
+        {
+          "beat": 335.5,
+          "velocity": 92
+        },
+        {
+          "beat": 398.75,
+          "velocity": 96
+        },
+        {
+          "beat": 431.5,
+          "velocity": 100
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Bubbles.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix Mid Side Enhance.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Space/Filtered Dub Tech.adv"
+        }
+      ]
+    }
+  ]
+}

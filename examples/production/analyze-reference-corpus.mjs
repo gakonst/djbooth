@@ -16,6 +16,12 @@ const runnerLog = path.join(outputRoot, "runner.log");
 const windowsPerStem = Number(option("--windows") ?? 2);
 const limit = Number(option("--limit") ?? Number.POSITIVE_INFINITY);
 const requestedTrack = option("--track");
+const nativeProfileCandidate = path.join(repository, "rust/target/release/djbooth-rs");
+const profileBinary =
+  option("--profile-binary") ??
+  (process.arch === "arm64" && (await exists(nativeProfileCandidate))
+    ? nativeProfileCandidate
+    : undefined);
 
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 const tracks = manifest.tracks
@@ -71,6 +77,7 @@ for (const [index, track] of tracks.entries()) {
         "produce",
         "reference-profile",
         track.audio,
+        ...(profileBinary ? ["--binary", profileBinary] : []),
         "--stem",
         `drums=${path.join(stemsRoot, "drums.wav")}`,
         "--stem",

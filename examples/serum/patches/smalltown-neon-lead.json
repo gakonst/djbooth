@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "name": "Small city neon lead",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 64,
+  "portamentoMs": 38,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 72,
+    "unison": 3,
+    "detunePercent": 10,
+    "blendPercent": 76,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 12
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 29,
+    "octave": 1,
+    "unison": 2,
+    "detunePercent": 4,
+    "blendPercent": 80,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 90,
+    "randomPhasePercent": 9
+  },
+  "ampEnvelope": {
+    "attackMs": 8,
+    "holdMs": 0,
+    "decayMs": 560,
+    "sustainPercent": 48,
+    "releaseMs": 410
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 4200,
+    "resonancePercent": 13,
+    "drivePercent": 20,
+    "fatPercent": 10,
+    "mixPercent": 100,
+    "stereoPercent": 18,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 18,
+      "mixPercent": 28,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 350,
+      "lowQPercent": 61,
+      "lowGainDb": -5,
+      "highType": "Shelf",
+      "highFrequencyHz": 4600,
+      "highQPercent": 44,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -27,
+      "ratio": "4:1",
+      "attackMs": 18,
+      "releaseMs": 135,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "reverb": {
+      "sizePercent": 46,
+      "preDelayMs": 24,
+      "lowCutPercent": 61,
+      "highCutPercent": 63,
+      "dampPercent": 52,
+      "widthPercent": 91,
+      "mixPercent": 19
+    }
+  },
+  "lfos": {},
+  "modulations": [],
+  "designNotes": [
+    "Bright but restrained saw-square lead, wide above the fundamental and short enough to leave the pulse exposed."
+  ]
+}

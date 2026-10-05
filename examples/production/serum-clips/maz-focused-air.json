@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "title": "serum-air-bed",
+  "bpm": 123,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 4
+  },
+  "tracks": [
+    {
+      "id": "serum-air-bed",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-air.json",
+      "gainDb": -4,
+      "notes": [
+        {
+          "beat": 0,
+          "durationBeats": 7.45,
+          "note": 56,
+          "velocity": 47
+        },
+        {
+          "beat": 0.025,
+          "durationBeats": 7.45,
+          "note": 63,
+          "velocity": 51
+        },
+        {
+          "beat": 0.05,
+          "durationBeats": 7.45,
+          "note": 68,
+          "velocity": 55
+        },
+        {
+          "beat": 8,
+          "durationBeats": 7.45,
+          "note": 56,
+          "velocity": 47
+        },
+        {
+          "beat": 8.025,
+          "durationBeats": 7.45,
+          "note": 61,
+          "velocity": 51
+        },
+        {
+          "beat": 8.05,
+          "durationBeats": 7.45,
+          "note": 64,
+          "velocity": 55
+        },
+        {
+          "beat": 16,
+          "durationBeats": 7.45,
+          "note": 56,
+          "velocity": 47
+        },
+        {
+          "beat": 16.025,
+          "durationBeats": 7.45,
+          "note": 59,
+          "velocity": 51
+        },
+        {
+          "beat": 16.05,
+          "durationBeats": 7.45,
+          "note": 66,
+          "velocity": 55
+        },
+        {
+          "beat": 24,
+          "durationBeats": 7.45,
+          "note": 54,
+          "velocity": 47
+        },
+        {
+          "beat": 24.025,
+          "durationBeats": 7.45,
+          "note": 59,
+          "velocity": 51
+        },
+        {
+          "beat": 24.05,
+          "durationBeats": 7.45,
+          "note": 64,
+          "velocity": 55
+        }
+      ]
+    }
+  ]
+}

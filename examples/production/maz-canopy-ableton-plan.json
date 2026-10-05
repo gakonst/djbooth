@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "title": "Canopy Current — Ableton-orchestrated Brazilian Afro House",
+  "graph": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/production/maz-canopy-ableton-graph.json",
+  "postProcess": {
+    "analog-bass": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Bass Fattener.adv"
+    ],
+    "nylon-guitar": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Guitar - Controlled Dynamics.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Subtle Funk.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Room/Guitar Room.adv"
+    ],
+    "electric-piano": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Subtle Funk.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Room/Ambience.adv"
+    ],
+    "marimba-answer": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Echo/Clean Delay/Digital Edge Ping Pong.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Short Ambience.adv"
+    ],
+    "analog-pad": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Subtle Funk.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Wide Ambience.adv"
+    ],
+    "harp-hook": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Echo/Vintage Delay/Analog Triplet Dub.adv",
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Room/Ambience Medium.adv"
+    ],
+    "transition-riser": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Bright Long Verb.adv"
+    ],
+    "core909-39-hand-clap": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Short Ambience.adv"
+    ],
+    "core-perc-37-drum-voice": [
+      "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Echo/Clean Delay/Fake Dub Room.adv"
+    ]
+  },
+  "master": [
+    "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Racks/Audio Effect Racks/Mixing & Mastering/Master Punchy Dance.adg"
+  ],
+  "render": {
+    "dryStemsDirectory": "/Users/gakonst/Music/djbooth-candidates/maz-canopy-ableton/stems-dry",
+    "processedStemsDirectory": "/Users/gakonst/Music/djbooth-candidates/maz-canopy-ableton/stems-processed",
+    "finalMix": "/Users/gakonst/Music/djbooth-candidates/maz-canopy-ableton/canopy-current-master.wav"
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "name": "Focused glasswood pluck",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 62,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 77,
+    "unison": 3,
+    "detunePercent": 8,
+    "blendPercent": 74,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 18,
+    "warp": { "mode": "Bend +", "amountPercent": 18 }
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 21,
+    "octave": 1,
+    "semitones": 7,
+    "unison": 2,
+    "detunePercent": 5,
+    "blendPercent": 78,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 90,
+    "randomPhasePercent": 25
+  },
+  "ampEnvelope": {
+    "attackMs": 1.5,
+    "holdMs": 0,
+    "decayMs": 410,
+    "sustainPercent": 0,
+    "releaseMs": 260
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 540,
+    "resonancePercent": 24,
+    "drivePercent": 30,
+    "fatPercent": 18,
+    "mixPercent": 100,
+    "stereoPercent": 28,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 31,
+      "mixPercent": 46,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 420,
+      "lowQPercent": 58,
+      "lowGainDb": -4,
+      "highType": "Shelf",
+      "highFrequencyHz": 4800,
+      "highQPercent": 46,
+      "highGainDb": 3
+    },
+    "compressor": {
+      "thresholdDb": -26,
+      "ratio": "4:1",
+      "attackMs": 11,
+      "releaseMs": 120,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "reverb": {
+      "sizePercent": 47,
+      "preDelayMs": 18,
+      "lowCutPercent": 58,
+      "highCutPercent": 68,
+      "dampPercent": 45,
+      "widthPercent": 100,
+      "mixPercent": 24
+    }
+  },
+  "lfos": {
+    "strike": {
+      "mode": "envelope",
+      "rateHz": 4.2,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 10, "valuePercent": 76 },
+        { "positionPercent": 31, "valuePercent": 24 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "strike",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 540, "maximum": 5100 }
+    }
+  ],
+  "designNotes": [
+    "One recognizable upper-mid voice: woody transient, glass overtone, short wide reverb tail."
+  ]
+}

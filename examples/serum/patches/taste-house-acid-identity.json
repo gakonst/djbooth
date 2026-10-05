@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "name": "Taste model acid identity layer",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "tutorial": {
+    "title": "How To Make Indie Dance Like Mita Gami & Adam Ten (Maccabi House)",
+    "url": "https://www.youtube.com/watch?v=ktPQjgMMBP4",
+    "section": "acid edge, fine pitch motion, and resonant note articulation"
+  },
+  "masterVolumePercent": 48,
+  "portamentoMs": 34,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 71,
+    "octave": 0,
+    "unison": 1,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0,
+    "warp": { "mode": "Bend +", "amountPercent": 27 }
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 19,
+    "octave": 1,
+    "unison": 2,
+    "detunePercent": 3,
+    "blendPercent": 86,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 210,
+    "randomPhasePercent": 3
+  },
+  "ampEnvelope": {
+    "attackMs": 0.5,
+    "holdMs": 0,
+    "decayMs": 138,
+    "sustainPercent": 19,
+    "releaseMs": 34
+  },
+  "filter": {
+    "filterType": "MG Low 18",
+    "cutoffHz": 385,
+    "resonancePercent": 37,
+    "drivePercent": 62,
+    "fatPercent": 46,
+    "mixPercent": 100,
+    "stereoPercent": 6,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Diode 1",
+      "drivePercent": 57,
+      "mixPercent": 72,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 145,
+      "lowQPercent": 58,
+      "lowGainDb": -8,
+      "highType": "Shelf",
+      "highFrequencyHz": 2100,
+      "highQPercent": 47,
+      "highGainDb": 2.5
+    },
+    "compressor": {
+      "thresholdDb": -27,
+      "ratio": "4:1",
+      "attackMs": 11,
+      "releaseMs": 82,
+      "gainDb": 0,
+      "multiband": true
+    }
+  },
+  "lfos": {
+    "bite": {
+      "mode": "envelope",
+      "rateHz": 6.2,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 10, "valuePercent": 88 },
+        { "positionPercent": 36, "valuePercent": 47 },
+        { "positionPercent": 72, "valuePercent": 13 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    },
+    "chirp": {
+      "mode": "envelope",
+      "rateHz": 14,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 16, "valuePercent": 42 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "bite",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 385, "maximum": 3100 }
+    },
+    {
+      "source": "bite",
+      "destination": "filter.resonance",
+      "range": { "unit": "percent", "minimum": 24, "maximum": 49 }
+    },
+    {
+      "source": "chirp",
+      "destination": "pitch",
+      "range": { "unit": "semitones", "minimum": 0, "maximum": 1 }
+    }
+  ],
+  "designNotes": [
+    "This is a narrow upper-bass identity voice, not a second sub.",
+    "Its cutoff, resonance, and tiny pitch chirp move differently from the mono foundation on every note."
+  ]
+}

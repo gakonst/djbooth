@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "title": "Capability-aware Ableton sound-design recipes",
+  "sources": [
+    {
+      "title": "Working with Instruments and Effects",
+      "url": "https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/",
+      "principles": ["serial device chains", "automation targets", "gain staging"]
+    },
+    {
+      "title": "Instrument, Drum and Effect Racks",
+      "url": "https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/",
+      "principles": ["parallel chains", "macro mappings", "chain zones", "return chains"]
+    },
+    {
+      "title": "Live Instrument Reference",
+      "url": "https://www.ableton.com/en/live-manual/12/live-instrument-reference/",
+      "principles": ["oscillator interaction", "filter drive", "envelope and LFO modulation"]
+    },
+    {
+      "title": "Max for Live Devices",
+      "url": "https://www.ableton.com/en/live-manual/12/max-for-live-devices/",
+      "principles": ["LFO mapping", "envelope following", "sidechain modulation", "Shaper curves"]
+    },
+    {
+      "title": "Ableton Tutorials",
+      "url": "https://www.ableton.com/en/blog/categories/tutorials/",
+      "principles": ["device recipes", "resampling", "layering", "genre-specific workflows"]
+    }
+  ],
+  "runtimeSnapshot": {
+    "libraryAssets": 3588,
+    "deviceFamilies": 75,
+    "completeFamilies": 12,
+    "partialFamilies": 63,
+    "blockedFamilies": 0,
+    "nativePresetFamiliesRenderProven": 42,
+    "largestRemainingLimit": "exact execution of parallel rack chains, sends, selectors, nested routing, sidechains, and tempo automation"
+  },
+  "recipes": {
+    "pulseDefinition": {
+      "goal": "Add audible harmonics and controlled stereo motion without widening the sub",
+      "chain": [
+        { "kind": "native", "device": "Chorus2", "preset": "Chorus-Ensemble/Chorus Bass.adv" },
+        { "kind": "native", "device": "GlueCompressor", "preset": "Glue Compressor/Bass - Punch.adv" }
+      ]
+    },
+    "shadowPadSpace": {
+      "goal": "Create a wide ensemble bed with a real Ableton reverb tail",
+      "chain": [
+        { "kind": "native", "device": "Chorus2", "preset": "Chorus-Ensemble/Warm Ensemble.adv" },
+        { "kind": "native", "device": "Reverb", "preset": "Reverb/Special/Wide Ambience.adv" }
+      ]
+    },
+    "neonLeadSpace": {
+      "goal": "Give a dry synth lead classic ensemble movement and a compact room",
+      "chain": [
+        { "kind": "native", "device": "Chorus2", "preset": "Chorus-Ensemble/Chorus Classic.adv" },
+        { "kind": "native", "device": "Reverb", "preset": "Reverb/Room/Ambience Medium.adv" }
+      ]
+    },
+    "kickFocus": {
+      "goal": "Tighten a factory drum-machine kick with Ableton's own EQ and transient processing",
+      "chain": [
+        { "kind": "native", "device": "Eq8", "preset": "EQ Eight/Drums/Kick EQ 2.adv" },
+        { "kind": "native", "device": "DrumBuss", "preset": "Drum Buss/Transient Shaping Enhance.adv" }
+      ]
+    },
+    "snareRoom": {
+      "goal": "Shape the snare body before adding a short real Ableton room",
+      "chain": [
+        { "kind": "native", "device": "Eq8", "preset": "EQ Eight/Drums/Snare EQ 1.adv" },
+        { "kind": "native", "device": "Reverb", "preset": "Reverb/Room/Snare Room.adv" }
+      ]
+    },
+    "hatFocus": {
+      "goal": "Remove drum-machine hat harshness using the installed factory curve",
+      "chain": [
+        { "kind": "native", "device": "Eq8", "preset": "EQ Eight/Drums/Hat EQ 1.adv" }
+      ]
+    },
+    "clapAmbience": {
+      "goal": "Place the clap behind the snare without custom reverb",
+      "chain": [
+        { "kind": "native", "device": "Reverb", "preset": "Reverb/Special/Short Ambience.adv" }
+      ]
+    }
+  }
+}

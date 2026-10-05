@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "name": "Focused C# pulse bass",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 60,
+  "portamentoMs": 24,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 68,
+    "octave": 0,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 32,
+    "octave": 0,
+    "unison": 2,
+    "detunePercent": 4,
+    "blendPercent": 82,
+    "wavetablePositionPercent": 67,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "sub": {
+    "shape": "Sin",
+    "octave": -1,
+    "levelPercent": 42
+  },
+  "ampEnvelope": {
+    "attackMs": 0.5,
+    "holdMs": 8,
+    "decayMs": 190,
+    "sustainPercent": 26,
+    "releaseMs": 55
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 310,
+    "resonancePercent": 11,
+    "drivePercent": 54,
+    "fatPercent": 39,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 48,
+      "mixPercent": 62,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 180,
+      "lowQPercent": 62,
+      "lowGainDb": -2,
+      "highType": "Shelf",
+      "highFrequencyHz": 1650,
+      "highQPercent": 44,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -25,
+      "ratio": "4:1",
+      "attackMs": 18,
+      "releaseMs": 95,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "bite": {
+      "mode": "envelope",
+      "rateHz": 5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 18, "valuePercent": 62 },
+        { "positionPercent": 55, "valuePercent": 14 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "bite",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 310, "maximum": 1850 }
+    }
+  ],
+  "designNotes": [
+    "Centered sine/sub fundamental with a short harmonically rich pulse; no wide low-end layer."
+  ]
+}

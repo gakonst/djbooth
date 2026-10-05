@@ -1,0 +1,2685 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-09T23:13:31.855Z",
+  "status": {
+    "requestedReferences": 58,
+    "analyzedPersonalReferences": 30,
+    "analyzedProductionReferences": 30,
+    "analyzedHookLineageReferences": 0,
+    "analyzedMazReferences": 17,
+    "tutorialVideos": 50,
+    "tutorialHours": 45.87,
+    "tutorialActionWindows": 1432
+  },
+  "tasteAnchors": [
+    {
+      "name": "Adam Ten",
+      "score": 178.84,
+      "tracks": 20,
+      "genres": [
+        "indie dance",
+        "melodic house",
+        "tech house"
+      ]
+    },
+    {
+      "name": "Mita Gami",
+      "score": 127.44,
+      "tracks": 16,
+      "genres": [
+        "indie dance",
+        "melodic house"
+      ]
+    },
+    {
+      "name": "Echonomist",
+      "score": 117.08,
+      "tracks": 14,
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ]
+    },
+    {
+      "name": "Argy",
+      "score": 109.72,
+      "tracks": 16,
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "techno"
+      ]
+    },
+    {
+      "name": "Rafael",
+      "score": 96,
+      "tracks": 11,
+      "genres": [
+        "indie dance",
+        "tech house"
+      ]
+    },
+    {
+      "name": "OMRI.",
+      "score": 91.96,
+      "tracks": 11,
+      "genres": [
+        "indie dance",
+        "tech house"
+      ]
+    },
+    {
+      "name": "Emanuel Satie",
+      "score": 90.68,
+      "tracks": 10,
+      "genres": [
+        "melodic house",
+        "tech house"
+      ]
+    },
+    {
+      "name": "Max Styler",
+      "score": 74.44,
+      "tracks": 12,
+      "genres": [
+        "tech house"
+      ]
+    },
+    {
+      "name": "Trikk",
+      "score": 72.36,
+      "tracks": 7,
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Maga",
+      "score": 67.72,
+      "tracks": 7,
+      "genres": [
+        "melodic house",
+        "organic house",
+        "afro house",
+        "melodic techno"
+      ]
+    },
+    {
+      "name": "Chris Lake",
+      "score": 66.92,
+      "tracks": 5,
+      "genres": [
+        "tech house",
+        "house",
+        "bass house"
+      ]
+    },
+    {
+      "name": "Loofy",
+      "score": 62,
+      "tracks": 2,
+      "genres": [
+        "melodic techno"
+      ]
+    },
+    {
+      "name": "Layton Giordani",
+      "score": 61.04,
+      "tracks": 7,
+      "genres": [
+        "techno",
+        "melodic techno",
+        "tech house"
+      ]
+    },
+    {
+      "name": "Sean Doron",
+      "score": 60.68,
+      "tracks": 6,
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "indie dance",
+        "afro house"
+      ]
+    },
+    {
+      "name": "Brunello",
+      "score": 59.36,
+      "tracks": 6,
+      "genres": [
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Yamagucci",
+      "score": 54.64,
+      "tracks": 5,
+      "genres": [
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Henri Bergmann",
+      "score": 53.52,
+      "tracks": 7,
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Tim Engelhardt",
+      "score": 53.4,
+      "tracks": 5,
+      "genres": [
+        "melodic house",
+        "melodic techno",
+        "organic house",
+        "progressive house"
+      ]
+    },
+    {
+      "name": "Rem Siman",
+      "score": 52.72,
+      "tracks": 8,
+      "genres": [
+        "indie dance",
+        "melodic techno",
+        "melodic house"
+      ]
+    },
+    {
+      "name": "Purple Disco Machine",
+      "score": 51.24,
+      "tracks": 4,
+      "genres": [
+        "disco house",
+        "nu disco",
+        "funky house",
+        "house"
+      ]
+    },
+    {
+      "name": "Solomun",
+      "score": 47,
+      "tracks": 7,
+      "genres": [
+        "melodic techno",
+        "minimal techno",
+        "techno",
+        "melodic house"
+      ]
+    },
+    {
+      "name": "Ugo Banchi",
+      "score": 46.56,
+      "tracks": 3,
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ]
+    },
+    {
+      "name": "Jenia Tarsol",
+      "score": 42.64,
+      "tracks": 5,
+      "genres": [
+        "melodic techno",
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Auggië",
+      "score": 42.48,
+      "tracks": 7,
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "indie dance"
+      ]
+    },
+    {
+      "name": "Adriatique",
+      "score": 42.4,
+      "tracks": 4,
+      "genres": [
+        "melodic techno",
+        "melodic house",
+        "afro house",
+        "techno"
+      ]
+    },
+    {
+      "name": "BLOND:ISH",
+      "score": 42.28,
+      "tracks": 6,
+      "genres": [
+        "afro house",
+        "techengue",
+        "latin house"
+      ]
+    },
+    {
+      "name": "Yuvèe",
+      "score": 41.2,
+      "tracks": 6,
+      "genres": [
+        "indie dance"
+      ]
+    },
+    {
+      "name": "HIGHLITE",
+      "score": 40.88,
+      "tracks": 3,
+      "genres": [
+        "indie dance",
+        "melodic techno"
+      ]
+    },
+    {
+      "name": "Notre Dame",
+      "score": 39.48,
+      "tracks": 7,
+      "genres": [
+        "afro house",
+        "afro tech",
+        "melodic house",
+        "indie dance",
+        "organic house"
+      ]
+    },
+    {
+      "name": "FISHER",
+      "score": 38.84,
+      "tracks": 3,
+      "genres": [
+        "tech house",
+        "house"
+      ]
+    }
+  ],
+  "vocabulary": {
+    "primary": "Indie dance and melodic house with tech-house rhythmic authority, Afro/organic color, and memorable pop/disco/new-wave hook inheritance.",
+    "priorities": [
+      "A recognizable bass or melodic identity, not merely a functional loop.",
+      "Interlocking syncopation between bass, percussion, vocal fragments, and tonal stabs.",
+      "Eight- and sixteen-bar phrase development with subtraction, response, fills, and timbral evolution.",
+      "A controlled mono low-end foundation surrounded by wider, moving mid/high layers.",
+      "Contrast between sparse tension spaces and dense club-payoff sections.",
+      "Organic or human source gestures processed into a psychedelic electronic frame."
+    ],
+    "antiPatterns": [
+      "One static four-bar loop copied across the arrangement.",
+      "Every layer entering on the same downbeat and sustaining continuously.",
+      "A generic root-note bass with no articulation, syncopation, or call-and-response.",
+      "Brightness created only by adding hats or boosting highs.",
+      "Wide sub-bass, permanent full-spectrum pads, and reverb directly on low-frequency anchors.",
+      "Effects added as decoration without automation, routing intent, or section function."
+    ]
+  },
+  "audioTargets": {
+    "tracks": 30,
+    "metrics": {
+      "bpm": {
+        "min": 120.998,
+        "p25": 123.994,
+        "median": 124.997,
+        "p75": 126.749,
+        "max": 131.999,
+        "mean": 125.301
+      },
+      "phraseCount": {
+        "min": 6,
+        "p25": 12.25,
+        "median": 15,
+        "p75": 19,
+        "max": 24,
+        "mean": 15.467
+      },
+      "crestFactorDb": {
+        "min": 11.072,
+        "p25": 12.379,
+        "median": 12.963,
+        "p75": 13.426,
+        "max": 14.764,
+        "mean": 12.915
+      },
+      "transientDensityPerSecond": {
+        "min": 1.459,
+        "p25": 2.058,
+        "median": 2.577,
+        "p75": 3.385,
+        "max": 5.486,
+        "mean": 2.771
+      },
+      "stereoWidthDb": {
+        "min": -18.321,
+        "p25": -13.595,
+        "median": -12.762,
+        "p75": -10.734,
+        "max": -9.745,
+        "mean": -12.73
+      },
+      "lowBandRatio": {
+        "min": 0.576,
+        "p25": 0.671,
+        "median": 0.705,
+        "p75": 0.733,
+        "max": 0.771,
+        "mean": 0.698
+      },
+      "midBandRatio": {
+        "min": 0.221,
+        "p25": 0.254,
+        "median": 0.282,
+        "p75": 0.313,
+        "max": 0.403,
+        "mean": 0.288
+      },
+      "highBandRatio": {
+        "min": 0.004,
+        "p25": 0.01,
+        "median": 0.014,
+        "p75": 0.018,
+        "max": 0.029,
+        "mean": 0.014
+      },
+      "syncopationRatio": {
+        "min": 0.307,
+        "p25": 0.393,
+        "median": 0.487,
+        "p75": 0.594,
+        "max": 0.822,
+        "mean": 0.501
+      },
+      "sectionContrastDb": {
+        "min": 3.732,
+        "p25": 7.557,
+        "median": 9.206,
+        "p75": 13.059,
+        "max": 17.612,
+        "mean": 10.031
+      },
+      "bassToDrumsRmsDb": {
+        "min": -28.081,
+        "p25": -7.493,
+        "median": -6.07,
+        "p75": -3.945,
+        "max": -0.705,
+        "mean": -7.097
+      },
+      "otherToDrumsRmsDb": {
+        "min": -15.544,
+        "p25": -11.396,
+        "median": -9.844,
+        "p75": -7.736,
+        "max": -3.685,
+        "mean": -9.598
+      },
+      "vocalsToDrumsRmsDb": {
+        "min": -89.139,
+        "p25": -15.236,
+        "median": -12.895,
+        "p75": -10.038,
+        "max": -7.194,
+        "mean": -17.553
+      }
+    },
+    "phraseLengths": [
+      {
+        "value": "8",
+        "count": 258
+      },
+      {
+        "value": "16",
+        "count": 112
+      },
+      {
+        "value": "4",
+        "count": 46
+      },
+      {
+        "value": "1",
+        "count": 17
+      },
+      {
+        "value": "2",
+        "count": 13
+      },
+      {
+        "value": "10",
+        "count": 2
+      },
+      {
+        "value": "12",
+        "count": 2
+      },
+      {
+        "value": "24",
+        "count": 2
+      },
+      {
+        "value": "3",
+        "count": 2
+      },
+      {
+        "value": "7",
+        "count": 2
+      },
+      {
+        "value": "15",
+        "count": 1
+      },
+      {
+        "value": "18",
+        "count": 1
+      }
+    ]
+  },
+  "mazTargets": {
+    "tracks": 17,
+    "metrics": {
+      "bpm": {
+        "min": 119.998,
+        "p25": 121.997,
+        "median": 122.998,
+        "p75": 124.001,
+        "max": 126.006,
+        "mean": 123
+      },
+      "phraseCount": {
+        "min": 11,
+        "p25": 14,
+        "median": 15,
+        "p75": 18,
+        "max": 24,
+        "mean": 16.059
+      },
+      "crestFactorDb": {
+        "min": 9.817,
+        "p25": 12.525,
+        "median": 12.742,
+        "p75": 13.526,
+        "max": 14.12,
+        "mean": 12.689
+      },
+      "transientDensityPerSecond": {
+        "min": 0.823,
+        "p25": 1.87,
+        "median": 2.212,
+        "p75": 2.559,
+        "max": 3.821,
+        "mean": 2.198
+      },
+      "stereoWidthDb": {
+        "min": -14.822,
+        "p25": -12.524,
+        "median": -10.255,
+        "p75": -9.676,
+        "max": -8.8,
+        "mean": -11.087
+      },
+      "lowBandRatio": {
+        "min": 0.577,
+        "p25": 0.62,
+        "median": 0.647,
+        "p75": 0.693,
+        "max": 0.741,
+        "mean": 0.654
+      },
+      "midBandRatio": {
+        "min": 0.248,
+        "p25": 0.3,
+        "median": 0.341,
+        "p75": 0.368,
+        "max": 0.409,
+        "mean": 0.334
+      },
+      "highBandRatio": {
+        "min": 0.007,
+        "p25": 0.01,
+        "median": 0.011,
+        "p75": 0.014,
+        "max": 0.018,
+        "mean": 0.012
+      },
+      "syncopationRatio": {
+        "min": 0.412,
+        "p25": 0.487,
+        "median": 0.533,
+        "p75": 0.596,
+        "max": 0.783,
+        "mean": 0.555
+      },
+      "sectionContrastDb": {
+        "min": 5.673,
+        "p25": 8.977,
+        "median": 9.968,
+        "p75": 12.219,
+        "max": 15.591,
+        "mean": 10.299
+      },
+      "bassToDrumsRmsDb": {
+        "min": -24.886,
+        "p25": -7.784,
+        "median": -5.881,
+        "p75": -5.221,
+        "max": -3.95,
+        "mean": -7.676
+      },
+      "otherToDrumsRmsDb": {
+        "min": -10.59,
+        "p25": -7.833,
+        "median": -5.825,
+        "p75": -4.512,
+        "max": -2.194,
+        "mean": -6.276
+      },
+      "vocalsToDrumsRmsDb": {
+        "min": -34.756,
+        "p25": -12.852,
+        "median": -11.823,
+        "p75": -8.7,
+        "max": -7.448,
+        "mean": -13.319
+      }
+    },
+    "phraseLengths": [
+      {
+        "value": "8",
+        "count": 159
+      },
+      {
+        "value": "16",
+        "count": 71
+      },
+      {
+        "value": "1",
+        "count": 16
+      },
+      {
+        "value": "4",
+        "count": 16
+      },
+      {
+        "value": "2",
+        "count": 5
+      },
+      {
+        "value": "5",
+        "count": 2
+      },
+      {
+        "value": "11",
+        "count": 1
+      },
+      {
+        "value": "44",
+        "count": 1
+      },
+      {
+        "value": "7",
+        "count": 1
+      },
+      {
+        "value": "9",
+        "count": 1
+      }
+    ]
+  },
+  "hookLineageTargets": null,
+  "transcriptionTargets": {
+    "tracks": 30,
+    "windows": 120,
+    "notes": 5094,
+    "instruments": [
+      {
+        "value": "drums",
+        "count": 1794
+      },
+      {
+        "value": "electric_bass",
+        "count": 936
+      },
+      {
+        "value": "clean_electric_guitar",
+        "count": 817
+      },
+      {
+        "value": "acoustic_piano",
+        "count": 400
+      },
+      {
+        "value": "synth_lead",
+        "count": 375
+      },
+      {
+        "value": "acoustic_guitar",
+        "count": 238
+      },
+      {
+        "value": "string_ensemble",
+        "count": 208
+      },
+      {
+        "value": "voice",
+        "count": 182
+      },
+      {
+        "value": "distorted_electric_guitar",
+        "count": 112
+      },
+      {
+        "value": "synth_pad",
+        "count": 14
+      },
+      {
+        "value": "brass_section",
+        "count": 8
+      },
+      {
+        "value": "violin",
+        "count": 8
+      },
+      {
+        "value": "acoustic_bass",
+        "count": 2
+      }
+    ],
+    "sixteenthSlots": [
+      {
+        "value": "0",
+        "count": 1729
+      },
+      {
+        "value": "2",
+        "count": 1422
+      },
+      {
+        "value": "3",
+        "count": 999
+      },
+      {
+        "value": "1",
+        "count": 944
+      }
+    ],
+    "drumPitches": [
+      {
+        "value": "42",
+        "count": 446
+      },
+      {
+        "value": "36",
+        "count": 402
+      },
+      {
+        "value": "38",
+        "count": 301
+      },
+      {
+        "value": "44",
+        "count": 229
+      },
+      {
+        "value": "82",
+        "count": 98
+      },
+      {
+        "value": "35",
+        "count": 75
+      },
+      {
+        "value": "39",
+        "count": 72
+      },
+      {
+        "value": "54",
+        "count": 55
+      },
+      {
+        "value": "56",
+        "count": 38
+      },
+      {
+        "value": "46",
+        "count": 18
+      },
+      {
+        "value": "70",
+        "count": 14
+      },
+      {
+        "value": "51",
+        "count": 9
+      },
+      {
+        "value": "76",
+        "count": 8
+      },
+      {
+        "value": "50",
+        "count": 6
+      },
+      {
+        "value": "63",
+        "count": 6
+      },
+      {
+        "value": "64",
+        "count": 5
+      },
+      {
+        "value": "41",
+        "count": 3
+      },
+      {
+        "value": "47",
+        "count": 3
+      },
+      {
+        "value": "48",
+        "count": 3
+      },
+      {
+        "value": "52",
+        "count": 1
+      }
+    ],
+    "melodicIntervals": [
+      {
+        "value": "0",
+        "count": 651
+      },
+      {
+        "value": "12",
+        "count": 376
+      },
+      {
+        "value": "7",
+        "count": 258
+      },
+      {
+        "value": "5",
+        "count": 244
+      },
+      {
+        "value": "-12",
+        "count": 181
+      },
+      {
+        "value": "3",
+        "count": 172
+      },
+      {
+        "value": "4",
+        "count": 170
+      },
+      {
+        "value": "-19",
+        "count": 102
+      },
+      {
+        "value": "-7",
+        "count": 70
+      },
+      {
+        "value": "-24",
+        "count": 59
+      },
+      {
+        "value": "-5",
+        "count": 54
+      },
+      {
+        "value": "-16",
+        "count": 52
+      },
+      {
+        "value": "19",
+        "count": 47
+      },
+      {
+        "value": "24",
+        "count": 47
+      },
+      {
+        "value": "-14",
+        "count": 37
+      },
+      {
+        "value": "-2",
+        "count": 37
+      },
+      {
+        "value": "9",
+        "count": 36
+      },
+      {
+        "value": "2",
+        "count": 35
+      },
+      {
+        "value": "-8",
+        "count": 33
+      },
+      {
+        "value": "10",
+        "count": 31
+      }
+    ]
+  },
+  "tutorialCapabilities": [
+    {
+      "family": "Reverb",
+      "evidenceStatus": "evidence-rich",
+      "videos": 35,
+      "windows": 187,
+      "actions": [
+        {
+          "name": "add",
+          "count": 51
+        },
+        {
+          "name": "turn",
+          "count": 46
+        },
+        {
+          "name": "use",
+          "count": 37
+        },
+        {
+          "name": "set",
+          "count": 20
+        },
+        {
+          "name": "cut",
+          "count": 14
+        },
+        {
+          "name": "compress",
+          "count": 13
+        },
+        {
+          "name": "group",
+          "count": 10
+        },
+        {
+          "name": "create",
+          "count": 9
+        }
+      ],
+      "parameters": [
+        {
+          "name": "return",
+          "count": 36
+        },
+        {
+          "name": "send",
+          "count": 36
+        },
+        {
+          "name": "gain",
+          "count": 32
+        },
+        {
+          "name": "chain",
+          "count": 21
+        },
+        {
+          "name": "mix",
+          "count": 20
+        },
+        {
+          "name": "drive",
+          "count": 15
+        },
+        {
+          "name": "decay",
+          "count": 13
+        },
+        {
+          "name": "dry wet",
+          "count": 5
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Compressor2",
+      "evidenceStatus": "evidence-rich",
+      "videos": 26,
+      "windows": 91,
+      "actions": [
+        {
+          "name": "compress",
+          "count": 91
+        },
+        {
+          "name": "use",
+          "count": 24
+        },
+        {
+          "name": "add",
+          "count": 18
+        },
+        {
+          "name": "turn",
+          "count": 16
+        },
+        {
+          "name": "set",
+          "count": 12
+        },
+        {
+          "name": "group",
+          "count": 10
+        },
+        {
+          "name": "boost",
+          "count": 6
+        },
+        {
+          "name": "sidechain",
+          "count": 6
+        }
+      ],
+      "parameters": [
+        {
+          "name": "chain",
+          "count": 29
+        },
+        {
+          "name": "gain",
+          "count": 22
+        },
+        {
+          "name": "ratio",
+          "count": 12
+        },
+        {
+          "name": "attack",
+          "count": 9
+        },
+        {
+          "name": "mix",
+          "count": 9
+        },
+        {
+          "name": "release",
+          "count": 9
+        },
+        {
+          "name": "threshold",
+          "count": 8
+        },
+        {
+          "name": "resonance",
+          "count": 4
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Chorus2",
+      "evidenceStatus": "evidence-rich",
+      "videos": 16,
+      "windows": 35,
+      "actions": [
+        {
+          "name": "add",
+          "count": 11
+        },
+        {
+          "name": "use",
+          "count": 7
+        },
+        {
+          "name": "compress",
+          "count": 6
+        },
+        {
+          "name": "create",
+          "count": 6
+        },
+        {
+          "name": "turn",
+          "count": 6
+        },
+        {
+          "name": "set",
+          "count": 5
+        },
+        {
+          "name": "cut",
+          "count": 4
+        },
+        {
+          "name": "filter",
+          "count": 3
+        }
+      ],
+      "parameters": [
+        {
+          "name": "chain",
+          "count": 5
+        },
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "resonance",
+          "count": 5
+        },
+        {
+          "name": "decay",
+          "count": 4
+        },
+        {
+          "name": "cutoff",
+          "count": 2
+        },
+        {
+          "name": "envelope",
+          "count": 2
+        },
+        {
+          "name": "macro",
+          "count": 2
+        },
+        {
+          "name": "dry wet",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "StereoGain",
+      "evidenceStatus": "evidence-rich",
+      "videos": 15,
+      "windows": 34,
+      "actions": [
+        {
+          "name": "use",
+          "count": 14
+        },
+        {
+          "name": "turn",
+          "count": 13
+        },
+        {
+          "name": "set",
+          "count": 9
+        },
+        {
+          "name": "add",
+          "count": 7
+        },
+        {
+          "name": "cut",
+          "count": 5
+        },
+        {
+          "name": "automate",
+          "count": 4
+        },
+        {
+          "name": "group",
+          "count": 4
+        },
+        {
+          "name": "increase",
+          "count": 4
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 13
+        },
+        {
+          "name": "frequency",
+          "count": 4
+        },
+        {
+          "name": "mix",
+          "count": 4
+        },
+        {
+          "name": "rate",
+          "count": 3
+        },
+        {
+          "name": "return",
+          "count": 3
+        },
+        {
+          "name": "width",
+          "count": 3
+        },
+        {
+          "name": "0 dB",
+          "count": 2
+        },
+        {
+          "name": "chain",
+          "count": 2
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "UltraAnalog",
+      "evidenceStatus": "evidence-rich",
+      "videos": 14,
+      "windows": 34,
+      "actions": [
+        {
+          "name": "use",
+          "count": 13
+        },
+        {
+          "name": "add",
+          "count": 10
+        },
+        {
+          "name": "filter",
+          "count": 7
+        },
+        {
+          "name": "set",
+          "count": 5
+        },
+        {
+          "name": "create",
+          "count": 4
+        },
+        {
+          "name": "lower",
+          "count": 3
+        },
+        {
+          "name": "select",
+          "count": 3
+        },
+        {
+          "name": "turn",
+          "count": 3
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 6
+        },
+        {
+          "name": "send",
+          "count": 4
+        },
+        {
+          "name": "chain",
+          "count": 3
+        },
+        {
+          "name": "decay",
+          "count": 3
+        },
+        {
+          "name": "envelope",
+          "count": 3
+        },
+        {
+          "name": "gain",
+          "count": 3
+        },
+        {
+          "name": "attack",
+          "count": 2
+        },
+        {
+          "name": "mix",
+          "count": 2
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "Echo",
+      "evidenceStatus": "evidence-rich",
+      "videos": 18,
+      "windows": 31,
+      "actions": [
+        {
+          "name": "add",
+          "count": 12
+        },
+        {
+          "name": "set",
+          "count": 9
+        },
+        {
+          "name": "use",
+          "count": 7
+        },
+        {
+          "name": "cut",
+          "count": 6
+        },
+        {
+          "name": "change",
+          "count": 4
+        },
+        {
+          "name": "create",
+          "count": 3
+        },
+        {
+          "name": "turn",
+          "count": 3
+        },
+        {
+          "name": "compress",
+          "count": 2
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "dry wet",
+          "count": 4
+        },
+        {
+          "name": "mix",
+          "count": 4
+        },
+        {
+          "name": "chain",
+          "count": 3
+        },
+        {
+          "name": "cutoff",
+          "count": 3
+        },
+        {
+          "name": "send",
+          "count": 3
+        },
+        {
+          "name": "decay",
+          "count": 2
+        },
+        {
+          "name": "feedback",
+          "count": 2
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "GlueCompressor",
+      "evidenceStatus": "evidence-rich",
+      "videos": 10,
+      "windows": 29,
+      "actions": [
+        {
+          "name": "compress",
+          "count": 29
+        },
+        {
+          "name": "use",
+          "count": 9
+        },
+        {
+          "name": "add",
+          "count": 5
+        },
+        {
+          "name": "group",
+          "count": 5
+        },
+        {
+          "name": "set",
+          "count": 3
+        },
+        {
+          "name": "turn",
+          "count": 3
+        },
+        {
+          "name": "adjust",
+          "count": 2
+        },
+        {
+          "name": "boost",
+          "count": 2
+        }
+      ],
+      "parameters": [
+        {
+          "name": "chain",
+          "count": 7
+        },
+        {
+          "name": "release",
+          "count": 7
+        },
+        {
+          "name": "attack",
+          "count": 5
+        },
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "ratio",
+          "count": 5
+        },
+        {
+          "name": "mix",
+          "count": 2
+        },
+        {
+          "name": "threshold",
+          "count": 2
+        },
+        {
+          "name": "amount",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Overdrive",
+      "evidenceStatus": "evidence-rich",
+      "videos": 8,
+      "windows": 29,
+      "actions": [
+        {
+          "name": "add",
+          "count": 11
+        },
+        {
+          "name": "turn",
+          "count": 11
+        },
+        {
+          "name": "use",
+          "count": 5
+        },
+        {
+          "name": "compress",
+          "count": 3
+        },
+        {
+          "name": "cut",
+          "count": 3
+        },
+        {
+          "name": "change",
+          "count": 2
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "filter",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "drive",
+          "count": 29
+        },
+        {
+          "name": "return",
+          "count": 8
+        },
+        {
+          "name": "send",
+          "count": 7
+        },
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "frequency",
+          "count": 4
+        },
+        {
+          "name": "chain",
+          "count": 2
+        },
+        {
+          "name": "60 HZ",
+          "count": 1
+        },
+        {
+          "name": "decay",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Limiter",
+      "evidenceStatus": "evidence-rich",
+      "videos": 13,
+      "windows": 27,
+      "actions": [
+        {
+          "name": "use",
+          "count": 13
+        },
+        {
+          "name": "compress",
+          "count": 9
+        },
+        {
+          "name": "turn",
+          "count": 7
+        },
+        {
+          "name": "add",
+          "count": 6
+        },
+        {
+          "name": "set",
+          "count": 5
+        },
+        {
+          "name": "change",
+          "count": 4
+        },
+        {
+          "name": "boost",
+          "count": 3
+        },
+        {
+          "name": "automate",
+          "count": 2
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 7
+        },
+        {
+          "name": "mix",
+          "count": 6
+        },
+        {
+          "name": "attack",
+          "count": 2
+        },
+        {
+          "name": "chain",
+          "count": 2
+        },
+        {
+          "name": "release",
+          "count": 2
+        },
+        {
+          "name": "0 dB",
+          "count": 1
+        },
+        {
+          "name": "1 dB",
+          "count": 1
+        },
+        {
+          "name": "1 DB",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Eq8",
+      "evidenceStatus": "evidence-rich",
+      "videos": 5,
+      "windows": 24,
+      "actions": [
+        {
+          "name": "turn",
+          "count": 10
+        },
+        {
+          "name": "use",
+          "count": 9
+        },
+        {
+          "name": "add",
+          "count": 7
+        },
+        {
+          "name": "compress",
+          "count": 5
+        },
+        {
+          "name": "reduce",
+          "count": 5
+        },
+        {
+          "name": "filter",
+          "count": 4
+        },
+        {
+          "name": "set",
+          "count": 4
+        },
+        {
+          "name": "automate",
+          "count": 3
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 7
+        },
+        {
+          "name": "return",
+          "count": 3
+        },
+        {
+          "name": "drive",
+          "count": 2
+        },
+        {
+          "name": "send",
+          "count": 2
+        },
+        {
+          "name": "width",
+          "count": 2
+        },
+        {
+          "name": "5db",
+          "count": 1
+        },
+        {
+          "name": "amount",
+          "count": 1
+        },
+        {
+          "name": "chain",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "AutoFilter",
+      "evidenceStatus": "evidence-rich",
+      "videos": 9,
+      "windows": 19,
+      "actions": [
+        {
+          "name": "filter",
+          "count": 19
+        },
+        {
+          "name": "add",
+          "count": 6
+        },
+        {
+          "name": "automate",
+          "count": 5
+        },
+        {
+          "name": "cut",
+          "count": 5
+        },
+        {
+          "name": "turn",
+          "count": 5
+        },
+        {
+          "name": "use",
+          "count": 5
+        },
+        {
+          "name": "group",
+          "count": 4
+        },
+        {
+          "name": "increase",
+          "count": 3
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 4
+        },
+        {
+          "name": "200 HZ",
+          "count": 1
+        },
+        {
+          "name": "depth",
+          "count": 1
+        },
+        {
+          "name": "macro",
+          "count": 1
+        },
+        {
+          "name": "mix",
+          "count": 1
+        },
+        {
+          "name": "ratio",
+          "count": 1
+        },
+        {
+          "name": "resonance",
+          "count": 1
+        },
+        {
+          "name": "return",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "StringStudio",
+      "evidenceStatus": "evidence-rich",
+      "videos": 13,
+      "windows": 17,
+      "actions": [
+        {
+          "name": "add",
+          "count": 8
+        },
+        {
+          "name": "compress",
+          "count": 2
+        },
+        {
+          "name": "cut",
+          "count": 2
+        },
+        {
+          "name": "filter",
+          "count": 2
+        },
+        {
+          "name": "use",
+          "count": 2
+        },
+        {
+          "name": "automate",
+          "count": 1
+        },
+        {
+          "name": "change",
+          "count": 1
+        },
+        {
+          "name": "group",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 3
+        },
+        {
+          "name": "rate",
+          "count": 2
+        },
+        {
+          "name": "envelope",
+          "count": 1
+        },
+        {
+          "name": "macro",
+          "count": 1
+        },
+        {
+          "name": "ratio",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "Operator",
+      "evidenceStatus": "evidence-rich",
+      "videos": 10,
+      "windows": 17,
+      "actions": [
+        {
+          "name": "use",
+          "count": 11
+        },
+        {
+          "name": "add",
+          "count": 5
+        },
+        {
+          "name": "create",
+          "count": 4
+        },
+        {
+          "name": "filter",
+          "count": 3
+        },
+        {
+          "name": "set",
+          "count": 3
+        },
+        {
+          "name": "automate",
+          "count": 2
+        },
+        {
+          "name": "duplicate",
+          "count": 2
+        },
+        {
+          "name": "lower",
+          "count": 2
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 4
+        },
+        {
+          "name": "sustain",
+          "count": 4
+        },
+        {
+          "name": "gain",
+          "count": 3
+        },
+        {
+          "name": "release",
+          "count": 3
+        },
+        {
+          "name": "envelope",
+          "count": 2
+        },
+        {
+          "name": "decay",
+          "count": 1
+        },
+        {
+          "name": "lfo",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Saturator",
+      "evidenceStatus": "evidence-rich",
+      "videos": 10,
+      "windows": 16,
+      "actions": [
+        {
+          "name": "add",
+          "count": 10
+        },
+        {
+          "name": "turn",
+          "count": 6
+        },
+        {
+          "name": "use",
+          "count": 4
+        },
+        {
+          "name": "group",
+          "count": 3
+        },
+        {
+          "name": "set",
+          "count": 3
+        },
+        {
+          "name": "compress",
+          "count": 2
+        },
+        {
+          "name": "duplicate",
+          "count": 2
+        },
+        {
+          "name": "filter",
+          "count": 2
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 3
+        },
+        {
+          "name": "ratio",
+          "count": 3
+        },
+        {
+          "name": "drive",
+          "count": 2
+        },
+        {
+          "name": "gain",
+          "count": 2
+        },
+        {
+          "name": "chain",
+          "count": 1
+        },
+        {
+          "name": "envelope",
+          "count": 1
+        },
+        {
+          "name": "macro",
+          "count": 1
+        },
+        {
+          "name": "rate",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "DrumGroupDevice",
+      "evidenceStatus": "usable",
+      "videos": 7,
+      "windows": 13,
+      "actions": [
+        {
+          "name": "use",
+          "count": 5
+        },
+        {
+          "name": "turn",
+          "count": 4
+        },
+        {
+          "name": "select",
+          "count": 2
+        },
+        {
+          "name": "change",
+          "count": 1
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "cut",
+          "count": 1
+        },
+        {
+          "name": "layer",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "chain",
+          "count": 4
+        },
+        {
+          "name": "return",
+          "count": 4
+        },
+        {
+          "name": "send",
+          "count": 4
+        },
+        {
+          "name": "amount",
+          "count": 1
+        },
+        {
+          "name": "drive",
+          "count": 1
+        },
+        {
+          "name": "dry wet",
+          "count": 1
+        },
+        {
+          "name": "lfo",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "OriginalSimpler",
+      "evidenceStatus": "usable",
+      "videos": 9,
+      "windows": 12,
+      "actions": [
+        {
+          "name": "use",
+          "count": 6
+        },
+        {
+          "name": "create",
+          "count": 3
+        },
+        {
+          "name": "filter",
+          "count": 2
+        },
+        {
+          "name": "add",
+          "count": 1
+        },
+        {
+          "name": "set",
+          "count": 1
+        },
+        {
+          "name": "turn",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "lfo",
+          "count": 4
+        },
+        {
+          "name": "gain",
+          "count": 2
+        },
+        {
+          "name": "resonance",
+          "count": 2
+        },
+        {
+          "name": "transpose",
+          "count": 2
+        },
+        {
+          "name": "drive",
+          "count": 1
+        },
+        {
+          "name": "envelope",
+          "count": 1
+        },
+        {
+          "name": "width",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "Erosion",
+      "evidenceStatus": "usable",
+      "videos": 8,
+      "windows": 11,
+      "actions": [
+        {
+          "name": "add",
+          "count": 6
+        },
+        {
+          "name": "turn",
+          "count": 3
+        },
+        {
+          "name": "use",
+          "count": 2
+        },
+        {
+          "name": "change",
+          "count": 1
+        },
+        {
+          "name": "compress",
+          "count": 1
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "saturate",
+          "count": 1
+        },
+        {
+          "name": "set",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "return",
+          "count": 3
+        },
+        {
+          "name": "gain",
+          "count": 2
+        },
+        {
+          "name": "send",
+          "count": 2
+        },
+        {
+          "name": "amount",
+          "count": 1
+        },
+        {
+          "name": "chain",
+          "count": 1
+        },
+        {
+          "name": "drive",
+          "count": 1
+        },
+        {
+          "name": "frequency",
+          "count": 1
+        },
+        {
+          "name": "rate",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Drift",
+      "evidenceStatus": "usable",
+      "videos": 4,
+      "windows": 9,
+      "actions": [
+        {
+          "name": "add",
+          "count": 5
+        },
+        {
+          "name": "filter",
+          "count": 3
+        },
+        {
+          "name": "set",
+          "count": 3
+        },
+        {
+          "name": "automate",
+          "count": 1
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "layer",
+          "count": 1
+        },
+        {
+          "name": "use",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "lfo",
+          "count": 3
+        },
+        {
+          "name": "envelope",
+          "count": 2
+        },
+        {
+          "name": "frequency",
+          "count": 2
+        },
+        {
+          "name": "chain",
+          "count": 1
+        },
+        {
+          "name": "gain",
+          "count": 1
+        },
+        {
+          "name": "ratio",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Gate",
+      "evidenceStatus": "usable",
+      "videos": 4,
+      "windows": 8,
+      "actions": [
+        {
+          "name": "layer",
+          "count": 2
+        },
+        {
+          "name": "turn",
+          "count": 2
+        },
+        {
+          "name": "compress",
+          "count": 1
+        },
+        {
+          "name": "group",
+          "count": 1
+        },
+        {
+          "name": "use",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "chain",
+          "count": 2
+        },
+        {
+          "name": "threshold",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "AutoPan",
+      "evidenceStatus": "usable",
+      "videos": 7,
+      "windows": 7,
+      "actions": [
+        {
+          "name": "add",
+          "count": 4
+        },
+        {
+          "name": "set",
+          "count": 3
+        },
+        {
+          "name": "turn",
+          "count": 2
+        },
+        {
+          "name": "automate",
+          "count": 1
+        },
+        {
+          "name": "cut",
+          "count": 1
+        },
+        {
+          "name": "increase",
+          "count": 1
+        },
+        {
+          "name": "reduce",
+          "count": 1
+        },
+        {
+          "name": "use",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 3
+        },
+        {
+          "name": "amount",
+          "count": 2
+        },
+        {
+          "name": "dry wet",
+          "count": 1
+        },
+        {
+          "name": "rate",
+          "count": 1
+        },
+        {
+          "name": "resonance",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Roar",
+      "evidenceStatus": "usable",
+      "videos": 5,
+      "windows": 7,
+      "actions": [
+        {
+          "name": "add",
+          "count": 5
+        },
+        {
+          "name": "boost",
+          "count": 2
+        },
+        {
+          "name": "compress",
+          "count": 2
+        },
+        {
+          "name": "set",
+          "count": 2
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "lower",
+          "count": 1
+        },
+        {
+          "name": "use",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 4
+        },
+        {
+          "name": "drive",
+          "count": 1
+        },
+        {
+          "name": "envelope",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "PhaserNew",
+      "evidenceStatus": "usable",
+      "videos": 5,
+      "windows": 7,
+      "actions": [
+        {
+          "name": "add",
+          "count": 2
+        },
+        {
+          "name": "cut",
+          "count": 2
+        },
+        {
+          "name": "use",
+          "count": 2
+        },
+        {
+          "name": "compress",
+          "count": 1
+        },
+        {
+          "name": "filter",
+          "count": 1
+        },
+        {
+          "name": "select",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "cutoff",
+          "count": 2
+        },
+        {
+          "name": "resonance",
+          "count": 2
+        },
+        {
+          "name": "macro",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "InstrumentVector",
+      "evidenceStatus": "usable",
+      "videos": 3,
+      "windows": 7,
+      "actions": [
+        {
+          "name": "create",
+          "count": 3
+        },
+        {
+          "name": "turn",
+          "count": 3
+        },
+        {
+          "name": "use",
+          "count": 3
+        },
+        {
+          "name": "add",
+          "count": 1
+        },
+        {
+          "name": "filter",
+          "count": 1
+        },
+        {
+          "name": "set",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "chain",
+          "count": 2
+        },
+        {
+          "name": "envelope",
+          "count": 1
+        },
+        {
+          "name": "macro",
+          "count": 1
+        },
+        {
+          "name": "send",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "Hybrid",
+      "evidenceStatus": "usable",
+      "videos": 2,
+      "windows": 7,
+      "actions": [
+        {
+          "name": "set",
+          "count": 5
+        },
+        {
+          "name": "turn",
+          "count": 3
+        },
+        {
+          "name": "add",
+          "count": 2
+        },
+        {
+          "name": "reduce",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 5
+        },
+        {
+          "name": "return",
+          "count": 3
+        },
+        {
+          "name": "dry wet",
+          "count": 2
+        },
+        {
+          "name": "resonance",
+          "count": 2
+        },
+        {
+          "name": "send",
+          "count": 2
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "Corpus",
+      "evidenceStatus": "usable",
+      "videos": 4,
+      "windows": 5,
+      "actions": [
+        {
+          "name": "create",
+          "count": 2
+        },
+        {
+          "name": "layer",
+          "count": 2
+        },
+        {
+          "name": "set",
+          "count": 2
+        },
+        {
+          "name": "turn",
+          "count": 2
+        },
+        {
+          "name": "use",
+          "count": 2
+        },
+        {
+          "name": "add",
+          "count": 1
+        },
+        {
+          "name": "change",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "frequency",
+          "count": 1
+        },
+        {
+          "name": "macro",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "Resonator",
+      "evidenceStatus": "usable",
+      "videos": 4,
+      "windows": 5,
+      "actions": [
+        {
+          "name": "layer",
+          "count": 2
+        },
+        {
+          "name": "use",
+          "count": 2
+        },
+        {
+          "name": "add",
+          "count": 1
+        },
+        {
+          "name": "change",
+          "count": 1
+        },
+        {
+          "name": "compress",
+          "count": 1
+        },
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "cut",
+          "count": 1
+        },
+        {
+          "name": "select",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "lfo",
+          "count": 1
+        },
+        {
+          "name": "mix",
+          "count": 1
+        },
+        {
+          "name": "ratio",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "FilterDelay",
+      "evidenceStatus": "usable",
+      "videos": 2,
+      "windows": 5,
+      "actions": [
+        {
+          "name": "filter",
+          "count": 5
+        },
+        {
+          "name": "turn",
+          "count": 1
+        },
+        {
+          "name": "use",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "rate",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "partial"
+    },
+    {
+      "family": "MultiSampler",
+      "evidenceStatus": "thin",
+      "videos": 7,
+      "windows": 4,
+      "actions": [
+        {
+          "name": "create",
+          "count": 1
+        },
+        {
+          "name": "select",
+          "count": 1
+        },
+        {
+          "name": "set",
+          "count": 1
+        }
+      ],
+      "parameters": [
+        {
+          "name": "gain",
+          "count": 1
+        }
+      ],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "LoungeLizard",
+      "evidenceStatus": "thin",
+      "videos": 2,
+      "windows": 3,
+      "actions": [
+        {
+          "name": "set",
+          "count": 2
+        },
+        {
+          "name": "filter",
+          "count": 1
+        },
+        {
+          "name": "layer",
+          "count": 1
+        }
+      ],
+      "parameters": [],
+      "headlessStatus": "complete"
+    },
+    {
+      "family": "BeatRepeat",
+      "evidenceStatus": "thin",
+      "videos": 3,
+      "windows": 2,
+      "actions": [
+        {
+          "name": "create",
+          "count": 2
+        },
+        {
+          "name": "turn",
+          "count": 2
+        }
+      ],
+      "parameters": [],
+      "headlessStatus": "complete"
+    }
+  ],
+  "generationContract": {
+    "beforeWriting": "Retrieve at least three compatible audio references, one producer/style document, and two relevant tutorial technique documents.",
+    "composition": "Derive a new motif grammar from interval, rhythm-slot, articulation, and phrase evidence; do not copy a copyrighted melody or reuse one source as a template.",
+    "orchestration": "Use only render-proven Ableton assets/devices and hosted plugins. Prefer real presets, racks, samples, grooves, and device chains over custom DSP.",
+    "validation": "Render, extract the same reference profile, compare stem balance/contrast/groove/timbre, inspect sparse and payoff sections separately, then revise the largest audible deltas."
+  }
+}

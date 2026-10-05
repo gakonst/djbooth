@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "title": "serum-glasswood-hook",
+  "bpm": 123,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 2.2
+  },
+  "tracks": [
+    {
+      "id": "serum-glasswood-hook",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-pluck.json",
+      "gainDb": -2,
+      "notes": [
+        {
+          "beat": 0.76,
+          "durationBeats": 0.23,
+          "note": 68,
+          "velocity": 92
+        },
+        {
+          "beat": 2.74,
+          "durationBeats": 0.32,
+          "note": 71,
+          "velocity": 80
+        },
+        {
+          "beat": 6.5,
+          "durationBeats": 0.2,
+          "note": 73,
+          "velocity": 101
+        },
+        {
+          "beat": 7.26,
+          "durationBeats": 0.18,
+          "note": 71,
+          "velocity": 72
+        },
+        {
+          "beat": 10.76,
+          "durationBeats": 0.34,
+          "note": 68,
+          "velocity": 88
+        },
+        {
+          "beat": 14.5,
+          "durationBeats": 0.42,
+          "note": 64,
+          "velocity": 97
+        },
+        {
+          "beat": 16.76,
+          "durationBeats": 0.22,
+          "note": 68,
+          "velocity": 78
+        },
+        {
+          "beat": 18.5,
+          "durationBeats": 0.28,
+          "note": 71,
+          "velocity": 91
+        },
+        {
+          "beat": 22.74,
+          "durationBeats": 0.38,
+          "note": 76,
+          "velocity": 103
+        },
+        {
+          "beat": 26.5,
+          "durationBeats": 0.23,
+          "note": 73,
+          "velocity": 84
+        },
+        {
+          "beat": 27.5,
+          "durationBeats": 0.17,
+          "note": 71,
+          "velocity": 69
+        },
+        {
+          "beat": 30.75,
+          "durationBeats": 0.45,
+          "note": 68,
+          "velocity": 96
+        }
+      ]
+    }
+  ]
+}

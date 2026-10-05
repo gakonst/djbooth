@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "title": "house-taste-air-ghost",
+  "bpm": 126,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 3.5
+  },
+  "tracks": [
+    {
+      "id": "air-ghost",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/taste-house-air-ghost.json",
+      "gainDb": -8,
+      "notes": [
+        {
+          "beat": 0.761632,
+          "durationBeats": 0.73,
+          "note": 88,
+          "velocity": 67
+        },
+        {
+          "beat": 3.262347,
+          "durationBeats": 0.73,
+          "note": 88,
+          "velocity": 65
+        },
+        {
+          "beat": 4.764136,
+          "durationBeats": 0.73,
+          "note": 89,
+          "velocity": 65
+        },
+        {
+          "beat": 7.26047,
+          "durationBeats": 0.73,
+          "note": 89,
+          "velocity": 63
+        },
+        {
+          "beat": 8.76436,
+          "durationBeats": 0.73,
+          "note": 84,
+          "velocity": 70
+        },
+        {
+          "beat": 11.259597,
+          "durationBeats": 0.73,
+          "note": 84,
+          "velocity": 61
+        },
+        {
+          "beat": 12.760176,
+          "durationBeats": 0.73,
+          "note": 91,
+          "velocity": 68
+        },
+        {
+          "beat": 15.261143,
+          "durationBeats": 0.73,
+          "note": 91,
+          "velocity": 66
+        },
+        {
+          "beat": 16.76012,
+          "durationBeats": 0.73,
+          "note": 88,
+          "velocity": 66
+        },
+        {
+          "beat": 19.263059,
+          "durationBeats": 0.73,
+          "note": 88,
+          "velocity": 64
+        },
+        {
+          "beat": 20.764323,
+          "durationBeats": 0.73,
+          "note": 93,
+          "velocity": 64
+        },
+        {
+          "beat": 23.263197,
+          "durationBeats": 0.73,
+          "note": 93,
+          "velocity": 62
+        },
+        {
+          "beat": 24.764489,
+          "durationBeats": 0.73,
+          "note": 95,
+          "velocity": 69
+        },
+        {
+          "beat": 27.264563,
+          "durationBeats": 0.73,
+          "note": 95,
+          "velocity": 60
+        },
+        {
+          "beat": 28.760504,
+          "durationBeats": 0.73,
+          "note": 86,
+          "velocity": 67
+        },
+        {
+          "beat": 31.259888,
+          "durationBeats": 0.73,
+          "note": 86,
+          "velocity": 65
+        }
+      ]
+    }
+  ]
+}

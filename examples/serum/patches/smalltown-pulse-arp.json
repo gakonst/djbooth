@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "name": "Small city octave pulse",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 67,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 52,
+    "unison": 1,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 55,
+    "octave": 1,
+    "unison": 2,
+    "detunePercent": 5,
+    "blendPercent": 80,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "sub": {
+    "shape": "Sin",
+    "octave": -1,
+    "levelPercent": 0
+  },
+  "ampEnvelope": {
+    "attackMs": 1,
+    "holdMs": 0,
+    "decayMs": 250,
+    "sustainPercent": 54,
+    "releaseMs": 62
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 3100,
+    "resonancePercent": 10,
+    "drivePercent": 34,
+    "fatPercent": 24,
+    "mixPercent": 100,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 24,
+      "mixPercent": 37,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 190,
+      "lowQPercent": 58,
+      "lowGainDb": -9,
+      "highType": "Shelf",
+      "highFrequencyHz": 2600,
+      "highQPercent": 42,
+      "highGainDb": 4
+    },
+    "compressor": {
+      "thresholdDb": -25,
+      "ratio": "4:1",
+      "attackMs": 15,
+      "releaseMs": 82,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "pluck": {
+      "mode": "envelope",
+      "rateHz": 5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 20, "valuePercent": 58 },
+        { "positionPercent": 65, "valuePercent": 9 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "pluck",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 3100, "maximum": 7200 }
+    }
+  ],
+  "designNotes": [
+    "Tight mono-forward pulse with fixed phase and a short bright filter bite; intended for octave eighth notes."
+  ]
+}

@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-hook-b",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 2
+  },
+  "tracks": [
+    {
+      "id": "hook-b",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/smalltown-neon-lead.json",
+      "gainDb": -1,
+      "notes": [
+        {
+          "beat": 0.25,
+          "durationBeats": 0.34,
+          "note": 75,
+          "velocity": 101
+        },
+        {
+          "beat": 0.75,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 108
+        },
+        {
+          "beat": 1.25,
+          "durationBeats": 0.34,
+          "note": 84,
+          "velocity": 114
+        },
+        {
+          "beat": 1.75,
+          "durationBeats": 0.72,
+          "note": 82,
+          "velocity": 105
+        },
+        {
+          "beat": 2.75,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 97
+        },
+        {
+          "beat": 3.25,
+          "durationBeats": 0.58,
+          "note": 75,
+          "velocity": 104
+        },
+        {
+          "beat": 4.5,
+          "durationBeats": 0.42,
+          "note": 77,
+          "velocity": 99
+        },
+        {
+          "beat": 5,
+          "durationBeats": 0.42,
+          "note": 79,
+          "velocity": 106
+        },
+        {
+          "beat": 5.5,
+          "durationBeats": 0.72,
+          "note": 82,
+          "velocity": 112
+        },
+        {
+          "beat": 6.5,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 100
+        },
+        {
+          "beat": 7,
+          "durationBeats": 0.84,
+          "note": 74,
+          "velocity": 108
+        },
+        {
+          "beat": 8.25,
+          "durationBeats": 0.34,
+          "note": 72,
+          "velocity": 96
+        },
+        {
+          "beat": 8.75,
+          "durationBeats": 0.34,
+          "note": 75,
+          "velocity": 102
+        },
+        {
+          "beat": 9.25,
+          "durationBeats": 0.34,
+          "note": 80,
+          "velocity": 111
+        },
+        {
+          "beat": 9.75,
+          "durationBeats": 0.72,
+          "note": 79,
+          "velocity": 103
+        },
+        {
+          "beat": 10.75,
+          "durationBeats": 0.34,
+          "note": 75,
+          "velocity": 96
+        },
+        {
+          "beat": 11.25,
+          "durationBeats": 0.58,
+          "note": 72,
+          "velocity": 105
+        },
+        {
+          "beat": 12.5,
+          "durationBeats": 0.42,
+          "note": 70,
+          "velocity": 94
+        },
+        {
+          "beat": 13,
+          "durationBeats": 0.42,
+          "note": 75,
+          "velocity": 103
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.72,
+          "note": 79,
+          "velocity": 112
+        },
+        {
+          "beat": 14.5,
+          "durationBeats": 0.34,
+          "note": 77,
+          "velocity": 101
+        },
+        {
+          "beat": 15,
+          "durationBeats": 0.84,
+          "note": 74,
+          "velocity": 109
+        },
+        {
+          "beat": 16.25,
+          "durationBeats": 0.34,
+          "note": 75,
+          "velocity": 101
+        },
+        {
+          "beat": 16.75,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 108
+        },
+        {
+          "beat": 17.25,
+          "durationBeats": 0.34,
+          "note": 84,
+          "velocity": 116
+        },
+        {
+          "beat": 17.75,
+          "durationBeats": 1.18,
+          "note": 87,
+          "velocity": 118
+        },
+        {
+          "beat": 19.25,
+          "durationBeats": 0.42,
+          "note": 84,
+          "velocity": 103
+        },
+        {
+          "beat": 20.25,
+          "durationBeats": 0.34,
+          "note": 82,
+          "velocity": 106
+        },
+        {
+          "beat": 20.75,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 102
+        },
+        {
+          "beat": 21.25,
+          "durationBeats": 0.72,
+          "note": 77,
+          "velocity": 110
+        },
+        {
+          "beat": 22.25,
+          "durationBeats": 0.34,
+          "note": 74,
+          "velocity": 97
+        },
+        {
+          "beat": 22.75,
+          "durationBeats": 0.9,
+          "note": 70,
+          "velocity": 108
+        },
+        {
+          "beat": 24.5,
+          "durationBeats": 0.42,
+          "note": 72,
+          "velocity": 99
+        },
+        {
+          "beat": 25,
+          "durationBeats": 0.42,
+          "note": 77,
+          "velocity": 106
+        },
+        {
+          "beat": 25.5,
+          "durationBeats": 0.72,
+          "note": 80,
+          "velocity": 114
+        },
+        {
+          "beat": 26.5,
+          "durationBeats": 0.34,
+          "note": 79,
+          "velocity": 103
+        },
+        {
+          "beat": 27,
+          "durationBeats": 0.72,
+          "note": 77,
+          "velocity": 109
+        },
+        {
+          "beat": 28.25,
+          "durationBeats": 0.3,
+          "note": 75,
+          "velocity": 105
+        },
+        {
+          "beat": 28.75,
+          "durationBeats": 0.3,
+          "note": 74,
+          "velocity": 102
+        },
+        {
+          "beat": 29.25,
+          "durationBeats": 0.3,
+          "note": 72,
+          "velocity": 99
+        },
+        {
+          "beat": 29.75,
+          "durationBeats": 0.3,
+          "note": 70,
+          "velocity": 96
+        },
+        {
+          "beat": 30.25,
+          "durationBeats": 0.3,
+          "note": 67,
+          "velocity": 93
+        },
+        {
+          "beat": 30.75,
+          "durationBeats": 1.05,
+          "note": 63,
+          "velocity": 112
+        }
+      ]
+    }
+  ]
+}

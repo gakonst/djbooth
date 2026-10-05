@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "title": "house-taste-drive",
+  "bpm": 126,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 0.6
+  },
+  "tracks": [
+    {
+      "id": "drive",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/taste-house-acid-identity.json",
+      "gainDb": -8,
+      "notes": [
+        {
+          "beat": 0.781932,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 65
+        },
+        {
+          "beat": 1.784001,
+          "durationBeats": 0.2,
+          "note": 76,
+          "velocity": 72
+        },
+        {
+          "beat": 2.782646,
+          "durationBeats": 0.2,
+          "note": 57,
+          "velocity": 79
+        },
+        {
+          "beat": 3.283704,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 86
+        },
+        {
+          "beat": 4.784436,
+          "durationBeats": 0.2,
+          "note": 76,
+          "velocity": 65
+        },
+        {
+          "beat": 5.784189,
+          "durationBeats": 0.2,
+          "note": 57,
+          "velocity": 72
+        },
+        {
+          "beat": 6.78077,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 79
+        },
+        {
+          "beat": 7.285117,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 86
+        },
+        {
+          "beat": 8.78466,
+          "durationBeats": 0.2,
+          "note": 53,
+          "velocity": 65
+        },
+        {
+          "beat": 9.783616,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 72
+        },
+        {
+          "beat": 10.779897,
+          "durationBeats": 0.2,
+          "note": 65,
+          "velocity": 79
+        },
+        {
+          "beat": 11.284059,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 86
+        },
+        {
+          "beat": 12.780476,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 65
+        },
+        {
+          "beat": 13.780124,
+          "durationBeats": 0.2,
+          "note": 65,
+          "velocity": 72
+        },
+        {
+          "beat": 14.781443,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 79
+        },
+        {
+          "beat": 15.280277,
+          "durationBeats": 0.2,
+          "note": 53,
+          "velocity": 86
+        },
+        {
+          "beat": 16.78042,
+          "durationBeats": 0.2,
+          "note": 67,
+          "velocity": 65
+        },
+        {
+          "beat": 17.784379,
+          "durationBeats": 0.2,
+          "note": 76,
+          "velocity": 72
+        },
+        {
+          "beat": 18.783359,
+          "durationBeats": 0.2,
+          "note": 60,
+          "velocity": 79
+        },
+        {
+          "beat": 19.279513,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 86
+        },
+        {
+          "beat": 20.784623,
+          "durationBeats": 0.2,
+          "note": 76,
+          "velocity": 65
+        },
+        {
+          "beat": 21.784428,
+          "durationBeats": 0.2,
+          "note": 60,
+          "velocity": 72
+        },
+        {
+          "beat": 22.783497,
+          "durationBeats": 0.2,
+          "note": 72,
+          "velocity": 79
+        },
+        {
+          "beat": 23.279941,
+          "durationBeats": 0.2,
+          "note": 67,
+          "velocity": 86
+        },
+        {
+          "beat": 24.784789,
+          "durationBeats": 0.2,
+          "note": 55,
+          "velocity": 65
+        },
+        {
+          "beat": 25.784677,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 72
+        },
+        {
+          "beat": 26.784863,
+          "durationBeats": 0.2,
+          "note": 67,
+          "velocity": 79
+        },
+        {
+          "beat": 27.27962,
+          "durationBeats": 0.2,
+          "note": 74,
+          "velocity": 86
+        },
+        {
+          "beat": 28.780804,
+          "durationBeats": 0.2,
+          "note": 69,
+          "velocity": 65
+        },
+        {
+          "beat": 29.782975,
+          "durationBeats": 0.2,
+          "note": 67,
+          "velocity": 72
+        },
+        {
+          "beat": 30.780188,
+          "durationBeats": 0.2,
+          "note": 74,
+          "velocity": 79
+        },
+        {
+          "beat": 31.280092,
+          "durationBeats": 0.2,
+          "note": 55,
+          "velocity": 86
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-pad-b",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 3
+  },
+  "tracks": [
+    {
+      "id": "pad-b",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/smalltown-shadow-pad.json",
+      "gainDb": -5,
+      "notes": [
+        {
+          "beat": 0,
+          "durationBeats": 3.72,
+          "note": 60,
+          "velocity": 54
+        },
+        {
+          "beat": 0.014,
+          "durationBeats": 3.72,
+          "note": 63,
+          "velocity": 59
+        },
+        {
+          "beat": 0.028,
+          "durationBeats": 3.72,
+          "note": 68,
+          "velocity": 64
+        },
+        {
+          "beat": 4,
+          "durationBeats": 3.72,
+          "note": 58,
+          "velocity": 54
+        },
+        {
+          "beat": 4.014,
+          "durationBeats": 3.72,
+          "note": 62,
+          "velocity": 59
+        },
+        {
+          "beat": 4.028,
+          "durationBeats": 3.72,
+          "note": 65,
+          "velocity": 64
+        },
+        {
+          "beat": 8,
+          "durationBeats": 3.72,
+          "note": 60,
+          "velocity": 54
+        },
+        {
+          "beat": 8.014,
+          "durationBeats": 3.72,
+          "note": 63,
+          "velocity": 59
+        },
+        {
+          "beat": 8.028,
+          "durationBeats": 3.72,
+          "note": 67,
+          "velocity": 64
+        },
+        {
+          "beat": 12,
+          "durationBeats": 3.72,
+          "note": 63,
+          "velocity": 54
+        },
+        {
+          "beat": 12.014,
+          "durationBeats": 3.72,
+          "note": 67,
+          "velocity": 59
+        },
+        {
+          "beat": 12.028,
+          "durationBeats": 3.72,
+          "note": 70,
+          "velocity": 64
+        },
+        {
+          "beat": 16,
+          "durationBeats": 3.72,
+          "note": 63,
+          "velocity": 54
+        },
+        {
+          "beat": 16.014,
+          "durationBeats": 3.72,
+          "note": 68,
+          "velocity": 59
+        },
+        {
+          "beat": 16.028,
+          "durationBeats": 3.72,
+          "note": 72,
+          "velocity": 64
+        },
+        {
+          "beat": 20,
+          "durationBeats": 3.72,
+          "note": 65,
+          "velocity": 54
+        },
+        {
+          "beat": 20.014,
+          "durationBeats": 3.72,
+          "note": 70,
+          "velocity": 59
+        },
+        {
+          "beat": 20.028,
+          "durationBeats": 3.72,
+          "note": 74,
+          "velocity": 64
+        },
+        {
+          "beat": 24,
+          "durationBeats": 3.72,
+          "note": 63,
+          "velocity": 54
+        },
+        {
+          "beat": 24.014,
+          "durationBeats": 3.72,
+          "note": 67,
+          "velocity": 59
+        },
+        {
+          "beat": 24.028,
+          "durationBeats": 3.72,
+          "note": 70,
+          "velocity": 64
+        },
+        {
+          "beat": 28,
+          "durationBeats": 3.72,
+          "note": 59,
+          "velocity": 54
+        },
+        {
+          "beat": 28.014,
+          "durationBeats": 3.72,
+          "note": 62,
+          "velocity": 59
+        },
+        {
+          "beat": 28.028,
+          "durationBeats": 3.72,
+          "note": 67,
+          "velocity": 64
+        }
+      ]
+    }
+  ]
+}

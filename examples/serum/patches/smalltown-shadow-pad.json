@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "name": "Small city shadow pad",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 55,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 68,
+    "unison": 5,
+    "detunePercent": 18,
+    "blendPercent": 73,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 74
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 14,
+    "octave": 0,
+    "unison": 2,
+    "detunePercent": 4,
+    "blendPercent": 82,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 90,
+    "randomPhasePercent": 55
+  },
+  "ampEnvelope": {
+    "attackMs": 145,
+    "holdMs": 0,
+    "decayMs": 1500,
+    "sustainPercent": 61,
+    "releaseMs": 1250
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 2300,
+    "resonancePercent": 9,
+    "drivePercent": 13,
+    "fatPercent": 8,
+    "mixPercent": 100,
+    "stereoPercent": 36,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 260,
+      "lowQPercent": 58,
+      "lowGainDb": -7,
+      "highType": "Shelf",
+      "highFrequencyHz": 5400,
+      "highQPercent": 40,
+      "highGainDb": -2
+    },
+    "compressor": {
+      "thresholdDb": -30,
+      "ratio": "2:1",
+      "attackMs": 42,
+      "releaseMs": 190,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "reverb": {
+      "sizePercent": 62,
+      "preDelayMs": 18,
+      "lowCutPercent": 64,
+      "highCutPercent": 57,
+      "dampPercent": 55,
+      "widthPercent": 94,
+      "mixPercent": 31
+    }
+  },
+  "lfos": {},
+  "modulations": [],
+  "designNotes": [
+    "Dark detuned backing pad with most low mids removed so it supports rather than masks the octave pulse."
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "name": "Taste model air ghost",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "tutorial": {
+    "title": "Making an AFRO HOUSE Track From START TO FINISH",
+    "url": "https://www.youtube.com/watch?v=NKV-cThrfm8",
+    "section": "quiet moving detail behind the foreground motif"
+  },
+  "masterVolumePercent": 45,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 58,
+    "octave": 1,
+    "unison": 7,
+    "detunePercent": 14,
+    "blendPercent": 68,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 38,
+    "warp": { "mode": "Bend -", "amountPercent": 22 }
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 23,
+    "octave": 2,
+    "unison": 4,
+    "detunePercent": 11,
+    "blendPercent": 72,
+    "wavetablePositionPercent": 100,
+    "phaseDegrees": 72,
+    "randomPhasePercent": 43
+  },
+  "ampEnvelope": {
+    "attackMs": 34,
+    "holdMs": 0,
+    "decayMs": 760,
+    "sustainPercent": 31,
+    "releaseMs": 880
+  },
+  "filter": {
+    "filterType": "HP 12",
+    "cutoffHz": 980,
+    "resonancePercent": 14,
+    "drivePercent": 17,
+    "fatPercent": 9,
+    "mixPercent": 100,
+    "stereoPercent": 38,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "SoftClip",
+      "drivePercent": 18,
+      "mixPercent": 24,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 480,
+      "lowQPercent": 54,
+      "lowGainDb": -8,
+      "highType": "Shelf",
+      "highFrequencyHz": 5600,
+      "highQPercent": 39,
+      "highGainDb": 2.5
+    },
+    "reverb": {
+      "sizePercent": 61,
+      "preDelayMs": 29,
+      "lowCutPercent": 68,
+      "highCutPercent": 58,
+      "dampPercent": 56,
+      "widthPercent": 96,
+      "mixPercent": 24
+    }
+  },
+  "lfos": {
+    "bloom": {
+      "mode": "envelope",
+      "rateHz": 1.15,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 12 },
+        { "positionPercent": 38, "valuePercent": 100 },
+        { "positionPercent": 72, "valuePercent": 58 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "bloom",
+      "destination": "oscillatorB.level",
+      "range": { "unit": "percent", "minimum": 8, "maximum": 29 }
+    }
+  ],
+  "designNotes": [
+    "This voice is intentionally quiet, high-passed, wide, and slow enough to create detail between transients.",
+    "Its long Ableton depth branch appears only around phrase answers and transitions."
+  ]
+}

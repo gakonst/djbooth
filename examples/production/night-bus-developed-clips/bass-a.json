@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-bass-a",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "bass-a",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/maz-focused-bass.json",
+      "gainDb": -2,
+      "notes": [
+        {
+          "beat": 0,
+          "durationBeats": 0.72,
+          "note": 36,
+          "velocity": 113
+        },
+        {
+          "beat": 1.5,
+          "durationBeats": 0.38,
+          "note": 43,
+          "velocity": 91
+        },
+        {
+          "beat": 2.25,
+          "durationBeats": 0.56,
+          "note": 48,
+          "velocity": 106
+        },
+        {
+          "beat": 3.25,
+          "durationBeats": 0.42,
+          "note": 46,
+          "velocity": 87
+        },
+        {
+          "beat": 4,
+          "durationBeats": 0.72,
+          "note": 34,
+          "velocity": 113
+        },
+        {
+          "beat": 5.5,
+          "durationBeats": 0.38,
+          "note": 41,
+          "velocity": 91
+        },
+        {
+          "beat": 6.25,
+          "durationBeats": 0.56,
+          "note": 46,
+          "velocity": 106
+        },
+        {
+          "beat": 7.25,
+          "durationBeats": 0.42,
+          "note": 41,
+          "velocity": 87
+        },
+        {
+          "beat": 8,
+          "durationBeats": 0.72,
+          "note": 29,
+          "velocity": 113
+        },
+        {
+          "beat": 9.5,
+          "durationBeats": 0.38,
+          "note": 36,
+          "velocity": 91
+        },
+        {
+          "beat": 10.25,
+          "durationBeats": 0.56,
+          "note": 41,
+          "velocity": 106
+        },
+        {
+          "beat": 11.25,
+          "durationBeats": 0.42,
+          "note": 39,
+          "velocity": 87
+        },
+        {
+          "beat": 12,
+          "durationBeats": 0.72,
+          "note": 27,
+          "velocity": 113
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.38,
+          "note": 34,
+          "velocity": 91
+        },
+        {
+          "beat": 14.25,
+          "durationBeats": 0.56,
+          "note": 39,
+          "velocity": 106
+        },
+        {
+          "beat": 15.25,
+          "durationBeats": 0.42,
+          "note": 35,
+          "velocity": 87
+        },
+        {
+          "beat": 16,
+          "durationBeats": 0.72,
+          "note": 36,
+          "velocity": 113
+        },
+        {
+          "beat": 17.5,
+          "durationBeats": 0.38,
+          "note": 43,
+          "velocity": 91
+        },
+        {
+          "beat": 18.25,
+          "durationBeats": 0.56,
+          "note": 48,
+          "velocity": 106
+        },
+        {
+          "beat": 19.25,
+          "durationBeats": 0.42,
+          "note": 46,
+          "velocity": 87
+        },
+        {
+          "beat": 20,
+          "durationBeats": 0.72,
+          "note": 34,
+          "velocity": 113
+        },
+        {
+          "beat": 21.5,
+          "durationBeats": 0.38,
+          "note": 41,
+          "velocity": 91
+        },
+        {
+          "beat": 22.25,
+          "durationBeats": 0.56,
+          "note": 46,
+          "velocity": 106
+        },
+        {
+          "beat": 23.25,
+          "durationBeats": 0.42,
+          "note": 44,
+          "velocity": 87
+        },
+        {
+          "beat": 24,
+          "durationBeats": 0.72,
+          "note": 32,
+          "velocity": 113
+        },
+        {
+          "beat": 25.5,
+          "durationBeats": 0.38,
+          "note": 39,
+          "velocity": 91
+        },
+        {
+          "beat": 26.25,
+          "durationBeats": 0.56,
+          "note": 44,
+          "velocity": 106
+        },
+        {
+          "beat": 27.25,
+          "durationBeats": 0.42,
+          "note": 43,
+          "velocity": 87
+        },
+        {
+          "beat": 28,
+          "durationBeats": 0.72,
+          "note": 31,
+          "velocity": 113
+        },
+        {
+          "beat": 29.5,
+          "durationBeats": 0.38,
+          "note": 38,
+          "velocity": 91
+        },
+        {
+          "beat": 30.25,
+          "durationBeats": 0.56,
+          "note": 43,
+          "velocity": 106
+        },
+        {
+          "beat": 31.25,
+          "durationBeats": 0.42,
+          "note": 35,
+          "velocity": 87
+        }
+      ]
+    }
+  ]
+}

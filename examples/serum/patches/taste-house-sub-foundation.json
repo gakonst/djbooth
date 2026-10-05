@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "name": "Taste model mono sub foundation",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "tutorial": {
+    "title": "How To Make Indie Dance Like Mita Gami & Adam Ten (Maccabi House)",
+    "url": "https://www.youtube.com/watch?v=ktPQjgMMBP4",
+    "section": "mono bass foundation with controlled harmonic color"
+  },
+  "masterVolumePercent": 55,
+  "portamentoMs": 18,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 49,
+    "octave": 0,
+    "unison": 1,
+    "wavetablePositionPercent": 0,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 0
+  },
+  "sub": {
+    "shape": "Sin",
+    "octave": -1,
+    "levelPercent": 60
+  },
+  "ampEnvelope": {
+    "attackMs": 0.5,
+    "holdMs": 5,
+    "decayMs": 165,
+    "sustainPercent": 38,
+    "releaseMs": 45
+  },
+  "filter": {
+    "filterType": "MG Low 24",
+    "cutoffHz": 245,
+    "resonancePercent": 7,
+    "drivePercent": 31,
+    "fatPercent": 24,
+    "mixPercent": 100,
+    "route": ["oscillatorA"]
+  },
+  "effects": {
+    "distortion": {
+      "mode": "Tube",
+      "drivePercent": 24,
+      "mixPercent": 31,
+      "preFilter": true
+    },
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 125,
+      "lowQPercent": 45,
+      "lowGainDb": 1.5,
+      "highType": "Shelf",
+      "highFrequencyHz": 1250,
+      "highQPercent": 38,
+      "highGainDb": -4
+    },
+    "compressor": {
+      "thresholdDb": -24,
+      "ratio": "4:1",
+      "attackMs": 23,
+      "releaseMs": 105,
+      "gainDb": 0,
+      "multiband": false
+    }
+  },
+  "lfos": {
+    "knock": {
+      "mode": "envelope",
+      "rateHz": 7.5,
+      "points": [
+        { "positionPercent": 0, "valuePercent": 100 },
+        { "positionPercent": 12, "valuePercent": 76 },
+        { "positionPercent": 46, "valuePercent": 18 },
+        { "positionPercent": 100, "valuePercent": 0 }
+      ]
+    }
+  },
+  "modulations": [
+    {
+      "source": "knock",
+      "destination": "filter.cutoff",
+      "range": { "unit": "hertz", "minimum": 245, "maximum": 720 }
+    }
+  ],
+  "designNotes": [
+    "One mono fundamental does one job: stable low-end authority beneath the syncopated identity layer.",
+    "The note-retriggered filter knock supplies articulation without widening or washing the sub."
+  ]
+}

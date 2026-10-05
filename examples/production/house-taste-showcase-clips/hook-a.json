@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "title": "house-taste-hook-a",
+  "bpm": 126,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 2.5
+  },
+  "tracks": [
+    {
+      "id": "hook-a",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/taste-house-ritual-hook.json",
+      "gainDb": -4,
+      "notes": [
+        {
+          "beat": 0.502327,
+          "durationBeats": 0.28,
+          "note": 69,
+          "velocity": 91
+        },
+        {
+          "beat": 0.998807,
+          "durationBeats": 0.24,
+          "note": 72,
+          "velocity": 103
+        },
+        {
+          "beat": 1.497899,
+          "durationBeats": 0.62,
+          "note": 76,
+          "velocity": 115
+        },
+        {
+          "beat": 2.498955,
+          "durationBeats": 0.28,
+          "note": 72,
+          "velocity": 90
+        },
+        {
+          "beat": 3.001563,
+          "durationBeats": 0.74,
+          "note": 71,
+          "velocity": 108
+        },
+        {
+          "beat": 4.501061,
+          "durationBeats": 0.28,
+          "note": 65,
+          "velocity": 96
+        },
+        {
+          "beat": 4.999574,
+          "durationBeats": 0.24,
+          "note": 68,
+          "velocity": 101
+        },
+        {
+          "beat": 5.497096,
+          "durationBeats": 0.62,
+          "note": 72,
+          "velocity": 113
+        },
+        {
+          "beat": 6.497852,
+          "durationBeats": 0.28,
+          "note": 68,
+          "velocity": 88
+        },
+        {
+          "beat": 7.001939,
+          "durationBeats": 0.74,
+          "note": 67,
+          "velocity": 106
+        },
+        {
+          "beat": 8.501276,
+          "durationBeats": 0.28,
+          "note": 72,
+          "velocity": 94
+        },
+        {
+          "beat": 9.000925,
+          "durationBeats": 0.24,
+          "note": 75,
+          "velocity": 106
+        },
+        {
+          "beat": 9.500896,
+          "durationBeats": 0.62,
+          "note": 79,
+          "velocity": 111
+        },
+        {
+          "beat": 10.499066,
+          "durationBeats": 0.28,
+          "note": 75,
+          "velocity": 93
+        },
+        {
+          "beat": 10.998469,
+          "durationBeats": 0.74,
+          "note": 74,
+          "velocity": 104
+        },
+        {
+          "beat": 12.500553,
+          "durationBeats": 0.28,
+          "note": 67,
+          "velocity": 92
+        },
+        {
+          "beat": 13.002889,
+          "durationBeats": 0.24,
+          "note": 70,
+          "velocity": 104
+        },
+        {
+          "beat": 13.501631,
+          "durationBeats": 0.62,
+          "note": 74,
+          "velocity": 109
+        },
+        {
+          "beat": 14.49775,
+          "durationBeats": 0.28,
+          "note": 70,
+          "velocity": 91
+        },
+        {
+          "beat": 15.002046,
+          "durationBeats": 0.74,
+          "note": 69,
+          "velocity": 109
+        },
+        {
+          "beat": 16.501212,
+          "durationBeats": 0.28,
+          "note": 69,
+          "velocity": 97
+        },
+        {
+          "beat": 16.999608,
+          "durationBeats": 0.24,
+          "note": 72,
+          "velocity": 102
+        },
+        {
+          "beat": 17.49923,
+          "durationBeats": 0.62,
+          "note": 76,
+          "velocity": 114
+        },
+        {
+          "beat": 18.498491,
+          "durationBeats": 0.28,
+          "note": 72,
+          "velocity": 89
+        },
+        {
+          "beat": 18.998294,
+          "durationBeats": 0.74,
+          "note": 71,
+          "velocity": 107
+        },
+        {
+          "beat": 20.498292,
+          "durationBeats": 0.28,
+          "note": 74,
+          "velocity": 95
+        },
+        {
+          "beat": 20.997211,
+          "durationBeats": 0.24,
+          "note": 77,
+          "velocity": 100
+        },
+        {
+          "beat": 21.500971,
+          "durationBeats": 0.62,
+          "note": 81,
+          "velocity": 112
+        },
+        {
+          "beat": 22.497239,
+          "durationBeats": 0.28,
+          "note": 77,
+          "velocity": 94
+        },
+        {
+          "beat": 22.998392,
+          "durationBeats": 0.74,
+          "note": 76,
+          "velocity": 105
+        },
+        {
+          "beat": 24.50117,
+          "durationBeats": 0.28,
+          "note": 72,
+          "velocity": 93
+        },
+        {
+          "beat": 25.002726,
+          "durationBeats": 0.24,
+          "note": 75,
+          "velocity": 105
+        },
+        {
+          "beat": 25.497195,
+          "durationBeats": 0.62,
+          "note": 91,
+          "velocity": 110
+        },
+        {
+          "beat": 26.498126,
+          "durationBeats": 0.28,
+          "note": 75,
+          "velocity": 92
+        },
+        {
+          "beat": 26.998075,
+          "durationBeats": 0.74,
+          "note": 74,
+          "velocity": 103
+        },
+        {
+          "beat": 28.501332,
+          "durationBeats": 0.28,
+          "note": 67,
+          "velocity": 91
+        },
+        {
+          "beat": 29.002845,
+          "durationBeats": 0.24,
+          "note": 70,
+          "velocity": 103
+        },
+        {
+          "beat": 29.50272,
+          "durationBeats": 0.62,
+          "note": 86,
+          "velocity": 115
+        },
+        {
+          "beat": 30.498354,
+          "durationBeats": 0.28,
+          "note": 70,
+          "velocity": 90
+        },
+        {
+          "beat": 30.998343,
+          "durationBeats": 0.74,
+          "note": 69,
+          "velocity": 108
+        }
+      ]
+    }
+  ]
+}

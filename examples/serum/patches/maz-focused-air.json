@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "name": "Focused filtered air bed",
+  "templatePreset": "Pads/PD Centipad [7S].fxp",
+  "expectedResources": ["Analog/Basic Shapes.wav"],
+  "masterVolumePercent": 48,
+  "oscillatorA": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 63,
+    "unison": 5,
+    "detunePercent": 16,
+    "blendPercent": 70,
+    "wavetablePositionPercent": 66,
+    "phaseDegrees": 180,
+    "randomPhasePercent": 100
+  },
+  "oscillatorB": {
+    "wavetable": "Analog/Basic Shapes.wav",
+    "levelPercent": 19,
+    "octave": 1,
+    "unison": 4,
+    "detunePercent": 11,
+    "blendPercent": 72,
+    "wavetablePositionPercent": 100,
+    "randomPhasePercent": 100
+  },
+  "ampEnvelope": {
+    "attackMs": 520,
+    "holdMs": 0,
+    "decayMs": 2200,
+    "sustainPercent": 48,
+    "releaseMs": 3100
+  },
+  "filter": {
+    "filterType": "MG Low 12",
+    "cutoffHz": 1180,
+    "resonancePercent": 15,
+    "drivePercent": 14,
+    "fatPercent": 8,
+    "mixPercent": 100,
+    "stereoPercent": 42,
+    "route": ["oscillatorA", "oscillatorB"]
+  },
+  "effects": {
+    "eq": {
+      "lowType": "Peak",
+      "lowFrequencyHz": 280,
+      "lowQPercent": 60,
+      "lowGainDb": -8,
+      "highType": "Shelf",
+      "highFrequencyHz": 6100,
+      "highQPercent": 42,
+      "highGainDb": 2
+    },
+    "compressor": {
+      "thresholdDb": -29,
+      "ratio": "2:1",
+      "attackMs": 38,
+      "releaseMs": 180,
+      "gainDb": 0,
+      "multiband": true
+    },
+    "reverb": {
+      "sizePercent": 78,
+      "preDelayMs": 27,
+      "lowCutPercent": 63,
+      "highCutPercent": 62,
+      "dampPercent": 48,
+      "widthPercent": 100,
+      "mixPercent": 41
+    }
+  },
+  "lfos": {},
+  "modulations": [],
+  "designNotes": [
+    "Filtered stereo bed reserved for intros and breakdowns; deliberately absent under the main hook."
+  ]
+}

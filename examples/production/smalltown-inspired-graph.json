@@ -1,0 +1,538 @@
+{
+  "schemaVersion": 1,
+  "title": "Night Bus — 1980s synth-pop production study",
+  "bpm": 134.60400251452523,
+  "bars": 96,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "tailSeconds": 4,
+  "master": {
+    "inputGainDb": 3.4,
+    "outputGainDb": 0,
+    "effects": []
+  },
+  "provenance": {
+    "referenceProfile": "/Users/gakonst/Library/Caches/djbooth/reference-corpora/smalltown-boy/reference-profile.json",
+    "headlessTechniques": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/production/ableton-headless-techniques.json",
+    "tonalTranscription": "/Users/gakonst/Library/Caches/djbooth/reference-corpora/smalltown-boy/stems/other.wav",
+    "drumTranscription": "/Users/gakonst/Library/Caches/djbooth/reference-corpora/smalltown-boy/stems/drums.wav",
+    "observedGrammar": {
+      "tempoBpm": 134.60400251452523,
+      "pulseMedianInterOnsetSeconds": 0.23000000000000043,
+      "drumTransientDensityPerSecond": 4.837749658304308,
+      "referenceStereoCorrelation": 0.9288480147255254,
+      "dominantPhraseBars": 8
+    },
+    "audioRuntime": "Serum VST2 plus installed Ableton Core Library samples",
+    "customAudioDsp": false
+  },
+  "tracks": [
+    {
+      "id": "ableton-dmx-kick",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Kick/Kick DMX.wav",
+      "velocityAmount": 0.3,
+      "gainDb": -5,
+      "pan": 0,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 48,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 122
+        },
+        {
+          "beat": 1,
+          "velocity": 111
+        },
+        {
+          "beat": 2,
+          "velocity": 111
+        },
+        {
+          "beat": 3,
+          "velocity": 111
+        },
+        {
+          "beat": 4,
+          "velocity": 122
+        },
+        {
+          "beat": 5,
+          "velocity": 111
+        },
+        {
+          "beat": 6,
+          "velocity": 111
+        },
+        {
+          "beat": 7,
+          "velocity": 111
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Kick EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Transient Shaping Enhance.adv"
+        }
+      ]
+    },
+    {
+      "id": "ableton-linn-snare",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Snare/Snare LD.aif",
+      "velocityAmount": 0.34,
+      "gainDb": -6,
+      "pan": 0,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 48,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 1,
+          "velocity": 106
+        },
+        {
+          "beat": 3,
+          "velocity": 113
+        },
+        {
+          "beat": 5,
+          "velocity": 106
+        },
+        {
+          "beat": 7,
+          "velocity": 113
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Snare EQ 1.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Room/Snare Room.adv"
+        }
+      ]
+    },
+    {
+      "id": "ableton-707-clap",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Clap/Clap 707.wav",
+      "velocityAmount": 0.45,
+      "gainDb": -15,
+      "pan": 0.04,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 128,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 1,
+          "velocity": 106
+        },
+        {
+          "beat": 3,
+          "velocity": 113
+        },
+        {
+          "beat": 5,
+          "velocity": 106
+        },
+        {
+          "beat": 7,
+          "velocity": 113
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Short Ambience.adv"
+        }
+      ]
+    },
+    {
+      "id": "ableton-dmx-closed-hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Closed DMX.wav",
+      "velocityAmount": 0.58,
+      "gainDb": -15,
+      "pan": -0.08,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 368
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 61
+        },
+        {
+          "beat": 0.5,
+          "velocity": 86
+        },
+        {
+          "beat": 1,
+          "velocity": 61
+        },
+        {
+          "beat": 1.5,
+          "velocity": 86
+        },
+        {
+          "beat": 2,
+          "velocity": 61
+        },
+        {
+          "beat": 2.5,
+          "velocity": 86
+        },
+        {
+          "beat": 3,
+          "velocity": 61
+        },
+        {
+          "beat": 3.5,
+          "velocity": 86
+        },
+        {
+          "beat": 4,
+          "velocity": 61
+        },
+        {
+          "beat": 4.5,
+          "velocity": 86
+        },
+        {
+          "beat": 5,
+          "velocity": 61
+        },
+        {
+          "beat": 5.5,
+          "velocity": 86
+        },
+        {
+          "beat": 6,
+          "velocity": 61
+        },
+        {
+          "beat": 6.5,
+          "velocity": 86
+        },
+        {
+          "beat": 7,
+          "velocity": 61
+        },
+        {
+          "beat": 7.5,
+          "velocity": 86
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Hat EQ 1.adv"
+        }
+      ]
+    },
+    {
+      "id": "ableton-dmx-open-hat",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Hihat/Hihat Open DMX.wav",
+      "velocityAmount": 0.42,
+      "gainDb": -17,
+      "pan": 0.09,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 64,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 208,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0.5,
+          "velocity": 84
+        },
+        {
+          "beat": 2.5,
+          "velocity": 84
+        },
+        {
+          "beat": 4.5,
+          "velocity": 84
+        },
+        {
+          "beat": 6.5,
+          "velocity": 84
+        }
+      ],
+      "effects": []
+    },
+    {
+      "id": "ableton-80s-tambourine",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Tambourine/Tamb 80s Space Craft.wav",
+      "velocityAmount": 0.5,
+      "gainDb": -18,
+      "pan": 0.12,
+      "loopBeats": 8,
+      "placements": [
+        {
+          "startBeat": 128,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 224,
+          "endBeat": 256
+        },
+        {
+          "startBeat": 288,
+          "endBeat": 352
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 100
+        },
+        {
+          "beat": 1,
+          "velocity": 72
+        },
+        {
+          "beat": 2,
+          "velocity": 72
+        },
+        {
+          "beat": 3,
+          "velocity": 72
+        },
+        {
+          "beat": 4,
+          "velocity": 100
+        },
+        {
+          "beat": 5,
+          "velocity": 72
+        },
+        {
+          "beat": 6,
+          "velocity": 72
+        },
+        {
+          "beat": 7,
+          "velocity": 72
+        }
+      ],
+      "effects": []
+    },
+    {
+      "id": "serum-octave-pulse",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/smalltown-inspired/smalltown-pulse-arp.wav",
+      "velocityAmount": 0,
+      "gainDb": 2,
+      "pan": 0,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 384
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Bass.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        }
+      ]
+    },
+    {
+      "id": "serum-shadow-pad",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/smalltown-inspired/smalltown-shadow-pad.wav",
+      "velocityAmount": 0,
+      "gainDb": 12,
+      "pan": -0.03,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 0,
+          "endBeat": 64
+        },
+        {
+          "startBeat": 96,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 160,
+          "endBeat": 224
+        },
+        {
+          "startBeat": 256,
+          "endBeat": 320
+        },
+        {
+          "startBeat": 352,
+          "endBeat": 384
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Warm Ensemble.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Wide Ambience.adv"
+        }
+      ]
+    },
+    {
+      "id": "serum-neon-lead",
+      "kind": "sample",
+      "sample": "/Users/gakonst/Library/Caches/djbooth/smalltown-inspired/smalltown-neon-lead.wav",
+      "velocityAmount": 0,
+      "gainDb": 12,
+      "pan": 0.04,
+      "loopBeats": 32,
+      "placements": [
+        {
+          "startBeat": 32,
+          "endBeat": 64
+        },
+        {
+          "startBeat": 96,
+          "endBeat": 160
+        },
+        {
+          "startBeat": 192,
+          "endBeat": 288
+        },
+        {
+          "startBeat": 320,
+          "endBeat": 384
+        }
+      ],
+      "triggers": [
+        {
+          "beat": 0,
+          "velocity": 127
+        }
+      ],
+      "effects": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Classic.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Room/Ambience Medium.adv"
+        }
+      ]
+    },
+    {
+      "id": "ableton-section-crash",
+      "kind": "sample",
+      "sample": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/One Shots/Drums/Cymbal/Crash DMX.wav",
+      "velocityAmount": 0.3,
+      "gainDb": -16,
+      "pan": 0.06,
+      "triggers": [
+        {
+          "beat": 48,
+          "velocity": 110
+        },
+        {
+          "beat": 160,
+          "velocity": 110
+        },
+        {
+          "beat": 192,
+          "velocity": 110
+        },
+        {
+          "beat": 288,
+          "velocity": 110
+        },
+        {
+          "beat": 352,
+          "velocity": 110
+        }
+      ]
+    }
+  ]
+}

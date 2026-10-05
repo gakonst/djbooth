@@ -1,0 +1,972 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-09T18:50:45.773Z",
+  "corpus": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/production/ableton-tutorial-corpus.json",
+  "method": {
+    "synthesis": "Paraphrase repeated tutorial principles into serial device-chain recipes.",
+    "execution": "Every stage points to an installed Ableton ADV rendered by Ableton's own engine.",
+    "exclusions": [
+      "no copied tutorial text",
+      "no custom audio DSP",
+      "no guessed third-party effect algorithm"
+    ]
+  },
+  "recipes": {
+    "lowEndAuthority": {
+      "goal": "Keep the fundamental centered, add audible upper harmonics, then control the envelope.",
+      "principles": [
+        "mono compatibility before enhancement",
+        "harmonic density makes bass audible without relying only on sub level",
+        "compression follows nonlinear color so added harmonics remain controlled"
+      ],
+      "sources": [
+        {
+          "title": "Low End Theory: Make Four Classic Bass Sounds in Live",
+          "url": "https://www.ableton.com/en/blog/low-end-theory-make-four-classic-bass-sounds-in-live/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "ZZdSrd0Jyxg",
+              "url": "https://www.youtube.com/watch?v=ZZdSrd0Jyxg"
+            }
+          ]
+        },
+        {
+          "title": "808 Bass Tutorials: From Creation to Mix",
+          "url": "https://www.ableton.com/en/blog/808-bass-tutorials-creation-mix/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "HZwMX6T5Jhk",
+              "url": "https://www.youtube.com/watch?v=HZwMX6T5Jhk"
+            },
+            {
+              "kind": "youtube",
+              "id": "DplwUET2GuU",
+              "url": "https://www.youtube.com/watch?v=DplwUET2GuU"
+            },
+            {
+              "kind": "youtube",
+              "id": "_j4v8PXOcA4",
+              "url": "https://www.youtube.com/watch?v=_j4v8PXOcA4"
+            },
+            {
+              "kind": "youtube",
+              "id": "BwD9e741Dvo",
+              "url": "https://www.youtube.com/watch?v=BwD9e741Dvo"
+            },
+            {
+              "kind": "youtube",
+              "id": "9FvxiUxaL7o",
+              "url": "https://www.youtube.com/watch?v=9FvxiUxaL7o"
+            },
+            {
+              "kind": "youtube",
+              "id": "rjlSiASsUIs",
+              "url": "https://www.youtube.com/watch?v=rjlSiASsUIs"
+            }
+          ]
+        },
+        {
+          "title": "Get Deep: Make a Sub Bass with Operator",
+          "url": "https://www.ableton.com/en/blog/get-deep-make-sub-bass-operator/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "YA6MTidtPAQ",
+              "url": "https://www.youtube.com/watch?v=YA6MTidtPAQ"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Bass Fattener.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        }
+      ]
+    },
+    "focusedPulse": {
+      "goal": "Add subtle ensemble motion while restoring a centered, punchy low register.",
+      "principles": [
+        "modulation is restrained on low material",
+        "finish with mono-compatible utility"
+      ],
+      "sources": [
+        {
+          "title": "Low End Theory: Make Four Classic Bass Sounds in Live",
+          "url": "https://www.ableton.com/en/blog/low-end-theory-make-four-classic-bass-sounds-in-live/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "ZZdSrd0Jyxg",
+              "url": "https://www.youtube.com/watch?v=ZZdSrd0Jyxg"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Chorus Bass.adv"
+        },
+        {
+          "kind": "native",
+          "device": "GlueCompressor",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Glue Compressor/Bass - Punch.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Utility",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Utility/Bass Mono.adv"
+        }
+      ]
+    },
+    "kickAuthority": {
+      "goal": "Separate kick body, nonlinear attack, and transient contour into deliberate stages.",
+      "principles": [
+        "correct broad tone first",
+        "color second",
+        "transient contour last"
+      ],
+      "sources": [
+        {
+          "title": "Enter the Temple of Boom: Acoustic Kicks",
+          "url": "https://www.ableton.com/en/blog/enter-temple-boom-acoustic-kicks/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "07kcQFFlJJ0",
+              "url": "https://www.youtube.com/watch?v=07kcQFFlJJ0"
+            },
+            {
+              "kind": "youtube",
+              "id": "PLUZ5cgehAI",
+              "url": "https://www.youtube.com/watch?v=PLUZ5cgehAI"
+            },
+            {
+              "kind": "youtube",
+              "id": "gG7UXv8Zc5Q",
+              "url": "https://www.youtube.com/watch?v=gG7UXv8Zc5Q"
+            },
+            {
+              "kind": "youtube",
+              "id": "Etl6-5E7KHI",
+              "url": "https://www.youtube.com/watch?v=Etl6-5E7KHI"
+            },
+            {
+              "kind": "youtube",
+              "id": "_fKAsvJrFes",
+              "url": "https://www.youtube.com/watch?v=_fKAsvJrFes"
+            }
+          ]
+        },
+        {
+          "title": "Make a Perfect Kick Drum - Tutorial from Lenny Kiser",
+          "url": "https://www.ableton.com/en/blog/make-perfect-kick-drum-tutorial-lenny-kiser/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "RYey_pp-IoU",
+              "url": "https://www.youtube.com/watch?v=RYey_pp-IoU"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Kick EQ 3.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Kick Me.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Transient Shaping Enhance.adv"
+        }
+      ]
+    },
+    "snareDepth": {
+      "goal": "Shape the dry snare before placing it in a dark, bounded room.",
+      "principles": [
+        "pre-reverb tonal cleanup",
+        "short dark reflections imply depth without washing the groove"
+      ],
+      "sources": [
+        {
+          "title": "Reverb Reflections: Learn How to Get Reverb Right in this Beginner Mixing Tutorial",
+          "url": "https://www.ableton.com/en/blog/reverb-beginner-mixing-video-tutorial/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "m53xk6hJZB0",
+              "url": "https://www.youtube.com/watch?v=m53xk6hJZB0"
+            }
+          ]
+        },
+        {
+          "title": "Enter the Temple of Boom: Acoustic Kicks",
+          "url": "https://www.ableton.com/en/blog/enter-temple-boom-acoustic-kicks/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "07kcQFFlJJ0",
+              "url": "https://www.youtube.com/watch?v=07kcQFFlJJ0"
+            },
+            {
+              "kind": "youtube",
+              "id": "PLUZ5cgehAI",
+              "url": "https://www.youtube.com/watch?v=PLUZ5cgehAI"
+            },
+            {
+              "kind": "youtube",
+              "id": "gG7UXv8Zc5Q",
+              "url": "https://www.youtube.com/watch?v=gG7UXv8Zc5Q"
+            },
+            {
+              "kind": "youtube",
+              "id": "Etl6-5E7KHI",
+              "url": "https://www.youtube.com/watch?v=Etl6-5E7KHI"
+            },
+            {
+              "kind": "youtube",
+              "id": "_fKAsvJrFes",
+              "url": "https://www.youtube.com/watch?v=_fKAsvJrFes"
+            }
+          ]
+        },
+        {
+          "title": "Make a Great Snare Drum Sound - Tutorial from Lenny Kiser",
+          "url": "https://www.ableton.com/en/blog/make-great-snare-drum-sound-tutorial-lenny-kiser/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "etga0_T-X4w",
+              "url": "https://www.youtube.com/watch?v=etga0_T-X4w"
+            }
+          ]
+        },
+        {
+          "title": "Free Snare Layering Rack and Tutorial from Quantize Courses",
+          "url": "https://www.ableton.com/en/blog/free-snare-layering-rack-and-tutorial-quantize-courses/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "xn2KdJ_Wpc8",
+              "url": "https://www.youtube.com/watch?v=xn2KdJ_Wpc8"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Snare EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Dark Snare Room.adv"
+        }
+      ]
+    },
+    "clapDimension": {
+      "goal": "Give the clap a distinct hybrid reflection that sits behind the main snare.",
+      "principles": [
+        "different percussion occupies different depth planes",
+        "ambience remains event-specific"
+      ],
+      "sources": [
+        {
+          "title": "A Step-by-Step Guide on Harmonizing and Layering Vocals",
+          "url": "https://www.ableton.com/en/blog/a-step-by-step-guide-on-harmonizing-and-layering-vocals/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "cWIVqSfWo8A",
+              "url": "https://www.youtube.com/watch?v=cWIVqSfWo8A"
+            }
+          ]
+        },
+        {
+          "title": "Reverb Reflections: Learn How to Get Reverb Right in this Beginner Mixing Tutorial",
+          "url": "https://www.ableton.com/en/blog/reverb-beginner-mixing-video-tutorial/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "m53xk6hJZB0",
+              "url": "https://www.youtube.com/watch?v=m53xk6hJZB0"
+            }
+          ]
+        },
+        {
+          "title": "Free Snare Layering Rack and Tutorial from Quantize Courses",
+          "url": "https://www.ableton.com/en/blog/free-snare-layering-rack-and-tutorial-quantize-courses/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "xn2KdJ_Wpc8",
+              "url": "https://www.youtube.com/watch?v=xn2KdJ_Wpc8"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Clap Hybrid.adv"
+        }
+      ]
+    },
+    "hatAir": {
+      "goal": "Control brittle hat frequencies, then add restrained high-frequency density.",
+      "principles": [
+        "remove harshness before enhancement",
+        "top-end color stays off the low-frequency layers"
+      ],
+      "sources": [
+        {
+          "title": "Learn How to Make High-Impact Sounds for Movies and Trailers",
+          "url": "https://www.ableton.com/en/blog/learn-how-to-make-high-impact-sounds-for-movies-and-trailers/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "YqNYrYUiMfg",
+              "url": "https://www.youtube.com/watch?v=YqNYrYUiMfg"
+            },
+            {
+              "kind": "youtube",
+              "id": "xjDjIWPwcPU",
+              "url": "https://www.youtube.com/watch?v=xjDjIWPwcPU"
+            },
+            {
+              "kind": "youtube",
+              "id": "66TuSJo4dZM",
+              "url": "https://www.youtube.com/watch?v=66TuSJo4dZM"
+            },
+            {
+              "kind": "youtube",
+              "id": "tFMo3UJ4B4g",
+              "url": "https://www.youtube.com/watch?v=tFMo3UJ4B4g"
+            }
+          ]
+        },
+        {
+          "title": "Make noise-based hi-hats with Analog",
+          "url": "https://www.ableton.com/en/blog/make-noise-based-hi-hats-analog/",
+          "media": []
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Eq8",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/EQ Eight/Drums/Hat EQ 2.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix High End Sparkler.adv"
+        }
+      ]
+    },
+    "padDepth": {
+      "goal": "Use ensemble motion for width and a dark plate for a stable rear depth plane.",
+      "principles": [
+        "modulation creates width",
+        "dark reverb separates rear layers from bright foreground"
+      ],
+      "sources": [
+        {
+          "title": "Reverb Reflections: Learn How to Get Reverb Right in this Beginner Mixing Tutorial",
+          "url": "https://www.ableton.com/en/blog/reverb-beginner-mixing-video-tutorial/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "m53xk6hJZB0",
+              "url": "https://www.youtube.com/watch?v=m53xk6hJZB0"
+            }
+          ]
+        },
+        {
+          "title": "Switching Moods and Stacking Layers – Inside the Track with Clockwerk",
+          "url": "https://www.ableton.com/en/blog/inside-the-track-clockwerk/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "9Ae5GHULQkI",
+              "url": "https://www.youtube.com/watch?v=9Ae5GHULQkI"
+            },
+            {
+              "kind": "youtube",
+              "id": "efA-Zaxg4eo",
+              "url": "https://www.youtube.com/watch?v=efA-Zaxg4eo"
+            }
+          ]
+        },
+        {
+          "title": "Make Lush Pads with Harmony to MIDI and Granulator II: Tutorial from DJ Fracture and Producertech",
+          "url": "https://www.ableton.com/en/blog/make-lush-pads-harmony-midi-and-granulator-ii-tutorial-dj-fracture-and-producertech/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "BOENgkaSiLE",
+              "url": "https://www.youtube.com/watch?v=BOENgkaSiLE"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Ensemble Deep.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    "padTapeDepth": {
+      "goal": "Add gentle tape-like density before ensemble width and a dark rear reflection.",
+      "principles": [
+        "harmonic color precedes spatial processing",
+        "dark tails make a layer feel farther away"
+      ],
+      "sources": [
+        {
+          "title": "Explore Auto Filter, Roar, MIDI Tools and More with ELPHNT",
+          "url": "https://www.ableton.com/en/blog/explore-auto-filter-roar-midi-tools-elphnt/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "-5AqJ4r5bkc",
+              "url": "https://www.youtube.com/watch?v=-5AqJ4r5bkc"
+            },
+            {
+              "kind": "youtube",
+              "id": "L9OCRWYSwTg",
+              "url": "https://www.youtube.com/watch?v=L9OCRWYSwTg"
+            },
+            {
+              "kind": "youtube",
+              "id": "o8diEg51rZs",
+              "url": "https://www.youtube.com/watch?v=o8diEg51rZs"
+            },
+            {
+              "kind": "youtube",
+              "id": "IpO6UW6BuEw",
+              "url": "https://www.youtube.com/watch?v=IpO6UW6BuEw"
+            },
+            {
+              "kind": "youtube",
+              "id": "3v7Z0uhr7Fs",
+              "url": "https://www.youtube.com/watch?v=3v7Z0uhr7Fs"
+            }
+          ]
+        },
+        {
+          "title": "Reverb Reflections: Learn How to Get Reverb Right in this Beginner Mixing Tutorial",
+          "url": "https://www.ableton.com/en/blog/reverb-beginner-mixing-video-tutorial/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "m53xk6hJZB0",
+              "url": "https://www.youtube.com/watch?v=m53xk6hJZB0"
+            }
+          ]
+        },
+        {
+          "title": "Three Creative Tips for Live 12.2 – Roar, Meld and Auto Filter",
+          "url": "https://www.ableton.com/en/blog/three-things-to-try-in-ableton-live-12-2/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "daDkXiuHwRs",
+              "url": "https://www.youtube.com/watch?v=daDkXiuHwRs"
+            },
+            {
+              "kind": "youtube",
+              "id": "C_F8hQZEQt0",
+              "url": "https://www.youtube.com/watch?v=C_F8hQZEQt0"
+            },
+            {
+              "kind": "youtube",
+              "id": "PKIPD8ueIXQ",
+              "url": "https://www.youtube.com/watch?v=PKIPD8ueIXQ"
+            }
+          ]
+        },
+        {
+          "title": "Exploring Roar's New Features in Live 12.2 with Ned Rush",
+          "url": "https://www.ableton.com/en/blog/exploring-roar-new-features-in-live-12-2/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "C5KTNPZhiUo",
+              "url": "https://www.youtube.com/watch?v=C5KTNPZhiUo"
+            }
+          ]
+        },
+        {
+          "title": "Shapeshifting: Sound Design Explorations with Roar",
+          "url": "https://www.ableton.com/en/blog/shapeshifting-sound-design-explorations-with-roar/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "fHC3VYhde1c",
+              "url": "https://www.youtube.com/watch?v=fHC3VYhde1c"
+            }
+          ]
+        },
+        {
+          "title": "Roar: Meet Live 12’s New Processing Powerhouse",
+          "url": "https://www.ableton.com/en/blog/roar-meet-live-12s-new-processing-powerhouse/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "d6_4eWh89jY",
+              "url": "https://www.youtube.com/watch?v=d6_4eWh89jY"
+            },
+            {
+              "kind": "youtube",
+              "id": "WlaeDOOLTEA",
+              "url": "https://www.youtube.com/watch?v=WlaeDOOLTEA"
+            },
+            {
+              "kind": "youtube",
+              "id": "gRyxyhKC-Nk",
+              "url": "https://www.youtube.com/watch?v=gRyxyhKC-Nk"
+            },
+            {
+              "kind": "youtube",
+              "id": "fsEed7SKTB0",
+              "url": "https://www.youtube.com/watch?v=fsEed7SKTB0"
+            }
+          ]
+        },
+        {
+          "title": "Switching Moods and Stacking Layers – Inside the Track with Clockwerk",
+          "url": "https://www.ableton.com/en/blog/inside-the-track-clockwerk/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "9Ae5GHULQkI",
+              "url": "https://www.youtube.com/watch?v=9Ae5GHULQkI"
+            },
+            {
+              "kind": "youtube",
+              "id": "efA-Zaxg4eo",
+              "url": "https://www.youtube.com/watch?v=efA-Zaxg4eo"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix Fat Tape.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Chorus2",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Chorus-Ensemble/Warm Ensemble.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    "leadPerspective": {
+      "goal": "Create rhythmic depth with a tempo-related echo before a compact dark tail.",
+      "principles": [
+        "delay supplies rhythmic perspective",
+        "reverb glues repeats into one depth plane"
+      ],
+      "sources": [
+        {
+          "title": "Reverb Reflections: Learn How to Get Reverb Right in this Beginner Mixing Tutorial",
+          "url": "https://www.ableton.com/en/blog/reverb-beginner-mixing-video-tutorial/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "m53xk6hJZB0",
+              "url": "https://www.youtube.com/watch?v=m53xk6hJZB0"
+            }
+          ]
+        },
+        {
+          "title": "Beyond the Echo Chamber: Inventive Effects Using Live’s Delay Devices",
+          "url": "https://www.ableton.com/en/blog/beyond-the-echo-chamber-inventive-effects-using-lives-delay-devices/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "VSGYqvV4bTg",
+              "url": "https://www.youtube.com/watch?v=VSGYqvV4bTg"
+            }
+          ]
+        },
+        {
+          "title": "Everything Echo: Slynk Explores Live’s New Delay",
+          "url": "https://www.ableton.com/en/blog/everything-echo-slynk/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "6zovaF2KSTE",
+              "url": "https://www.youtube.com/watch?v=6zovaF2KSTE"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Delay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Delay/Clean Delay/Dotted Eighth Note.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Hall/Medium Dark Plate.adv"
+        }
+      ]
+    },
+    "leadWideEcho": {
+      "goal": "Use a wide ping-pong echo on sparse phrases while keeping the main pulse centered.",
+      "principles": [
+        "width belongs to sparse upper layers",
+        "echo movement contrasts with a stable rhythm section"
+      ],
+      "sources": [
+        {
+          "title": "Beyond the Echo Chamber: Inventive Effects Using Live’s Delay Devices",
+          "url": "https://www.ableton.com/en/blog/beyond-the-echo-chamber-inventive-effects-using-lives-delay-devices/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "VSGYqvV4bTg",
+              "url": "https://www.youtube.com/watch?v=VSGYqvV4bTg"
+            }
+          ]
+        },
+        {
+          "title": "Everything Echo: Slynk Explores Live’s New Delay",
+          "url": "https://www.ableton.com/en/blog/everything-echo-slynk/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "6zovaF2KSTE",
+              "url": "https://www.youtube.com/watch?v=6zovaF2KSTE"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Echo",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Echo/Clean Delay/Ping Pong Wide.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Reverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Reverb/Special/Short Ambience.adv"
+        }
+      ]
+    },
+    "granularEarCandy": {
+      "goal": "Transform a quiet duplicate into an unstable detail layer, not a new foreground part.",
+      "principles": [
+        "resample or duplicate selectively",
+        "spectral novelty works best at low level and phrase boundaries"
+      ],
+      "sources": [
+        {
+          "title": "A Step-by-Step Guide for Designing Melodic Ear Candy",
+          "url": "https://www.ableton.com/en/blog/step-by-step-guide-for-designing-ear-candy/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "PbdLB0ZJagQ",
+              "url": "https://www.youtube.com/watch?v=PbdLB0ZJagQ"
+            }
+          ]
+        },
+        {
+          "title": "Against the Grain: Creative Applications of Granulator III",
+          "url": "https://www.ableton.com/en/blog/against-the-grain-creative-applications-of-granulator-iii/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "Nx88BMRyiWA",
+              "url": "https://www.youtube.com/watch?v=Nx88BMRyiWA"
+            }
+          ]
+        },
+        {
+          "title": "Experimental Sound Design with Feedback Loops",
+          "url": "https://www.ableton.com/en/blog/experimental-sound-design-with-feedback-loops/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "3HKDztcT3Cg",
+              "url": "https://www.youtube.com/watch?v=3HKDztcT3Cg"
+            },
+            {
+              "kind": "youtube",
+              "id": "h4trAHWsi9Q",
+              "url": "https://www.youtube.com/watch?v=h4trAHWsi9Q"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Bubbles.adv"
+        },
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Mix Mid Side Enhance.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Space/Filtered Dub Tech.adv"
+        }
+      ]
+    },
+    "percussionElectricity": {
+      "goal": "Turn selected secondary percussion into a short, animated texture layer.",
+      "principles": [
+        "process supporting percussion more aggressively than anchors",
+        "short ambience contains the result"
+      ],
+      "sources": [
+        {
+          "title": "A Step-by-Step Guide for Designing Melodic Ear Candy",
+          "url": "https://www.ableton.com/en/blog/step-by-step-guide-for-designing-ear-candy/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "PbdLB0ZJagQ",
+              "url": "https://www.youtube.com/watch?v=PbdLB0ZJagQ"
+            }
+          ]
+        },
+        {
+          "title": "Against the Grain: Creative Applications of Granulator III",
+          "url": "https://www.ableton.com/en/blog/against-the-grain-creative-applications-of-granulator-iii/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "Nx88BMRyiWA",
+              "url": "https://www.youtube.com/watch?v=Nx88BMRyiWA"
+            }
+          ]
+        },
+        {
+          "title": "Complex Beatmaking with Seed to Stage",
+          "url": "https://www.ableton.com/en/blog/complex-beatmaking-seed-stage/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "C5OSsMBsGKc",
+              "url": "https://www.youtube.com/watch?v=C5OSsMBsGKc"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "GrainDelay",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Grain Delay/Drum Electrifier.adv"
+        },
+        {
+          "kind": "native",
+          "device": "HybridReverb",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Hybrid Reverb/Drums/Short Bliss.adv"
+        }
+      ]
+    },
+    "warmDrumColor": {
+      "goal": "Add cohesive nonlinear color to drums without replacing their individual transient work.",
+      "principles": [
+        "bus color is subtler than sound-design distortion",
+        "transient detail survives saturation"
+      ],
+      "sources": [
+        {
+          "title": "Explore Auto Filter, Roar, MIDI Tools and More with ELPHNT",
+          "url": "https://www.ableton.com/en/blog/explore-auto-filter-roar-midi-tools-elphnt/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "-5AqJ4r5bkc",
+              "url": "https://www.youtube.com/watch?v=-5AqJ4r5bkc"
+            },
+            {
+              "kind": "youtube",
+              "id": "L9OCRWYSwTg",
+              "url": "https://www.youtube.com/watch?v=L9OCRWYSwTg"
+            },
+            {
+              "kind": "youtube",
+              "id": "o8diEg51rZs",
+              "url": "https://www.youtube.com/watch?v=o8diEg51rZs"
+            },
+            {
+              "kind": "youtube",
+              "id": "IpO6UW6BuEw",
+              "url": "https://www.youtube.com/watch?v=IpO6UW6BuEw"
+            },
+            {
+              "kind": "youtube",
+              "id": "3v7Z0uhr7Fs",
+              "url": "https://www.youtube.com/watch?v=3v7Z0uhr7Fs"
+            }
+          ]
+        },
+        {
+          "title": "Three Creative Tips for Live 12.2 – Roar, Meld and Auto Filter",
+          "url": "https://www.ableton.com/en/blog/three-things-to-try-in-ableton-live-12-2/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "daDkXiuHwRs",
+              "url": "https://www.youtube.com/watch?v=daDkXiuHwRs"
+            },
+            {
+              "kind": "youtube",
+              "id": "C_F8hQZEQt0",
+              "url": "https://www.youtube.com/watch?v=C_F8hQZEQt0"
+            },
+            {
+              "kind": "youtube",
+              "id": "PKIPD8ueIXQ",
+              "url": "https://www.youtube.com/watch?v=PKIPD8ueIXQ"
+            }
+          ]
+        },
+        {
+          "title": "Exploring Roar's New Features in Live 12.2 with Ned Rush",
+          "url": "https://www.ableton.com/en/blog/exploring-roar-new-features-in-live-12-2/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "C5KTNPZhiUo",
+              "url": "https://www.youtube.com/watch?v=C5KTNPZhiUo"
+            }
+          ]
+        },
+        {
+          "title": "Shapeshifting: Sound Design Explorations with Roar",
+          "url": "https://www.ableton.com/en/blog/shapeshifting-sound-design-explorations-with-roar/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "fHC3VYhde1c",
+              "url": "https://www.youtube.com/watch?v=fHC3VYhde1c"
+            }
+          ]
+        },
+        {
+          "title": "Roar: Meet Live 12’s New Processing Powerhouse",
+          "url": "https://www.ableton.com/en/blog/roar-meet-live-12s-new-processing-powerhouse/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "d6_4eWh89jY",
+              "url": "https://www.youtube.com/watch?v=d6_4eWh89jY"
+            },
+            {
+              "kind": "youtube",
+              "id": "WlaeDOOLTEA",
+              "url": "https://www.youtube.com/watch?v=WlaeDOOLTEA"
+            },
+            {
+              "kind": "youtube",
+              "id": "gRyxyhKC-Nk",
+              "url": "https://www.youtube.com/watch?v=gRyxyhKC-Nk"
+            },
+            {
+              "kind": "youtube",
+              "id": "fsEed7SKTB0",
+              "url": "https://www.youtube.com/watch?v=fsEed7SKTB0"
+            }
+          ]
+        },
+        {
+          "title": "Enter the Temple of Boom: Acoustic Kicks",
+          "url": "https://www.ableton.com/en/blog/enter-temple-boom-acoustic-kicks/",
+          "media": [
+            {
+              "kind": "youtube",
+              "id": "07kcQFFlJJ0",
+              "url": "https://www.youtube.com/watch?v=07kcQFFlJJ0"
+            },
+            {
+              "kind": "youtube",
+              "id": "PLUZ5cgehAI",
+              "url": "https://www.youtube.com/watch?v=PLUZ5cgehAI"
+            },
+            {
+              "kind": "youtube",
+              "id": "gG7UXv8Zc5Q",
+              "url": "https://www.youtube.com/watch?v=gG7UXv8Zc5Q"
+            },
+            {
+              "kind": "youtube",
+              "id": "Etl6-5E7KHI",
+              "url": "https://www.youtube.com/watch?v=Etl6-5E7KHI"
+            },
+            {
+              "kind": "youtube",
+              "id": "_fKAsvJrFes",
+              "url": "https://www.youtube.com/watch?v=_fKAsvJrFes"
+            }
+          ]
+        }
+      ],
+      "chain": [
+        {
+          "kind": "native",
+          "device": "Roar",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Roar/Drum Kit Enhancer.adv"
+        },
+        {
+          "kind": "native",
+          "device": "DrumBuss",
+          "preset": "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Devices/Audio Effects/Drum Buss/Punchy Driven .adv"
+        }
+      ]
+    }
+  }
+}

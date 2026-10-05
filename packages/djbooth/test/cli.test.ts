@@ -73,6 +73,7 @@ describe("djbooth CLI", () => {
         "produce ableton library",
         "produce ableton probe-engine",
         "produce ableton render-audio-rack",
+        "produce ableton render-graph",
         "produce profile-compare",
         "produce reference-profile",
         "produce render",
@@ -104,8 +105,10 @@ describe("djbooth CLI", () => {
     expect(output).toContain("--note <number>");
     expect(output).toContain("--sequence <string>");
     expect(output).toContain("--sample <string>");
+    expect(output).toContain("--sidechain <string>");
     expect(output).toContain("--preset <string>");
     expect(output).toContain("--preset-device-offset <number>");
+    expect(output).toContain("--schema-query <string>");
     expect(output).toContain("--velocity <number>");
     expect(output).toContain("--gate-seconds <number>");
     expect(output).toContain("--render-frames <number>");
@@ -135,6 +138,7 @@ describe("djbooth CLI", () => {
     const { output, exitCode } = await serve(["produce", "ableton", "audit-presets", "--help"]);
     expect(exitCode).toBeUndefined();
     expect(output).toContain("--all");
+    expect(output).toContain("--family <string>");
     expect(output).toContain("every eligible installed ADV preset");
   });
 
@@ -144,6 +148,16 @@ describe("djbooth CLI", () => {
     expect(output).toContain("<rack> <input> <output>");
     expect(output).toContain("chain selection");
     expect(output).toContain("--max-contents <string>");
+  });
+
+  test("exposes complete Ableton graph rendering", async () => {
+    const { output, exitCode } = await serve(["produce", "ableton", "render-graph", "--help"]);
+    expect(exitCode).toBeUndefined();
+    expect(output).toContain("<manifest> <output>");
+    expect(output).toContain("--cache-dir <string>");
+    expect(output).toContain("--device-host <string>");
+    expect(output).toContain("--stems-dir <string>");
+    expect(output).toContain("complete declarative arrangement");
   });
 
   test("retains package command schemas after mounting", async () => {

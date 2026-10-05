@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "title": "night-bus-pulse-b",
+  "bpm": 134.60400251452523,
+  "bars": 8,
+  "beatsPerBar": 4,
+  "sampleRate": 44100,
+  "master": {
+    "inputGainDb": 0,
+    "tailSeconds": 0.8
+  },
+  "tracks": [
+    {
+      "id": "pulse-b",
+      "kind": "serum",
+      "patch": "/Users/gakonst/github/gakonst/music-ts-programmatic-production/examples/serum/patches/smalltown-pulse-arp.json",
+      "gainDb": -2,
+      "notes": [
+        {
+          "beat": 0,
+          "durationBeats": 0.27,
+          "note": 60,
+          "velocity": 106
+        },
+        {
+          "beat": 0.58,
+          "durationBeats": 0.27,
+          "note": 56,
+          "velocity": 85
+        },
+        {
+          "beat": 1,
+          "durationBeats": 0.27,
+          "note": 68,
+          "velocity": 92
+        },
+        {
+          "beat": 1.5,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 81
+        },
+        {
+          "beat": 2.08,
+          "durationBeats": 0.27,
+          "note": 63,
+          "velocity": 106
+        },
+        {
+          "beat": 2.5,
+          "durationBeats": 0.27,
+          "note": 56,
+          "velocity": 95
+        },
+        {
+          "beat": 3.08,
+          "durationBeats": 0.27,
+          "note": 80,
+          "velocity": 84
+        },
+        {
+          "beat": 3.5,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 91
+        },
+        {
+          "beat": 4,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 106
+        },
+        {
+          "beat": 4.58,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 88
+        },
+        {
+          "beat": 5,
+          "durationBeats": 0.27,
+          "note": 65,
+          "velocity": 95
+        },
+        {
+          "beat": 5.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 84
+        },
+        {
+          "beat": 6.08,
+          "durationBeats": 0.27,
+          "note": 62,
+          "velocity": 106
+        },
+        {
+          "beat": 6.5,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 80
+        },
+        {
+          "beat": 7.08,
+          "durationBeats": 0.27,
+          "note": 77,
+          "velocity": 87
+        },
+        {
+          "beat": 7.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 94
+        },
+        {
+          "beat": 8,
+          "durationBeats": 0.27,
+          "note": 60,
+          "velocity": 106
+        },
+        {
+          "beat": 8.58,
+          "durationBeats": 0.27,
+          "note": 60,
+          "velocity": 91
+        },
+        {
+          "beat": 9,
+          "durationBeats": 0.27,
+          "note": 67,
+          "velocity": 80
+        },
+        {
+          "beat": 9.5,
+          "durationBeats": 0.27,
+          "note": 55,
+          "velocity": 87
+        },
+        {
+          "beat": 10.08,
+          "durationBeats": 0.27,
+          "note": 63,
+          "velocity": 106
+        },
+        {
+          "beat": 10.5,
+          "durationBeats": 0.27,
+          "note": 60,
+          "velocity": 83
+        },
+        {
+          "beat": 11.08,
+          "durationBeats": 0.27,
+          "note": 79,
+          "velocity": 90
+        },
+        {
+          "beat": 11.5,
+          "durationBeats": 0.27,
+          "note": 55,
+          "velocity": 79
+        },
+        {
+          "beat": 12,
+          "durationBeats": 0.27,
+          "note": 63,
+          "velocity": 106
+        },
+        {
+          "beat": 12.58,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 94
+        },
+        {
+          "beat": 13,
+          "durationBeats": 0.27,
+          "note": 70,
+          "velocity": 83
+        },
+        {
+          "beat": 13.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 90
+        },
+        {
+          "beat": 14.08,
+          "durationBeats": 0.27,
+          "note": 67,
+          "velocity": 106
+        },
+        {
+          "beat": 14.5,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 86
+        },
+        {
+          "beat": 15.08,
+          "durationBeats": 0.27,
+          "note": 82,
+          "velocity": 93
+        },
+        {
+          "beat": 15.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 82
+        },
+        {
+          "beat": 16,
+          "durationBeats": 0.27,
+          "note": 63,
+          "velocity": 106
+        },
+        {
+          "beat": 16.58,
+          "durationBeats": 0.27,
+          "note": 56,
+          "velocity": 79
+        },
+        {
+          "beat": 17,
+          "durationBeats": 0.27,
+          "note": 72,
+          "velocity": 86
+        },
+        {
+          "beat": 17.5,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 93
+        },
+        {
+          "beat": 18.08,
+          "durationBeats": 0.27,
+          "note": 68,
+          "velocity": 106
+        },
+        {
+          "beat": 18.5,
+          "durationBeats": 0.27,
+          "note": 56,
+          "velocity": 89
+        },
+        {
+          "beat": 19.08,
+          "durationBeats": 0.27,
+          "note": 84,
+          "velocity": 78
+        },
+        {
+          "beat": 19.5,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 85
+        },
+        {
+          "beat": 20,
+          "durationBeats": 0.27,
+          "note": 65,
+          "velocity": 106
+        },
+        {
+          "beat": 20.58,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 82
+        },
+        {
+          "beat": 21,
+          "durationBeats": 0.27,
+          "note": 74,
+          "velocity": 89
+        },
+        {
+          "beat": 21.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 78
+        },
+        {
+          "beat": 22.08,
+          "durationBeats": 0.27,
+          "note": 70,
+          "velocity": 106
+        },
+        {
+          "beat": 22.5,
+          "durationBeats": 0.27,
+          "note": 58,
+          "velocity": 92
+        },
+        {
+          "beat": 23.08,
+          "durationBeats": 0.27,
+          "note": 86,
+          "velocity": 81
+        },
+        {
+          "beat": 23.5,
+          "durationBeats": 0.27,
+          "note": 53,
+          "velocity": 88
+        },
+        {
+          "beat": 24,
+          "durationBeats": 0.27,
+          "note": 63,
+          "velocity": 106
+        },
+        {
+          "beat": 24.58,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 85
+        },
+        {
+          "beat": 25,
+          "durationBeats": 0.27,
+          "note": 70,
+          "velocity": 92
+        },
+        {
+          "beat": 25.5,
+          "durationBeats": 0.27,
+          "note": 46,
+          "velocity": 81
+        },
+        {
+          "beat": 26.08,
+          "durationBeats": 0.27,
+          "note": 67,
+          "velocity": 106
+        },
+        {
+          "beat": 26.5,
+          "durationBeats": 0.27,
+          "note": 51,
+          "velocity": 95
+        },
+        {
+          "beat": 27.08,
+          "durationBeats": 0.27,
+          "note": 82,
+          "velocity": 84
+        },
+        {
+          "beat": 27.5,
+          "durationBeats": 0.27,
+          "note": 46,
+          "velocity": 91
+        },
+        {
+          "beat": 28,
+          "durationBeats": 0.27,
+          "note": 59,
+          "velocity": 106
+        },
+        {
+          "beat": 28.58,
+          "durationBeats": 0.27,
+          "note": 55,
+          "velocity": 88
+        },
+        {
+          "beat": 29,
+          "durationBeats": 0.27,
+          "note": 67,
+          "velocity": 95
+        },
+        {
+          "beat": 29.5,
+          "durationBeats": 0.27,
+          "note": 50,
+          "velocity": 84
+        },
+        {
+          "beat": 30.08,
+          "durationBeats": 0.27,
+          "note": 62,
+          "velocity": 106
+        },
+        {
+          "beat": 30.5,
+          "durationBeats": 0.27,
+          "note": 55,
+          "velocity": 80
+        },
+        {
+          "beat": 31.08,
+          "durationBeats": 0.27,
+          "note": 79,
+          "velocity": 87
+        },
+        {
+          "beat": 31.5,
+          "durationBeats": 0.27,
+          "note": 50,
+          "velocity": 94
+        }
+      ]
+    }
+  ]
+}
