@@ -162,79 +162,81 @@ function Cdj3000({ deck }: { deck: DeckState }) {
       className={`cdj3000 ${deck.connected ? "is-online" : "is-offline"} ${deck.playing ? "is-playing" : ""}`}
       aria-label={`CDJ-3000 player ${deck.player}`}
     >
-      <img className="hardware-photo cdj-photo" src={CDJ_3000_IMAGE} alt="CDJ-3000 top view" />
+      <div className="cdj-coordinate-plane">
+        <img className="hardware-photo cdj-photo" src={CDJ_3000_IMAGE} alt="CDJ-3000 top view" />
 
-      <section className="cdj-live-screen">
-        <div className="cdj-screen-nav">
-          <b>{deck.connected ? (deck.model ?? "CDJ-3000") : "PRO DJ LINK"}</b>
-          <span>PLAYER {deck.player}</span>
-          <em className={deck.connected ? "online" : "offline"}>
-            {deck.connected ? "LINK" : "WAITING"}
-          </em>
-        </div>
-        {deck.connected ? (
-          <>
-            <div className="cdj-trackline">
-              <span>
-                <strong>
-                  {deck.trackTitle ?? (deck.trackId ? "LOADING TRACK…" : "NO TRACK LOADED")}
-                </strong>
-                {deck.trackArtist ? <small>{deck.trackArtist}</small> : null}
-              </span>
-              <b>{deck.tempoMaster ? "MASTER" : deck.synced ? "SYNC" : ""}</b>
-            </div>
-            <CdjWaveform progress={progress} waveform={waveform} />
-            <div className="cdj-screen-bottom">
-              <span>
-                <small>PLAYED</small>
-                <b>{Math.round(progress)}%</b>
-              </span>
-              <span className="cdj-time">
-                <small>ELAPSED / TOTAL</small>
-                <b>
-                  {formatTime(inferredPlayheadMs)} / {formatDuration(trackLengthSec)}
-                </b>
-              </span>
-              <span>
-                <small>TEMPO</small>
-                <b>{formatPitch(deck.pitchPercent)}</b>
-              </span>
-              <span className="cdj-bpm">
-                <small>BPM</small>
-                <b>{formatBpm(bpm)}</b>
-              </span>
-            </div>
-          </>
-        ) : (
-          <div className="cdj-offline-screen">
-            <i />
-            <strong>LINK OFFLINE</strong>
-            <span>Waiting for player {deck.player}</span>
+        <section className="cdj-live-screen">
+          <div className="cdj-screen-nav">
+            <b>{deck.connected ? (deck.model ?? "CDJ-3000") : "PRO DJ LINK"}</b>
+            <span>PLAYER {deck.player}</span>
+            <em className={deck.connected ? "online" : "offline"}>
+              {deck.connected ? "LINK" : "WAITING"}
+            </em>
           </div>
-        )}
-      </section>
+          {deck.connected ? (
+            <>
+              <div className="cdj-trackline">
+                <span>
+                  <strong>
+                    {deck.trackTitle ?? (deck.trackId ? "LOADING TRACK…" : "NO TRACK LOADED")}
+                  </strong>
+                  {deck.trackArtist ? <small>{deck.trackArtist}</small> : null}
+                </span>
+                <b>{deck.tempoMaster ? "MASTER" : deck.synced ? "SYNC" : ""}</b>
+              </div>
+              <CdjWaveform playheadMs={inferredPlayheadMs} bpm={deck.bpm} waveform={waveform} />
+              <div className="cdj-screen-bottom">
+                <span>
+                  <small>PLAYED</small>
+                  <b>{Math.round(progress)}%</b>
+                </span>
+                <span className="cdj-time">
+                  <small>ELAPSED / TOTAL</small>
+                  <b>
+                    {formatTime(inferredPlayheadMs)} / {formatDuration(trackLengthSec)}
+                  </b>
+                </span>
+                <span>
+                  <small>TEMPO</small>
+                  <b>{formatPitch(deck.pitchPercent)}</b>
+                </span>
+                <span className="cdj-bpm">
+                  <small>BPM</small>
+                  <b>{formatBpm(bpm)}</b>
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="cdj-offline-screen">
+              <i />
+              <strong>LINK OFFLINE</strong>
+              <span>Waiting for player {deck.player}</span>
+            </div>
+          )}
+        </section>
 
-      <div
-        className="cdj-jog-live"
-        style={cdjSpriteStyle(50.2, 67.4, 50.2, 67.4, 12.8, 12.8 * CDJ_IMAGE.faceRatio)}
-      >
-        <i style={{ transform: `rotate(${jogAngle}deg)` }} />
-        <span>{deck.playing ? "PLAY" : (deck.playState ?? "IDLE").toUpperCase()}</span>
-        <strong>{formatTime(inferredPlayheadMs)}</strong>
-        <small>{deck.beatInBar ?? "–"}/4</small>
+        <div
+          className="cdj-jog-live"
+          style={cdjSpriteStyle(50.2, 67.4, 50.2, 67.4, 12.8, 12.8 * CDJ_IMAGE.faceRatio)}
+        >
+          <i style={{ transform: `rotate(${jogAngle}deg)` }} />
+          <span>{deck.playing ? "PLAY" : (deck.playState ?? "IDLE").toUpperCase()}</span>
+          <strong>{formatTime(inferredPlayheadMs)}</strong>
+          <small>{deck.beatInBar ?? "–"}/4</small>
+        </div>
+
+        <i
+          className={`cdj-photo-button cdj-cue-glow ${deck.active && !deck.playing ? "lit" : ""}`}
+          style={cdjSpriteStyle(13.25, 81.4, 13.25, 81.4, 10.8, 10.8 * CDJ_IMAGE.faceRatio)}
+          aria-label={deck.active && !deck.playing ? "Cue active" : "Cue inactive"}
+        />
+        <i
+          className={`cdj-photo-button cdj-play-glow ${deck.playing ? "lit" : ""}`}
+          style={cdjSpriteStyle(13.25, 91.25, 13.25, 91.25, 10.8, 10.8 * CDJ_IMAGE.faceRatio)}
+          aria-label={deck.playing ? "Playing" : "Play paused"}
+        />
+        <CdjTempoFader pitch={deck.pitchPercent} />
       </div>
-
-      <i
-        className={`cdj-photo-button cdj-cue-glow ${deck.active && !deck.playing ? "lit" : ""}`}
-        style={cdjSpriteStyle(13.25, 81.4, 13.25, 81.4, 10.8, 10.8 * CDJ_IMAGE.faceRatio)}
-        aria-label={deck.active && !deck.playing ? "Cue active" : "Cue inactive"}
-      />
-      <i
-        className={`cdj-photo-button cdj-play-glow ${deck.playing ? "lit" : ""}`}
-        style={cdjSpriteStyle(13.25, 91.25, 13.25, 91.25, 10.8, 10.8 * CDJ_IMAGE.faceRatio)}
-        aria-label={deck.playing ? "Playing" : "Play paused"}
-      />
-      <CdjTempoFader pitch={deck.pitchPercent} />
     </article>
   );
 }
@@ -266,7 +268,17 @@ function useDeckPlayhead(
     const previousEstimate = previous == null ? 0 : estimateDeckPosition(previous, now);
     const trackChanged = previous?.trackId !== deck.trackId;
     const rawChanged = rawMs != null && rawMs !== previous?.rawMs;
-    const nextPosition = trackChanged ? (rawMs ?? 0) : rawChanged ? rawMs : previousEstimate;
+    const errorMs = rawMs == null ? 0 : rawMs - previousEstimate;
+    // Preserve seeks/loops and stopped positions, but absorb packet timing jitter
+    // during playback instead of snapping the scrolling waveform on every beat.
+    const snap = trackChanged || !deck.playing || !previous?.playing || Math.abs(errorMs) > 750;
+    const nextPosition = trackChanged
+      ? (rawMs ?? 0)
+      : rawChanged
+        ? snap
+          ? rawMs
+          : previousEstimate + errorMs * 0.12
+        : previousEstimate;
     const boundedPosition = boundPlayhead(nextPosition, durationMs);
     anchorRef.current = {
       trackId: deck.trackId,
@@ -283,11 +295,9 @@ function useDeckPlayhead(
   useEffect(() => {
     if (!deck.playing || deck.trackId == null) return;
     let frame = 0;
-    let lastPaint = 0;
     const tick = (now: number) => {
       const anchor = anchorRef.current;
-      if (anchor && now - lastPaint >= 33) {
-        lastPaint = now;
+      if (anchor) {
         setPositionMs(estimateDeckPosition(anchor, now));
       }
       frame = requestAnimationFrame(tick);

@@ -892,3 +892,42 @@
     justify-content: center;
   }
 }
+
+/* One common height, with each hardware image retaining its native aspect ratio.
+   The selector specificity also supersedes older live-display wrapper styles. */
+.booth-grid.booth-grid {
+  --booth-height: min(100vh, 30.4vw);
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 0 !important;
+}
+
+.booth-grid > .cdj3000,
+.booth-grid > .djma9 {
+  flex: none !important;
+  height: var(--booth-height) !important;
+  width: auto !important;
+}
+
+/* Crop the CDJ to its rectangular chassis: source pixels x=146..2342,
+   y=345..3171. The top edge is the USB shoulder, below the browse overhang.
+   Keep the original coordinate plane so every live control stays registered. */
+.booth-grid > .cdj3000 {
+  aspect-ratio: 2196 / 2826 !important;
+  overflow: hidden;
+  filter: none;
+}
+
+.cdj-coordinate-plane {
+  position: absolute;
+  left: calc(-146 / 2196 * 100%);
+  top: calc(-345 / 2826 * 100%);
+  width: calc(2478 / 2196 * 100%);
+  height: calc(3300 / 2826 * 100%);
+}
+
+.booth-grid > .djma9 {
+  overflow: hidden;
+  filter: none;
+}
