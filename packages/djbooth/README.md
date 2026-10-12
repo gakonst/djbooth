@@ -196,3 +196,15 @@ pnpm --filter @gakonst/djbooth validate
 ```
 
 MIT licensed.
+
+### Audio recommendations with Clef-omni
+
+`pnpm djbooth recommend reference.flac --candidate candidate-a.mp3 --candidate candidate-b.wav --brief "Keep the rolling groove, with a little more energy" --start 60 --duration 30 --format json`
+
+This experimental command ranks supplied local tracks by their audible fit to a reference and brief. It requires `ffmpeg`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_AUTH_TOKEN`) with Workers AI Run permission. It sends audio excerpts to Cloudflare and incurs one inference request per unique candidate (up to 20). It never changes the library or creates a playlist. CLI help/schema and MCP expose the same command.
+
+Each file is decoded locally into a mono 24 kHz WAV excerpt, default 30 seconds and at most 60 seconds. `--start` applies to every file; choose a representative section, not a silent intro. Two clips per request stay below the documented 4-clip, 8 MiB/clip, 300-second/clip and 16 MiB combined limits. Candidates are scored individually with identical yes/no questions; output includes fit, groove and energy probabilities, sorted by fit. These are experimental model judgments, not measured BPM/key or guaranteed transition compatibility. No music-recommendation benchmark has been established for this model; audition results before mixing. Ranking across independent requests is heuristic.
+
+All files are prepared before requests begin. A failed request stops the run without automatic retry; prior successful calls may already be billed. Excerpts live only in memory. `--progress always|auto|never` controls stderr progress. Credentials and audio are never included in the result.
+
+Sources: [Clef announcement](https://blog.cloudflare.com/clef-faster-cheaper-multimodal/), [Clef-omni model documentation](https://developers.cloudflare.com/workers-ai/models/clef-omni/), [input schema](https://developers.cloudflare.com/workers-ai/models/clef-omni/schema-input.json), [output schema](https://developers.cloudflare.com/workers-ai/models/clef-omni/schema-output.json). Clef-omni is a typed decision API, not an embedding or music-generation endpoint; Clef and Clef-flash do not accept audio. A next step is evaluating blind DJ judgments against these rankings, then combining validated audio-fit scores with existing BPM/key analysis and library candidate retrieval.
