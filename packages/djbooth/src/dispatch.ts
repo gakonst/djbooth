@@ -52,7 +52,7 @@ export async function runDirectDjBoothCommand(argv: string[]): Promise<void> {
       cli.command((await import("@gakonst/djlink/cli")).linkCli);
       break;
     case "playlist":
-      cli.command((await import("@gakonst/rekordbox/cli")).playlistCli);
+      cli.command((await import("./playlist.js")).playlistCli);
       break;
     case "produce":
       cli.command((await import("./produce.js")).produceCli);

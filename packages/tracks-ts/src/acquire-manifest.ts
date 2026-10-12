@@ -5,11 +5,13 @@ import { extname, isAbsolute, join, resolve } from "node:path";
 import {
   acquirePipelineManifestLock,
   createSourceSetClip,
+  probeAudio,
   retagAudio,
   scoreYoutubeCandidates,
   verifyAudioFile,
   writeManifestAtomic,
   type AudioMetadata,
+  type AudioProbe,
   type ScoredYoutubeCandidate,
   type YoutubeSearchCandidate,
   type YoutubeTarget,
@@ -212,9 +214,11 @@ export type AcquisitionVerification = {
   metadataVerified: number;
 };
 
-/** Network-bound acquisition stays conservative; callers can explicitly raise the cap. */
+/** Default parallelism; callers can request one worker per recording. */
 export const DEFAULT_ACQUISITION_CONCURRENCY = 3;
-export const MAX_ACQUISITION_CONCURRENCY = 8;
+// Workers are bounded by the number of recordings in the plan. Let callers
+// choose concurrency without an additional fixed transfer cap.
+export const MAX_ACQUISITION_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 export const DEFAULT_VERIFICATION_CONCURRENCY = 8;
 export const MAX_VERIFICATION_CONCURRENCY = 16;
 export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 8;
@@ -788,9 +792,17 @@ export async function acquireManifest(
               ) {
                 // Metadata schemas evolve independently of the recording bytes. Retag a verified
                 // checkpoint in place instead of reacquiring the same audio from the network.
+                const sourcePath = variant.outputPath;
+                const pcmCompatibility = needsPcmCompatibility(await probeAudio(sourcePath));
+                if (pcmCompatibility) {
+                  const outputPath = flacOutputPath(sourcePath);
+                  assertAdaptedOutputUnique(plan, variant, outputPath);
+                  variant.outputPath = outputPath;
+                }
                 const tagged = await retagAudio({
-                  sourcePath: variant.outputPath,
+                  sourcePath,
                   outputPath: variant.outputPath,
+                  ...(pcmCompatibility ? { audioCodec: "flac" as const } : {}),
                   metadata: variant.metadata,
                   ...(prior.backend === "local" || !prior.source
                     ? {}
@@ -814,21 +826,36 @@ export async function acquireManifest(
                   variant,
                 );
                 completed = {
-                  download: { ...prior, sha256: tagged.sha256 },
+                  download: {
+                    ...prior,
+                    mediaPath: variant.outputPath,
+                    files: [variant.outputPath],
+                    sha256: tagged.sha256,
+                  },
                   ...(priorCandidate ? { candidate: priorCandidate } : {}),
                 };
                 warnings.push(`${variantLabel(variant)} refreshed embedded metadata`);
+                if (pcmCompatibility)
+                  warnings.push(
+                    `${variantLabel(variant)} decoded HE-AAC to FLAC for analyzer/deck compatibility; the source remains lossy`,
+                  );
                 downloaded.push(variant.outputPath);
               } else if (localArtifact) {
+                const pcmCompatibility = needsPcmCompatibility(
+                  await probeAudio(localArtifact.sourcePath),
+                );
+                if (pcmCompatibility) {
+                  const outputPath = flacOutputPath(variant.outputPath);
+                  assertAdaptedOutputUnique(plan, variant, outputPath);
+                  variant.outputPath = outputPath;
+                }
                 const tagged = await retagAudio({
                   sourcePath: localArtifact.sourcePath,
                   outputPath: variant.outputPath,
                   metadata: variant.metadata,
-                  audioCodec: retagCodecForSource(
-                    localArtifact.sourcePath,
-                    variant.outputPath,
-                    "slsk",
-                  ),
+                  audioCodec: pcmCompatibility
+                    ? "flac"
+                    : retagCodecForSource(localArtifact.sourcePath, variant.outputPath, "slsk"),
                   ...(variant.durationMs === undefined
                     ? {}
                     : { expectedDurationSeconds: variant.durationMs / 1000 }),
@@ -946,18 +973,25 @@ export async function acquireManifest(
                   );
                 }
                 if (localArtifactRejection) variant.outputPath = m4aOutputPath(variant.outputPath);
-                const adaptedOutputPath = outputPathForSource(
-                  variant.outputPath,
-                  acquired.source.path,
-                  acquired.acquirer.backend,
+                const pcmCompatibility = needsPcmCompatibility(
+                  await probeAudio(acquired.source.path),
                 );
+                const adaptedOutputPath = pcmCompatibility
+                  ? flacOutputPath(variant.outputPath)
+                  : outputPathForSource(
+                      variant.outputPath,
+                      acquired.source.path,
+                      acquired.acquirer.backend,
+                    );
                 assertAdaptedOutputUnique(plan, variant, adaptedOutputPath);
                 variant.outputPath = adaptedOutputPath;
-                const retagCodec = retagCodecForSource(
-                  acquired.source.path,
-                  variant.outputPath,
-                  acquired.acquirer.backend,
-                );
+                const retagCodec = pcmCompatibility
+                  ? "flac"
+                  : retagCodecForSource(
+                      acquired.source.path,
+                      variant.outputPath,
+                      acquired.acquirer.backend,
+                    );
                 const tagged = await retagAudio({
                   sourcePath: acquired.source.path,
                   outputPath: variant.outputPath,
@@ -1673,6 +1707,15 @@ function m4aOutputPath(path: string): string {
   return `${extension ? path.slice(0, -extension.length) : path}.m4a`;
 }
 
+function flacOutputPath(path: string): string {
+  const extension = extname(path);
+  return `${extension ? path.slice(0, -extension.length) : path}.flac`;
+}
+
+function needsPcmCompatibility(probe: AudioProbe): boolean {
+  return probe.codec === "aac" && /^HE-AAC/iu.test(probe.profile ?? "");
+}
+
 function targetForVariant(variant: AcquisitionRecordingVariant): YoutubeTarget {
   return {
     title: variant.title,
@@ -1915,6 +1958,7 @@ async function preflightExistingArtifacts(
           cache,
         );
         const after = await stat(item.path);
+        if (needsPcmCompatibility(verified.probe)) return;
         if (!sameFileStat(before, after)) {
           throw new Error(`Audio file changed during verification: ${item.path}`);
         }
@@ -1981,7 +2025,7 @@ async function verifyAudioCached(
   const info = await stat(path);
   return cache.getOrLoad(
     {
-      verificationVersion: 2,
+      verificationVersion: 3,
       path: resolve(path),
       size: info.size,
       mtimeMs: info.mtimeMs,
@@ -2180,8 +2224,9 @@ function validatePlan(
         const checkpointed = downloadForPath(entry, variant.outputPath);
         const allowedAdaptedOutput =
           allowCheckpointedSoulseekOutputs &&
-          (checkpointed?.backend === "slsk" || checkpointed?.backend === "local") &&
-          (outputExtension === ".flac" || outputExtension === ".mp3");
+          (((checkpointed?.backend === "slsk" || checkpointed?.backend === "local") &&
+            (outputExtension === ".flac" || outputExtension === ".mp3")) ||
+            (checkpointed?.backend === "ytdlp" && outputExtension === ".flac"));
         const allowedLocalOutput =
           variant.localArtifact !== undefined &&
           (outputExtension === ".flac" || outputExtension === ".m4a" || outputExtension === ".mp3");

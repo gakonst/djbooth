@@ -6,7 +6,8 @@ import { pathToFileURL } from "node:url";
 
 import { usbCli } from "@gakonst/cdj-usb/cli";
 import { linkCli } from "@gakonst/djlink/cli";
-import { enhanceCli, enhancementGroupCli, playlistCli, stemsCli } from "@gakonst/rekordbox/cli";
+import { enhanceCli, enhancementGroupCli, stemsCli } from "@gakonst/rekordbox/cli";
+import { playlistCli } from "./playlist.js";
 import soundcloudCli from "@gakonst/soundcloud/cli";
 import spotsCli from "@gakonst/spots/cli";
 import { analyzeCli, downloadCli, enrichCli, importCli, resolveCli } from "@gakonst/tracks/cli";

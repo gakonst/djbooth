@@ -11,82 +11,199 @@ import {
 } from "../src/integrations/ytdlp-library.js";
 
 describe("YtdlpReferenceAcquirer", () => {
-  test("searches one track and downloads a direct M4A through the injected library", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "tracks-ytdlp-library-"));
-    const calls: Array<{ kind: string; url: string; options: unknown }> = [];
+  test("keeps browser-authenticated metadata out of the shared disk cache", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-auth-search-"));
+    let calls = 0;
     const client: YtdlpReferenceClient = {
-      async inspect(url, options) {
-        calls.push({ kind: "inspect", url, options });
-        if (url.startsWith("ytsearch")) {
-          return {
-            id: "search",
-            title: "search",
-            entries: [
-              {
-                id: "abcdefghijk",
-                title: "Artist - Track",
-                uploader: "Artist - Topic",
-                duration: 300,
-                extractor: "youtube",
-              },
-            ],
-          };
-        }
-        return {
-          id: "abcdefghijk",
-          title: "Artist - Track",
-          formats: [{ ext: "m4a", acodec: "mp4a.40.2", vcodec: "none" }],
-        };
+      async inspect(_source, options) {
+        expect(options?.cookiesFromBrowser).toBe("brave");
+        calls += 1;
+        return { id: "search", title: "search", entries: [] };
       },
-      async download(url, options) {
-        calls.push({ kind: "download", url, options });
-        await writeFile(join(directory, "track.m4a"), "audio");
-        return { files: ["track.m4a"], stdout: "", stderr: "" };
+      async download() {
+        throw new Error("not used");
       },
     };
-    const acquirer = new YtdlpReferenceAcquirer(client, { searchLimit: 4, cache: false });
-
-    const candidates = await acquirer.search({
-      artists: ["Artist"],
-      title: "Track",
-      durationSeconds: 300,
+    const acquirer = new YtdlpReferenceAcquirer(client, {
+      cookiesFromBrowser: "brave",
+      cache: new JsonDiskCache({ root, namespace: "auth-test" }),
     });
-    const download = await acquirer.download({ ...candidates[0]!, score: 1 }, directory, "track");
-
-    expect(candidates).toEqual([
-      {
-        id: "abcdefghijk",
-        source: "https://www.youtube.com/watch?v=abcdefghijk",
-        title: "Artist - Track",
-        uploader: "Artist - Topic",
-        durationSeconds: 300,
-      },
-    ]);
-    expect(download).toEqual({
-      path: join(directory, "track.m4a"),
-      source: "https://www.youtube.com/watch?v=abcdefghijk",
-      engine: "reference",
-      temporary: true,
-      transcoded: false,
-      qualityNote:
-        "Downloaded the source AAC/M4A audio and stream-copied tags without re-encoding.",
-    });
-    expect(calls[0]).toMatchObject({
-      kind: "inspect",
-      url: "ytsearch4:Artist Track",
-      options: { flatPlaylist: true },
-    });
-    expect(calls[2]).toMatchObject({
-      kind: "download",
-      options: {
-        playlist: false,
-        format: "bestaudio[ext=m4a]/bestaudio/best",
-        extractAudio: true,
-        audioFormat: "m4a",
-        noOverwrites: true,
-      },
-    });
+    const target = { artists: ["Artist"], title: "Track" };
+    await acquirer.search(target);
+    await acquirer.search(target);
+    expect(calls).toBe(2);
+    expect(await readdir(root)).toEqual([]);
   });
+
+  test("searches the primary artist when an upload omits collaborator credits", async () => {
+    const queries: string[] = [];
+    const client: YtdlpReferenceClient = {
+      async inspect(source) {
+        queries.push(source);
+        return {
+          id: "search",
+          title: "search",
+          entries:
+            source === "scsearch10:Artist Track"
+              ? [
+                  {
+                    id: "123",
+                    title: "Track",
+                    uploader: "Artist",
+                    duration: 300,
+                    webpage_url: "https://soundcloud.com/artist/track",
+                  },
+                ]
+              : [],
+        };
+      },
+      async download() {
+        throw new Error("not used");
+      },
+    };
+    const acquirer = new YtdlpReferenceAcquirer(client, {
+      cache: false,
+      searchProviders: ["soundcloud"],
+    });
+    expect(
+      await acquirer.search({ artists: ["Artist", "Collaborator"], title: "Track" }),
+    ).toHaveLength(1);
+    expect(queries).toEqual(["scsearch10:Artist Collaborator Track", "scsearch10:Artist Track"]);
+  });
+
+  test("retains SoundCloud page URLs in cached flat results when YouTube search fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tracks-soundcloud-search-"));
+    const queries: string[] = [];
+    const client: YtdlpReferenceClient = {
+      async inspect(source) {
+        queries.push(source);
+        if (source.startsWith("ytsearch")) throw new Error("YouTube unavailable");
+        return {
+          id: "search",
+          title: "search",
+          entries: [
+            {
+              id: "12345",
+              title: "Artist - Track",
+              url: "https://soundcloud.com/artist/track",
+              duration: 300,
+              uploader: "Artist",
+              extractor: "soundcloud",
+            },
+          ],
+        };
+      },
+      async download() {
+        throw new Error("not used");
+      },
+    };
+    const cache = new JsonDiskCache({ root, namespace: "soundcloud-test" });
+    const acquirer = new YtdlpReferenceAcquirer(client, {
+      cache,
+      searchProviders: ["youtube", "soundcloud"],
+    });
+    const target = { artists: ["Artist"], title: "Track", durationSeconds: 300 };
+    const first = await acquirer.search(target);
+    expect(first).toEqual([
+      expect.objectContaining({
+        source: "https://soundcloud.com/artist/track",
+        durationSeconds: 300,
+      }),
+    ]);
+    expect(await acquirer.search(target)).toEqual(first);
+    expect(queries.filter((query) => query.startsWith("scsearch"))).toEqual([
+      "scsearch10:Artist Track",
+    ]);
+  });
+
+  test.each([undefined, "brave"])(
+    "searches and downloads a direct M4A with browser session %s",
+    async (cookiesFromBrowser) => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-ytdlp-library-"));
+      const calls: Array<{ kind: string; url: string; options: unknown }> = [];
+      const client: YtdlpReferenceClient = {
+        async inspect(url, options) {
+          calls.push({ kind: "inspect", url, options });
+          if (url.startsWith("ytsearch")) {
+            return {
+              id: "search",
+              title: "search",
+              entries: [
+                {
+                  id: "abcdefghijk",
+                  title: "Artist - Track",
+                  uploader: "Artist - Topic",
+                  duration: 300,
+                  extractor: "youtube",
+                },
+              ],
+            };
+          }
+          return {
+            id: "abcdefghijk",
+            title: "Artist - Track",
+            formats: [{ ext: "m4a", acodec: "mp4a.40.2", vcodec: "none" }],
+          };
+        },
+        async download(url, options) {
+          calls.push({ kind: "download", url, options });
+          await writeFile(join(directory, "track.m4a"), "audio");
+          return { files: ["track.m4a"], stdout: "", stderr: "" };
+        },
+      };
+      const acquirer = new YtdlpReferenceAcquirer(client, {
+        searchLimit: 4,
+        cache: false,
+        ...(cookiesFromBrowser ? { cookiesFromBrowser } : {}),
+      });
+
+      const candidates = await acquirer.search({
+        artists: ["Artist"],
+        title: "Track",
+        durationSeconds: 300,
+      });
+      const download = await acquirer.download({ ...candidates[0]!, score: 1 }, directory, "track");
+
+      expect(candidates).toEqual([
+        {
+          id: "abcdefghijk",
+          source: "https://www.youtube.com/watch?v=abcdefghijk",
+          title: "Artist - Track",
+          uploader: "Artist - Topic",
+          durationSeconds: 300,
+        },
+      ]);
+      expect(download).toEqual({
+        path: join(directory, "track.m4a"),
+        source: "https://www.youtube.com/watch?v=abcdefghijk",
+        engine: "reference",
+        temporary: true,
+        transcoded: false,
+        qualityNote:
+          "Downloaded the source AAC/M4A audio and stream-copied tags without re-encoding.",
+      });
+      expect(calls[0]).toMatchObject({
+        kind: "inspect",
+        url: "ytsearch4:Artist Track",
+        options: { flatPlaylist: true },
+      });
+      expect(calls[2]).toMatchObject({
+        kind: "download",
+        options: {
+          playlist: false,
+          format: "bestaudio[ext=m4a]/bestaudio/best",
+          extractAudio: true,
+          audioFormat: "m4a",
+          noOverwrites: true,
+          ...(cookiesFromBrowser ? { cookiesFromBrowser } : {}),
+        },
+      });
+      if (cookiesFromBrowser) {
+        expect(calls[0]).toMatchObject({ options: { cookiesFromBrowser } });
+        expect(calls[1]).toMatchObject({ options: { cookiesFromBrowser } });
+      }
+    },
+  );
 
   test("reuses sanitized YouTube search metadata from disk", async () => {
     const root = await mkdtemp(join(tmpdir(), "tracks-youtube-cache-"));

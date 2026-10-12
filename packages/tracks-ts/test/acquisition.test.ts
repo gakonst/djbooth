@@ -22,6 +22,46 @@ import { createManifest } from "../src/manifest.js";
 
 describe("acquisition primitives", () => {
   test.skipIf(spawnSync("ffmpeg", ["-version"]).status !== 0)(
+    "replaces FLAC tracknumber aliases instead of appending the new playlist position",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-flac-tags-"));
+      try {
+        const sourcePath = join(directory, "source.mka");
+        execFileSync("ffmpeg", [
+          "-v",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=duration=1",
+          "-metadata",
+          "track=4/4",
+          "-metadata",
+          "TRACKNUMBER=4/4",
+          "-metadata",
+          "genre=House",
+          sourcePath,
+        ]);
+        const result = await retagAudio({
+          sourcePath,
+          outputPath: join(directory, "tagged.flac"),
+          audioCodec: "flac",
+          metadata: {
+            title: "Extender",
+            artists: ["Oldboy"],
+            comment: "Imported recording",
+            trackNumber: 34,
+            trackTotal: 110,
+          },
+        });
+        expect(result.probe.tags).toMatchObject({ track: "34/110", genre: "House" });
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(spawnSync("ffmpeg", ["-version"]).status !== 0)(
     "rejects damaged AAC packets even when MP4 headers and duration are intact",
     async () => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-decode-"));

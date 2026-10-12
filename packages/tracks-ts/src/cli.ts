@@ -151,10 +151,13 @@ export function orderedImportSetAcquirers(
 export function createImportSetReferenceAcquirer(
   client: YtdlpReferenceClient,
   cacheMode: CacheMode,
+  cookiesFromBrowser?: string,
 ): YtdlpReferenceAcquirer {
   return new YtdlpReferenceAcquirer(client, {
     cacheMode,
     requiresPriorCapabilityFailure: false,
+    searchProviders: ["youtube", "soundcloud"],
+    ...(cookiesFromBrowser ? { cookiesFromBrowser } : {}),
   });
 }
 
@@ -823,6 +826,10 @@ const setWorkflowOptions = z.object({
     .boolean()
     .default(false)
     .describe("Explicitly add external yt-dlp after Soulseek and the typed native downloader"),
+  cookiesFromBrowser: z
+    .string()
+    .optional()
+    .describe("Browser session for the explicitly enabled reference downloader, e.g. brave"),
   sourceSetPath: z
     .string()
     .optional()
@@ -846,6 +853,14 @@ const setWorkflowOptions = z.object({
     .max(MAX_ACQUISITION_CONCURRENCY)
     .default(DEFAULT_ACQUISITION_CONCURRENCY)
     .describe("Parallel independent recording variants; defaults to 3"),
+  slskQueueTimeoutMs: z
+    .number()
+    .int()
+    .min(1000)
+    .default(120_000)
+    .describe(
+      "Soulseek queue and file-connection wait before trying another peer; does not limit active transfers",
+    ),
   verificationConcurrency: z
     .number()
     .int()
@@ -1145,7 +1160,7 @@ async function runSetWorkflowCommand(
     const spotify = context.options.wholeSet
       ? undefined
       : await workflowSpotifyClient(context.options.cacheMode);
-    soulseek = new SoulseekClient();
+    soulseek = new SoulseekClient({ transferTimeout: context.options.slskQueueTimeoutMs });
     const acquirers = orderedImportSetAcquirers(context.options.referenceYtdlp, {
       soulseek: () =>
         new SoulseekLibraryAcquirer(soulseek!, {
@@ -1162,7 +1177,11 @@ async function runSetWorkflowCommand(
           signal: controller.signal,
         }),
       referenceYtdlp: () =>
-        createImportSetReferenceAcquirer(new ReferenceClient(), context.options.cacheMode),
+        createImportSetReferenceAcquirer(
+          new ReferenceClient(),
+          context.options.cacheMode,
+          context.options.cookiesFromBrowser,
+        ),
     });
     if (!initialState) {
       const hosted = await prepareHostedImportSource(context.args.source, {

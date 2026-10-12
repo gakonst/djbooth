@@ -198,11 +198,23 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
   async #search(target: YoutubeTarget): Promise<SoulseekSearchCandidate[]> {
     const client = await this.#connectedClient();
     const query = [...target.artists, target.title].join(" ").trim();
-    const responses = await client.search(query, {
-      timeout: this.#searchTimeoutMs,
-      maxResults: this.#maxPeerResults,
-      ...(this.#signal ? { signal: this.#signal } : {}),
-    });
+    const queries = [
+      ...new Set([
+        query,
+        ...(target.artists.length > 1 ? [[target.artists[0], target.title].join(" ").trim()] : []),
+      ]),
+    ];
+    const responses = (
+      await Promise.all(
+        queries.map((searchQuery) =>
+          client.search(searchQuery, {
+            timeout: this.#searchTimeoutMs,
+            maxResults: this.#maxPeerResults,
+            ...(this.#signal ? { signal: this.#signal } : {}),
+          }),
+        ),
+      )
+    ).flat();
     const seen = new Set<string>();
     const candidates = responses.flatMap((response) =>
       response.files.flatMap((file) => {
@@ -276,6 +288,12 @@ export class SoulseekLibraryAcquirer implements TrackAcquirer {
       return this.#client!;
     }
     const availability = await this.availability();
+    // Other recording searches can begin connecting while availability yields.
+    if (this.#connecting) {
+      await this.#connecting;
+      this.#signal?.throwIfAborted();
+      return this.#client!;
+    }
     if (!availability.available) throw new Error(`Soulseek unavailable: ${availability.reason}`);
     const client = this.#client!;
     if (client.state === "connected") return client;

@@ -51,7 +51,12 @@ export type YtdlpMediaInfo = {
 export type YtdlpReferenceClient = {
   inspect(
     url: string,
-    options?: { playlist?: boolean; flatPlaylist?: boolean; extractorArgs?: string[] },
+    options?: {
+      playlist?: boolean;
+      flatPlaylist?: boolean;
+      extractorArgs?: string[];
+      cookiesFromBrowser?: string;
+    },
   ): Promise<YtdlpMediaInfo>;
   download(
     url: string,
@@ -69,6 +74,7 @@ export type YtdlpReferenceClient = {
       audioQuality?: string;
       embedMetadata?: boolean;
       extractorArgs?: string[];
+      cookiesFromBrowser?: string;
     },
   ): Promise<{ files: string[]; stdout: string; stderr: string }>;
 };
@@ -251,6 +257,8 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
   readonly #cacheMode: CacheMode;
   readonly #searchTtlMs: number;
   readonly #metadataTtlMs: number;
+  readonly #searchProviders: readonly ("youtube" | "soundcloud")[];
+  readonly #cookiesFromBrowser: string | undefined;
 
   constructor(
     client: YtdlpReferenceClient,
@@ -261,9 +269,13 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
       searchTtlMs?: number;
       metadataTtlMs?: number;
       requiresPriorCapabilityFailure?: boolean;
+      searchProviders?: readonly ("youtube" | "soundcloud")[];
+      cookiesFromBrowser?: string;
     } = {},
   ) {
     this.#client = client;
+    this.#cookiesFromBrowser = options.cookiesFromBrowser;
+    this.#searchProviders = options.searchProviders ?? ["youtube"];
     this.requiresPriorCapabilityFailure = options.requiresPriorCapabilityFailure ?? false;
     this.#searchLimit = options.searchLimit ?? 10;
     this.#cacheMode = options.cacheMode ?? "default";
@@ -289,25 +301,54 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
 
   async search(target: YoutubeTarget): Promise<YoutubeSearchCandidate[]> {
     const query = target.searchQuery ?? [...target.artists, target.title].join(" ");
-    const source = `ytsearch${this.#searchLimit}:${query}`;
+    // Provider search treats every credit as a required term. Uploads often
+    // credit only the main artist; scoring still checks the complete identity.
+    const queries = [
+      ...new Set([
+        query,
+        ...(!target.searchQuery && target.artists.length > 1
+          ? [[target.artists[0], target.title].join(" ")]
+          : []),
+      ]),
+    ];
     const inspectOptions: Parameters<YtdlpReferenceClient["inspect"]>[1] = {
       flatPlaylist: true,
     };
-    const result = await this.#inspect("search", source, inspectOptions, this.#searchTtlMs);
-    return (result.entries ?? []).flatMap((entry) => {
-      const source = mediaUrl(entry);
-      if (!source || !entry.id || !entry.title) return [];
-      return [
-        {
-          id: entry.id,
-          source,
-          title: entry.title,
-          ...((entry.artist ?? entry.creator) ? { artist: entry.artist ?? entry.creator } : {}),
-          ...(entry.uploader ? { uploader: entry.uploader } : {}),
-          ...(entry.duration === undefined ? {} : { durationSeconds: entry.duration }),
-        },
-      ];
-    });
+    const results = await Promise.allSettled(
+      this.#searchProviders.flatMap((provider) =>
+        queries.map((searchQuery) =>
+          this.#inspect(
+            "search",
+            `${provider === "soundcloud" ? "scsearch" : "ytsearch"}${this.#searchLimit}:${searchQuery}`,
+            inspectOptions,
+            this.#searchTtlMs,
+          ),
+        ),
+      ),
+    );
+    const successful = results.filter((result) => result.status === "fulfilled");
+    if (!successful.length) {
+      throw new AggregateError(
+        results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        "All media searches failed",
+      );
+    }
+    return successful
+      .flatMap((result) => result.value.entries ?? [])
+      .flatMap((entry) => {
+        const source = mediaUrl(entry);
+        if (!source || !entry.id || !entry.title) return [];
+        return [
+          {
+            id: entry.id,
+            source,
+            title: entry.title,
+            ...((entry.artist ?? entry.creator) ? { artist: entry.artist ?? entry.creator } : {}),
+            ...(entry.uploader ? { uploader: entry.uploader } : {}),
+            ...(entry.duration === undefined ? {} : { durationSeconds: entry.duration }),
+          },
+        ];
+      });
   }
 
   async download(
@@ -342,6 +383,7 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     );
     const directM4a = hasDirectM4a(info);
     const result = await this.#client.download(candidate.source, {
+      ...(this.#cookiesFromBrowser ? { cookiesFromBrowser: this.#cookiesFromBrowser } : {}),
       playlist: false,
       format: directM4a ? "bestaudio[ext=m4a]/bestaudio/best" : "bestaudio/best",
       paths: destinationDirectory,
@@ -374,6 +416,12 @@ export class YtdlpReferenceAcquirer implements TrackAcquirer {
     options: Parameters<YtdlpReferenceClient["inspect"]>[1],
     ttlMs: number,
   ): Promise<YtdlpMediaInfo> {
+    if (this.#cookiesFromBrowser) {
+      return this.#client.inspect(source, {
+        ...options,
+        cookiesFromBrowser: this.#cookiesFromBrowser,
+      });
+    }
     if (!this.#cache || isSensitiveMediaSource(source)) {
       return this.#client.inspect(source, options);
     }
@@ -443,7 +491,7 @@ function sanitizeNativeSearchResults(
 }
 
 function sanitizeMediaInfo(info: YtdlpMediaInfo): YtdlpMediaInfo {
-  const webpageUrl = stablePageUrl(info.webpage_url);
+  const webpageUrl = stablePageUrl(info.webpage_url) ?? stablePageUrl(info.url);
   const originalUrl = stablePageUrl(info.original_url);
   return {
     id: info.id,

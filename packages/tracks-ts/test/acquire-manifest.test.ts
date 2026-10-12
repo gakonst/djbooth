@@ -83,11 +83,13 @@ const { readFileSync } = require("node:fs");
 const input = process.argv.at(-1);
 let comment = "test";
 let duration = "100";
+let profile;
 try { comment = readFileSync(input + ".comment", "utf8"); } catch {}
 try { duration = readFileSync(input + ".duration", "utf8").trim(); } catch {}
+try { profile = readFileSync(input + ".profile", "utf8").trim(); } catch {}
 process.stdout.write(JSON.stringify({
   format: { duration, bit_rate: "128000", tags: { title: "Track", artist: "Artist", comment } },
-  streams: [{ codec_type: "audio", codec_name: "aac" }],
+  streams: [{ codec_type: "audio", codec_name: input.endsWith(".flac") ? "flac" : "aac", ...(profile ? { profile } : {}) }],
 }) + "\\n");
 `,
   );
@@ -123,6 +125,57 @@ writeFileSync(output + ".comment", comment);
 }
 
 describe("acquireManifest", () => {
+  audioToolTest(
+    "converts checkpointed HE-AAC to a separate FLAC artifact without network acquisition",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "tracks-he-aac-"));
+      const manifestPath = join(directory, "manifest.json");
+      const sourcePath = join(directory, "track.m4a");
+      const outputPath = join(directory, "track.flac");
+      const contents = "existing verified HE-AAC";
+      const value = oneTrackManifest();
+      value.entries[0]!.acquisition = {
+        status: "downloaded",
+        query: "Artist Track",
+        download: {
+          backend: "ytdlp",
+          mediaPath: sourcePath,
+          files: [sourcePath],
+          source: "https://youtube.test/track",
+          spotifyId: "spotify-1",
+          sha256: createHash("sha256").update(contents).digest("hex"),
+        },
+      };
+      await writeFile(sourcePath, contents);
+      await writeFile(`${sourcePath}.profile`, "HE-AAC");
+      await writeManifestAtomic(manifestPath, value);
+      const bin = await installFakeAudioTools(directory);
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+      try {
+        const result = await acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [],
+        });
+        expect(result.failures).toEqual([]);
+        expect(result.manifest.entries[0]!.acquisition).toMatchObject({
+          status: "downloaded",
+          download: { mediaPath: outputPath, files: [outputPath] },
+        });
+        expect(await readFile(sourcePath, "utf8")).toBe(contents);
+        const resumed = await acquireManifest({
+          manifestPath,
+          plan: recordingPlan(directory),
+          acquirers: [],
+        });
+        expect(resumed.resumed).toEqual([outputPath]);
+      } finally {
+        process.env.PATH = previousPath;
+      }
+    },
+  );
+
   test("rejects incomplete and unsafe plans before writing", async () => {
     const directory = await mkdtemp(join(tmpdir(), "tracks-plan-"));
     const manifestPath = join(directory, "manifest.json");
@@ -1460,9 +1513,9 @@ describe("acquireManifest", () => {
     },
   );
 
-  audioToolTest(
-    "runs independent recording jobs concurrently with serialized checkpoints",
-    async () => {
+  audioToolTest.each([3, 110])(
+    "runs independent recording jobs with concurrency %i and serialized checkpoints",
+    async (concurrency) => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-parallel-recordings-"));
       const manifestPath = join(directory, "manifest.json");
       const manifest = createManifest({
@@ -1545,14 +1598,14 @@ describe("acquireManifest", () => {
           plan,
           acquirers: [acquirer],
           requireCompletePlan: true,
-          concurrency: 3,
+          concurrency,
         });
 
         expect(maximumActive).toBe(3);
         expect(stagingDirectories.size).toBe(3);
         expect(result.failures).toEqual([]);
         expect(result.downloaded).toHaveLength(3);
-        expect(result.performance).toMatchObject({ concurrency: 3 });
+        expect(result.performance).toMatchObject({ concurrency });
         expect(result.performance.stages).toContainEqual(
           expect.objectContaining({ stage: "recordings" }),
         );

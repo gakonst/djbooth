@@ -19,6 +19,21 @@ afterEach(async () => {
 });
 
 describe("SoulseekLibraryAcquirer", () => {
+  test("searches primary artist credits and deduplicates shared files across queries", async () => {
+    const fake = fakeClient([
+      response("peer", [file("Artist - Track.flac", 10_000_000n, { length: 300 })]),
+    ]);
+    fake.client.state = "connected";
+    const acquirer = new SoulseekLibraryAcquirer(fake.client);
+    expect(
+      await acquirer.search({ artists: ["Artist", "Collaborator"], title: "Track" }),
+    ).toHaveLength(1);
+    expect(fake.search.mock.calls.map((call) => call[0])).toEqual([
+      "Artist Collaborator Track",
+      "Artist Track",
+    ]);
+  });
+
   test("reports missing injected client and missing credentials without touching the network", async () => {
     const noClient = new SoulseekLibraryAcquirer(undefined, { environment: {} });
     await expect(noClient.availability()).resolves.toEqual({
@@ -138,6 +153,26 @@ describe("SoulseekLibraryAcquirer", () => {
     await expect(
       acquirer.search({ title: "Another", artists: ["Artist"], durationSeconds: 300 }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("shares one connection across concurrent distinct recordings", async () => {
+    const fake = fakeClient([]);
+    fake.connect.mockImplementation(async () => {
+      if (fake.client.state !== "disconnected") throw new Error("Already connecting");
+      fake.client.state = "connecting";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      fake.client.state = "connected";
+    });
+    const acquirer = new SoulseekLibraryAcquirer(fake.client, {
+      credentials: { username: "local", password: "secret" },
+    });
+    await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        acquirer.search({ title: `Track ${index}`, artists: ["Artist"] }),
+      ),
+    );
+    expect(fake.connect).toHaveBeenCalledTimes(1);
+    expect(fake.search).toHaveBeenCalledTimes(8);
   });
 
   test("coalesces identical in-flight searches on one long-lived client", async () => {

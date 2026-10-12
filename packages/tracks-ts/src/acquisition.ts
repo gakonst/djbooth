@@ -30,6 +30,7 @@ export type AudioAcquisitionSource = {
 export type AudioProbe = {
   durationSeconds: number;
   codec: string;
+  profile?: string;
   bitrate?: number;
   tags: Record<string, string>;
 };
@@ -253,7 +254,7 @@ export async function probeAudio(path: string, ffprobe = "ffprobe"): Promise<Aud
     "-v",
     "error",
     "-show_entries",
-    "format=duration,bit_rate:format_tags:stream=codec_name,codec_type:stream_tags",
+    "format=duration,bit_rate:format_tags:stream=codec_name,codec_type,profile:stream_tags",
     "-of",
     "json",
     path,
@@ -280,6 +281,7 @@ export async function probeAudio(path: string, ffprobe = "ffprobe"): Promise<Aud
   return {
     durationSeconds,
     codec,
+    ...(typeof audio?.profile === "string" ? { profile: audio.profile } : {}),
     tags,
     ...(bitrate === undefined ? {} : { bitrate: Math.round(bitrate) }),
   };
@@ -542,6 +544,18 @@ function unwantedVersionPenalty(expected: string, actual: string): number {
 
 function metadataArguments(metadata: AudioMetadata, extension: string): string[] {
   const arguments_: string[] = [];
+  if (metadata.trackNumber !== undefined) {
+    // Some inputs carry both track and TRACKNUMBER. FLAC maps them to the
+    // same Vorbis field and concatenates values unless the alias is cleared.
+    arguments_.push(
+      "-metadata",
+      "TRACKNUMBER=",
+      "-metadata",
+      "TRACKTOTAL=",
+      "-metadata",
+      "TOTALTRACKS=",
+    );
+  }
   if (extension.toLocaleLowerCase("en-US") === ".m4a") {
     // Keep AAC metadata ahead of audio so network players can start without a tail fetch.
     arguments_.push("-movflags", "use_metadata_tags+faststart");
