@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -13,7 +13,9 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function runningSource(options: { supported?: boolean; failRefresh?: boolean } = {}) {
+async function runningSource(
+  options: { supported?: boolean; failRefresh?: boolean; failStatus?: boolean } = {},
+) {
   const root = await mkdtemp(resolve(tmpdir(), "djlink-refresh-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const env = { ...process.env, DJBOOTH_DJLINK_STATE_DIR: root };
@@ -51,6 +53,10 @@ async function runningSource(options: { supported?: boolean; failRefresh?: boole
       let error: string | undefined;
       switch (request.method) {
         case "status":
+          if (options.failStatus) {
+            error = "control temporarily unavailable";
+            break;
+          }
           result = {
             pid: process.pid,
             bindIp: "127.0.0.1",
@@ -102,10 +108,33 @@ async function runningSource(options: { supported?: boolean; failRefresh?: boole
         server.close((error) => (error ? reject(error) : resolveClosed())),
       ),
   );
-  return { env, methods, databasePath };
+  return { env, methods, databasePath, paths };
 }
 
 describe("live DJ Link library refresh", () => {
+  it("never stops a live source after a failed status request", async () => {
+    const { env, methods, databasePath } = await runningSource({ failStatus: true });
+    await expect(
+      startRekordboxDjLink({ env, databasePath, binaryPath: "/bin/true" }),
+    ).rejects.toThrow("playback has been left running");
+    expect(methods).not.toContain("stop");
+  });
+
+  it("preserves a responding source whose daemon state is missing", async () => {
+    const { env, methods, databasePath, paths } = await runningSource();
+    await unlink(paths.state);
+    await expect(
+      startRekordboxDjLink({ env, databasePath, binaryPath: "/bin/true" }),
+    ).rejects.toThrow("existing server has been left running");
+    expect(methods).not.toContain("stop");
+    await expect(refreshDjLinkLibrary({ env })).rejects.toThrow("not running");
+    // The socket remains reachable even though this client cannot adopt it yet.
+    const { requestControl } = await import("../src/control.js");
+    await expect(requestControl(paths.socket, "status")).resolves.toMatchObject({
+      pid: process.pid,
+    });
+  });
+
   it("refreshes before resolving a newly imported track without stopping the source", async () => {
     const { env, methods } = await runningSource();
     await expect(loadDjLinkTrack({ env, selector: "new track", player: 2 })).resolves.toMatchObject(

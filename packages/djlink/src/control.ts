@@ -121,6 +121,12 @@ export async function requestControl<T>(
         );
       }
     });
+    socket.once("close", () => {
+      clearTimeout(timeout);
+      rejectRequest(
+        new DjLinkError("CONTROL_FAILED", `${method} connection closed before a complete response`),
+      );
+    });
     socket.once("error", (error) => {
       clearTimeout(timeout);
       rejectRequest(new DjLinkError("CONTROL_FAILED", `${method} failed`, { cause: error }));

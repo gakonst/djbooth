@@ -864,20 +864,21 @@ async function writeState(path: string, state: DjLinkDaemonState): Promise<void>
 
 async function clearConfirmedStaleRuntime(paths: RuntimePaths): Promise<void> {
   const state = await readState(paths.state);
-  if (state && validStatePaths(state, paths) && processExists(state.pid)) {
-    try {
-      await requestControl<{ stopping: true }>(state.socketPath, "stop");
-    } catch {
-      process.kill(state.pid, "SIGTERM");
-    }
-    const deadline = Date.now() + requestTimeoutMs;
-    while (processExists(state.pid) && Date.now() < deadline) await delay(50);
-    if (processExists(state.pid)) {
-      throw new DjLinkError(
-        "START_FAILED",
-        `Confirmed stale DJ Link process ${String(state.pid)} did not stop`,
-      );
-    }
+  // A failed status RPC is not evidence that a live process is stale. The
+  // native server can still be streaming audio while its control plane stalls.
+  if (state && processExists(state.pid)) {
+    throw new DjLinkError(
+      "ALREADY_RUNNING",
+      `DJ Link process ${String(state.pid)} is still alive but its control connection could not be verified; playback has been left running. Retry after the control connection recovers, or stop it explicitly.`,
+    );
+  }
+  // A startup interrupted before daemon.json was written can leave a healthy
+  // server behind. Never unlink its socket and launch a competing source.
+  if (await socketResponds(paths.socket)) {
+    throw new DjLinkError(
+      "ALREADY_RUNNING",
+      `DJ Link is responding at ${paths.socket} without matching daemon state; the existing server has been left running.`,
+    );
   }
   await unlinkIfPresent(paths.state);
   await unlinkIfPresent(paths.socket);
