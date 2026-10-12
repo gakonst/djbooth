@@ -33,6 +33,7 @@ import type {
   DjLinkSearchMode,
   DjLinkSearchResult,
   DjLinkRekordboxReport,
+  DjLinkRefreshResult,
   DjLinkServerStatus,
   DjLinkSnapshot,
   DjLinkSourceKind,
@@ -334,6 +335,12 @@ async function resumeOrRestartDjLink(
   ) {
     return { ...current, resumed: true };
   }
+  if (!explicitConfigurationMatches || !stagehandSessionMatches) {
+    throw new DjLinkError(
+      "ALREADY_RUNNING",
+      "DJ Link is already running with a different network/player identity. Keep its current settings to load or refresh without interrupting playback; stop it explicitly before changing identity.",
+    );
+  }
   const stopped = await stopDjLink({ env });
   if (!stopped.stopped) {
     throw new DjLinkError(
@@ -529,6 +536,7 @@ export async function loadDjLinkTrack(options: LoadDjLinkOptions): Promise<DjLin
     }
     track = resolveDjLinkTrack(await readSnapshot(state.snapshotPath), options.selector);
   } else {
+    await refreshRunningLibrary(state, false);
     track = await requestControl<NativeResolvedTrack>(state.socketPath, "resolveTrack", {
       selector: options.selector,
     });
@@ -565,6 +573,7 @@ export async function prepareDjLinkTrack(
     }
     track = resolveDjLinkTrack(await readSnapshot(state.snapshotPath), options.selector);
   } else {
+    await refreshRunningLibrary(state, false);
     track = await requestControl<NativeResolvedTrack>(state.socketPath, "resolveTrack", {
       selector: options.selector,
     });
@@ -616,8 +625,38 @@ export async function browseRekordboxDjLink(
 ): Promise<DjLinkBrowseResult> {
   const doctor = await doctorRekordboxDjLink(options);
   const server = await startRekordboxDjLink(options);
+  if (server.resumed && server.libraryRefreshSupported) {
+    const refreshed = await refreshDjLinkLibrary({ env: options.env });
+    server.tracks = refreshed.tracks;
+    server.playlists = refreshed.playlists;
+  }
   const devices = await requireDjLinkDevices(server, options.waitMs, options.env);
   return { doctor, server, devices };
+}
+
+/** Reload the current source in place; never restart its network services. */
+export async function refreshDjLinkLibrary(
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<DjLinkRefreshResult> {
+  const state = await requireRunningState(options.env ?? process.env);
+  return (await refreshRunningLibrary(state, true))!;
+}
+
+async function refreshRunningLibrary(
+  state: DjLinkDaemonState,
+  required: boolean,
+): Promise<DjLinkRefreshResult | undefined> {
+  const native = await requestControl<NativeStatus>(state.socketPath, "status");
+  if (!native.libraryRefreshSupported) {
+    if (required) {
+      throw new DjLinkError(
+        "CONTROL_FAILED",
+        "The running DJ Link binary predates live library refresh. Activate the updated binary when playback can pause; the current server has been left running.",
+      );
+    }
+    return undefined;
+  }
+  return requestControl<DjLinkRefreshResult>(state.socketPath, "refreshLibrary", {}, 60_000);
 }
 
 /** Validate/start the full Rekordbox library, discover a deck, and cue one database track. */

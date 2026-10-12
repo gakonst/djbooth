@@ -37,6 +37,7 @@ export type NativeStatus = {
   uptimeMs: number;
   remoteTransportSupported: boolean;
   remoteDeckPreparationSupported?: boolean;
+  libraryRefreshSupported?: boolean;
 };
 
 /** Typed DJ Link lifecycle/runtime failure. */
@@ -220,5 +221,6 @@ export function toServerStatus(state: DjLinkDaemonState, native: NativeStatus): 
     uptimeMs: native.uptimeMs,
     remoteTransportSupported: native.remoteTransportSupported === true,
     remoteDeckPreparationSupported: native.remoteDeckPreparationSupported === true,
+    libraryRefreshSupported: native.libraryRefreshSupported === true,
   };
 }

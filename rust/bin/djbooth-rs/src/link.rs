@@ -123,7 +123,7 @@ struct ServeArgs {
     stagehand_protocol_nonce: Option<u64>,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct LibraryArgs {
     /// Projected JSON library used for an ad-hoc djbooth manifest.
     #[arg(
@@ -276,7 +276,6 @@ struct ArpProbeParams {
     timeout_ms: u64,
 }
 
-#[derive(Clone)]
 struct RuntimeInfo {
     started: Instant,
     bind_ip: Ipv4Addr,
@@ -287,6 +286,83 @@ struct RuntimeInfo {
     stagehand_protocol_nonce: Option<u64>,
     tracks: usize,
     playlists: usize,
+    source: LibraryArgs,
+    require_analysis: bool,
+    fingerprint: tokio::sync::Mutex<LibrarySourceFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceFileStamp {
+    length: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+type LibrarySourceFingerprint = Vec<Option<SourceFileStamp>>;
+
+async fn library_source_fingerprint(source: &LibraryArgs) -> Result<LibrarySourceFingerprint> {
+    use std::os::unix::fs::MetadataExt;
+    let path = source
+        .snapshot
+        .as_ref()
+        .or(source.rekordbox_db.as_ref())
+        .context("library source is missing")?;
+    let mut paths = vec![path.clone()];
+    if source.rekordbox_db.is_some() {
+        for suffix in ["-wal", "-journal"] {
+            let mut name = path.as_os_str().to_os_string();
+            name.push(suffix);
+            paths.push(PathBuf::from(name));
+        }
+    }
+    let mut stamps = Vec::with_capacity(paths.len());
+    for (index, path) in paths.into_iter().enumerate() {
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) => stamps.push(Some(SourceFileStamp {
+                length: metadata.len(),
+                modified: metadata.modified().ok(),
+                inode: metadata.ino(),
+            })),
+            Err(error) if index > 0 && error.kind() == std::io::ErrorKind::NotFound => {
+                stamps.push(None)
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("cannot inspect library source '{}'", path.display())
+                });
+            }
+        }
+    }
+    Ok(stamps)
+}
+
+async fn refresh_library_source(server: &DjLinkServer, runtime: &RuntimeInfo) -> Result<Value> {
+    // Reloads serialize with each other only. Readers retain their immutable
+    // generation and neither filesystem work nor SQL holds their snapshot lock.
+    let mut previous = runtime.fingerprint.lock().await;
+    let fingerprint = library_source_fingerprint(&runtime.source).await?;
+    if *previous == fingerprint {
+        let (tracks, playlists) = server.library_counts();
+        return Ok(json!({"tracks": tracks, "playlists": playlists, "changed": false}));
+    }
+    let (library, _) = load_library(&runtime.source).await?;
+    let report = library.validate_for_serving(runtime.require_analysis).await;
+    anyhow::ensure!(
+        report.is_ok(runtime.require_analysis),
+        "refreshed library is not serveable: missing_audio={} missing_analysis={}",
+        report.missing_audio.len(),
+        report.missing_analysis.len()
+    );
+    let result = server.refresh_library(library).await?;
+    // Save the pre-read fingerprint so writes committed during this reload are
+    // picked up on the next poll. Errors leave both the old library and stamp.
+    *previous = fingerprint;
+    tracing::info!(
+        tracks = result.tracks,
+        playlists = result.playlists,
+        "library_refreshed"
+    );
+    Ok(serde_json::to_value(result)?)
 }
 
 #[derive(Debug)]
@@ -954,6 +1030,7 @@ async fn serve(args: ServeArgs) -> Result<()> {
             .with_context(|| format!("failed to create '{}'", parent.display()))?;
     }
 
+    let fingerprint = library_source_fingerprint(&args.library).await?;
     let (library, rekordbox) = load_library(&args.library).await?;
     let report = library.validate_for_serving(args.require_analysis).await;
     if !report.is_ok(args.require_analysis) {
@@ -1014,6 +1091,9 @@ async fn serve(args: ServeArgs) -> Result<()> {
         stagehand_protocol_nonce: server.stagehand_protocol_nonce(),
         tracks: server.library_track_count(),
         playlists: server.library_playlist_count(),
+        source: args.library.clone(),
+        require_analysis: args.require_analysis,
+        fingerprint: tokio::sync::Mutex::new(fingerprint),
     });
     // USB MIDI and CoreAudio are optional and can block for minutes while macOS
     // rebuilds its device graph after a cable or hardware restart. Bring the
@@ -1065,6 +1145,21 @@ async fn serve(args: ServeArgs) -> Result<()> {
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
     let mut control_tasks = JoinSet::new();
+    {
+        let server = server.clone();
+        let runtime = runtime.clone();
+        control_tasks.spawn(async move {
+            let mut updates = tokio::time::interval(Duration::from_secs(2));
+            updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            updates.tick().await;
+            loop {
+                updates.tick().await;
+                if let Err(error) = refresh_library_source(&server, &runtime).await {
+                    tracing::warn!(%error, "library_refresh_failed");
+                }
+            }
+        });
+    }
     let mut decoder = Decoder::default();
     let mut midi_connect_task: Option<tokio::task::JoinHandle<MidiConnectResult>> = None;
     let mut audio_connect_task: Option<tokio::task::JoinHandle<AudioConnectResult>> = None;
@@ -1339,6 +1434,7 @@ async fn dispatch_control(
     server: &DjLinkServer,
     runtime: &RuntimeInfo,
 ) -> Result<Value> {
+    let (tracks, playlists) = server.library_counts();
     match request.method.as_str() {
         "status" => Ok(json!({
             "pid": std::process::id(),
@@ -1348,12 +1444,14 @@ async fn dispatch_control(
             "stagehandSessionNonce": runtime.stagehand_session_nonce.map(|nonce| nonce.to_string()),
             "stagehandSessionIp": runtime.stagehand_session_ip.map(|ip| ip.to_string()),
             "stagehandProtocolNonce": runtime.stagehand_protocol_nonce.map(|nonce| nonce.to_string()),
-            "tracks": runtime.tracks,
-            "playlists": runtime.playlists,
+            "tracks": tracks,
+            "playlists": playlists,
+            "libraryRefreshSupported": true,
             "uptimeMs": runtime.started.elapsed().as_millis(),
             "remoteTransportSupported": true,
             "remoteDeckPreparationSupported": true,
         })),
+        "refreshLibrary" => refresh_library_source(server, runtime).await,
         "devices" => {
             let devices = server
                 .list_devices()
@@ -1531,7 +1629,14 @@ async fn load_snapshot(path: &Path) -> Result<LibrarySnapshot> {
     let bytes = tokio::fs::read(path)
         .await
         .with_context(|| format!("failed to read snapshot '{}'", path.display()))?;
-    let document = serde_json::from_slice::<SnapshotDocument>(&bytes)
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || decode_snapshot(&path, &bytes))
+        .await
+        .context("snapshot decode task failed")?
+}
+
+fn decode_snapshot(path: &Path, bytes: &[u8]) -> Result<LibrarySnapshot> {
+    let document = serde_json::from_slice::<SnapshotDocument>(bytes)
         .with_context(|| format!("failed to decode snapshot '{}'", path.display()))?;
     if document.schema_version != 1 {
         bail!(
@@ -1661,6 +1766,130 @@ fn default_arp_probe_timeout_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn library_fingerprint_detects_wal_commits_and_checkpoint_removal() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("master.db");
+        let wal = temp.path().join("master.db-wal");
+        tokio::fs::write(&database, b"database").await.unwrap();
+        let source = LibraryArgs {
+            snapshot: None,
+            rekordbox_db: Some(database),
+        };
+        let before = library_source_fingerprint(&source).await.unwrap();
+        tokio::fs::write(&wal, b"commit").await.unwrap();
+        let committed = library_source_fingerprint(&source).await.unwrap();
+        assert_eq!(before[0], committed[0]);
+        assert_ne!(before, committed);
+        tokio::fs::write(&wal, b"another commit").await.unwrap();
+        assert_ne!(
+            committed,
+            library_source_fingerprint(&source).await.unwrap()
+        );
+        tokio::fs::remove_file(wal).await.unwrap();
+        assert_eq!(before, library_source_fingerprint(&source).await.unwrap());
+    }
+
+    fn snapshot_fixture(audio: &Path, title: &str, id: u32) -> Value {
+        json!({
+            "schemaVersion": 1, "masterDbId": 1,
+            "tracks": [{
+                "trackId": id, "title": title, "artist": "Artist", "artistId": 1,
+                "canonicalName": title, "album": "Album", "albumId": 1,
+                "durationSec": 1, "bpmHundreds": 12000, "key": "Am", "camelot": "8A",
+                "keyId": 1, "bitrateKbps": 320, "comment": "", "mountPath": audio,
+                "analysisDatPath": null, "analysisExtPath": null, "analysisTwoexPath": null,
+                "artworkId": 0, "artworkUrl": null, "genre": "", "genreId": 0,
+                "label": "", "year": 0, "dateAddedId": 0, "dateAdded": ""
+            }], "playlists": []
+        })
+    }
+
+    #[tokio::test]
+    async fn source_refresh_skips_unchanged_and_preserves_library_on_reload_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let audio = temp.path().join("track.mp3");
+        let snapshot = temp.path().join("snapshot.json");
+        tokio::fs::write(&audio, b"audio").await.unwrap();
+        tokio::fs::write(
+            &snapshot,
+            serde_json::to_vec(&snapshot_fixture(&audio, "First", 1)).unwrap(),
+        )
+        .await
+        .unwrap();
+        let source = LibraryArgs {
+            snapshot: Some(snapshot.clone()),
+            rekordbox_db: None,
+        };
+        let (initial, _) = load_library(&source).await.unwrap();
+        let server = DjLinkServer::new(
+            DjLinkConfig {
+                bind_ip: Some(Ipv4Addr::LOCALHOST),
+                broadcast_ip: Some(Ipv4Addr::LOCALHOST),
+                ..Default::default()
+            },
+            initial,
+        )
+        .await
+        .unwrap();
+        let runtime = RuntimeInfo {
+            started: Instant::now(),
+            bind_ip: Ipv4Addr::LOCALHOST,
+            broadcast_ip: Ipv4Addr::LOCALHOST,
+            player_number: REKORDBOX_PLAYER_NUMBER,
+            stagehand_session_ip: None,
+            stagehand_session_nonce: None,
+            stagehand_protocol_nonce: None,
+            tracks: 1,
+            playlists: 0,
+            require_analysis: false,
+            fingerprint: tokio::sync::Mutex::new(
+                library_source_fingerprint(&source).await.unwrap(),
+            ),
+            source,
+        };
+        assert_eq!(
+            refresh_library_source(&server, &runtime).await.unwrap()["changed"],
+            false
+        );
+        tokio::fs::write(&snapshot, b"invalid snapshot")
+            .await
+            .unwrap();
+        assert!(refresh_library_source(&server, &runtime).await.is_err());
+        assert_eq!(server.resolve_library_track("1").unwrap().1.title, "First");
+        // Failed fingerprints are never accepted: a retry still attempts reload.
+        assert!(refresh_library_source(&server, &runtime).await.is_err());
+        tokio::fs::write(
+            &snapshot,
+            serde_json::to_vec(&snapshot_fixture(&audio, "New import", 2)).unwrap(),
+        )
+        .await
+        .unwrap();
+        let updated = refresh_library_source(&server, &runtime).await.unwrap();
+        assert_eq!(updated, json!({"tracks":1,"playlists":0,"changed":true}));
+        assert_eq!(
+            server.resolve_library_track("2").unwrap().1.title,
+            "New import"
+        );
+        assert_eq!(
+            refresh_library_source(&server, &runtime).await.unwrap()["changed"],
+            false
+        );
+        let status = dispatch_control(
+            &ControlRequest {
+                id: "test".into(),
+                method: "status".into(),
+                params: Value::Null,
+            },
+            &server,
+            &runtime,
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["libraryRefreshSupported"], true);
+        assert_eq!(status["tracks"], 1);
+    }
 
     #[test]
     fn reassembles_out_of_order_tcp_and_drops_retransmitted_overlap() {

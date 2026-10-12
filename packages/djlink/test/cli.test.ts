@@ -83,6 +83,9 @@ describe("DJ Link CLI", () => {
     expect(output).toContain("folders, playlists, artists, albums, and tracks");
     expect(output).toContain("network CTA");
     expect(output).toContain("default: true");
+    expect(output).toContain("--refresh");
+    expect(output).toContain("preserve a running server");
+    expect(output).not.toContain("default: 17");
   });
 
   it("waits for discovery by default", async () => {

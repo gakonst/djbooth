@@ -38,6 +38,7 @@ pub(crate) const NFS_DIR: u32 = 2;
 pub(crate) const NFS_OK: u32 = 0;
 pub(crate) const NFSERR_NOENT: u32 = 2;
 pub(crate) const NFSERR_IO: u32 = 5;
+pub(crate) const NFSERR_STALE: u32 = 70;
 
 #[allow(async_fn_in_trait)]
 pub(crate) trait NfsContext {
@@ -104,6 +105,37 @@ impl Default for NfsState {
 }
 
 impl NfsState {
+    pub(crate) fn extend_exports(&mut self, added: Self) {
+        for (handle, path) in added.handles {
+            self.handles.entry(handle).or_insert(path);
+        }
+        for (path, handle) in added.path_to_fh {
+            self.path_to_fh.entry(path).or_insert(handle);
+        }
+    }
+
+    pub(crate) fn from_exports(paths: &std::collections::HashSet<PathBuf>) -> Self {
+        let mut state = Self::default();
+        for path in paths {
+            if path == Path::new("/") {
+                continue;
+            }
+            // Decks retain handles across server restarts. Restore both normal
+            // component LOOKUP and absolute-path LOOKUP from the export root.
+            let parent_id = path
+                .parent()
+                .filter(|parent| *parent != Path::new("/"))
+                .map(|parent| stable_id(parent).max(1))
+                .unwrap_or(0);
+            let mut parent = NFS_ROOT_FH;
+            parent[..4].copy_from_slice(&parent_id.to_be_bytes());
+            let mut fh = state.handle_for_path(path, Some(&parent));
+            fh[4..8].fill(0);
+            state.handles.insert(fh, path.clone());
+        }
+        state
+    }
+
     pub(crate) fn handle_for_path(&mut self, path: &Path, parent_fh: Option<&[u8]>) -> Vec<u8> {
         if let Some(existing) = self.path_to_fh.get(path) {
             return existing.clone();
@@ -131,6 +163,15 @@ impl NfsState {
     pub(crate) fn path_for_handle(&self, fh: &[u8]) -> Option<PathBuf> {
         self.handles.get(fh).cloned()
     }
+}
+
+fn stale_reply(xid: u32, post_attributes: bool) -> Vec<u8> {
+    let mut reply = rpc_reply_header(xid);
+    reply.extend_from_slice(&NFSERR_STALE.to_be_bytes());
+    if post_attributes {
+        reply.extend_from_slice(&post_op_attr(None));
+    }
+    reply
 }
 
 pub(crate) fn portmap_getport(req_prog: u32, req_vers: u32, req_prot: u32, mount_port: u16) -> u16 {
@@ -403,7 +444,9 @@ pub(crate) async fn nfs2_getattr<C: NfsContext + ?Sized>(
     off: usize,
 ) -> Option<Vec<u8>> {
     let fh = data.get(off..off + NFS_FHSIZE)?;
-    let path = ctx.nfs_path_for_handle(fh).await?;
+    let Some(path) = ctx.nfs_path_for_handle(fh).await else {
+        return Some(stale_reply(xid, false));
+    };
     let mut reply = rpc_reply_header(xid);
     if path != Path::new("/") && !tokio::fs::try_exists(&path).await.unwrap_or(false) {
         reply.extend_from_slice(&NFSERR_NOENT.to_be_bytes());
@@ -425,7 +468,9 @@ pub(crate) async fn nfs2_lookup<C: NfsContext + ?Sized>(
 ) -> Option<Vec<u8>> {
     let parent_fh = data.get(off..off + NFS_FHSIZE)?;
     let (name, _) = xdr_decode_string(data, off + NFS_FHSIZE, NameEncoding::Auto);
-    let parent = ctx.nfs_path_for_handle(parent_fh).await?;
+    let Some(parent) = ctx.nfs_path_for_handle(parent_fh).await else {
+        return Some(stale_reply(xid, false));
+    };
     let child = resolve_child_path(&parent, &name).await;
     let mut reply = rpc_reply_header(xid);
     if !tokio::fs::try_exists(&child).await.unwrap_or(false) {
@@ -453,7 +498,9 @@ pub(crate) async fn nfs2_read<C: NfsContext + ?Sized>(
     let arg_off = off + NFS_FHSIZE;
     let offset = be_u32(data.get(arg_off..arg_off + 4)?) as u64;
     let count = be_u32(data.get(arg_off + 4..arg_off + 8)?) as usize;
-    let path = ctx.nfs_path_for_handle(fh).await?;
+    let Some(path) = ctx.nfs_path_for_handle(fh).await else {
+        return Some(stale_reply(xid, false));
+    };
     let mut reply = rpc_reply_header(xid);
     match ctx
         .nfs_read_chunk(&path, offset, count.min(NFS_READ_CHUNK_MAX))
@@ -496,7 +543,9 @@ pub(crate) async fn nfs3_getattr<C: NfsContext + ?Sized>(
     off: usize,
 ) -> Option<Vec<u8>> {
     let (fh, _) = xdr_decode_opaque(data, off)?;
-    let path = ctx.nfs_path_for_handle(&fh).await?;
+    let Some(path) = ctx.nfs_path_for_handle(&fh).await else {
+        return Some(stale_reply(xid, false));
+    };
     let mut reply = rpc_reply_header(xid);
     reply.extend_from_slice(&NFS_OK.to_be_bytes());
     let is_dir = tokio::fs::metadata(&path)
@@ -514,7 +563,9 @@ pub(crate) async fn nfs3_lookup<C: NfsContext + ?Sized>(
 ) -> Option<Vec<u8>> {
     let (parent_fh, name_off) = xdr_decode_opaque(data, off)?;
     let (name, _) = xdr_decode_string(data, name_off, NameEncoding::Auto);
-    let parent = ctx.nfs_path_for_handle(&parent_fh).await?;
+    let Some(parent) = ctx.nfs_path_for_handle(&parent_fh).await else {
+        return Some(stale_reply(xid, true));
+    };
     let child = resolve_child_path(&parent, &name).await;
     let mut reply = rpc_reply_header(xid);
     if !tokio::fs::try_exists(&child).await.unwrap_or(false) {
@@ -541,7 +592,9 @@ pub(crate) async fn nfs3_access<C: NfsContext + ?Sized>(
 ) -> Option<Vec<u8>> {
     let (fh, access_off) = xdr_decode_opaque(data, off)?;
     let access = be_u32(data.get(access_off..access_off + 4)?);
-    let path = ctx.nfs_path_for_handle(&fh).await?;
+    let Some(path) = ctx.nfs_path_for_handle(&fh).await else {
+        return Some(stale_reply(xid, true));
+    };
     let mut reply = rpc_reply_header(xid);
     reply.extend_from_slice(&NFS_OK.to_be_bytes());
     let is_dir = tokio::fs::metadata(&path)
@@ -562,7 +615,9 @@ pub(crate) async fn nfs3_read<C: NfsContext + ?Sized>(
     let (fh, arg_off) = xdr_decode_opaque(data, off)?;
     let offset = be_u64(data.get(arg_off..arg_off + 8)?);
     let count = be_u32(data.get(arg_off + 8..arg_off + 12)?) as usize;
-    let path = ctx.nfs_path_for_handle(&fh).await?;
+    let Some(path) = ctx.nfs_path_for_handle(&fh).await else {
+        return Some(stale_reply(xid, true));
+    };
     let mut reply = rpc_reply_header(xid);
     match ctx
         .nfs_read_chunk(&path, offset, count.min(NFS_READ_CHUNK_MAX))
@@ -586,4 +641,90 @@ pub(crate) async fn nfs3_read<C: NfsContext + ?Sized>(
         Err(_) => reply.extend_from_slice(&NFSERR_IO.to_be_bytes()),
     }
     Some(reply)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Context(NfsState);
+
+    impl NfsContext for Context {
+        fn bind_ip(&self) -> Ipv4Addr {
+            Ipv4Addr::LOCALHOST
+        }
+        async fn nfs_handle_for_path(&self, _: &Path, _: Option<&[u8]>) -> Option<Vec<u8>> {
+            panic!("unknown handles must not reach child lookup")
+        }
+        async fn nfs_path_for_handle(&self, fh: &[u8]) -> Option<PathBuf> {
+            self.0.path_for_handle(fh)
+        }
+        async fn nfs_read_chunk(
+            &self,
+            path: &Path,
+            offset: u64,
+            count: usize,
+        ) -> std::io::Result<Vec<u8>> {
+            read_file_chunk(path, offset, count).await
+        }
+        async fn note_nfs_audio_progress(&self, _: SocketAddr, _: &Path, _: u64) {}
+    }
+
+    #[tokio::test]
+    async fn unknown_handles_receive_stale_instead_of_silence() {
+        let ctx = Context(NfsState::default());
+        let addr = "127.0.0.1:40000".parse().unwrap();
+        let fh = [0xab; NFS_FHSIZE];
+        let mut v2 = fh.to_vec();
+        v2.extend_from_slice(&[0; 12]);
+        let mut v3 = xdr_encode_opaque(&fh);
+        v3.extend_from_slice(&[0; 12]);
+        let responses = [
+            (nfs2_getattr(&ctx, 42, &v2, 0).await, false),
+            (nfs2_lookup(&ctx, 42, &v2, 0).await, false),
+            (nfs2_read(&ctx, 42, &v2, 0, addr).await, false),
+            (nfs3_getattr(&ctx, 42, &v3, 0).await, false),
+            (nfs3_lookup(&ctx, 42, &v3, 0).await, true),
+            (nfs3_access(&ctx, 42, &v3, 0).await, true),
+            (nfs3_read(&ctx, 42, &v3, 0, addr).await, true),
+        ];
+        for (response, has_attrs) in responses {
+            let reply = response.expect("valid RPC must receive a reply");
+            let header = rpc_reply_header(42);
+            assert_eq!(&reply[..header.len()], &header);
+            assert_eq!(be_u32(&reply[header.len()..]), 70);
+            assert_eq!(reply.len(), header.len() + if has_attrs { 8 } else { 4 });
+            if has_attrs {
+                assert_eq!(&reply[reply.len() - 4..], &[0; 4]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_file_handles_read_after_restart_without_new_lookups() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("track.wav");
+        tokio::fs::write(&path, b"audio").await.unwrap();
+        let paths = path.ancestors().map(Path::to_path_buf).collect();
+        let mut previous = NfsState::default();
+        let mut parent = NFS_ROOT_FH.to_vec();
+        let ancestors = path.ancestors().collect::<Vec<_>>();
+        for component in ancestors.into_iter().rev().skip(1) {
+            parent = previous.handle_for_path(component, Some(&parent));
+        }
+        let ctx = Context(NfsState::from_exports(&paths));
+        assert_eq!(ctx.0.path_for_handle(&parent), Some(path.clone()));
+        let absolute = NfsState::default().handle_for_path(&path, Some(&NFS_ROOT_FH));
+        assert_eq!(ctx.0.path_for_handle(&absolute), Some(path));
+        for fh in [parent, absolute] {
+            let mut request = fh;
+            request.extend_from_slice(&0u32.to_be_bytes());
+            request.extend_from_slice(&5u32.to_be_bytes());
+            let reply = nfs2_read(&ctx, 17, &request, 0, "127.0.0.1:40000".parse().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(be_u32(&reply[rpc_reply_header(17).len()..]), NFS_OK);
+            assert!(reply.windows(5).any(|bytes| bytes == b"audio"));
+        }
+    }
 }

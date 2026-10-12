@@ -72,6 +72,7 @@ describe("combined djbooth server", () => {
     const fake = dependencies({ resumed: true });
     const server = await startDjBoothServer({}, fake.value);
 
+    expect(fake.startLink.mock.calls[0]?.[0].playerNumber).toBeUndefined();
     await expect(server.close()).resolves.toEqual({ linkStopped: false });
     expect(fake.closeWeb).toHaveBeenCalledTimes(1);
     expect(fake.stopLink).not.toHaveBeenCalled();

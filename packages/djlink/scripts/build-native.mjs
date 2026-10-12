@@ -1,4 +1,4 @@
-import { chmod, copyFile, mkdir } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rename, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -26,6 +26,13 @@ await new Promise((resolveBuild, rejectBuild) => {
 });
 
 await mkdir(dirname(destination), { recursive: true });
-await copyFile(source, destination);
-await chmod(destination, 0o755);
+// Replace the path atomically, leaving an already-running server's executable intact.
+const stagedDestination = `${destination}.${process.pid}.tmp`;
+try {
+  await copyFile(source, stagedDestination);
+  await chmod(stagedDestination, 0o755);
+  await rename(stagedDestination, destination);
+} finally {
+  await rm(stagedDestination, { force: true });
+}
 process.stdout.write(`${destination}\n`);

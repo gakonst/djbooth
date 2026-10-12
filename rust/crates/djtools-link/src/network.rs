@@ -91,15 +91,28 @@ pub(crate) fn spawn_raw_udp_receiver(
     {
         let interface_name = interface_name
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "unknown bind interface"))?;
-        let mut receiver = RawUdpSender::open(interface_name)?;
+        let mut receiver = Some(RawUdpSender::open(interface_name)?);
+        let interface_name = interface_name.to_owned();
         let (tx, rx) = mpsc::channel(RAW_UDP_QUEUE_CAPACITY);
         thread::spawn(move || {
             loop {
-                match receiver.read_frames() {
+                if tx.is_closed() {
+                    return;
+                }
+                match read_recovering_receiver(
+                    &mut receiver,
+                    || RawUdpSender::open(&interface_name),
+                    RawUdpSender::read_frames,
+                ) {
                     Ok(frames) => {
                         for frame in frames {
                             if let Some(reply) = build_arp_reply_for(&frame, local_mac, local_ip) {
-                                if let Err(error) = receiver.file.write_all(&reply) {
+                                if let Err(error) = receiver
+                                    .as_mut()
+                                    .expect("open receiver")
+                                    .file
+                                    .write_all(&reply)
+                                {
                                     tracing::warn!(%error, "stagehand_arp_reply_failed");
                                 }
                                 continue;
@@ -114,7 +127,11 @@ pub(crate) fn spawn_raw_udp_receiver(
                     }
                     Err(error) => {
                         tracing::warn!(%error, "stagehand_raw_receive_failed");
-                        return;
+                        // USB Ethernet can return with the same address. Its old BPF
+                        // descriptor is still dead; reopen instead of losing telemetry
+                        // until the entire server is restarted.
+                        thread::sleep(Duration::from_secs(1));
+                        continue;
                     }
                 }
                 thread::sleep(Duration::from_millis(2));
@@ -131,6 +148,23 @@ pub(crate) fn spawn_raw_udp_receiver(
             "raw Stagehand peer receiving is only implemented on macOS",
         ))
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn read_recovering_receiver<T, R>(
+    receiver: &mut Option<T>,
+    open: impl FnOnce() -> io::Result<T>,
+    read: impl FnOnce(&mut T) -> io::Result<R>,
+) -> io::Result<R> {
+    if receiver.is_none() {
+        *receiver = Some(open()?);
+    }
+    let result = read(receiver.as_mut().expect("open receiver"));
+    if result.is_err() {
+        // Close the invalid descriptor before retrying, including while unplugged.
+        *receiver = None;
+    }
+    result
 }
 
 enum RawNetworkRequest {
@@ -876,6 +910,36 @@ fn internet_checksum(data: &[u8]) -> u16 {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn receiver_recovers_after_disconnect_and_failed_reopen() {
+        let mut receiver = Some(1);
+        let error = || io::Error::from_raw_os_error(libc::ENXIO);
+        assert!(
+            read_recovering_receiver(
+                &mut receiver,
+                || panic!("already open"),
+                |_| Err::<(), _>(error())
+            )
+            .is_err()
+        );
+        assert!(receiver.is_none());
+        assert!(read_recovering_receiver(&mut receiver, || Err(error()), |_| Ok(())).is_err());
+        assert!(receiver.is_none());
+        assert_eq!(
+            read_recovering_receiver(&mut receiver, || Ok(2), |fd| Ok(*fd)).unwrap(),
+            2
+        );
+        assert_eq!(
+            read_recovering_receiver(
+                &mut receiver,
+                || panic!("reuse new descriptor"),
+                |fd| Ok(*fd)
+            )
+            .unwrap(),
+            2
+        );
+    }
 
     #[test]
     fn parses_mac_strictly() {

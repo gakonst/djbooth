@@ -12,6 +12,7 @@ import {
   monitorDjLink,
   prepareDjLinkTrack,
   probeDjLinkDevice,
+  refreshDjLinkLibrary,
   runDjLink,
   runRekordboxDjLink,
   searchDjLink,
@@ -78,6 +79,7 @@ const runningOutput = z.object({
   uptimeMs: z.number().nonnegative(),
   remoteTransportSupported: z.boolean(),
   remoteDeckPreparationSupported: z.boolean(),
+  libraryRefreshSupported: z.boolean().optional(),
 });
 
 const statusOutput = z.union([
@@ -140,6 +142,12 @@ const browseOutput = z.object({
   devices: z.array(deviceOutput),
 });
 
+const refreshOutput = z.object({
+  tracks: z.number().int().nonnegative(),
+  playlists: z.number().int().nonnegative(),
+  changed: z.boolean(),
+});
+
 export const djlinkCli = Cli.create("djlink", {
   version: DJLINK_VERSION,
   description:
@@ -173,14 +181,18 @@ export const linkCli = Cli.create("link", {
     intervalMs: z.number().int().min(10).max(5_000).default(250),
     name: z.string().min(1).default("music").describe("Source name shown on the CDJ"),
     path: z.string().optional().describe("master.db path; defaults to auto-discovery"),
+    refresh: z
+      .boolean()
+      .default(false)
+      .describe("Refresh the running library without restarting DJ Link or changing playback"),
     player: z.number().int().min(1).max(6).default(3).describe("Target CDJ player number"),
     playerNumber: z
       .number()
       .int()
       .min(1)
       .max(19)
-      .default(17)
-      .describe("Virtual Rekordbox player number"),
+      .optional()
+      .describe("Virtual Rekordbox player number; preserve a running server, otherwise 17"),
     repeat: z
       .number()
       .int()
@@ -197,6 +209,7 @@ export const linkCli = Cli.create("link", {
       .describe("Wait this long for device announcements"),
   }),
   output: z.union([
+    refreshOutput,
     browseOutput,
     z.object({
       ...browseOutput.shape,
@@ -205,6 +218,7 @@ export const linkCli = Cli.create("link", {
   ]),
   async run(c) {
     try {
+      if (c.options.refresh && !c.args.track) return await refreshDjLinkLibrary();
       const common = {
         databasePath: c.options.path,
         allowMissingAnalysis: c.options.allowMissingAnalysis,
@@ -285,8 +299,8 @@ djlinkCli.command("run", {
       .int()
       .min(1)
       .max(19)
-      .default(17)
-      .describe("Virtual Rekordbox player number"),
+      .optional()
+      .describe("Virtual Rekordbox player number; preserve a running server, otherwise 17"),
     repeat: z
       .number()
       .int()
@@ -376,8 +390,8 @@ djlinkCli.command("start", {
       .int()
       .min(1)
       .max(19)
-      .default(17)
-      .describe("Virtual Rekordbox player number"),
+      .optional()
+      .describe("Virtual Rekordbox player number; preserve a running server, otherwise 17"),
   }),
   output: runningOutput.extend({ resumed: z.boolean() }),
   async run(c) {

@@ -120,6 +120,14 @@ export type DjLinkServerStatus = {
   uptimeMs: number;
   remoteTransportSupported: boolean;
   remoteDeckPreparationSupported: boolean;
+  libraryRefreshSupported?: boolean;
+};
+
+/** In-place refresh of the running source, without touching deck transport. */
+export type DjLinkRefreshResult = {
+  tracks: number;
+  playlists: number;
+  changed: boolean;
 };
 
 /** No active runtime was found. */

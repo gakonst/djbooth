@@ -404,7 +404,15 @@ pub(crate) fn encode_db_message(tx_id: u32, msg_type: u16, args: &[DbValue]) -> 
         args.len().min(u8::MAX as usize) as u8,
     )));
     out.extend_from_slice(&encode_db_field(&DbValue::Binary(arg_types)));
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
+        // Match native framing (and recv_db_message): the field remains in
+        // the argument table, but a zero-length payload has no wire bytes.
+        if matches!(arg, DbValue::Binary(bytes) if bytes.is_empty())
+            && index > 0
+            && db_int(args.get(index - 1)) == Some(0)
+        {
+            continue;
+        }
         out.extend_from_slice(&encode_db_field(arg));
     }
     out
@@ -890,6 +898,33 @@ mod tests {
 
     use super::*;
     use crate::protocol::decode_hex;
+
+    #[tokio::test]
+    async fn empty_cue_blobs_preserve_following_fields_and_transactions() {
+        for (first, second) in [
+            (vec![], vec![]),
+            (vec![1; 36], vec![]),
+            (vec![], vec![2; 36]),
+        ] {
+            let mut wire =
+                cue_points_response(1, DB_REQ_CUE_POINTS, Some(&first), Some(&second), 0, 0);
+            wire.extend(cue_points_ext_response(2, DB_REQ_CUE_POINTS_EXT, &[], 0));
+            wire.extend(success_with_count(3, DB_REQ_METADATA, 7));
+            let mut reader = wire.as_slice();
+            let cues = recv_db_message(&mut reader).await.unwrap();
+            assert_eq!(cues.args[3], DbValue::Binary(first));
+            assert_eq!(cues.args[4], DbValue::Int32(0x24));
+            assert_eq!(cues.args[8], DbValue::Binary(second));
+            let extended = recv_db_message(&mut reader).await.unwrap();
+            assert_eq!(extended.tx_id, 2);
+            assert_eq!(extended.args[3], DbValue::Binary(vec![]));
+            assert_eq!(extended.args[4], DbValue::Int32(0));
+            let next = recv_db_message(&mut reader).await.unwrap();
+            assert_eq!(next.tx_id, 3);
+            assert_eq!(next.args[1], DbValue::Int32(7));
+            assert!(reader.is_empty());
+        }
+    }
 
     #[test]
     fn back_selection_uses_sorted_entry_ids_within_its_menu_context() {

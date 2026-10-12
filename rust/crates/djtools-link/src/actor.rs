@@ -228,6 +228,10 @@ pub(crate) enum ServerMsg {
         fh: Vec<u8>,
         reply: oneshot::Sender<Option<PathBuf>>,
     },
+    ExtendNfsExports {
+        exports: NfsState,
+        reply: oneshot::Sender<()>,
+    },
     Shutdown,
 }
 
@@ -294,6 +298,11 @@ impl ServerActor {
             telemetry: Some(telemetry),
             ..Self::default()
         }
+    }
+
+    pub(crate) fn with_nfs_exports(mut self, paths: &HashSet<PathBuf>) -> Self {
+        self.nfs = NfsState::from_exports(paths);
+        self
     }
 
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<ServerMsg>) {
@@ -583,6 +592,10 @@ impl ServerActor {
             }
             ServerMsg::NfsPathForHandle { fh, reply } => {
                 let _ = reply.send(self.nfs.path_for_handle(&fh));
+            }
+            ServerMsg::ExtendNfsExports { exports, reply } => {
+                self.nfs.extend_exports(exports);
+                let _ = reply.send(());
             }
             ServerMsg::Shutdown => {}
         }

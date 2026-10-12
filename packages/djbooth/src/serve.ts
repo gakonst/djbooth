@@ -83,7 +83,7 @@ export async function startDjBoothServer(
     ...(options.broadcastIp ? { broadcastIp: options.broadcastIp } : {}),
     ...(options.databasePath ? { databasePath: options.databasePath } : {}),
     name: options.name ?? "djbooth",
-    playerNumber: options.playerNumber ?? 17,
+    ...(options.playerNumber === undefined ? {} : { playerNumber: options.playerNumber }),
     ...(stagehandSessionIp ? { stagehandSessionIp } : {}),
     ...(stagehandSessionNonce ? { stagehandSessionNonce } : {}),
     ...(stagehandProtocolNonce ? { stagehandProtocolNonce } : {}),
@@ -235,8 +235,8 @@ export const serveCli = Cli.create("serve", {
       .int()
       .min(1)
       .max(19)
-      .default(17)
-      .describe("Virtual Rekordbox player number"),
+      .optional()
+      .describe("Virtual Rekordbox player number; preserve a running server, otherwise 17"),
     port: z.number().int().min(0).max(65_535).default(4179),
     sonos: z
       .string()
@@ -277,7 +277,9 @@ export const serveCli = Cli.create("serve", {
       host: context.options.host,
       link: context.options.link,
       name: context.options.name,
-      playerNumber: context.options.playerNumber,
+      ...(context.options.playerNumber === undefined
+        ? {}
+        : { playerNumber: context.options.playerNumber }),
       port: context.options.port,
       ...(context.options.sonos ? { sonos: context.options.sonos } : {}),
       sonosPort: context.options.sonosPort,

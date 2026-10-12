@@ -37,6 +37,7 @@ const djLinkStatusOutput = z.discriminatedUnion("running", [
     tracks: z.number().int().nonnegative(),
     playlists: z.number().int().nonnegative(),
     uptimeMs: z.number().nonnegative(),
+    libraryRefreshSupported: z.boolean(),
     logPath: z.string(),
   }),
   z.object({ running: z.literal(false), staleState: z.boolean() }),
@@ -131,6 +132,7 @@ export const statusCli = Cli.create("status", {
               tracks: link.tracks,
               playlists: link.playlists,
               uptimeMs: link.uptimeMs,
+              libraryRefreshSupported: link.libraryRefreshSupported === true,
               logPath: link.logPath,
             }
           : link,

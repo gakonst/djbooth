@@ -48,11 +48,12 @@ use crate::network::{
 };
 pub use crate::nfs::NFS_PORT;
 use crate::nfs::{
-    NFS_READ_CHUNK_MAX, NfsContext, PORTMAP_GETPORT, RPC_PORTMAP_PROG, handle_mount_packet,
-    handle_nfs_datagram, portmap_getport, read_file_chunk as read_nfs_file_chunk,
+    NFS_READ_CHUNK_MAX, NfsContext, NfsState, PORTMAP_GETPORT, RPC_PORTMAP_PROG,
+    handle_mount_packet, handle_nfs_datagram, portmap_getport,
+    read_file_chunk as read_nfs_file_chunk,
 };
 #[cfg(test)]
-use crate::nfs::{NFS_ROOT_FH, NfsState, RPC_MOUNT_PROG, RPC_NFS_PROG};
+use crate::nfs::{NFS_ROOT_FH, RPC_MOUNT_PROG, RPC_NFS_PROG};
 #[cfg(test)]
 use crate::protocol::decode_nfs_name;
 use crate::protocol::keepalive::{self, KeepaliveBody, KeepaliveKind};
@@ -601,7 +602,10 @@ impl DjLinkServer {
                 nonce,
             )
         });
-        let search_index = SearchIndex::new(&library);
+        let library_generation =
+            tokio::task::spawn_blocking(move || LibraryGeneration::new(library))
+                .await
+                .context("initial library generation preparation failed")?;
         let (actor_tx, actor_rx) = ServerActor::channel();
         let (telemetry_tx, _) = broadcast::channel(1_024);
         let (mixer_telemetry_tx, _) = broadcast::channel(1_024);
@@ -616,9 +620,8 @@ impl DjLinkServer {
             stagehand_link_mac,
             raw_udp,
             interface_name,
-            nfs_exports: library.nfs_exports(),
-            library: Arc::new(library),
-            search_index,
+            library_generation: RwLock::new(Arc::new(library_generation)),
+            library_refresh: tokio::sync::Mutex::new(()),
             actor_tx,
             telemetry_tx,
             mixer_telemetry_tx,
@@ -665,28 +668,81 @@ impl DjLinkServer {
     }
 
     pub fn library_track_count(&self) -> usize {
-        self.state.library.track_count()
+        self.state.library().track_count()
     }
 
     pub fn library_playlist_count(&self) -> usize {
-        self.state.library.playlist_count()
+        self.state.library().playlist_count()
     }
 
-    pub fn resolve_library_track(&self, selector: &str) -> LinkResult<(usize, &TrackRecord)> {
-        let track = self.state.library.resolve_track_selector(selector)?;
-        let order = self
-            .state
-            .library
+    pub fn library_counts(&self) -> (usize, usize) {
+        let library = self.state.library();
+        (library.track_count(), library.playlist_count())
+    }
+
+    /// Publish a complete library generation without closing any deck connection.
+    /// Audio exports from earlier generations stay valid until the server stops.
+    pub async fn refresh_library(&self, library: LibrarySnapshot) -> Result<DjLinkLibraryRefresh> {
+        let _refresh = self.state.library_refresh.lock().await;
+        let previous = self.state.library();
+        let (generation, exports) = tokio::task::spawn_blocking(move || {
+            let mut next = LibraryGeneration::new(library);
+            let added_paths = next
+                .nfs_exports
+                .paths
+                .difference(&previous.nfs_exports.paths)
+                .cloned()
+                .collect();
+            let exports = NfsState::from_exports(&added_paths);
+            next.nfs_exports
+                .files
+                .extend(previous.nfs_exports.files.iter().cloned());
+            next.nfs_exports
+                .paths
+                .extend(previous.nfs_exports.paths.iter().cloned());
+            (next, exports)
+        })
+        .await
+        .context("library generation preparation failed")?;
+        if self.actor_rx.is_none() {
+            self.state
+                .actor_reply(|reply| ServerMsg::ExtendNfsExports { exports, reply })
+                .await
+                .context("DJ Link actor stopped during library refresh")?;
+        }
+        let result = DjLinkLibraryRefresh {
+            tracks: generation.track_count(),
+            playlists: generation.playlist_count(),
+            changed: true,
+        };
+        let retired = {
+            let mut current = self
+                .state
+                .library_generation
+                .write()
+                .expect("library generation lock poisoned");
+            std::mem::replace(&mut *current, Arc::new(generation))
+        };
+        // Releasing a large old index/cache must not happen under the reader lock.
+        let _ = tokio::task::spawn_blocking(move || drop(retired)).await;
+        Ok(result)
+    }
+
+    pub fn resolve_library_track(&self, selector: &str) -> LinkResult<(usize, TrackRecord)> {
+        let library = self.state.library();
+        let track = library.resolve_track_selector(selector)?;
+        let order = library
             .all_tracks
             .iter()
             .position(|candidate| candidate.track_id == track.track_id)
             .map(|index| index + 1)
             .unwrap_or(1);
-        Ok((order, track))
+        Ok((order, track.clone()))
     }
 
     pub fn library_track_metadata(&self, track_id: u32) -> Option<DjLinkTrackMetadata> {
-        let track = self.state.library.tracks_by_id.get(&track_id)?;
+        let library = self.state.library();
+        let track = library.tracks_by_id.get(&track_id)?;
         Some(DjLinkTrackMetadata {
             track_id,
             key: track.key_label(),
@@ -699,7 +755,8 @@ impl DjLinkServer {
     }
 
     pub async fn library_waveform(&self, track_id: u32) -> Option<DjLinkWaveform> {
-        let track = self.state.library.tracks_by_id.get(&track_id)?;
+        let library = self.state.library();
+        let track = library.tracks_by_id.get(&track_id)?;
         // A scrolling beat-grid view needs full RGB detail. PWV4/PWAV are
         // whole-track previews and look blocky when expanded to eight bars.
         let mut waveform = None;
@@ -735,9 +792,8 @@ impl DjLinkServer {
         track_id: u32,
         bars_before: u16,
     ) -> Result<DjLinkPhraseCue> {
-        let track = self
-            .state
-            .library
+        let library = self.state.library();
+        let track = library
             .tracks_by_id
             .get(&track_id)
             .with_context(|| format!("track {track_id} is not in the served library"))?;
@@ -761,7 +817,7 @@ impl DjLinkServer {
     }
 
     pub fn set_memory_cue_override(&self, track_id: u32, cue_ms: u32) -> Result<()> {
-        if !self.state.library.tracks_by_id.contains_key(&track_id) {
+        if !self.state.library().tracks_by_id.contains_key(&track_id) {
             bail!("track {track_id} is not in the served library");
         }
         self.state
@@ -810,7 +866,7 @@ impl DjLinkServer {
 
     pub fn first_track_id(&self) -> Option<u32> {
         self.state
-            .library
+            .library()
             .all_tracks
             .first()
             .map(|track| track.track_id)
@@ -821,9 +877,8 @@ impl DjLinkServer {
     }
 
     pub async fn profile_track_load(&self, track_id: u32) -> Result<DjLinkLoadProfile> {
-        let track = self
-            .state
-            .library
+        let library = self.state.library();
+        let track = library
             .tracks_by_id
             .get(&track_id)
             .cloned()
@@ -834,15 +889,15 @@ impl DjLinkServer {
         let preview_args = vec![DbValue::Int32(0), DbValue::Int32(track.track_id)];
 
         let started = Instant::now();
-        let waveform_preview = load_waveform_preview(&self.state.library, &preview_args).await;
+        let waveform_preview = load_waveform_preview(&library, &preview_args).await;
         let waveform_preview_ms = started.elapsed().as_millis();
 
         let started = Instant::now();
-        let waveform_detail = load_waveform_detail(&self.state.library, &args).await;
+        let waveform_detail = load_waveform_detail(&library, &args).await;
         let waveform_detail_ms = started.elapsed().as_millis();
 
         let started = Instant::now();
-        let beat_grid = load_beat_grid(&self.state.library, &args).await;
+        let beat_grid = load_beat_grid(&library, &args).await;
         let beat_grid_ms = started.elapsed().as_millis();
 
         let mut extended_tags = Vec::new();
@@ -861,7 +916,7 @@ impl DjLinkServer {
             ];
             let started = Instant::now();
             let blob = load_anlz_tag(
-                &self.state.library,
+                &library,
                 &tag_args,
                 self.state.config.serve_extended_anlz_tags,
             )
@@ -919,7 +974,7 @@ impl DjLinkServer {
 
     pub fn profile_key_browse(&self) -> DjLinkKeyBrowseProfile {
         let total_start = Instant::now();
-        let library = &self.state.library;
+        let library = &self.state.library();
         let total_tracks = library.all_tracks.len();
         let keyed_tracks = library
             .all_tracks
@@ -998,6 +1053,7 @@ impl DjLinkServer {
     }
 
     pub fn profile_search(&self, query: &str, mode: DjLinkSearchMode) -> DjLinkSearchProfile {
+        let library = self.state.library();
         let started = Instant::now();
         let query_wire = query.to_ascii_uppercase();
         let query_bytes = utf16be_z_bytes(&query_wire);
@@ -1008,7 +1064,7 @@ impl DjLinkServer {
             DbValue::Binary(query_bytes),
             DbValue::Int32(0),
         ];
-        let entries = search_entries_indexed(&self.state.library, &self.state.search_index, &args);
+        let entries = search_entries_indexed(&library, &library.search_index, &args);
         let items = entries.iter().map(search_profile_item).collect::<Vec<_>>();
         DjLinkSearchProfile {
             query: query.to_string(),
@@ -1200,8 +1256,8 @@ impl DjLinkServer {
             interface = self.state.interface_name.as_deref().unwrap_or("-"),
             broadcast = %self.state.broadcast_ip,
             db_port = self.state.config.db_server_port,
-            tracks = self.state.library.track_count(),
-            playlists = self.state.library.playlist_count(),
+            tracks = self.state.library().track_count(),
+            playlists = self.state.library().playlist_count(),
             mount_port,
             portmap_port = PORTMAP_PORT,
             "DJ Link up"
@@ -1218,7 +1274,9 @@ impl DjLinkServer {
 
         let actor_rx = self.actor_rx.take().ok_or(LinkError::RuntimeStopped)?;
         self.tasks.push(tokio::spawn(
-            ServerActor::with_telemetry(self.state.telemetry_tx.clone()).run(actor_rx),
+            ServerActor::with_telemetry(self.state.telemetry_tx.clone())
+                .with_nfs_exports(&self.state.library().nfs_exports.paths)
+                .run(actor_rx),
         ));
         let (load_tx, load_rx) = mpsc::channel(LOAD_COMMAND_QUEUE_CAPACITY);
         self.load_tx = Some(load_tx);
@@ -2457,8 +2515,8 @@ async fn execute_load_command(
     spec: LoadCommandSpec,
 ) -> Result<usize> {
     if state.config.tcp_track_file_side_channel {
-        if let Some(track) = state.library.tracks_by_id.get(&spec.track_id) {
-            let master_db_id = state.library.master_db_id;
+        if let Some(track) = state.library().tracks_by_id.get(&spec.track_id) {
+            let master_db_id = state.library().master_db_id;
             match send_track_file_tcp_side_channel(&state, spec.target_ip, track).await {
                 Ok(bytes) => tracing::info!(
                     target_player = spec.target_player,
@@ -2478,12 +2536,12 @@ async fn execute_load_command(
                 ),
             }
         }
-    } else if state.library.tracks_by_id.contains_key(&spec.track_id) {
+    } else if state.library().tracks_by_id.contains_key(&spec.track_id) {
         tracing::debug!(
             target_player = spec.target_player,
             target_ip = %spec.target_ip,
             track_id = spec.track_id,
-            master_db_id = state.library.master_db_id,
+            master_db_id = state.library().master_db_id,
             "skipped TCP track-file side channel for CDJ load; experimental mobile side channel disabled"
         );
     }
@@ -2680,6 +2738,40 @@ impl Drop for DjLinkServer {
     }
 }
 
+struct LibraryGeneration {
+    library: Arc<LibrarySnapshot>,
+    search_index: SearchIndex,
+    nfs_exports: crate::library::NfsExports,
+    artwork_cache: RwLock<HashMap<u32, Option<Vec<u8>>>>,
+    waveform_cache: RwLock<HashMap<u32, Vec<u8>>>,
+}
+
+impl LibraryGeneration {
+    fn new(library: LibrarySnapshot) -> Self {
+        Self {
+            search_index: SearchIndex::new(&library),
+            nfs_exports: library.nfs_exports(),
+            library: Arc::new(library),
+            artwork_cache: RwLock::new(HashMap::new()),
+            waveform_cache: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+impl std::ops::Deref for LibraryGeneration {
+    type Target = LibrarySnapshot;
+    fn deref(&self) -> &Self::Target {
+        &self.library
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DjLinkLibraryRefresh {
+    pub tracks: usize,
+    pub playlists: usize,
+    pub changed: bool,
+}
+
 struct ServerState {
     config: DjLinkConfig,
     bind_ip: Ipv4Addr,
@@ -2689,9 +2781,8 @@ struct ServerState {
     stagehand_link_mac: Option<[u8; 6]>,
     interface_name: Option<String>,
     raw_udp: RawUdpTx,
-    library: Arc<LibrarySnapshot>,
-    nfs_exports: crate::library::NfsExports,
-    search_index: SearchIndex,
+    library_generation: RwLock<Arc<LibraryGeneration>>,
+    library_refresh: tokio::sync::Mutex<()>,
     actor_tx: ServerActorSender,
     telemetry_tx: broadcast::Sender<DjLinkTelemetryEvent>,
     mixer_telemetry_tx: broadcast::Sender<DjLinkMixerTelemetryEvent>,
@@ -2711,6 +2802,19 @@ enum LoadProgressRecordResult {
 }
 
 impl ServerState {
+    fn library(&self) -> Arc<LibraryGeneration> {
+        self.library_generation
+            .read()
+            .expect("library generation lock poisoned")
+            .clone()
+    }
+
+    #[cfg(test)]
+    fn test_library_mut(&mut self) -> &mut LibrarySnapshot {
+        let generation = Arc::get_mut(self.library_generation.get_mut().unwrap()).unwrap();
+        Arc::make_mut(&mut generation.library)
+    }
+
     fn network_diagnostics(&self, devices: Vec<LinkDevice>) -> serde_json::Value {
         let neighbours = match crate::discovery::neighbours(self.interface_name.as_deref()) {
             Ok(peers) => serde_json::json!({"resolved":peers}),
@@ -2883,30 +2987,6 @@ impl ServerState {
         .flatten()
     }
 
-    async fn cached_artwork(&self, artwork_id: u32) -> Option<Option<Vec<u8>>> {
-        self.actor_reply(|reply| ServerMsg::CachedArtwork { artwork_id, reply })
-            .await
-            .flatten()
-    }
-
-    async fn store_artwork(&self, artwork_id: u32, bytes: Option<Vec<u8>>) {
-        let _ = self
-            .actor_send(ServerMsg::StoreArtwork { artwork_id, bytes })
-            .await;
-    }
-
-    async fn cached_waveform_preview(&self, track_id: u32) -> Option<Vec<u8>> {
-        self.actor_reply(|reply| ServerMsg::CachedWaveformPreview { track_id, reply })
-            .await
-            .flatten()
-    }
-
-    async fn store_waveform_preview(&self, track_id: u32, blob: Vec<u8>) {
-        let _ = self
-            .actor_send(ServerMsg::StoreWaveformPreview { track_id, blob })
-            .await;
-    }
-
     async fn monitor_snapshot(&self, player: u8) -> DjLinkMonitorSnapshot {
         self.actor_reply(|reply| ServerMsg::MonitorSnapshot { player, reply })
             .await
@@ -2953,7 +3033,7 @@ impl ServerState {
         let seen_at = Instant::now();
         // Read immutable prepared analysis once per loaded track, never analyze
         // audio or scan the library when a deck connects.
-        if let Some(track) = self.library.tracks_by_id.get(&status.track_id) {
+        if let Some(track) = self.library().tracks_by_id.get(&status.track_id) {
             let mut loaded = self.timing_loaded.lock().await;
             if loaded.insert(status.track_id) {
                 if let Some(tag) = read_anlz_tag(track, "PQTZ", None).await {
@@ -3005,7 +3085,7 @@ impl NfsContext for ServerState {
     }
 
     async fn nfs_handle_for_path(&self, path: &Path, parent_fh: Option<&[u8]>) -> Option<Vec<u8>> {
-        if !self.nfs_exports.paths.contains(path) {
+        if !self.library().nfs_exports.paths.contains(path) {
             return None;
         }
         self.actor_reply(|reply| ServerMsg::NfsHandleForPath {
@@ -3031,7 +3111,7 @@ impl NfsContext for ServerState {
         offset: u64,
         count: usize,
     ) -> std::io::Result<Vec<u8>> {
-        if !self.nfs_exports.files.contains(path) {
+        if !self.library().nfs_exports.files.contains(path) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "file is not in the DJ Link library",
@@ -3052,7 +3132,7 @@ async fn maybe_note_nfs_audio_progress(
     offset: u64,
 ) {
     let track_id = state
-        .library
+        .library()
         .all_tracks
         .iter()
         .find(|track| track.mount_path == path)
@@ -5321,7 +5401,7 @@ async fn send_track_file_kernel_tcp_side_channel(
     let header = build_tcp_send_track_file_path_packet(
         TCP_MODEL_REKORDBOX,
         track.track_id,
-        state.library.master_db_id,
+        state.library().master_db_id,
         file_size,
     );
     stream
@@ -6330,7 +6410,7 @@ async fn maybe_send_db_auto_load(
     else {
         return;
     };
-    let Some(track_id) = track_id_from_request_args(&state.library, args) else {
+    let Some(track_id) = track_id_from_request_args(&state.library(), args) else {
         trace!(
             target: "djtools_link::db",
             %addr,
@@ -6462,7 +6542,7 @@ async fn maybe_send_mount_info_load_confirm(
     else {
         return;
     };
-    let Some(track_id) = track_id_from_request_args(&state.library, args) else {
+    let Some(track_id) = track_id_from_request_args(&state.library(), args) else {
         return;
     };
     if !should_mount_info_load_confirm(state, target_player, track_id) {
@@ -6697,7 +6777,7 @@ async fn should_db_auto_load(
     if !state.config.db_auto_load || !(1..=6).contains(&target_player) {
         return false;
     }
-    if !state.library.tracks_by_id.contains_key(&track_id) {
+    if !state.library().tracks_by_id.contains_key(&track_id) {
         return false;
     }
     !track_is_loaded_on_player(state, target_player, track_id).await
@@ -6706,7 +6786,7 @@ async fn should_db_auto_load(
 fn should_mount_info_load_confirm(state: &ServerState, target_player: u8, track_id: u32) -> bool {
     state.config.auto_load_confirm
         && (1..=6).contains(&target_player)
-        && state.library.tracks_by_id.contains_key(&track_id)
+        && state.library().tracks_by_id.contains_key(&track_id)
 }
 
 async fn track_is_loaded_on_player(state: &ServerState, target_player: u8, track_id: u32) -> bool {
@@ -6761,7 +6841,7 @@ async fn note_load_progress_with_logging(
     let Some(track_id) = track_id else {
         return;
     };
-    if !state.library.tracks_by_id.contains_key(&track_id) {
+    if !state.library().tracks_by_id.contains_key(&track_id) {
         return;
     }
     let Some((target_player, _)) = load_settings_target_for_db_peer(state, addr).await else {
@@ -6872,9 +6952,10 @@ fn load_confirm_context_is_browse(source_menu: u8) -> bool {
 }
 
 fn artist_load_context_for_track(state: &ServerState, track_id: u32) -> Option<LoadConfirmContext> {
-    let track = state.library.tracks_by_id.get(&track_id)?;
+    let library = state.library();
+    let track = library.tracks_by_id.get(&track_id)?;
     let mut count = 0u16;
-    for candidate in &state.library.all_tracks {
+    for candidate in &library.all_tracks {
         if !matches_filter_id(candidate.artist_id, track.artist_id) {
             continue;
         }
@@ -7186,8 +7267,8 @@ fn spawn_status(state: Arc<ServerState>, sock: Arc<UdpSocket>) -> TokioJoinHandl
                     state.config.player_number,
                     slot,
                     &state.config.source_name,
-                    state.library.track_count(),
-                    state.library.playlist_count(),
+                    state.library().track_count(),
+                    state.library().playlist_count(),
                 );
                 let _ = send_udp_packet(
                     &state,
@@ -7533,6 +7614,7 @@ async fn handle_db_client(
                 return;
             }
         };
+        let library = state.library();
         let tx = msg.tx_id;
         let request_started = Instant::now();
         let request_name = db_request_name(msg.msg_type);
@@ -7628,7 +7710,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    title_entries_for_request(&state.library, &msg.args),
+                    title_entries_for_request(&library, &msg.args),
                 )
                 .await;
             }
@@ -7639,7 +7721,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    artist_entries(&state.library),
+                    artist_entries(&library),
                 )
                 .await;
             }
@@ -7650,7 +7732,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    artists_for_genre_entries(&state.library, &msg.args),
+                    artists_for_genre_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7661,7 +7743,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    album_entries(&state.library),
+                    album_entries(&library),
                 )
                 .await;
             }
@@ -7672,7 +7754,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    genre_entries(&state.library),
+                    genre_entries(&library),
                 )
                 .await;
             }
@@ -7683,7 +7765,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    bpm_entries(&state.library),
+                    bpm_entries(&library),
                 )
                 .await;
             }
@@ -7705,7 +7787,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    decade_entries(&state.library),
+                    decade_entries(&library),
                 )
                 .await;
             }
@@ -7716,7 +7798,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    label_entries(&state.library),
+                    label_entries(&library),
                 )
                 .await;
             }
@@ -7727,7 +7809,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    color_entries(&state.library),
+                    color_entries(&library),
                 )
                 .await;
             }
@@ -7738,7 +7820,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    time_entries(&state.library),
+                    time_entries(&library),
                 )
                 .await;
             }
@@ -7749,7 +7831,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    bitrate_entries(&state.library),
+                    bitrate_entries(&library),
                 )
                 .await;
             }
@@ -7771,7 +7853,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    date_added_entries(&state.library),
+                    date_added_entries(&library),
                 )
                 .await;
             }
@@ -7782,7 +7864,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    filename_entries(&state.library),
+                    filename_entries(&library),
                 )
                 .await;
             }
@@ -7793,7 +7875,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    key_entries(&state.library),
+                    key_entries(&library),
                 )
                 .await;
             }
@@ -7804,7 +7886,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    bpm_range_entries(&state.library, &msg.args),
+                    bpm_range_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7817,7 +7899,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_rating_entries(&state.library, &msg.args),
+                    tracks_for_rating_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7828,7 +7910,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    years_for_decade_entries(&state.library, &msg.args),
+                    years_for_decade_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7839,7 +7921,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    artists_for_label_entries(&state.library, &msg.args),
+                    artists_for_label_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7852,7 +7934,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_color_entries(&state.library, &msg.args),
+                    tracks_for_color_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7865,7 +7947,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_time_entries(&state.library, &msg.args),
+                    tracks_for_time_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7878,7 +7960,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_bitrate_entries(&state.library, &msg.args),
+                    tracks_for_bitrate_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7902,7 +7984,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    key_neighbor_entries(&state.library, &msg.args),
+                    key_neighbor_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7915,7 +7997,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_key_distance_entries(&state.library, &msg.args),
+                    tracks_for_key_distance_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7926,7 +8008,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    albums_for_artist_entries(&state.library, &msg.args),
+                    albums_for_artist_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7939,7 +8021,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_album_entries(&state.library, &msg.args),
+                    tracks_for_album_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7950,7 +8032,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    albums_for_genre_artist_entries(&state.library, &msg.args),
+                    albums_for_genre_artist_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7963,7 +8045,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_artist_album_entries(&state.library, &msg.args),
+                    tracks_for_artist_album_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7976,7 +8058,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_bpm_distance_entries(&state.library, &msg.args),
+                    tracks_for_bpm_distance_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -7989,7 +8071,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_decade_year_entries(&state.library, &msg.args),
+                    tracks_for_decade_year_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8000,7 +8082,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    albums_for_label_artist_entries(&state.library, &msg.args),
+                    albums_for_label_artist_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8013,13 +8095,12 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    playlist_entries(&state.library, &msg.args),
+                    playlist_entries(&library, &msg.args),
                 )
                 .await;
             }
             DB_REQ_SEARCH | DB_REQ_INCREMENTAL_SEARCH => {
-                let entries =
-                    search_entries_indexed(&state.library, &state.search_index, &msg.args);
+                let entries = search_entries_indexed(&library, &library.search_index, &msg.args);
                 let search_query = search_query_from_args(&msg.args).unwrap_or_default();
                 let normalized_query = normalize_search_text(&search_query);
                 let search_sort = search_sort_from_args(&msg.args);
@@ -8058,7 +8139,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_genre_artist_album_entries(&state.library, &msg.args),
+                    tracks_for_genre_artist_album_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8071,7 +8152,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_date_added_entries(&state.library, &msg.args),
+                    tracks_for_date_added_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8102,7 +8183,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    tracks_for_label_artist_album_entries(&state.library, &msg.args),
+                    tracks_for_label_artist_album_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8113,7 +8194,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    metadata_entries(&state.library, &msg.args),
+                    metadata_entries(&library, &msg.args),
                 )
                 .await;
                 maybe_send_db_auto_load(
@@ -8132,7 +8213,7 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    delivery_info_entries(&state.library, &msg.args),
+                    delivery_info_entries(&library, &msg.args),
                 )
                 .await;
             }
@@ -8143,14 +8224,14 @@ async fn handle_db_client(
                     msg.msg_type,
                     &msg.args,
                     &mut pending,
-                    mount_info_entries(&state.library, &msg.args),
+                    mount_info_entries(&library, &msg.args),
                 )
                 .await;
                 maybe_send_mount_info_load_confirm(&state, status_sock.as_ref(), addr, &msg.args)
                     .await;
             }
             DB_REQ_ARTWORK => {
-                let blob = load_artwork(&state, &msg.args).await;
+                let blob = load_artwork(&library, &msg.args).await;
                 send_response!(blob_response(
                     tx,
                     msg.msg_type,
@@ -8159,8 +8240,8 @@ async fn handle_db_client(
                 ));
             }
             DB_REQ_WAVEFORM_PREVIEW => {
-                let track_id = track_id_from_request_at(&state.library, &msg.args, 1);
-                let blob = load_cached_waveform_preview(&state, &msg.args).await;
+                let track_id = track_id_from_request_at(&library, &msg.args, 1);
+                let blob = load_cached_waveform_preview(&library, &msg.args).await;
                 if blob.as_ref().is_some_and(|blob| !blob.is_empty()) {
                     note_load_progress(
                         &state,
@@ -8188,11 +8269,13 @@ async fn handle_db_client(
                 ));
             }
             DB_REQ_WAVEFORM_PREVIEW_UPLOAD => {
-                if let Some((track_id, preview)) =
-                    waveform_preview_upload(&state.library, &msg.args)
-                {
+                if let Some((track_id, preview)) = waveform_preview_upload(&library, &msg.args) {
                     let bytes = preview.len();
-                    state.store_waveform_preview(track_id, preview).await;
+                    library
+                        .waveform_cache
+                        .write()
+                        .expect("waveform cache lock poisoned")
+                        .insert(track_id, preview);
                     trace!(
                         target: "djtools_link::db",
                         %addr,
@@ -8239,8 +8322,8 @@ async fn handle_db_client(
                 send_response!(empty_blob_response(tx, msg.msg_type, DB_RES_DJ_ID, false));
             }
             DB_REQ_WAVEFORM_DETAIL => {
-                let track_id = track_id_from_request_at(&state.library, &msg.args, 0);
-                let blob = load_waveform_detail(&state.library, &msg.args).await;
+                let track_id = track_id_from_request_at(&library, &msg.args, 0);
+                let blob = load_waveform_detail(&library, &msg.args).await;
                 if blob.as_ref().is_some_and(|blob| !blob.is_empty()) {
                     note_load_progress(
                         &state,
@@ -8268,8 +8351,8 @@ async fn handle_db_client(
                 ));
             }
             DB_REQ_BEAT_GRID => {
-                let track_id = track_id_from_request_at(&state.library, &msg.args, 0);
-                let blob = load_beat_grid(&state.library, &msg.args).await;
+                let track_id = track_id_from_request_at(&library, &msg.args, 0);
+                let blob = load_beat_grid(&library, &msg.args).await;
                 if blob.as_ref().is_some_and(|blob| !blob.is_empty()) {
                     note_load_progress(&state, status_sock.as_ref(), addr, track_id, "beat-grid")
                         .await;
@@ -8297,7 +8380,7 @@ async fn handle_db_client(
                 let cues = if cues.memory_count > 0 {
                     cues
                 } else {
-                    load_cue_points(&state.library, &msg.args)
+                    load_cue_points(&library, &msg.args)
                         .await
                         .unwrap_or_default()
                 };
@@ -8313,7 +8396,7 @@ async fn handle_db_client(
             DB_REQ_CUE_POINTS_EXT => {
                 let cues = match cue_override_for_request(&state, &msg.args) {
                     Some(cue_ms) => cue_points_ext_for_memory_override(cue_ms),
-                    None => load_cue_points_ext(&state.library, &msg.args)
+                    None => load_cue_points_ext(&library, &msg.args)
                         .await
                         .unwrap_or_else(default_extended_cue_points),
                 };
@@ -8326,12 +8409,8 @@ async fn handle_db_client(
             }
             DB_REQ_ANLZ_TAG | 0x2d04 => {
                 let (track_id, tag_name, ext_name) = anlz_tag_request_summary(&msg.args);
-                let blob = load_anlz_tag(
-                    &state.library,
-                    &msg.args,
-                    state.config.serve_extended_anlz_tags,
-                )
-                .await;
+                let blob =
+                    load_anlz_tag(&library, &msg.args, state.config.serve_extended_anlz_tags).await;
                 if blob.as_ref().is_some_and(|blob| !blob.is_empty()) {
                     note_load_progress(
                         &state,
@@ -8363,7 +8442,7 @@ async fn handle_db_client(
                 ));
             }
             0x2504 => {
-                let blob = load_vbr_payload(&state.library, &msg.args).await;
+                let blob = load_vbr_payload(&library, &msg.args).await;
                 send_response!(blob_response(
                     tx,
                     msg.msg_type,
@@ -8553,7 +8632,6 @@ fn root_menu_entries() -> Vec<MenuEntry> {
         MenuEntry::label(0, 5, "PLAYLIST", META_ROOT_PLAYLIST),
         MenuEntry::label(0, ROOT_HISTORY_ID, "HISTORY", 0x0095),
         MenuEntry::label(0, ROOT_SEARCH_ID, "SEARCH", 0x0091),
-        MenuEntry::label(0, ROOT_MATCHING_ID, "MATCHING", 0x00aa),
         MenuEntry::label(0, ROOT_DATE_ADDED_ID, "DATE ADDED", 0x008c),
         MenuEntry::label(0, ROOT_COLOR_ID, "COLOR", 0x008e),
     ]
@@ -8786,7 +8864,10 @@ fn title_entries_for_request(library: &LibrarySnapshot, args: &[DbValue]) -> Vec
         .filter_map(|arg| db_int(Some(arg)))
         .any(|value| value == ROOT_MATCHING_ID || value == 19 || value == 0x00aa)
     {
-        return title_entries_for_sort(&library.all_tracks, SORT_DEFAULT, true);
+        // Matching needs Rekordbox's relationship data, which we do not serve.
+        // A deck can retain the old menu across a server update; answer that
+        // stale selection with an empty menu rather than the complete library.
+        return Vec::new();
     }
     if args
         .iter()
@@ -9641,12 +9722,18 @@ fn track_from_artwork_request<'a>(
     None
 }
 
-async fn load_artwork(state: &ServerState, args: &[DbValue]) -> Option<Vec<u8>> {
-    let track = track_from_artwork_request(&state.library, args)?;
+async fn load_artwork(library: &LibraryGeneration, args: &[DbValue]) -> Option<Vec<u8>> {
+    let track = track_from_artwork_request(&library, args)?;
     if track.artwork_id == 0 {
         return None;
     }
-    if let Some(cached) = state.cached_artwork(track.artwork_id).await {
+    if let Some(cached) = library
+        .artwork_cache
+        .read()
+        .expect("artwork cache lock poisoned")
+        .get(&track.artwork_id)
+        .cloned()
+    {
         return cached;
     }
 
@@ -9660,7 +9747,11 @@ async fn load_artwork(state: &ServerState, args: &[DbValue]) -> Option<Vec<u8>> 
             "artwork_local_loaded"
         );
     });
-    state.store_artwork(track.artwork_id, fetched.clone()).await;
+    library
+        .artwork_cache
+        .write()
+        .expect("artwork cache lock poisoned")
+        .insert(track.artwork_id, fetched.clone());
     fetched
 }
 
@@ -9710,18 +9801,31 @@ async fn load_waveform_preview_for_track(track: &TrackRecord) -> Option<Vec<u8>>
     waveform_preview_from_pwav_tag(&pwav, pwv2.as_deref())
 }
 
-async fn load_cached_waveform_preview(state: &ServerState, args: &[DbValue]) -> Option<Vec<u8>> {
-    let Some(track_id) = track_id_from_request_at(&state.library, args, 1) else {
-        return load_waveform_preview(&state.library, args).await;
+async fn load_cached_waveform_preview(
+    library: &LibraryGeneration,
+    args: &[DbValue],
+) -> Option<Vec<u8>> {
+    let Some(track_id) = track_id_from_request_at(&library, args, 1) else {
+        return load_waveform_preview(&library, args).await;
     };
 
-    if let Some(blob) = state.cached_waveform_preview(track_id).await {
+    if let Some(blob) = library
+        .waveform_cache
+        .read()
+        .expect("waveform cache lock poisoned")
+        .get(&track_id)
+        .cloned()
+    {
         return Some(blob);
     }
 
-    let blob = load_waveform_preview(&state.library, args).await;
+    let blob = load_waveform_preview(&library, args).await;
     if let Some(blob) = blob.as_ref() {
-        state.store_waveform_preview(track_id, blob.clone()).await;
+        library
+            .waveform_cache
+            .write()
+            .expect("waveform cache lock poisoned")
+            .insert(track_id, blob.clone());
     }
     blob
 }
@@ -9746,7 +9850,7 @@ struct CuePointsExt {
 }
 
 fn cue_override_for_request(state: &ServerState, args: &[DbValue]) -> Option<u32> {
-    let track_id = track_id_from_request_at(&state.library, args, 0)?;
+    let track_id = track_id_from_request_at(&state.library(), args, 0)?;
     state
         .cue_overrides_ms
         .read()
@@ -10764,6 +10868,179 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn library_refresh_keeps_pending_browse_and_old_audio_while_exposing_new_tracks() {
+        async fn receive(client: &mut TcpStream) -> DbMessage {
+            tokio::time::timeout(Duration::from_secs(1), recv_db_message(client))
+                .await
+                .expect("response deadline")
+                .unwrap()
+        }
+        async fn request(client: &mut TcpStream, tx: u32, kind: u16, args: &[u32]) {
+            let args = args.iter().copied().map(DbValue::Int32).collect::<Vec<_>>();
+            client
+                .write_all(&encode_db_message(tx, kind, &args))
+                .await
+                .unwrap();
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let mut old = sample_track_record();
+        old.title = "Previous generation".into();
+        old.mount_path = temp.path().join("old.mp3");
+        tokio::fs::write(&old.mount_path, b"old audio")
+            .await
+            .unwrap();
+        let initial = LibrarySnapshot {
+            master_db_id: 1,
+            tracks_by_id: [(old.track_id, old.clone())].into_iter().collect(),
+            all_tracks: vec![old.clone()],
+            playlists: Vec::new(),
+        };
+        let mut server = DjLinkServer::new(
+            DjLinkConfig {
+                bind_ip: Some(Ipv4Addr::LOCALHOST),
+                broadcast_ip: Some(Ipv4Addr::LOCALHOST),
+                ..Default::default()
+            },
+            initial,
+        )
+        .await
+        .unwrap();
+        let actor = tokio::spawn(
+            ServerActor::default()
+                .with_nfs_exports(&server.state.library().nfs_exports.paths)
+                .run(server.actor_rx.take().unwrap()),
+        );
+        let held_generation = server.state.library();
+        held_generation
+            .waveform_cache
+            .write()
+            .unwrap()
+            .insert(old.track_id, vec![9]);
+        let old_handle = server
+            .state
+            .nfs_handle_for_path(&old.mount_path, Some(&NFS_ROOT_FH))
+            .await
+            .unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (client, accepted) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept()
+        );
+        let mut client = client.unwrap();
+        let (stream, addr) = accepted.unwrap();
+        let handler = tokio::spawn(handle_db_client(server.state.clone(), stream, addr, None));
+        client
+            .write_all(&encode_db_field(&DbValue::Int32(DB_MAGIC)))
+            .await
+            .unwrap();
+        assert_eq!(recv_db_field(&mut client).await.unwrap(), DbValue::Int32(1));
+        let browse = 0x0101_0401;
+        request(&mut client, 1, DB_REQ_TITLE, &[browse, 0]).await;
+        assert_eq!(db_int(receive(&mut client).await.args.get(1)), Some(1));
+
+        let mut added = old.clone();
+        added.track_id += 1;
+        added.title = "Freshneedle recording".into();
+        added.mount_path = temp.path().join("new.mp3");
+        tokio::fs::write(&added.mount_path, b"new audio")
+            .await
+            .unwrap();
+        let next = LibrarySnapshot {
+            master_db_id: 1,
+            tracks_by_id: [(added.track_id, added.clone())].into_iter().collect(),
+            all_tracks: vec![added.clone()],
+            playlists: vec![PlaylistRecord {
+                playlist_id: 42,
+                name: "New imports".into(),
+                parent_id: 0,
+                is_folder: false,
+                sequence: 1,
+                tracks: vec![added.track_id],
+            }],
+        };
+        let refresh = server.refresh_library(next).await.unwrap();
+        assert!(refresh.changed);
+        assert_eq!((refresh.tracks, refresh.playlists), (1, 1));
+        assert_eq!(held_generation.all_tracks[0].track_id, old.track_id);
+        assert!(
+            server
+                .state
+                .library()
+                .waveform_cache
+                .read()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            server
+                .profile_search("freshneedle", DjLinkSearchMode::Track)
+                .result_count,
+            1
+        );
+        assert_eq!(
+            server
+                .profile_search("previous", DjLinkSearchMode::Track)
+                .result_count,
+            0
+        );
+        assert_eq!(
+            server
+                .resolve_library_track(&added.track_id.to_string())
+                .unwrap()
+                .1
+                .title,
+            added.title
+        );
+
+        // A render already prepared by the deck still resolves its old rows.
+        request(&mut client, 2, DB_REQ_RENDER, &[browse, 0, 1, 0, 1, 0]).await;
+        assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_HEADER);
+        assert_eq!(
+            db_int(receive(&mut client).await.args.get(1)),
+            Some(old.track_id)
+        );
+        assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_FOOTER);
+        request(&mut client, 3, DB_REQ_TITLE, &[browse, 0]).await;
+        assert_eq!(db_int(receive(&mut client).await.args.get(1)), Some(1));
+        request(&mut client, 4, DB_REQ_RENDER, &[browse, 0, 1, 0, 1, 0]).await;
+        assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_HEADER);
+        assert_eq!(
+            db_int(receive(&mut client).await.args.get(1)),
+            Some(added.track_id)
+        );
+        assert_eq!(receive(&mut client).await.msg_type, DB_RES_MENU_FOOTER);
+        assert_eq!(
+            server.state.nfs_path_for_handle(&old_handle).await,
+            Some(old.mount_path.clone())
+        );
+        assert_eq!(
+            server
+                .state
+                .nfs_read_chunk(&old.mount_path, 0, 9)
+                .await
+                .unwrap(),
+            b"old audio"
+        );
+        assert_eq!(
+            server
+                .state
+                .nfs_read_chunk(&added.mount_path, 0, 9)
+                .await
+                .unwrap(),
+            b"new audio"
+        );
+        assert!(
+            server
+                .state
+                .nfs_read_chunk(&temp.path().join("unshared.mp3"), 0, 1)
+                .await
+                .is_err()
+        );
+        handler.abort();
+        actor.abort();
+    }
+
+    #[tokio::test]
     async fn kernel_stagehand_identity_survives_server_recreation() {
         let config = || DjLinkConfig {
             bind_ip: Some(Ipv4Addr::LOCALHOST),
@@ -10772,7 +11049,7 @@ mod tests {
             stagehand_monitor: true,
             ..Default::default()
         };
-        let library = (*test_state().library).clone();
+        let library = (*test_state().library().library).clone();
         let first = DjLinkServer::new(config(), library.clone()).await.unwrap();
         let second = DjLinkServer::new(config(), library).await.unwrap();
         assert_eq!(first.stagehand_session_ip(), Some(Ipv4Addr::LOCALHOST));
@@ -11074,7 +11351,7 @@ mod tests {
         }
         let playlist = 123;
         let mut state = test_state_with_sample_library(playlist);
-        let library = Arc::make_mut(&mut state.library);
+        let library = state.test_library_mut();
         let first = library.all_tracks[0].track_id;
         let mut second = library.all_tracks[0].clone();
         second.track_id = first + 1;
@@ -11097,6 +11374,18 @@ mod tests {
         assert_eq!(recv_db_field(&mut client).await.unwrap(), DbValue::Int32(1));
         let browse = 0x0101_0401;
         let metadata = 0x0102_0401;
+        // Cached Matching menus must terminate with zero rows and a render
+        // footer, then allow ordinary browsing on the same connection.
+        for (index, selector) in [ROOT_MATCHING_ID, 19, 0x00aa].into_iter().enumerate() {
+            let rows = menu(
+                &mut client,
+                0x0700 + index as u32 * 2,
+                DB_REQ_TITLE,
+                &[browse, 0, selector],
+            )
+            .await;
+            assert!(rows.is_empty());
+        }
         for (iteration, track) in [first, first + 1, first].into_iter().enumerate() {
             let tx = 0x0782 + iteration as u32 * 16;
             let folders = menu(&mut client, tx, DB_REQ_PLAYLIST, &[browse, 0, 0, 1]).await;
@@ -11606,7 +11895,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     #[test]
     fn load_payload_overrides_are_explicit_only() {
         let mut state = test_state_with_sample_library(123);
-        let track_id = state.library.all_tracks[0].track_id;
+        let track_id = state.library().all_tracks[0].track_id;
 
         let overrides = load_payload_overrides_for_track(&state, track_id);
         assert!(overrides.is_empty());
@@ -11643,7 +11932,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             vec![DbValue::Int32(0x0109_0401), DbValue::Int32(777201902)]
         );
         let mut state = test_state_with_sample_library(123);
-        let library = Arc::make_mut(&mut state.library);
+        let library = state.test_library_mut();
         let mut track = library.all_tracks[0].clone();
         track.track_id = 777201902;
         track.mount_path = "test.FLAC".into();
@@ -12155,9 +12444,9 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     }
 
     #[test]
-    fn db_root_and_sort_menu_shapes_match_reference_capture() {
+    fn db_root_omits_unsupported_matching_and_preserves_supported_menu_shapes() {
         let root = root_menu_entries();
-        assert_eq!(root.len(), 10);
+        assert_eq!(root.len(), 9);
         assert_eq!(
             root.iter()
                 .map(|entry| (entry.entry_id2, entry.text1.as_str(), entry.entry_type))
@@ -12170,13 +12459,13 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
                 (5, "PLAYLIST", META_ROOT_PLAYLIST),
                 (ROOT_HISTORY_ID, "HISTORY", 0x0095),
                 (ROOT_SEARCH_ID, "SEARCH", 0x0091),
-                (ROOT_MATCHING_ID, "MATCHING", 0x00aa),
                 (ROOT_DATE_ADDED_ID, "DATE ADDED", 0x008c),
                 (ROOT_COLOR_ID, "COLOR", 0x008e),
             ]
         );
         let root_preview = menu_entries_preview(&root);
-        for watched in ["HISTORY", "SEARCH", "MATCHING", "DATE ADDED", "COLOR"] {
+        assert!(!root_preview.contains("MATCHING"));
+        for watched in ["HISTORY", "SEARCH", "DATE ADDED", "COLOR"] {
             assert!(
                 root_preview.contains(watched),
                 "root preview should include watched row {watched}"
@@ -12985,11 +13274,8 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         let tag = test_pqtz_tag(&[(1, 12000, 100), (2, 12000, 600), (3, 12000, 1100)]);
         write_test_anlz_tag(&path, b"PQTZ", &tag[12..]);
         let mut state = test_state_with_sample_library(1);
-        let id = state.library.all_tracks[0].track_id;
-        let track = Arc::make_mut(&mut state.library)
-            .tracks_by_id
-            .get_mut(&id)
-            .unwrap();
+        let id = state.library().all_tracks[0].track_id;
+        let track = state.test_library_mut().tracks_by_id.get_mut(&id).unwrap();
         track.analysis_dat_path = Some(path);
         track.duration_sec = 5;
         let mut status = test_cdj_status(REKORDBOX_PLAYER_NUMBER, id, 0x05);
@@ -13440,7 +13726,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     #[test]
     fn progress_load_confirm_requires_opt_in_and_a_library_track() {
         let mut state = test_state_with_sample_library(0x1020_3040);
-        let track_id = state.library.all_tracks[0].track_id;
+        let track_id = state.library().all_tracks[0].track_id;
 
         assert!(!should_mount_info_load_confirm(&state, 3, track_id));
 
@@ -13562,7 +13848,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     #[tokio::test]
     async fn load_command_retries_with_target_browse_then_artist_context() {
         let state = test_state_with_sample_library(0x1020_3040);
-        let track = &state.library.all_tracks[0];
+        let track = &state.library().all_tracks[0];
         let playlist_context = LoadConfirmContext {
             source_menu: 0x05,
             category_1: 0x1020_3040,
@@ -14210,7 +14496,7 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     #[tokio::test]
     async fn db_handler_roundtrips_consecutive_searches_without_back() {
         let state = Arc::new(test_state_with_sample_library(0x5293_8822));
-        let artist_id = state.library.all_tracks[0].artist_id;
+        let artist_id = state.library().all_tracks[0].artist_id;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("listener");
@@ -14764,15 +15050,13 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             &library,
             &[DbValue::Int32(0), DbValue::Int32(ROOT_MATCHING_ID)],
         );
-        assert_eq!(matching_by_root_id[0].entry_type, META_TITLE);
-        assert_eq!(matching_by_root_id[0].entry_id2, track.track_id);
+        assert!(matching_by_root_id.is_empty());
         let matching_by_legacy_root =
             title_entries_for_request(&library, &[DbValue::Int32(0), DbValue::Int32(19)]);
-        assert_eq!(matching_by_legacy_root[0].entry_type, META_TITLE);
+        assert!(matching_by_legacy_root.is_empty());
         let matching_by_item_type =
             title_entries_for_request(&library, &[DbValue::Int32(0), DbValue::Int32(0x00aa)]);
-        assert_eq!(matching_by_item_type[0].entry_type, META_TITLE);
-        assert_eq!(matching_by_item_type[0].entry_id2, track.track_id);
+        assert!(matching_by_item_type.is_empty());
         let album_sort = title_entries_for_request(&library, &[DbValue::Int32(SORT_ALBUM)]);
         assert_eq!(album_sort[0].entry_type, META_TRACK_TITLE_AND_ALBUM);
         assert_eq!(album_sort[0].entry_id1, track.album_id);
@@ -14959,23 +15243,23 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
     fn browsed_track_rows_carry_positions_for_back_navigation() {
         let state = test_state_with_sample_library(0x5293_8822);
         let root_tracks = title_entries_for_request(
-            &state.library,
+            &state.library(),
             &[DbValue::Int32(0x0301_0401), DbValue::Int32(SORT_DEFAULT)],
         );
         assert_eq!(root_tracks[0].position, 1);
 
         let album_tracks = tracks_for_album_entries(
-            &state.library,
+            &state.library(),
             &[
                 DbValue::Int32(0x0301_0401),
                 DbValue::Int32(SORT_DEFAULT),
-                DbValue::Int32(state.library.all_tracks[0].album_id),
+                DbValue::Int32(state.library().all_tracks[0].album_id),
             ],
         );
         assert_eq!(album_tracks[0].position, 1);
 
         let search_tracks = search_entries(
-            &state.library,
+            &state.library(),
             &[DbValue::String("BRUNELLO SCIENCE".to_string())],
         );
         assert_eq!(search_tracks[0].position, 1);
@@ -15182,13 +15466,19 @@ en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
         let DbValue::Int8(argc) = field(reader)? else {
             return Err(TestDbParseError::ExpectedField { expected: "argc" });
         };
-        let DbValue::Binary(_) = field(reader)? else {
+        let DbValue::Binary(arg_types) = field(reader)? else {
             return Err(TestDbParseError::ExpectedField {
                 expected: "argtypes",
             });
         };
         let mut args = Vec::new();
-        for _ in 0..argc {
+        for index in 0..argc as usize {
+            if arg_types.get(index) == Some(&DB_MSG_FIELD_BINARY)
+                && args.last().and_then(|value| db_int(Some(value))) == Some(0)
+            {
+                args.push(DbValue::Binary(Vec::new()));
+                continue;
+            }
             args.push(field(reader)?);
         }
         Ok(DbMessage {
@@ -15810,14 +16100,13 @@ notes: []
             tracks: vec![track.track_id],
         };
         let mut state = test_state();
-        state.library = Arc::new(LibrarySnapshot {
+        let library = LibrarySnapshot {
             master_db_id: 0x0102_0304,
             tracks_by_id: [(track.track_id, track.clone())].into_iter().collect(),
             all_tracks: vec![track],
             playlists: vec![playlist],
-        });
-        state.search_index = SearchIndex::new(&state.library);
-        state.nfs_exports = state.library.nfs_exports();
+        };
+        *state.library_generation.get_mut().unwrap() = Arc::new(LibraryGeneration::new(library));
         state
     }
 
@@ -16023,7 +16312,6 @@ notes: []
             all_tracks: Vec::new(),
             playlists: Vec::new(),
         });
-        let search_index = SearchIndex::new(&library);
         ServerState {
             config: DjLinkConfig::default(),
             bind_ip: Ipv4Addr::LOCALHOST,
@@ -16033,9 +16321,8 @@ notes: []
             stagehand_link_mac: None,
             interface_name: None,
             raw_udp: RawUdpTx::disabled(),
-            nfs_exports: library.nfs_exports(),
-            library,
-            search_index,
+            library_generation: RwLock::new(Arc::new(LibraryGeneration::new((*library).clone()))),
+            library_refresh: tokio::sync::Mutex::new(()),
             actor_tx,
             telemetry_tx,
             mixer_telemetry_tx,
