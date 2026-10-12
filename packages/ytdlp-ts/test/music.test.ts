@@ -156,13 +156,13 @@ describe('music batch downloads', () => {
     expect(skipped).toMatchObject({ downloaded: 0, skipped: 4, failed: 0 })
   })
 
-  it('prepares with three workers and serializes reference YouTube by default', async () => {
+  it.each([undefined, 24])('honors music and reference YouTube concurrency %s', async (concurrency) => {
     expect(DEFAULT_MUSIC_CONCURRENCY).toBe(3)
-    expect(MAX_MUSIC_CONCURRENCY).toBe(16)
+    expect(MAX_MUSIC_CONCURRENCY).toBe(Number.MAX_SAFE_INTEGER)
     expect(DEFAULT_YOUTUBE_CONCURRENCY).toBe(1)
-    expect(MAX_YOUTUBE_CONCURRENCY).toBe(4)
+    expect(MAX_YOUTUBE_CONCURRENCY).toBe(Number.MAX_SAFE_INTEGER)
     expect(DEFAULT_NATIVE_YOUTUBE_CONCURRENCY).toBe(3)
-    expect(MAX_NATIVE_YOUTUBE_CONCURRENCY).toBe(16)
+    expect(MAX_NATIVE_YOUTUBE_CONCURRENCY).toBe(Number.MAX_SAFE_INTEGER)
     let activeInspections = 0
     let maxActiveInspections = 0
     let activeDownloads = 0
@@ -199,10 +199,14 @@ describe('music batch downloads', () => {
       },
     }
 
-    const result = await downloadMusicBatch(urls, {}, dependencies)
+    const result = await downloadMusicBatch(
+      urls,
+      concurrency === undefined ? {} : { concurrency, youtubeConcurrency: concurrency },
+      dependencies,
+    )
 
-    expect(maxActiveInspections).toBe(3)
-    expect(maxActiveDownloads).toBe(1)
+    expect(maxActiveInspections).toBe(concurrency ?? 3)
+    expect(maxActiveDownloads).toBe(concurrency ?? 1)
     expect(result).toMatchObject({
       requested: 70,
       tracks: 70,
@@ -433,7 +437,7 @@ describe('music batch downloads', () => {
     expect(cleanedUp).toBe(true)
   })
 
-  it('routes native YouTube audio through three network-bound track workers', async () => {
+  it('honors explicit native YouTube concurrency above sixteen', async () => {
     let active = 0
     let maximumActive = 0
     const dependencies: MusicDependencies = {
@@ -472,14 +476,14 @@ describe('music batch downloads', () => {
     }
 
     const result = await downloadMusicBatch(
-      ['https://youtube.test/y1', 'https://youtube.test/y2', 'https://youtube.test/y3'],
-      { engine: 'native', concurrency: 3 },
+      Array.from({ length: 24 }, (_, index) => `https://youtube.test/y${index}`),
+      { engine: 'native', concurrency: 24, nativeYoutubeConcurrency: 24 },
       dependencies,
     )
 
-    expect(result).toMatchObject({ downloaded: 3, failed: 0 })
+    expect(result).toMatchObject({ downloaded: 24, failed: 0 })
     expect(result.items.every((item) => item.engine === 'native')).toBe(true)
-    expect(maximumActive).toBe(3)
+    expect(maximumActive).toBe(24)
   })
 
   it('prefers source M4A over higher-bitrate WebM for Rekordbox workflows', async () => {

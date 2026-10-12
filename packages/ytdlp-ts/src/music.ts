@@ -20,11 +20,11 @@ import {
 export const MUSIC_FORMAT_SPEC = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best'
 export const MUSIC_OUTPUT_TEMPLATE = '%(uploader,channel)s/%(title)s [%(id)s].%(ext)s'
 export const DEFAULT_MUSIC_CONCURRENCY = 3
-export const MAX_MUSIC_CONCURRENCY = 16
+export const MAX_MUSIC_CONCURRENCY = Number.MAX_SAFE_INTEGER
 export const DEFAULT_YOUTUBE_CONCURRENCY = 1
-export const MAX_YOUTUBE_CONCURRENCY = 4
+export const MAX_YOUTUBE_CONCURRENCY = Number.MAX_SAFE_INTEGER
 export const DEFAULT_NATIVE_YOUTUBE_CONCURRENCY = 3
-export const MAX_NATIVE_YOUTUBE_CONCURRENCY = 16
+export const MAX_NATIVE_YOUTUBE_CONCURRENCY = Number.MAX_SAFE_INTEGER
 
 export interface MusicDownloadOptions extends InspectReferenceOptions {
   engine?: EngineKind

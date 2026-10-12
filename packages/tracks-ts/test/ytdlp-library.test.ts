@@ -152,7 +152,7 @@ describe("YtdlpReferenceAcquirer", () => {
         },
       };
       const acquirer = new YtdlpReferenceAcquirer(client, {
-        searchLimit: 4,
+        searchLimit: 75,
         cache: false,
         ...(cookiesFromBrowser ? { cookiesFromBrowser } : {}),
       });
@@ -184,7 +184,7 @@ describe("YtdlpReferenceAcquirer", () => {
       });
       expect(calls[0]).toMatchObject({
         kind: "inspect",
-        url: "ytsearch4:Artist Track",
+        url: "ytsearch75:Artist Track",
         options: { flatPlaylist: true },
       });
       expect(calls[2]).toMatchObject({

@@ -25,7 +25,7 @@ wrote the result.
 
 `searchYoutube` is the typed discovery boundary for individual YouTube videos. It uses the shared
 YouTube.js Web session, returns stable canonical watch URLs plus identity/duration fields, defaults
-to 10 results, caps callers at 50, paginates at most five pages, deduplicates video IDs, excludes
+to 10 results, honors explicit result limits, detects repeated pages, deduplicates video IDs, excludes
 live results, and honors `AbortSignal` around client creation and every request. Exact extraction
 continues to request Android VR explicitly through `ExtractorRegistry`.
 

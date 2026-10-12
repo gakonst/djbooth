@@ -110,8 +110,7 @@ export interface YoutubeSearchResult {
 }
 
 export const DEFAULT_YOUTUBE_SEARCH_RESULTS = 10
-export const MAX_YOUTUBE_SEARCH_RESULTS = 50
-const MAX_YOUTUBE_SEARCH_PAGES = 5
+export const MAX_YOUTUBE_SEARCH_RESULTS = Number.MAX_SAFE_INTEGER
 
 let sharedClient: Promise<YoutubeInnertubeClient> | undefined
 
@@ -129,8 +128,13 @@ export async function searchYoutube(
   const results: YoutubeSearchResult[] = []
   const seen = new Set<string>()
 
-  for (let pageNumber = 0; pageNumber < MAX_YOUTUBE_SEARCH_PAGES; pageNumber += 1) {
+  const seenPages = new Set<string>()
+  while (true) {
     throwIfAborted(options.signal)
+    // Stop a broken continuation cycle without imposing a page-count ceiling.
+    const pageKey = JSON.stringify(page.videos.map((video) => video.video_id ?? video.content_id))
+    if (seenPages.has(pageKey)) break
+    seenPages.add(pageKey)
     for (const value of page.videos) {
       const result = youtubeSearchResult(value)
       if (!result || seen.has(result.id)) continue
@@ -138,11 +142,7 @@ export async function searchYoutube(
       results.push(result)
       if (results.length >= limit) return results
     }
-    if (
-      pageNumber + 1 >= MAX_YOUTUBE_SEARCH_PAGES ||
-      !page.has_continuation ||
-      !page.getContinuation
-    ) {
+    if (!page.has_continuation || !page.getContinuation) {
       break
     }
     try {
@@ -249,7 +249,7 @@ function youtubeSearchLimit(value: number | undefined): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new YtdlpError('INVALID_SEARCH_LIMIT', `YouTube search limit must be a positive integer: ${value}`)
   }
-  return Math.min(value, MAX_YOUTUBE_SEARCH_RESULTS)
+  return value
 }
 
 function youtubeSearchResult(value: YoutubeSearchVideo): YoutubeSearchResult | undefined {

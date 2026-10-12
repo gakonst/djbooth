@@ -70,7 +70,8 @@ The library also exposes bounded native YouTube video search through the same sh
 [`youtubei.js`](https://ytjs.dev/guide/creating-an-innertube-instance) client. Search uses a Web
 session because its result parser supports the current search response; exact extraction explicitly
 requests Android VR and keeps signed formats in memory. Results are canonical public page URLs with
-stable IDs, uploader data, and durations. The default is 10 results, the hard cap is 50, and an
+stable IDs, uploader data, and durations. The default is 10 results; explicit limits are honored
+until results are exhausted or a repeated page is detected. An
 `AbortSignal` stops client creation, search, or pagination:
 
 ```ts
@@ -93,8 +94,9 @@ requests a codec. Use the lower-level `download --media-format ...` command when
 compatibility is not required and another source format is preferred.
 
 Batch source inspection and native YouTube downloads default to three concurrent tracks; reference
-YouTube downloads default to one. The explicit caps are 16 for `--concurrency`, 4 for
-`--youtube-concurrency`, and 16 for `--native-youtube-concurrency`. Native YouTube transfers use up
+YouTube downloads default to one. Positive safe-integer overrides are accepted for `--concurrency`,
+`--youtube-concurrency`, and `--native-youtube-concurrency`; workers never exceed queued tracks.
+Native YouTube transfers use up
 to two concurrent 1 MiB ranges per track; ordered commits keep the workload network-bound without
 sacrificing exact resume state. Reference YouTube transfers retain exponential
 HTTP/fragment/extractor retry delays, throttling detection, and one fragment at a time. A durable

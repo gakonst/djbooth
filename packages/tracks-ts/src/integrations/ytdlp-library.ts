@@ -4,7 +4,6 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   DEFAULT_YOUTUBE_SEARCH_RESULTS,
   ExtractorRegistry,
-  MAX_YOUTUBE_SEARCH_RESULTS,
   downloadMedia,
   nativeFallbackFor,
   searchYoutube,
@@ -449,7 +448,7 @@ function boundedSearchLimit(value: number | undefined): number {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RangeError("searchLimit must be a positive integer");
   }
-  return Math.min(value, MAX_YOUTUBE_SEARCH_RESULTS);
+  return value;
 }
 
 type NativeSearchIdentity = Pick<

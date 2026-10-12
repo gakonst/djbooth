@@ -44,5 +44,5 @@ archives, playlist-wide concurrency, provider-specific overrides, and automatic 
 
 **Why:** Audio quality is harmed by unnecessary transcoding, while large batches need stronger
 idempotency and network-bound throughput. Three concurrent tracks avoid provider bursts while each
-native YouTube track can still issue two bounded-range requests. Explicit global/reference caps of
-16 and 4, plus a native YouTube cap of 16, preserve opt-in throughput for controlled networks.
+native YouTube track can still issue two bounded-range requests. Explicit concurrency overrides
+are bounded by queued work rather than fixed global or provider-specific worker ceilings.

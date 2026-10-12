@@ -1768,9 +1768,9 @@ describe("acquireManifest", () => {
     },
   );
 
-  audioToolTest(
-    "fans every set variant through one bounded queue and preserves ambiguity order",
-    async () => {
+  audioToolTest.each([undefined, 65])(
+    "fans every set variant through one bounded queue with maintenance concurrency %s",
+    async (maintenanceConcurrency) => {
       const directory = await mkdtemp(join(tmpdir(), "tracks-set-fanout-"));
       const manifestPath = join(directory, "manifest.json");
       const manifest = createManifest({
@@ -1878,6 +1878,12 @@ describe("acquireManifest", () => {
           plan,
           acquirers: [acquirer],
           requireCompletePlan: true,
+          ...(maintenanceConcurrency === undefined
+            ? {}
+            : {
+                verificationConcurrency: maintenanceConcurrency,
+                spotifyConcurrency: maintenanceConcurrency,
+              }),
         });
         if (process.env.TRACKS_PERF_LOG === "1") {
           process.stderr.write(
@@ -1895,8 +1901,8 @@ describe("acquireManifest", () => {
         expect(result.downloaded).toHaveLength(34);
         expect(result.performance).toMatchObject({
           concurrency: 3,
-          verificationConcurrency: 8,
-          spotifyConcurrency: 8,
+          verificationConcurrency: maintenanceConcurrency ?? 8,
+          spotifyConcurrency: maintenanceConcurrency ?? 8,
         });
         expect(result.performance.stages).toContainEqual(
           expect.objectContaining({

@@ -220,9 +220,9 @@ export const DEFAULT_ACQUISITION_CONCURRENCY = 3;
 // choose concurrency without an additional fixed transfer cap.
 export const MAX_ACQUISITION_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 export const DEFAULT_VERIFICATION_CONCURRENCY = 8;
-export const MAX_VERIFICATION_CONCURRENCY = 16;
+export const MAX_VERIFICATION_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 export const DEFAULT_SPOTIFY_REFRESH_CONCURRENCY = 8;
-export const MAX_SPOTIFY_REFRESH_CONCURRENCY = 32;
+export const MAX_SPOTIFY_REFRESH_CONCURRENCY = Number.MAX_SAFE_INTEGER;
 
 export type AcquireManifestOptions = {
   /** Legacy JSON checkpoint adapter. New callers persist state in Rekordbox master.db. */

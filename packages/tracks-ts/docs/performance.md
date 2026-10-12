@@ -93,8 +93,8 @@ repaired checkpoint returns to the no-mutation fast path.
 - Three acquisition workers by default; ambiguity variants share the same global queue. Backend
   searches overlap while candidate downloads retain deterministic backend priority.
 - Eight verification, Spotify enrichment, and Spotify refresh workers by default. Callers may
-  override acquisition up to 8, verification up to 16, and Spotify work up to 32; actual workers
-  never exceed queued work.
+  override acquisition, verification, and Spotify refresh concurrency with positive safe integers;
+  actual workers never exceed queued work. Spotify enrichment retains its separate 32-worker cap.
 - Three local recognition workers by default with an eight-call cap; clean-room analysis defaults to
   four with an explicit 64-worker expert cap. Rekordbox media preflight and checksum verification use up to
   eight workers or Node's available parallelism, whichever is lower, while every encrypted database

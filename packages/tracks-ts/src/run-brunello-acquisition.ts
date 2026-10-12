@@ -56,11 +56,11 @@ export type RunBrunelloAcquisitionOptions = {
   refreshSpotify?: boolean;
   dryRun?: boolean;
   continueOnError?: boolean;
-  /** Independent recording variants. Defaults to 3; accepts 1 through 8. */
+  /** Independent recording variants. Defaults to 3; accepts positive safe integers. */
   concurrency?: number;
-  /** Parallel media verification. Defaults to 8; accepts 1 through 16. */
+  /** Parallel media verification. Defaults to 8; accepts positive safe integers. */
   verificationConcurrency?: number;
-  /** Parallel Spotify metadata refreshes. Defaults to 8; accepts 1 through 32. */
+  /** Parallel Spotify metadata refreshes. Defaults to 8; accepts positive safe integers. */
   spotifyConcurrency?: number;
   cacheMode?: CacheMode;
   spotsModule?: SpotsModule;

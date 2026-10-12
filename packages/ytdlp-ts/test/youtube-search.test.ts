@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  MAX_YOUTUBE_SEARCH_RESULTS,
   searchYoutube,
   type YoutubeNativeSearchClientFactory,
 } from '../src/extractors/youtube-innertube.js'
@@ -55,7 +54,7 @@ describe('native YouTube search', () => {
     ])
   })
 
-  it('caps result count and rejects invalid limits', async () => {
+  it('honors requested result counts above fifty and rejects invalid limits', async () => {
     const createClient: YoutubeNativeSearchClientFactory = async () => ({
       async search() {
         return {
@@ -72,12 +71,10 @@ describe('native YouTube search', () => {
     await expect(searchYoutube(' ', {}, createClient)).rejects.toMatchObject({
       code: 'EMPTY_SEARCH_QUERY',
     })
-    expect(await searchYoutube('track', { limit: 100 }, createClient)).toHaveLength(
-      MAX_YOUTUBE_SEARCH_RESULTS,
-    )
+    expect(await searchYoutube('track', { limit: 100 }, createClient)).toHaveLength(60)
   })
 
-  it('never requests more than five result pages', async () => {
+  it.each([false, true])('continues beyond five pages (content IDs: %s)', async (contentIds) => {
     let pages = 0
     const page = (index: number): Awaited<ReturnType<YoutubeNativeSearchClientFactory>> extends {
       search(...args: never[]): Promise<infer Result>
@@ -86,7 +83,15 @@ describe('native YouTube search', () => {
       : never => {
       pages += 1
       return {
-        videos: [searchVideo(`page${String(index).padStart(7, '0')}`, `Track ${index}`, 180)],
+        videos: [
+          contentIds
+            ? {
+                content_type: 'VIDEO',
+                content_id: `page${String(index).padStart(7, '0')}`,
+                title: text(`Track ${index}`),
+              }
+            : searchVideo(`page${String(index).padStart(7, '0')}`, `Track ${index}`, 180),
+        ],
         has_continuation: true,
         async getContinuation() {
           return page(index + 1)
@@ -99,8 +104,25 @@ describe('native YouTube search', () => {
 
     const results = await searchYoutube('track', { limit: 50 }, createClient)
 
-    expect(results).toHaveLength(5)
-    expect(pages).toBe(5)
+    expect(results).toHaveLength(50)
+    expect(pages).toBe(50)
+  })
+
+  it('stops on repeated pages instead of looping forever', async () => {
+    let continuations = 0
+    const page = {
+      videos: [searchVideo('abcdefghijk', 'Artist - Track', 300)],
+      has_continuation: true,
+      async getContinuation() {
+        continuations += 1
+        return { ...page }
+      },
+    }
+    const results = await searchYoutube('track', { limit: 100 }, async () => ({
+      search: async () => page,
+    }))
+    expect(results).toHaveLength(1)
+    expect(continuations).toBe(1)
   })
 
   it('keeps earlier results when a continuation fails or is empty', async () => {
