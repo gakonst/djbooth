@@ -15,6 +15,7 @@ import { Cli } from "incur";
 import slskCli from "slsk-ts/cli";
 
 import { serveCli } from "./serve.js";
+import { visualsCli } from "./visuals.js";
 import { replayCli } from "./replay.js";
 import { statusCli } from "./status.js";
 import { stopCli } from "./stop.js";
@@ -95,6 +96,7 @@ export function createDjBoothCli(): ReturnType<typeof Cli.create> {
   cli.command(linkCli);
   cli.command(replayCli);
   cli.command(serveCli);
+  cli.command(visualsCli);
   cli.command(statusCli);
   cli.command(stopCli);
   cli.command(usbCli);

@@ -9,6 +9,7 @@ import type {
   MeterState,
 } from "./types.js";
 import { CdjWaveform } from "./CdjWaveform.js";
+import { useA9Midi } from "./useA9Midi.js";
 import { useHardwareMonitor } from "./useHardwareMonitor.js";
 import { useTrackWaveform } from "./useTrackWaveform.js";
 import cdj3000Image from "./assets/CDJ-3000_top.webp";
@@ -65,8 +66,22 @@ const A9_KNOB_BODY_RADIUS: Record<A9KnobFamily, number> = {
 
 export function LiveHardwareMonitor() {
   const monitor = useHardwareMonitor();
+  const midi = useA9Midi();
   const replay = new URLSearchParams(window.location.search).has("hardwareWs");
-  return <HardwareMonitor {...monitor} mode={replay ? "replay" : "live"} />;
+  return (
+    <HardwareMonitor
+      {...monitor}
+      snapshot={{
+        ...monitor.snapshot,
+        mixer: {
+          ...monitor.snapshot.mixer,
+          connected: monitor.snapshot.mixer.connected || midi.connected,
+          controls: { ...monitor.snapshot.mixer.controls, ...midi.controls },
+        },
+      }}
+      mode={replay ? "replay" : "live"}
+    />
+  );
 }
 
 export function HardwareMonitor({
@@ -131,7 +146,7 @@ function monitorDecks(decks: DeckState[]): DeckState[] {
 }
 
 function Cdj3000({ deck }: { deck: DeckState }) {
-  const waveform = useTrackWaveform(deck.trackId);
+  const waveform = useTrackWaveform(deck.trackId, deck.sourcePlayer, deck.sourceSlot);
   const trackLengthSec = deck.trackLengthSec ?? waveform?.durationSeconds ?? null;
   const beatGridMs = beatGridPositionMs(deck.beatNumber, waveform?.beatGrid);
   const inferredPlayheadMs = useDeckPlayhead(deck, trackLengthSec, beatGridMs);
