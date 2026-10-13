@@ -98,6 +98,9 @@ describe("acquisition primitives", () => {
 
   test("normalizes punctuation and creates filesystem-safe names", () => {
     expect(normalizeMatchText("Sébastien Léger & Tim Green")).toBe("sebastien leger and tim green");
+    expect(normalizeMatchText("weather / synthesizer ᐸ8ᐸv299")).toBe(
+      normalizeMatchText("weather / synthesizer <8<v299"),
+    );
     expect(safeFilename("A/B: C\\D\u0000")).toBe("A-B- C-D-");
   });
 

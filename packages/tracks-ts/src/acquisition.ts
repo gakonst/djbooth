@@ -213,6 +213,7 @@ export function scoreYoutubeCandidate(
 export function normalizeMatchText(value: string): string {
   return value
     .normalize("NFKD")
+    .replace(/\u1438/gu, "<")
     .replace(/\p{Diacritic}/gu, "")
     .toLocaleLowerCase("en-US")
     .replace(/&/gu, " and ")
