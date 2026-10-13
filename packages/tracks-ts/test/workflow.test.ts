@@ -558,6 +558,69 @@ describe("runSetToRekordbox", () => {
     expect(importRekordbox).toHaveBeenCalledOnce();
   });
 
+  test("refresh retries skipped tracks and preserves the stable playlist target", async () => {
+    const checkpointed = downloadedManifest(true);
+    const reason = "Recording unavailable: source temporarily forbidden";
+    checkpointed.entries[0]!.acquisition = { status: "skipped", reason };
+    checkpointed.entries[0]!.rekordbox = { status: "skipped", reason };
+    checkpointed.entries[0]!.warnings.push(reason);
+    checkpointed.artifacts.rekordbox = {
+      target: "rekordbox-db",
+      dbPath: "/tmp/master.db",
+      folderName: "Sets",
+      folderId: "folder",
+      playlistName: "Example Set",
+      playlistId: "stable-playlist",
+    };
+    const refreshed = downloadedManifest(true);
+    const save = vi.fn(async () => undefined);
+    const acquire = vi.fn<RunSetToRekordboxDependencies["acquire"]>(async (options) => {
+      expect(options.continueOnError).toBe(true);
+      expect(options.state?.entries[0]!.acquisition.status).toBe("pending");
+      expect(options.state?.entries[0]!.warnings).not.toContain(reason);
+      expect(options.state?.artifacts.rekordbox).toBeUndefined();
+      return acquisitionResult(refreshed, false);
+    });
+    const importRekordbox = vi.fn<RunSetToRekordboxDependencies["importRekordbox"]>(
+      async (options) => {
+        expect(options.playlistId).toBe("stable-playlist");
+        return importResult(options.manifest, true);
+      },
+    );
+    const dependencies: RunSetToRekordboxDependencies = {
+      exists: async () => true,
+      readManifest: vi.fn(),
+      writeManifest: vi.fn(),
+      identify: vi.fn(),
+      createManifest,
+      enrichSpotify: async (current) => spotifyResult(current, 0),
+      cacheSourceSet: vi.fn(),
+      describeSourceSet: vi.fn(),
+      buildPlan: async () => ({ clips: [], recordings: [], stagingDirectory: "/tmp/staging" }),
+      acquire,
+      analyze: async () => analysisResult(true),
+      importRekordbox,
+    };
+
+    await runSetToRekordbox({
+      source,
+      outputDirectory,
+      cacheMode: "refresh",
+      stateStore: {
+        artifactDirectory: "/tmp/music-ts-workflow/artifacts",
+        load: vi.fn(),
+        save,
+      },
+      initialState: checkpointed,
+      acquirers: [],
+      dependencies,
+    });
+
+    expect(save).toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(importRekordbox).toHaveBeenCalledOnce();
+  });
+
   test("backfills durable analyzer metadata on an older warm manifest", async () => {
     const manifest = downloadedManifest();
     const writeManifest = vi.fn();

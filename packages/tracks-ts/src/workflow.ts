@@ -315,6 +315,10 @@ export async function runSetToRekordbox(
     };
   });
   const checkpointedPlaylistId = manifest.artifacts.rekordbox?.playlistId;
+  if (options.cacheMode === "refresh" && reconsiderUnavailableAcquisitions(manifest)) {
+    delete manifest.artifacts.rekordbox;
+    await savePipelineState(manifest);
+  }
   const sourceSetStage: WorkflowStage = {
     stage: "source-set",
     status: "skipped",
@@ -550,7 +554,7 @@ export async function runSetToRekordbox(
             : { onArtifactVerified: analyzeVerifiedArtifact }),
         });
       const passes: [AcquireManifestResult, ...AcquireManifestResult[]] = [
-        await acquirePass(allowSourceSetClips),
+        await acquirePass(true),
       ];
       acquisitionPasses = 1;
       const recoverableOrders = allowSourceSetClips
@@ -969,6 +973,19 @@ function settleUnavailableAcquisitions(manifest: SetManifest): number {
     skipped += 1;
   }
   return skipped;
+}
+
+function reconsiderUnavailableAcquisitions(manifest: SetManifest): number {
+  let reconsidered = 0;
+  for (const entry of manifest.entries) {
+    if (entry.acquisition.status !== "skipped" || entry.rekordbox.status !== "skipped") continue;
+    const reason = entry.acquisition.reason;
+    entry.acquisition = { status: "pending" };
+    entry.rekordbox = { status: "pending" };
+    entry.warnings = entry.warnings.filter((warning) => warning !== reason);
+    reconsidered += 1;
+  }
+  return reconsidered;
 }
 
 function sourceSetFallbackOrders(
