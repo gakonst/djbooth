@@ -335,6 +335,40 @@ describe("acquireManifest", () => {
     },
   );
 
+  audioToolTest("includes verified-artifact callback failures in the terminal error", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tracks-callback-error-"));
+    const manifestPath = join(directory, "manifest.json");
+    const outputPath = join(directory, "track.m4a");
+    await Promise.all([
+      writeManifestAtomic(manifestPath, oneTrackManifest()),
+      writeFile(outputPath, "existing audio bytes"),
+    ]);
+    const plan = recordingPlan(directory);
+    plan.recordings[0]!.variants[0]!.localArtifact = {
+      sourcePath: outputPath,
+      matchedBy: "spotify-id",
+    };
+    const bin = await installFakeAudioTools(directory);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${previousPath ?? ""}`;
+    try {
+      await expect(
+        acquireManifest({
+          manifestPath,
+          plan,
+          acquirers: [],
+          continueOnError: false,
+          requireCompletePlan: true,
+          onArtifactVerified() {
+            throw new Error("analyzer binary missing");
+          },
+        }),
+      ).rejects.toThrow(/Verified-artifact callbacks failed.*analyzer binary missing/iu);
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   audioToolTest(
     "falls through to acquisition when a local artifact has the wrong duration",
     async () => {
